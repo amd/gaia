@@ -104,6 +104,22 @@ def test_lane_names_are_unique_and_artifact_safe(lanes_doc):
         )
 
 
+def test_memory_is_alone_in_its_lane(lanes_doc):
+    # eval_flagship.yml turns the long-term store on for a whole LANE when that
+    # lane contains `memory`, because env is a job-level thing and the lane is
+    # the job. So a neighbour in that lane would run with memory live too, and
+    # start scoring differently depending on what ran before it - the bleed the
+    # workflow-level default exists to prevent.
+    for lane in lanes_doc["lanes"]:
+        if "memory" in lane["categories"]:
+            assert lane["categories"] == ["memory"], (
+                f"Lane `{lane['lane']}` runs {lane['categories']} alongside "
+                "`memory`. The workflow enables the memory store per lane, so "
+                "those categories would inherit it and their scores would "
+                "depend on scenario order. Give `memory` its own lane."
+            )
+
+
 def test_every_lane_has_at_least_one_category(lanes_doc):
     for lane in lanes_doc["lanes"]:
         assert lane["categories"], (

@@ -323,10 +323,25 @@ env:
   # Connector resolution blocks on the OS keyring in a headless runner, which
   # hangs agent construction. Same guard as test_email_agent_eval.yml.
   PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-  # Persistent runner — keep long-term memory out of the loop so state cannot
-  # bleed between the three chained categories or across runs. Established
-  # convention (test_chat_agent.yml, test_email_agent_eval.yml).
+  # The default for every lane; the memory lane overrides all three at job level.
+  # Long-term memory surviving between categories makes a later category's score
+  # depend on an earlier one's run order (convention: test_chat_agent.yml,
+  # test_email_agent_eval.yml). The memory lane is the one place that state IS
+  # the subject, and it can opt back in safely because it is alone on a machine
+  # that is destroyed when the job ends.
+  #
+  # Do NOT flip these here. Workflow scope would re-enable memory for every lane
+  # and bring back the cross-category bleed this is guarding.
   GAIA_MEMORY_DISABLED: '1'
+  # Both gate the memory surface the scenarios verify through, and both are read
+  # from the environment only: nothing in src/gaia/ sets them, despite two code
+  # comments that say the eval runner does. ADMIN gates memory_clear / the admin
+  # REST endpoints the runner's own memory preflight probes; MCP_ALWAYS gates
+  # whether the Agent UI MCP server registers the memory READ tools at all.
+  # Without the second, a scenario's "VERIFY VIA MCP: memory_recall(...)" has no
+  # tool to call and the judge is left scoring the reply text alone.
+  GAIA_MEMORY_ADMIN: '0'
+  GAIA_MEMORY_MCP_ALWAYS: '0'
 
 jobs:
   # Build the lane matrix, and refuse to build a bad one. Runs on a hosted runner
@@ -408,8 +423,22 @@ jobs:
                   "measures nothing and reports success."
               )
 
+          # The memory lane is the only one whose scenarios call remember/recall
+          # and verify through memory_recall, so it is the only one that runs with
+          # the store live. Derived from the categories rather than stored as a
+          # second field, so moving `memory` between lanes cannot leave the flag
+          # pointing at the wrong one. Emitted as the literal env values rather
+          # than a boolean the job turns into one: a GitHub expression of the
+          # form "flag and '0' or '1'" reads '0' as FALSY and falls through to
+          # '1', quietly handing the memory lane the disabled value.
           include = [
-              {"lane": lane["lane"], "categories": " ".join(lane["categories"])}
+              {
+                  "lane": lane["lane"],
+                  "categories": " ".join(lane["categories"]),
+                  "memory_disabled": "0" if "memory" in lane["categories"] else "1",
+                  "memory_admin": "1" if "memory" in lane["categories"] else "0",
+                  "memory_mcp": "1" if "memory" in lane["categories"] else "0",
+              }
               for lane in lanes
           ]
           print(f"matrix={json.dumps({'include': include})}")
@@ -710,9 +739,47 @@ jobs:
       # disagree about what this lane was supposed to measure.
       EVAL_CATEGORIES: ${{ matrix.categories }}
       EVAL_LANE: ${{ matrix.lane }}
+      # Memory ON for the memory lane, OFF everywhere else. Job scope beats the
+      # workflow defaults, and everything that reads these is started from here:
+      # the backend inherits the job environment through Start-Process, and the
+      # MCP server inherits it from the backend. The values are decided in the
+      # `lanes` job and arrive as literal strings - see the comment there for why
+      # they are not computed in YAML.
+      GAIA_MEMORY_DISABLED: ${{ matrix.memory_disabled }}
+      GAIA_MEMORY_ADMIN: ${{ matrix.memory_admin }}
+      GAIA_MEMORY_MCP_ALWAYS: ${{ matrix.memory_mcp }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # A memory lane with memory switched off does not fail - it scores badly,
+      # and the scorecard reads as a quality regression rather than a setup
+      # fault. So re-derive what this lane needs from its own category list and
+      # refuse to start if the environment disagrees, before anything has run.
+      # Independent of the matrix wiring on purpose: the point is to catch that
+      # wiring going wrong, so it cannot be checked against itself.
+      - name: Check the memory environment matches this lane
+        run: |
+          $ErrorActionPreference = "Stop"
+          $needsMemory = ($env:EVAL_CATEGORIES -split '\s+') -contains 'memory'
+          if ($needsMemory) {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1' }
+            $why = "The memory scenarios call remember/recall and verify through memory_recall, so this lane must run with the store live and its admin and MCP read tools registered."
+          } else {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0' }
+            $why = "No category in this lane touches long-term memory, and leaving the store live lets state from one scenario change the next one's score."
+          }
+          $wrong = @()
+          foreach ($name in $want.Keys) {
+            $have = [Environment]::GetEnvironmentVariable($name)
+            if ($null -eq $have) { $have = '<unset>' }
+            if ($have -ne $want[$name]) { $wrong += "$name is '$have' but should be '$($want[$name])'" }
+          }
+          if ($wrong.Count -gt 0) {
+            Write-Host "::error::Lane '$env:EVAL_LANE' runs [$env:EVAL_CATEGORIES] but its memory environment is wrong: $($wrong -join '; '). $why Fix the per-lane overrides in the agent-eval job's env: block, which take their values from the lanes job in this same workflow - do NOT change the workflow-level defaults, that would re-enable memory for every lane."
+            exit 1
+          }
+          Write-Host "Lane '$env:EVAL_LANE' memory environment is correct (memory scenarios in this lane: $needsMemory)."
 
       - name: Setup Python Environment
         uses: ./.github/actions/setup-venv
@@ -1687,6 +1754,9 @@ jobs:
             embedder_ok = ($env:EMBEDDER_OK -ne 'false')
             runner = $env:COMPUTERNAME
             enforce = ($env:ENFORCE -eq 'true')
+            # Whether the agent under test could remember anything, recorded next
+            # to the scores so a memory result is never read without it.
+            memory_enabled = ($env:GAIA_MEMORY_DISABLED -ne '1')
           } | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText("$PWD\eval-out\lane-status.json", $status, (New-Object System.Text.UTF8Encoding($false)))
 
