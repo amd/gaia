@@ -1367,7 +1367,9 @@ class ShellToolsMixin:
 
         segments = step.segments
         scanned = [
-            seg for seg in segments if not _skips_path_scan(policy_argv(seg)[0], granted)
+            seg
+            for seg in segments
+            if not _skips_path_scan(policy_argv(seg)[0], granted)
         ]
         candidates = [("Argument", a) for seg in scanned for a in seg[1:]]
         candidates += [
