@@ -157,6 +157,22 @@ class TestBuiltinRegistration:
             assert all("4b" in m.lower() for m in lite.models), lite.models
             assert lite.min_memory_gb == 5.0
 
+    def test_base_agents_are_hidden_from_selection(self):
+        """chat/doc/file are retired as user-facing choices — the flagship
+        supersedes them — but must stay resolvable by id so stored sessions,
+        the ``*-lite`` aliases, and the eval scenarios keep working.
+        """
+        pytest.importorskip("gaia_agent_chat")
+        registry = AgentRegistry()
+        registry.discover()
+        for agent_id in self._BASE_AGENTS:
+            reg = registry.get(agent_id)
+            assert reg is not None, f"{agent_id} must remain resolvable"
+            assert reg.hidden is True, f"{agent_id} must not be offered as a choice"
+        # What the UI picker renders (routers/agents.py filters on .hidden).
+        selectable = {r.id for r in registry.list() if not r.hidden}
+        assert selectable.isdisjoint(self._BASE_AGENTS), selectable
+
     def test_legacy_lite_ids_resolve_to_base_agent(self):
         registry = AgentRegistry()
         registry.discover()
