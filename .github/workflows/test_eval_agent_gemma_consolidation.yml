@@ -233,11 +233,24 @@ env:
     adversarial captured context_retention error_recovery mcp_reliability
     memory personality rag_quality real_world tool_selection
   # What still means something when the RAG embedder will not load (#3016).
-  # Deliberately NOT widened alongside the list above: which of the other
-  # categories stay interpretable without retrieval is a question only a real
-  # run answers, and guessing would put unmeasurable categories in a scorecard.
+  # Not the whole list above: for the categories left out, only a real run says
+  # whether they stay interpretable without retrieval, and guessing would put
+  # unmeasurable categories in a scorecard. `memory` needs no such run - 0 of
+  # its 25 scenarios carry a non-empty `setup.index_documents`, so the embedder
+  # is not what would stop them scoring, and leaving it out meant a degraded
+  # run measured 2 scenarios out of 82.
+  # Scenarios inside a listed category may still fail on their own - 3 of
+  # tool_selection's 5 do index documents, and the cross-session memory
+  # scenarios want the store GAIA_MEMORY_DISABLED turns off. That is the
+  # posture on purpose: run the category, let the scenario fail, do not call
+  # the whole category unmeasurable.
+  # BEFORE WIDENING FURTHER, do the timeout arithmetic. These two categories
+  # sum to a 579 min worst case against the eval step's 600 min cap (every one
+  # of the 30 scenarios hitting its own _compute_effective_timeout ceiling;
+  # the expected cost is ~131 min). There is no room for a third category
+  # without raising the cap.
   # Everything in EVAL_CATEGORIES but not here is reported NOT MEASURED.
-  EVAL_CATEGORIES_NO_EMBEDDER: tool_selection
+  EVAL_CATEGORIES_NO_EMBEDDER: memory tool_selection
   BACKEND_URL: http://127.0.0.1:4200
   # This runner's home is C:\Windows\System32\config\systemprofile and the
   # checkout is not under it, so without this every scenario carrying a
@@ -1185,7 +1198,7 @@ jobs:
             $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
             if ($env:EMBEDDER_OK -eq 'false') {
               $categories = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
-              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The remaining categories answer out of embedder-produced chunks and cannot be measured; the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true)."
+              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The run is cut to the categories listed in EVAL_CATEGORIES_NO_EMBEDDER; the rest are not run and the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true). Not every skipped category needs the embedder - the list is what this runner has been shown to measure without it, not a claim about the others."
             }
             Write-Host "Categories this run: $($categories -join ', ') ($($categories.Count) of $((($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }).Count))"
             foreach ($category in $categories) {
@@ -1325,7 +1338,10 @@ jobs:
           if ($env:EMBEDDER_OK -eq 'false') {
             foreach ($c in $measured) { $gateArgs += @("--category", $c) }
             foreach ($c in ($all | Where-Object { $measured -notcontains $_ })) { $gateArgs += @("--not-measured", $c) }
-            $gateArgs += @("--not-measured-reason", "the RAG embedder will not load on this runner (#3016), and this category answers out of embedder-produced chunks")
+            # One reason covers every skipped category, so it can only say why
+            # the RUN was cut - not why each category needs the embedder, which
+            # for several of them it does not.
+            $gateArgs += @("--not-measured-reason", "the RAG embedder will not load on this runner (#3016), so the run was cut to EVAL_CATEGORIES_NO_EMBEDDER and this category was not on that list")
           } else {
             foreach ($c in $all) { $gateArgs += @("--category", $c) }
           }
