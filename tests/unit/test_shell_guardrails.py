@@ -3,6 +3,9 @@
 
 """Unit tests for shell command guardrails in ShellToolsMixin._validate_command."""
 
+import time
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -41,6 +44,7 @@ def test_reviewed_switches_and_relative_path_reads_remain_allowed(command):
     assert ShellToolsMixin()._validate_shell_command(command)[0] is None
 
 
+from gaia.agents.tools import shell_tools
 from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     DANGEROUS_SHELL_OPERATORS,
@@ -99,8 +103,9 @@ def check(command: str, *, bypass: bool):
 
 
 def segments_for(command: str, *, bypass: bool):
-    _error, segments = _Shell(bypass)._validate_shell_command(command)
-    return segments
+    """Every segment on the line, in order, flattened across its steps."""
+    _error, steps = _Shell(bypass)._validate_shell_command(command)
+    return [segment for step in steps for segment in step.segments]
 
 
 # ---------------------------------------------------------------------------
@@ -211,14 +216,24 @@ class TestDangerousOperators:
     def test_command_substitution_dollar(self):
         assert DANGEROUS_SHELL_OPERATORS.search("echo $(whoami)")
 
-    def test_semicolon(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls; rm -rf /")
+    def test_chaining_is_split_off_before_this_scan(self):
+        """`&&`, `||` and `;` pick which commands run; they do not change what
+        a command IS, so each one goes through the whole allowlist on its own.
 
-    def test_logical_and(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls && rm -rf /")
+        `rm` is refused here for being `rm`, not for the operator in front of it.
+        """
+        for command in ("ls; rm -rf /", "ls && rm -rf /", "ls || rm -rf /"):
+            error, _ = ShellToolsMixin()._validate_shell_command(command)
+            assert error is not None, command
+            assert "not in the allowed list" in error["error"]
 
-    def test_logical_or(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls || rm -rf /")
+    def test_a_lone_ampersand_is_not_a_chaining_operator(self):
+        """`&` backgrounds a command, and cmd.exe runs `dir&whoami` as two."""
+        assert DANGEROUS_SHELL_OPERATORS.search("dir&whoami")
+        assert DANGEROUS_SHELL_OPERATORS.search("ls & rm -rf /")
+
+    def test_newline(self):
+        assert DANGEROUS_SHELL_OPERATORS.search("ls\nrm -rf /")
 
     def test_pipe_is_safe(self):
         # Single pipe is allowed (handled by pipe logic, not this regex)
@@ -686,10 +701,11 @@ class TestBypassIsStillASet:
 
 
 class TestOperatorsUnderBypass:
-    def test_compound_refused_by_default(self):
-        result = check("cd . && ls", bypass=False)
-        assert result is not None
-        assert "Shell operators" in result["error"]
+    def test_chaining_is_allowed_in_both_modes(self):
+        # `&&`, `||` and `;` are no longer bypass-only: the default tier walks
+        # every step of a chain and judges each one on its own binary.
+        assert check("cd . && ls", bypass=False) is None
+        assert check("cd . && ls", bypass=True) is None
 
     def test_compound_allowed_under_bypass(self):
         assert check("cd . && ls | head -3", bypass=True) is None
@@ -710,12 +726,17 @@ class TestOperatorsUnderBypass:
     @pytest.mark.parametrize(
         "command",
         [
-            "cd build && cmake ..",
-            "pytest -q || echo failed",
-            "echo one ; echo two",
+            "make build > out.txt",
+            "ls &",
+            "echo `whoami`",
+            "echo $(whoami)",
+            "ls\necho hi",
         ],
     )
-    def test_same_sequences_refused_by_default(self, command):
+    def test_shell_only_operators_still_refused_by_default(self, command):
+        # What bypass actually lifts now: redirection, backgrounding,
+        # substitution and the newline — the operators that only a shell can
+        # act on, and that no per-segment check can judge.
         result = check(command, bypass=False)
         assert result is not None
         assert "Shell operators" in result["error"]
@@ -735,11 +756,9 @@ class TestPerSegmentWalkSurvivesBypass:
     short-circuited just because the operators now parse."""
 
     def test_denied_binary_in_segment_two_refuses_the_whole_command_by_default(self):
-        # Refused for the operator, before the binary is even reached — the
-        # ordering documented in #3373.
         result = check("ls && rm -rf /tmp/foo", bypass=False)
         assert result is not None
-        assert "Shell operators" in result["error"]
+        assert "rm" in result["error"]
 
     def test_denied_binary_in_segment_two_refuses_the_whole_command_under_bypass(self):
         result = check("ls && rm -rf /tmp/foo", bypass=True)
@@ -936,17 +955,24 @@ class TestExecutorUnderBypass:
         assert "first" in result["stdout"]
         assert "second" in result["stdout"]
 
-    def test_the_same_command_never_reaches_a_shell_by_default(
-        self, shell_tool, tmp_path
-    ):
+    def test_a_redirect_never_reaches_a_shell_by_default(self, shell_tool, tmp_path):
         run = shell_tool(bypass=False)
+        target = tmp_path / "out.txt"
 
-        result = run(
-            "cd . && echo first && echo second", working_directory=str(tmp_path)
-        )
+        result = run(f"echo first > {target}", working_directory=str(tmp_path))
 
         assert result["status"] == "error"
         assert "Shell operators" in result["error"]
+        assert not target.exists()
+
+    def test_a_redirect_runs_under_bypass(self, shell_tool, tmp_path):
+        run = shell_tool(bypass=True)
+        target = tmp_path / "out.txt"
+
+        result = run(f"echo first > {target}", working_directory=str(tmp_path))
+
+        assert result["status"] == "success", result
+        assert "first" in target.read_text(encoding="utf-8")
 
     def test_the_rate_limit_is_lifted(self, shell_tool, tmp_path):
         """More than max_commands_per_10_seconds back to back, no refusal.
@@ -962,12 +988,29 @@ class TestExecutorUnderBypass:
             assert result["status"] == "success", result
             assert not result.get("rate_limited")
 
-    def test_the_rate_limit_still_applies_by_default(self, shell_tool, tmp_path):
+    def test_the_rate_limit_still_applies_by_default(
+        self, shell_tool, tmp_path, monkeypatch
+    ):
+        # Over the cap the default tier waits its turn rather than refusing, so
+        # what bypass lifts is the wait, not a refusal.
+        slept: list = []
+        now = [1_000_000.0]
+
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += seconds
+
+        monkeypatch.setattr(
+            shell_tools,
+            "time",
+            SimpleNamespace(time=lambda: now[0], sleep=sleep, monotonic=time.monotonic),
+        )
         run = shell_tool(bypass=False)
 
         results = [run("echo hi", working_directory=str(tmp_path)) for _ in range(5)]
 
-        assert any(r.get("rate_limited") for r in results)
+        assert all(r["status"] == "success" for r in results), results
+        assert slept
 
     def test_every_execution_is_audited_with_its_arguments(
         self, shell_tool, tmp_path, monkeypatch

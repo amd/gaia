@@ -1192,7 +1192,8 @@ def build_parser() -> "argparse.ArgumentParser":
         "--bypass-permissions",
         action="store_true",
         help="Start with the permission gates OFF: every gated tool runs "
-        "without asking, shell operators (&&, ||, ;, >) parse and run, the "
+        "without asking, the shell-only operators (>, >>, <, &, `, $(), "
+        "newline) parse and run, the "
         "read-only binary policy is replaced by the developer set (node, npm, "
         "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh) and the "
         "shell rate limit is lifted. This is arbitrary code execution. Off "

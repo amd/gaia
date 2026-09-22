@@ -28,8 +28,9 @@ var dev bool
 
 // bypassPermissions starts agents with the permission gates off: every gated
 // tool — shell commands, file writes — runs without asking, and the shell's own
-// guardrails come off with them (compound operators parse, the read-only binary
-// allowlist is replaced by a developer set, the rate limit is lifted).
+// guardrails come off with them (redirection and the other shell-only operators
+// parse, the read-only binary allowlist is replaced by a developer set, the
+// rate limit is lifted).
 //
 // Off unless passed, and only for this launch. Nothing persists it, so there
 // is no way to land in this mode without having typed it, and the TUI carries

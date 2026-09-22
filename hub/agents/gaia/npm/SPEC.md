@@ -411,8 +411,10 @@ keys never travel through stdio queries. These controls are not exposed over
 remotely, so a local server URL alone does not establish local inference.
 
 `--bypass-permissions` turns off more than the prompt. It also lifts the shell
-tool's own guardrails for the session: compound operators (`&&`, `||`, `;`, `>`)
-parse and run, the read-only binary allowlist is replaced by a developer set
+tool's own guardrails for the session: the shell-only operators — redirection
+(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
+newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
+default, the read-only binary allowlist is replaced by a developer set
 (`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
 `timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`, which
 already had their own paths), and the shell rate limit is dropped. That is

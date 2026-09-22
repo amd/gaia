@@ -228,19 +228,21 @@ one sanctioned place session-wide trust lives — see
 `src/gaia/agents/base/tool_grants.py`. It has always turned the confirmation
 prompt off. It now also lifts the shell tool's **own** guardrails, because
 turning off the prompt alone left the agent unable to do the work the user had
-just consented to: compound commands were refused before they parsed, and there
-was no interpreter, test runner or package manager in the allowlist.
+just consented to: there was no interpreter, test runner or package manager in
+the allowlist, and nothing could write its output anywhere.
 
 **What comes off, together, and only under bypass:**
 
 | Gate | Default | Under bypass |
 |------|---------|--------------|
-| Shell operator block (`&&`, `\|\|`, `;`, `>`, `>>`, `<`, `` ` ``, `$()`) | refused before parsing | parsed and executed |
+| Shell operator block (`>`, `>>`, `<`, `&`, `` ` ``, `$()`, newline) | refused before parsing | parsed and executed |
 | Confirmation prompts | asked every call | pre-approved (unchanged behaviour) |
 | Per-binary read-only policy | `ALLOWED_COMMANDS` + the git / PowerShell / `find` / `sort` / `uniq` sub-guards | replaced by `DEVELOPER_COMMANDS` |
-| Shell rate limit (10/min, 3/10s) | enforced | lifted |
+| Shell rate limit (10/min, 3/10s) | paced — a command over the cap waits its turn | lifted |
 
-Pipes were never blocked and are unaffected.
+Pipes and chaining (`\|`, `&&`, `\|\|`, `;`) were never blocked, or have since
+stopped being: every step of a chain runs by default, judged on its own binary.
+Bypass changes nothing there.
 
 Redirection has one exception. A command that is *only* a skill-granted CLI —
 `gh issue list > out.txt` with `shell:execute:gh` loaded — is handed its

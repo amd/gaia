@@ -49,9 +49,11 @@ the terminal UI meant building it from source.
   it. See SKILL §11.
 - **`--bypass-permissions` now lifts the shell guardrails too.** It used to skip
   only the confirmation prompt, which left the agent unable to run a build or a
-  test suite even with the user's blanket consent: compound commands were
-  refused before they parsed, and no interpreter, test runner or package manager
-  was reachable. Under bypass, `&&` / `||` / `;` / `>` now parse and run, the
+  test suite even with the user's blanket consent: no interpreter, test runner
+  or package manager was reachable, and nothing could write its output anywhere.
+  Under bypass, redirection (`>`, `>>`, `<`), backgrounding (`&`), substitution
+  (`` ` ``, `$()`) and the newline now parse and run — chaining with `&&` / `||`
+  / `;` / `|` already worked by default — the
   read-only allowlist is replaced by a developer set (`node`, `npm`, `make`,
   `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`, `timeout`, `export`,
   `cp`, `mv`, plus `python` / `python3` / `pytest` / `gh`), and the shell rate

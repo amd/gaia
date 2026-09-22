@@ -241,7 +241,7 @@ def test_the_shell_mixin_reads_the_attached_handler():
 
     agent = _Agent()
     assert agent.bypass_gates_active() is False
-    # A compound command and an ungranted developer binary: both refused.
+    # `make` is a developer binary, ungranted by default: the chain is refused.
     assert agent._validate_shell_command("cd . && make build")[0] is not None
 
     stdio.PermissionState(bypass=True).attach(agent.console)

@@ -347,7 +347,8 @@ an oversight.
 
 There is also no way to turn the gating off over HTTP. The stdio transport's
 `--bypass-permissions` runs gated tools unasked *and* lifts the shell tool's
-guardrails (compound operators, the read-only binary allowlist, the rate limit),
+guardrails (redirection and the other shell-only operators, the read-only binary
+allowlist, the rate limit),
 which is arbitrary code execution — appropriate for one local parent on a
 private pipe, not for a bound socket. The request body rejects unknown fields,
 so a client cannot ask for it. See SPEC §5.5.
