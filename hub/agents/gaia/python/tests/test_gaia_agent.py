@@ -258,7 +258,7 @@ def test_the_readiness_probe_takes_no_request_parameters():
 
 #: The acceptance bar from #4103: a conversational turn on the flagship must
 #: cost no more than ~2x what the retired ``chat`` agent charged for one, so
-#: dropping the ``chat`` agent id costs users no speed. ``chat`` measures 1,227
+#: dropping the ``chat`` agent id costs users no speed. ``chat`` measures 1,484
 #: tiktoken (cl100k) tokens of fixed prefill on this same construction.
 #:
 #: This is a ceiling, not a pin. A prompt edit that moves the number by fifty
@@ -273,7 +273,7 @@ def _agent(env=None, **overrides):
 
     Memory off is the determinism pin the module docstring explains: a
     reachable embedder adds five tools and a memory prompt block, so a count
-    taken on a dev box would not match CI. ``chat``'s 1,227-token reference was
+    taken on a dev box would not match CI. ``chat``'s 1,484-token reference was
     measured the same way, so the ratio is like-for-like.
 
     Yields inside the isolated registry rather than returning, because
@@ -311,15 +311,30 @@ def test_default_construction_is_not_fast():
 
 
 def test_fast_mode_registers_only_the_conversational_surface():
-    """The whole saving is here: 73 tools become 2.
+    """The whole saving is here: the full surface collapses to a handful.
 
     ``prompt_profile="chat"`` alone used to leave 19 registered, because this
     agent's own extras — skill library, skill learning, code index, email —
-    ran before ``super()._register_tools()`` and never read the profile.
+    ran before ``super()._register_tools()`` and never read the profile. That
+    absence is the invariant; the exact list below is ChatAgent's bare profile
+    and moves when ChatAgent does, which is a pin worth updating, not a bug.
     """
     with _agent(fast=True) as agent:
         registered = sorted(agent._tools_registry)
-    assert registered == ["run_shell_command", "search_documentation"]
+    assert registered == [
+        "read_tool_output",
+        "run_shell_command",
+        "search_documentation",
+    ]
+    # The 17 this agent adds on every other profile. Any one of them back means
+    # _profile_registers_tools stopped gating and the prefill budget is gone.
+    for extra in (
+        "list_skills",
+        "remember_skill_lesson",
+        "index_codebase",
+        "list_inbox",
+    ):
+        assert extra not in registered
 
 
 def test_fast_mode_meets_the_conversational_prefill_budget():
@@ -407,11 +422,7 @@ def test_env_turns_fast_mode_off_again():
 
 def _requirement(connector_id):
     return next(
-        (
-            cr
-            for cr in GaiaAgent.REQUIRED_CONNECTORS
-            if cr.connector_id == connector_id
-        ),
+        (cr for cr in GaiaAgent.REQUIRED_CONNECTORS if cr.connector_id == connector_id),
         None,
     )
 

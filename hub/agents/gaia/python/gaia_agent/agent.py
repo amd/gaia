@@ -419,7 +419,7 @@ class GaiaAgent(
         ChatAgent returns early on such a profile — ``chat`` is the only one —
         and this agent's own extras have to return early with it. Registering
         17 more tools onto a surface the profile deliberately left bare is what
-        made ``prompt_profile="chat"`` cost 5.8K prefill instead of 2.2K.
+        made ``prompt_profile="chat"`` cost 6.2K prefill instead of 2.2K.
         """
         profile = getattr(self.config, "prompt_profile", "full")
         return not get_profile_spec(profile).early_return
