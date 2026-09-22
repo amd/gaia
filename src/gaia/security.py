@@ -356,7 +356,7 @@ def stable_scratch_dir(anchor: str) -> Path:
         str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "")
     )
     digest = hashlib.sha1(
-        f"{owner}:{Path(anchor).resolve()}".encode("utf-8")
+        f"{owner}:{Path(anchor).resolve()}".encode("utf-8"), usedforsecurity=False
     ).hexdigest()[:12]
     path = Path(tempfile.gettempdir()) / f"gaia-scratch-{digest}"
     try:
