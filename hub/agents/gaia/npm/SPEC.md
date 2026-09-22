@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.13"`                  |
+| Contract version   | `API_VERSION = "2.14"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -391,14 +391,14 @@ the hub, which is what this package delivers, is supervised by the daemon over
 the HTTP surface above instead (§6.1).
 
 It emits the identical canonical event vocabulary, but its input channel accepts
-a JSON line carrying a `gaia_control` key, which gives it something HTTP does
-not have: a back-channel that can answer a confirmation prompt *while* a turn is
-in flight, and stop that turn (`cancel`) without ending the process — so loaded
+a JSON line carrying a `gaia_control` key, which can answer a confirmation
+prompt while a turn is in flight and stop that turn (`cancel`) without ending the process — so loaded
 skills, "always" grants, history and the bypass mode survive a cancel. It also
 takes `--bypass-permissions` (start with gating off) and
 `--use-claude` / `--claude-model` (route chat to the Anthropic API instead of
 local Lemonade; embeddings stay on Lemonade either way). None of that is
-reachable over `/v1/gaia/query`.
+reachable over `/v1/gaia/query` except opt-in per-call approval (contract 2.14);
+HTTP still offers no always grants or bypass mode.
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models;
@@ -557,10 +557,22 @@ worker with required authentication, explicit workspace/Host configuration,
 readiness checks and managed embedded Lemonade. This entrypoint is separate from
 the npm sidecar lifecycle. See [Container service](../../../../docs/deployment/container-service.mdx)
 for image configuration and operational limits. The canonical query contract
-remains unchanged; HTTP confirmation-gated tools still refuse the action.
+remains unchanged; HTTP confirmation-gated tools refuse unless the caller opts into per-call approval.
 
 The frozen binary also supports `gaia-agent --client` for deployed-worker
 status, streaming queries, mid-run responses and cancellation. Source installs
 expose `gaia-agent-client`; see the container service guide for credentials and examples.
 Interactive sensitive answers require hidden terminal input; failed answer delivery
 requests cancellation. Socket timeouts must be finite and positive.
+
+
+### Opt-in HTTP tool approval (contract 2.14)
+
+Send `can_confirm_tools: true` on `/v1/gaia/query` only when the client can show the
+complete pending action and `arguments` and collect an explicit decision. A
+`needs_confirmation` event then keeps the stream open and includes `confirm_id`.
+POST `/v1/gaia/query/{run_id}/confirm` with `{"confirm_id":"…","approved":true}`
+to approve that call once, or `false` to deny. Missing, stale, duplicate and
+cancelled requests are rejected; there is no always/session grant. Cancellation
+or disconnection never approves. The default remains refusal for older callers.
+The remote CLI opts in with `--interactive` and defaults its approval prompt to no.

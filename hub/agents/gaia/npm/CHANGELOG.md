@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Contract 2.14 adds opt-in per-call HTTP tool approval; the remote interactive CLI can approve or deny without granting future calls.
 - Accepted HTTP cancellation now terminates the stream explicitly instead of forwarding a late model answer.
 - Add `gaia-agent --client` / `gaia-agent-client` for authenticated worker status, streaming queries, questions and cancellation; include a Compose deployment and deterministic container query test.
 - Respect hidden-input questions in the remote CLI, fail on unacknowledged answers, and reject nonfinite timeouts.

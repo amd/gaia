@@ -288,3 +288,25 @@ def test_unacknowledged_interactive_answer_cancels(endpoint, monkeypatch):
     monkeypatch.setattr(cli.Client, "json", json_response)
     assert cli.main(["--url", endpoint.url, "query", "hello", "--interactive"]) == 1
     assert endpoint.posts[-1][0].endswith("/cancel")
+
+
+@pytest.mark.parametrize(
+    "answer,approved", [("yes\n", True), ("\n", False), ("no\n", False)]
+)
+def test_interactive_tool_decision_is_explicit(endpoint, monkeypatch, answer, approved):
+    endpoint.frames = [
+        {
+            "type": "needs_confirmation",
+            "confirm_id": "call",
+            "action": "run_python",
+            "arguments": {"code": "print(42)"},
+        },
+        {"type": "final", "answer": "done"},
+    ]
+    stdin = io.StringIO(answer)
+    monkeypatch.setattr(stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.sys, "stdin", stdin)
+    assert cli.main(["--url", endpoint.url, "query", "hello", "--interactive"]) == 0
+    assert endpoint.posts[0][1]["can_confirm_tools"] is True
+    assert endpoint.posts[-1][0].endswith("/confirm")
+    assert endpoint.posts[-1][1] == {"confirm_id": "call", "approved": approved}

@@ -12,13 +12,10 @@ The event translation itself is NOT reimplemented here — it lives in
 ``gaia.ui.sse_translation.CanonicalTranslator``, shared with the email sidecar,
 so the two agents cannot drift into private dialects of the same contract.
 
-Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
-``/query/{run_id}/cancel`` and ``/query/{run_id}/respond``. ``needs_input`` is
-answered over ``/respond`` on the run's existing stream. ``needs_confirmation``
-is the one gate still unimplemented: it ends the run with a refusal (the
-stateless D1 stub, same as email) rather than pretending to support server-side
-resume. That is additive when a tool needs it; claiming support we haven't built
-would be worse than the honest gap.
+Questions use ``/respond`` on the existing stream. Callers opting into
+``can_confirm_tools`` (contract 2.14) can approve or deny one pending tool with
+``/confirm``. Other callers retain the default refusal, matching the email
+sidecar's stateless behavior.
 
 :func:`main` also owns the binary's TRANSPORT DISPATCH: ``--serve`` runs this
 HTTP surface, anything else delegates to :mod:`gaia_agent.stdio`. One
@@ -57,7 +54,8 @@ AGENT_ID = "gaia"
 #: optional request fields on this, so it must reflect real capability.
 #: 2.13 (#3978) added ``GET /memory`` — the daemon-transport counterpart of
 #: the stdio ``MEMORY_DUMP_QUERY`` sentinel.
-API_VERSION = "2.13"
+#: 2.14 adds opt-in, per-call HTTP tool confirmation.
+API_VERSION = "2.14"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -110,6 +108,7 @@ class QueryRequest(_Strict):
             "document agent forgets what it just indexed."
         ),
     )
+    can_confirm_tools: bool = Field(default=False, strict=True)
     can_answer_questions: Optional[bool] = Field(
         default=None,
         description=(
@@ -153,6 +152,11 @@ class QueryRespondResponse(_Strict):
     delivered: bool
 
 
+class QueryConfirmRequest(_Strict):
+    confirm_id: str = Field(min_length=1, max_length=128)
+    approved: bool = Field(strict=True)
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -161,6 +165,8 @@ class _QueryRun:
         self.agent = agent
         self.handler = handler
         self.cancel_event = threading.Event()
+        self.can_confirm_tools = False
+        self.confirmed_ids = set()
         self.result: Optional[Dict[str, Any]] = None
 
 
@@ -661,6 +667,7 @@ async def query(request: QueryRequest, raw_request: Request):
                 mark()
 
         run = _QueryRun(request.run_id, agent, handler)
+        run.can_confirm_tools = request.can_confirm_tools
         precancelled = _registry.add(run)
         registered = True
         agent._cancel_event = run.cancel_event
@@ -757,6 +764,9 @@ async def query(request: QueryRequest, raw_request: Request):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype == "needs_confirmation" and request.can_confirm_tools:
+                        canonical["arguments"] = event.get("args", {})
+                        canonical.pop("always_scope", None)
                     yield _sse(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
@@ -764,6 +774,8 @@ async def query(request: QueryRequest, raw_request: Request):
                         # the worker thread blocks waiting for /respond.
                         continue
                     if ctype == "needs_confirmation":
+                        if request.can_confirm_tools:
+                            continue
                         yield _sse(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
@@ -813,6 +825,25 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8141  # 8131 is the email sidecar; never 4001.
+
+
+@router.post("/query/{run_id}/confirm")
+async def confirm_query(run_id: str, body: QueryConfirmRequest) -> Dict[str, bool]:
+    """Apply one explicit decision to the current tool call, never a session grant."""
+    run = _registry.get(run_id)
+    if run is None:
+        raise HTTPException(404, "Run is no longer active")
+    if (
+        not run.can_confirm_tools
+        or run.cancel_event.is_set()
+        or body.confirm_id in run.confirmed_ids
+        or not run.handler.resolve_tool_confirmation(
+            approved=body.approved, always=False, confirm_id=body.confirm_id
+        )
+    ):
+        raise HTTPException(409, "Tool approval is no longer pending")
+    run.confirmed_ids.add(body.confirm_id)
+    return {"delivered": True}
 
 
 @router.post("/query/{run_id}/respond", response_model=QueryRespondResponse)

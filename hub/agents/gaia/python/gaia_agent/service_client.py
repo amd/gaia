@@ -219,6 +219,7 @@ def main(argv=None):
             "context": context,
             "max_steps": args.max_steps,
             "can_answer_questions": args.interactive,
+            "can_confirm_tools": args.interactive,
         }
         if args.session_id:
             body["session_id"] = args.session_id
@@ -235,6 +236,33 @@ def main(argv=None):
                 print(
                     json.dumps(event, ensure_ascii=False), file=sys.stderr, flush=True
                 )
+            if kind == "needs_confirmation" and args.interactive:
+                print(
+                    json.dumps(event.get("arguments", {}), indent=2),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(
+                    "Approve this call once? [y/N]: ",
+                    end="",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                answer = sys.stdin.readline()
+                if not answer:
+                    raise ClientError("Input closed while approving a tool")
+                delivered = client.json(
+                    f"/v1/gaia/query/{run_id}/confirm",
+                    {
+                        "confirm_id": event["confirm_id"],
+                        "approved": answer.strip().lower() in {"y", "yes"},
+                    },
+                )
+                if (
+                    not isinstance(delivered, dict)
+                    or delivered.get("delivered") is not True
+                ):
+                    raise ClientError("GAIA did not acknowledge the tool decision")
             if kind == "needs_input" and args.interactive:
                 if event.get("sensitive") is True:
                     try:

@@ -439,3 +439,99 @@ def test_cancelling_a_live_run_reports_it_stopped(built, monkeypatch):
         worker.join(timeout=10)
 
     assert result["response"].status_code == 200
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_opt_in_tool_confirmation_is_single_use(built, monkeypatch, approved):
+    from concurrent.futures import ThreadPoolExecutor
+
+    client, agents = built
+
+    def process(self, query, max_steps=None):
+        allowed = self.console.confirm_tool_execution(
+            "run_python", {"code": "print(42)"}, timeout=5
+        )
+        return {"answer": "executed" if allowed else "denied"}
+
+    monkeypatch.setattr(_ScriptedAgent, "process_query", process)
+    body = _body(can_confirm_tools=True)
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(client.post, "/v1/gaia/query", json=body)
+        deadline = time.monotonic() + 5
+        while not agents or not getattr(agents[0].console, "_confirm_id", None):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        ident = agents[0].console._confirm_id
+        url = f"/v1/gaia/query/{body['run_id']}/confirm"
+        assert (
+            client.post(url, json={"confirm_id": "stale", "approved": True}).status_code
+            == 409
+        )
+        assert (
+            client.post(url, json={"confirm_id": ident, "approved": "true"}).status_code
+            == 422
+        )
+        response = client.post(url, json={"confirm_id": ident, "approved": approved})
+        assert response.status_code == 200 and response.json()["delivered"]
+        assert client.post(
+            url, json={"confirm_id": ident, "approved": not approved}
+        ).status_code in {404, 409}
+        streamed = pending.result(timeout=5)
+    events = [
+        json.loads(line[6:])
+        for line in streamed.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    approval = next(e for e in events if e["type"] == "needs_confirmation")
+    assert approval["arguments"] == {"code": "print(42)"}
+    assert approval["confirm_id"] == ident
+    assert events[-1]["answer"] == ("executed" if approved else "denied")
+
+
+def test_legacy_confirmation_still_refuses(built, monkeypatch):
+    client, _ = built
+
+    def process(self, query, max_steps=None):
+        assert not self.console.confirm_tool_execution(
+            "run_python", {"code": "print(42)"}, timeout=2
+        )
+        return {"answer": "denied"}
+
+    monkeypatch.setattr(_ScriptedAgent, "process_query", process)
+    response = client.post("/v1/gaia/query", json=_body())
+    assert response.status_code == 200
+    assert "supports confirmation" in response.text
+    assert '"arguments"' not in response.text
+
+
+def test_cancel_pending_approval_never_executes(built, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    client, agents = built
+    executed = []
+
+    def process(self, query, max_steps=None):
+        allowed = self.console.confirm_tool_execution(
+            "run_python", {"code": "print(42)"}, timeout=5
+        )
+        if allowed:
+            executed.append(True)
+        return {"answer": "done"}
+
+    monkeypatch.setattr(_ScriptedAgent, "process_query", process)
+    body = _body(can_confirm_tools=True)
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(client.post, "/v1/gaia/query", json=body)
+        deadline = time.monotonic() + 5
+        while not agents or not getattr(agents[0].console, "_confirm_id", None):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        ident = agents[0].console._confirm_id
+        assert client.post(f"/v1/gaia/query/{body['run_id']}/cancel").status_code == 200
+        result = client.post(
+            f"/v1/gaia/query/{body['run_id']}/confirm",
+            json={"confirm_id": ident, "approved": True},
+        )
+        assert result.status_code in {404, 409}
+        assert "499" in pending.result(timeout=5).text
+    assert not executed

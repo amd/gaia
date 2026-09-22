@@ -152,7 +152,8 @@ mid-run questions and reads answers from the terminal. Sensitive questions use
 hidden input and fail if terminal echo cannot be disabled; an unacknowledged
 answer requests cancellation instead of waiting indefinitely. `respond RUN_UUID
 REQUEST_ID "answer"` can answer from a second client while the original stream
-stays open. This does not add approval support for confirmation-gated tools.
+stays open. Interactive mode also shows full tool arguments and asks for explicit per-call
+approval, defaulting to deny. No session-wide grants are supported.
 
 For multiple turns, reuse `--session-id NAME` for retained runtime state and pass
 `--context-file transcript.json` with a JSON array of `{role, content}` messages.
@@ -190,6 +191,9 @@ uses a cloud provider. Validate the selected tool surface with its real models.
   endpoint, including credentials when querying Lemonade.
 - `POST /v1/gaia/query`: authenticated canonical SSE; supply `query`, UUID `run_id`
   and a `context` list, optionally a `session_id` and model override.
+- Opt-in `can_confirm_tools: true` keeps `needs_confirmation` open for a strict
+  boolean decision at `POST /v1/gaia/query/{run_id}/confirm` using its `confirm_id`.
+  Stale/duplicate decisions are rejected; older callers retain refusal.
 - Query cancellation, mid-run input response and memory retain the existing
   flagship HTTP contract. See the bundled flagship SPEC.
 

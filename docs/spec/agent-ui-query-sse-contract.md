@@ -530,3 +530,17 @@ canonical stream and never re-derive the mapping.
 - **Q4 — confirmation model (D1).** `confirm_url` presence in
   `needs_confirmation` depends on the stateless-vs-resume decision (§5), still
   pending epic sign-off.
+
+
+## GAIA HTTP 2.14 opt-in extension
+
+The stateless confirmation behavior above remains the default and the email
+sidecar behavior. GAIA callers may explicitly send `can_confirm_tools: true`.
+For that request, `needs_confirmation` is nonterminal and includes `confirm_id`
+and the complete `arguments` object; `always_scope` is omitted. The caller must
+show the action and arguments before POSTing a strict boolean `approved` and
+matching `confirm_id` to `/v1/gaia/query/{run_id}/confirm`. Only the pending call
+is affected. Unknown runs return 404; stale, duplicate or cancelled decisions
+return 409; malformed decisions return 422. Authentication applies as on query.
+Success is `{"delivered":true}`. There is no session grant, bypass, or implicit
+approval. The SSE handler's timeout/disconnect/cancellation paths still deny.
