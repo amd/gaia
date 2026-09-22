@@ -9,6 +9,12 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Received-invite grounding now recognizes Google events with omitted
+  organizer flags (#2787).** Calendar tools preserve the provider's explicit
+  organizer signal and treat the authenticated attendee as externally invited
+  when Google omits its default-false `organizer.self` and attendee organizer
+  fields. Mixed sent/received claims remain guarded, so self-organized events
+  cannot be mistaken for received invites.
 - **A content question ("who signed this?", "what date was agreed?") no
   longer comes back unanswerable when the answer is sitting in the mailbox
   (#3773).** `search_messages` used to fetch full bodies only when the model
