@@ -48,7 +48,15 @@ var runCmd = &cobra.Command{
 		"on a model server that is not there. The turn itself is bounded too, so an " +
 		"agent that accepts the query and then goes quiet is reported, never waited " +
 		"on forever — raise or lower that bound with --timeout.",
-	Args:         cobra.ExactArgs(1),
+	// ExactArgs(1) alone reports "accepts 1 arg(s), received 2" for
+	// `run <agent> --trace out.jsonl`, which never mentions the flag that
+	// caused it.
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := traceArgAdvice(args, 1); err != nil {
+			return err
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := checkModelSupported(args[0], runModel); err != nil {
@@ -58,12 +66,20 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		trace, err := openTrace(args[0])
+		if err != nil {
+			return err
+		}
+		defer closeTrace(trace)
 		code, err := ui.RunAgent(args[0], runQuery, runModel, dev, runTimeout, ctrl,
-			bypassPermissions, useClaude, claudeModelArg(), mockAgent)
+			bypassPermissions, useClaude, claudeModelArg(), mockAgent, trace)
 		if err != nil {
 			return err
 		}
 		if code != 0 {
+			// Closed explicitly: os.Exit runs no deferred function, so the
+			// trace would never report a recording that stopped early.
+			closeTrace(trace)
 			// The failure was already rendered to stderr; exit without letting
 			// cobra print a second, less useful message.
 			os.Exit(code)

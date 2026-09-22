@@ -188,6 +188,10 @@ async def get_or_refresh(
                 # Carry the derived account kind across rotation — it comes from
                 # the connect-time id_token, which a refresh does not re-issue.
                 account_type=stored.get("account_type"),
+                # #2591 review: a forwarded connection must stay marked
+                # forwarded across rotation, or the next disconnect would
+                # revoke the host app's own grant.
+                forwarded=bool(stored.get("forwarded")),
             )
 
         entry.access_token = new_access

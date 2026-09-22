@@ -84,6 +84,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError
@@ -163,10 +164,14 @@ class Subcommand:
             non-flag token is a path operand (pytest's test paths), not a
             single subcommand action, and each is checked for a shape that
             could escape the project (absolute, drive-letter, or ``..``).
-        allowed_flags: The valueless flags this grant accepts. Always the rule
-            for a :attr:`BinaryPolicy.positional` binary, and for a subcommand
-            rule that sets ``strict_flags``.
-        strict_flags: Make subcommand-mode flag checking an ALLOWLIST too —
+        allowed_flags: The valueless flags this grant accepts. Setting it turns
+            flag checking into an ALLOWLIST — a flag absent from it, from
+            ``value_flags``, from ``flag_values`` and from the policy's
+            ``bare_flags`` is refused. Always the rule for a
+            :attr:`BinaryPolicy.positional` binary, and for a subcommand rule
+            that sets ``strict_flags``.
+        strict_flags: Make subcommand-mode flag checking an ALLOWLIST even when
+            the rule lists no ``allowed_flags`` of its own —
             anything not in ``allowed_flags`` / ``value_flags`` / ``flag_values``
             / ``bare_flags`` is refused. Set for every CLI whose flags can name
             a PROGRAM (``go``, ``npm``, ``pip``, ``uv``). A denylist there is
@@ -330,6 +335,9 @@ class BinaryPolicy:
             a read-only floor predates the policy — ``git status`` has always
             been in the shell tool's whitelist, and this is where that floor
             now lives, so one table describes the binary instead of two.
+        python_module: The module that runs this CLI as ``python -m <module>``.
+            That spelling is then judged as the binary itself — same grant,
+            same policy — instead of as an ungranted ``python``.
     """
 
     binary: str
@@ -346,6 +354,7 @@ class BinaryPolicy:
     )
     remote_operands: bool = False
     ungranted: frozenset[str] = frozenset()
+    python_module: str | None = None
 
     def __post_init__(self) -> None:
         if bool(self.subcommands) == bool(self.positional is not None):
@@ -450,6 +459,8 @@ _GH_COMMON_VALUE_FLAGS = frozenset(
         "--user",
         "--sort",
         "--order",
+        "--status",
+        "--visibility",
     }
 )
 
@@ -497,38 +508,95 @@ _GH_WRITE_VALUE_FLAGS = frozenset(
 #: classified — so they raise no prompt. Not writes in themselves; each is a
 #: different capability smuggled in on a write's back.
 _GH_WRITE_DENIED_FLAGS = frozenset(
-    {"-F", "--body-file", "-e", "--editor", "-w", "--web"}
+    {"-F", "--body-file", "-e", "--editor", "-w", "--web", "--watch"}
 )
 
-_GH_WRITE_DENIED_FLAG_REASONS = {
-    "-F": "it posts the contents of a LOCAL file to the remote — a file-read "
-    "and an upload wearing an issue body's clothes. Pass the text with --body",
-    "--body-file": "it posts the contents of a LOCAL file to the remote — a "
-    "file-read and an upload wearing an issue body's clothes. Pass the text "
-    "with --body",
-    "-e": "it opens an interactive editor, which hangs an agent whose stdin is "
-    "closed. Pass the text with --body",
-    "--editor": "it opens an interactive editor, which hangs an agent whose "
-    "stdin is closed. Pass the text with --body",
-    "-w": "it opens a browser on the machine instead of returning anything, so "
-    "a read gets you no output and a write you approved never happens",
-    "--web": "it opens a browser on the machine instead of returning anything, "
-    "so a read gets you no output and a write you approved never happens",
-}
+_GH_WRITE_DENIED_FLAG_REASONS: Mapping[str, str] = MappingProxyType(
+    {
+        "-F": "it posts the contents of a LOCAL file to the remote — a file-read "
+        "and an upload wearing an issue body's clothes. Pass the text with --body",
+        "--body-file": "it posts the contents of a LOCAL file to the remote — a "
+        "file-read and an upload wearing an issue body's clothes. Pass the text "
+        "with --body",
+        "-e": "it opens an interactive editor, which hangs an agent whose stdin is "
+        "closed. Pass the text with --body",
+        "--editor": "it opens an interactive editor, which hangs an agent whose "
+        "stdin is closed. Pass the text with --body",
+        "-w": "it opens a browser on the machine instead of returning anything, so "
+        "a read gets you no output and a write you approved never happens",
+        "--web": "it opens a browser on the machine instead of returning anything, "
+        "so a read gets you no output and a write you approved never happens",
+        "--watch": "it blocks until the run finishes, which hangs an agent whose "
+        "stdin is closed. Poll with a plain read instead",
+    }
+)
 
 
-def _gh(actions: Iterable[str], confirm: Iterable[str] = ()) -> Subcommand:
+#: Refused on gh's READ subcommands. ``--web`` and ``--watch`` for the reasons
+#: above; ``-t``/``--show-token`` because on ``gh auth status`` it prints the
+#: GitHub credential itself — the escalation ``gh auth token`` is refused for,
+#: wearing a read's clothes. ``-t`` is ``--template`` everywhere else, which is
+#: why this is scoped per subcommand rather than set globally.
+_GH_READ_DENIED_FLAGS = frozenset({"-w", "--web", "--watch"})
+
+_GH_AUTH_DENIED_FLAGS = _GH_READ_DENIED_FLAGS | {"-t", "--show-token"}
+
+_GH_AUTH_DENIED_FLAG_REASONS: Mapping[str, str] = MappingProxyType(
+    {
+        **_GH_WRITE_DENIED_FLAG_REASONS,
+        "-t": "it prints the GitHub token to the output, which is the same "
+        "credential disclosure 'gh auth token' is refused for",
+        "--show-token": "it prints the GitHub token to the output, which is the "
+        "same credential disclosure 'gh auth token' is refused for",
+    }
+)
+
+
+#: Valueless flags a read subcommand accepts. An ALLOWLIST, like ``pytest``'s
+#: and for the same reason: a flag nobody reviewed is refused rather than
+#: passed through, so the next gh release cannot widen this grant on its own.
+_GH_READ_ALLOWED_FLAGS = frozenset(
+    {
+        "--log",
+        "--log-failed",
+        "--exit-status",
+        "--verbose",
+        "--comments",
+        "--source",
+        "--fork",
+        "--no-archived",
+        "--archived",
+        "--paginate",
+    }
+)
+
+
+def _gh(
+    actions: Iterable[str],
+    confirm: Iterable[str] = (),
+    *,
+    denied_flags: frozenset[str] = _GH_READ_DENIED_FLAGS,
+    denied_flag_reasons: Mapping[str, str] = _GH_WRITE_DENIED_FLAG_REASONS,
+) -> Subcommand:
     """One gh subcommand: reads that run unasked, plus writes the user approves.
 
-    *confirm* is empty for a purely read-only subcommand. When it is not, the
-    write-flag denylist comes with it — those flags are refused on the reads
-    too, which costs nothing (no read accepts them) and means one rule covers
-    the subcommand rather than one per action.
+    *confirm* is empty for a purely read-only subcommand; its flags are then an
+    ALLOWLIST, so an unreviewed flag is refused rather than passed through.
+    When *confirm* is not empty, the write-flag denylist comes with it — those
+    flags are refused on the reads too, which costs nothing (no read accepts
+    them) and means one rule covers the subcommand rather than one per action.
+
+    *denied_flags* / *denied_flag_reasons* override the read-side defaults for a
+    subcommand whose flags mean something different (``gh auth status -t``).
     """
     confirm_actions = frozenset(confirm)
     if not confirm_actions:
         return Subcommand(
-            actions=frozenset(actions), value_flags=_GH_COMMON_VALUE_FLAGS
+            actions=frozenset(actions),
+            value_flags=_GH_COMMON_VALUE_FLAGS,
+            allowed_flags=_GH_READ_ALLOWED_FLAGS,
+            denied_flags=denied_flags,
+            denied_flag_reasons=denied_flag_reasons,
         )
     return Subcommand(
         actions=frozenset(actions),
@@ -1231,8 +1299,14 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             # that carries it, which no per-call prompt makes visible.
             "label": _gh({"list"}, {"create", "edit"}),
             "search": _gh({"issues", "prs", "repos", "code", "commits"}),
-            # `status` only. `gh auth token` prints the credential.
-            "auth": _gh({"status"}),
+            # `status` only. `gh auth token` prints the credential — and so
+            # does `gh auth status -t`, which is why auth carries its own
+            # denylist instead of the shared read one.
+            "auth": _gh(
+                {"status"},
+                denied_flags=_GH_AUTH_DENIED_FLAGS,
+                denied_flag_reasons=_GH_AUTH_DENIED_FLAG_REASONS,
+            ),
             "api": _GH_API,
         },
     ),
@@ -1256,6 +1330,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
     #   anything plugin-shaped that isn't `-p no:...` (see denied below)
     "pytest": BinaryPolicy(
         binary="pytest",
+        python_module="pytest",
         summary=(
             "pytest — runs the project's own test suite. This EXECUTES "
             "project code under the loaded skill grant, not a "
@@ -2026,6 +2101,28 @@ def normalize_binary(token: str) -> str:
     return name if BINARY_NAME_RE.match(name) else ""
 
 
+#: Interpreters whose ``-m <module>`` form can stand in for a policy's binary.
+PYTHON_LAUNCHERS = frozenset({"python", "python3", "py"})
+
+
+def policy_argv(argv: Sequence[str]) -> list[str]:
+    """*argv* as the grant sees it: ``python -m pytest -q`` → ``pytest -q``.
+
+    Only the exact ``<launcher> -m <module>`` shape of a policy that declares
+    :attr:`BinaryPolicy.python_module`. An interpreter flag before ``-m`` keeps
+    it an ordinary ``python`` call, which the command whitelist refuses.
+    """
+    if (
+        len(argv) >= 3
+        and normalize_binary(argv[0]) in PYTHON_LAUNCHERS
+        and argv[1] == "-m"
+    ):
+        for policy in BINARY_POLICIES.values():
+            if policy.python_module is not None and argv[2] == policy.python_module:
+                return [policy.binary, *argv[3:]]
+    return list(argv)
+
+
 def _split_flag(
     token: str, *, single_dash_long: bool = False
 ) -> tuple[str, str | None]:
@@ -2291,12 +2388,24 @@ def classify_invocation(
                 return _refuse(denial)
             continue
 
-        if rule.strict_flags and not _is_known_flag(policy, rule, name):
+        # An allowlist, when the rule asks for one: a flag nobody reviewed is
+        # refused rather than passed through to the CLI's own parser.
+        # ``strict_flags`` asks outright; a rule that spells out
+        # ``allowed_flags`` has asked by listing them.
+        if (rule.strict_flags or rule.allowed_flags) and not _is_known_flag(
+            policy, rule, name
+        ):
+            known = ", ".join(sorted(_known_flags(policy, rule)))
+            if rule.strict_flags:
+                return _refuse(
+                    f"'{policy.binary} {subcommand} {name}' is not allowed. This "
+                    f"grant reads {policy.binary}'s flags as an allowlist, because "
+                    "a flag of this CLI can name a program to run; it covers "
+                    f"{known}."
+                )
             return _refuse(
                 f"'{policy.binary} {subcommand} {name}' is not allowed. This "
-                f"grant reads {policy.binary}'s flags as an allowlist, because "
-                "a flag of this CLI can name a program to run; it covers "
-                f"{', '.join(sorted(_known_flags(policy, rule)))}."
+                f"grant covers a fixed set of read-only flags: {known}."
             )
 
         takes_value = (

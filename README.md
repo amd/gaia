@@ -10,7 +10,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/channels/1392562559122407535/1402013282495102997)
 
-**GAIA** is AMD's open-source framework for building intelligent AI agents that run **100% locally** on AMD Ryzen AI hardware. Keep your data private, eliminate cloud costs, and deploy in air-gapped environments—all with hardware-accelerated performance.
+**GAIA** is AMD's open-source framework for building intelligent AI agents that run **locally by default** on AMD Ryzen AI hardware. Local inference keeps your data private, avoids cloud usage fees, and supports air-gapped deployment with hardware-accelerated performance.
+
+The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx).
 
 <p align="center">
   <a href="https://amd-gaia.ai/docs/quickstart"><strong>Get Started →</strong></a>
@@ -34,8 +36,8 @@ See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/i
 
 | Feature | Description |
 |---------|-------------|
-| **100% Local** | All data stays on your machine—perfect for sensitive workloads and air-gapped deployments |
-| **Zero Cloud Costs** | No API fees, no usage limits, no subscriptions—unlimited AI at no extra cost |
+| **Local Inference** | Run models on your machine for sensitive workloads and air-gapped deployments |
+| **No Cloud Inference Fees** | Local models require no API subscription; optional cloud providers have their own pricing |
 | **Privacy-First** | HIPAA-compliant, GDPR-friendly—ideal for healthcare, finance, and enterprise |
 | **Ryzen AI Optimized** | Hardware-accelerated inference using NPU + iGPU on AMD Ryzen AI processors |
 

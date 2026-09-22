@@ -924,6 +924,39 @@ def operatorize_query(query: str) -> str:
     return f"from:({cleaned}) OR subject:({cleaned})"
 
 
+# Matches an operator token AND its value (``from:acme``, ``from:(john
+# smith)``, ``newer_than:"14d"``) so it can be stripped before checking for
+# leftover free text -- reuses the canonical ``_GMAIL_OPERATORS`` list so
+# this never drifts from ``has_gmail_operator``'s idea of an operator.
+_OPERATOR_VALUE_RE = re.compile(
+    r"-?\b(?:" + "|".join(_GMAIL_OPERATORS) + r"):(?:\([^)]*\)|\"[^\"]*\"|\S+)",
+    re.IGNORECASE,
+)
+
+
+def _query_has_free_text(query: str) -> bool:
+    """True when ``query`` carries a term beyond Gmail structural operators.
+
+    A pure filter (``from:acme is:unread``) narrows by envelope metadata
+    only -- a hit proves nothing about body content. A query carrying a
+    bare term (``contract renewal``) only matches because Gmail searched
+    subject+body text, so its hits are a legitimate signal that the
+    caller is after content, not a count (#3773).
+    """
+    stripped = _OPERATOR_VALUE_RE.sub("", query or "")
+    stripped = re.sub(r"\b(?:OR|AND)\b", "", stripped, flags=re.IGNORECASE)
+    stripped = stripped.replace("(", "").replace(")", "")
+    return bool(stripped.strip())
+
+
+# #3773 — ceiling on how many hits an unset ``include_bodies`` may
+# auto-escalate to full bodies. A content-shaped query that still matches
+# more than this many messages falls back to metadata-only instead of
+# reproducing the #2763 overflow -- auto-escalation only ever applies to a
+# search already narrowed to a small candidate set.
+SEARCH_AUTO_BODY_CAP = 5
+
+
 def search_messages_impl(
     gmail,
     *,
@@ -932,23 +965,33 @@ def search_messages_impl(
     debug: bool = False,
     operator_retry: bool = True,
     budget_tokens: Optional[int] = None,
-    include_bodies: bool = False,
+    include_bodies: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """``include_bodies`` defaults to ``False`` (#2763): metadata-only (no
-    body decode, no per-message/envelope budget check needed -- see
-    ``_format_message_metadata_for_llm``). Live-hardware evidence showed a
-    docstring-only opt-IN (default ``True``, model sets ``False`` for a
-    counting question) is not reliable enough: a 4B-class local model did
-    not choose it on the very probe this issue is about, reproducing the
-    original overflow byte-for-byte (measured ``n_prompt_tokens`` within 1%
-    of the pre-fix run). Defaulting to the cheap, safe path and requiring an
-    explicit ``include_bodies=True`` opt-in for the expensive one means the
-    fix does not depend on the model reliably choosing a new parameter on
-    the failure path that actually destroys the conversation -- the
-    asymmetry matters: a content question that forgets to opt in gets a
-    recoverable "no body available" rather than a context-ending overflow.
-    Full bodies via ``_format_messages_within_budget`` are still available
-    with ``include_bodies=True``.
+    """``include_bodies=None`` (the default) auto-decides from the query
+    itself (#3773) rather than requiring the model to opt in: a query that
+    carries a free-text term beyond Gmail's structural operators
+    (``_query_has_free_text``) only matched because Gmail searched
+    subject+body text, so it is treated as a content search and its hits
+    are escalated to full bodies -- but ONLY when the candidate set is
+    already narrowed to ``SEARCH_AUTO_BODY_CAP`` messages or fewer, so a
+    content-shaped query that still matches many messages falls back to
+    metadata-only instead of reproducing the #2763 overflow. A pure filter
+    (``from:acme is:unread``) never auto-escalates, however few hits it
+    returns -- matching by sender/label/date proves nothing about body
+    content. ``include_bodies=True``/``False`` still override the
+    heuristic explicitly and are never capped by ``SEARCH_AUTO_BODY_CAP``.
+
+    Before #3773, ``include_bodies`` defaulted to plain ``False`` (#2763):
+    live-hardware evidence showed a docstring-only opt-IN (default
+    ``True``, model sets ``False`` for a counting question) was not
+    reliable enough -- a 4B-class local model did not choose it on the
+    very probe #2763 was about, reproducing the original overflow
+    byte-for-byte. Auto-deciding from the query shape keeps that same
+    guarantee (a forgotten opt-in can never overflow the context window)
+    while no longer requiring a content question to opt in by hand. Full
+    bodies via ``_format_messages_within_budget`` are still available
+    (unbounded by the auto-escalation cap) with an explicit
+    ``include_bodies=True``.
     """
     query = normalize_gmail_date_operators(query)
     with log_tool_call(
@@ -980,7 +1023,22 @@ def search_messages_impl(
                     stubs = listing.get("messages", [])
         finally:
             log_search_effective_query(query=query, retried_query=retried_query)
-        if include_bodies:
+
+        auto_escalated = False
+        resolved_include_bodies = include_bodies
+        if resolved_include_bodies is None:
+            # #3773: auto-decide from the EFFECTIVE query (the retried
+            # operator query when one fired) -- checking the original bare
+            # phrase would misread an already-operator-only retried query
+            # as still needing content escalation.
+            effective_query = retried_query if retried_query is not None else query
+            resolved_include_bodies = (
+                _query_has_free_text(effective_query)
+                and len(stubs) <= SEARCH_AUTO_BODY_CAP
+            )
+            auto_escalated = resolved_include_bodies
+
+        if resolved_include_bodies:
             full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
             out = _format_messages_within_budget(
                 full_msgs,
@@ -1010,11 +1068,18 @@ def search_messages_impl(
         summary: Dict[str, Any] = {"count": len(out), "truncated": truncated}
         if retried_query is not None:
             summary["operator_retry"] = retried_query
+        if auto_escalated:
+            summary["include_bodies_auto"] = True
         st["result_summary"] = summary
         return {
             "messages": out,
             "operator_retry": retried_query,
             "truncated": truncated,
+            # #3773 — True only when this call's own auto-decision (not an
+            # explicit include_bodies=True) escalated to full bodies, so a
+            # caller/test can tell "the heuristic chose to fetch bodies"
+            # apart from "the caller asked for bodies".
+            "include_bodies_auto": auto_escalated,
         }
 
 
@@ -1058,13 +1123,12 @@ def _apply_session_preferences(
     message is never urgent": a newsletter from a priority sender stays
     exactly as low-signal as its content says, and a genuinely urgent
     message from a muted sender stays exactly as urgent as its content
-    says. Both branches only tag ``preference_applied`` — today that tag
-    has no reader anywhere in this codebase (#2777); it does not reorder
-    or highlight anything in the rendered triage card. ``low_priority_senders``
+    says. Both branches tag ``preference_applied`` for the pre-scan ordering
+    path below; the tag does not change classification. ``low_priority_senders``
     separately has a real effect outside this function, in the autonomy
     loop: ``TrustPolicy._explicitly_preferred`` (``trust.py``) reads the
     raw set directly to auto-archive without confirmation. ``priority_senders``
-    has no reader anywhere outside this function.
+    is otherwise only used for pre-scan salience.
 
     Safety override: a phishing-flagged message bypasses BOTH priority
     and low-priority sender preferences. A user can't safely promote a
@@ -1685,6 +1749,14 @@ def _needs_review_sort_key(decision: Mapping[str, Any]) -> tuple:
     return (-internal_date, _looks_automated(decision.get("from", "")))
 
 
+def _preference_sort_key(item: Mapping[str, Any]) -> int:
+    """Put preferred senders first and muted senders last, stably."""
+    return {
+        "priority_sender": 0,
+        "low_priority_sender": 2,
+    }.get(item.get("preference_applied"), 1)
+
+
 def _fetch_inbox_counts(gmail) -> Dict[str, Optional[int]]:
     """Exact INBOX message/unread counts via ONE ``labels().get`` call
     (#2584, extended #2638) — NOT ``list_messages``'s ``resultSizeEstimate``.
@@ -1840,7 +1912,7 @@ def _finalize_needs_you_item(
 
     ``age_seconds`` is computed here, uniformly, from the working-only
     ``internal_date`` field every candidate carries by this point (never
-    part of the public contract, see ``_drop_internal_date`` below) — the
+    part of the public contract, see ``_drop_working_fields`` below) — the
     ONE place this computation happens, so a merge-level candidate (added
     after a per-backend view is already built, see
     ``merge_pre_scan_backends``) gets the identical treatment.
@@ -2024,9 +2096,9 @@ def pre_scan_inbox_impl(
     defaults, and a needs-review bucket for messages the heuristic was not
     confident about (#2584). A low-priority-sender match does not by
     itself route a message into suggested_archives (#2666) — only content
-    does. The ``preference_applied`` tag it carries instead has no reader
-    in this envelope today (#2777); it does not reorder or highlight
-    anything rendered here. The caller is expected to set ``kind`` in the
+    does. The ``preference_applied`` tag it carries is used only to order
+    each rendered section by sender salience (#2777); it does not change
+    classification. The caller is expected to set ``kind`` in the
     rendered output to ``email_pre_scan``
     so the chat surface can detect and render the structured card
     component.
@@ -2082,6 +2154,17 @@ def pre_scan_inbox_impl(
     is never silently dropped from ``suspicious_total``. Lets a narrow
     "anything suspicious?" caller (``check_suspicious_mail``) get an honest
     count without receiving the other, unrelated pre-scan sections.
+
+    NO MESSAGE BODY IS EVER READ ON THIS SURFACE (#3773/#2968): this call
+    passes no ``classifier=`` to ``triage_inbox_impl``, so its phase 2
+    full-body fetch never runs — every field above (category, urgency,
+    ``why``, ``suspicious``) is derived from phase 1 metadata (subject,
+    sender, labels, snippet) alone. A caller that needs a fact from inside
+    a message's actual body must use ``get_message``/``get_thread`` for a
+    known id, or ``search_messages`` (whose default auto-escalates to full
+    bodies for a small, content-shaped result set, #3773) — never this
+    tool. Wiring a bounded body-reading path into this surface is #2968,
+    intentionally not done here.
     """
     prefs = session_preferences or {}
     category_defaults = prefs.get("category_defaults") or {}
@@ -2132,6 +2215,9 @@ def pre_scan_inbox_impl(
                 # first and always wins — see its own docstring).
                 "is_phishing": bool(r.get("is_phishing", False)),
                 "is_spam": bool(r.get("is_spam", False)),
+                # Internal salience marker; removed before the public card
+                # payload is validated, but retained to order capped sections.
+                "preference_applied": r.get("preference_applied"),
                 # Epoch-millis string, carried through so #2743's needs_you
                 # view can order oldest-first and compute age_seconds —
                 # never part of the public PreScanItem shape.
@@ -2232,6 +2318,7 @@ def pre_scan_inbox_impl(
                         "sender": item["sender"],
                         "subject": item["subject"],
                         "is_meeting_request": item.get("is_meeting_request", False),
+                        "preference_applied": item.get("preference_applied"),
                         "reason": (
                             "informational + session default 'archive'"
                             f" — {item.get('why', '')}"
@@ -2239,6 +2326,17 @@ def pre_scan_inbox_impl(
                     }
                 )
             informational = []
+
+        # Session sender preferences affect salience, not classification:
+        # surface priority senders first and low-priority senders last within
+        # each attention section. Archive suggestions are a disposal list, so
+        # the safest candidates (low-priority senders) must come first and
+        # preferred senders last before the cap is applied. Stable sorting
+        # preserves the backend order for ties.
+        for section in (urgent, actionable, informational):
+            section.sort(key=_preference_sort_key)
+        suggested_archives.sort(key=_preference_sort_key, reverse=True)
+        needs_review.sort(key=_preference_sort_key)
 
         # #2743 redirect: waiting-on-you detections and persisted action
         # items carry no category bucket of their own — reuses
@@ -2279,11 +2377,17 @@ def pre_scan_inbox_impl(
         bulk_count = len(informational) + len(suggested_archives)
         bulk_view = {"count": bulk_count, "filter_tests": sorted(filter_test_ids)}
 
-        def _drop_internal_date(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            # ``internal_date`` is a needs_you-only working field (#2743) —
-            # never part of the public PreScanItem shape (extra="forbid").
+        def _drop_working_fields(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            # ``internal_date`` is a needs_you-only working field (#2743) and
+            # ``preference_applied`` is the sort-key tag consumed by
+            # _preference_sort_key — neither is part of the public
+            # PreScanItem shape (extra="forbid").
             return [
-                {k: v for k, v in item.items() if k != "internal_date"}
+                {
+                    k: v
+                    for k, v in item.items()
+                    if k not in ("internal_date", "preference_applied")
+                }
                 for item in items
             ]
 
@@ -2291,20 +2395,20 @@ def pre_scan_inbox_impl(
         inbox_counts = _fetch_inbox_counts(gmail)
         out = {
             "kind": "email_pre_scan",
-            "urgent": _drop_internal_date(urgent[: max(0, urgent_cap)]),
-            "actionable": _drop_internal_date(actionable[: max(0, actionable_cap)]),
+            "urgent": _drop_working_fields(urgent[: max(0, urgent_cap)]),
+            "actionable": _drop_working_fields(actionable[: max(0, actionable_cap)]),
             "informational_count": len(informational),
             # #2633: empty unless the caller opted in — the full list was
             # already computed above, so honoring the flag costs nothing
             # beyond what this call already did.
             "informational": (
-                _drop_internal_date(informational) if include_informational else []
+                _drop_working_fields(informational) if include_informational else []
             ),
-            "suggested_archives": _drop_internal_date(
+            "suggested_archives": _drop_working_fields(
                 suggested_archives[: max(0, archive_cap)]
             ),
             "suggested_drafts": [],
-            "needs_review": _drop_internal_date(
+            "needs_review": _drop_working_fields(
                 needs_review[: max(0, needs_review_cap)]
             ),
             "preferences_applied": {
@@ -2338,7 +2442,7 @@ def pre_scan_inbox_impl(
             # into ``scanned`` (every flagged row is already counted once
             # via ``actionable``'s own total — adding it again here would
             # double-count the same message in the coverage figure).
-            "suspicious": _drop_internal_date(suspicious[: max(0, suspicious_cap)]),
+            "suspicious": _drop_working_fields(suspicious[: max(0, suspicious_cap)]),
             "suspicious_total": len(suspicious),
         }
         st["result_summary"] = {
@@ -2816,7 +2920,7 @@ class ReadToolsMixin:
 
         @tool
         def search_messages(
-            query: str, max_results: int = 25, include_bodies: bool = False
+            query: str, max_results: int = 25, include_bodies: Optional[bool] = None
         ) -> str:
             """Search across ALL connected mailboxes.
 
@@ -2852,16 +2956,25 @@ class ReadToolsMixin:
             query automatically, but forming the operator query yourself is
             more reliable.
 
-            By DEFAULT this returns METADATA ONLY — id/subject/from/to/date/
-            label_ids/snippet, no body text — which is all a counting or
-            listing question needs ("how many emails from X", "list the
-            emails from Y this week", "do I have anything from Z"), at a
-            small fraction of the cost of a full search, so a large or
-            long-bodied result set never risks the model's context window.
-            Set ``include_bodies=True`` ONLY when the question needs what a
-            message actually SAYS — summarizing, quoting, or answering about
-            body content — since fetching bodies costs far more context and
-            can force the tool to shrink or refuse a large request.
+            By DEFAULT (``include_bodies`` omitted/``None``) this AUTO-DECIDES
+            from ``query`` (#3773): a pure filter query (only ``from:``/
+            ``is:``/``label:``/date operators, no bare term) returns METADATA
+            ONLY — id/subject/from/to/date/label_ids/snippet, no body text —
+            which is all a counting or listing question needs ("how many
+            emails from X", "list the emails from Y this week"). A query that
+            also carries a bare term (e.g. ``contract renewal deadline``) only
+            matched because Gmail searched subject+body text, so it is
+            escalated to full bodies automatically — but only when the hits
+            are already narrowed to a handful (``SEARCH_AUTO_BODY_CAP``); a
+            content-shaped query that still matches many messages stays
+            metadata-only rather than risking the model's context window. You
+            do not need to set ``include_bodies`` yourself for a content
+            question — form a query that includes the actual words you're
+            looking for and the tool escalates on its own. Set
+            ``include_bodies=True``/``False`` explicitly only to override the
+            auto-decision (e.g. force bodies for a pure ``from:`` filter, or
+            force metadata-only despite a bare term) — an explicit value is
+            never capped by ``SEARCH_AUTO_BODY_CAP``.
 
             When ``include_bodies=True``, a large ``max_results`` may shrink
             every hit's body TOGETHER (never independently, never dropping a
@@ -2880,10 +2993,13 @@ class ReadToolsMixin:
                 ``max_results`` — say "at least N", never present N as the
                 total). REPORT EVERY ENTRY in ``messages`` individually — do
                 not summarize, merge, or quietly drop entries from a long
-                list. With ``include_bodies=False`` each entry has no ``body``
-                field at all — never claim to quote or summarize content from
-                a metadata-only result; re-call with ``include_bodies=True``
-                (narrowing the query first) if content is actually needed.
+                list. When each entry has no ``body`` field at all, never
+                claim to quote or summarize content from a metadata-only
+                result — add the actual words you're looking for to ``query``
+                (or pass ``include_bodies=True`` explicitly) if content is
+                actually needed. ``include_bodies_auto`` is true when THIS
+                call escalated to full bodies on its own (rather than because
+                you passed ``include_bodies=True``).
                 If ``operator_retry`` is present, the literal query you
                 passed found nothing and this is the broadened operator query
                 that was retried instead — say the search was broadened
@@ -2909,6 +3025,7 @@ class ReadToolsMixin:
                 # being computed since inception.
                 truncated = False
                 operator_retry_query: Optional[str] = None
+                include_bodies_auto = False
                 for provider, backend in backends.items():
                     if len(merged) >= max_results:
                         break
@@ -2933,6 +3050,9 @@ class ReadToolsMixin:
                         )
                         continue
                     truncated = truncated or bool(result.get("truncated"))
+                    include_bodies_auto = include_bodies_auto or bool(
+                        result.get("include_bodies_auto")
+                    )
                     if result.get("operator_retry"):
                         operator_retry_query = result["operator_retry"]
                     for msg in result.get("messages", []):
@@ -2957,6 +3077,7 @@ class ReadToolsMixin:
                     "count": len(messages),
                     "truncated": truncated,
                     "operator_retry": operator_retry_query,
+                    "include_bodies_auto": include_bodies_auto,
                 }
                 if mailbox_errors:
                     out["mailbox_errors"] = mailbox_errors
@@ -3072,6 +3193,20 @@ class ReadToolsMixin:
             """Pre-scan the inbox into a typed envelope for the chat
             triage card.
 
+            This is the DEFAULT tool for any open-ended question about what
+            in the inbox deserves attention — importance, urgency, what to
+            look at, or generic time-sensitivity that names no specific
+            meeting/invite/deadline (#2764) — regardless of the words used
+            to ask it. It is NOT limited to literal "triage"/"review"/
+            "check" phrasing. Divert to a narrower tool only when the
+            question itself narrows the target: the user's own SENT mail
+            (``check_followups`` — a different DIRECTION than this tool's
+            ``needs_you`` rows, which are inbound), a named person/thread
+            (thread/search tools), explicit calendar language (calendar
+            tools), or flagged/suspicious mail only
+            (``check_suspicious_mail``). See ``ROUTING.md`` in this package
+            for the full decision table.
+
             The result has ``kind: "email_pre_scan"`` so the chat surface
             renders the structured card component instead of plain text.
             The card's ONE worklist is ``needs_you`` (#2743) — up to
@@ -3123,6 +3258,14 @@ class ReadToolsMixin:
             a global verdict ("nothing needs you") from a partial one. When
             ``degraded`` is true or ``mailbox_errors`` is non-empty, say
             which mailbox couldn't be scanned.
+
+            NO MESSAGE BODY IS READ for this scan (#3773) — every ``why``/
+            category/urgency signal comes from subject, sender, labels, and
+            the provider snippet alone. Never claim to quote or summarize a
+            message's actual content from this tool's output; if the user
+            asks what a specific flagged message actually says, call
+            ``get_message``/``get_thread`` on its id, or ``search_messages``
+            with the words you're looking for.
 
             The chat surface injects the triage card automatically from
             the tool result — do NOT copy, re-serialize, or paraphrase

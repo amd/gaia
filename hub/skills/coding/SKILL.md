@@ -16,7 +16,7 @@ metadata:
       - edit_file
       - search_file_content
       - search_code_index
-      - execute_python_file
+      - run_python
     provenance:
       source: starter-pack
 ---
@@ -84,7 +84,9 @@ separate `execute_python_file` tool still requires per-call approval.
 
 `python -c "..."` is refused because the grant requires a reviewable file in the
 checkout. Write new code to a file first so the diff shows it, and review what
-it does before executing it.
+it does before executing it. For a one-off calculation that should not land in
+the repository at all, `run_python` takes the snippet through the tool path
+instead — it asks for approval on every call rather than riding this grant.
 
 The rest of the grant is narrow on purpose. `--pdb` would hang waiting for a
 debugger nobody can answer, `-p <plugin>` imports arbitrary code, `--junitxml`

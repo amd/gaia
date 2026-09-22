@@ -61,6 +61,26 @@ const (
 	sessionContractMinor = 12
 )
 
+// memoryContract is the contract version that introduced GET /v1/<agent>/memory
+// (#3978, schema 2.13) on the agent named by memoryAgentID. A peer below it has
+// no memory route at all.
+//
+// The floor is only meaningful for that one agent: every sidecar numbers its
+// own contract, so the same number means different things across them. Pair it
+// with memoryAgentID — never read it as a capability on its own.
+const (
+	memoryContractMajor = 2
+	memoryContractMinor = 13
+)
+
+// memoryAgentID is the only agent that serves a memory dump. The flagship owns
+// the memory store; `email` reports a numerically HIGHER contract (2.14) and
+// has no such route, so a version-only gate would offer /memory there and then
+// 404 — the advertised-then-refused shape #3978 exists to remove. Mirrors
+// modelSwitchAgentID's reasoning in ui/chat/modelcmd.go: the feature lives
+// agent-side, so it is gated by WHICH agent.
+const memoryAgentID = "gaia"
+
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
 // failure the client assumes the peer is old, which is the answer that keeps
@@ -71,13 +91,29 @@ const versionProbeTimeout = 8 * time.Second
 type peerContract struct {
 	// version is the peer's reported apiVersion, or "" when unknown.
 	version string
+	// agentVersion is the peer's reported agent release version (server.py's
+	// "version" field, e.g. "0.2.0"), or "" when unknown -- distinct from
+	// apiVersion, which is the wire contract, not the shipped release.
+	agentVersion string
 	// canAnswerQuestions is true only when the peer is provably >= 2.6.
 	canAnswerQuestions bool
 	// supportsSession is true only when the peer is provably >= 2.12.
 	supportsSession bool
+	// answered is true only when the /version probe actually heard from the
+	// peer: a parsed 200 body, or a 404 (no such route -- which is itself a
+	// definitive "old enough to predate every contract this file tracks").
+	// False for a transport error, timeout, 401, 5xx, or an unreadable/
+	// unparseable body -- those are "we never got an answer", not "the peer
+	// answered and is old", and callers that need the distinction (Supports,
+	// FetchMemory) must not collapse the two (#3978 A1).
+	answered bool
 }
 
-// negotiate resolves the peer's contract once per client and caches it.
+// negotiate resolves the peer's contract once per client and caches it,
+// whether or not the probe actually got an answer (peerContract.answered) --
+// this is the single round-trip guaranteed per client, matching
+// TestSSEProbeCapabilitiesSharesTheCacheWithNegotiate: a persistently
+// unreachable relay must not turn into a fresh 8s probe on every Send().
 //
 // Cached for the life of this client, which is one agent launch: reinstalling
 // the agent means relaunching it, and that builds a fresh client that re-probes.
@@ -110,8 +146,10 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		Op:         fmt.Sprintf("read the '%s' agent's contract version", s.agentID),
 	})
 	if err != nil {
-		// Not fatal: the query itself is about to run and will report its own
-		// failure. Assuming "old" keeps that query valid.
+		// Not fatal for the query itself, which is about to run and will report
+		// its own failure; assuming "old" there keeps it valid. But this is NOT
+		// an answer from the peer -- a relay hiccup says nothing about the
+		// peer's actual version, so answered stays false (#3978 A1).
 		s.opts.Logf("sse: could not read the '%s' contract version (%v) — "+
 			"assuming it predates optional request fields", s.agentID, err)
 		return peerContract{}
@@ -127,9 +165,20 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		s.mu.Unlock()
 	}
 
+	if resp.StatusCode == http.StatusNotFound {
+		// No /version route at all is itself a definitive answer, not a
+		// failure: a peer old enough to lack this route predates every
+		// contract this file tracks.
+		s.opts.Logf("sse: '%s' has no /version route (404) — treating it as a "+
+			"peer old enough to predate every contract this file tracks", s.agentID)
+		return peerContract{answered: true}
+	}
 	if resp.StatusCode != http.StatusOK {
-		s.opts.Logf("sse: '%s' /version answered HTTP %d — assuming it predates "+
-			"optional request fields", s.agentID, resp.StatusCode)
+		// An operational failure (401 stale token, 503 sidecar still binding,
+		// ...), not a version signal -- the peer may be perfectly current and
+		// merely unreachable right now, so this is unanswered, not old.
+		s.opts.Logf("sse: '%s' /version answered HTTP %d — not a version signal, "+
+			"treating the probe as unanswered", s.agentID, resp.StatusCode)
 		return peerContract{}
 	}
 
@@ -138,8 +187,14 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		s.opts.Logf("sse: could not read the '%s' /version body (%v)", s.agentID, err)
 		return peerContract{}
 	}
+	// Both spellings: the flagship's /v1/gaia/version calls it "version",
+	// while email's /v1/email/version and BOTH agents' top-level /version call
+	// it "agentVersion". Decoding one leaves the release version permanently
+	// empty for the other.
 	var payload struct {
-		APIVersion string `json:"apiVersion"`
+		APIVersion   string `json:"apiVersion"`
+		Version      string `json:"version"`
+		AgentVersion string `json:"agentVersion"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil || payload.APIVersion == "" {
 		s.opts.Logf("sse: '%s' /version returned no readable apiVersion", s.agentID)
@@ -150,11 +205,27 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 	supportsSession := contractAtLeast(payload.APIVersion, sessionContractMajor, sessionContractMinor)
 	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t)",
 		s.agentID, payload.APIVersion, supports, supportsSession)
+	agentVersion := payload.Version
+	if agentVersion == "" {
+		agentVersion = payload.AgentVersion
+	}
 	return peerContract{
 		version:            payload.APIVersion,
+		agentVersion:       agentVersion,
 		canAnswerQuestions: supports,
 		supportsSession:    supportsSession,
+		answered:           true,
 	}
+}
+
+// AgentVersion returns the peer's reported agent release version (e.g.
+// "0.2.0"), or "" when no probe has completed yet. Never blocks or triggers a
+// probe itself -- callers that need a fresher answer call ProbeCapabilities
+// first; this only reads whatever negotiate has already cached.
+func (s *SSEClient) AgentVersion() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peer.agentVersion
 }
 
 // contractAtLeast reports whether a "MAJOR.MINOR" version is >= the floor.
@@ -213,6 +284,28 @@ func noticeForMissingPreScan(agentID, version string) string {
 			"Update it with `%s` then `%s`.",
 		agentID, have, preScanContractMajor, preScanContractMinor,
 		updateCommand("uninstall", agentID), updateCommand("install", agentID))
+}
+
+// noticeForMissingMemory is what the user is told when the installed sidecar
+// predates GET /v1/<agent>/memory (#3978, schema 2.13). Mirrors
+// noticeForMissingPreScan's shape: name what's missing, name the floor, name
+// the fix -- never a silent degrade to an empty-looking memory view.
+func noticeForMissingMemory(agentID, version string) string {
+	have := "an older contract"
+	if version != "" {
+		have = "contract " + version
+	}
+	// Deliberately does NOT promise that reinstalling fixes it. `gaia hub
+	// install` fetches the PUBLISHED artifact, so when the floor is newer than
+	// the latest release the same build comes back and the advice is worse
+	// than none -- it sends the user in a circle.
+	return fmt.Sprintf(
+		"the installed '%s' agent speaks %s, so it cannot serve its memory dump "+
+			"over this connection -- that needs %d.%d or newer. Check for a newer "+
+			"build with `%s`; if that is already the latest, this agent gets the "+
+			"memory view when the next one publishes.",
+		agentID, have, memoryContractMajor, memoryContractMinor,
+		updateCommand("install", agentID))
 }
 
 // updateCommand names the AGENT-scoped hub command, never the bare verb.
