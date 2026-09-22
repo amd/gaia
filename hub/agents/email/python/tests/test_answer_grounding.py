@@ -49,6 +49,7 @@ from gaia_agent_email import attention_cache  # noqa: E402
 from gaia_agent_email.agent import EmailTriageAgent, _SYSTEM_PROMPT  # noqa: E402
 from gaia_agent_email.answer_grounding import (  # noqa: E402
     UNGROUNDED_SUCCESS_FALLBACK,
+    _honest_prescan_summary,
     decode_stray_unicode_escapes,
     find_attention_card_contradiction,
     find_fabricated_attendee_claim,
@@ -245,6 +246,15 @@ class TestFindUngroundedSuccessClaim:
             "I have successfully archived all 3 messages.",
             "Both have been marked read.",
             "I have trashed that email.",
+            # #2914's exact repro: a fabricated draft-creation claim.
+            "The draft was successfully created.",
+            "I've created a draft for you.",
+            "I have drafted a reply to that message.",
+            "Draft is now saved.",
+            "The scheduled send has been cancelled.",
+            "I've RSVP'd yes to the meeting.",
+            "I have created an event on your calendar.",
+            "I've added it to your calendar.",
         ],
     )
     def test_detects_completion_claim_with_empty_tool_trace(self, phrase):
@@ -263,6 +273,14 @@ class TestFindUngroundedSuccessClaim:
             "No messages needed to be archived.",
             "Here's your inbox pre-scan — 5 actionable, 1 suggested archive.",
             "Let me know if you'd like me to star anything.",
+            # Non-fabricating "draft" mentions must not trip the guard --
+            # the guard is turn-scoped to completion claims, not the noun.
+            "Would you like me to draft a reply?",
+            "I can create a draft if you'd like.",
+            "Drafting a reply now, one moment.",
+            "Once created, the draft will appear in your Drafts folder.",
+            "Here's a draft summary of your inbox.",
+            "I can RSVP to that if you want.",
         ],
     )
     def test_no_false_positive_on_non_completion_language(self, phrase):
@@ -272,6 +290,23 @@ class TestFindUngroundedSuccessClaim:
         convo = [_tool_entry("archive_message", {"archived": True})]
         assert (
             find_ungrounded_success_claim("The message has been archived.", convo)
+            is None
+        )
+
+    def test_grounded_draft_claim_when_draft_reply_tool_actually_ran(self):
+        # The issue's own repro, but with the tool call present -- must NOT
+        # be flagged. Pins the narrow, non-fabricating half of the guard.
+        convo = [_tool_entry("draft_reply", {"draft_id": "d1"})]
+        assert (
+            find_ungrounded_success_claim(
+                "The draft has been successfully created.", convo
+            )
+            is None
+        )
+        assert (
+            find_ungrounded_success_claim(
+                "I have drafted a reply and it's ready in your Drafts folder.", convo
+            )
             is None
         )
 
@@ -559,6 +594,59 @@ class TestRewriteTriageAnswer:
         assert out.startswith("Here's your inbox — 1 item needs attention.")
 
 
+class TestHonestPrescanSummary:
+    """#3768 — a pre-scan that skipped a failed mailbox must say so in the
+    sentence the user reads, not only in the envelope's ``degraded`` flag.
+    """
+
+    def test_degraded_scan_names_the_failed_mailbox(self):
+        envelope = _prescan_envelope(
+            urgent=[{"message_id": "m1"}],
+            degraded=True,
+            mailbox_errors=[{"mailbox": "microsoft", "error": "token expired"}],
+        )
+        summary = _honest_prescan_summary(envelope)
+        assert "Outlook" in summary, (
+            f"must name the mailbox that failed (provider_label('microsoft') "
+            f"== 'Outlook'), got: {summary!r}"
+        )
+        assert "couldn't be scanned" in summary
+        # A user must not be able to read this as whole-account coverage.
+        assert "only" in summary
+
+    def test_non_degraded_scan_is_byte_identical_to_the_plain_summary(self):
+        envelope = _prescan_envelope(urgent=[{"message_id": "m1"}], scanned=25)
+        assert _honest_prescan_summary(envelope) == (
+            "Here's your inbox pre-scan — 1 urgent. "
+            "25 messages scanned · 100 unread in your inbox."
+        )
+
+    def test_degraded_with_unusable_mailbox_errors_still_qualifies_the_counts(self):
+        for errors in ([], [{"error": "no mailbox name"}], None):
+            summary = _honest_prescan_summary(
+                _prescan_envelope(degraded=True, mailbox_errors=errors)
+            )
+            assert "Part of your mail could not be scanned this time." in summary, (
+                f"a degraded envelope with mailbox_errors={errors!r} must still "
+                f"carry the generic caveat, got: {summary!r}"
+            )
+
+    def test_grounded_replacement_answer_carries_the_caveat(self):
+        # End-to-end through the path that actually reaches the user: the
+        # model's contradicted claim is replaced by this summary.
+        envelope = _prescan_envelope(
+            urgent=[{"message_id": "m1"}],
+            degraded=True,
+            mailbox_errors=[{"mailbox": "microsoft", "error": "token expired"}],
+        )
+        result = {
+            "result": "No urgent items today.",
+            "conversation": [_tool_entry("pre_scan_inbox", envelope)],
+        }
+        out = ground_final_answer(result)
+        assert "Outlook couldn't be scanned (token expired)" in out["result"]
+
+
 class TestNormalizeTriageList:
     def test_ordinary_prose_is_untouched(self):
         prose = "We looked at 5. Then we stopped."
@@ -652,10 +740,9 @@ class TestFindUngroundedCalendarConflictClaim:
 
 
 # ---------------------------------------------------------------------------
-# find_ungrounded_invite_claim (#2766) — "proposals are not invites". No
-# tool here can currently confirm a genuine received/sent invite, so a
-# completion-framed invite claim is always ungrounded except when this turn
-# actually called create_event_from_email.
+# find_ungrounded_invite_claim (#2766/#2787) — proposals are not invites;
+# an event with organizer_self=False is the narrow evidence for a received
+# invite, while self-organized and sent/confirmed claims remain guarded.
 # ---------------------------------------------------------------------------
 
 
@@ -700,6 +787,50 @@ class TestFindUngroundedInviteClaim:
     def test_unrelated_tool_call_does_not_ground_the_claim(self):
         convo = [_list_events_tool_entry(2)]
         text = "An invite has been confirmed as sent."
+        assert find_ungrounded_invite_claim(text, convo) is not None
+
+    def test_external_organizer_grounds_received_invite_claim(self):
+        convo = [
+            _events_tool_entry("list_calendar_events", [_event(organizer_self=False)])
+        ]
+        text = "An invite was received from the vendor."
+        assert find_ungrounded_invite_claim(text, convo) is None
+
+    def test_self_organized_event_does_not_ground_received_invite_claim(self):
+        convo = [
+            _events_tool_entry("list_calendar_events", [_event(organizer_self=True)])
+        ]
+        text = "An invite was received from the vendor."
+        assert find_ungrounded_invite_claim(text, convo) is not None
+
+    def test_external_evidence_from_an_earlier_listing_is_retained(self):
+        convo = [
+            _events_tool_entry("list_calendar_events", [_event(organizer_self=False)]),
+            _events_tool_entry("list_calendar_events", [_event(organizer_self=True)]),
+        ]
+        text = "You have received a calendar invite from the vendor."
+        assert find_ungrounded_invite_claim(text, convo) is None
+
+    def test_external_organizer_does_not_ground_sent_claim(self):
+        convo = [
+            _events_tool_entry("list_calendar_events", [_event(organizer_self=False)])
+        ]
+        text = "The invite was sent to your inbox."
+        assert find_ungrounded_invite_claim(text, convo) is not None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "An invite was sent to the team and received by all.",
+            "An invite was received and later sent to Bob.",
+        ],
+    )
+    def test_external_evidence_does_not_ground_mixed_sent_and_received_claim(
+        self, text
+    ):
+        convo = [
+            _events_tool_entry("list_calendar_events", [_event(organizer_self=False)])
+        ]
         assert find_ungrounded_invite_claim(text, convo) is not None
 
     def test_negation_far_from_the_word_invite_still_suppresses(self):

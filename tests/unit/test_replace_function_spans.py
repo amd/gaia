@@ -16,10 +16,13 @@ reported success for every one of them.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.security import PathValidator
 
 MODULE = """\
 import functools
@@ -49,10 +52,16 @@ def run():
 
 
 @pytest.fixture
-def replace():
-    """The registered ``replace_function`` tool, with no PathValidator attached."""
+def replace(tmp_path):
+    """The registered ``replace_function`` tool on a correctly-wired host.
+
+    The host must bind ``path_validator`` (#3316) — a write tool without one
+    reports the missing setup instead of running the span logic under test.
+    """
     mixin = FileIOToolsMixin()
     mixin.console = None
+    mixin.path_validator = PathValidator()
+    mixin.path_validator.allowed_paths.add(tmp_path.resolve())
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()
     try:
@@ -233,13 +242,31 @@ def test_a_missing_function_is_still_reported_as_not_found(replace, module):
     assert module.read_text(encoding="utf-8") == MODULE
 
 
-def test_the_backup_holds_the_original_without_a_path_validator(replace, module):
-    """The manual ``.bak`` path is the one every un-validated agent takes."""
+def test_the_backup_holds_the_original(replace, module):
     result = replace(str(module), "foo", "def foo():\n    return 99", backup=True)
 
-    backup = module.parent / f"{module.name}.bak"
-    assert result["backup_path"] == str(backup)
-    assert backup.read_text(encoding="utf-8") == MODULE
+    assert Path(result["backup_path"]).read_text(encoding="utf-8") == MODULE
+
+
+def test_a_host_without_a_path_validator_is_refused(module):
+    """#3316: the un-validated host used to take a manual-backup path and
+    write anyway. It must now report the missing setup and touch nothing."""
+    mixin = FileIOToolsMixin()
+    mixin.console = None
+    saved = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    try:
+        mixin.register_file_io_tools()
+        result = _TOOL_REGISTRY["replace_function"]["function"](
+            str(module), "foo", "def foo():\n    return 99", backup=True
+        )
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+    assert result["status"] == "error"
+    assert "path_validator" in result["error"]
+    assert module.read_text(encoding="utf-8") == MODULE
 
 
 def test_replacing_the_last_function_keeps_everything_above_it(replace, module):

@@ -251,25 +251,23 @@ def connect_scopes(provider: str, agent_scopes: List[str]) -> List[str]:
     return merged
 
 
-def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
-    """Run the browser OAuth flow and grant the result to this agent."""
+def _run_browser_flow(
+    agent: Any, provider: str, config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Start the browser OAuth flow with an already-assembled *config*, wait
+    for the user to finish it, and grant the result to this agent.
+
+    Shared by the generic loopback path (``_run_oauth``, which still collects
+    the OAuth client itself) and the guided Google walkthrough
+    (``_run_google_setup``, which has already saved the client via its own
+    route-driven walkthrough before calling this).
+    """
     from gaia.connectors._loop import run_sync
     from gaia.connectors.grants import grant_agent
     from gaia.connectors.handler import configure
 
     label = ms.provider_label(provider)
     scopes = ms.required_scopes(provider)
-
-    # Collect the OAuth client FIRST (#2730): connect_scopes() now fails
-    # loudly when the provider isn't configured yet (no more silent
-    # "connect with mail scopes only" degrade), so it must not run before
-    # the client-collection step that makes the provider resolvable.
-    config: Dict[str, Any] = dict(_collect_oauth_client(agent, provider))
-    config["scopes"] = connect_scopes(provider, ms.requested_scopes(provider))
-    # Committing the grant inside the same flow is what stops the
-    # connected-but-unusable dead end this whole feature exists to remove.
-    # required_scopes() stays the usability gate, not the request above.
-    config["grant_agents"] = {ms.AGENT_ID: scopes}
 
     started = run_sync(configure(provider, config))
     auth_url = started.get("authorization_url") or ""
@@ -303,18 +301,39 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
     return state
 
 
+def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
+    """Run the browser OAuth flow and grant the result to this agent."""
+    # Collect the OAuth client FIRST (#2730): connect_scopes() now fails
+    # loudly when the provider isn't configured yet (no more silent
+    # "connect with mail scopes only" degrade), so it must not run before
+    # the client-collection step that makes the provider resolvable.
+    config: Dict[str, Any] = dict(_collect_oauth_client(agent, provider))
+    config["scopes"] = connect_scopes(provider, ms.requested_scopes(provider))
+    # Committing the grant inside the same flow is what stops the
+    # connected-but-unusable dead end this whole feature exists to remove.
+    # required_scopes() stays the usability gate, not the request above.
+    config["grant_agents"] = {ms.AGENT_ID: ms.required_scopes(provider)}
+    return _run_browser_flow(agent, provider, config)
+
+
 def _run_connect(agent: Any, provider: str) -> None:
     """Run whichever sign-in *provider* actually uses.
 
     Personal Microsoft goes through the guided device-code walkthrough
-    (#2590) — no client secret, no browser required. ``microsoft_work``
-    deliberately falls through to the generic browser-loopback path instead
-    (``setup_routes.ROUTES`` has no entry for it): a work tenant registers
-    its own app and consent policy, so the personal walkthrough's
-    assumptions don't hold. Every other provider uses the same generic path.
+    (#2590) — no client secret, no browser required. Personal Google goes
+    through the guided Cloud Console walkthrough (#2594) — it DOES need a
+    client secret and a browser, but the steps and FAQ still come from
+    ``setup_routes`` instead of an ad hoc prompt. ``microsoft_work`` and
+    ``google_workspace`` deliberately fall through to the generic
+    browser-loopback path instead (``setup_routes.ROUTES`` has no entry for
+    either): a work/Workspace tenant registers its own app and consent
+    policy, so the personal walkthroughs' assumptions don't hold. Every
+    other provider uses the same generic path.
     """
     if provider == "microsoft":
         _run_microsoft_setup(agent)
+    elif provider == "google":
+        _run_google_setup(agent)
     else:
         _run_oauth(agent, provider)
 
@@ -353,6 +372,65 @@ def _run_microsoft_setup(agent: Any) -> Dict[str, Any]:
             )
         )
     return sw.run_device_oauth(agent, "microsoft")
+
+
+def _run_google_setup(agent: Any) -> Dict[str, Any]:
+    """First-time Google connect: walk the guided Cloud Console setup if the
+    OAuth client isn't configured yet, then continue through the ordinary
+    browser-loopback sign-in.
+
+    Mirrors ``_run_microsoft_setup``, but Google has no device-code flow for
+    a personal client and its token endpoint requires a client secret — so
+    the guided walkthrough runs with ``sign_in=SIGN_IN_LOOPBACK`` and both
+    credential steps (id and secret) get saved together before sign-in
+    starts, then ``_run_browser_flow`` takes over exactly as it does for
+    ``_run_oauth``.
+
+    A client id with no secret (``gap == "client_secret"``) does NOT re-walk
+    the whole console route — the user already has a project and an OAuth
+    client, just not the secret on this machine. ``_collect_oauth_client``
+    already asks for exactly the missing piece and reuses the stored id, so
+    that path is reused here instead of duplicating it.
+    """
+    from gaia_agent_email.tools import setup_walkthrough as sw
+
+    from gaia.connectors._loop import run_sync
+    from gaia.connectors.handler import configure
+    from gaia.connectors.setup_routes import SIGN_IN_LOOPBACK, get_route
+
+    gap = _oauth_client_gap("google")
+    if gap == "client_id":
+        route = get_route("google")
+        if route is None:
+            # Defensive — unreachable while setup_routes.ROUTES has a
+            # "google" entry. A future route removal must still fail as a
+            # legible message, never a crash or a silent no-op.
+            raise RuntimeError(
+                "No guided walkthrough exists for Google yet. Connect from "
+                f"Settings → Connections in the Agent UI, or see {OAUTH_DOCS_URL}."
+            )
+        collected, _trace = sw.run_setup_walkthrough(
+            agent, route, sign_in=SIGN_IN_LOOPBACK
+        )
+        run_sync(
+            configure(
+                "google",
+                {
+                    "client_id": collected["client_id"],
+                    "client_secret": collected["client_secret"],
+                    "save_only": True,
+                },
+            )
+        )
+    elif gap == "client_secret":
+        client_config = _collect_oauth_client(agent, "google")
+        run_sync(configure("google", {**client_config, "save_only": True}))
+
+    config: Dict[str, Any] = {
+        "scopes": connect_scopes("google", ms.requested_scopes("google")),
+        "grant_agents": {ms.AGENT_ID: ms.required_scopes("google")},
+    }
+    return _run_browser_flow(agent, "google", config)
 
 
 _CLIENT_FIRST_BLURB = (
@@ -723,6 +801,13 @@ def _setup_flow(agent: Any, wanted: str) -> str:
             target = by_provider[_choose_provider(agent, states)]
 
     if not _confirm_repair(agent, target):
+        # A first-time connect is the one decline that still needs the docs
+        # pointer: this is the last chance to hand it over before the
+        # provider-specific setup (walkthrough or otherwise) would have
+        # started. Reconnect/re-authorise declines already have a working
+        # setup, so the generic message is enough.
+        if target["state"] == ms.STATE_NOT_CONNECTED:
+            raise _Declined(f"{_DECLINED} Setup guide: {OAUTH_DOCS_URL}")
         raise _Declined(_DECLINED)
 
     provider = target["provider"]

@@ -468,6 +468,22 @@ agent = MyAgent(
 
 ---
 
+## Large tool results
+
+The agent applies a character budget to plain-string tool results as well as
+structured results before sending them to the model. Strings at or below the
+threshold remain unchanged. Oversized strings become a JSON envelope containing
+`head`, `tail`, `original_chars`, `omitted_chars`, and `truncated: true`. The
+serialized envelope, including escaping, fits the target budget, so long logs
+retain both their initial context and final diagnostic lines.
+
+Local thresholds/targets are 30,000/20,000 characters for NPU and 60,000/40,000
+for GPU/CPU. An omitted device follows the configured profile; FLM models retain
+the NPU budget. The Claude path uses its existing larger window. These are
+per-result character budgets, not measured remaining tokens. The envelope includes
+an artifact handle and continuation instructions for recovering the omitted
+middle with `read_tool_output`. Structured results retain complete records.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>
@@ -894,11 +910,32 @@ turn — no extra model call:
 | `partially verified` | Checks ran, but not all of them passed. |
 | `unverified` | No check ran. Names how many tools did run, if any. |
 
-A call counts as a check when the tool is one of `run_tests`, `run_lint`,
-`typecheck`, or `build`, or when its `command` argument names a known runner
-(`pytest`, `ruff`, `npm test`, `cargo test`, `go test`, `tsc`, …). The
-classifier is deliberately conservative: a missed runner reads `unverified`,
-which is cautious rather than wrong.
+The tool that ran the check says so. `run_shell_command`, `run_python`, and
+`execute_python_file` put a `check_result` on every result for a call that ran:
+a `CheckResult` (`label`, `target`, `kind`, `passed`, `summary`) when the program
+was a test, lint, typecheck, or build runner, and `null` when it was not. The
+footer reads that and nothing else. A shell run counts only when the program
+itself is the runner (`pytest -q`, `python -m pytest`, `uv run pytest`), so
+`cat pytest.ini` is not a test run; a failing summary line wins over a zero exit
+code, so `pytest | tail` that failed reads as failed.
+
+Results that carry no `check_result` — MCP tools, hub agents built before the
+field existed — are still classified from their text: a tool named `run_tests`,
+`run_lint`, `typecheck`, or `build`, a `command` argument naming a known runner,
+or a `run_python` / `execute_python_file` output with a pytest or unittest
+summary. Other unrecognized runners remain `unverified`.
+
+Before the answer goes out, the loop also checks it against the same record. An
+answer that reports a test outcome (`111 passed`, "all tests pass") when no test
+run passed after the last file edit gets one correction naming the gap; the
+second answer is emitted as written, with the footer beside it. A turn on its
+last step gets no correction.
+
+A check that ran more than once in the turn is judged by its most recent run. A
+test that failed and then passed after a fix reads `verified`; one that passed
+and then failed after an edit reads `ran and did not pass`. Only a rerun of the
+same command replaces an earlier run: if `pytest tests/` failed and
+`pytest tests/test_cart.py` then passed, the line still reports the failure.
 
 The statement rides in the emitted answer, so it reaches every surface — the
 CLI console, the SSE `answer` event, and `process_query`'s return value — and
@@ -1041,3 +1078,25 @@ See pre-built agents for chat, code, Jira, Blender
 Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 </small>
+
+
+## Recovering large tool outputs
+
+When a result exceeds the model budget, the excerpt includes an `artifact`
+handle and `continuation: read_tool_output`. Call
+`read_tool_output(artifact, offset=0, limit=2000)` to retrieve exact text;
+`next_offset` is the next character offset, or `null` at the end. Pages are
+limited to 8,000 characters. Unicode offsets count characters, not bytes.
+The archived text is the original string, or JSON for a structured result.
+Small results remain unchanged. Structured excerpts retain whole records.
+
+Shell, Python execution and browser excerpts retain omitted output before
+applying their own display limits. File readers accept `offset` and `limit`
+for bounded text pages, including files too large for a full read. Their normal
+path permissions still apply; paging does not authorize a new path.
+
+Output handles belong to the producing agent process, expire after one hour,
+and share a 64 MiB archive quota. Unknown, expired, cross-session handles and
+quota exhaustion return explicit errors. Restarting an agent invalidates its
+output handles; rerun the source tool if the session has ended. A continuation
+reads captured output rather than re-executing a potentially state-changing tool.
