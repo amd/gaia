@@ -87,14 +87,17 @@
                     "group": "Core Agents",
                     "pages": [
                       "guides/gaia",
+                      "guides/ai-providers",
                       "guides/chat",
-                      "guides/talk"
+                      "guides/talk",
+                      "guides/transcription"
                     ]
                   },
                   {
                     "group": "Developer Tools",
                     "pages": [
-                      "guides/code-index"
+                      "guides/code-index",
+                      "guides/project-map"
                     ]
                   },
                   {
@@ -343,6 +346,7 @@
                   "eval"
                 ]
               },
+              "reference/session-analytics",
               "reference/dependency-management",
               "reference/contributing-docs"
             ]
@@ -373,6 +377,7 @@
           {
             "group": "Packaging & Distribution",
             "pages": [
+              "deployment/shareable-build",
               "deployment/ui",
               "deployment/testing-electron",
               "deployment/code-signing"
@@ -398,6 +403,7 @@
               "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
+              "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
               "plans/autonomy-engine"
             ]
@@ -445,7 +451,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
-              "releases/v0.23.1",
+              "releases/v0.24.1",
               "releases/v0.23.0",
               "releases/v0.22.0",
               "releases/v0.21.2",
@@ -506,7 +512,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.23.0 \u00b7 Lemonade 11.5.0",
+        "label": "v0.24.1 \u00b7 Lemonade 11.8.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

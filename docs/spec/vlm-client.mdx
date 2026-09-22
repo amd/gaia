@@ -185,10 +185,14 @@ class VLMClient:
         Returns:
             Extracted text in markdown format
 
+        Raises:
+            VLMExtractionError: the page was not read. Never returns an error
+                string — a caller that indexes the return value would otherwise
+                index the error as the page's content (#3555).
+
         Note:
             - Ensures VLM is loaded before extraction
             - Uses default OCR prompt if none provided
-            - Returns error message if extraction fails
 
         Default Prompt:
             "You are an OCR system. Extract ALL visible text from this image
@@ -337,9 +341,11 @@ def extract_from_image(
 ) -> str:
     # Ensure VLM is loaded
     if not self._ensure_vlm_loaded():
-        error_msg = "VLM model not available"
+        error_msg = (
+            f"VLM model '{self.vlm_model}' is not available at {self.server_url}"
+        )
         logger.error(error_msg)
-        return f"[VLM extraction failed: {error_msg}]"
+        raise VLMExtractionError(error_msg, page_num, image_num)
 
     # Encode image as base64
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -404,14 +410,34 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             )
             return extracted_text
         else:
-            logger.error(f"Unexpected VLM response format: {response}")
-            return "[VLM extraction failed: unexpected response format]"
+            error_msg = self._parse_vlm_error(response)
+            logger.error(error_msg)
+            raise VLMExtractionError(error_msg, page_num, image_num)
 
+    except VLMExtractionError:
+        raise
     except Exception as e:
         logger.error(
             f"VLM extraction failed for page {page_num}, image {image_num}: {e}"
         )
-        return f"[VLM extraction failed: {str(e)}]"
+        raise VLMExtractionError(str(e), page_num, image_num) from e
+```
+
+### Error Handling
+
+A failure raises rather than returning text. Callers translate it at their own
+boundary — the RAG PDF/PPTX paths skip the page and record a warning, the vision
+tools return an error envelope, and `providers.lemonade.vision()` propagates.
+Nothing that failed is ever indexed as content (#3555).
+
+```python
+from gaia.llm import VLMExtractionError
+
+try:
+    text = vlm.extract_from_image(image_bytes, page_num=7)
+except VLMExtractionError as e:
+    # e.page_num / e.image_num name what could not be read
+    log.warning("Skipping page %s: %s", e.page_num, e)
 ```
 
 ### Server URL Parsing
@@ -551,10 +577,8 @@ def test_extract_from_image_vlm_not_loaded():
         vlm = VLMClient(auto_load=False)
 
         image_bytes = b"fake_image_data"
-        result = vlm.extract_from_image(image_bytes)
-
-        assert "[VLM extraction failed" in result
-        assert "not available" in result
+        with pytest.raises(VLMExtractionError, match="not available"):
+            vlm.extract_from_image(image_bytes)
 
 def test_extract_from_image_extraction_error():
     """Test extraction failure."""
@@ -566,10 +590,8 @@ def test_extract_from_image_extraction_error():
         vlm.client.chat_completions = Mock(side_effect=Exception("Network error"))
 
         image_bytes = b"fake_image_data"
-        result = vlm.extract_from_image(image_bytes)
-
-        assert "[VLM extraction failed" in result
-        assert "Network error" in result
+        with pytest.raises(VLMExtractionError, match="Network error"):
+            vlm.extract_from_image(image_bytes)
 
 def test_extract_from_image_with_custom_prompt():
     """Test extraction with custom prompt."""
@@ -826,11 +848,11 @@ try:
     with open("image.png", "rb") as f:
         text = vlm.extract_from_image(f.read())
 
-    if "[VLM extraction failed" in text:
-        print(f"Extraction failed: {text}")
-    else:
-        print(f"Success: {len(text)} chars extracted")
+    print(f"Success: {len(text)} chars extracted")
 
+except VLMExtractionError as e:
+    # The page was not read. Never index `text` here — there is none.
+    print(f"Page {e.page_num} could not be read: {e}")
 except Exception as e:
     print(f"Error: {e}")
 finally:

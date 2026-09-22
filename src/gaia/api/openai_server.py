@@ -22,7 +22,7 @@ import uuid
 from typing import AsyncGenerator
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -30,6 +30,7 @@ from gaia.agents.base.api_agent import ApiAgent
 
 from .agent_proxy import build_agent_proxy_router
 from .agent_registry import registry
+from .local_http import build_caller_guard, cors_config
 from .schemas import (
     ChatCompletionChoice,
     ChatCompletionRequest,
@@ -112,38 +113,6 @@ def _prepend_tool_denials(agent, content: str) -> str:
     return "\n".join(list(denials.values()) + ([content] if content else []))
 
 
-def extract_workspace_root(messages):
-    """
-    Extract workspace root path from GitHub Copilot messages.
-
-    GitHub Copilot includes workspace info in messages like:
-    <workspace_info>
-    I am working in a workspace with the following folders:
-    - /Users/username/path/to/workspace
-    </workspace_info>
-
-    Args:
-        messages: List of ChatMessage objects
-
-    Returns:
-        str: Workspace root path, or None if not found
-    """
-    import re
-
-    for msg in messages:
-        if msg.role == "user" and msg.content:
-            # Look for workspace_info section
-            workspace_match = re.search(
-                r"<workspace_info>.*?following folders:\s*\n\s*-\s*([^\s\n]+)",
-                msg.content,
-                re.DOTALL,
-            )
-            if workspace_match:
-                return workspace_match.group(1).strip()
-
-    return None
-
-
 # Initialize FastAPI app
 app = FastAPI(
     title="GAIA OpenAI-Compatible API",
@@ -151,45 +120,10 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Browser origins allowed by default: localhost/127.0.0.1 on any port.
-_LOCAL_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+# Cross-origin and caller-auth policy live in one place for every GAIA local
+# HTTP server -- see gaia/api/local_http.py.
+app.add_middleware(CORSMiddleware, **cors_config())
 
-
-def _cors_config() -> dict:
-    """Build the CORS policy: localhost-only by default.
-
-    ``GAIA_API_CORS_ORIGINS`` (comma-separated) adds extra allowed origins,
-    e.g. ``https://myapp.example.com``. A literal ``*`` opts into open CORS
-    for all origins, which the Fetch spec forbids combining with credentials
-    — so the wildcard also disables credentialed requests. Wildcard origins
-    WITH credentials are never configured: Starlette would reflect any
-    request Origin, letting any website the user visits call this local,
-    unauthenticated API with credentials.
-    """
-    raw = os.environ.get("GAIA_API_CORS_ORIGINS", "")
-    origins = [o.strip() for o in raw.split(",") if o.strip()]
-    if "*" in origins:
-        logger.warning(
-            "GAIA_API_CORS_ORIGINS='*': allowing all origins WITHOUT "
-            "credentials. To allow credentialed cross-origin calls, list "
-            "explicit origins instead of '*'."
-        )
-        return {
-            "allow_origins": ["*"],
-            "allow_credentials": False,
-            "allow_methods": ["*"],
-            "allow_headers": ["*"],
-        }
-    return {
-        "allow_origins": origins,
-        "allow_origin_regex": _LOCAL_ORIGIN_REGEX,
-        "allow_credentials": True,
-        "allow_methods": ["*"],
-        "allow_headers": ["*"],
-    }
-
-
-app.add_middleware(CORSMiddleware, **_cors_config())
 
 # The email agent's REST surface (POST /v1/email/*) is no longer mounted
 # in-process (#2176). It was the last in-process agent mount after the v2
@@ -245,7 +179,14 @@ async def log_raw_requests(request: Request, call_next):
     return response
 
 
-@app.post("/v1/chat/completions")
+#: Foreign browser origins are refused; the API key is enforced when set and
+#: warned about once when not (mandatory would break every consumer at once).
+_chat_completions_guard = build_caller_guard(
+    "POST /v1/chat/completions", public_paths=frozenset()
+)
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(_chat_completions_guard)])
 async def create_chat_completion(request: ChatCompletionRequest):
     """
     Create chat completion (OpenAI-compatible endpoint).
@@ -307,11 +248,6 @@ async def create_chat_completion(request: ChatCompletionRequest):
             status_code=404, detail=f"Model '{request.model}' not found"
         )
 
-    # Extract workspace root from messages (for converting relative paths to absolute)
-    workspace_root = extract_workspace_root(request.messages)
-    if _api_debug_enabled() and workspace_root:
-        logger.debug("📁 Extracted workspace root: %s", _REDACTED_LOG_VALUE)
-
     # Extract user query from messages (get last user message)
     user_message = next(
         (m.content for m in reversed(request.messages) if m.role == "user"), None
@@ -345,9 +281,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             logger.debug("🌊 Using STREAMING mode")
 
         return StreamingResponse(
-            create_sse_stream(
-                agent, user_message, request.model, workspace_root=workspace_root
-            ),
+            create_sse_stream(agent, user_message, request.model),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -360,8 +294,9 @@ async def create_chat_completion(request: ChatCompletionRequest):
         if _api_debug_enabled():
             logger.debug("📦 Using NON-STREAMING mode")
 
-        # Process query synchronously with workspace root
-        result = agent.process_query(user_message, workspace_root=workspace_root)
+        # Keep synchronous agent work from blocking health checks and other
+        # requests handled by the event loop.
+        result = await asyncio.to_thread(agent.process_query, user_message)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
@@ -430,9 +365,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
 
 
-async def create_sse_stream(
-    agent, query: str, model: str, workspace_root: str = None
-) -> AsyncGenerator[str, None]:
+async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str, None]:
     """
     Create Server-Sent Events stream for chat completion.
 
@@ -443,7 +376,6 @@ async def create_sse_stream(
         agent: Agent instance (with SSEOutputHandler)
         query: User query string
         model: Model ID
-        workspace_root: Optional workspace root path for absolute file paths
 
     Yields:
         SSE-formatted chunks with "data: " prefix
@@ -492,9 +424,7 @@ async def create_sse_stream(
 
     try:
         # Start processing in background
-        task = loop.run_in_executor(
-            None, lambda: agent.process_query(query, workspace_root=workspace_root)
-        )
+        task = loop.run_in_executor(None, lambda: agent.process_query(query))
 
         # Stream events as they are generated
         while not task.done():

@@ -28,6 +28,8 @@ from gaia.hub import installer as installer_mod
 from gaia.hub import lifecycle as lifecycle_mod
 from gaia.logger import get_logger
 
+from ..security import require_ui_header as _require_ui_header
+
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["hub"])
@@ -48,11 +50,6 @@ def _require_localhost(request: Request) -> None:
         raise HTTPException(
             status_code=403, detail="endpoint only available on localhost"
         )
-
-
-def _require_ui_header(request: Request) -> None:
-    if request.headers.get("x-gaia-ui") != "1":
-        raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
 def _shutdown_email_sidecar(agent_id: str) -> None:

@@ -32,7 +32,7 @@ def index_command(args):
             continue
 
         print(f"📄 Indexing: {pdf_path}")
-        if rag.index_document(pdf_path):
+        if rag.index_document(pdf_path).get("success"):
             print(f"✅ Successfully indexed: {pdf_path}")
             success_count += 1
         else:
@@ -161,7 +161,7 @@ def quick_command(args):
     else:
         print(f"📄 Processing {Path(args.file).name}...")
 
-    if not rag.index_document(args.file):
+    if not rag.index_document(args.file).get("success"):
         print(f"❌ Failed to index: {args.file}")
         return
 

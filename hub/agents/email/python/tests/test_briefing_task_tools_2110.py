@@ -12,6 +12,7 @@ fresh scan and populates the task store, (4) list_tasks reads them back.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from types import SimpleNamespace
 
@@ -109,6 +110,7 @@ def test_get_briefing_cold_generates(host, monkeypatch, tmp_path):
     out = json.loads(fn(max_messages=10))
     assert out["ok"] is True
     assert out["data"]["briefing"]["kind"] == "email_pre_scan"
+    assert out["data"]["stale"] is False
     assert host._prescan_calls == 1  # generated fresh
     assert (tmp_path / "brief.json").exists()  # persisted
 
@@ -162,7 +164,33 @@ def test_get_briefing_returns_persisted_when_present(host, monkeypatch, tmp_path
     out = json.loads(fn(max_messages=10))
     assert out["ok"] is True
     assert out["data"]["generated_at"] == "2026-06-01T08:00:00Z"
+    assert out["data"]["stale"] is True
+    assert out["data"]["cache_age_seconds"] > 24 * 60 * 60
+    assert "old and may be out of date" in out["data"]["summary"]["headline"]
     assert host._prescan_calls == 0  # did NOT regenerate
+
+
+def test_get_briefing_marks_a_recent_record_fresh(host, monkeypatch, tmp_path):
+    import gaia_agent_email.briefing as briefing
+
+    path = tmp_path / "brief.json"
+    generated_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    path.write_text(
+        json.dumps(
+            {
+                "generated_at": generated_at.isoformat(),
+                "briefing": {"kind": "x"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(briefing, "briefing_path", lambda: path)
+    fn = _tool(host, "get_briefing")
+    out = json.loads(fn(max_messages=10))
+    assert out["ok"] is True
+    assert out["data"]["stale"] is False
+    assert 60 * 60 < out["data"]["cache_age_seconds"] < 2 * 60 * 60
+    assert "old and may be out of date" not in out["data"]["summary"]["headline"]
 
 
 def test_extract_action_items_drives_scan_and_persists(host):

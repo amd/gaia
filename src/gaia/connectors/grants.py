@@ -42,7 +42,11 @@ import threading
 from pathlib import Path
 from typing import Dict, List
 
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import (
+    ConnectorsError,
+    ScopeNotAllowedError,
+    UnknownConnectorError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +159,31 @@ def _save_grants_locked(data: Dict[str, Dict[str, List[str]]]) -> None:
         raise
 
 
+def resolve_spec(connector_id: str):
+    """Return the catalog ``ConnectorSpec`` for ``connector_id``.
+
+    Raises ``UnknownConnectorError`` — not the registry's bare ``KeyError``,
+    which would reach an HTTP boundary as an unhandled 500 and a CLI as a
+    traceback.
+
+    Importing the catalog here (deferred — it imports the handlers, which
+    import this module) means every caller gets a populated REGISTRY without
+    each entry point having to remember, exactly as
+    ``api._require_mcp_server_for_activation`` does for activations.
+
+    Only WIDENING operations call this. Revoking must never depend on the
+    catalog — see the note on ``revoke_agent_grant``.
+    """
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    try:
+        return REGISTRY.get(connector_id)
+    except KeyError as e:
+        known = [spec.id for spec in REGISTRY.all()]
+        raise UnknownConnectorError(connector_id, known) from e
+
+
 def grant_agent(connector_id: str, agent_id: str, scopes: List[str]) -> None:
     """
     Grant ``agent_id`` (already namespaced) the given scopes for ``connector_id``.
@@ -162,7 +191,24 @@ def grant_agent(connector_id: str, agent_id: str, scopes: List[str]) -> None:
     Overwrites any existing scopes for the same ``(connector_id, agent_id)`` pair.
     The full load-modify-save sequence is performed under the per-process
     write lock so concurrent grants from multiple threads don't lose updates.
+
+    Both authorization gates live HERE rather than at each call site, so the
+    Agent UI route, the CLI, and the SDK cannot drift apart (#915, #3247):
+
+    - an id the catalog does not publish raises ``UnknownConnectorError`` —
+      otherwise a typo'd connector persists a phantom ledger key nothing will
+      ever read;
+    - a scope outside ``spec.scope_ceiling()`` raises ``ScopeNotAllowedError``
+      — otherwise the ledger can be set to scopes the connector never
+      advertised, and ``check_agent_grant`` would then approve token requests
+      for them. This is the same ceiling ``flow._reject_scopes_outside_catalog``
+      applies to the OAuth authorize path.
     """
+    spec = resolve_spec(connector_id)
+    disallowed = sorted(set(scopes) - set(spec.scope_ceiling()))
+    if disallowed:
+        raise ScopeNotAllowedError(agent_id, connector_id, disallowed)
+
     with _write_lock:
         data = load_grants()
         data.setdefault(connector_id, {})[agent_id] = list(scopes)
@@ -179,6 +225,11 @@ def revoke_agent_grant(connector_id: str, agent_id: str) -> None:
     """
     Remove an agent's grant for ``connector_id``. Idempotent — silently no-ops
     if the agent has no grant.
+
+    Deliberately NOT catalog-gated, unlike ``grant_agent``. Taking authority
+    away must always be possible: a connector dropped from the catalog would
+    otherwise strand grants that can never be cleared — a security regression
+    in the opposite direction. Only widening is gated.
     """
     with _write_lock:
         data = load_grants()
@@ -195,6 +246,10 @@ def revoke_agent_grant(connector_id: str, agent_id: str) -> None:
 def revoke_all_grants_for(connector_id: str) -> List[str]:
     """
     Remove every agent grant for ``connector_id``.
+
+    Not catalog-gated, for the same reason as ``revoke_agent_grant``: this
+    runs on disconnect, including for a connector that is on its way out of
+    the catalog, and must clear the ledger regardless.
 
     Called on connector ``disconnect()`` to prevent silent grant inheritance
     when a connector with the same id is later re-added (which would otherwise

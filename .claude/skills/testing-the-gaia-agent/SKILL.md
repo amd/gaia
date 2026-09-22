@@ -58,9 +58,9 @@ gh issue list --repo amd/gaia --limit 3 --json number,title   # must match exact
 
 If you cannot independently verify a result, report it as unverified. Say so plainly.
 
-## Two rules about the machine — ignore these and you will measure noise
+## Rules about the machine — ignore these and you will measure noise
 
-Both of these cost real hours in the session this skill came from, and both produce
+Each of these cost real hours in the session this skill came from, and each produces
 symptoms that look like product bugs.
 
 ### 1. Exactly ONE TUI at a time
@@ -127,6 +127,38 @@ Lines also carry `pid:NNNN`, so the shared default is still attributable when yo
 This is not hypothetical: a 180s `run_shell_command` timeout was nearly filed as a shell
 bug here before the record turned out to belong to another process. Confirm the pid in
 the log matches the `gaia-agent.exe` your TUI spawned before believing anything.
+
+### 4. Point memory at a throwaway DB — ALWAYS
+
+**`GAIA_MEMORY_DB` is mandatory in every launcher.** Without it the agent writes to the
+user's real `~/.gaia/memory.db`, and everything you plant during a test drive becomes a
+permanent fact about the user:
+
+```powershell
+$env:GAIA_MEMORY_DB = 'C:\...\gaia-tui-test\memory\test-memory.db'
+```
+
+This is the eval-runner rule applied to interactive sessions. `gaia eval agent` already
+resets state between memory scenarios (`GAIA_MEMORY_ADMIN=1` + `memory_clear(scope=all)`
+in `src/gaia/eval/runner.py`); a TUI test drive has no such cleanup, so isolation has to
+come from the environment.
+
+It is not hypothetical. A ladder run planted a persona's overdue deadline; days later a
+real session answered the user's "sweet!" with *"Priya needs that Fernbrook deck ASAP."*
+The user's second brain had been quietly seeded by a test.
+
+Delete the file between runs to test the cold-start path — a warm store hides
+first-run bugs the same way a warm model cache hid #1655.
+
+A bad value is fatal on purpose. `GAIA_MEMORY_DB` set to a directory, or set blank,
+raises at startup rather than falling back to the real store — a harness that believes
+it is isolated but is not is the whole failure mode. If the agent will not start,
+read the error; do not unset the variable.
+
+`GAIA_HOME` selects `$GAIA_HOME/memory.db` when `GAIA_MEMORY_DB` is unset. It
+does not isolate the whole `~/.gaia` tree: config uses `GAIA_CONFIG_DIR`, and logs
+and other state may still use the real home directory. Use a separate OS user or
+container when the harness needs complete isolation.
 
 ## Which surface you are testing
 
@@ -197,6 +229,8 @@ Create `launch-tui.ps1`. Every line matters:
 $root = '<ABSOLUTE PATH TO YOUR WORKTREE>'
 $env:PYTHONPATH = "$root\src;$root\hub\agents\chat\python;$root\hub\agents\gaia\python"
 $env:GAIA_TUI_HOME = '<A PRIVATE TEMP DIR — NOT ~/.gaia/tui>'
+$env:GAIA_MEMORY_DB = '<A PRIVATE TEMP FILE — NOT ~/.gaia/memory.db>'
+$env:GAIA_AGENT_LOG = '<A PRIVATE TEMP FILE — NOT ~/.gaia/logs/gaia-agent.log>'
 $env:PYTHONIOENCODING = 'utf-8'
 $inner = "cd /d `"$root`" && tui\bin\gaia-drive.exe run gaia --control-port 8817"
 Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', $inner -WindowStyle Normal
@@ -220,6 +254,13 @@ python -c "import gaia; print(gaia.__file__)"   # must be YOUR worktree
 above. It gives you a private `control.json` (`tui/internal/control/paths.go`) instead
 of the shared `~/.gaia/tui/control.json` that agents hijack from each other. It does not
 excuse running two TUIs.
+
+**`GAIA_MEMORY_DB` is mandatory always** — see machine rule 4. Omit it and your test
+drive writes into the user's real second brain. Verify before you type anything:
+
+```bash
+python -c "from gaia.agents.base.memory_store import resolve_memory_db_path as r; print(r())"
+```
 
 **Do not use `cmd //c start` from Git Bash** — MSYS mangles the arguments and no window
 opens. PowerShell `Start-Process` with a `.ps1` avoids the quoting entirely.
@@ -322,6 +363,35 @@ Then confirm end-to-end in the TUI, with the box quiet:
 Answer `n` unless you actually want the issue filed. If you answer `y`, delete
 the issue afterwards — and note `gh issue close` is itself REFUSE, so that is a
 manual step on github.com.
+
+### Check the prompt with your eyes, not the event log
+
+**The event stream is not the screen, and only one of them is the product.** A
+gate can emit a perfectly-formed `needs_confirmation` that the user never sees:
+the modal used to live inside the scrollable transcript, so a long enough
+session pushed it below the fold — and because a pending modal owns the
+keyboard, `end` and PgUp could not scroll to it either. Measured cost: 442s of
+`● GAIA streaming`, no visible question, and the turn ended only because the
+tester pressed Esc. Every unit test passed the whole time.
+
+So capture the frame and read it:
+
+```bash
+python util/tui_driver.py screen      # the frame, as the terminal paints it
+```
+
+| check | pass |
+|---|---|
+| the command is on screen | `gh issue create --title …` appears verbatim |
+| it is answerable | `y run once · … · n/esc deny` on screen |
+| the status bar tells the truth | `● gaia waiting for your answer` — **not** `streaming` |
+| the prompt survives scrollback | run a long session first, then trigger a write; the prompt is still in the frame |
+| no contradiction | the status hint must not say `Esc cancel` while the modal says `esc deny` |
+
+A prompt on the model but not in the frame is the same defect as no prompt at
+all — worse than a hard refusal, because a refusal at least ends the turn.
+`tui/internal/ui/chat/confirmvisible_test.go` asserts these against the rendered
+frame; add to it rather than to a test that only inspects `m.confirmation`.
 
 ## Measuring streaming
 

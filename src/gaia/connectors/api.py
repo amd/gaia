@@ -33,7 +33,7 @@ from gaia.connectors.activations import (
     list_agent_activations,
     load_activations,
 )
-from gaia.connectors.context import current_agent_id
+from gaia.connectors.context import agent_runtime_active, current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -182,9 +182,33 @@ def _authorize_access(
     Agent-id resolution order (per AC8 explicit opt-out clause):
       1. Explicit ``agent_id`` kwarg, if non-None.
       2. Active contextvar (``current_agent_id()``), set by the agent runtime.
-      3. ``None``, which BYPASSES the per-agent grant check.
+      3. ``None``, which BYPASSES the per-agent grant check — but ONLY outside
+         an agent turn. Inside one, a missing identity is a dropped context,
+         not an opt-out, so the request is refused (#915).
     """
     resolved_agent = agent_id if agent_id is not None else current_agent_id()
+
+    if resolved_agent is None and agent_runtime_active():
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+            provider=provider,
+            agent_id=None,
+            missing_scopes=list(scopes),
+        )
+
+    if resolved_agent is not None and not scopes:
+        # ``check_agent_grant(provider, agent, [])`` is True vacuously, and the
+        # connection-coverage check below is vacuous too — so a scope-less
+        # request would return a FULL-capability token with the ledger never
+        # consulted. That is the whole bypass this control exists to close,
+        # reached by simply not saying what you want. Same guard
+        # ``handler.get_credential`` applies; this is the OAuth twin of it.
+        raise ConfigurationError(
+            f"get_access_token({provider!r}) named no scopes, so the per-agent "
+            f"grant for {resolved_agent!r} cannot be verified and no token will "
+            "be issued. Pass the scopes the caller actually needs, e.g. "
+            "scopes=['https://www.googleapis.com/auth/gmail.readonly']."
+        )
 
     # Eager check for per-agent grant — surface the error BEFORE any
     # network round-trip so the caller can prompt the user immediately.
@@ -243,7 +267,12 @@ async def get_access_token(
     Agent-id resolution order (per AC8 explicit opt-out clause):
       1. Explicit ``agent_id`` kwarg, if non-None.
       2. Active contextvar (``current_agent_id()``), set by the agent runtime.
-      3. ``None``, which BYPASSES the per-agent grant check.
+      3. ``None``, which BYPASSES the per-agent grant check — but ONLY outside
+         an agent turn. Inside one, a missing identity is a dropped context,
+         not an opt-out, so the request is refused (#915).
+
+    An empty ``scopes`` list is refused whenever an agent id resolves: it would
+    satisfy the grant check vacuously and hand back a full-capability token.
 
     The contextvar path is the production path: ``Agent.process_query``
     enters ``_agent_context(self.namespaced_agent_id)`` before invoking
@@ -447,10 +476,53 @@ def get_connection(provider: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def revoke_connection(provider: str) -> None:
-    """Remove the stored connection for ``provider``. Idempotent."""
+async def revoke_connection_async(provider: str) -> Dict[str, Any]:
+    """
+    Revoke ``provider``'s OAuth grant with the provider (when it exposes a
+    public revoke endpoint), then remove the local stored connection.
+    Idempotent.
+
+    Returns ``{"revoke_supported": bool, "revoked_remotely": bool,
+    "revoke_error": str | None}`` (see ``flow.revoke_provider_token``) —
+    never bare success for what was only a local keyring delete. Reporting
+    a full revoke when the provider-side grant is still live was the
+    literal #2591 bug this replaces. Call this directly from async code
+    already on an event loop; use ``revoke_connection`` (sync) otherwise.
+    """
+    from gaia.connectors.flow import revoke_provider_token
+
+    result = await revoke_provider_token(provider)
     delete_connection(provider)
-    logger.info("api: revoked connection provider=%s", provider)
+    logger.info(
+        "api: revoked connection provider=%s revoke_supported=%s "
+        "revoked_remotely=%s",
+        provider,
+        result["revoke_supported"],
+        result["revoked_remotely"],
+    )
+    return result
+
+
+def revoke_connection(provider: str) -> Dict[str, Any]:
+    """Synchronous wrapper around :func:`revoke_connection_async`.
+
+    Must NOT be called from a thread with a running asyncio event loop —
+    call ``await revoke_connection_async(...)`` directly from async code
+    instead (mirrors ``get_access_token_sync``'s guard).
+    """
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is not None:
+        raise RuntimeError(
+            "revoke_connection was called from a thread with a running "
+            "asyncio event loop. Call `await revoke_connection_async(...)` "
+            "directly from async code instead."
+        )
+    from gaia.connectors._loop import run_sync
+
+    return run_sync(revoke_connection_async(provider))
 
 
 def import_forwarded_connection(
@@ -486,6 +558,8 @@ def import_forwarded_connection(
       - insecure keyring backend → ``ConnectorsError`` (via
         ``verify_keyring_backend``);
       - empty ``client_id`` / ``refresh_token`` → ``ConnectorsError``;
+      - a forwarded scope outside the connector's catalog ceiling, when
+        ``grant_agents`` is set → ``ScopeNotAllowedError``;
       - forwarded scopes don't cover ``required_scopes`` → ``ScopeMismatchError``.
         ``required_scopes is None`` falls back to the per-provider default
         (``_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER``, empty for unknown providers);
@@ -537,6 +611,17 @@ def import_forwarded_connection(
             required=required, granted=list(scopes), provider=provider
         )
 
+    # 3b. Grant ceiling (#915). Step 8 hands these scopes to ``grant_agent``,
+    #     which refuses any the connector never advertised — check it here so a
+    #     rejected forward still leaves the keyring untouched, per the
+    #     up-front-validation contract above.
+    if grant_agents:
+        from gaia.connectors.grants import resolve_spec
+
+        outside = sorted(set(scopes) - set(resolve_spec(provider).scope_ceiling()))
+        if outside:
+            raise ScopeNotAllowedError(None, provider, outside)
+
     account = account_email or DEFAULT_ACCOUNT
 
     # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
@@ -566,6 +651,9 @@ def import_forwarded_connection(
         client_id_hash=prov.client_id_hash,
         connected_at=connected_at,
         account_type=resolved_account_type,
+        # #2591 review: mark it so a later disconnect never revokes the
+        # host app's own OAuth grant — see save_connection's docstring.
+        forwarded=True,
     )
 
     # 7. Evict any stale access-token cache entry so the next get_or_refresh
@@ -800,6 +888,7 @@ __all__ = [
     "resolve_declared_scopes",
     "revoke_agent_grant",
     "revoke_connection",
+    "revoke_connection_async",
     "start_authorization",
     "start_device_flow",
     "tripwire_check",

@@ -23,7 +23,76 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable, List, Tuple
+
+#: CLI tools whose presence also implies a desktop application is installed.
+#: Labels match the per-platform probes in ``collect_system_info`` so the two
+#: never emit the same app twice.
+CLI_TOOL_PROBES: Dict[str, str] = {
+    "git": "git",
+    "code": "VS Code",
+    "cursor": "Cursor",
+    "node": "Node.js",
+    "docker": "Docker",
+    "brew": "Homebrew",
+    "npm": "npm",
+}
+
+#: Developer toolchain binaries, probed by the project map. The extension over
+#: ``CLI_TOOL_PROBES``, which covers only the seven commands that double as
+#: desktop-app markers. Closed list; adding a name is a one-line change.
+DEV_TOOL_PROBES: Tuple[str, ...] = (
+    "bash",
+    "cargo",
+    "cmake",
+    "curl",
+    "docker",
+    "dotnet",
+    "gcc",
+    "gh",
+    "git",
+    "go",
+    "gradle",
+    "java",
+    "make",
+    "mvn",
+    "node",
+    "npm",
+    "npx",
+    "pip",
+    "pnpm",
+    "poetry",
+    "powershell",
+    "python",
+    "python3",
+    "rg",
+    "ruby",
+    "rustc",
+    "tsc",
+    "uv",
+    "yarn",
+)
+
+#: ``(PATH value, binary name) -> present``. Keyed on PATH so a shell that
+#: prepends a venv invalidates the answer rather than reusing a stale one.
+_BINARY_CACHE: Dict[Tuple[str, str], bool] = {}
+
+
+def probe_binaries(names: Iterable[str]) -> Dict[str, bool]:
+    """Presence on PATH of each binary in *names*.
+
+    The single binary probe in the codebase — ``collect_system_info`` and the
+    project map both go through it, so "is X installed" has one answer and one
+    cache rather than drifting per caller.
+    """
+    path_env = os.environ.get("PATH", "")
+    result: Dict[str, bool] = {}
+    for name in names:
+        key = (path_env, name)
+        if key not in _BINARY_CACHE:
+            _BINARY_CACHE[key] = shutil.which(name) is not None
+        result[name] = _BINARY_CACHE[key]
+    return result
 
 
 def collect_system_info() -> List[Dict[str, str]]:
@@ -342,23 +411,12 @@ def collect_system_info() -> List[Dict[str, str]]:
                 except Exception:
                     pass
 
-        # Cross-platform: shutil.which() for CLI tools.
+        # Cross-platform: PATH probe for CLI tools.
         # Use the same display names as the platform checks to avoid duplicates.
-        _cli_tools: dict = {
-            "git": "git",
-            "code": "VS Code",
-            "cursor": "Cursor",
-            "node": "Node.js",
-            "docker": "Docker",
-            "brew": "Homebrew",
-            "npm": "npm",
-        }
-        for cmd, label in _cli_tools.items():
-            try:
-                if shutil.which(cmd) and label not in found_apps:
-                    found_apps.append(label)
-            except Exception:
-                pass
+        present = probe_binaries(CLI_TOOL_PROBES)
+        for cmd, label in CLI_TOOL_PROBES.items():
+            if present.get(cmd) and label not in found_apps:
+                found_apps.append(label)
 
         if found_apps:
             facts.append(

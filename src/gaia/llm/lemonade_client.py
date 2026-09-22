@@ -8,7 +8,6 @@ This module provides a client for interacting with the Lemonade server's
 OpenAI-compatible API and additional functionality.
 """
 
-import contextlib
 import json
 import logging
 import os
@@ -19,8 +18,10 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from threading import Event, Thread
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -65,22 +66,55 @@ DEFAULT_LEMONADE_URL = (
 )
 
 
+def _embedded_lemonade_url() -> str:
+    """The embedded server's base URL, or the packaged default.
+
+    ``gaia lemonade embedded`` binds a port chosen at start time and records it
+    alongside its API key. Nothing exports either, so a client that assumed the
+    default port looked at an address with nothing on it and reported the models
+    as missing — while the embedded server held every one of them.
+    """
+    state = _read_embedded_lemonade_state()
+    port = state.get("port") if state else None
+    if isinstance(port, int) and port > 0:
+        return f"http://{DEFAULT_HOST}:{port}"
+    return DEFAULT_LEMONADE_URL
+
+
+def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
+    """Read the selected GAIA home's embedded server, without crossing homes."""
+    gaia_home = os.getenv("GAIA_HOME", "").strip()
+    state_path = (
+        Path(os.path.expandvars(gaia_home)).expanduser() / "lemonade" / "state.json"
+        if gaia_home
+        else EMBEDDED_LEMONADE_STATE
+    )
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    port = state.get("port")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        return None
+    return state
+
+
 def _get_lemonade_config() -> tuple:
     """
     Get Lemonade host, port, and base_url from environment or defaults.
 
     Parses LEMONADE_BASE_URL env var if set, otherwise uses defaults.
-    Normalizes the URL to include /api/v1 suffix if omitted.
+    Adds /api/v1 to bare origins, preserving explicitly configured API paths.
 
     Returns:
         Tuple of (host, port, base_url)
     """
     from urllib.parse import urlparse
 
-    base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
-    # Normalize: ensure base_url includes /api/v1 suffix (users often omit it)
-    if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
-        base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
+    configured_url = os.getenv("LEMONADE_BASE_URL", "").strip()
+    base_url = resolve_lemonade_base_url(configured_url or _embedded_lemonade_url())
     # Parse the URL to extract host and port for backwards compatibility
     parsed = urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
@@ -95,20 +129,88 @@ def _get_lemonade_config() -> tuple:
     return (host, port, base_url)
 
 
-def resolve_lemonade_api_key(api_key: Optional[str] = None) -> Optional[str]:
-    """Resolve the Lemonade API key from argument, env var, or None.
+def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
+    """Resolve the Lemonade base URL: argument, env var, embedded server, default.
+
+    The public counterpart to :func:`resolve_lemonade_api_key`, and the only
+    thing callers should use to answer "where is Lemonade?".
+
+    Bare origins gain ``/api/<version>``. Explicit API paths, such as ``/v1``
+    or a reverse proxy's prefix, are preserved. Callers append endpoint paths
+    directly without adding another API prefix.
+
+    Callers that instead wrote ``os.getenv("LEMONADE_BASE_URL", "http://…")``
+    inline could not see GAIA's own embedded server, which binds a port chosen
+    at start time. Every one of those copies had to be found and changed for
+    the embedded server to be usable at all.
+    """
+    from urllib.parse import urlparse
+
+    if base_url is None or not base_url.strip():
+        return _get_lemonade_config()[2]
+    trimmed = base_url.strip().rstrip("/")
+    parsed = urlparse(trimmed)
+    if parsed.hostname and not parsed.path:
+        return parsed._replace(path=f"/api/{LEMONADE_API_VERSION}").geturl()
+    return trimmed
+
+
+#: Where GAIA's embedded Lemonade records the credential it generated.
+EMBEDDED_LEMONADE_STATE = Path.home() / ".gaia" / "lemonade" / "state.json"
+
+
+def _embedded_lemonade_api_key(base_url: Optional[str] = None) -> Optional[str]:
+    """The key GAIA's own embedded Lemonade generated for itself, if present.
+
+    ``gaia lemonade embedded`` starts a private server that mints an API key
+    and writes it here. Nothing exports it, so every GAIA client that resolved
+    the key from the environment alone got 401 from a server that was healthy
+    and serving — which the readiness screen then reported as "Lemonade not
+    running", and offered to install a second one onto the same port.
+    """
+    state = _read_embedded_lemonade_state()
+    if state is None:
+        return None
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(resolve_lemonade_base_url(base_url))
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            or parsed.port != state["port"]
+            or parsed.username is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+    except ValueError:
+        return None
+    key = state.get("api_key")
+    return key.strip() or None if isinstance(key, str) else None
+
+
+def resolve_lemonade_api_key(
+    api_key: Optional[str] = None, *, base_url: Optional[str] = None
+) -> Optional[str]:
+    """Resolve the Lemonade API key: argument, env var, embedded server, None.
 
     Empty or whitespace-only env values are treated as unset to avoid
     sending a malformed ``Bearer `` header to authenticated Lemonade
     servers (which would reject it).
+
+    An explicit argument or env var always wins — a configured credential must
+    never be overridden by whatever a local state file happens to hold.
+    The embedded key is restricted to its recorded local HTTP endpoint. Callers
+    with an explicit endpoint must pass ``base_url``; omitted uses the configured
+    Lemonade URL. ``GAIA_HOME`` selects the embedded state directory.
     """
     if api_key is not None:
         return api_key
     env_value = os.getenv("LEMONADE_API_KEY")
-    if env_value is None:
-        return None
-    stripped = env_value.strip()
-    return stripped or None
+    if env_value is not None and env_value.strip():
+        return env_value.strip()
+    return _embedded_lemonade_api_key(base_url)
 
 
 def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -135,6 +237,27 @@ DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
 
 
+def cloud_model_provider(
+    model_id: Optional[str], metadata: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """Identify Lemonade cloud models without mistaking dotted local ids for cloud.
+
+    Lemonade uses ``<provider>.<upstream-id>`` (cloud.md in lemonade-sdk/lemonade).
+    Known GAIA providers work before discovery; other providers require catalog
+    metadata, since ``user.*`` and local model version numbers also contain dots.
+    """
+    if not model_id:
+        return None
+    provider, separator, upstream_id = model_id.partition(".")
+    if not separator or not upstream_id:
+        return None
+    if metadata is not None and metadata.get("recipe") == "cloud":
+        return metadata.get("cloud_provider") or provider
+    if provider in {"fireworks", "amd"}:
+        return provider
+    return None
+
+
 def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
     """Compare two Lemonade model names, tolerating the ``user.`` namespace.
 
@@ -152,6 +275,20 @@ def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
         return n.lower()
 
     return norm(a) == norm(b)
+
+
+def is_llm_model_entry(model: Dict[str, Any]) -> bool:
+    """True if *model* is an LLM entry, not embedding/image/transcription/etc.
+
+    Accepts either a raw ``all_models_loaded`` entry (has ``type``) or an
+    enriched ``loaded_models`` entry (may have ``type is None`` for
+    catalog-derived rows lacking health data). ``type == "llm"`` is the
+    precise check; the label fallback covers those catalog-only rows.
+    """
+    if model.get("type") is not None:
+        return model.get("type") == "llm"
+    labels = model.get("labels") or []
+    return "image" not in labels and "embeddings" not in labels
 
 
 # Minimum context window (in tokens) that GAIA agents assume is loaded. The
@@ -186,6 +323,30 @@ def profile_ctx_size(device: Optional[str]) -> int:
     fails the load outright.
     """
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
+
+def resolve_effective_ctx_size(
+    requested_ctx: int, max_context_window: Optional[int]
+) -> int:
+    """The ctx_size actually in force for a load of *requested_ctx* (#2992).
+
+    ``profile_ctx_size`` picks a flat per-device value with no knowledge of
+    the model being loaded. Lemonade's own llama.cpp backend already caps an
+    over-large request at the model's trained context internally (logging
+    ``n_ctx_seq > n_ctx_train``) — but it keeps *reporting* the requested
+    value in ``recipe_options.ctx_size``, a config echo, not a measurement.
+    Clamp against the model's real ``max_context_window`` so GAIA requests
+    and reports the true ceiling instead of relying on — and repeating —
+    that silent server-side cap.
+
+    ``max_context_window`` of ``None`` or ``0`` means "unknown" (Lemonade
+    hasn't resolved the model's metadata yet, e.g. before first download) —
+    never treat that as "no ceiling"; the caller is responsible for warning
+    when the ceiling can't be determined.
+    """
+    if not max_context_window or max_context_window <= 0:
+        return requested_ctx
+    return min(requested_ctx, max_context_window)
 
 
 # ``_handle_large_tool_result``'s truncation trigger/target were tuned as a
@@ -716,6 +877,79 @@ class InsufficientDiskSpaceError(LemonadeClientError):
     """Raised when there's not enough disk space for model download."""
 
 
+def _cloud_error_status(error: openai.APIError) -> Optional[int]:
+    """Read numeric status fields; never interpret or display upstream text."""
+    status = getattr(error, "status_code", None)
+    if (
+        isinstance(status, int)
+        and not isinstance(status, bool)
+        and 400 <= status <= 599
+    ):
+        return status
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        envelope = body.get("error", body)
+        if isinstance(envelope, dict):
+            details = envelope.get("details")
+            if isinstance(details, dict):
+                status = details.get("status_code")
+                if (
+                    isinstance(status, int)
+                    and not isinstance(status, bool)
+                    and 400 <= status <= 599
+                ):
+                    return status
+    return None
+
+
+#: Where a user adds funds, for cloud providers whose billing page is known.
+_CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/billing")}
+
+
+def _cloud_request_error(
+    status: Optional[int], provider: Optional[str] = None
+) -> LemonadeClientError:
+    """Actionable cloud failures without reflecting provider response bodies."""
+    if status in {401, 403}:
+        return LemonadeAuthError(
+            f"Cloud authentication or access was denied (HTTP {status}). "
+            "Reconnect the provider in the TUI provider settings and check "
+            "your account's model access. If Lemonade itself requires "
+            "authentication, verify LEMONADE_API_KEY."
+        )
+    if status == 404:
+        return LemonadeClientError(
+            "The selected cloud model is unavailable (HTTP 404). It may need "
+            "deployment or access for your account. Choose a deployed model "
+            "or router in the TUI provider settings."
+        )
+    if status == 429:
+        return LemonadeClientError(
+            "Cloud rate limit reached (HTTP 429). Wait before retrying; "
+            "check your provider's usage limits and account in the TUI "
+            "provider settings."
+        )
+    if status in {402, 412}:
+        # Fireworks answers a suspended or over-limit account with 412.
+        name, billing = _CLOUD_BILLING.get(
+            provider or "",
+            (f"The {provider} provider" if provider else "The cloud provider", None),
+        )
+        where = f"at {billing}" if billing else "in your provider's billing console"
+        return LemonadeClientError(
+            f"{name} refused the request (HTTP {status}): the account may be "
+            "suspended, out of credit, or over its spending limit. Retrying will "
+            f"not help. Add funds or raise the limit {where}, then send your "
+            "message again, or switch to a local model in the TUI provider "
+            "settings to keep working now."
+        )
+    code = f" (HTTP {status})" if status is not None else ""
+    return LemonadeClientError(
+        f"Cloud request through Lemonade failed{code}. Check the provider "
+        "connection and selected model in the TUI provider settings."
+    )
+
+
 # Phrases indicating a backend rejected a request because the prompt plus
 # conversation history exceeded the loaded model's context window.
 # Case-insensitive; matched against the backend's own error message once
@@ -1160,8 +1394,7 @@ class LemonadeClient:
             self.base_url = f"http://{self.host}:{self.port}/api/{LEMONADE_API_VERSION}"
         elif base_url is not None:
             # base_url parameter provided - normalize and use it
-            if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
-                base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
+            base_url = resolve_lemonade_base_url(base_url)
             self.base_url = base_url
             # Parse for backwards compatibility with code accessing self.host/self.port
             parsed = urlparse(base_url)
@@ -1173,6 +1406,7 @@ class LemonadeClient:
             self.host = env_host
             self.port = env_port
         self.model = model
+        self._model_metadata: Dict[str, Dict[str, Any]] = {}
         self.server_process = None
         self.log = get_logger(__name__)
         # Gateway models already announced as non-streaming, so the reason is
@@ -1180,7 +1414,7 @@ class LemonadeClient:
         self._announced_non_streaming: set = set()
         self.keep_alive = keep_alive
         self._log_file = None
-        self.api_key = resolve_lemonade_api_key(api_key)
+        self.api_key = resolve_lemonade_api_key(api_key, base_url=self.base_url)
         # Instance-scoped exact-pin ctx override (#1892). Never a class-level
         # default or MODELS mutation — chat/RAG clients sharing this process
         # must keep their own floor semantics.
@@ -1196,6 +1430,19 @@ class LemonadeClient:
         self.active_downloads: Dict[str, DownloadTask] = {}
         self._downloads_lock = threading.Lock()
 
+        # Models already warned about a floor-vs-ceiling clamp (#2992), so the
+        # warning fires once per model instead of on every already-loaded call.
+        self._ceiling_clamp_warned: set = set()
+
+        # Wall-clock seconds the most recent ``_ensure_model_loaded`` call
+        # spent actually loading the model (None when that call found the
+        # model already resident, so no load happened). Lemonade's own
+        # ``/stats`` never reports load time — this is why cold-load ttft
+        # was silently mis-reported as the warm generation-only figure
+        # (#2924). Reset at the top of every ``_ensure_model_loaded_locked``
+        # call so a later warm call never leaks a stale value.
+        self._last_model_load_seconds: Optional[float] = None
+
         # Set logging level based on verbosity
         if not verbose:
             self.log.setLevel(logging.WARNING)
@@ -1206,6 +1453,14 @@ class LemonadeClient:
         if self.api_key:
             # Never log the key value itself — only its presence.
             self.log.debug("Lemonade API key configured")
+
+    #: Hostnames that mean "this machine", so launching a server here can
+    #: actually satisfy this client.
+    _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", ""})
+
+    def _targets_this_machine(self) -> bool:
+        """True when this client's server would run on the local host."""
+        return (self.host or "").strip().lower() in self._LOCAL_HOSTS
 
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
@@ -1223,7 +1478,22 @@ class LemonadeClient:
                      For chat/RAG applications, use 32768 or higher.
 
         This method follows the approach in test_lemonade_server.py.
+
+        Raises:
+            LemonadeClientError: this client is pointed at a server on another
+                host. Launching is a local act — it frees a local port and
+                starts a local process — so it can only ever satisfy a local
+                client (#3558).
         """
+        if not self._targets_this_machine():
+            raise LemonadeClientError(
+                f"Refusing to start a local Lemonade server: this client is "
+                f"configured for {self.base_url}, which is not on this machine. "
+                f"Launching would free local port {self.port} and start a "
+                "server the client would not talk to. Start Lemonade on that "
+                "host, or unset LEMONADE_BASE_URL to use a local one."
+            )
+
         self.log.info("Starting Lemonade server...")
 
         # Skip the port takeover when a healthy server is already listening —
@@ -1819,7 +2089,9 @@ class LemonadeClient:
             LemonadeClientError: If download/load fails, or if *error* is
                 not a missing-model error (re-raised unchanged)
         """
-        if not (auto_download and self._is_model_error(error)):
+        if self.cloud_model_provider(model) or not (
+            auto_download and self._is_model_error(error)
+        ):
             # Not the missing-model condition this recovery is for --
             # retrying would just repeat the same failing request.
             raise error
@@ -1899,6 +2171,11 @@ class LemonadeClient:
           }]
         }
         """
+        if self.cloud_model_provider(model):
+            # These local llama.cpp defaults are inserted by LemonadeProvider.
+            kwargs.pop("repeat_penalty", None)
+            kwargs.pop("repeat_last_n", None)
+
         # Handle max_tokens vs max_completion_tokens
         if max_completion_tokens is None and max_tokens is None:
             max_completion_tokens = 1000  # Default value
@@ -1955,6 +2232,10 @@ class LemonadeClient:
             )
 
             if response.status_code == 401:
+                if self.cloud_model_provider(model):
+                    raise _cloud_request_error(
+                        response.status_code, self.cloud_model_provider(model)
+                    )
                 raise LemonadeAuthError(
                     "Lemonade returned 401 Unauthorized for /chat/completions. "
                     "Verify LEMONADE_API_KEY is correct (currently "
@@ -1962,6 +2243,10 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
+                if self.cloud_model_provider(model):
+                    raise _cloud_request_error(
+                        response.status_code, self.cloud_model_provider(model)
+                    )
                 error_msg = (
                     f"Error in chat completions "
                     f"(status {response.status_code}): {response.text}"
@@ -1972,7 +2257,7 @@ class LemonadeClient:
             result = response.json()
             if "choices" in result and len(result["choices"]) > 0:
                 token_count = len(
-                    result["choices"][0].get("message", {}).get("content", "")
+                    result["choices"][0].get("message", {}).get("content") or ""
                 )
                 self.log.debug(
                     f"Chat completion successful. "
@@ -2293,6 +2578,8 @@ class LemonadeClient:
             )
 
         except openai.AuthenticationError:
+            if self.cloud_model_provider(model):
+                raise _cloud_request_error(401) from None
             # Fixed-string error: do NOT include str(e), as the OpenAI SDK's
             # exception may stringify the failing request including its
             # Authorization header.
@@ -2301,6 +2588,10 @@ class LemonadeClient:
                 "streaming chat completions. Verify LEMONADE_API_KEY is correct."
             )
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
+            if self.cloud_model_provider(model):
+                raise _cloud_request_error(
+                    _cloud_error_status(e), self.cloud_model_provider(model)
+                ) from None
             error_type = e.__class__.__name__
             error_msg = str(e)
             self.log.error(f"OpenAI {error_type}: {error_msg}")
@@ -2707,9 +2998,16 @@ class LemonadeClient:
         url = f"{self.base_url}/models"
         if show_all:
             url += "?show_all=true"
-        result = self._send_request("get", url)
-        record_cloud_models(result)
-        return result
+        catalog = self._send_request("get", url)
+        for entry in catalog.get("data", []):
+            if entry.get("id"):
+                self._model_metadata.setdefault(entry["id"], {}).update(entry)
+        record_cloud_models(catalog)
+        return catalog
+
+    def cloud_model_provider(self, model: str) -> Optional[str]:
+        """Return the provider for a built-in or previously discovered cloud model."""
+        return cloud_model_provider(model, self._model_metadata.get(model))
 
     def refresh_cloud_models(self) -> Dict[str, Dict[str, Any]]:
         """Re-read the catalog so cloud-model classification is current.
@@ -2809,6 +3107,51 @@ class LemonadeClient:
         url = f"{self.base_url}/models/{model_id}"
         return self._send_request("get", url)
 
+    def get_model_max_context_window(
+        self,
+        model_id: str,
+        status: Optional["LemonadeStatus"] = None,
+        *,
+        allow_catalog_lookup: bool = True,
+    ) -> Optional[int]:
+        """Trained context ceiling for *model_id* (Lemonade's ``max_context_window``).
+
+        The value is read from the model's own GGUF metadata, not GAIA's
+        requested ctx_size — it's only populated once Lemonade has resolved
+        that metadata (already loaded, or previously downloaded). Returns
+        ``None`` when unresolved (e.g. an undownloaded model); callers must
+        treat that as "unknown", never as "no ceiling" (#2992).
+
+        Args:
+            model_id: Model identifier to look up.
+            status: An already-fetched :class:`LemonadeStatus` — checked
+                first (no extra HTTP call) via its enriched ``loaded_models``.
+            allow_catalog_lookup: When the model isn't in *status*, fall back
+                to a ``list_models(show_all=True)`` catalog query. Set False
+                for a best-effort, no-network-call check (e.g. a hot loop
+                that already pays for one HTTP round trip per call).
+        """
+        if status is not None:
+            entry = self._find_loaded_entry(status, model_id)
+            if entry is not None:
+                ceiling = entry.get("max_context_window")
+                if ceiling:
+                    return int(ceiling)
+
+        if not allow_catalog_lookup:
+            return None
+
+        try:
+            catalog = self.list_models(show_all=True).get("data", [])
+        except LemonadeClientError as e:
+            self.log.debug(f"Could not query model catalog for {model_id!r}: {e}")
+            return None
+        for m in catalog:
+            if _model_ids_match(m.get("id"), model_id):
+                ceiling = m.get("max_context_window")
+                return int(ceiling) if ceiling else None
+        return None
+
     def pull_model(
         self,
         model_name: str,
@@ -2838,6 +3181,12 @@ class LemonadeClient:
         Raises:
             LemonadeClientError: If the model installation fails
         """
+        if self.cloud_model_provider(model_name):
+            raise LemonadeClientError(
+                f"Cloud model '{model_name}' cannot be downloaded. "
+                "Connect its provider in the TUI provider settings, then select "
+                "a discovered model with /model."
+            )
         self.log.info(f"Installing {model_name}")
 
         request_data = {"model_name": model_name}
@@ -2991,6 +3340,12 @@ class LemonadeClient:
                 elif event["event"] == "complete":
                     print("Done!")
         """
+        if self.cloud_model_provider(model_name):
+            raise LemonadeClientError(
+                f"Cloud model '{model_name}' cannot be downloaded. "
+                "Connect its provider in the TUI provider settings, then select "
+                "a discovered model with /model."
+            )
         self.log.info(f"Installing {model_name} with streaming progress")
 
         request_data = {"model_name": model_name, "stream": True}
@@ -3153,6 +3508,15 @@ class LemonadeClient:
             if client.ensure_model_downloaded("Qwen3-0.6B-GGUF"):
                 client.load_model("Qwen3-0.6B-GGUF")
         """
+        if self.cloud_model_provider(model_name):
+            catalog = self.list_models(show_all=True)
+            if any(m.get("id") == model_name for m in catalog.get("data", [])):
+                return True
+            raise LemonadeClientError(
+                f"Cloud model '{model_name}' is not in Lemonade's catalog. "
+                "Connect its provider in the TUI provider settings and select "
+                "a discovered model with /model."
+            )
         try:
             # Check if model is already downloaded
             models_response = self.list_models()
@@ -3528,8 +3892,10 @@ class LemonadeClient:
 
         Deferred import keeps ``gaia.daemon`` off the standalone import path.
         """
-        if self._is_cloud_model(model):
-            return contextlib.nullcontext()
+        # A built-in provider namespace answers without any request; anything
+        # else needs the catalog warmed, which is what _is_cloud_model does.
+        if self.cloud_model_provider(model) or self._is_cloud_model(model):
+            return nullcontext()
 
         from gaia.daemon.broker_client import model_lease
 
@@ -3565,7 +3931,7 @@ class LemonadeClient:
             the model is ready before making API requests. When a model is explicitly
             requested via CLI flags, it downloads automatically without user confirmation.
         """
-        if not auto_download:
+        if self.cloud_model_provider(model) or not auto_download:
             return  # Skip if auto_download disabled
 
         # A cloud model is proxied to a gateway: nothing to download, no local
@@ -3581,16 +3947,24 @@ class LemonadeClient:
     def _ensure_model_loaded_locked(self, model: str) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while
         holding the broker lease (when configured)."""
+        # Reset every call: only set below when THIS call actually performs a
+        # load, so a warm call (model already resident) never reports a
+        # stale load duration from an earlier cold call (#2924).
+        self._last_model_load_seconds = None
+
         # Defence in depth for direct callers: this must precede the pinned-load
         # branch below, which would otherwise unload the resident local model to
         # pin a ctx window a cloud model does not have.
         if is_cloud_model(model):
             return
+
         # Exact-pin path (#1892): async-safe unload→settle→load→settle. Its
         # failures PROPAGATE — never the best-effort debug-swallow below (a
         # silently unpinned eval run would measure the wrong window).
         if self.ctx_size_override is not None:
+            _pin_load_start = time.monotonic()
             self._ensure_pinned_load(model)
+            self._last_model_load_seconds = time.monotonic() - _pin_load_start
             return
 
         # Determine the ctx_size GAIA expects for this model. This lookup
@@ -3613,33 +3987,83 @@ class LemonadeClient:
         # model is already loaded at a sufficient ctx. A probe failure here is
         # NOT fatal — fall through to the actual load below, whose failure DOES
         # propagate. Only the status/ctx check is swallowed; never the load.
+        status: Optional["LemonadeStatus"] = None
         try:
             # Check current server state. ``status.loaded_models`` carries
             # health entries enriched with ``id`` + ``recipe_options`` so we
             # can read ctx_size.
             status = self.get_status()
-            loaded_entry = self._find_loaded_entry(status, model)
-
-            if loaded_entry is not None:
-                loaded_ctx = (
-                    loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
-                )
-                if loaded_ctx >= expected_ctx:
-                    self.log.debug(
-                        f"Model '{model}' already loaded at ctx={loaded_ctx} "
-                        f"(expected >= {expected_ctx})"
-                    )
-                    return
-                # Loaded but under-sized — fall through to the reload path
-                # which calls /load with explicit ctx_size.
-                self.log.info(
-                    f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
-                    f"expects ctx={expected_ctx}; reloading."
-                )
-            else:
-                self.log.debug(f"Model '{model}' not loaded, loading...")
         except Exception as e:  # pylint: disable=broad-except
             self.log.debug(f"Could not pre-check model status: {e}")
+
+        # Best-effort floor-vs-ceiling conflict check (#2992): if the MODELS
+        # registry requires more context than the model can actually train
+        # on, clamp to the model's real ceiling rather than raise — this must
+        # agree with LemonadeManager._report_capped_at_ceiling, which treats
+        # the identical situation as "proceed capped", not fatal. No extra
+        # HTTP call here (``allow_catalog_lookup=False``) — this only catches
+        # the conflict when the model happens to already be loaded (and thus
+        # in ``status``); an undownloaded model's ceiling is unknown anyway.
+        # Resolved BEFORE the already-loaded comparison below, so a model
+        # resident at its (clamped) ceiling short-circuits instead of
+        # reloading forever at the same ceiling every call.
+        # Probe failure stays non-fatal here, same as the get_status() above —
+        # only the load below is allowed to abort the call.
+        try:
+            _ceiling = self.get_model_max_context_window(
+                model, status=status, allow_catalog_lookup=False
+            )
+        except Exception as e:  # pylint: disable=broad-except
+            self.log.debug(f"Could not resolve max_context_window for {model!r}: {e}")
+            _ceiling = None
+        if _ceiling and expected_ctx > _ceiling:
+            if model not in self._ceiling_clamp_warned:
+                self.log.warning(
+                    f"'{model}' requires ctx_size={expected_ctx} (MODELS "
+                    f"registry min_ctx_size), but its trained context ceiling "
+                    f"is {_ceiling} tokens (max_context_window); loading at "
+                    f"{_ceiling} instead. Use a model with a larger trained "
+                    f"context if more is needed — no server restart or config "
+                    f"change raises a GGUF's trained context."
+                )
+                self._ceiling_clamp_warned.add(model)
+            expected_ctx = _ceiling
+        elif _ceiling is None:
+            # Not an error — the common case for a model not yet loaded (its
+            # metadata isn't resolvable without a catalog round trip, which
+            # this best-effort check intentionally skips). Named at debug so
+            # the "unknown, proceeding anyway" choice is traceable, not a
+            # silent no-op (#2992).
+            self.log.debug(
+                f"No max_context_window resolvable for '{model}' from the "
+                f"current status; proceeding with ctx_size={expected_ctx} "
+                f"without a floor/ceiling check."
+            )
+
+        if status is not None:
+            try:
+                loaded_entry = self._find_loaded_entry(status, model)
+
+                if loaded_entry is not None:
+                    loaded_ctx = (
+                        loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
+                    )
+                    if loaded_ctx >= expected_ctx:
+                        self.log.debug(
+                            f"Model '{model}' already loaded at ctx={loaded_ctx} "
+                            f"(expected >= {expected_ctx})"
+                        )
+                        return
+                    # Loaded but under-sized — fall through to the reload path
+                    # which calls /load with explicit ctx_size.
+                    self.log.info(
+                        f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
+                        f"expects ctx={expected_ctx}; reloading."
+                    )
+                else:
+                    self.log.debug(f"Model '{model}' not loaded, loading...")
+            except Exception as e:  # pylint: disable=broad-except
+                self.log.debug(f"Could not pre-check model status: {e}")
 
         # Distinguish "needs download" from "needs memory-map" so the user
         # sees an honest expectation. ``list_models`` returns per-model
@@ -3697,6 +4121,7 @@ class LemonadeClient:
         # corrupt checkpoint) previously got hidden by a blanket
         # ``except Exception: log.debug(...)``, so the downstream chat call
         # failed generically with no model id, URL, or fix. Surface it loudly.
+        _load_start = time.monotonic()
         try:
             self.load_model(
                 model, auto_download=True, prompt=False, ctx_size=expected_ctx
@@ -3712,6 +4137,10 @@ class LemonadeClient:
                 f"~/.cache/lemonade/server.log), or run `gaia init` to "
                 f"(re)install it."
             ) from e
+        # Recorded only after a successful load — a failed/cancelled load
+        # raises above and never reaches here, so it can't be misattributed
+        # as ttft on a request that never got a response.
+        self._last_model_load_seconds = time.monotonic() - _load_start
 
         # Print model ready message
         try:
@@ -3792,6 +4221,12 @@ class LemonadeClient:
 
         See :meth:`_load_model_leased` for the full parameter documentation.
         """
+        if self.cloud_model_provider(model_name):
+            raise LemonadeClientError(
+                f"Cloud model '{model_name}' does not use local model loading. "
+                "Send chat requests through Lemonade; select its provider in "
+                "the TUI provider settings if it is not connected."
+            )
         with self._model_slot_lease(model_name):
             return self._load_model_leased(
                 model_name,
@@ -4188,11 +4623,24 @@ class LemonadeClient:
         """
         Get performance statistics from the last request.
 
+        Lemonade's ``/stats`` only ever measures generation (prefill + decode)
+        — it has no notion of the model-load latency that precedes a cold
+        request, so a cold turn's ``time_to_first_token`` alone silently
+        undercounts (#2924). When THIS client itself loaded the model for
+        the request whose stats these are, ``model_load_seconds`` (measured
+        client-side around the ``/load`` call) is merged in so a caller can
+        attribute that latency instead of dropping it.
+
         Returns:
-            Dict containing performance statistics
+            Dict containing performance statistics, plus ``model_load_seconds``
+            when a model load happened as part of the most recent request.
         """
         url = f"{self.base_url}/stats"
-        return self._send_request("get", url)
+        stats = self._send_request("get", url)
+        if isinstance(stats, dict) and self._last_model_load_seconds is not None:
+            stats = dict(stats)
+            stats["model_load_seconds"] = self._last_model_load_seconds
+        return stats
 
     def get_system_info(self, verbose: bool = False) -> Dict[str, Any]:
         """
@@ -4280,12 +4728,15 @@ class LemonadeClient:
 
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
             all_models = health.get("all_models_loaded", [])
-            if all_models:
-                # Get context size from the first loaded model (typically the LLM)
-                reported_ctx = (
-                    all_models[0].get("recipe_options", {}).get("ctx_size", 0)
-                )
-            else:
+            reported_ctx = 0
+            for m in all_models:
+                if not is_llm_model_entry(m):
+                    continue
+                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
+                if ctx:
+                    reported_ctx = ctx
+                    break
+            if not reported_ctx:
                 # Fallback for older Lemonade versions
                 reported_ctx = health.get("context_size", 0)
 
@@ -4326,10 +4777,12 @@ class LemonadeClient:
             status.version = health.get("version")
 
             # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
-            # Skip embedding models — their ctx_size is irrelevant for LLM context checks.
+            # Only consider LLM entries — a co-loaded transcription or
+            # embedding model's ctx_size is irrelevant and, if it sorts
+            # first, would otherwise be misreported as the server's context.
             all_models = health.get("all_models_loaded", [])
             for m in all_models:
-                if m.get("type") == "embedding":
+                if not is_llm_model_entry(m):
                     continue
                 ctx = m.get("recipe_options", {}).get("ctx_size", 0)
                 if ctx:
@@ -4376,6 +4829,11 @@ class LemonadeClient:
                         "recipe": catalog.get("recipe", ""),
                         "recipe_options": hm.get("recipe_options", {}),
                         "checkpoint": hm.get("checkpoint", ""),
+                        # Trained-context ceiling (#2992) — ``/health`` reports
+                        # this directly on the loaded entry, so no second
+                        # catalog round trip is needed once a model is loaded.
+                        "max_context_window": hm.get("max_context_window")
+                        or catalog.get("max_context_window"),
                         "_health": hm,
                     }
                 )
@@ -4453,9 +4911,16 @@ class LemonadeClient:
             models = self.list_models(show_all=True)
             for model in models.get("data", []):
                 if _model_ids_match(model.get("id"), model_id):
-                    return model.get("downloaded", False)
-        except Exception:
-            pass
+                    return bool(
+                        model.get("downloaded", False)
+                        or cloud_model_provider(model_id, model)
+                    )
+        except LemonadeClientError as exc:
+            self.log.warning(
+                "Could not check model availability (%s). "
+                "Check the Lemonade connection and authentication, then retry.",
+                type(exc).__name__,
+            )
         return False
 
     def download_agent_models(
@@ -4469,7 +4934,7 @@ class LemonadeClient:
         and provides real-time progress updates via SSE streaming.
 
         Args:
-            agent: Agent name (chat, code, rag, etc.) or "all" for all models
+            agent: Agent name (gaia, chat, email, etc.) or "all" for all models
 
         Returns:
             Dict with download results:
@@ -4699,7 +5164,7 @@ class LemonadeClient:
         so we don't validate model availability during initialization.
 
         Args:
-            agent: Agent name (chat, code, rag, talk, blender, jira, docker, vlm, minimal, mcp)
+            agent: Agent name (gaia, chat, email, rag, talk, vlm, minimal, mcp)
             ctx_size: Override context size (default: 32768 for most agents)
             auto_start: Automatically start server if not running
             timeout: Timeout in seconds for server startup
@@ -4927,9 +5392,9 @@ def create_lemonade_client(
         model: Name of the model to use
                (defaults to env var LEMONADE_MODEL or DEFAULT_MODEL_NAME)
         host: Host address for the Lemonade server
-              (defaults to env var LEMONADE_HOST or DEFAULT_HOST)
+              (defaults to env var LEMONADE_HOST; see the note below)
         port: Port number for the Lemonade server
-              (defaults to env var LEMONADE_PORT or DEFAULT_PORT)
+              (defaults to env var LEMONADE_PORT; see the note below)
         auto_start: Automatically start the server
         auto_load: Automatically load the model
         auto_pull: Whether to automatically pull the model if it's not available
@@ -4948,6 +5413,13 @@ def create_lemonade_client(
                  loads ("interactive"|"background") — forwarded verbatim to
                  ``LemonadeClient`` (#2151 / V2-11)
 
+    Address resolution:
+        When neither ``host``/``port`` nor ``LEMONADE_HOST``/``LEMONADE_PORT``
+        names an address, the client resolves it: ``LEMONADE_BASE_URL``, then
+        GAIA's own embedded server's recorded port, then
+        ``DEFAULT_HOST``/``DEFAULT_PORT``. A named host or port outranks
+        ``LEMONADE_BASE_URL``.
+
     Returns:
         A configured LemonadeClient instance
     """
@@ -4961,17 +5433,26 @@ def create_lemonade_client(
     server_host = host or env_host or DEFAULT_HOST
     server_port = port or (int(env_port) if env_port else DEFAULT_PORT)
 
+    # A named host or port wins; otherwise let the client resolve the address
+    # itself — LEMONADE_BASE_URL, then GAIA's own embedded server's dynamic
+    # port, then the default. Passing host/port unconditionally pinned every
+    # caller to localhost:13305: a documented remote setup was contacted on the
+    # developer's own machine, and the embedded server (whose port is chosen at
+    # start time, and whose generated API key is keyed to it) was unreachable
+    # (#3558).
+    client_kwargs = {
+        "verbose": verbose,
+        "keep_alive": keep_alive,
+        "api_key": api_key,
+        "ctx_size_override": ctx_size_override,
+        "model_lease_priority": model_lease_priority,
+    }
+    if host is not None or port is not None or env_host or env_port:
+        client_kwargs["host"] = server_host
+        client_kwargs["port"] = server_port
+
     # Create the client
-    client = LemonadeClient(
-        model=model_name,
-        host=server_host,
-        port=server_port,
-        verbose=verbose,
-        keep_alive=keep_alive,
-        api_key=api_key,
-        ctx_size_override=ctx_size_override,
-        model_lease_priority=model_lease_priority,
-    )
+    client = LemonadeClient(model=model_name, **client_kwargs)
 
     # Auto-start server if requested
     if auto_start:
@@ -4982,9 +5463,7 @@ def create_lemonade_client(
                 client.log.info("Lemonade server is already running")
             except LemonadeClientError:
                 # Server not running, start it
-                client.log.info(
-                    f"Starting Lemonade server at {server_host}:{server_port}"
-                )
+                client.log.info(f"Starting Lemonade server at {client.base_url}")
                 client.launch_server(background=background)
 
                 # Perform a health check to verify the server is running
@@ -4993,8 +5472,8 @@ def create_lemonade_client(
             client.log.error(f"Failed to start Lemonade server: {str(e)}")
             raise LemonadeClientError(f"Failed to start Lemonade server: {str(e)}")
 
-    # Auto-load model if requested
-    if auto_load:
+    # Cloud models have no local weights or context to preload.
+    if auto_load and not client.cloud_model_provider(model_name):
         try:
             # A gateway model has no local weights and no slot — pulling and
             # loading are both meaningless, and load would evict the resident
@@ -5080,8 +5559,8 @@ def initialize_lemonade(
     timeout: int = 120,
     verbose: bool = False,
     quiet: bool = False,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
 ) -> LemonadeStatus:
     """
     Convenience function to initialize Lemonade Server.
@@ -5090,14 +5569,15 @@ def initialize_lemonade(
     profiles. It creates a temporary client and runs initialization.
 
     Args:
-        agent: Agent name (chat, code, rag, talk, blender, jira, docker, vlm, minimal, mcp)
+        agent: Agent name (gaia, chat, email, rag, talk, vlm, minimal, mcp)
         ctx_size: Override context size
         auto_start: Automatically start server if not running
         timeout: Timeout for server startup
         verbose: Enable verbose output
         quiet: Suppress output
-        host: Lemonade server host
-        port: Lemonade server port
+        host: Lemonade server host (defaults to LEMONADE_BASE_URL, then
+              LEMONADE_HOST, then localhost)
+        port: Lemonade server port (same resolution as host)
 
     Returns:
         LemonadeStatus with server status
@@ -5111,6 +5591,9 @@ def initialize_lemonade(
         # Initialize for code agent with larger context
         status = initialize_lemonade(agent="chat", ctx_size=65536)
     """
+    # Named host/port win; otherwise LEMONADE_BASE_URL, which this defaulted
+    # past entirely — a documented remote server was initialized on localhost
+    # instead, and auto_start then tried to free the local port (#3558).
     client = LemonadeClient(host=host, port=port, keep_alive=True)
     return client.initialize(
         agent=agent,

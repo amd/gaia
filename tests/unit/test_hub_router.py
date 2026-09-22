@@ -37,6 +37,18 @@ def client(app):
     return TestClient(app)
 
 
+@pytest.fixture
+def client_no_ui_header(app):
+    """Client that opts out of ``tests/conftest.py``'s ``X-Gaia-UI`` default.
+
+    Used by the tests that assert the CSRF guard refuses an unheadered
+    request -- they would otherwise pass for the wrong reason.
+    """
+    client = TestClient(app)
+    client.headers.pop("x-gaia-ui", None)
+    return client
+
+
 @pytest.fixture(autouse=True)
 def _clean():
     installer_mod.clear_progress()
@@ -161,8 +173,8 @@ def test_install_duplicate_returns_409(client, monkeypatch):
     assert resp.status_code == 409
 
 
-def test_install_requires_ui_header(client):
-    resp = client.post("/api/agents/install", json={"id": "demo"})
+def test_install_requires_ui_header(client_no_ui_header):
+    resp = client_no_ui_header.post("/api/agents/install", json={"id": "demo"})
     assert resp.status_code == 403
 
 
@@ -208,8 +220,8 @@ def test_uninstall_not_installed_404(client, monkeypatch):
     assert resp.status_code == 404
 
 
-def test_uninstall_requires_ui_header(client):
-    resp = client.delete("/api/agents/demo")
+def test_uninstall_requires_ui_header(client_no_ui_header):
+    resp = client_no_ui_header.delete("/api/agents/demo")
     assert resp.status_code == 403
 
 
@@ -277,8 +289,10 @@ def test_set_config_replace_flag(client, monkeypatch):
     assert captured["merge"] is False
 
 
-def test_set_config_requires_ui_header(client):
-    resp = client.post("/api/agents/demo/config", json={"config": {"a": 1}})
+def test_set_config_requires_ui_header(client_no_ui_header):
+    resp = client_no_ui_header.post(
+        "/api/agents/demo/config", json={"config": {"a": 1}}
+    )
     assert resp.status_code == 403
 
 
@@ -344,8 +358,8 @@ def test_setup_empty_ids_400(client):
     assert resp.status_code == 400
 
 
-def test_setup_requires_ui_header(client):
-    resp = client.post("/api/agents/setup", json={"ids": ["a"]})
+def test_setup_requires_ui_header(client_no_ui_header):
+    resp = client_no_ui_header.post("/api/agents/setup", json={"ids": ["a"]})
     assert resp.status_code == 403
 
 

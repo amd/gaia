@@ -121,7 +121,7 @@ func TestChatModelWelcome(t *testing.T) {
 // message nothing consumes would leave the user in an alt screen with no way
 // out — so Esc must neither quit nor dispatch anything.
 func TestEscOnAnIdleChatIsSafe(t *testing.T) {
-	m := chat.NewChatModelForFlagship(nil, "gaia", "GAIA", false, true)
+	m := chat.NewChatModelForFlagship(nil, "gaia", "GAIA", "", false, true)
 
 	updated, _ := m.Update(windowSize(120, 40))
 	m = updated.(chat.ChatModel)
