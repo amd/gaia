@@ -878,6 +878,18 @@ RUN = "python -m pytest tests -q"
             True,
         ),
         ([_edit(), _shell("cat tests/test_dates.py", 0, "def test_x(): ...")], False),
+        ([_edit(), _shell("pytest --version", 0, "pytest 8.3.2\n")], False),
+        (
+            [
+                _edit(),
+                _shell(
+                    "pytest --collect-only -q",
+                    0,
+                    "tests/test_dates.py::test_x\n\n4 tests collected in 0.02s\n",
+                ),
+            ],
+            False,
+        ),
         (
             [
                 _edit(),
@@ -905,6 +917,8 @@ RUN = "python -m pytest tests -q"
         "latest-run-decides",
         "narrow-pass-beside-a-red-suite",
         "reading-tests-is-not-running-them",
+        "asking-pytest-its-version-is-not-running-it",
+        "collect-only-is-not-running-them",
         "result-as-json-text",
     ],
 )
@@ -912,10 +926,27 @@ def test_verified_needs_a_passing_test_run_after_the_last_edit(conversation, ver
     assert ft.tests_verified(conversation) is verified
 
 
+def test_a_huge_setup_diff_reaches_the_judge_as_a_file_list():
+    """A generated fixture's contents are noise the judge may answer from."""
+    log = "".join(f"+2026-09-18 line {i}\n" for i in range(2000))
+    diff = f"--- a/logs/app.log\n+++ b/logs/app.log\n@@ -0,0 +1,2000 @@\n{log}"
+    assert len(diff) > ft.SETUP_DIFF_CAP
+
+    summary = ft._setup_summary(diff)
+
+    assert "logs/app.log" in summary and "2026-09-18 line 0" not in summary
+    assert len(summary) < ft.SETUP_DIFF_CAP
+
+
+def test_a_small_setup_diff_reaches_the_judge_whole():
+    diff = "--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n+An empty file is fine.\n"
+    assert ft._setup_summary(diff) == diff
+
+
 def test_edit_tools_match_the_tools_that_write_one_file():
     from gaia.agents.base import tool_grants
 
-    assert ft.EDIT_TOOLS == tool_grants._PATH_TOOLS
+    assert ft.EDIT_TOOLS is tool_grants.PATH_TOOLS
 
 
 def test_a_run_records_whether_the_change_was_tested(fake_agent, tmp_path):
@@ -1324,6 +1355,14 @@ def test_the_report_shows_whether_each_task_was_verified():
     assert "| `a` | PASS | yes | 5 |" in report
     assert "| `b` | PASS | no | 5 |" in report
     assert "| `old` | PASS | — | 5 |" in report
+
+
+def test_a_question_shows_no_verified_verdict():
+    """The gate counts coding tasks only, so a yes/no here would misread."""
+    question = {**asdict_task("q", judge=_GOOD), "check": "stated", "verified": True}
+    report = ft.render_report(_card(_coding("a", True), question), None)
+    assert "| `q` | PASS | — | 5 |" in report
+    assert "1/1 changes verified by a test run" in report
 
 
 # ---------------------------------------------------------------------------

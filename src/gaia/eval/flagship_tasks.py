@@ -31,6 +31,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.tool_grants import PATH_TOOLS
 from gaia.agents.base.verification import (
     check_was_executed,
     verification_check_label,
@@ -61,6 +62,11 @@ TESTS_TIMEOUT_S = 240
 PROBE_TIMEOUT_S = 120
 JUDGE_TIMEOUT_S = 300
 DIFF_CAP = 20000
+#: A setup diff only has to stop the judge crediting the agent with the setup's
+#: work, and the file list carries that. Past this, the contents are noise the
+#: judge may try to answer the task from — a truncated generated log reads as a
+#: complete one.
+SETUP_DIFF_CAP = 4000
 ANSWER_CAP = 8000
 PROJECT_CAP = 12000
 IGNORED = ("__pycache__", ".pytest_cache", ".git")
@@ -292,23 +298,19 @@ def prepare_workdir(task: Task, root: Path) -> Tuple[Path, Path]:
 
 
 #: Tools that write a file. A test run verifies only the edits made before it.
-EDIT_TOOLS = frozenset(
-    {
-        "write_file",
-        "write_python_file",
-        "write_markdown_file",
-        "edit_file",
-        "edit_python_file",
-        "replace_function",
-        "update_gaia_md",
-    }
-)
+#: The same set the grant layer scopes to one path, so a tool added there is
+#: one this sees too.
+EDIT_TOOLS = PATH_TOOLS
 
 #: pytest's closing summary when a test failed. A snippet or a pipe that prints
 #: it can still exit 0, so the exit code alone would call the run a pass.
 _FAILED_SUMMARY = re.compile(
     r"(?m)^[= ]*(?:\d+ [a-z]+, )*[1-9]\d* (?:failed|errors?)\b.* in \d+(?:\.\d+)?s\b"
 )
+
+#: pytest's closing summary for a run that actually collected tests. Without
+#: it, ``pytest --version`` and ``--collect-only`` would read as a passing run.
+_RAN_SUMMARY = re.compile(r"(?m)^[= ]*(?:\d+ [a-z]+(?:, )?)+ in \d+(?:\.\d+)?s\b")
 
 
 def _tool_result(content: Any) -> Any:
@@ -326,7 +328,7 @@ def _test_run_passed(result: Any) -> bool:
     if not isinstance(result, dict):
         return True
     output = "\n".join(str(result.get(key) or "") for key in ("stdout", "stderr"))
-    return not _FAILED_SUMMARY.search(output)
+    return bool(_RAN_SUMMARY.search(output)) and not _FAILED_SUMMARY.search(output)
 
 
 def tests_verified(conversation: List[Mapping[str, Any]]) -> bool:
@@ -335,7 +337,8 @@ def tests_verified(conversation: List[Mapping[str, Any]]) -> bool:
     Read from the agent's own tool record, with the check detection its
     verification line uses, so ``python -m pytest`` and pytest run through
     ``run_python`` both count. A command run more than once counts by its
-    latest run. Edits made through a shell command or a snippet are not seen.
+    latest run. A run that collected no tests (``--version``, ``--collect-only``)
+    does not count. Edits made through a shell command or a snippet are not seen.
     """
     latest: Dict[str, bool] = {}
     for entry in conversation:
@@ -636,6 +639,21 @@ class Attempt:
         return self.task is not None and self.task.check == "stated"
 
 
+def _setup_summary(diff: str) -> str:
+    """The setup diff, or just the files it touched when it is too big to send."""
+    if len(diff) <= SETUP_DIFF_CAP:
+        return diff
+    files = sorted(
+        {
+            line[6:].strip()
+            for line in diff.splitlines()
+            if line.startswith("+++ b/") or line.startswith("--- a/")
+        }
+    )
+    listed = "\n".join(f"- {name}" for name in files)
+    return f"(contents omitted — too large) files the setup added or changed:\n{listed}"
+
+
 def _attempt_section(attempt: Attempt) -> str:
     kind = "QUESTION" if attempt.question else "TASK"
     parts = [
@@ -645,7 +663,7 @@ def _attempt_section(attempt: Attempt) -> str:
     if attempt.setup_diff:
         parts.append(
             "Before the agent started, its copy of the project was changed like "
-            f"this (not the agent's work):\n{attempt.setup_diff}"
+            f"this (not the agent's work):\n{_setup_summary(attempt.setup_diff)}"
         )
     if attempt.question:
         points = "\n".join(f"- {p}" for p in attempt.task.must_establish)
@@ -976,7 +994,9 @@ def _task_row(t: Mapping[str, Any]) -> Dict[str, Any]:
                 )
             )
         ),
-        "verified": t.get("verified"),
+        # Only coding tasks are counted by the gate, so a question showing
+        # yes/no here would read as a number the gate deliberately excludes.
+        "verified": t.get("verified") if t.get("check") == "mechanical" else None,
         "steps": t["steps"],
         "total_tokens": t["input_tokens"] + t["output_tokens"],
         "wall_seconds": t["wall_seconds"],

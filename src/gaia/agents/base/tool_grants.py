@@ -88,7 +88,7 @@ _SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command"})
 
 #: Tools whose blast radius is one path. The grant is that exact path — not its
 #: directory: the prompt named a file, so the grant covers a file.
-_PATH_TOOLS = frozenset(
+PATH_TOOLS = frozenset(
     {
         "write_file",
         "write_python_file",
@@ -130,7 +130,7 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     args = tool_args if isinstance(tool_args, dict) else {}
     if tool_name in _SHELL_TOOLS:
         return _shell_scope(tool_name, args)
-    if tool_name in _PATH_TOOLS:
+    if tool_name in PATH_TOOLS:
         return _path_scope(tool_name, args)
     if tool_name in _SKILL_TOOLS:
         return _named_scope(tool_name, args, _SKILL_ARG_NAMES)
