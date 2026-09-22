@@ -117,7 +117,7 @@ That count is what the agent *can* do, not what it sees at once: per-turn tool s
 
 Breadth is not free. The tool descriptions and capability instructions are re-read by the model on **every** call of a turn, and a turn is two to five calls — so a session spent entirely on conversation pays for documents, files, and the web without ever using them.
 
-Fast mode drops the agent to a plain conversational surface for the whole session: **2,176 tokens of fixed prompt instead of 17,867**, against the 1,484 the retired Chat agent cost for the same greeting. The personality and honesty rules stay; nothing else does.
+Fast mode drops the agent to a plain conversational surface for the whole session: **2,176 tokens of fixed prompt instead of 17,955**, against the 1,484 the retired Chat agent cost for the same greeting. The personality and honesty rules stay; nothing else does.
 
 ```bash
 GAIA_FAST=1               # environment
