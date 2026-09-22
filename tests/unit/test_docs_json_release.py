@@ -143,7 +143,9 @@ def test_current_docs_do_not_recommend_removed_lemonade_cli():
     for page in (REPO_ROOT / "docs").rglob("*.mdx"):
         if "releases" in page.relative_to(REPO_ROOT / "docs").parts:
             continue
-        for line_number, line in enumerate(page.read_text().splitlines(), 1):
+        for line_number, line in enumerate(
+            page.read_text(encoding="utf-8").splitlines(), 1
+        ):
             if any(
                 command in line
                 for command in (

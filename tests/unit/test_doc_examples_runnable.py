@@ -168,7 +168,9 @@ def test_composition_example_registers_code_index_tools():
 def test_mixin_table_matches_registry():
     from gaia.agents.registry import KNOWN_TOOLS
 
-    document = (REPO_ROOT / "docs/sdk/mixins/tool-mixins.mdx").read_text()
+    document = (REPO_ROOT / "docs/sdk/mixins/tool-mixins.mdx").read_text(
+        encoding="utf-8"
+    )
     for name, (module, class_name) in KNOWN_TOOLS.items():
         source_path = module.replace(".", "/")
         assert (
