@@ -13,6 +13,7 @@ before the file is written rather than after.
 """
 
 import json
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -91,6 +92,7 @@ class TestSchemaPresentInTrace:
 
         block = written["tool_schema"]
         assert block["sent"] is True
+        assert block["render"] == "native"
         assert {"alpha_tool", "beta_tool"} <= set(block["tool_names"])
         assert block["tools_sent"] == len(block["tool_names"])
         assert [s["function"]["name"] for s in block["schemas"]] == block["tool_names"]
@@ -156,6 +158,22 @@ class TestFilterIsVisible:
 
         assert block["filter"] is None
         assert block["tools_sent"] == block["tools_registered"]
+
+
+class TestNoCarryOverBetweenTurns:
+    def test_a_turn_that_never_called_the_backend_reports_nothing_sent(self, tmp_path):
+        """No carry-over: last turn's schema must not be reported as this one's."""
+        _register_tools()
+        agent = _make_agent(tmp_path)
+        _run_trace(agent, "first.json")
+
+        agent._cancel_event = threading.Event()
+        agent._cancel_event.set()
+        block = _run_trace(agent, "second.json")["tool_schema"]
+
+        assert block["sent"] is False
+        assert block["tools_sent"] == 0
+        assert block["tool_names"] == []
 
 
 class TestTurnMetricsReachTheFile:

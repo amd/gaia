@@ -1781,7 +1781,9 @@ Do NOT wrap conversational replies in JSON.
         schema_json = json.dumps(schemas) if schemas else ""
         block: Dict[str, Any] = {
             "sent": schemas is not None,
-            "render": "native" if schemas is not None else "prompt_text",
+            # How this model takes tools, independent of whether any were sent:
+            # an empty registry on a native model is "native, nothing to send".
+            "render": ("native" if self._uses_native_tool_calls() else "prompt_text"),
             "tools_sent": len(schemas or []),
             "tools_registered": len(self._tools_registry),
             "tool_names": [s["function"]["name"] for s in schemas or []],
@@ -5499,6 +5501,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
         self._begin_turn_provenance()
+        # Cleared per turn: a trace must never report the previous turn's
+        # schema for a turn that never reached the backend.
+        self._last_tool_schemas = None
+        self._last_tool_filter = None
 
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
