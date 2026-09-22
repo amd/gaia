@@ -9,7 +9,8 @@ each has its own mode. ``--mode`` picks which; the default is ``sidecar``.
 ``--mode sidecar`` -- the REST surface the daemon supervises:
 
   1. Launch the binary as a subprocess -- binary only, no interpreter available
-     to it.
+     to it. The argv is the daemon's own (``--host``/``--port``, no ``--serve``),
+     because that is the invocation that ships.
   2. Poll ``GET /health`` until ready (dependency-free readiness probe).
   3. ``GET /health``       -> 200 ``{"status": "ok", ...}``.
   4. ``GET /version``      -> 200 with BOTH ``apiVersion`` and ``agentVersion``
@@ -23,27 +24,33 @@ the stdio name boots happily, passes any "did it start?" check, and then feeds
 uvicorn's startup log to a JSON line scanner (#3062). So the assertions are all
 about the WIRE:
 
-  1. Launch the binary BARE -- no argv at all, exactly as the TUI spawns the
+  1. ``--json-events --help`` is answered by the STDIO parser. ``--help`` is
+     printed by whichever parser owns the flag, so the help TEXT is the
+     evidence: the sidecar's parser cannot print flags it does not have, and
+     answers ``unrecognized arguments: --json-events`` instead. Costs no
+     startup, so a binary frozen from the wrong entry fails in seconds.
+  2. Launch the binary BARE -- no argv at all, exactly as the TUI spawns the
      flagship (``seedAgents`` in ``tui/internal/catalog/catalog.go`` declares no
      ``BinaryArgs``). A binary that needs ``--host``/``--port`` to do anything is
      the sidecar.
-  2. The first stdout line must be the startup model-state ping: a canonical
+  3. The first stdout line must be the startup model-state ping: a canonical
      ``status`` event naming the model the agent resolved
      (``gaia_agent/stdio.py`` ``_model_state_event``, written by ``main`` before
      stdin is read). Reaching it proves the frozen binary constructed the whole
-     ``GaiaAgent`` -- every hidden import, every bundled data file.
-  3. Write ``{"gaia_query": "/model"}`` and expect exactly one terminal ``final``
+     ``GaiaAgent`` -- every hidden import, every bundled data file. A hidden
+     import PyInstaller missed shows up here as an ``error`` event naming it.
+  4. Write ``{"gaia_query": "/model"}`` and expect exactly one terminal ``final``
      event back. ``/model`` is intercepted before the LLM ever sees it
      (``run_model_command``), so this is a real round trip that needs NO model
      and NO Lemonade -- verified against a dead Lemonade URL, which the ping
      reports as ``lemonade_reachable: false`` and otherwise ignores.
-  4. Nothing but JSON objects on stdout -- stdout IS the wire, and anything else
+  5. Nothing but JSON objects on stdout -- stdout IS the wire, and anything else
      there renders in the TUI as an unreadable event.
-  5. Nothing listening on the sidecar's port, re-checked every second while
-     waiting for (2). This is the check that actually catches a mis-frozen
-     binary: uvicorn logs to STDERR, so the sidecar under the stdio name is not
-     noisy on stdout -- it is SILENT there, and silence alone would only fail at
-     the end of the startup window.
+  6. Nothing listening on the sidecar's port, re-checked every second while
+     waiting for (3). This is the check that actually catches a mis-frozen
+     binary that got past (1): uvicorn logs to STDERR, so the sidecar under the
+     stdio name is not noisy on stdout -- it is SILENT there, and silence alone
+     would only fail at the end of the startup window.
 
 It does NOT prove the agent can answer a question: no inference runs, so a model
 that loads but produces garbage passes this. That is deliberate -- requiring a
@@ -405,7 +412,47 @@ def assert_no_http_listener() -> None:
         )
 
 
+def check_stdio_argv(binary: Path) -> bool:
+    """The TUI's flags must be owned by this binary's parser.
+
+    ``--help`` is answered by whichever parser the binary was frozen from, so
+    the help TEXT is the evidence: the sidecar cannot print flags it does not
+    have. Costs no agent construction, so a binary frozen from the wrong entry
+    is caught in seconds rather than at the end of the startup window.
+    """
+    result = subprocess.run(
+        [str(binary), "--json-events", "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+    )
+    if result.returncode != 0:
+        log(
+            f"FAIL: `--json-events --help` exited {result.returncode}. "
+            f"stdout: {result.stdout[-800:]!r} stderr: {result.stderr[-800:]!r}"
+        )
+        return False
+    missing = [flag for flag in ("--json-events", "--dev") if flag not in result.stdout]
+    if missing:
+        log(
+            f"FAIL: the help text is missing {missing} -- this binary was frozen "
+            "from the HTTP sidecar entry, not the stdio one."
+        )
+        log(f"help text was:\n{result.stdout[-2000:]}")
+        return False
+    log("stdio argv check PASS -- the TUI's flags reach this binary's parser")
+    return True
+
+
 def run_stdio(binary: Path) -> int:
+    # Cheapest discriminator first: no agent construction, so a sidecar frozen
+    # under the stdio name fails here instead of after the startup window.
+    if not check_stdio_argv(binary):
+        log("VERDICT: FAIL")
+        return 1
+
     # Preflight on the sidecar's port: a server already sitting there would make
     # the no-listener check meaningless, and we cannot tell it from our own.
     if _port_is_open(SIDECAR_DEFAULT_PORT):
@@ -504,6 +551,8 @@ def run_sidecar(binary: Path) -> int:
         log(f"FAIL: port {PORT} already in use -- kill the stale server first.")
         return 2
 
+    # The daemon's own argv: bind flags, no --serve. That is what ships, so that
+    # is what is tested; the --serve spelling is covered by the unit tests.
     cmd = [str(binary), "--host", HOST, "--port", str(PORT)]
     log(f"launching frozen binary: {binary}")
     log(f"command: {' '.join(cmd)}")

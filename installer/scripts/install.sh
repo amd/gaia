@@ -620,7 +620,7 @@ show_next_steps() {
     echo "     (installs Lemonade Server — asks for your password)"
     if [ "${FLAGSHIP_INSTALLED:-0}" = "1" ]; then
         printf '  3. Talk to the agent: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
-        printf '     (it opens the GAIA agent; type %s/hub%s for the agent hub)\n' "$COLOR_GREEN" "$COLOR_RESET"
+        printf '     (it opens the GAIA agent; type %s/agents%s to list installed agents)\n' "$COLOR_GREEN" "$COLOR_RESET"
     else
         printf '  3. Open the terminal hub: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         printf '     %sThe GAIA agent was skipped — see the warning above — so this\n' "$COLOR_YELLOW"

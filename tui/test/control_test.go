@@ -52,6 +52,13 @@ type liveTUI struct {
 // 0. Leave any of them out and the gate correctly refuses to reach chat.
 func startLiveTUI(t *testing.T) *liveTUI {
 	t.Helper()
+	return startLiveTUIWith(t, func(m root.FlagshipModel) root.FlagshipModel { return m })
+}
+
+// startLiveTUIWith is startLiveTUI with a chance to adjust the flagship model
+// before it boots — a launch flag such as --bypass-permissions.
+func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.FlagshipModel) *liveTUI {
+	t.Helper()
 	t.Setenv(control.EnvHome, t.TempDir())
 	isolateGaiaHome(t)
 	stubSetupCheck(t, 0)
@@ -68,9 +75,9 @@ func startLiveTUI(t *testing.T) *liveTUI {
 	}
 
 	state := control.NewState(nil)
-	model := root.NewFlagshipModel(*agent, false).
+	model := adjust(root.NewFlagshipModel(*agent, false).
 		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
-		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
+		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond}))
 	return runLiveTUI(t, tea.NewProgram(
 		control.NewRecorder(model, state),
 		tea.WithInput(strings.NewReader("")),

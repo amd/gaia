@@ -28,11 +28,19 @@ jobs:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
     steps:
+      # This job used to run with no checkout at all. It now needs
+      # util/classify_claude_probe.py on disk to classify the probe response,
+      # so check the repo out first. Still no untrusted input reaches any step.
+      - name: Check out the repo for the probe classifier
+        uses: actions/checkout@v4
+
       - name: Authenticate and run a trivial prompt
         id: claude
-        # NO continue-on-error: an auth failure MUST fail the job so the notify step
-        # fires. Same OAuth-preferred / API-key-fallback wiring as claude.yml. One turn
-        # keeps the monthly subscription-quota cost negligible.
+        continue-on-error: true
+        # The failure is asserted by the next step instead of here, so a budget
+        # rejection that makes the action itself fail still reaches the
+        # assertion step below. That is what makes this canary mean "CI can
+        # call Claude", not just "the action didn't error".
         #
         # The model is a dispatch input so this doubles as the MODEL-RESOLUTION canary.
         # The pinned action bundles the Claude Code CLI that resolves model names, so a
@@ -42,7 +50,7 @@ jobs:
         # It now defaults to the same model the real jobs use (claude-opus-5) so the
         # scheduled run exercises the actual path, not a cheaper proxy that could stay
         # green while every real job fails to resolve its model.
-        uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10  # v1.0.210
+        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -55,8 +63,8 @@ jobs:
           # So every scheduled canary since then failed on the GATE, never reaching auth
           # — the token was fine and the canary was reporting nothing. See run 30690604648
           # (2026-08-01). This is safe here where it would not be on the fork-facing jobs:
-          # the prompt is a fixed literal in this file, there is no untrusted input, no
-          # checkout, and --allowedTools is Read only.
+          # the prompt is a fixed literal in this file, there is no untrusted input, the
+          # only checkout is this repo's own default branch, and --allowedTools is Read only.
           allowed_bots: "*"
           prompt: |
             Reply with exactly the word: ok
@@ -64,6 +72,25 @@ jobs:
             --max-turns 1
             --model ${{ github.event.inputs.model || 'claude-opus-5' }}
             --allowedTools Read
+
+      # The canary used to pass whenever the action did not error, which means
+      # "the token parses", not "CI can call Claude": a budget rejection can
+      # arrive as an ordinary completion. Assert on the response body instead -
+      # scan it for a quota or credential signature even on success, and require
+      # the model to have actually said "ok" (#4080).
+      - name: Assert the model actually replied
+        env:
+          CLAUDE_CONCLUSION: ${{ steps.claude.outputs.conclusion }}
+          CLAUDE_LOG: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAUDE_LOG:-}" ] || [ ! -f "$CLAUDE_LOG" ]; then
+            echo "::error::The Claude action produced no execution log (conclusion='${CLAUDE_CONCLUSION:-}'), so this canary cannot prove CI can call Claude and must not pass. | WHAT TO DO: read the previous step's log for the real failure. | WHERE TO LOOK: .github/workflows/claude-auth-canary.yml"
+            exit 1
+          fi
+          if [ "${CLAUDE_CONCLUSION:-}" = "success" ]; then PROBE_EXIT=0; else PROBE_EXIT=1; fi
+          python3 util/classify_claude_probe.py --exit-code "$PROBE_EXIT" \
+            --text-file "$CLAUDE_LOG" --format stream-json --always-scan --expect ok
 
       # Only the SCHEDULED canary files an issue. A manual dispatch is a probe — usually
       # someone checking whether a new model resolves on the pinned action — and a failed
@@ -74,10 +101,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TITLE="⚠️ Claude CI auth canary failed — token may have expired"
-          BODY="The monthly Claude auth canary failed. This usually means \`CLAUDE_CODE_OAUTH_TOKEN\` has expired (it is valid ~1 year) or both auth secrets are missing.
+          TITLE="WARNING: Claude CI auth canary failed - CI cannot call Claude"
+          BODY="The monthly Claude auth canary failed. **The failing step's error line names which of the two causes applies** - they need different people, so read it before acting.
 
-          **Fix:** run \`claude setup-token\` locally, then update the repo secret:
+          **Quota exhausted (\`QUOTA EXHAUSTED\` in the log):** the credential is fine and the org is out of budget. An Anthropic org admin raises the monthly spend limit at https://claude.ai/admin-settings/usage. Rotating the repo secrets will not help.
+
+          **Credential invalid (\`CREDENTIAL INVALID\` in the log):** run \`claude setup-token\` locally, then update the repo secret:
           \`\`\`
           gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo $GITHUB_REPOSITORY
           \`\`\`
@@ -88,9 +117,10 @@ jobs:
 
           cc @kovtcharov-amd"
 
-          # EVERY gh call here needs an explicit --repo. This job does NOT check out the
-          # repo, so gh has no git remote to infer from: `gh issue create` without --repo
-          # died with "fatal: not a git repository" and the alert was never filed. The
+          # EVERY gh call here needs an explicit --repo. The job does check the repo out
+          # now (for the probe classifier), but relying on the inferred remote is what
+          # broke this before: `gh issue create` without --repo, back when there was no
+          # checkout, died with "fatal: not a git repository" and the alert was never filed. The
           # canary failed, its own notification failed, and nobody was told — the exact
           # silent-safety-net shape this canary exists to prevent (run 30690604648).
           # Reuse an existing open canary issue instead of filing a new one each month.

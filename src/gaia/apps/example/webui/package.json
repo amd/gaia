@@ -40,14 +40,14 @@
     }
   },
   "dependencies": {
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.0",
     "electron-squirrel-startup": "^1.0.0"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",
     "@electron-forge/maker-squirrel": "^7.11.2",
     "@electron-forge/maker-zip": "^7.11.2",
-    "electron": "^44.0.0"
+    "electron": "^44.4.2"
   },
   "overrides": {
     "tar": ">=7.5.8"

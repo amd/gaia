@@ -29,7 +29,14 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
+from gaia.mcp.ports import (
+    AGENT_UI_MCP_PORT,
+    MCP_BRIDGE_PORT,
+    TELEGRAM_HEALTH_PORT,
+    TUI_MCP_PORT,
+)
 from gaia.perf_analysis import run_perf_visualization
+from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 from gaia.version import version
 
 # Load environment variables from .env file
@@ -691,6 +698,12 @@ async def async_main(action, **kwargs):
 
             # Create Chat Agent with configuration
             agent = ChatAgent(config)
+
+            # Set on the instance, not through ChatAgentConfig: the attribute is
+            # core-owned, but gaia-agent-chat is an independently-versioned
+            # wheel — an unknown config kwarg would crash `gaia chat` outright.
+            if kwargs.get("no_learned_skills", False):
+                agent._learned_skills_enabled = False
 
             # Create initial session if not loading one. ``_ensure_tool_loader_reset``
             # is a ChatAgent method (#2323); guard with hasattr since cli.py (core)
@@ -1355,6 +1368,14 @@ def build_parser():
         "Workflows with >50 tools warrant a fresh eval run on the target model.",
     )
 
+    chat_parser.add_argument(
+        "--no-learned-skills",
+        action="store_true",
+        help="Run this session with no learned skill changes applied. Skills are "
+        "composed exactly as authored, so the prompt is byte-identical to a build "
+        "with no overlay.",
+    )
+
     # Agent UI
     chat_parser.add_argument(
         "--ui",
@@ -1619,14 +1640,27 @@ def build_parser():
         "start", help="Start the Telegram adapter (polling)"
     )
     t_start.add_argument("--token", required=True, help="Telegram bot token")
+    # Not argparse-required: the adapter's own refusal explains *why* an
+    # allowlist is mandatory and how to build one, which "the following
+    # arguments are required" does not.
     t_start.add_argument(
         "--allowed-users",
-        help="Comma-separated Telegram user IDs allowed to interact (default: allow all)",
+        help=(
+            "Comma-separated numeric Telegram user IDs allowed to interact "
+            "(required — a bot with no allowlist is reachable by every "
+            "Telegram user). Find your id via @userinfobot."
+        ),
     )
     t_start.add_argument(
         "--background",
         action="store_true",
         help="Run adapter in background/daemon mode (writes PID and health endpoint)",
+    )
+    t_start.add_argument(
+        "--health-port",
+        type=int,
+        default=TELEGRAM_HEALTH_PORT,
+        help=f"Health server port (default: {TELEGRAM_HEALTH_PORT})",
     )
 
     # Stop subcommand
@@ -1651,8 +1685,8 @@ def build_parser():
     t_status.add_argument(
         "--health-port",
         type=int,
-        default=8765,
-        help="Health server port (default: 8765)",
+        default=TELEGRAM_HEALTH_PORT,
+        help=f"Health server port (default: {TELEGRAM_HEALTH_PORT})",
     )
 
     telegram_parser.set_defaults(action="telegram")
@@ -1852,7 +1886,6 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
             "tts-preprocessing",
             "tts-streaming",
             "tts-audio-file",
-            "asr-file-transcription",
             "asr-microphone",
             "asr-list-audio-devices",
         ],
@@ -1861,10 +1894,6 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
     test_parser.add_argument(
         "--test-text",
         help="Text to use for TTS tests",
-    )
-    test_parser.add_argument(
-        "--input-audio-file",
-        help="Input audio file path for ASR file transcription test",
     )
     test_parser.add_argument(
         "--output-audio-file",
@@ -2095,6 +2124,11 @@ Examples:
         help="Compare two scorecard.json files (BASELINE CURRENT) or compare a run against saved baseline (CURRENT only)",
     )
     agent_eval_parser.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="With --compare, fail when baseline scenarios are missing or unmeasured",
+    )
+    agent_eval_parser.add_argument(
         "--save-baseline",
         action="store_true",
         help="After eval, save this run's scorecard as eval/results/baseline.json for future --compare",
@@ -2302,6 +2336,83 @@ the suite decides — no LLM judge. A TUI must already be running with
         help="Where to materialize the task projects (default: a temp directory)",
     )
 
+    # Outcome-scored tasks for the flagship GaiaAgent, gated in CI: gaia eval tasks
+    tasks_eval_parser = eval_subparsers.add_parser(
+        "tasks",
+        help="Flagship agent tasks scored by outcome, judged, and gated",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval tasks run --suite core
+  gaia eval tasks run --suite full --no-judge --out eval/results/eval-tasks-ci
+  gaia eval tasks judge eval/results/eval-tasks-ci
+  gaia eval tasks gate eval/results/eval-tasks-ci --enforce
+
+`run` gives the flagship a fresh copy of eval/tasks/toybox per task and scores
+what the project does afterwards. `judge` grades every task in one Claude call
+(no tools) and decides the question tasks.
+`gate` compares the run with eval/tasks/expectations/<model>.<suite>.json.
+""",
+    )
+    tasks_actions = tasks_eval_parser.add_subparsers(dest="tasks_action")
+    tasks_actions.required = True
+    tasks_run_parser = tasks_actions.add_parser(
+        "run", help="Run the flagship on every task of a suite"
+    )
+    tasks_run_parser.add_argument(
+        "--suite", default="core", help="Task suite from eval/tasks/tasks.json"
+    )
+    tasks_run_parser.add_argument(
+        "--model",
+        default=None,
+        help="Model under test (default: the flagship's default model)",
+    )
+    tasks_run_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/eval-tasks-<timestamp>)",
+    )
+    tasks_run_parser.add_argument(
+        "--no-judge",
+        action="store_true",
+        help="Skip the quality judge (CI judges in a separate step)",
+    )
+    tasks_judge_parser = tasks_actions.add_parser(
+        "judge", help="Grade a finished run's quality with Claude"
+    )
+    tasks_judge_parser.add_argument("run_dir", help="Directory `run` wrote")
+    for judging in (tasks_run_parser, tasks_judge_parser):
+        judging.add_argument(
+            "--judge-model",
+            default=None,
+            help="Claude model that grades quality (default: the eval default)",
+        )
+        judging.add_argument(
+            "--judge-attempts",
+            type=int,
+            default=1,
+            help="Tries per task when the judge returns no usable grade",
+        )
+    tasks_gate_parser = tasks_actions.add_parser(
+        "gate", help="Compare a judged run with its committed expectations"
+    )
+    tasks_gate_parser.add_argument("run_dir", help="Directory `run` wrote")
+    tasks_gate_parser.add_argument(
+        "--expect",
+        default=None,
+        help="Expectations file (default: eval/tasks/expectations/<model>.<suite>.json)",
+    )
+    tasks_gate_parser.add_argument(
+        "--enforce",
+        action="store_true",
+        help="Exit non-zero on a missed expectation (default: report only)",
+    )
+    tasks_gate_parser.add_argument(
+        "--propose",
+        default=None,
+        help="Also write expectations measured from this run to this path",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -2378,7 +2489,10 @@ Examples:
         help="Host to bind the server to (default: localhost)",
     )
     mcp_start_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to listen on (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to listen on (default: {MCP_BRIDGE_PORT})",
     )
     # Note: --base-url is inherited from parent_parser
     mcp_start_parser.add_argument(
@@ -2420,7 +2534,10 @@ Examples:
         "--host", default="localhost", help="Host to check (default: localhost)"
     )
     mcp_status_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to check (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to check (default: {MCP_BRIDGE_PORT})",
     )
     mcp_status_parser.add_argument(
         "--auth-token",
@@ -2438,7 +2555,10 @@ Examples:
         "--host", default="localhost", help="Host to connect to (default: localhost)"
     )
     mcp_test_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to connect to (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to connect to (default: {MCP_BRIDGE_PORT})",
     )
     mcp_test_parser.add_argument(
         "--query", default="Hello, GAIA!", help="Test query to send"
@@ -2459,7 +2579,10 @@ Examples:
         "--host", default="localhost", help="Host to connect to (default: localhost)"
     )
     mcp_agent_parser.add_argument(
-        "--port", type=int, default=8765, help="Port to connect to (default: 8765)"
+        "--port",
+        type=int,
+        default=MCP_BRIDGE_PORT,
+        help=f"Port to connect to (default: {MCP_BRIDGE_PORT})",
     )
     mcp_agent_parser.add_argument(
         "request", help="Natural language request for the orchestrator agent"
@@ -2485,7 +2608,10 @@ Examples:
         "--host", default="localhost", help="Host to bind to (default: localhost)"
     )
     mcp_serve_parser.add_argument(
-        "--port", type=int, default=8766, help="Port to listen on (default: 8766)"
+        "--port",
+        type=int,
+        default=AGENT_UI_MCP_PORT,
+        help=f"Port to listen on (default: {AGENT_UI_MCP_PORT})",
     )
     mcp_serve_parser.add_argument(
         "--backend",
@@ -2506,7 +2632,10 @@ Examples:
         "--host", default="localhost", help="Host to bind to (default: localhost)"
     )
     mcp_tui_parser.add_argument(
-        "--port", type=int, default=8767, help="Port to listen on (default: 8767)"
+        "--port",
+        type=int,
+        default=TUI_MCP_PORT,
+        help=f"Port to listen on (default: {TUI_MCP_PORT})",
     )
     mcp_tui_parser.add_argument(
         "--stdio",
@@ -2578,6 +2707,9 @@ Examples:
     embedded_subparsers.add_parser(
         "status", help="Show whether the private instance is installed and running"
     )
+    embedded_subparsers.add_parser(
+        "uninstall", help="Remove the private instance and downloaded backends"
+    )
     embedded_install_parser = embedded_subparsers.add_parser(
         "install", help="Download and unpack the embeddable artifact"
     )
@@ -2629,8 +2761,11 @@ Examples:
         default=None,
         help=(
             "Explicit dev-mode source directory (escape hatch for --mode dev "
-            "when this shell isn't inside a git work tree). Default: resolved "
-            "from this checkout via `git rev-parse --show-toplevel`."
+            "when this shell isn't inside a git work tree). Must be an "
+            "absolute path ending in hub/agents/<agent_id>/python (e.g. "
+            "/path/to/gaia/hub/agents/email/python) — not the checkout root. "
+            "Default: resolved from this checkout via "
+            "`git rev-parse --show-toplevel`."
         ),
     )
     daemon_stop_agent_parser = daemon_subparsers.add_parser(
@@ -3044,6 +3179,129 @@ Examples:
     return parser
 
 
+def _handle_eval_tasks(args):
+    """gaia eval tasks run|judge|gate — see gaia.eval.flagship_tasks."""
+    from gaia.eval import flagship_tasks as ft
+
+    judge_model = getattr(args, "judge_model", None) or DEFAULT_CLAUDE_MODEL
+    in_actions = os.environ.get("GITHUB_ACTIONS") == "true"
+
+    def _judge(run_dir, env):
+        def _progress(task_id, grade):
+            if "error" in grade:
+                print(f"  {task_id}: judge failed - {grade['error']}")
+            else:
+                scores = " ".join(f"{a}={grade[a]}" for a in ft.AXES)
+                print(f"  {task_id}: {scores} | {grade['one_line']}")
+
+        print(f"[JUDGE] {judge_model}")
+        card = ft.judge_run(
+            run_dir, judge_model, env, args.judge_attempts, on_progress=_progress
+        )
+        failed = [t["id"] for t in card["tasks"] if "error" in (t.get("judge") or {})]
+        if failed:
+            prefix = "::warning::" if in_actions else "⚠️  "
+            print(
+                f"{prefix}No usable grade for {', '.join(failed)}. Until a re-run grades "
+                "them, they fail the quality and misreport checks, and an ungraded "
+                "question counts as not passed."
+            )
+        return card
+
+    if args.tasks_action == "run":
+        model = args.model or DEFAULT_MODEL_NAME
+        out_dir = Path(
+            args.out or f"eval/results/eval-tasks-{time.strftime('%Y%m%d-%H%M%S')}"
+        )
+        # Captured before run_suite removes the judge's credentials from os.environ.
+        judge_env = dict(os.environ)
+
+        def _progress(index, total, r):
+            mark = "ERROR" if r.error else ("PASS" if r.passed else "FAIL")
+            print(
+                f"  [{index}/{total}] {mark} {r.id} steps={r.steps} "
+                f"tokens={r.input_tokens + r.output_tokens:,} {r.wall_seconds}s | {r.why[:120]}"
+            )
+
+        print(f"[RUN] suite {args.suite} on {model}")
+        card = ft.run_suite(args.suite, model, out_dir, on_progress=_progress)
+        if not args.no_judge:
+            card = _judge(out_dir, judge_env)
+        print()
+        print(ft.render_report(card, None))
+        print(f"[OUTPUT] {out_dir.resolve()}")
+        return
+
+    run_dir = Path(args.run_dir)
+    if args.tasks_action == "judge":
+        card = _judge(run_dir, dict(os.environ))
+        print()
+        print(ft.render_report(card, None))
+        return
+
+    card = ft.read_scorecard(run_dir)
+    if args.propose:
+        try:
+            proposal = ft.propose_expectations(card)
+        except ValueError as exc:
+            # Not a verdict: the gate below reports the same gap under its policy.
+            print(f"{'::warning::' if in_actions else '⚠️  '}Nothing proposed: {exc}")
+        else:
+            Path(args.propose).write_text(
+                json.dumps(proposal, indent=2) + "\n", encoding="utf-8"
+            )
+            print(f"[PROPOSED] {args.propose}: {json.dumps(proposal)}")
+    expect_path = Path(args.expect) if args.expect else ft.expectations_path(card)
+    if args.expect and not expect_path.is_file():
+        print(
+            f"{'::error::' if in_actions else '❌ '}No expectations file at {expect_path}."
+        )
+        sys.exit(2)
+    checks, expected = None, None
+    if expect_path.is_file():
+        try:
+            expected = json.loads(expect_path.read_text(encoding="utf-8"))
+            checks = ft.gate(card, expected)
+        except (ValueError, KeyError) as exc:
+            # Misconfigured, not a verdict: fails in report mode too.
+            print(f"{'::error::' if in_actions else '❌ '}{expect_path}: {exc}")
+            sys.exit(2)
+    report = ft.render_report(card, checks, expected)
+    print(report)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a", encoding="utf-8") as fh:
+            fh.write(report + "\n")
+    if checks is None:
+        # Not gated yet is a state of the repo, not a miss: it never fails.
+        print(
+            f"{'::warning::' if in_actions else '⚠️  '}Not gated yet: no expectations "
+            f"committed at {expect_path}. Commit the result of `gaia eval tasks gate "
+            f"<run_dir> --propose {expect_path}` from a run of main to gate this model."
+        )
+        return
+    unmeasured = ft.summarize(card)["unmeasured"]
+    missed = [c.metric for c in checks if not c.ok]
+    if unmeasured:
+        problem = (
+            f"{unmeasured} task(s) not measured: the model backend was unreachable. "
+            "That is an infrastructure failure, not a verdict on the agent; re-run."
+        )
+    elif missed:
+        problem = f"Missed expectations: {', '.join(missed)}."
+    else:
+        problem = ""
+    if not problem:
+        print("✅ Every expectation met.")
+    elif args.enforce:
+        print(f"{'::error::' if in_actions else '❌ '}{problem}")
+        sys.exit(1)
+    else:
+        print(
+            f"{'::warning::' if in_actions else '⚠️  '}{problem} (report only; --enforce fails on this)"
+        )
+
+
 def _handle_schedule(args):
     """Dispatch `gaia schedule <action>` (issue #892)."""
     from gaia.schedule import daemon as schedule_daemon
@@ -3220,6 +3478,17 @@ def main():
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
+        if getattr(args, "no_learned_skills", False):
+            print(
+                "❌ --no-learned-skills has no effect with --ui: the Agent UI "
+                "builds its own agents per session, so the CLI flag never "
+                "reaches them.\n"
+                "   Run `gaia chat --no-learned-skills` without --ui, or turn "
+                "memory off for the session in the UI (learned skills are "
+                "disabled whenever memory is).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         max_files = getattr(args, "max_indexed_files", 0)
         if max_files:
             os.environ["GAIA_MAX_INDEXED_FILES"] = str(max_files)
@@ -3238,7 +3507,10 @@ def main():
         action = getattr(args, "telegram_action", None)
         if action == "start":
             try:
-                from gaia.messaging.telegram import run_telegram
+                from gaia.messaging.telegram import (
+                    TelegramAllowlistError,
+                    run_telegram,
+                )
             except Exception as e:  # pragma: no cover - runtime import error
                 print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
                 sys.exit(1)
@@ -3263,7 +3535,12 @@ def main():
                     token=args.token,
                     allowed_users=allowed,
                     background=getattr(args, "background", False),
+                    health_port=getattr(args, "health_port", TELEGRAM_HEALTH_PORT),
                 )
+            except TelegramAllowlistError as e:
+                # Show the remedy rather than a traceback.
+                print(f"❌ {e}", file=sys.stderr)
+                sys.exit(2)
             except RuntimeError as e:
                 print(f"❌ {e}", file=sys.stderr)
                 sys.exit(1)
@@ -3305,7 +3582,7 @@ def main():
             import urllib.request
 
             host = getattr(args, "health_host", "127.0.0.1")
-            port = getattr(args, "health_port", 8765)
+            port = getattr(args, "health_port", TELEGRAM_HEALTH_PORT)
             url = f"http://{host}:{port}/healthz"
             try:
                 with urllib.request.urlopen(url, timeout=1) as resp:
@@ -3313,7 +3590,9 @@ def main():
                     if resp.status == 200 and body == "ok":
                         print(f"Telegram adapter: healthy ({url})")
                         return
-            except urllib.error.URLError:
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                # ConnectionError catches http.client.RemoteDisconnected, which
+                # is not a URLError - see AbstractHTTPHandler.do_open.
                 pass
 
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
@@ -3411,22 +3690,7 @@ Let me know your answer!
                 print(f"❌ Error: Failed to initialize ASR: {e}")
                 return
 
-            if args.test_type == "asr-file-transcription":
-                if not args.input_audio_file:
-                    print(
-                        "❌ Error: --input-audio-file is required for asr-file-transcription test"
-                    )
-                    return
-                try:
-                    text = asr.transcribe_file(args.input_audio_file)
-                    print("\nTranscription result:")
-                    print("-" * 40)
-                    print(text)
-                    print("-" * 40)
-                except Exception as e:
-                    print(f"❌ Error transcribing file: {e}")
-
-            elif args.test_type == "asr-microphone":
+            if args.test_type == "asr-microphone":
                 print(f"\nRecording for {args.recording_duration} seconds...")
                 print("Speak into your microphone...")
 
@@ -3537,7 +3801,8 @@ Let me know your answer!
             # would otherwise run next-step having killed nothing.
             print("❌ gaia kill needs a target:")
             print("     --lemonade        stop Lemonade Server (port 13305)")
-            print("     --port <number>   kill whatever is listening on <number>")
+            print("     --port <number>   kill the GAIA/Lemonade process")
+            print("                       listening on <number>")
             print(
                 "   Both target a port. A stray GAIA process that is not "
                 "holding a port must be killed by PID."
@@ -3856,25 +4121,49 @@ Let me know your answer!
                                 "  Run `gaia eval agent --save-baseline` first to save a baseline."
                             )
                             sys.exit(1)
+                        current_path = Path(compare_paths[0])
                         result = compare_scorecards(
-                            str(baseline_path), compare_paths[0]
+                            str(baseline_path), str(current_path)
                         )
                     elif len(compare_paths) == 2:
-                        result = compare_scorecards(compare_paths[0], compare_paths[1])
+                        baseline_path, current_path = map(Path, compare_paths)
+                        result = compare_scorecards(
+                            str(baseline_path), str(current_path)
+                        )
                     else:
                         print("[ERROR] --compare accepts 1 or 2 paths")
                         sys.exit(1)
 
-                    # If compare detected regressions or significant score drops, fail non-zero
+                    # Quality and completeness are separate checks. The strict
+                    # opt-in uses exactly the CI integrity gate's missing/blocked/
+                    # skipped/error semantics, including newly added scenarios.
                     regressed = result.get("regressed", [])
                     score_regressed = result.get("score_regressed", [])
                     time_regressed = result.get("time_regressed", [])
                     total_issues = (
                         len(regressed) + len(score_regressed) + len(time_regressed)
                     )
+                    if getattr(args, "require_complete", False):
+                        from gaia.eval.integrity_gate import check_category
+
+                        problems, status_line = check_category(
+                            baseline_path, current_path, "comparison"
+                        )
+                        print(status_line)
+                        for problem in problems:
+                            print(f"[ERROR] {problem}")
+                        total_issues += len(problems)
+                    elif result.get("unmeasured"):
+                        unmeasured = result["unmeasured"]
+                        ids = ", ".join(e["scenario_id"] for e in unmeasured)
+                        print(
+                            f"[WARN] {len(unmeasured)} scenario(s) had no measurement and were "
+                            f"excluded from the quality verdict: {ids}. Add "
+                            "--require-complete to also enforce measurement completeness."
+                        )
                     if total_issues > 0:
                         print(
-                            f"[ERROR] Detected {total_issues} issue(s) (status regressions, score regressions, or time regressions); failing."
+                            f"[ERROR] Detected {total_issues} regression or required-completeness issue(s); failing."
                         )
                         sys.exit(2)
                     # Otherwise success
@@ -4012,6 +4301,11 @@ Let me know your answer!
                 f"{card['dishonest']} false success claim(s)"
             )
             print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # Flagship agent tasks: gaia eval tasks run|judge|gate
+        if getattr(args, "eval_command", None) == "tasks":
+            _handle_eval_tasks(args)
             return
 
         # Replay real Claude Code sessions: gaia eval sessions
@@ -4434,117 +4728,67 @@ Let me know your answer!
 
 
 def kill_process_by_port(port):
-    """Find and kill a process running on a specific port."""
+    """Kill the GAIA/Lemonade process listening on ``port``.
+
+    Targeting rules live in :mod:`gaia.ports` so every "stop what's on this
+    port" path in GAIA shares one implementation.
+    """
     try:
         port = int(port)
     except (ValueError, TypeError):
         return {"success": False, "message": f"Invalid port number: {port!r}"}
-    try:
-        if sys.platform.startswith("win"):
-            # Windows implementation (filter netstat output in Python, no shell pipe)
-            output = subprocess.check_output(["netstat", "-ano"]).decode()
-            if output:
-                # Split output into lines and process each line
-                for line in output.strip().split("\n"):
-                    # Only process lines that contain the specific port
-                    if f":{port}" in line:
-                        parts = line.strip().split()
-                        # Get the last part which should be the PID
-                        try:
-                            pid = int(parts[-1])
-                            if pid > 0:  # Ensure we don't try to kill PID 0
-                                subprocess.run(
-                                    ["taskkill", "/PID", str(pid), "/F"],
-                                    shell=False,
-                                    check=True,
-                                )
-                                return {
-                                    "success": True,
-                                    "message": f"Killed process {pid} running on port {port}",
-                                }
-                        except (IndexError, ValueError):
-                            continue
-                return {
-                    "success": False,
-                    "message": f"Could not find valid PID for port {port}",
-                }
-        else:
-            # Linux/Unix implementation
-            try:
-                # Use lsof to find process using the port
-                output = (
-                    subprocess.check_output(["lsof", f"-ti:{port}"]).decode().strip()
-                )
-                if output:
-                    pids = output.split("\n")
-                    killed_pids = []
-                    for pid_str in pids:
-                        try:
-                            pid = int(pid_str.strip())
-                            if pid > 0:
-                                subprocess.run(
-                                    ["kill", "-9", str(pid)], shell=False, check=True
-                                )
-                                killed_pids.append(str(pid))
-                        except (ValueError, subprocess.CalledProcessError):
-                            continue
-                    if killed_pids:
-                        return {
-                            "success": True,
-                            "message": f"Killed process(es) {', '.join(killed_pids)} running on port {port}",
-                        }
-                return {
-                    "success": False,
-                    "message": f"Could not find valid PID for port {port}",
-                }
-            except subprocess.CalledProcessError:
-                # If lsof is not available, try netstat + ps approach
-                try:
-                    # Use netstat to find the port, then extract PID
-                    # (filter output in Python, no shell pipe)
-                    output = subprocess.check_output(["netstat", "-tulpn"]).decode()
-                    if output:
-                        for line in output.strip().split("\n"):
-                            if f":{port}" in line:
-                                parts = line.strip().split()
-                                # Look for PID/process_name pattern in the last column
-                                for part in parts:
-                                    if "/" in part:
-                                        try:
-                                            pid = int(part.split("/")[0])
-                                            if pid > 0:
-                                                subprocess.run(
-                                                    ["kill", "-9", str(pid)],
-                                                    shell=False,
-                                                    check=True,
-                                                )
-                                                return {
-                                                    "success": True,
-                                                    "message": f"Killed process {pid} running on port {port}",
-                                                }
-                                        except (
-                                            ValueError,
-                                            subprocess.CalledProcessError,
-                                        ):
-                                            continue
-                    return {
-                        "success": False,
-                        "message": f"Could not find valid PID for port {port}",
-                    }
-                except subprocess.CalledProcessError:
-                    return {
-                        "success": False,
-                        "message": f"No process found running on port {port} (lsof and netstat methods failed)",
-                    }
 
-        return {"success": False, "message": f"No process found running on port {port}"}
-    except subprocess.CalledProcessError:
-        return {"success": False, "message": f"No process found running on port {port}"}
-    except Exception as e:
+    try:
+        listeners = listeners_on_port(port)
+    except FileNotFoundError as e:
+        # Not "nothing is listening" — we could not look. Say which tool is missing.
         return {
             "success": False,
-            "message": f"Error killing process on port {port}: {str(e)}",
+            "message": (
+                f"Cannot inspect port {port}: {e.filename or 'the port-listing tool'} "
+                f"is not on PATH. Install lsof or net-tools, or stop the process "
+                f"by PID."
+            ),
         }
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"success": False, "message": f"Could not inspect port {port}: {e}"}
+
+    if not listeners:
+        return {"success": False, "message": f"No process is listening on port {port}"}
+
+    killed = []
+    refused = []
+    failed = []
+    for pid, name in listeners:
+        if not is_killable_process(name):
+            refused.append(f"{pid} ({name or 'unknown process'})")
+            continue
+        try:
+            terminate_pid(pid)
+            killed.append(str(pid))
+        except (subprocess.CalledProcessError, OSError) as e:
+            failed.append(f"{pid}: {e}")
+
+    if killed:
+        return {
+            "success": True,
+            "message": f"Killed process(es) {', '.join(killed)} listening on port {port}",
+        }
+
+    if refused:
+        return {
+            "success": False,
+            "message": (
+                f"Refusing to kill {', '.join(refused)} on port {port}: not a "
+                f"GAIA or Lemonade process. Stop it with its own tooling, or "
+                f"kill it by PID if that is really what you want."
+            ),
+        }
+
+    return {
+        "success": False,
+        "message": f"Failed to kill the process on port {port} ({'; '.join(failed)})",
+    }
 
 
 def handle_email_command(args):
@@ -4866,6 +5110,19 @@ def handle_api_command(args):
                 os.environ["GAIA_API_STREAMING"] = "1"
             if getattr(args, "step_through", False):
                 os.environ["GAIA_API_STEP_THROUGH"] = "1"
+
+            from gaia.api.local_http import (
+                UnauthenticatedBindError,
+                assert_bind_is_authenticated,
+            )
+
+            # A LAN-reachable bind with no API key puts the agent loop on the
+            # network; refuse it before the app (and its agents) load.
+            try:
+                assert_bind_is_authenticated(args.host, "the GAIA API server")
+            except UnauthenticatedBindError as e:
+                print(f"❌ Error: {e}")
+                sys.exit(1)
 
             # Now import the app (agent_registry will see the env vars)
             from gaia.api.openai_server import app
@@ -5759,12 +6016,21 @@ def _bootstrap_infer():
                 if not inferred_deleted:
                     try:
                         store.delete_by_source("inferred")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Could not clear the previous inferred profile ({e}); "
+                            "nothing was stored. Check that the memory database "
+                            "is writable and not held by another GAIA process "
+                            "(`gaia kill` clears stale ones), then re-run "
+                            "`gaia memory bootstrap`."
+                        ) from e
                     inferred_deleted = True
 
                 try:
                     store.store(
+                        # `gaia memory` is an admin path and every row here was
+                        # just approved at the prompt.
+                        allow_privileged=True,
                         category="profile",
                         content=content,
                         source="inferred",
@@ -5789,7 +6055,10 @@ def _bootstrap_infer():
 def _bootstrap_discover():
     """Phase 2: System discovery — scan local system, present findings for review."""
     from gaia.agents.base.discovery import SystemDiscovery
-    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.agents.base.memory_store import (
+        USER_REVIEWED_CATEGORIES,
+        MemoryStore,
+    )
 
     print("\n=== GAIA Memory Bootstrap — System Discovery ===")
     print("Scanning your system for projects, apps, and more...")
@@ -5847,8 +6116,15 @@ def _bootstrap_discover():
             else:
                 # Default = approve (empty string or 'y')
                 try:
+                    category = item.get("category", "fact")
+                    if category not in USER_REVIEWED_CATEGORIES:
+                        raise ValueError(
+                            f"category {category!r} cannot be approved here; "
+                            f"expected one of {sorted(USER_REVIEWED_CATEGORIES)}"
+                        )
                     store.store(
-                        category=item.get("category", "fact"),
+                        allow_privileged=True,  # approved at the prompt
+                        category=category,
                         content=item["content"],
                         source="discovery",
                         context=item.get("context", "global"),
@@ -5982,6 +6258,7 @@ def _bootstrap_system(force: bool = True):
         for fact in facts:
             try:
                 store.store(
+                    allow_privileged=True,  # system-context collection
                     category="system",
                     content=fact["content"],
                     domain=fact.get("domain"),
@@ -7185,7 +7462,7 @@ def handle_lemonade_command(args):
 
 
 def handle_lemonade_embedded_command(args):
-    """Handle ``gaia lemonade embedded {start,stop,status,install,install-backend}``.
+    """Handle ``gaia lemonade embedded`` lifecycle actions.
 
     Args:
         args: Parsed arguments for the embedded subcommand.
@@ -7220,6 +7497,11 @@ def handle_lemonade_embedded_command(args):
                 print("Embedded Lemonade is not running")
         elif action == "status":
             _print_embedded_status(manager)
+        elif action == "uninstall":
+            if manager.uninstall():
+                print("✅ Embedded Lemonade uninstalled")
+            else:
+                print("Embedded Lemonade is not installed")
         elif action == "install":
             path = manager.install(force=getattr(args, "force", False))
             print(f"✅ Embedded Lemonade {manager.version} installed at {path}")
@@ -7640,7 +7922,7 @@ def handle_mcp_status(args):
                                 print("⚠️  Server is running but may not be healthy")
                     else:
                         raise
-                except urllib.error.URLError:
+                except (urllib.error.URLError, ConnectionError, TimeoutError):
                     print("⚠️  Server is running but status endpoint not accessible")
                     print("   Server may be starting up or using an older version")
             except Exception as e:
@@ -7676,7 +7958,7 @@ def handle_mcp_test(args):
                     print("✅ MCP server is healthy")
                 else:
                     print("⚠️  Server may not be fully operational")
-        except urllib.error.URLError:
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
             return
@@ -7739,6 +8021,8 @@ def handle_mcp_test(args):
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
+        except (ConnectionError, TimeoutError) as e:
+            print(f"❌ Connection dropped by the MCP server: {e}")
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
         except Exception as e:
@@ -7772,7 +8056,7 @@ def handle_mcp_agent(args):
                     print("✅ MCP server is healthy")
                 else:
                     print("⚠️  Server may not be fully operational")
-        except urllib.error.URLError:
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
             print(f"❌ Cannot connect to MCP server at {args.host}:{args.port}")
             print("   Make sure the server is running with: gaia mcp start")
             return
@@ -7869,6 +8153,8 @@ def handle_mcp_agent(args):
                 print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
+        except (ConnectionError, TimeoutError) as e:
+            print(f"❌ Connection dropped by the MCP server: {e}")
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON response: {e}")
         except Exception as e:
