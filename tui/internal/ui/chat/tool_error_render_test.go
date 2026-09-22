@@ -63,10 +63,12 @@ func TestFailedRenderToolShowsErrorNotCard(t *testing.T) {
 	}
 }
 
-// AC-5: the S1 gate. A failed tool with no render key must be untouched by
-// this change — this pins the guard against a future "simplification" that
-// removes the Render check and reintroduces the proven batch false positive.
-func TestFailedNonRenderToolChangesNothing(t *testing.T) {
+// The render gate this once pinned was lifted in #2724, after #2723 taught the
+// classifier to read a truncated batch summary. A non-render failure now
+// surfaces inline — see nonrender_tool_error_test.go. What survives here is the
+// half that never depended on the gate: a non-render tool draws no error PANEL,
+// so the bordered treatment stays exclusive to the card path.
+func TestFailedNonRenderToolDrawsNoErrorPanel(t *testing.T) {
 	data := json.RawMessage(`{"status":"error","error":"boom"}`)
 	m := feed(t, newTestChat(t),
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "archive_message_batch"},
@@ -75,16 +77,8 @@ func TestFailedNonRenderToolChangesNothing(t *testing.T) {
 
 	for _, msg := range m.messages {
 		if msg.Role == RoleError {
-			t.Fatalf("a non-render tool result must not gain a new RoleError message: %+v", msg)
+			t.Fatalf("a non-render tool result must not gain a RoleError panel: %+v", msg)
 		}
-	}
-	// "keeps its current value": today's markToolDone classifier
-	// (toolResultSucceeded) has no top-level "ok"/"success" bool to read from
-	// this fixture, so it defaults to true — pinned literally, not derived
-	// from the function under test.
-	item := m.activity[0]
-	if item.Success == nil || !*item.Success {
-		t.Errorf("tick changed for a non-render tool: got %v, want true (today's classifier)", item.Success)
 	}
 }
 

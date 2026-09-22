@@ -757,7 +757,9 @@ def _refusal(host, command: str):
         # Ungranted and unknown commands are equally pre-decided.
         ("kubectl get pods", "not in the allowed list"),
         ("git push", "not allowed"),
-        ("gh issue list && rm -rf /", "Shell operators"),
+        # Chaining is allowed; the command it chains to is still refused, and
+        # the refusal still lands before anyone is asked to approve the line.
+        ("gh issue list && rm -rf /", "not in the allowed list"),
         ("gh issue list 'unterminated", "Invalid command syntax"),
     ],
 )
@@ -1367,17 +1369,24 @@ def _run_capturing_subprocess(host, command):
 
     seen = {}
     real_run = shell_module.subprocess.run
+    real_pipeline = shell_module._run_pipeline
 
     def fake_run(args, **kwargs):
         seen["args"] = args
         seen["shell"] = kwargs.get("shell", False)
         return subprocess_module.CompletedProcess(args, 0, "", "")
 
+    def fake_pipeline(segments, modes, envs, cwd, timeout):
+        seen["pipeline"] = segments
+        return subprocess_module.CompletedProcess(segments, 0, "", "")
+
     shell_module.subprocess.run = fake_run
+    shell_module._run_pipeline = fake_pipeline
     try:
         _captured_shell_tool(host)(command=command)
     finally:
         shell_module.subprocess.run = real_run
+        shell_module._run_pipeline = real_pipeline
     return seen
 
 
@@ -1411,7 +1420,11 @@ def test_a_pipeline_is_not_run_as_argv():
     """`cmd_parts` has dropped the `|`, so an argv run of a pipeline would
     silently concatenate two commands into one. Only a lone segment qualifies."""
     call = _run_capturing_subprocess(_Gated("gh"), "gh issue list | head -5")
-    assert call["shell"] is (os.name == "nt")
+    if os.name == "nt":
+        assert call["shell"] is True
+    else:
+        assert "args" not in call, f"ran as one argv: {call.get('args')}"
+        assert call["pipeline"] == [["gh", "issue", "list"], ["head", "-5"]]
 
 
 def test_pytest_has_no_write_tier():
@@ -1421,3 +1434,116 @@ def test_pytest_has_no_write_tier():
         classify_invocation(PYTEST, shlex.split("pytest tests/unit")).outcome == ALLOW
     )
     assert classify_invocation(PYTEST, shlex.split("pytest --pdb")).outcome == REFUSE
+
+
+# ---------------------------------------------------------------------------
+# `python -m pytest` is the pytest grant, not an ungranted `python`
+# ---------------------------------------------------------------------------
+#
+# Agents type `python -m pytest` first, and the shell answered "only read-only
+# commands are allowed" — no mention that pytest exists behind a skill, so the
+# run was abandoned and then reported as passing. It is also the spelling that
+# works on a checkout that was never installed: `-m` puts the working directory
+# on the import path, which bare `pytest` does not.
+
+
+def _validation_error(host, command):
+    parts = shlex.split(command)
+    return host._validate_command(
+        parts[0].lower(),
+        parts,
+        command,
+        granted_binaries=skill_granted_binaries(host),
+    )
+
+
+def test_python_m_pytest_without_the_grant_points_at_the_skill():
+    error = _validation_error(_Gated(), "python -m pytest -q")
+    assert error is not None
+    assert "shell:execute:pytest" in error["error"], error
+    assert "allowed list" not in error["error"]
+
+
+@pytest.mark.parametrize("launcher", ["python", "python3"])
+def test_python_m_pytest_runs_under_the_pytest_grant(launcher):
+    command = f"{launcher} -m pytest -q tests"
+    assert _validation_error(_Gated("pytest"), command) is None
+
+    call = _run_capturing_subprocess(_Gated("pytest"), command)
+    # The typed spelling runs, not a rewrite: `-m` is what makes imports work.
+    assert call["args"] == [launcher, "-m", "pytest", "-q", "tests"]
+    assert call["shell"] is False
+
+
+def test_python_m_pytest_needs_no_more_consent_than_pytest():
+    host = _Gated("pytest")
+    assert _needs_modal(host, "pytest -q") is False
+    assert _needs_modal(host, "python -m pytest -q") is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest --pdb",
+        "python -m pytest -c /etc/pytest.ini",
+        "python -m pytest ../../etc/passwd",
+        "python -m pytest -p evil_plugin",
+    ],
+)
+def test_python_m_pytest_is_held_to_the_pytest_policy(command):
+    host = _Gated("pytest")
+    assert _validation_error(host, command) is not None
+    assert _needs_modal(host, command) is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -c 'import os'",
+        "python script.py",
+        "python -m pip install requests",
+        # An interpreter flag changes what runs; only the bare shape maps.
+        "python -X dev -m pytest",
+        "python -m pytest_evil",
+        "./python -m pytest",
+    ],
+)
+def test_only_the_exact_python_m_pytest_shape_is_covered(command):
+    host = _Gated("pytest")
+    assert _validation_error(host, command) is not None
+    assert _needs_modal(host, command) is True
+
+
+def test_python_m_pytest_imports_a_checkout_that_was_never_installed(
+    tmp_path, monkeypatch
+):
+    """The user's real starting state: a flat project, no config, no install."""
+    import shutil
+    import sys
+
+    bin_dir = os.path.dirname(sys.executable)
+    if not shutil.which("python", path=bin_dir):
+        pytest.skip("no `python` next to this interpreter")
+    monkeypatch.setenv("PATH", bin_dir + os.pathsep + os.environ.get("PATH", ""))
+    (tmp_path / "toy").mkdir()
+    (tmp_path / "toy" / "__init__.py").write_text("def one():\n    return 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_toy.py").write_text(
+        "from toy import one\n\n\ndef test_one():\n    assert one() == 1\n"
+    )
+
+    result = _captured_shell_tool(_Gated("pytest"))(
+        command="python -m pytest -q -p no:cacheprovider",
+        working_directory=str(tmp_path),
+    )
+
+    assert result.get("return_code") == 0, result
+    assert "1 passed" in result["stdout"]
+
+
+def test_an_inline_env_assignment_is_named_as_one():
+    """`PYTHONPATH=. pytest` was refused as an unknown command 'pythonpath=.'."""
+    error = _validation_error(_Gated("pytest"), "PYTHONPATH=. pytest -q")
+    assert error is not None
+    assert "environment variable" in error["error"], error
+    assert "'pythonpath=.'" not in error["error"]
