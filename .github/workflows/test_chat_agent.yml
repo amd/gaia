@@ -15,10 +15,13 @@ on:
       - 'hub/agents/chat/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
+      # Only lane that installs the chat wheel, so the only lane where
+      # test_registry.py's importorskip cases actually run (#2240).
+      - 'src/gaia/agents/registry.py'
+      - 'tests/unit/agents/test_registry.py'
       - 'src/gaia/rag/**'
       - 'src/gaia/chat/**'
       - 'tests/test_chat_agent.py'
-      - 'tests/test_chat_sdk.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
   pull_request:
@@ -28,10 +31,13 @@ on:
       - 'hub/agents/chat/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
+      # Only lane that installs the chat wheel, so the only lane where
+      # test_registry.py's importorskip cases actually run (#2240).
+      - 'src/gaia/agents/registry.py'
+      - 'tests/unit/agents/test_registry.py'
       - 'src/gaia/rag/**'
       - 'src/gaia/chat/**'
       - 'tests/test_chat_agent.py'
-      - 'tests/test_chat_sdk.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
   merge_group:
