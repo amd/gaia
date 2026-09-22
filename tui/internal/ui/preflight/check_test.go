@@ -28,7 +28,10 @@ import (
 // and SidecarRegistry.list_agents from src/gaia/daemon/sidecars/registry.py.
 
 const (
-	agentsRunning = `{"agents":[{"agent_id":"email","state":"running","mode":"frozen",` +
+	// "user" is what a real daemon reports here — AgentSidecarManager.mode
+	// validates against exactly "user" and "dev", and the listing carries
+	// resolved_mode verbatim.
+	agentsRunning = `{"agents":[{"agent_id":"email","state":"running","mode":"user",` +
 		`"pid":41999,"port":51234,"base_url":"http://127.0.0.1:51234","api_version":"2.3",` +
 		`"agent_version":"0.5.0","started_at":1750000000.0,"dev_src_dir":null}]}`
 
