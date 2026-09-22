@@ -137,25 +137,33 @@ def test_skill_scenario_validates(path: Path):
     validate_scenario(path, data)
 
 
-def test_the_default_agent_can_load_skills():
+def test_the_eval_default_agent_is_the_flagship():
     """Every scenario here needs an agent that actually has ``load_skill``.
 
     Scenarios no longer pin ``agent_type`` -- the runner passes the one default
     for the whole run -- so this is the only place the requirement can be
-    checked. Only the flagship composes ``SkillLibraryToolsMixin``; ChatAgent
-    (the chat/doc/file profiles) has no ``load_skill`` tool at all, so a default
-    pointed back at it would make all eight scenarios fail on turn 1 for a
-    reason that has nothing to do with the skills.
+    checked. ChatAgent (the chat/doc/file profiles) has no ``load_skill`` tool
+    at all, so a default pointed back at it would make every skill scenario fail
+    on turn 1 for a reason that has nothing to do with the skills.
     """
-    from gaia_agent.agent import GaiaAgent
-
     assert DEFAULT_AGENT_TYPE == "gaia", (
         f"the eval default agent is {DEFAULT_AGENT_TYPE!r}, which is not the "
         f"flagship. Skill scenarios assert `load_skill` on turn 1 and only the "
         f"flagship provides it."
     )
-    assert SkillLibraryToolsMixin in GaiaAgent.__mro__
-    assert hasattr(GaiaAgent, "load_skill")
+
+
+def test_the_flagship_actually_provides_load_skill():
+    """The other half of the assertion above, where the flagship is installed.
+
+    ``gaia_agent`` is a hub package, absent from lanes that install only one
+    agent, so this skips rather than failing there -- the name check above still
+    runs everywhere.
+    """
+    agent_module = pytest.importorskip("gaia_agent.agent")
+
+    assert SkillLibraryToolsMixin in agent_module.GaiaAgent.__mro__
+    assert hasattr(agent_module.GaiaAgent, "load_skill")
 
 
 @pytest.mark.parametrize("path", SKILL_SCENARIOS, ids=lambda p: p.stem)
