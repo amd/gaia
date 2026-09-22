@@ -449,7 +449,9 @@ func TestAnAllGreenGateReachesChat(t *testing.T) {
 	if snap := d.m.ControlSnapshot(); snap.Agent != "email" {
 		t.Errorf("chat agent = %q, want email", snap.Agent)
 	}
-	if !strings.Contains(d.flat(), "Email") {
+	// The identity chip names the stable id, not the display name — that is
+	// the string --agent takes back.
+	if !strings.Contains(d.flat(), "agent email") {
 		t.Errorf("the chat view does not name the agent:\n%s", d.screen())
 	}
 }

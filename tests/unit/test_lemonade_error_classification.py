@@ -21,7 +21,9 @@ timeout case correctly.
 
 from __future__ import annotations
 
+from gaia.llm.lemonade_client import _cloud_request_error
 from gaia.llm.providers.lemonade import (
+    LemonadeCloudAccountError,
     LemonadeModelNotFoundError,
     LemonadeModelNotLoadedError,
     LemonadeNetworkError,
@@ -217,6 +219,53 @@ def test_agent_extract_surfaces_missing_model_id() -> None:
     msg = agent._extract_lemonade_user_message(exc)
     assert msg is not None
     assert "Qwen3.5-35B-A3B-GGUF" in msg
+
+
+def test_refused_cloud_account_is_not_retryable() -> None:
+    """A suspended or over-limit account (Fireworks answers 412) never recovers
+    on retry, so it must not be bucketed with transient failures."""
+    for status in (402, 412):
+        exc = RuntimeError(f"Error in send_messages: {_cloud_request_error(status)}")
+        err = _classify_chat_exception(exc)
+        assert isinstance(err, LemonadeCloudAccountError)
+        assert err.retryable is False
+
+
+def test_refusal_names_the_provider_and_where_to_add_funds() -> None:
+    """The classifier keeps the provider-specific message instead of a generic one."""
+    err = _classify_chat_exception(
+        RuntimeError(
+            f"Error in send_messages: {_cloud_request_error(412, 'fireworks')}"
+        )
+    )
+    assert isinstance(err, LemonadeCloudAccountError)
+    assert err.user_message.startswith("Fireworks AI refused the request")
+    assert "https://fireworks.ai/account/billing" in err.user_message
+    assert "local model" in err.user_message
+
+    unknown = str(_cloud_request_error(402, "amd"))
+    assert unknown.startswith("The amd provider refused the request")
+    assert "billing console" in unknown and "https://" not in unknown
+
+
+def test_agent_says_billing_not_try_again_for_a_refused_account() -> None:
+    """Measured on a suspended account: the user was told "a temporary issue —
+    try again in a moment", which no retry could fix."""
+    from unittest.mock import MagicMock
+
+    from gaia.agents.base.agent import Agent
+
+    agent = MagicMock(spec=Agent)
+    agent._extract_lemonade_user_message = Agent._extract_lemonade_user_message.__get__(
+        agent
+    )
+
+    msg = agent._extract_lemonade_user_message(
+        RuntimeError(str(_cloud_request_error(412)))
+    )
+    assert msg is not None
+    assert "spending limit" in msg
+    assert "temporary" not in msg
 
 
 # ── Agent loop: typed-message surfacing (no generic "try again" wrapper) ─

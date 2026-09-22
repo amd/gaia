@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import queue
+import subprocess
 import sys
 
 import pytest
@@ -710,7 +711,7 @@ def test_model_switch_unknown_local_id_is_refused_not_accepted(monkeypatch):
 
     events = _events(out)
     assert len(events) == 1 and events[0]["type"] == "error"
-    assert "Unknown local model" in events[0]["detail"]
+    assert "Unknown Lemonade model" in events[0]["detail"]
     assert "Gemma-4-E4B-it-GGUF" in events[0]["detail"]
     assert agent.chat.llm_client is previous_client
     assert agent.rebuild_count == 0
@@ -951,6 +952,63 @@ def test_lemonade_models_unreachable_names_url_and_fix(monkeypatch):
         assert "gaia daemon start" in str(exc)
     finally:
         fake.error = None
+
+
+@pytest.mark.parametrize(
+    "provider,name", [("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")]
+)
+def test_cloud_model_switch_preserves_session_and_reports_remote(
+    monkeypatch, stub_lemonade, provider, name
+):
+    model = f"{provider}.gemma-4-31b-it"
+    stub_lemonade.catalog = {
+        "data": [{"id": model, "recipe": "cloud", "downloaded": False}]
+    }
+    client = object()
+    monkeypatch.setattr(stdio, "create_client", lambda **kwargs: client)
+    agent = _ModelSwitchAgent()
+    history = [{"role": "user", "content": "remember this"}]
+    agent.chat.history = history
+    embedder = object()
+    agent.embedder = embedder
+
+    events = _events(_model_run(agent, f"/model {model}"))
+
+    assert [event["type"] for event in events] == ["status", "final"]
+    assert events[0]["model_backend"] == provider
+    assert events[0]["model_remote"] is True
+    assert name in events[1]["answer"]
+    assert "this conversation is sent to" in events[1]["answer"]
+    assert agent.chat.history is history
+    assert agent.embedder is embedder
+    assert agent.chat.llm_client is client
+    assert agent._use_claude is False
+
+
+def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
+    stub_lemonade.catalog = {
+        "data": [
+            {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True},
+            {"id": "fireworks.gemma-4-31b-it", "downloaded": False},
+            {"id": "amd.gemma", "downloaded": False},
+            {"id": "fireworks.embedding", "labels": ["embeddings"]},
+            {"id": "other.gemma", "recipe": "cloud", "cloud_provider": "other"},
+        ]
+    }
+    answer = _events(_model_run(_ModelSwitchAgent(), "/model"))[0]["answer"]
+    assert answer.index("Local (Lemonade") < answer.index("Gemma-4-E4B-it-GGUF")
+    assert answer.index("Fireworks AI") < answer.index("fireworks.gemma-4-31b-it")
+    assert answer.index("AMD LLM Gateway") < answer.index("amd.gemma")
+    assert "fireworks.embedding" not in answer
+    assert "other.gemma" not in answer
+
+
+def test_undiscovered_cloud_model_is_refused_without_changing_session(stub_lemonade):
+    agent = _ModelSwitchAgent()
+    previous = agent.chat.llm_client
+    events = _events(_model_run(agent, "/model fireworks.not-discovered"))
+    assert [event["type"] for event in events] == ["error"]
+    assert agent.chat.llm_client is previous
 
 
 # ---------------------------------------------------------------------------
@@ -1328,3 +1386,68 @@ def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
     events = [json.loads(line) for line in _lines(wire)]
     assert events[-1]["type"] == "error"
     assert "dispatch bug" in events[-1]["detail"]
+
+
+def test_clear_conversation_resets_only_history(monkeypatch):
+    agent = _FakeAgent()
+    agent.conversation_history = []
+    agent.model_id = "chosen-model"
+    agent.loaded_skills = {"coding": "loaded"}
+    state = stdio.PermissionState(bypass=True)
+    seen = []
+
+    def turn(agent, query, out, **kwargs):
+        seen.append(list(agent.conversation_history))
+        stdio._record_turn(agent, query, "answer")
+        stdio._write({"type": "final", "answer": "answer"}, out)
+
+    monkeypatch.setattr(stdio, "run_turn", turn)
+    wire = io.StringIO()
+    stdio.dispatch_query(agent, "first", wire, state=state)
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    stdio.dispatch_query(agent, "second", wire, state=state)
+    assert seen == [[], []]
+    assert agent.model_id == "chosen-model"
+    assert agent.loaded_skills == {"coding": "loaded"}
+    assert state.bypass
+    assert json.loads(_lines(wire)[1]) == {
+        "type": "final",
+        "answer": "conversation_cleared",
+    }
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    assert agent.conversation_history == []
+
+
+def test_clear_conversation_over_real_stdio_process():
+    script = r"""
+import json
+import sys
+from gaia_agent import stdio
+class Agent:
+    console = None
+    conversation_history = []
+    loaded_skills = {"coding": "loaded"}
+    def process_query(self, query):
+        return {"answer": json.dumps(self.conversation_history)}
+agent = Agent()
+for line in sys.stdin:
+    stdio.dispatch_query(agent, stdio.parse_query(line.strip()), sys.stdout)
+"""
+    queries = ["first", "followup", "\x00gaia:clear_conversation\x00", "fresh"]
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input="".join(json.dumps({"gaia_query": query}) + "\n" for query in queries),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    events = [
+        json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")
+    ]
+    finals = [e["answer"] for e in events if e["type"] == "final"]
+    assert len(finals) == 4, result.stdout
+    assert json.loads(finals[1])[0]["content"] == "first"
+    assert finals[2] == "conversation_cleared"
+    assert json.loads(finals[3]) == []

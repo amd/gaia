@@ -172,6 +172,25 @@ class TestDerivePreview:
             derive_preview("fetch_page", payload) == "error: connection refused · 5ms"
         )
 
+    def test_error_prefix_is_not_doubled(self):
+        """``sse_handler`` already renders a failed status as ``error: ...``."""
+        payload = {
+            "success": False,
+            "summary": "error: Directory not found: /tmp/nope",
+        }
+        assert (
+            derive_preview("list_directory", payload)
+            == "error: Directory not found: /tmp/nope"
+        )
+
+    def test_error_prefix_from_a_tool_message_is_not_doubled(self):
+        payload = {"status": "error", "error": "Error: File not found: a.txt"}
+        assert derive_preview("read_file", payload) == "error: File not found: a.txt"
+
+    def test_a_bare_error_prefix_still_says_something(self):
+        payload = {"success": False, "summary": "error:"}
+        assert derive_preview("list_issues", payload) == "error: error:"
+
     def test_shell_success_reports_exit_code_and_line_count(self):
         payload = {"command_output": {"return_code": 0, "stdout": "a\nb\nc"}}
         assert derive_preview("run_shell_command", payload) == "exit 0 · 3 lines"

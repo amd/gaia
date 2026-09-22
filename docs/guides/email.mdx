@@ -230,8 +230,11 @@ enable it with environment variables when launching the sidecar:
 Each run produces the same `email_pre_scan` envelope as an on-demand pre-scan
 (the classification path is shared — nothing is re-implemented) and persists it
 locally; fetch the latest run from `GET /v1/email/briefing` (`404` until the first
-scheduled run). An invalid value fails sidecar startup with an actionable error
-rather than guessing a schedule. Push delivery and a cross-agent morning brief
+scheduled run). Because that is always a cached run, the response — and the agent's
+`get_briefing` tool — also carry `cache_age_seconds` and `stale`, and past 24 hours
+the briefing's own headline opens with its age. An old briefing is labeled, never
+refused or silently regenerated. An invalid value fails sidecar startup with an
+actionable error rather than guessing a schedule. Push delivery and a cross-agent morning brief
 are planned on the autonomy engine (#555).
 
 ## Small language model classifiers
@@ -419,6 +422,45 @@ When you ask the agent to quarantine a flagged message, it:
 To reverse: ask the agent to unquarantine the message. It restores the original labels and moves the message back to INBOX. Undo is only possible within the undo window; after expiry the agent says so explicitly.
 
 The agent **never** auto-acts on links or instructions inside a phishing message, even if you ask it to.
+
+## Mailbox selection in the flagship agent
+
+The flagship `gaia` agent reads mail through the same five tools regardless of which
+mailbox you connected. It picks one like this:
+
+1. **The only usable mailbox**, if exactly one is.
+2. **Gmail**, when both are usable. `check_mailbox_access` reports which mailbox was
+   chosen, why, and what the alternatives were, so you can tell at a glance.
+
+"Usable" means the account is connected, the connection carries a mail read scope, and
+the flagship holds a matching grant. When none is usable the agent names each mailbox's
+own state and the one command that fixes it — connect, reconnect, or grant.
+
+**There is no environment-variable override, by design.** Provider selection is derived
+from connector and grant state so that what the agent can reach is always visible in
+`gaia connectors`. To make it use Outlook when both are connected, revoke the flagship's
+Gmail grant:
+
+```bash
+gaia connectors grants revoke google installed:gaia
+```
+
+Gmail then stops being eligible and Outlook is selected. Re-grant to switch back.
+
+### Granting Gmail to the flagship
+
+A new Google connection consents to **read your email** and nothing more. If your Google
+account was connected earlier for the Email Triage Agent, it already carries the broader
+`gmail.modify` scope; the flagship reuses that rather than asking you to reconnect, but
+it does need its own entry in the grant ledger:
+
+```bash
+gaia connectors grants grant google installed:gaia \
+  --scopes https://www.googleapis.com/auth/gmail.modify
+```
+
+That is a local ledger write — no browser, no OAuth round-trip. Use
+`gmail.readonly` instead if that is what your connection carries.
 
 ## Calendar provider selection
 

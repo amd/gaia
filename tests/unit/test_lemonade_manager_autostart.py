@@ -42,6 +42,9 @@ def _client(*statuses):
     client = MagicMock()
     client.base_url = "http://localhost:13305/api/v1"
     client.get_status.side_effect = list(statuses)
+    # No discoverable ceiling: these tests are about the start, not about
+    # clamping a reported ctx_size against the model's real window.
+    client.get_model_max_context_window.return_value = None
     return client
 
 

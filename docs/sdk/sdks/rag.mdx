@@ -134,7 +134,7 @@ print(answer)
 **What happens behind the scenes:**
 1. Extracts text from the PDF
 2. Splits into chunks (default: 500 tokens each)
-3. Generates embeddings for all chunks
+3. Generates embeddings for all chunks. A short, empty, or dimensionally inconsistent batch is retried under the existing two-retry policy, then fails indexing if still invalid with an actionable error; partial vectors are never paired with different chunks.
 4. Creates temporary FAISS index
 5. Searches for relevant chunks
 6. Sends chunks + question to LLM
@@ -172,6 +172,11 @@ print(response.text)
 ```
 
 **Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing.
+
+Check the `success` field returned by `index_document()`. A failed cache write
+leaves the searchable index unchanged, so retrying does not duplicate chunks.
+Use `reindex_document(path)` after changing a document; if replacement fails,
+the previously indexed version remains available for queries.
 
 ---
 
@@ -991,7 +996,9 @@ except PermissionError as e:
 ```
 
 <Warning>
-**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths.
+**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
+
+`allowed_paths` is a *scope*, not a safety guarantee: it says which paths are in bounds, not which are safe. The agent's file tools apply separate denylists on top (secrets on read, login-execution files on write). RAG indexing does not yet apply those — treat an indexed directory as fully readable.
 </Warning>
 
 ---
