@@ -1307,7 +1307,9 @@ class ShellToolsMixin:
                     granted_binaries=granted,
                 )
                 if error:
-                    return error, []
+                    # Steps travel with the block: a TIER_CONFIRM one still has
+                    # to run once approved, and it can only run what was parsed.
+                    return error, steps
 
         return None, steps
 
