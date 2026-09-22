@@ -16,6 +16,7 @@ import argparse
 import json
 import re
 import statistics
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -50,13 +51,83 @@ def load_labels(path: Optional[Path]) -> Dict[str, str]:
     if not path:
         return {}
     if not path.exists():
-        raise SystemExit(f"label file {path} not found")
+        raise SystemExit(
+            f"label file {path} not found. Generate it as described in "
+            ".claude/skills/analyzing-claude-sessions/SKILL.md, or drop --labels."
+        )
     labels = {}
     for line in path.open(encoding="utf-8"):
         parts = line.split()
         if len(parts) >= 2:
             labels[parts[0]] = parts[1]
     return labels
+
+
+def reconcile_labels(
+    labels: Dict[str, str], traces: List[dict], path: Optional[Path] = None
+) -> Dict[str, object]:
+    """Match a hand-written label file against the corpus, and say what missed.
+
+    ``labels.txt`` is assembled by hand from 8-character session prefixes, so a
+    truncated prefix or a stale file is the expected failure, not an edge case.
+    Unmatched labels silently shrink the population every use-case table is
+    drawn over, and the percentages renormalise to whatever survived.
+    """
+
+    ids = {t["session_id"][:8] for t in traces}
+    matched = sorted(k for k in labels if k in ids)
+    unknown = sorted(set(labels) - set(matched))
+    if labels and not matched:
+        where = f" in {path}" if path else ""
+        raise SystemExit(
+            f"None of the {len(labels)} label prefixes{where} match a session "
+            f"in this corpus ({len(ids)} sessions). Labels are the first 8 "
+            "characters of a session id from intents.jsonl — check the file "
+            "was generated against this corpus and not an older one."
+        )
+    return {
+        "matched": len(matched),
+        "sessions": len(ids),
+        "unknown": unknown,
+        "unlabelled": len(ids) - len(matched),
+    }
+
+
+def coverage_note(cov: Optional[Dict[str, object]]) -> str:
+    """State the population a label-driven table is actually drawn over."""
+
+    if not cov or not cov["sessions"]:
+        return ""
+    matched, sessions = cov["matched"], cov["sessions"]
+    # No labels supplied at all: reconcile_labels raises when a non-empty file
+    # matches nothing, so this can only be the --labels-omitted case.
+    if not matched and not cov["unknown"]:
+        return ""
+    if matched == sessions and not cov["unknown"]:
+        return ""
+    bits = []
+    # Only when the subset really is smaller than the corpus — a file that
+    # covers everything and also carries a dead prefix renormalises nothing.
+    if matched != sessions:
+        bits.append(
+            f"Covers {matched} of {sessions} sessions ({_pct(matched, sessions)}) "
+            "— percentages in this table are of the labelled subset, not the corpus."
+        )
+    if cov["unlabelled"]:
+        n = cov["unlabelled"]
+        bits.append(
+            f"{n} session{'s' if n != 1 else ''} carr{'y' if n != 1 else 'ies'} no label."
+        )
+    if cov["unknown"]:
+        shown = ", ".join(f"`{u}`" for u in cov["unknown"][:5])
+        extra = len(cov["unknown"]) - 5
+        more = f" (+{extra} more)" if extra > 0 else ""
+        n = len(cov["unknown"])
+        bits.append(
+            f"{n} label prefix{'es' if n != 1 else ''} matched no session: "
+            f"{shown}{more}."
+        )
+    return f"_{' '.join(bits)}_"
 
 
 def _pct(n: float, d: float, places: int = 1) -> str:
@@ -399,6 +470,10 @@ def main() -> None:
     traces = load_traces(args.cache)
     stats = json.loads((args.cache / "stats.json").read_text(encoding="utf-8"))
     labels = load_labels(args.labels)
+    coverage = reconcile_labels(labels, traces, args.labels) if labels else None
+    note = coverage_note(coverage)
+    if note:
+        print(note.strip("_"), file=sys.stderr)
 
     print("## Corpus\n")
     print(corpus_table(stats))
@@ -424,8 +499,12 @@ def main() -> None:
     print(error_table(stats))
     print("\n## Use-cases\n")
     print(usecase_table(traces, labels))
+    if note:
+        print(f"\n{note}")
     print("\n## Token economics by use-case\n")
     print(token_table(traces, labels))
+    if note:
+        print(f"\n{note}")
     print("\n## Tokens and cost — main agent vs subagents\n")
     print(period_line(traces))
     print()
@@ -434,6 +513,8 @@ def main() -> None:
     print(subagent_category_table(traces))
     print("\n## Friction by use-case\n")
     print(friction_table(traces, labels))
+    if note:
+        print(f"\n{note}")
     print("\n## Session size and duration\n")
     print(distribution_table(stats))
     print("\n## Failure detail\n")
@@ -644,14 +725,29 @@ def codework_table(traces: List[dict]) -> str:
             "how much context one file costs |"
         ),
         (
-            f"| Median / p90 search result | {med_s:,} / {p90_s:,} chars | "
-            "searches return little; they are probes |"
+            (
+                f"| Median / p90 search result | {med_s:,} / {p90_s:,} chars | "
+                "searches return little; they are probes |"
+            )
+            if searches
+            # A corpus can reach for `grep` through the shell and never call the
+            # search tools. Rendering that as "0 / 0 chars" invents a finding out
+            # of an empty population.
+            else (
+                "| Search-tool results | — | no Grep/Glob calls in this corpus; "
+                "searching went through the shell |"
+            )
         ),
         (
-            f"| Searches returning nothing | {empty_search:,} | "
-            f"{_pct(empty_search, len(searches))} of searches were a miss |"
+            (
+                f"| Searches returning nothing | {empty_search:,} | "
+                f"{_pct(empty_search, len(searches))} of searches were a miss |"
+            )
+            if searches
+            else None
         ),
     ]
+    lines = [x for x in lines if x is not None]
 
     # Verification: which commands are run to check work, and how often they fail.
     verify = {
@@ -886,7 +982,9 @@ def distribution_table(stats: dict) -> str:
         "",
         "_Duration is elapsed wall-clock, not time worked: p90 of "
         f"{d['p90']:.0f} min is a session left open, not one being used. Only "
-        "the median is meaningful._",
+        "the median is meaningful, so its max is left blank rather than "
+        "printed — as is p75 for user turns, which a handful of sessions "
+        "dominate._",
     ]
     return "\n".join(out)
 
@@ -1511,13 +1609,16 @@ tool result. Nothing is sampled: every transcript in the period is read. Files w
 assistant activity (aborted or metadata-only runs) are skipped, since they
 contain no work to measure.
 
-**The pipeline.** Three deterministic stages, no LLM and no network:
+**The pipeline.** Deterministic stages, no LLM and no network:
 
 | Stage | Module | What it does |
 |---|---|---|
 | Parse | `harvest/reader.py` | JSONL to a normalized `Trace` — ordered tool calls, outcomes, token usage, subagents attached to their parent |
 | Aggregate | `harvest/scan.py` | Corpus-wide counts, token totals, per-model cost |
-| Render | `harvest/report.py` | Every table in Part 1 |
+| Analyse | `harvest/analyze.py` | Effectiveness and friction proxies — corrections, thrash, repair loops, error classes |
+| Render | `harvest/report.py` | Every table in this report |
+| Context | `harvest/context.py` | Per-request prompt size and local KV-cache memory (`context.md`) |
+| Savings | `harvest/savings.py` | Token/dollar savings per proposed mechanism (`savings.md`) |
 
 **The one LLM step.** Assigning each session to a use-case (`pr_lifecycle`, `code_review`,
 …) was done by classifying the opening instruction with an LLM, single-pass, against a
@@ -1542,8 +1643,8 @@ corpus-wide including subagents; "{cd_pct} of shell commands start with `cd`" is
 {n_cmds:,} shell commands only. When two figures seem to disagree, check which population each is
 over.
 
-**Reproducing it.** Re-running the two commands at the top of Part 1 regenerates every
-table. It will not reproduce these figures *exactly* — the corpus grows while it is being
+**Reproducing it.** `python -m gaia.factory.harvest.scan` followed by
+`python -m gaia.factory.harvest.report` regenerates every table above. It will not reproduce these figures *exactly* — the corpus grows while it is being
 analysed, since the session doing the analysis is itself being recorded. Counts drift by
 tens of calls between runs; the shape is stable."""
 

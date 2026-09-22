@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
+from gaia.agents.base.verification import NOT_EXECUTED
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,7 +37,11 @@ class FileToolsMixin:
             try:
                 # Validate path with PathValidator (handles user prompting and persistence)
                 if not self.path_validator.is_path_allowed(directory):
-                    return {"status": "error", "error": f"Access denied: {directory}"}
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": f"Access denied: {directory}",
+                    }
 
                 if not os.path.exists(directory):
                     return {

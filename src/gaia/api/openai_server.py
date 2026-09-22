@@ -294,7 +294,9 @@ async def create_chat_completion(request: ChatCompletionRequest):
         if _api_debug_enabled():
             logger.debug("📦 Using NON-STREAMING mode")
 
-        result = agent.process_query(user_message)
+        # Keep synchronous agent work from blocking health checks and other
+        # requests handled by the event loop.
+        result = await asyncio.to_thread(agent.process_query, user_message)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
