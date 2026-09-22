@@ -167,7 +167,12 @@ class TestBuiltinRegistration:
         registry.discover()
         for agent_id in self._BASE_AGENTS:
             reg = registry.get(agent_id)
+            # Half 2 — still routable. A hard delete would fail here, which is
+            # the regression this guards (#4103: falling through to the
+            # flagship's larger prompt costs 12-41s of extra TTFT per call).
             assert reg is not None, f"{agent_id} must remain resolvable"
+            assert callable(reg.factory), f"{agent_id} must stay constructible"
+            # Half 1 — no longer a choice.
             assert reg.hidden is True, f"{agent_id} must not be offered as a choice"
         # What the UI picker renders (routers/agents.py filters on .hidden).
         selectable = {r.id for r in registry.list() if not r.hidden}

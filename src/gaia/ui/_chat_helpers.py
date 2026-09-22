@@ -123,11 +123,11 @@ _SIDECAR_AGENT_TYPES = frozenset({"email"})
 def _agent_type_unknown(agent_type: str, registry) -> bool:
     """True when *agent_type* must be rejected as unknown before dispatch.
 
-    ``chat`` is the built-in default and sidecar types have their own dispatch
-    branch — neither goes through the registry. Everything else must resolve
-    in the registry or the caller returns the unavailable-agent error.
+    Sidecar types have their own dispatch branch and never go through the
+    registry. Everything else — ``chat`` included — must resolve in the
+    registry or the caller returns the unavailable-agent error.
     """
-    if agent_type == "chat" or agent_type in _SIDECAR_AGENT_TYPES:
+    if agent_type in _SIDECAR_AGENT_TYPES:
         return False
     return bool(registry) and not registry.get(agent_type)
 
@@ -1551,41 +1551,6 @@ async def _get_chat_response(
                 session_id[:8],
                 agent_type,
             )
-        elif agent_type == "chat":
-            try:
-                from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
-            except ImportError as e:
-                raise RuntimeError(
-                    agent_not_installed_message(
-                        "The chat agent is not installed",
-                        "gaia-agent-chat",
-                        next_step="Then restart the server.",
-                    )
-                ) from e
-
-            logger.info(
-                "chat: Creating new chat agent (ChatAgent) for session %s",
-                session_id[:8],
-            )
-            _session_kwargs = _session_agent_kwargs(
-                rag_file_paths=rag_file_paths,
-                library_paths=library_paths,
-                allowed=allowed,
-                session_id=session_id,
-                dynamic_tools=dynamic_tools,
-            )
-            config = ChatAgentConfig(
-                model_id=model_id,
-                silent_mode=True,
-                debug=False,
-                device=device,
-                min_context_size=device_ctx,
-                **_session_kwargs,
-            )
-            _stamp_chat_identity(config)
-            agent = ChatAgent(config)
-            _store_agent(session_id, model_id, document_ids, agent, agent_type)
-            _register_agent_memory_ops(agent)
         elif agent_type == "email":
             # #2109: email chat is served exclusively by the sidecar's
             # canonical /query loop, which is a streaming-only SSE contract
@@ -1602,7 +1567,7 @@ async def _get_chat_response(
                 ),
             )
         else:
-            # Non-chat agent: create via registry
+            # Every in-process agent, chat included, is created via the registry.
             registry = _agent_registry
             if registry is None or registry.get(agent_type) is None:
                 # Registry unavailable or agent_type unknown — return a user-friendly
@@ -1627,8 +1592,8 @@ async def _get_chat_response(
                     agent_type,
                     session_id[:8],
                 )
-                # Registered agents backed by ChatAgent (e.g. gaia-lite) need
-                # the same session-scoped context as the built-in path above.
+                # Registered agents backed by ChatAgent (e.g. chat, gaia-lite)
+                # need session-scoped context forwarded here.
                 # Agent factories that don't recognise a field filter it out
                 # via ``dataclasses.fields``/``AgentManifest`` validation.
                 #
@@ -1675,6 +1640,9 @@ async def _get_chat_response(
                     agent,
                     agent_type,
                 )
+                # Memory-dashboard ops need a live agent; no-op for agents
+                # that don't expose them.
+                _register_agent_memory_ops(agent)
 
         # Suppress memory writes when private session OR global memory is disabled.
         if hasattr(agent, "_incognito"):
