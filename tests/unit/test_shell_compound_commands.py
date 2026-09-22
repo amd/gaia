@@ -457,13 +457,23 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
 
     Each pipeline goes through the Windows path on its own, in sequence.
     """
-    import subprocess as subprocess_module
-
     calls = []
 
-    def fake_run(args, **kwargs):
+    class _Exited:
+        """Popen's surface for a command that has already finished."""
+
+        returncode = 0
+        pid = -1
+
+        def __init__(self, args):
+            self.args = args
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+    def fake_popen(args, **kwargs):
         calls.append((args, kwargs.get("shell", False)))
-        return subprocess_module.CompletedProcess(args, 0, "", "")
+        return _Exited(args)
 
     class _WindowsOS:
         """The real os, answering 'nt' — patching os.name itself breaks pathlib."""
@@ -474,7 +484,7 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
             return getattr(os, attribute)
 
     monkeypatch.setattr(shell_tools, "os", _WindowsOS())
-    monkeypatch.setattr(shell_tools.subprocess, "run", fake_run)
+    monkeypatch.setattr(shell_tools.subprocess, "Popen", fake_popen)
 
     _run("ls && cat notes.txt", notes)
 
