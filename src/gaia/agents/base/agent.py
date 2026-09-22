@@ -4878,11 +4878,10 @@ Do NOT wrap conversational replies in JSON.
         Returns ``None`` for unrelated exceptions so the caller falls
         through to its normal generic copy.
         """
-        try:
-            from gaia.llm.providers.lemonade import LemonadeError
-            from gaia.ui._chat_helpers import _classify_chat_exception
-        except Exception:  # pylint: disable=broad-except
-            return None
+        from gaia.llm.providers.lemonade import (
+            LemonadeError,
+            classify_lemonade_exception,
+        )
 
         # 1. Direct match anywhere in the cause chain.
         cur: Optional[BaseException] = exc
@@ -4897,9 +4896,9 @@ Do NOT wrap conversational replies in JSON.
 
         # 2. String-based reclassification — covers the case where the typed
         # exception was stringified into a generic ``Exception`` by AgentSDK.
-        # ``_classify_chat_exception`` already does the timeout-vs-network
+        # ``classify_lemonade_exception`` already does the timeout-vs-network
         # split we need for #1030.
-        classified = _classify_chat_exception(exc)
+        classified = classify_lemonade_exception(exc)
         if classified is not None:
             msg = getattr(classified, "user_message", None)
             if msg:
@@ -4912,10 +4911,12 @@ Do NOT wrap conversational replies in JSON.
         Out of funds or suspended: no retry can succeed, so the turn ends as an
         error instead of an answer.
         """
-        from gaia.llm.providers.lemonade import LemonadeCloudAccountError
-        from gaia.ui._chat_helpers import _classify_chat_exception
+        from gaia.llm.providers.lemonade import (
+            LemonadeCloudAccountError,
+            classify_lemonade_exception,
+        )
 
-        classified = _classify_chat_exception(exc)
+        classified = classify_lemonade_exception(exc)
         if isinstance(classified, LemonadeCloudAccountError):
             return classified.user_message
         return None
