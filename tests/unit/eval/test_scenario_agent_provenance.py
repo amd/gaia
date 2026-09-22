@@ -10,8 +10,6 @@ requested and observed ids are recorded separately and a disagreement fails the
 scenario.
 """
 
-import json
-
 import pytest
 
 from gaia.eval.runner import (
@@ -207,22 +205,33 @@ def test_read_back_parses_the_agent_type_from_the_session_endpoint(monkeypatch):
     calls = {}
 
     class _Resp:
-        def read(self):
-            return json.dumps({"id": "sess-1", "agent_type": "gaia"}).encode()
+        status_code = 200
 
-        def __enter__(self):
-            return self
+        def raise_for_status(self):
+            return None
 
-        def __exit__(self, *_):
-            return False
+        def json(self):
+            return {"id": "sess-1", "agent_type": "gaia"}
 
-    def fake_urlopen(url, timeout=None):  # noqa: ARG001
+    def fake_get(url, timeout=None):
         calls["url"] = url
         return _Resp()
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("requests.get", fake_get)
     assert _read_session_agent_type("http://x/", "sess-1") == "gaia"
     assert calls["url"] == "http://x/api/sessions/sess-1"
+
+
+def test_read_back_raises_on_an_http_error(monkeypatch):
+    import requests
+
+    class _Resp:
+        def raise_for_status(self):
+            raise requests.HTTPError("404 Not Found")
+
+    monkeypatch.setattr("requests.get", lambda url, timeout=None: _Resp())
+    with pytest.raises(requests.HTTPError):
+        _read_session_agent_type("http://x", "missing")
 
 
 def test_canonical_agent_type_resolves_aliases_without_discovery():

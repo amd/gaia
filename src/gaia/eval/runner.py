@@ -257,12 +257,12 @@ def _read_session_agent_type(backend_url: str, session_id: str, timeout: float =
     Raises on any transport or parse failure — a provenance check that guesses
     is worth nothing.
     """
-    import urllib.request
+    import requests  # local import — only needed when a scenario actually runs
 
     url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
-    with urllib.request.urlopen(url, timeout=timeout) as response:  # nosec B310
-        payload = json.loads(response.read().decode("utf-8"))
-    return payload.get("agent_type")
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json().get("agent_type")
 
 
 def _stamp_agent_provenance(
@@ -312,7 +312,9 @@ def _stamp_agent_provenance(
         return
 
     result["agent_type_observed"] = observed
-    if requested and _canonical_agent_type(observed) != _canonical_agent_type(requested):
+    if requested and _canonical_agent_type(observed) != _canonical_agent_type(
+        requested
+    ):
         result["status"] = "INFRA_ERROR"
         result["error"] = (
             f"{scenario_id}: requested agent_type '{requested}' but session "
