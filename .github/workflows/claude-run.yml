@@ -539,8 +539,10 @@ jobs:
           set -uo pipefail
           msg="The $KIND for $TARGET NEVER RAN, so this red says nothing about $TARGET."
           msg="$msg No execution log survived either attempt, so the action died"
-          msg="$msg before Claude started — overwhelmingly the upstream install-phase"
-          msg="$msg ENOENT crash. WHAT TO DO: re-run this job. If it reproduces twice, the"
+          msg="$msg before Claude started. Two causes look identical from here: a GitHub"
+          msg="$msg API rate limit and the upstream install-phase ENOENT crash. The failed"
+          msg="$msg 'Run Claude' step above names which one. WHAT TO DO: re-run this job —"
+          msg="$msg both are transient. If it reproduces twice with no rate-limit line, the"
           msg="$msg pinned claude-code-action SHA is the suspect, not the budget. Log: $RUN_URL"
           if [ "$REQUIRE_COMMENT" = "true" ]; then
             echo "::error title=Claude $KIND crashed before starting::$msg"

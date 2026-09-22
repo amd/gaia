@@ -205,6 +205,16 @@ def test_the_install_crash_is_only_blamed_when_there_is_no_log(runner):
         )
 
 
+def test_the_no_log_verdict_does_not_commit_to_a_single_cause(runner):
+    """A GitHub API rate limit dies before the CLI too — identical empty-log signature."""
+    step = _step(runner, lambda n: "crashed before starting" in n)
+    body = step["run"]
+    assert "rate limit" in body.lower(), (
+        "the no-log message names only ENOENT; a GitHub API rate limit produces an "
+        "identical empty-log signature and would send the reader to the wrong fix"
+    )
+
+
 def test_posting_defers_to_the_named_outage_step(runner):
     """One cause, one failure — not the generic 'no review' error on top of it."""
     post = _step(runner, lambda n: n == "Post Claude's comment")
