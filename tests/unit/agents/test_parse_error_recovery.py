@@ -1057,18 +1057,6 @@ class TestParseRecoveryPromptSurfacesStep1ImagePath:
         assert r"C:\first\a.png" not in text
 
 
-class _FailingToolAgent(_DummyAgent):
-    """A dummy agent with one tool that always reports an error."""
-
-    def _register_tools(self) -> None:
-        from gaia.agents.base.tools import tool
-
-        @tool
-        def run_check() -> dict:
-            """Run a check that fails."""
-            return {"status": "error", "error": "1 failed", "return_code": 1}
-
-
 class TestParseRetriesHaveTheirOwnBudget:
     """Failed tool calls are ordinary work; they must not spend the retries a
     malformed reply gets. A benchmark run lost its whole answer this way: three
@@ -1078,16 +1066,41 @@ class TestParseRetriesHaveTheirOwnBudget:
     @pytest.fixture
     def failing_agent(self):
         with patch("gaia.agents.base.agent.AgentSDK"):
-            a = _FailingToolAgent(silent_mode=True, skip_lemonade=True)
+            a = _DummyAgent(silent_mode=True, skip_lemonade=True)
             a.streaming = False
+            # Per-instance so the fake tool never reaches the global registry.
+            a._instance_tools = {
+                "run_check": {
+                    "name": "run_check",
+                    "description": "Run a check that fails.",
+                    "parameters": {"target": {"type": "string", "required": False}},
+                    "function": lambda target="": {
+                        "status": "error",
+                        "error": "1 failed",
+                        "return_code": 1,
+                    },
+                    "atomic": True,
+                }
+            }
             return a
 
+    @staticmethod
+    def _call(target: str) -> str:
+        # Vary the args so the three calls don't trip ``max_consecutive_repeats``
+        # (default 4) — this test is about the parse budget, nothing else.
+        return json.dumps({"tool": "run_check", "tool_args": {"target": target}})
+
     def test_a_malformed_reply_after_failing_tools_is_retried(self, failing_agent):
-        call = json.dumps({"tool": "run_check", "tool_args": {}})
         bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
         good = json.dumps({"thought": "Done.", "answer": "test_retry hangs."})
         chat = TestProcessQueryRecoversOnParseError._stub_chat(
-            None, failing_agent, call, call, call, bad, good
+            None,
+            failing_agent,
+            self._call("unit"),
+            self._call("mcp"),
+            self._call("integration"),
+            bad,
+            good,
         )
 
         result = failing_agent.process_query("Run the checks.", max_steps=10)
@@ -1106,3 +1119,26 @@ class TestParseRetriesHaveTheirOwnBudget:
 
         assert chat.send_messages.call_count == 3
         assert "trouble formatting" in result["result"]
+
+    def test_a_clean_parse_gives_the_retries_back(self, failing_agent):
+        """The budget counts malformed replies in a row, not per turn. Two bad
+        replies, a good tool call, two more bad replies — a long turn that keeps
+        recovering must not lose its answer to a cumulative count."""
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        good = json.dumps({"thought": "Done.", "answer": "all checks ran."})
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None,
+            failing_agent,
+            bad,
+            bad,
+            self._call("unit"),
+            bad,
+            bad,
+            good,
+        )
+
+        result = failing_agent.process_query("Run the checks.", max_steps=10)
+
+        assert chat.send_messages.call_count == 6
+        assert "all checks ran." in result["result"]
+        assert "trouble formatting" not in result["result"]

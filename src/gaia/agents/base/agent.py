@@ -5583,6 +5583,7 @@ Do NOT wrap conversational replies in JSON.
         # Set when the Agent-UI Stop is observed mid-generation (per-token) so
         # the turn ends with empty text instead of a completed answer (#2157).
         cancelled_by_console = False
+        # Diagnostic only — no threshold reads this; it just numbers the warnings.
         error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
         parse_failures = 0
@@ -6399,6 +6400,8 @@ Do NOT wrap conversational replies in JSON.
             # nudge the model to retry with simpler args, and continue the loop.
             try:
                 parsed = self._parse_llm_response(response)
+                # Budget is consecutive: a clean parse gives the retries back.
+                parse_failures = 0
             except ValueError as parse_exc:
                 logger.warning(
                     "Tool-call parse failed (step %d): %s — recovering with retry prompt",
@@ -6596,6 +6599,8 @@ Do NOT wrap conversational replies in JSON.
                 # Parse the plan response
                 try:
                     parsed_plan = self._parse_llm_response(plan_response)
+                    # Budget is consecutive: a clean parse gives the retries back.
+                    parse_failures = 0
                 except ValueError as plan_parse_exc:
                     logger.warning(
                         "Plan parse failed (step %d): %s — recovering with retry prompt",
