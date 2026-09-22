@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import LOCAL_MAX_OUTPUT_TOKENS, Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.llm.lemonade_client import (
     AGENT_PROFILES,
@@ -67,6 +67,9 @@ def _make_bare_agent(model_id=None):
     # _response_format_template is used by _compose_system_prompt; set a
     # sentinel so tests can assert its presence / absence in composed output.
     obj._response_format_template = Agent._PLANNING_FORMAT
+    # An explicit cap so _max_output_tokens() answers from the attribute; the
+    # unset branch reads self.chat, which __new__ never built.
+    obj.max_output_tokens = LOCAL_MAX_OUTPUT_TOKENS
     return obj
 
 
