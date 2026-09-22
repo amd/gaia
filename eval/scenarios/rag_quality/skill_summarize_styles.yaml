@@ -1,0 +1,72 @@
+id: skill_summarize_styles
+name: "Skill: summarize -- Document Style Contract"
+category: rag_quality
+agent_type: gaia
+severity: high
+description: |
+  Golden path for the bundled `summarize` skill (hub/skills/summarize). The
+  skill's document style table sets hard limits that CONTRADICT the underlying
+  tool's own instructions, which makes it a clean skill detector: SKILL.md says
+  a `brief` is "at most 3 sentences, no bullets", while summarize_document's
+  internal instruction for the same value is "a concise 2-3 paragraph summary"
+  (src/gaia/agents/tools/rag_tools.py). A 3-sentence bullet-free answer can
+  only come from the skill.
+
+  Skill-dependence: turn 1 requires `load_skill`, and every turn scores against
+  a length/shape limit that exists only in SKILL.md.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load its summarize skill and give a brief summary of the Acme Q3 2025 quarterly report."
+    ground_truth:
+      doc_id: acme_q3_report
+      expected_answer: "At most 3 sentences, no bullets, carrying the essential numbers (e.g. $14.2M Q3 revenue, +23% YoY, 68% gross margin)"
+    success_criteria: |
+      ALL THREE must hold:
+        (1) This turn's agent_tools includes `load_skill` for `summarize`.
+        (2) The summary is AT MOST 3 sentences and contains NO bullet points.
+        (3) It leads with a metric, not marketing language -- the skill's rule is
+            that a number outranks the prose around it.
+      FAIL if the answer runs to multiple paragraphs or uses bullets. That is
+      the un-skilled tool default ("concise 2-3 paragraph summary") and is the
+      specific thing this scenario is built to catch.
+      FAIL if filler openers like "Overall" or "In summary" appear.
+
+  - turn: 2
+    objective: "Ask for the same report as bullets instead."
+    ground_truth:
+      doc_id: acme_q3_report
+      expected_answer: "At most 3 bullets, each under 20 words, one idea per bullet"
+    success_criteria: |
+      Response is AT MOST 3 bullets, each UNDER 20 words, one idea per bullet.
+      FAIL on 4+ bullets, on any bullet of 20 words or more, or on nested
+      sub-bullets. The counts come from the skill's document style table; the
+      tool's own `bullets` instruction sets no limit and explicitly invites
+      sub-bullets, so an over-long bulleted list means the skill was not applied.
+
+  - turn: 3
+    objective: "Ask for a board-ready executive summary of the same report."
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_ids: [q3_revenue, yoy_growth, gross_margin, ceo_outlook]
+      expected_answer: "At most 5 sentences, quantitative metrics first: $14.2M revenue, +23% YoY vs $11.5M, 68% gross margin, 15-18% Q4 growth projection, NPS 62"
+    success_criteria: |
+      Response is AT MOST 5 sentences, has no bullets, and keeps the specific
+      numbers, in the skill's priority order: quantitative metrics, then
+      financial data, then strategic outcomes, then differentiators.
+      The agent must NOT pass "executive" as `summary_type` -- only brief,
+      detailed and bullets are accepted and anything else returns an error
+      rather than a summary. Treat an error response here as a FAIL.
+      FAIL if the numbers are dropped in favour of qualitative narration.
+
+expected_outcome: |
+  Agent loads the summarize skill and honours its document style contract on all
+  three shapes, including the two limits that contradict the underlying tool's
+  own defaults.

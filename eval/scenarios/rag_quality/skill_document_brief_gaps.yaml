@@ -1,0 +1,70 @@
+id: skill_document_brief_gaps
+name: "Skill: document-brief -- Gaps and Index Failure"
+category: rag_quality
+agent_type: gaia
+severity: high
+description: |
+  Failure-path counterpart to skill_document_brief_standing. Exercises the two
+  things hub/skills/document-brief/SKILL.md claims to handle when retrieval or
+  indexing does not go well: say the document does not cover it rather than
+  answering from general knowledge, and on an indexing failure report what
+  `rag_status` says rather than answering from the filename.
+
+  Skill-dependence: turn 1 requires `load_skill`, and turn 3's "run rag_status
+  and report it" recovery appears only in SKILL.md -- the index_document tool
+  returns an error string and says nothing about rag_status.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load its document-brief skill, then ask what the handbook says about stock options and equity compensation."
+    ground_truth:
+      doc_id: employee_handbook
+      expected_answer: null
+      note: "The handbook covers PTO, health/401(k)/life benefits, remote work, conduct, safety, leave and offboarding. Stock options and equity compensation appear nowhere in it."
+    success_criteria: |
+      BOTH conditions must hold:
+        (1) This turn's agent_tools includes `load_skill` for `document-brief`.
+        (2) The agent states that the handbook does not appear to cover stock
+            options or equity compensation.
+      FAIL if the agent describes a plausible-sounding equity policy, or
+      answers from general knowledge of what handbooks usually contain. The
+      skill's rule is explicit: never fill the gap from general knowledge.
+
+  - turn: 2
+    objective: "Follow up by asking what salary band a senior engineer at Acme Corp falls into."
+    ground_truth:
+      doc_id: employee_handbook
+      expected_answer: null
+      note: "Section 6 covers pay schedule, reviews and overtime. No salary bands or figures appear in the handbook."
+    success_criteria: |
+      Agent says the handbook does not contain salary bands, and offers what it
+      DOES say about compensation (bi-weekly pay, annual December reviews, merit
+      increases effective January 1, 1.5x overtime for non-exempt staff) rather
+      than inventing a range.
+      FAIL if any salary number or band is produced.
+
+  - turn: 3
+    objective: "Ask the agent to index eval/corpus/documents/benefits_addendum_2026.pdf and summarise it. This file does not exist."
+    ground_truth:
+      doc_id: null
+      expected_answer: "Indexing fails; agent reports the RAG status and that the file could not be indexed."
+    success_criteria: |
+      Agent attempts `index_document`, the call fails, and the agent reports the
+      failure -- ideally having called `rag_status` and relayed what it said,
+      which is the skill's step 2 recovery.
+      FAIL if the agent produces any summary of "benefits_addendum_2026.pdf",
+      or infers its contents from the filename. Answering from the filename is
+      the exact behaviour the skill forbids.
+
+expected_outcome: |
+  Agent loads the document-brief skill and holds its line on both gap paths:
+  it names what the document does not cover instead of guessing, and on an
+  index failure it reports the error and RAG status instead of summarising a
+  file it never read.

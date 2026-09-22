@@ -1,0 +1,78 @@
+id: skill_summarize_action_items
+name: "Skill: summarize -- Unsupported Style Names"
+category: rag_quality
+agent_type: gaia
+severity: high
+description: |
+  Failure-path counterpart to skill_summarize_styles. The summarize skill names
+  six transcript styles (participants, action_items, key_decisions,
+  topics_discussed among them) but only three of those are real `summary_type`
+  values. SKILL.md states the rule outright -- "summary_type accepts only brief,
+  detailed, or bullets -- anything else comes back as an error, not a summary"
+  -- and tells the agent to use `detailed` and write the list itself.
+
+  Skill-dependence: the valid-value list is NOT in the summarize_document
+  docstring (src/gaia/agents/tools/rag_tools.py), only in the function body
+  where it returns an error. An agent without the skill has no way to know the
+  enum before calling, so "ask for action items and get a list, not an error"
+  is a direct read on whether the skill was loaded.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: meeting_notes_q3
+      path: "eval/corpus/documents/meeting_notes_q3.txt"
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load its summarize skill, then ask what the action items were from the Q3 business review meeting notes."
+    ground_truth:
+      doc_id: meeting_notes_q3
+      fact_ids: [action_items]
+      expected_answer: "Six action items with owners and due dates: Tom Nguyen - API deprecation comm plan (Oct 10); Raj Patel - October docs sprint (Oct 3); Marcus Webb - executive outreach for 2 at-risk deals (Oct 1); Linda Torres - update Q4 financial model (Oct 7); Sandra Kim - confirm Android QA timeline (Oct 10); All VPs - submit Q4 OKR check-ins to Jane Smith (Oct 14)."
+    success_criteria: |
+      ALL THREE must hold:
+        (1) This turn's agent_tools includes `load_skill` for `summarize`.
+        (2) The agent does NOT pass an unsupported `summary_type`. If a
+            summarize_document call appears with summary_type "action_items"
+            (or "participants", "key_decisions", "topics_discussed",
+            "executive"), that is a FAIL -- the skill exists precisely to
+            prevent that call.
+        (3) The answer is a list of the assigned actions with their owners.
+            At least 5 of the 6 rows must be present with the correct owner.
+      FAIL if the agent surfaces a tool error message to the user instead of
+      an action-item list.
+
+  - turn: 2
+    objective: "Ask who attended the meeting and who did not."
+    ground_truth:
+      doc_id: meeting_notes_q3
+      fact_ids: [attendees]
+      expected_answer: "Eight attended: Jane Smith (CEO), Marcus Webb (VP Sales), Linda Torres (VP Finance), Raj Patel (Director of Product) in person; Sandra Kim (VP Engineering), Tom Nguyen (Director of Marketing), Priya Okonjo (Head of Customer Success), Derek Walsh (Regional Sales Manager, East) remotely. Carlos Rivera (Director of Operations) sent apologies -- traveling."
+    success_criteria: |
+      A simple list of who was involved WITH role/title, per the skill's
+      `participants` style. Carlos Rivera must be identified as not attending,
+      not folded into the attendee list.
+      FAIL if roles are omitted, or if the answer is a prose paragraph rather
+      than a list, or if Carlos Rivera is listed as present.
+
+  - turn: 3
+    objective: "Ask for a brief summary of the meeting."
+    ground_truth:
+      doc_id: meeting_notes_q3
+      expected_answer: "2-3 sentences on the key outcomes and decisions -- Q3 revenue $14.2M (+23% YoY), Q4 launch dates locked with no scope changes after Oct 1, mobile app slips before the Salesforce integration does."
+    success_criteria: |
+      Response is 2-3 sentences and is OUTCOME-focused -- decisions and results,
+      not a topic-by-topic walkthrough of the agenda. The skill's step 1 says to
+      classify the content first, and this is meeting notes, so the transcript
+      style ("2-3 sentences on the key outcomes and decisions") applies rather
+      than the document style.
+      FAIL if the response is multiple paragraphs, which is the underlying
+      tool's own `brief` instruction and means the skill's style rules were
+      not applied.
+
+expected_outcome: |
+  Agent loads the summarize skill, avoids the unsupported summary_type values
+  the skill warns about, and writes the list-shaped styles itself from the
+  document text.

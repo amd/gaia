@@ -1,0 +1,73 @@
+id: skill_document_brief_standing
+name: "Skill: document-brief -- Standing Brief Format"
+category: rag_quality
+agent_type: gaia
+severity: high
+description: |
+  Golden path for the bundled `document-brief` skill (hub/skills/document-brief).
+  The skill must be loaded from the skill library at runtime, and its two
+  distinctive claims must show in the output: the four-heading standing-brief
+  shape, and a quoted source sentence behind every claim.
+
+  Skill-dependence: the four-heading shape and the quote-the-source rule exist
+  ONLY in SKILL.md -- no tool docstring or system prompt mentions them -- and
+  turn 1 requires `load_skill` in the turn's tool list. With the skill removed
+  from the library the load fails and the format cannot be produced.
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load its document-brief skill and then give a standing brief on the employee handbook."
+    ground_truth:
+      doc_id: employee_handbook
+      expected_answer: "A four-section standing brief: What it is / What matters / What to watch / Open questions"
+    success_criteria: |
+      BOTH conditions must hold:
+        (1) This turn's agent_tools includes `load_skill` and the skill loaded is
+            `document-brief`. FAIL if the agent answers without loading it.
+        (2) The response follows the skill's standing-brief shape: four labelled
+            parts covering "What it is" (one line), "What matters" (3-5
+            decision-changing points), "What to watch" (obligations, deadlines,
+            numbers that move), and "Open questions".
+      FAIL if the response is a generic prose or bullet summary with no such
+      structure -- that is the un-skilled default, not this skill.
+
+  - turn: 2
+    objective: "Ask how many PTO days a first-year employee gets, and require the sentence from the handbook that proves it."
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days -- 'First-year employees receive 15 days of paid time off', accruing at 1.25 days per month"
+    success_criteria: |
+      Agent states 15 days AND quotes or closely paraphrases the supporting
+      sentence from Section 4 of the handbook (the "15 days" table row or the
+      "First-year employees receive 15 days of paid time off" line).
+      FAIL if the agent gives the right number with no source sentence -- the
+      skill's rule is that every claim carries the text that proves it.
+
+  - turn: 3
+    objective: "Ask whether contractors are eligible for the 401(k) plan and the Employee Assistance Program."
+    ground_truth:
+      doc_id: employee_handbook
+      fact_ids: [contractor_benefits, eap_eligibility]
+      expected_answer: "Contractors are not eligible for company benefits programs; the handbook states contractors are NOT eligible for the EAP. 401(k) eligibility is stated for full-time employees after 90 days."
+    success_criteria: |
+      Agent answers from the already-indexed document without re-indexing it --
+      the skill's step 1 says check `list_indexed_documents` first and skip
+      re-indexing when the file is already there.
+      Content: contractors are NOT eligible for the EAP and not covered by
+      company benefits programs; the 401(k) is described for full-time
+      employees (after 90 days).
+      FAIL if the agent calls `index_document` again on the same file, or if it
+      claims contractors are eligible.
+
+expected_outcome: |
+  Agent loads the document-brief skill, produces the skill's four-heading
+  standing brief, backs each fact with the sentence that proves it, and reuses
+  the already-indexed document instead of re-indexing.
