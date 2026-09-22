@@ -145,6 +145,8 @@ class AgentSDK:
         """
         Convert message content into a string for prompt construction, handling structured payloads.
         """
+        if content is None:
+            return ""
         if isinstance(content, str):
             return content
         if isinstance(content, list):
