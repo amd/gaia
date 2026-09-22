@@ -318,6 +318,7 @@ class OutputHandler(ABC):
         answer: str,
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
+        tok_per_s: Optional[float] = None,
     ):
         """Print final answer/result.
 
@@ -327,6 +328,9 @@ class OutputHandler(ABC):
         ttft_seconds: real time-to-first-token for the LLM call that produced
         this answer, if known (#2899 follow-up). None means no real value is
         available — never substitute an estimate.
+        tok_per_s: the backend's own generation rate for this turn, if it
+        reported one. None means unmeasured — never derive it from the turn's
+        wall clock, which includes tool time and agent overhead.
         """
         ...
 
@@ -389,6 +393,18 @@ class OutputHandler(ABC):
 
     def display_stats(self, stats: Dict[str, Any]):  # pylint: disable=unused-argument
         """Display performance statistics. Optional - default no-op."""
+        ...
+
+    def print_diff(  # pylint: disable=unused-argument
+        self, diff: str, filename: str
+    ) -> None:
+        """Show a unified diff for a file the agent changed. Optional no-op.
+
+        Declared here so no handler can be missing it: the write tools call it
+        AFTER the bytes are on disk, and an AttributeError there reported a
+        completed edit as a failure (#3676). The diff also rides in the tool
+        result, so a handler that renders nothing loses no information.
+        """
         ...
 
     def print_header(self, text: str):  # pylint: disable=unused-argument
@@ -1602,6 +1618,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
         ttft_seconds: Optional[float] = None,  # pylint: disable=unused-argument
+        tok_per_s: Optional[float] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer with appropriate styling.
@@ -1611,6 +1628,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             streaming: Not used (kept for compatibility)
             total_tokens: Not used here (CLI stats table is out of scope for #2899)
             ttft_seconds: Not used here (CLI stats table is out of scope for #2899)
+            tok_per_s: Not used here (CLI stats table is out of scope for #2899)
         """
         if self.rich_available:
             self.console.print()  # Add newline before
@@ -2562,6 +2580,7 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
         ttft_seconds: Optional[float] = None,  # pylint: disable=unused-argument
+        tok_per_s: Optional[float] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer.
@@ -2572,6 +2591,7 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
             streaming: Not used (kept for compatibility)
             total_tokens: Not used here (JSON-only mode has its own stats path)
             ttft_seconds: Not used here (JSON-only mode has its own stats path)
+            tok_per_s: Not used here (JSON-only mode has its own stats path)
         """
         if self.silence_final_answer:
             return  # Completely silent

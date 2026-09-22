@@ -250,6 +250,13 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
+		if evidence := findInstalledButUnresolvable(); evidence != "" {
+			return nil, &StartError{Reason: fmt.Sprintf(
+				"GAIA appears to be installed (%s), but the `gaia` CLI is not resolvable "+
+					"on this process's PATH, so the daemon cannot be launched. "+
+					"Add its directory to PATH, or launch this TUI from a shell where "+
+					"`gaia --version` already works, then retry.", evidence)}
+		}
 		return nil, &StartError{Reason: "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
 			"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
 			"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or `pip install amd-gaia` " +
@@ -257,6 +264,44 @@ func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 			"From a clone of the repo, `pip install -e .` works too"}
 	}
 	return exec.CommandContext(ctx, bin, "daemon", "start"), nil
+}
+
+// findInstalledButUnresolvable looks for filesystem evidence that GAIA is
+// already installed even though `gaia` didn't resolve on PATH, so the error
+// above can stop telling an existing user to (re)install it. It never runs
+// Python or trusts PATH again — only direct, deterministic file checks:
+//
+//   - $VIRTUAL_ENV/bin/gaia (or Scripts\gaia.exe on Windows): the interpreter
+//     that ran this process activated a venv, but the venv's script dir
+//     itself isn't on this process's PATH.
+//   - ~/.gaia/config.json: `gaia config` and `gaia init` both write here
+//     (see docs/reference/cli.mdx), so its presence means a `gaia` binary
+//     ran successfully on this machine before, just not in this environment.
+//
+// Returns a human-readable description of what was found, or "" if neither
+// check found anything (i.e. GAIA genuinely looks uninstalled).
+func findInstalledButUnresolvable() string {
+	if venv := os.Getenv("VIRTUAL_ENV"); venv != "" {
+		name := "gaia"
+		if runtime.GOOS == "windows" {
+			name = "gaia.exe"
+		}
+		dir := "bin"
+		if runtime.GOOS == "windows" {
+			dir = "Scripts"
+		}
+		candidate := filepath.Join(venv, dir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			return fmt.Sprintf("found %s in the active virtualenv", candidate)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		configPath := filepath.Join(home, ".gaia", "config.json")
+		if _, err := os.Stat(configPath); err == nil {
+			return fmt.Sprintf("found %s from a previous `gaia init`/`gaia config`", configPath)
+		}
+	}
+	return ""
 }
 
 // spawnAndWait launches the daemon and polls until a live instance registers.
@@ -545,23 +590,31 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	return inst, nil
 }
 
-// callerMode mirrors the built-in sidecar mode environment variables used by
-// the Python callers. Unknown IDs intentionally default to user mode: only
-// registered built-in agents have a caller-owned mode switch.
-func callerMode(agentID string) string {
-	envVar := ""
+// ModeEnvVar names the sidecar mode variable for the built-in agents, "" for an
+// agent that has no mode switch. Only registered built-in agents have one.
+func ModeEnvVar(agentID string) string {
 	switch agentID {
 	case "email":
-		envVar = "GAIA_EMAIL_AGENT_MODE"
+		return "GAIA_EMAIL_AGENT_MODE"
 	case "gaia":
-		envVar = "GAIA_GAIA_AGENT_MODE"
+		return "GAIA_GAIA_AGENT_MODE"
 	}
-	if envVar != "" {
-		if mode := os.Getenv(envVar); mode != "" {
-			return mode
-		}
+	return ""
+}
+
+// CallerMode mirrors the built-in sidecar mode environment variables used by
+// the Python callers, and reports whether the caller expressed a preference at
+// all. An unset variable is NO preference: the daemon attaches to whatever is
+// running and only conflicts on an explicit, differing mode.
+func CallerMode(agentID string) (string, bool) {
+	envVar := ModeEnvVar(agentID)
+	if envVar == "" {
+		return "", false
 	}
-	return "user"
+	if mode := strings.TrimSpace(os.Getenv(envVar)); mode != "" {
+		return mode, true
+	}
+	return "", false
 }
 
 // callerDevSrcDir resolves the same per-agent source layout as the daemon,
@@ -597,8 +650,14 @@ func callerDevSrcDir(agentID string) (string, error) {
 }
 
 func ensureRequestBody(agentID string) ([]byte, error) {
-	mode := callerMode(agentID)
-	body := map[string]string{"mode": mode}
+	body := map[string]string{}
+	mode, explicit := CallerMode(agentID)
+	if !explicit {
+		// No key at all — the daemon reads a present "mode" as a REQUEST and
+		// 409s a sidecar already running in the other one.
+		return json.Marshal(body)
+	}
+	body["mode"] = mode
 	if mode == "dev" {
 		devSrcDir, err := callerDevSrcDir(agentID)
 		if err != nil {

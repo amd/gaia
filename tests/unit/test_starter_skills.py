@@ -142,7 +142,7 @@ def test_starter_skill_permissions_resolve_against_the_real_catalog(skill_dir: P
 
 
 @pytest.fixture(scope="module")
-def registry_tool_names() -> frozenset[str]:
+def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     """Tool names the mixins a starter skill may target actually register.
 
     Registrars are invoked on bare stubs — they only close over ``self`` inside
@@ -154,12 +154,14 @@ def registry_tool_names() -> frozenset[str]:
     from gaia.agents.tools.audio_tools import AudioToolsMixin
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
     from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+    from gaia.agents.tools.email_tools import EmailToolsMixin
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
     from gaia.agents.tools.file_tools import FileSearchToolsMixin
     from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
     from gaia.agents.tools.shell_tools import ShellToolsMixin
+    from gaia.sd.mixin import SDToolsMixin
 
     class _Stub:
         """Enough surface for the registrars.
@@ -185,6 +187,7 @@ def registry_tool_names() -> frozenset[str]:
         (CodeIndexToolsMixin, "register_code_index_tools"),
         (AudioToolsMixin, "register_audio_tools"),
         (MemoryMixin, "register_memory_tools"),
+        (EmailToolsMixin, "register_email_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)
@@ -194,6 +197,12 @@ def registry_tool_names() -> frozenset[str]:
         _TOOL_REGISTRY.clear()
         for mixin, method in registrars:
             getattr(mixin, method)(_Stub())
+        # SD registers inside ``init_sd`` rather than a ``register_*`` method,
+        # so it needs the initializer — and an explicit output_dir, or it
+        # mkdirs ``.gaia/`` into the developer's cwd. No server is contacted.
+        SDToolsMixin.init_sd(
+            _Stub(), output_dir=str(tmp_path_factory.mktemp("sd-images"))
+        )
         names = frozenset(_TOOL_REGISTRY)
     finally:
         _TOOL_REGISTRY.clear()
@@ -221,15 +230,21 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
         encoding="utf-8"
     )
-    inline = {"execute_python_file", "list_files", "request_user_input"}
+    inline = {"execute_python_file", "run_python", "list_files", "request_user_input"}
     return frozenset(t for t in inline if f"def {t}(" in source)
 
 
 def test_registry_fixture_actually_registered_something(registry_tool_names):
     """Guards the guard: an empty set would make the check below vacuous."""
-    assert {"search_web", "fetch_page", "query_documents", "recall"} <= (
-        registry_tool_names
-    )
+    assert {
+        "search_web",
+        "fetch_page",
+        "query_documents",
+        "recall",
+        # SD registers via init_sd, not a register_* method — if that call
+        # starts failing quietly, image-gen's honesty check goes vacuous.
+        "generate_image",
+    } <= registry_tool_names
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))

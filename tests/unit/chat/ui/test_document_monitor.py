@@ -329,3 +329,169 @@ class TestDocumentMonitor:
             assert updated["indexing_status"] == "failed"
         finally:
             await monitor.stop()
+
+
+class TestAReconnectedDriveIsRepaired:
+    """A document on a removable or network drive came back "missing" forever.
+
+    Unplugging the drive marks it missing, correctly. Plugging it back in
+    changes nothing about the file, so its mtime still matches — and the
+    monitor's fast path returned before anything could clear the status. Only
+    a manual re-index brought it back (#3552).
+    """
+
+    @staticmethod
+    def _indexed(db, temp_file):
+        file_stat = os.stat(temp_file)
+        return db.add_document(
+            filename="on-a-usb-stick.txt",
+            filepath=temp_file,
+            file_hash=_compute_file_hash(temp_file),
+            file_size=file_stat.st_size,
+            chunk_count=3,
+            file_mtime=file_stat.st_mtime,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_missing_document_recovers_when_the_file_returns(
+        self, db, temp_file
+    ):
+        doc_id = self._indexed(db, temp_file)["id"]
+        # The state one sweep with the drive unplugged leaves behind.
+        db.update_document_status(doc_id, "missing")
+
+        monitor = DocumentMonitor(
+            db=db, index_fn=_dummy_index, interval=0.2, startup_delay=0.0
+        )
+        await monitor.start()
+        try:
+            for _ in range(40):
+                if db.get_document(doc_id)["indexing_status"] != "missing":
+                    break
+                await asyncio.sleep(0.1)
+        finally:
+            await monitor.stop()
+
+        assert db.get_document(doc_id)["indexing_status"] == "complete"
+
+    @pytest.mark.asyncio
+    async def test_recovery_does_not_require_re_indexing(self, db, temp_file):
+        """The file is unchanged; re-reading it would be wasted work."""
+        doc_id = self._indexed(db, temp_file)["id"]
+        db.update_document_status(doc_id, "missing")
+
+        calls = [0]
+
+        async def tracking_index(filepath) -> int:
+            calls[0] += 1
+            return 10
+
+        monitor = DocumentMonitor(
+            db=db, index_fn=tracking_index, interval=0.2, startup_delay=0.0
+        )
+        await monitor.start()
+        try:
+            for _ in range(40):
+                if db.get_document(doc_id)["indexing_status"] != "missing":
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            await monitor.stop()
+
+        assert db.get_document(doc_id)["indexing_status"] == "complete"
+        assert calls[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_file_that_is_still_gone_stays_missing(self, db, tmp_path):
+        gone = tmp_path / "still-unplugged.txt"
+        gone.write_text("content")
+        file_stat = os.stat(gone)
+        doc = db.add_document(
+            filename="still-unplugged.txt",
+            filepath=str(gone),
+            file_hash=_compute_file_hash(str(gone)),
+            file_size=file_stat.st_size,
+            chunk_count=3,
+            file_mtime=file_stat.st_mtime,
+        )
+        gone.unlink()
+
+        monitor = DocumentMonitor(
+            db=db, index_fn=_dummy_index, interval=0.2, startup_delay=0.0
+        )
+        await monitor.start()
+        try:
+            for _ in range(40):
+                if db.get_document(doc["id"])["indexing_status"] == "missing":
+                    break
+                await asyncio.sleep(0.1)
+            # And it must STAY missing across further sweeps.
+            await asyncio.sleep(0.5)
+        finally:
+            await monitor.stop()
+
+        assert db.get_document(doc["id"])["indexing_status"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_a_file_changed_while_away_is_still_re_indexed(self, db, temp_file):
+        """Repairing the status must not short-circuit a real content change."""
+        doc_id = self._indexed(db, temp_file)["id"]
+        db.update_document_status(doc_id, "missing")
+
+        time.sleep(0.1)
+        with open(temp_file, "a") as f:
+            f.write("\nedited while the drive was out")
+
+        index_called = asyncio.Event()
+
+        async def tracking_index(filepath) -> int:
+            index_called.set()
+            return 10
+
+        monitor = DocumentMonitor(
+            db=db, index_fn=tracking_index, interval=0.2, startup_delay=0.0
+        )
+        await monitor.start()
+        try:
+            await asyncio.wait_for(index_called.wait(), timeout=10.0)
+        finally:
+            await monitor.stop()
+
+        assert db.get_document(doc_id)["chunk_count"] == 10
+
+    @pytest.mark.asyncio
+    async def test_a_file_swapped_while_away_is_re_read_despite_its_mtime(
+        self, db, temp_file
+    ):
+        """mtime is only trustworthy while the monitor was watching.
+
+        A restore or an rsync that preserves timestamps looks unchanged, and
+        the missing window is exactly the period nothing was watching — so the
+        size is checked on that one transition.
+        """
+        doc_id = self._indexed(db, temp_file)["id"]
+        db.update_document_status(doc_id, "missing")
+
+        # Same mtime, different content: what `cp -p` leaves behind.
+        stat_before = os.stat(temp_file)
+        with open(temp_file, "w") as f:
+            f.write("completely different content, restored from a backup")
+        os.utime(temp_file, (stat_before.st_atime, stat_before.st_mtime))
+
+        index_called = asyncio.Event()
+
+        async def tracking_index(filepath) -> int:
+            index_called.set()
+            return 7
+
+        monitor = DocumentMonitor(
+            db=db, index_fn=tracking_index, interval=0.2, startup_delay=0.0
+        )
+        await monitor.start()
+        try:
+            await asyncio.wait_for(index_called.wait(), timeout=10.0)
+        finally:
+            await monitor.stop()
+
+        assert db.get_document(doc_id)["chunk_count"] == 7

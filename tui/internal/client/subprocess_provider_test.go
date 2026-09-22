@@ -137,7 +137,7 @@ func TestPendingCloudSelectionLaunchesAgainstEmbeddedEndpoint(t *testing.T) {
 		_ = st.stdin.Close()
 		st.proc.kill()
 		st.proc.reap()
-		c.discard(st.proc)
+		c.discard(st.proc, nil)
 		close(st.turnDone)
 	})
 	if !reflect.DeepEqual(st.proc.cmd.Args[1:], []string{"--json-events", "--model", "fireworks.gemma-4-31b-it"}) {

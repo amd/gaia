@@ -120,7 +120,10 @@ func TestClickingTheSelectedPaletteRowRunsIt(t *testing.T) {
 // same contract as Esc (TestPaletteEscClosesWithoutQuittingOrCancelling).
 func TestClickingOutsideThePaletteClosesIt(t *testing.T) {
 	m, _ := newTestModel(t)
-	m = typeInto(t, m, "/mo")
+	// /clear rather than /model: newTestModel's agent ("email") is not the
+	// flagship, and /model is now gated away from it (availability.go) — /clear
+	// is offered to every agent, and this test only needs SOME open palette.
+	m = typeInto(t, m, "/cl")
 	if !m.palette.open {
 		t.Fatal("test setup: palette should be open")
 	}
@@ -132,7 +135,7 @@ func TestClickingOutsideThePaletteClosesIt(t *testing.T) {
 	if m.palette.open {
 		t.Error("a click outside the box must close the palette")
 	}
-	if m.input.Value() != "/mo" {
+	if m.input.Value() != "/cl" {
 		t.Errorf("a click outside must not touch the composer, got %q", m.input.Value())
 	}
 	// Not "no Cmd at all": the palette closing legitimately releases the

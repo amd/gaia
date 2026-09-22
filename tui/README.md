@@ -124,6 +124,10 @@ gaia-tui status             # is the background service running, and what do I h
 gaia-tui version
 ```
 
+`--bypass-permissions` is available only for agents launched as subprocesses.
+Daemon-backed agents, including a Hub-installed flagship, reject it before
+readiness checks; omit the flag to run with confirmation prompts enabled.
+
 Full command reference: <https://amd-gaia.ai/docs/reference/cli>
 
 ---
@@ -278,6 +282,16 @@ HOME="$TMPHOME" gaia daemon start
 HOME="$TMPHOME" gaia daemon stop
 rm -rf "$TMPHOME"
 ```
+
+## Clearing a conversation
+
+`/clear` clears the conversation context as well as the visible transcript. The
+flagship keeps its running process, selected model, loaded skills, and permission
+settings. If the agent cannot acknowledge the reset, the transcript remains visible
+with an error. Stored long-term memories are unaffected.
+Legacy `--subprocess` and `--mock` connections clear the view with a visible note
+that their agent-side context is unchanged, because their protocol has no reset.
+
 
 ## The `tui` prefix
 

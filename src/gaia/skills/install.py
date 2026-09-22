@@ -60,7 +60,7 @@ from gaia.skills.hub import (
 )
 from gaia.skills.lock import SOURCE_HUB, LockEntry, SkillLock
 from gaia.skills.manager import SkillManager
-from gaia.skills.naming import skill_directory
+from gaia.skills.naming import artifact_path, skill_directory
 from gaia.skills.permissions import refuse_unbridged_permissions
 from gaia.skills.signing import (
     SIGNATURE_FILENAME,
@@ -212,7 +212,11 @@ def install_skill(
             name,
             version,
             artifact,
-            workdir / artifact.filename,
+            artifact_path(
+                workdir,
+                artifact.filename,
+                origin=f"hub manifest for '{name}' {version}",
+            ),
             base_url=base_url,
             fetcher=fetcher,
         )

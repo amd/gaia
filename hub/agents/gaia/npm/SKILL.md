@@ -226,7 +226,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.12**; the stream is
+package — call it with plain `fetch`. Contract version **2.13**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -327,10 +327,10 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Seven of the agent's 67 tools mutate the machine and need explicit approval
-before they run. Five sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+Eight of the agent's tools mutate the machine and need explicit approval
+before they run. Six sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
-**`execute_python_file`**, and **`notify_desktop`**, which spawns a PowerShell
+**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which spawns a PowerShell
 child on Windows to draw the notification — and the flagship adds two of its
 own, **`install_skill`** and **`remove_skill`**, because installing a skill
 writes third-party code under `~/.gaia/skills` and removing one deletes it.
@@ -352,7 +352,7 @@ data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary
 data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
-So: **`/query` cannot run any of those seven tools.** If your integration needs
+So: **`/query` cannot run any of those eight tools.** If your integration needs
 that, drive the agent from a surface that can prompt — its stdio transport is the
 one that can, because its control channel carries an approval back to a turn
 already in flight (SPEC §5.5) — or perform the mutation yourself from your own
@@ -367,6 +367,16 @@ paths, and **the default is the user's home directory**. That is the honest scop
 for a personal document agent, and it is still a real boundary — system
 directories, program files, and other users' homes are refused, with the check
 run against the *resolved* path so a symlink out of scope doesn't slip through.
+
+**Being in scope is not the same as being safe, and two denylists apply inside
+it.** Reads refuse secrets — `.env`, `id_rsa`, `credentials.json`, `.netrc`,
+`.pem`/`.key`, and everything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube` —
+even in an allowed directory. Writes additionally refuse anything that executes
+on its own: shell startup files, PowerShell profiles, `~/.config/autostart/*`,
+systemd user units, `LaunchAgents`, and a repo's `.git/` (hooks and config). Both
+come back as a structured error naming the file and the reason, so do not plan an
+integration around reading a credential file or editing a shell rc — perform
+those from your own code.
 
 **In 0.1.1 narrowing it is a construction-time setting only.** The packaged
 sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
@@ -484,7 +494,7 @@ There is no silent null.
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  The seven gated tools are unreachable **over `/query`** — the agent itself can
+  The eight gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a
@@ -506,7 +516,9 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up.
+  comes up. It must also be **0.23.1+**: an older core's daemon starts fine but
+  has no sidecar entry for this agent, which reads as a UI with a dead agent
+  rather than as a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
   *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
   shadow the npm bin shim. The lock's `filename` and `executable` differ for that
@@ -535,7 +547,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.12","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.13","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

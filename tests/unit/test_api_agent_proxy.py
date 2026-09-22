@@ -241,13 +241,15 @@ def test_openai_routes_not_shadowed_by_relay(api_client, with_api_key):
     assert r.status_code == 200
     assert r.json()["object"] == "list"
     # /v1/chat/completions is declared before the relay → its handler wins; an
-    # unknown model is the OpenAI handler's own 404, not the relay's.
+    # unknown model is the OpenAI handler's own 404, not the relay's. With a key
+    # configured the endpoint enforces it, so send it.
     r = api_client.post(
         "/v1/chat/completions",
         json={
             "model": "does-not-exist",
             "messages": [{"role": "user", "content": "x"}],
         },
+        headers={"Authorization": f"Bearer {_API_KEY}"},
     )
     assert r.status_code == 404
     assert "not found" in r.json()["detail"].lower()

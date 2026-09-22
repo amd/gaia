@@ -482,7 +482,7 @@ class TestFileBrowse:
 
         resp = client.get("/api/files/browse", params={"path": outside_path})
         assert resp.status_code == 403
-        assert "home directory" in resp.json()["detail"].lower()
+        assert "access restricted" in resp.json()["detail"].lower()
 
     def test_browse_quick_links_present(self, client, home_tmp_dir):
         """Verify quick_links are included in the browse response."""
@@ -871,7 +871,7 @@ class TestFilePreview:
             params={"path": outside_path},
         )
         assert resp.status_code == 403
-        assert "home directory" in resp.json()["detail"].lower()
+        assert "access restricted" in resp.json()["detail"].lower()
 
     def test_preview_encoding_detection(self, client, home_tmp_dir):
         """Verify utf-8 encoding is detected for a UTF-8 file."""

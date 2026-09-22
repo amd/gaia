@@ -54,9 +54,9 @@ import sys
 from pathlib import Path
 
 # Summary counters meaning "a scenario produced no measurement", as distinct
-# from `failed` (FAIL is a legitimate, comparable outcome). Mirrors
-# gaia.eval.runner._NO_MEASUREMENT_STATUSES, expressed in the scorecard summary's
-# own key names (scorecard.py::build_scorecard).
+# from `failed` (FAIL is a legitimate, comparable outcome). Unlike the runner's
+# regression comparison, completeness also treats blocked/skipped as unmeasured.
+# Keys come from scorecard.py::build_scorecard.
 NO_MEASUREMENT_COUNTERS = (
     "infra_error",
     "errored",

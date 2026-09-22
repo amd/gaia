@@ -465,3 +465,124 @@ class TestJudgeFactoryTemperature:
         make_claude_judge(model="claude-sonnet-4-6")
 
         spy.assert_called_once_with(model="claude-sonnet-4-6")
+
+
+# ---------------------------------------------------------------------------
+# Thinking blocks (#3884)
+#
+# The default judge is thinking-enabled and answers with [thinking, text], so
+# every extraction path must pick the first TEXT block instead of block zero.
+# A response with no text block must raise, not degrade to empty text — an
+# empty judge reply parses as a failed case and silently lowers the score.
+# ---------------------------------------------------------------------------
+
+
+def _thinking_block():
+    return SimpleNamespace(
+        type="thinking", thinking="considering the rubric", signature="sig"
+    )
+
+
+def _text_block(text="the verdict"):
+    return SimpleNamespace(type="text", text=text)
+
+
+def _thinking_then_text(text="the verdict", **extra):
+    return SimpleNamespace(content=[_thinking_block(), _text_block(text)], **extra)
+
+
+class TestFirstTextBlock:
+    def test_skips_leading_thinking_block(self):
+        from gaia.eval.claude import first_text_block
+
+        blocks = [_thinking_block(), _text_block("hello")]
+        assert first_text_block(blocks, "claude-opus-5") == "hello"
+
+    def test_returns_first_of_several_text_blocks(self):
+        from gaia.eval.claude import first_text_block
+
+        blocks = [_thinking_block(), _text_block("first"), _text_block("second")]
+        assert first_text_block(blocks, "claude-opus-5") == "first"
+
+    def test_raises_naming_model_and_block_types(self):
+        from gaia.eval.claude import first_text_block
+
+        blocks = [_thinking_block(), SimpleNamespace(type="tool_use", input={})]
+        with pytest.raises(ValueError) as excinfo:
+            first_text_block(blocks, "claude-opus-5")
+
+        message = str(excinfo.value)
+        assert "claude-opus-5" in message
+        assert "thinking" in message
+        assert "tool_use" in message
+
+    def test_raises_on_empty_content(self):
+        from gaia.eval.claude import first_text_block
+
+        with pytest.raises(ValueError, match="claude-opus-5"):
+            first_text_block([], "claude-opus-5")
+
+
+class TestExtractionPathsWithThinkingBlock:
+    @pytest.fixture()
+    def html_file(self, tmp_path):
+        path = tmp_path / "doc.html"
+        path.write_text("<html><body>hello</body></html>", encoding="utf-8")
+        return path
+
+    @pytest.fixture()
+    def txt_file(self, tmp_path):
+        path = tmp_path / "doc.txt"
+        path.write_text("hello world", encoding="utf-8")
+        return path
+
+    @pytest.fixture()
+    def pdf_file(self, tmp_path):
+        path = tmp_path / "doc.pdf"
+        path.write_bytes(b"%PDF-1.4 fake pdf content")
+        return path
+
+    def test_analyze_file_html(self, monkeypatch, html_file):
+        client = _build_client(monkeypatch, model="claude-opus-5")
+        monkeypatch.setattr(client, "_convert_html_to_text", lambda *a, **kw: "hello")
+        client.client.messages.create.return_value = _thinking_then_text("html verdict")
+
+        assert client.analyze_file(str(html_file), "summarize") == "html verdict"
+
+    def test_analyze_file_binary(self, monkeypatch, pdf_file):
+        client = _build_client(monkeypatch, model="claude-opus-5")
+        client.client.messages.create.return_value = _thinking_then_text("pdf verdict")
+
+        assert client.analyze_file(str(pdf_file), "summarize") == "pdf verdict"
+
+    def test_analyze_file_with_usage_text(self, monkeypatch, txt_file):
+        client = _build_client(monkeypatch, model="claude-opus-5")
+        client.client.messages.create.return_value = _thinking_then_text(
+            "txt verdict", usage=SimpleNamespace(input_tokens=10, output_tokens=5)
+        )
+
+        result = client.analyze_file_with_usage(str(txt_file), "summarize")
+        assert result["content"] == "txt verdict"
+        assert result["usage"]["total_tokens"] == 15
+
+    def test_analyze_file_with_usage_binary(self, monkeypatch, pdf_file):
+        client = _build_client(monkeypatch, model="claude-opus-5")
+        client.client.messages.create.return_value = _thinking_then_text(
+            "pdf verdict", usage=SimpleNamespace(input_tokens=10, output_tokens=5)
+        )
+
+        result = client.analyze_file_with_usage(str(pdf_file), "summarize")
+        assert result["content"] == "pdf verdict"
+        assert result["usage"]["total_tokens"] == 15
+
+    def test_no_text_block_raises_instead_of_returning_empty(
+        self, monkeypatch, txt_file
+    ):
+        client = _build_client(monkeypatch, model="claude-opus-5")
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[_thinking_block()],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+
+        with pytest.raises(ValueError, match="No text block"):
+            client.analyze_file_with_usage(str(txt_file), "summarize")

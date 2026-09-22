@@ -73,6 +73,14 @@
 # cannot be mistaken for a complete one. `enforce: true` restores blocking for
 # both.
 #
+# ONE EXCEPTION, AND IT IS ABOUT BLAME, NOT CONVENIENCE: when the RAG embedder
+# will not load on the runner at all (#3016, EMBEDDER_OK=false), rag_quality and
+# context_retention warn instead of failing. Every other non-measurement says
+# something about the PR under test; #3016 says only that this SoC cannot serve
+# the embedder for ANY commit, so failing on it made the gate permanently red
+# and unread. Nothing else is softened — tool_selection's own non-measurements
+# still fail. Remove the exception when #3016 closes. See the gate step below.
+#
 # TIME REGRESSIONS ARE NOT COMPARABLE TO THIS BASELINE. `--compare` folds a >2x
 # per-scenario wall-clock delta into the same exit 2 as a quality regression, but
 # the committed baseline was captured against a REMOTE Lemonade over ngrok
@@ -154,14 +162,18 @@ on:
         required: false
         type: boolean
         default: false
+      task_suite:
+        description: 'Flagship task suite from eval/tasks/tasks.json (core runs on PRs; full is the deeper set)'
+        required: false
+        default: 'core'
   # `pull_request`, NOT `push`. A `push` path filter matches the files in the
   # PUSH, so merging main into a branch replays all of main's churn through the
   # filter — which is how #2807 and #2809, both pure C++ PRs with no Python in
   # their diff at all, ended up wearing a red X from an LLM-quality gate and
   # burning hours of the scarcest runner pool. `pull_request` filters on the
   # PR's own base..head diff, so the gate fires only when the PR itself edits a
-  # path below. `branches: [main]` and the `types:` list follow
-  # test_email_agent_eval.yml; `ready_for_review` is what runs the gate on a PR
+  # path below. The `types:` list follows test_email_agent_eval.yml;
+  # `ready_for_review` is what runs the gate on a PR
   # that was opened as a draft (see the draft clause in the job `if:`).
   #
   # THE PATH LIST BELOW IS UNCHANGED ON PURPOSE. This change is mechanism only:
@@ -169,7 +181,7 @@ on:
   # `hub/agents/*/python/**`, so 18 hub packages newly qualify for a
   # single-slot pool — scoping to the PR diff is what keeps that affordable.
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # The consolidation itself.
@@ -188,6 +200,8 @@ on:
       - 'src/gaia/agents/builder/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/chat/**'
+      - 'src/gaia/eval/flagship_tasks.py'
+      - 'eval/tasks/**'
 
 concurrency:
   # Share the single Lemonade backend slot with the other self-hosted evals so two
@@ -204,6 +218,11 @@ permissions:
 env:
   BASELINE_DIR: tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914
   BACKEND_URL: http://127.0.0.1:4200
+  # This runner's home is C:\Windows\System32\config\systemprofile and the
+  # checkout is not under it, so without this every scenario carrying a
+  # `setup.index_documents` block 403s and scores as a failure (#3585).
+  # Declares the checkout's corpus, nothing wider.
+  GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
   # A dispatch input always wins. Otherwise `[eval-enforce]` in the PR TITLE opts
   # in — workflow_dispatch is not offered until this file is on the default
   # branch, so without this there is no way to enforce pre-merge. Reads the PR
@@ -247,8 +266,155 @@ env:
   GAIA_MEMORY_DISABLED: '1'
 
 jobs:
+  # The flagship GaiaAgent on outcome-scored tasks (`gaia eval tasks`, docs:
+  # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
+  # with separate environments: the agent runs with no credentials (it runs
+  # shell commands), Claude judges quality (and decides the question tasks) in
+  # one call with no tools, and the gate compares passes, quality, honesty,
+  # tokens, steps and runtime with main's committed results in
+  # eval/tasks/expectations/<model>.<suite>.json. The gate always enforces: a
+  # missed expectation fails this job. A model with no committed expectations
+  # is reported, not failed, and a task the backend could not serve is "not
+  # measured", never a regression. Memory is off here, as for the whole workflow.
+  # agent-eval waits for this job, so the one runner does them in a fixed order.
+  flagship-tasks:
+    name: Flagship agent tasks vs expectations
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
+    runs-on: [self-hosted, Windows, strix-halo, lemonade-eval]
+    defaults:
+      run:
+        # Windows PowerShell 5.1 and pure-ASCII run bodies, for the reasons
+        # spelled out on the agent-eval job below.
+        shell: powershell
+    timeout-minutes: 90
+    env:
+      TASK_SUITE: ${{ github.event.inputs.task_suite || 'core' }}
+      TASK_JUDGE_MODEL: claude-opus-5
+      TASKS_OUT: eval-out\tasks
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          # The flagship ships as its own hub package and builds on ChatAgent.
+          install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python -e hub/agents/gaia/python'
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI (the judge)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
+          claude --version
+          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+
+      - name: Start GAIA's embedded Lemonade
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = "Continue"
+          gaia lemonade embedded start --timeout 180
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content "$HOME\.gaia\lemonade\lemond.log" -Tail 60 -ErrorAction SilentlyContinue
+            throw "The embedded Lemonade did not start; its log is above."
+          }
+          gaia lemonade embedded install-backend llamacpp:vulkan
+          if ($LASTEXITCODE -ne 0) { throw "Could not install llamacpp:vulkan into the embedded Lemonade." }
+          gaia lemonade embedded status
+
+      # No credentials in this step's environment: the agent runs shell commands.
+      - name: Run the flagship on the task suite
+        timeout-minutes: 60
+        run: |
+          $ErrorActionPreference = "Continue"
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          . "$HOME\.gaia\lemonade\env.ps1"
+          gaia eval tasks run --suite $env:TASK_SUITE --no-judge --out $env:TASKS_OUT
+          if ($LASTEXITCODE -ne 0) { throw "gaia eval tasks run crashed (exit $LASTEXITCODE): a harness failure, not a verdict." }
+
+      - name: Judge quality
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Blank when the OAuth token is set: the judge adds --bare only with a key.
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          gaia eval tasks judge $env:TASKS_OUT --judge-model $env:TASK_JUDGE_MODEL --judge-attempts 2
+          if ($LASTEXITCODE -ne 0) { throw "gaia eval tasks judge failed (exit $LASTEXITCODE)." }
+
+      # Always enforced. With no committed expectations for the model yet it only
+      # reports; the proposal in the artifact is the file to commit from main.
+      - name: Gate on the committed expectations
+        if: ${{ !cancelled() }}
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          gaia eval tasks gate $env:TASKS_OUT --enforce --propose "$env:TASKS_OUT\proposed-expectations.json"
+          exit $LASTEXITCODE
+
+      - name: Stop the embedded Lemonade
+        if: always()
+        run: gaia lemonade embedded stop
+
+      # The artifact is public and, unlike the job log, not secret-masked. The
+      # file list here must match the upload step's `path:` below.
+      - name: Refuse to upload a credential
+        if: always()
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @(Get-ChildItem $env:TASKS_OUT -File -Include scorecard.json, proposed-expectations.json -Recurse -ErrorAction SilentlyContinue)
+          $leaked = @()
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if (-not $value) { continue }
+            foreach ($file in $files) {
+              if ((Test-Path -LiteralPath $file.FullName) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $value -Quiet)) {
+                $leaked += $file.FullName
+                Remove-Item -LiteralPath $file.FullName -Force
+              }
+            }
+          }
+          if ($leaked.Count -gt 0) {
+            Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the public artifact. They were deleted, not uploaded: $($leaked -join ', ')"
+            exit 1
+          }
+          if ($files.Count -eq 0) {
+            Write-Host "::warning::No scorecard under $env:TASKS_OUT - nothing was scanned, and nothing will upload."
+          } else {
+            Write-Host "Scanned $($files.Count) file(s): no credential found."
+          }
+
+      # Scores only: transcripts and diffs stay on the runner; reproduce locally.
+      # Must match the scan step's -Include list above.
+      - name: Upload the scorecard
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-tasks
+          path: |
+            eval-out/tasks/scorecard.json
+            eval-out/tasks/proposed-expectations.json
+          if-no-files-found: warn
+          retention-days: 14
+
   agent-eval:
     name: rag_quality + context_retention + tool_selection vs Gemma baselines
+    # After flagship-tasks whatever its result (`!cancelled()` below): the two
+    # jobs share one runner, so the order is fixed rather than incidental.
+    needs: flagship-tasks
     # Fork PRs and drafts never reach the lab pool. A fork PR would schedule
     # untrusted code onto a self-hosted runner and could not pass anyway
     # (ANTHROPIC_API_KEY is not exposed to fork PRs, so the judge preflight
@@ -261,10 +427,11 @@ jobs:
     # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
     # more-indented lines, and an `if:` expression must fold to a single line.
     if: >-
-      github.event_name != 'pull_request' ||
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))) &&
+      !cancelled()
     # `Windows` is load-bearing, not decoration: self-hosted pool labels here also
     # match a Linux box (xsj-aimlab-stxp-04), and every step below is PowerShell +
     # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not
@@ -526,12 +693,17 @@ jobs:
           # for weeks because the key existed and the account behind it was out
           # of credit: the preflight passed and all five scenarios then died in
           # three seconds each with their stdout discarded.
-          claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String -OutVariable probe | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::The Claude credential is present but a one-line probe was rejected, so every scenario would error. Response: $probe"
-            exit 1
-          }
-          Write-Host "Claude credential accepted by a live probe."
+          # A rejected probe has two causes needing two different people: the org is
+          # out of budget (billing admin) or the credential is bad (secrets change).
+          # The exit code cannot tell them apart, so classify the response body and
+          # name the right owner - see util/classify_claude_probe.py (#4080).
+          $global:LASTEXITCODE = 0
+          $probe = (claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String)
+          $probeExit = $LASTEXITCODE
+          $probeFile = Join-Path $env:RUNNER_TEMP "claude_probe.txt"
+          Set-Content -Path $probeFile -Value $probe -Encoding UTF8
+          python util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
           foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
@@ -866,12 +1038,22 @@ jobs:
           # the backend and its logs both land in the workspace.
           $outLog = Join-Path $PWD "eval-out\backend.out.log"
           $errLog = Join-Path $PWD "eval-out\backend.err.log"
+          # The agent under test runs shell commands, so it must not inherit the
+          # judge's credentials; only `claude -p` below needs them.
+          $judgeCredentials = @{}
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+            $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
+            Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
+          }
           $backend = Start-Process -FilePath "python" `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
             -WorkingDirectory $PWD `
             -RedirectStandardOutput $outLog `
             -RedirectStandardError $errLog `
             -NoNewWindow -PassThru
+          foreach ($name in $judgeCredentials.Keys) {
+            if ($judgeCredentials[$name]) { Set-Item "Env:\$name" $judgeCredentials[$name] }
+          }
           if (-not $backend) {
             Write-Host "::error::Could not start gaia.ui.server - the venv install is broken or python is not on PATH."
             exit 1
@@ -933,6 +1115,9 @@ jobs:
             # No --agent-type: the committed baselines were produced against the
             # backend default (their `config` records only backend_url/model/budget),
             # so passing one here would compare against a different agent.
+            #
+            # Never add web_system or vision here: they read this runner's
+            # clipboard, windows and screen into the scorecard.
             $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
             if ($env:EMBEDDER_OK -eq 'false') { Write-Host "::warning::Embedder unavailable (#3016) - measuring tool_selection only. rag_quality and context_retention answer out of embedder-produced chunks and cannot be measured; the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true)." }
             foreach ($category in $categories) {
@@ -1018,18 +1203,11 @@ jobs:
             }
             New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
             Copy-Item $scorecard "eval-out\$category\scorecard.json"
-            # Traces are what you actually read to triage a regression - a bare
-            # scorecard tells you a score moved, not why. Best-effort though: a
-            # deep trace tree can blow MAX_PATH, and losing the triage material
-            # must not red a job whose scorecard was already collected.
-            $traces = Join-Path $runDir "traces"
-            if (Test-Path $traces) {
-              try {
-                Copy-Item $traces "eval-out\$category\traces" -Recurse
-              } catch {
-                Write-Host "::warning::${category}: could not copy traces from $traces ($($_.Exception.Message)). The scorecard was collected; only the triage detail is missing."
-              }
-            }
+            # Traces and logs are not collected: the artifact is public and GitHub
+            # masks secrets only in logs. Reproduce a regression locally with the
+            # same `gaia eval agent --category` command to get the traces.
+            $summary = Join-Path $runDir "summary.md"
+            if (Test-Path $summary) { Copy-Item $summary "eval-out\$category\summary.md" }
             Write-Host "${category}: $runDir"
           }
 
@@ -1083,7 +1261,7 @@ jobs:
           python -m gaia.eval.integrity_gate @gateArgs
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE. Check the backend/Lemonade logs in the artifact, then re-run."
+            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE. The backend and Lemonade logs stay on the runner (eval-out\backend.*.log); reproduce locally with the same gaia eval agent command if you cannot reach it."
             exit 1
           }
 
@@ -1174,10 +1352,40 @@ jobs:
           # category regressed. Same guard as install-lemonade/action.yml.
           $global:LASTEXITCODE = 0
 
-      - name: Upload scorecards + eval logs
+      # The artifact is public and, unlike the job log, not secret-masked.
+      - name: Refuse to upload a credential
+        if: always()
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @(Get-ChildItem eval-out -Recurse -File -Include scorecard.json, summary.md -ErrorAction SilentlyContinue)
+          $leaked = @()
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if (-not $value) { continue }
+            foreach ($file in $files) {
+              if ((Test-Path -LiteralPath $file.FullName) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $value -Quiet)) {
+                $leaked += $file.FullName
+                Remove-Item -LiteralPath $file.FullName -Force
+              }
+            }
+          }
+          if ($leaked.Count -gt 0) {
+            Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the public artifact. They were deleted, not uploaded: $($leaked -join ', ')"
+            exit 1
+          }
+          Write-Host "Scanned $($files.Count) file(s): no credential found."
+
+      - name: Upload scorecards
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: agent-eval-gemma-consolidation
-          path: eval-out/
+          path: |
+            eval-out/*/scorecard.json
+            eval-out/*/summary.md
           if-no-files-found: warn
+          retention-days: 14
