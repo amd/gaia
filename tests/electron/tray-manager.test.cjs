@@ -96,3 +96,64 @@ describe("TrayManager icon loading", () => {
     expect(electronMock.nativeImage.createEmpty).not.toHaveBeenCalled();
   });
 });
+
+describe("TrayManager.setNotificationCount", () => {
+  test("reflects the unread count in the tray tooltip", () => {
+    setPlatform("win32");
+    const mgr = new TrayManager(createMockWindow());
+    mgr.create();
+
+    mgr.setNotificationCount(1);
+    expect(mgr.tray._toolTip).toBe("GAIA — 1 unread notification");
+    mgr.setNotificationCount(4);
+    expect(mgr.tray._toolTip).toBe("GAIA — 4 unread notifications");
+    mgr.setNotificationCount(0);
+    expect(mgr.tray._toolTip).toBe("GAIA");
+  });
+
+  test("does not call app.setBadgeCount on Windows", () => {
+    setPlatform("win32");
+    const mgr = new TrayManager(createMockWindow());
+    mgr.setNotificationCount(3);
+    expect(electronMock.app.setBadgeCount).not.toHaveBeenCalled();
+  });
+
+  test("sets the dock badge on macOS", () => {
+    setPlatform("darwin");
+    const mgr = new TrayManager(createMockWindow());
+    mgr.setNotificationCount(2);
+    expect(electronMock.app.setBadgeCount).toHaveBeenCalledWith(2);
+  });
+
+  test("a count set before create() is applied when the tray appears", () => {
+    setPlatform("win32");
+    const mgr = new TrayManager(createMockWindow());
+    mgr.setNotificationCount(5);
+    mgr.create();
+    expect(mgr.tray._toolTip).toBe("GAIA — 5 unread notifications");
+  });
+
+  test.each([[-1], [NaN], [Infinity], [undefined], ["3"]])(
+    "treats %p as zero",
+    (bad) => {
+      setPlatform("win32");
+      const mgr = new TrayManager(createMockWindow());
+      mgr.create();
+      mgr.setNotificationCount(bad);
+      expect(mgr.notificationCount).toBe(0);
+      expect(mgr.tray._toolTip).toBe("GAIA");
+    }
+  );
+
+  test("is a no-op on the tooltip after the tray is destroyed", () => {
+    setPlatform("win32");
+    const mgr = new TrayManager(createMockWindow());
+    mgr.create();
+    const destroyed = mgr.tray;
+    destroyed._destroyed = true;
+    destroyed.setToolTip.mockClear();
+    mgr.setNotificationCount(2);
+    expect(destroyed.setToolTip).not.toHaveBeenCalled();
+    expect(mgr.notificationCount).toBe(2);
+  });
+});

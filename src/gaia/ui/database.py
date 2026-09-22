@@ -16,13 +16,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia.config import GaiaConfig
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path.home() / ".gaia" / "chat" / "gaia_chat.db"
 
-# Default model for new sessions — kept in sync with the SQL schema DEFAULT and
-# any code that reads session["model"] and falls back when the field is NULL.
+# Hard-coded floor for new sessions — kept in sync with the SQL schema DEFAULT
+# and any code that reads session["model"] and falls back when NULL. Not what a
+# new session necessarily gets: resolved_default_model() checks the user's
+# configured default_model first.
 SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
+
+
+def resolved_default_model() -> str:
+    """The model a new session gets when the caller doesn't specify one.
+
+    ~/.gaia/config.json's default_model wins when set, otherwise
+    SESSION_DEFAULT_MODEL. Also used by routers/sessions.py's device-switch
+    rewrite guard, which treats a configured default the same as the floor.
+    """
+    return GaiaConfig.load().resolve_model(None, SESSION_DEFAULT_MODEL)
+
 
 # Auto-generated placeholder titles the auto-retitler may replace (#2165).
 # Anything else is treated as explicitly chosen and pinned via title_is_custom.
@@ -376,7 +391,9 @@ class ChatDatabase:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
-        model = model or SESSION_DEFAULT_MODEL
+        # An explicit caller-supplied model wins; otherwise resolve against
+        # the user's configured default_model.
+        model = model or resolved_default_model()
         # A non-placeholder title at creation is an explicit caller choice —
         # pin it so the auto-retitler never overwrites it (#2165).
         title_is_custom = 0 if is_placeholder_title(title) else 1
@@ -675,11 +692,29 @@ class ChatDatabase:
             rows = self._conn.execute(
                 """SELECT * FROM messages
                    WHERE session_id = ?
-                   ORDER BY created_at ASC
+                   ORDER BY created_at ASC, id ASC
                    LIMIT ? OFFSET ?""",
                 (session_id, limit, offset),
             ).fetchall()
 
+        return self._decode_messages(rows)
+
+    def get_recent_messages(
+        self, session_id: str, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Get the newest messages in chronological order for agent context."""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM (
+                       SELECT * FROM messages WHERE session_id = ?
+                       ORDER BY created_at DESC, id DESC LIMIT ?
+                   ) ORDER BY created_at ASC, id ASC""",
+                (session_id, limit),
+            ).fetchall()
+        return self._decode_messages(rows)
+
+    @staticmethod
+    def _decode_messages(rows) -> List[Dict[str, Any]]:
         messages = []
         for row in rows:
             msg = dict(row)

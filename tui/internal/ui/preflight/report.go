@@ -131,6 +131,9 @@ const (
 	FixConnectMailbox
 	// FixRunSetup — run `gaia init` for the flagship profile and stream it.
 	FixRunSetup
+	// FixRestartSidecar — stop the sidecar running in the wrong mode, then
+	// ensure it again in the one this launch asked for.
+	FixRestartSidecar
 )
 
 // Label is the key hint shown next to `f`.
@@ -146,6 +149,8 @@ func (k FixKind) Label() string {
 		return "connect a mailbox"
 	case FixRunSetup:
 		return "set it up now"
+	case FixRestartSidecar:
+		return "restart it in this mode"
 	default:
 		return ""
 	}

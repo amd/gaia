@@ -214,6 +214,34 @@ def test_merge_propagates_type_and_permissions_for_hub_lanes():
     assert by_id["weather"]["permissions"] == []
 
 
+def test_merge_propagates_eval_score_version_from_real_worker_payload_shape():
+    # #2965: the Agent Hub Worker (workers/agent-hub/src/catalog.ts) stamps
+    # eval_score / eval_scorecard_url / eval_score_version onto index.json
+    # entries by parsing a real SCORECARD.md's front matter. Mirror the exact
+    # values the committed hub/agents/email/npm/SCORECARD.md front matter
+    # produces (agent.version: 0.5.0, aggregate.value: 84.53) rather than a
+    # fixture invented to already match the expected merged output — that
+    # shape is what let the missing allowlist entry (merge_with_registry only
+    # forwarded eval_score/eval_scorecard_url) ship without a failing test.
+    merged = merge_with_registry(
+        [
+            _entry(
+                "email",
+                version="0.6.0",
+                eval_score=84.53,
+                eval_scorecard_url="https://hub.amd-gaia.ai/agents/email/0.6.0/SCORECARD.md",
+                eval_score_version="0.5.0",
+            )
+        ],
+        _FakeReg([]),
+        {},
+    )
+    by_id = {a["id"]: a for a in merged}
+    assert by_id["email"]["eval_score"] == 84.53
+    assert by_id["email"]["eval_score_version"] == "0.5.0"
+    assert by_id["email"]["latest_version"] == "0.6.0"
+
+
 def test_merge_registry_only_agent_defaults_to_agent_type():
     # Builtins / custom agents are always the "agent" kind with no declared
     # permissions — apps and components exist only as published hub packages.

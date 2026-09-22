@@ -154,11 +154,22 @@ curl -X POST http://localhost:4200/v1/connections/google \
 | `POST /v1/connections/{provider}` | Persist a forwarded grant (201). No browser step. |
 | `GET /v1/connections` | List connections — **metadata only, secrets omitted**. |
 | `GET /v1/connections/{provider}` | One connection's metadata (404 if absent). |
-| `DELETE /v1/connections/{provider}` | Revoke: clears token, client, grants, caches. |
+| `DELETE /v1/connections/{provider}` | Clears the local token, client, grants, and caches. Never revokes the host app's own OAuth grant — see below. |
 
 After a successful POST the agent resolves the connection ambiently — the
 triage request carries **no credentials**; `get_access_token` reads the
 persisted grant and refreshes transparently.
+
+<Warning>
+**Disconnecting a forwarded connection never revokes it with the provider.**
+The stored `refresh_token` was minted under the *host app's* OAuth client,
+not GAIA's own — Google's revoke endpoint takes no client auth and would
+kill the whole grant for whoever the token belongs to, signing the host app
+itself out of the user's account. `DELETE /v1/connections/{provider}` (and
+`gaia connectors disconnect`) only ever clears GAIA's local copy for a
+forwarded connection; to fully revoke access, disconnect it from the host
+app that forwarded it, or from the account's connected-apps page.
+</Warning>
 
 <Warning>
 **The host app's initial consent must request the UNION of every scope both
@@ -276,8 +287,9 @@ class GmailAgent(Agent):
     def _register_tools(self):
         self._register("list_recent_subjects", self._list_recent_subjects)
 
-    @tool(description="List the 5 newest Gmail subjects")
+    @tool()
     def _list_recent_subjects(self) -> list[str]:
+        """List the 5 newest Gmail subjects."""
         token = get_access_token_sync(
             provider="google",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
@@ -313,8 +325,9 @@ and pass it explicitly:
 ```python
 from gaia.connectors import current_agent_id, get_access_token_sync
 
-@tool(description="Fetch in a worker thread")
+@tool()
 def _fetch(self) -> str:
+    """Fetch in a worker thread."""
     agent_id = current_agent_id()          # captured in the tool body
     def _work():
         return get_access_token_sync(

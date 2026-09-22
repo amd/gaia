@@ -602,6 +602,8 @@ def merge_with_registry(
             merged["eval_score"] = entry["eval_score"]
         if "eval_scorecard_url" in entry:
             merged["eval_scorecard_url"] = entry["eval_scorecard_url"]
+        if "eval_score_version" in entry:
+            merged["eval_score_version"] = entry["eval_score_version"]
         by_id[agent_id] = merged
 
     # 2. Registry-only agents (builtins / custom not published to the hub).

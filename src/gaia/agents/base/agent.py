@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import ChainMap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -32,6 +33,7 @@ from typing import (
     FrozenSet,
     List,
     Literal,
+    MutableMapping,
     Optional,
     Tuple,
     Union,
@@ -39,10 +41,20 @@ from typing import (
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
+from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
+    NOT_EXECUTED,
+    VERIFY_AFTER_CHANGE_TAG,
     build_verification_scope,
-    verification_check_label,
+    check_output,
+    project_has_tests,
+    strip_verification_scope,
+    summary_reports_failure,
+    unsupported_test_claim,
+    unverified_change,
+    verification_record,
+    verify_after_change_correction,
 )
 
 # First-party imports
@@ -266,6 +278,28 @@ def tool_execution_timeout() -> float:
     return value
 
 
+def _trace_includes_schema_text() -> bool:
+    """Whether a ``--trace`` artifact carries the full tool-schema text.
+
+    On by default: the schema is the thing #3774 exists to make measurable, and
+    a trace that only counts it cannot answer "which schema did the model get".
+    ``GAIA_TRACE_TOOL_SCHEMA=0`` drops the text for anyone who needs a smaller
+    file — the names and sizes stay, and the artifact records the omission.
+    """
+    raw = os.environ.get("GAIA_TRACE_TOOL_SCHEMA")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_TRACE_TOOL_SCHEMA must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to record the full schema."
+    )
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -300,6 +334,8 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # Runs a .py file in a subprocess — arbitrary code execution, and unlike
     # run_shell_command there is no read-only allowlist behind it.
     "execute_python_file",
+    # The same arbitrary code execution, from a snippet instead of a file.
+    "run_python",
     "write_file",
     "write_python_file",
     "edit_file",
@@ -460,7 +496,14 @@ def _sum_conversation_tokens(
 ) -> Tuple[int, int]:
     """Sum input/output tokens from per-step 'stats' entries already appended
     to conversation, plus any tool-reported usage folded in separately (see
-    ``_extract_tool_usage``). Returns (total_input, total_output)."""
+    ``_extract_tool_usage``). Returns (total_input, total_output).
+
+    Both spellings are accepted, the same way the tool-usage loop below already
+    does: a local llama.cpp step reports ``input_tokens``/``output_tokens``,
+    while a cloud-routed one comes back in OpenAI's
+    ``prompt_tokens``/``completion_tokens``. Reading only the first pair threw
+    away a count the backend really had measured, and the turn then reported no
+    token total at all."""
     total_input = 0
     total_output = 0
     for entry in conversation:
@@ -468,8 +511,14 @@ def _sum_conversation_tokens(
             content = entry["content"]
             if content.get("type") == "stats" and "performance_stats" in content:
                 stats = content["performance_stats"]
-                total_input += _safe_number(stats.get("input_tokens"))
-                total_output += _safe_number(stats.get("output_tokens"))
+                if not isinstance(stats, dict):
+                    continue
+                total_input += _safe_number(
+                    stats.get("input_tokens") or stats.get("prompt_tokens")
+                )
+                total_output += _safe_number(
+                    stats.get("output_tokens") or stats.get("completion_tokens")
+                )
     for usage in tool_usage_entries or []:
         total_input += _safe_number(
             usage.get("prompt_tokens") or usage.get("input_tokens")
@@ -480,10 +529,66 @@ def _sum_conversation_tokens(
     return total_input, total_output
 
 
+def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
+    """Turn's generation rate, from the backend's OWN per-call measurement.
+
+    Averaged over the turn's LLM calls weighted by the tokens each generated —
+    ``sum(tokens) / sum(tokens / rate)`` — so a turn whose steps ran at
+    different rates reports the rate a user actually experienced rather than
+    the arithmetic mean of the steps.
+
+    ``None`` when no call reported one. It is never derived from wall time
+    here: a turn's wall clock includes tool execution and agent overhead, and
+    dividing generated tokens by it invents a number roughly an order of
+    magnitude below the hardware's real rate. A backend that does not report
+    a rate (an OpenAI-compatible remote endpoint, say) has not measured one,
+    and nothing downstream should print a figure nobody measured.
+    """
+    tokens_total = 0.0
+    seconds_total = 0.0
+    for entry in conversation:
+        if entry.get("role") != "system" or not isinstance(entry.get("content"), dict):
+            continue
+        content = entry["content"]
+        if content.get("type") != "stats" or "performance_stats" not in content:
+            continue
+        stats = content["performance_stats"]
+        if not isinstance(stats, dict):
+            continue
+        rate = stats.get("tokens_per_second")
+        tokens = stats.get("completion_tokens") or stats.get("output_tokens")
+        if (
+            not isinstance(rate, (int, float))
+            or isinstance(rate, bool)
+            or not math.isfinite(rate)
+            or rate <= 0
+        ):
+            continue
+        tokens = _safe_number(tokens)
+        if tokens <= 0:
+            continue
+        tokens_total += tokens
+        seconds_total += tokens / rate
+    if tokens_total <= 0 or seconds_total <= 0:
+        return None
+    return tokens_total / seconds_total
+
+
 def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
-    """Turn's ttft = the FIRST step's own time_to_first_token; a later step's
-    value would drop all earlier tool-decision latency. None when step 1 has
-    no positive value — never a fabricated 0.0."""
+    """Turn's ttft = the FIRST step's own time_to_first_token, plus that
+    step's model-load time when the step actually cold-loaded a model.
+
+    A later step's value would drop all earlier tool-decision latency, so
+    only step 1 is ever consulted. None when step 1 has no positive
+    ``time_to_first_token`` — never a fabricated 0.0.
+
+    Lemonade's ``/stats`` measures generation only (prefill + decode); it has
+    no concept of model-load latency. Left alone, a cold turn's ttft reported
+    only the post-load prefill time — a 44.5s cold query showed ttft 7.6s,
+    the same figure a warm query reports (#2924). ``model_load_seconds`` is
+    populated client-side (see ``LemonadeClient.get_stats``) only when THIS
+    step actually loaded the model, so a warm step's ttft is unchanged.
+    """
     for entry in conversation:
         if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
             content = entry["content"]
@@ -498,14 +603,24 @@ def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
                     if isinstance(stats, dict)
                     else None
                 )
-                if (
+                if not (
                     isinstance(ttft, (int, float))
                     and not isinstance(ttft, bool)
                     and math.isfinite(ttft)
                     and ttft > 0
                 ):
-                    return float(ttft)
-                return None
+                    return None
+                load_seconds = (
+                    stats.get("model_load_seconds") if isinstance(stats, dict) else None
+                )
+                if (
+                    isinstance(load_seconds, (int, float))
+                    and not isinstance(load_seconds, bool)
+                    and math.isfinite(load_seconds)
+                    and load_seconds > 0
+                ):
+                    return float(ttft) + float(load_seconds)
+                return float(ttft)
     return None
 
 
@@ -559,6 +674,223 @@ _SINGLE_TOOL_DONE_SUFFIX = (
     "Do not call any more tools.]"
 )
 
+# Test-claim guard: an answer reporting a pass count the turn never produced.
+# One correction — a second disagreement is better than a loop, and the
+# verification footer states the truth either way.
+_MAX_TEST_CLAIM_CORRECTIONS = 1
+
+# Unfinished-answer guard (#3887): a "final answer" that is really a plan,
+# a narrated next step, or a tool call typed out as text.
+_MAX_UNFINISHED_ANSWER_REPROMPTS = 2
+_UNFINISHED_PARAGRAPH_MAX_CHARS = 500
+_FENCED_BLOCK_PATTERN = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
+_TOOL_CALL_MARKUP_PATTERN = re.compile(
+    r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
+)
+_EMOJI_SHORTCODE_END_PATTERN = re.compile(r":[a-z0-9_+-]+:$", re.IGNORECASE)
+_NEXT_STEP_INTENT_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
+    r"(?:executing step|first step|(?:my|our) next step"
+    r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
+    r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
+    r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
+    r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
+    re.IGNORECASE,
+)
+_PLAN_HEADING_PATTERN = re.compile(
+    r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
+)
+
+
+def _unfinished_answer_kind(answer: str) -> Optional[str]:
+    """Classify an answer that did not actually finish the task.
+
+    Returns ``"tool_markup"`` when the prose carries a tool call written as
+    text, ``"narration"`` when it ends by announcing a next step or plan, and
+    ``None`` for an ordinary answer. Fenced code is ignored, and an answer that
+    ends in a code block is never narration.
+    """
+    text = (answer or "").replace("\u2019", "'").strip()
+    prose = _FENCED_BLOCK_PATTERN.sub("", text)
+    if _TOOL_CALL_MARKUP_PATTERN.search(prose):
+        return "tool_markup"
+    if not text or text.endswith("```"):
+        return None
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    if not paragraphs:
+        return None
+    last_line = re.sub(r"[*_`#>]", "", paragraphs[-1].splitlines()[-1]).strip()
+    if last_line.endswith(":") and not _EMOJI_SHORTCODE_END_PATTERN.search(last_line):
+        return "narration"
+
+    if len(paragraphs[-1]) > _UNFINISHED_PARAGRAPH_MAX_CHARS:
+        return None
+    sentences = re.split(r"(?<=[.!?])\s+", last_line)
+    if _NEXT_STEP_INTENT_PATTERN.match(sentences[-1]):
+        return "narration"
+    heading_lines = [paragraphs[-1].splitlines()[0]]
+    if len(paragraphs) > 1:
+        heading_lines.append(paragraphs[-2].splitlines()[0])
+    if any(
+        _PLAN_HEADING_PATTERN.match(re.sub(r"[*_`#>]", "", line).strip())
+        for line in heading_lines
+    ):
+        return "narration"
+    return None
+
+
+# Fabricated-save guard (#4010): a final answer that asserts a file was
+# written when no write tool ran this turn.
+_MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
+# File-writing tools the guard can name in its correction. Presence of one of
+# these in the registry is what makes the claim checkable at all.
+_FILE_WRITE_TOOLS: Tuple[str, ...] = (
+    "write_file",
+    "write_markdown_file",
+    "write_python_file",
+    "edit_file",
+)
+# Tools whose completed call makes a save claim believable. Two sources: the
+# confirmation set covers the write/execute tools (minus the one entry that
+# merely spawns a notifier), and the names below write a file as a side effect
+# of doing something else, so they are gated on cost rather than on danger and
+# never reach that set.
+_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
+    "notify_desktop"
+} | {
+    "take_screenshot",
+    "text_to_speech",
+    "transcribe_media",
+    "refine_transcript",
+}
+_FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
+# Adverbs the model sprinkles around the verb. They carry no meaning for the
+# guard, but every slot they can occupy has to be spelled out or the claim
+# reads as unmatched ("has been successfully written" vs "has been written").
+_WRITE_ADVERBS = r"(?:(?:just|now|already|successfully)\s+)*"
+_FILE_WRITE_CLAIM_PATTERNS = (
+    # "I saved …", "I've written …", "I have now created …"
+    re.compile(
+        rf"\bi(?:'ve|\s+have)?\s+{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
+        re.IGNORECASE,
+    ),
+    # "… has been saved", "… was written", "… has been successfully written"
+    re.compile(
+        rf"\b(?:has|have|had|was|were|is|are)\s+{_WRITE_ADVERBS}"
+        rf"(?:been\s+)?{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
+        re.IGNORECASE,
+    ),
+    # A bare "Saved to …" / "Report saved successfully at …" opening a line.
+    # The subject slot refuses negations, or "Nothing saved to disk" reads as
+    # a claim and burns the turn's only re-prompt.
+    re.compile(
+        rf"(?:^|[.!?]\s+|\n)\s*(?:the\s+)?"
+        rf"(?:(?!(?:not|never|no|nothing|none)\b)[\w'-]+\s+)?{_FILE_WRITE_VERBS}\s+"
+        rf"{_WRITE_ADVERBS}(?:it\s+|them\s+|the\s+\S+\s+)?(?:to|at|in|into)\b",
+        re.IGNORECASE,
+    ),
+    # "Created the file X", "The script successfully wrote the file X" — the
+    # file is the direct object, so no preposition follows the verb.
+    re.compile(
+        rf"(?<!\bnot\s)(?<!\bnever\s)\b{_FILE_WRITE_VERBS}\s+{_WRITE_ADVERBS}"
+        rf"(?:the|a|an|your|this|that)\s+(?:new\s+)?files?\b",
+        re.IGNORECASE,
+    ),
+)
+# Plan prose names a save the model still intends to make ("**Completion:**
+# Conclude by stating the path where the summary was saved"). Reading that as
+# a claim spends the turn's single re-prompt, so a real fabrication later in
+# the same turn goes through unblocked (#4057). Plan text belongs to the
+# narration guard above, not to this one.
+_PLAN_FRAME_PATTERN = re.compile(
+    r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?[*_#>\s]*"
+    r"(?:step\s*\d*|phase\s*\d*|completion|plan|next steps?|final step"
+    r"|approach|goal)\b[^:\n]{0,30}:"
+    r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
+    re.IGNORECASE,
+)
+# A plan label alone cannot exempt a sentence — "Step 3: I saved it to x.md"
+# would then be a one-token bypass. The save also has to sit in a subordinate
+# clause, which is where a step that has not happened yet puts it. The "by
+# stating" alternatives are repeated from the frame pattern on purpose: they
+# are both a frame label and a subordinate cue, and the two gates are checked
+# independently.
+_SUBORDINATE_CUE_PATTERN = re.compile(
+    r"\b(?:where|which|that|whether|if)\b"
+    r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
+    re.IGNORECASE,
+)
+_FILE_TARGET_PATTERN = re.compile(
+    r"\b(?:file|files|filename|path|directory|folder|disk)\b"
+    r"|[A-Za-z]:[\\/]"
+    r"|(?:^|\s)[~/][\w./\\-]+"
+    # "…to `routine.md`" — a backticked destination is a path even when the
+    # model invents a bare name with no extension.
+    r"|(?:to|at|in|into)\s+`[^`]+`",
+    re.IGNORECASE,
+)
+# Links and addresses are dotted but never save targets, so they are removed
+# before a dotted token is read as a filename.
+_URL_OR_EMAIL_PATTERN = re.compile(
+    r"\b(?:[A-Za-z][\w+.-]*://\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)",
+    re.IGNORECASE,
+)
+# Bounded on purpose: unbounded, the run scans quadratically and a 32KB hex
+# digest in one answer stalls the whole process for over a second under the
+# GIL. No coverage is lost — with no leading \b a longer path still matches
+# from a later offset.
+_DOTTED_TOKEN_PATTERN = re.compile(r"[\w~./\\-]{1,80}\.([A-Za-z0-9]{1,6})\b")
+# Suffixes that make a dotted token a hostname rather than a file.
+_NON_FILE_SUFFIXES = frozenset(
+    {"com", "org", "net", "io", "ai", "co", "gov", "edu", "dev", "app"}
+)
+
+
+def _names_a_file(sentence: str) -> bool:
+    """True when the sentence names somewhere on disk."""
+    if _FILE_TARGET_PATTERN.search(sentence):
+        return True
+    # A suffix with no letter is a version or a clock time, not an extension.
+    return any(
+        any(char.isalpha() for char in suffix)
+        and suffix.lower() not in _NON_FILE_SUFFIXES
+        for suffix in _DOTTED_TOKEN_PATTERN.findall(sentence)
+    )
+
+
+def _is_plan_narration(sentence: str) -> bool:
+    """True when the sentence frames a save as a step still to be taken."""
+    if not _PLAN_FRAME_PATTERN.search(sentence):
+        return False
+    cue = _SUBORDINATE_CUE_PATTERN.search(sentence)
+    if cue is None:
+        return False
+    return all(
+        (match := pattern.search(sentence)) is None or match.start() > cue.start()
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+    )
+
+
+def _claims_file_write(answer: str) -> bool:
+    """True when the prose asserts a file has already been written to disk.
+
+    A sentence must carry both a completed write verb and a file/path target,
+    so "I saved the routine to notes/routine.md" fires while "I created a
+    summary of the meeting" does not. Fenced code is ignored — a sample
+    command is not a claim — and so is a sentence in a planning frame.
+    """
+    prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
+    prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", prose):
+        if _is_plan_narration(sentence):
+            continue
+        if not _names_a_file(sentence):
+            continue
+        if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
+            return True
+    return False
+
 
 class Agent(abc.ABC):
     """
@@ -586,11 +918,20 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Class-level so a subclass that never runs ``__init__`` still increments.
+    _turn_seq: int = 0
+
     # Dynamic tool loader (#1449): the sorted subset of tool names to surface
     # this turn, or ``None`` to render the full registry (legacy, byte-identical).
     # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
     # both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
+
+    # Last value handed to the backend as ``tools=``, and the filter in force
+    # when it was built. Stamped by the ``_openai_tools`` property so a trace
+    # reports what went out rather than re-deriving it (#3774).
+    _last_tool_schemas: Optional[List[Dict[str, Any]]] = None
+    _last_tool_filter: Optional[List[str]] = None
 
     # Re-entrancy guard for tool timing. A tool body may call another tool
     # (CodeAgent orchestrates that way); only the outermost call is timed.
@@ -739,6 +1080,9 @@ class Agent(abc.ABC):
             "get_memory_system_prompt",  # changes on any remember()/forget()
             "get_skills_system_prompt",  # per-turn body selection (#2848)
             "get_recalled_skills_system_prompt",  # per-turn procedural recall
+            # Mostly static, but the index line flips as a background index
+            # lands and the shape line changes if the project does (#3379).
+            "get_project_map_system_prompt",
         }
     )
 
@@ -874,6 +1218,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log (#3376).
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Same rationale for the per-turn record of edited files (#3733).
+        self._turn_file_edits: List[Dict[str, Any]] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -903,26 +1249,33 @@ Do NOT wrap conversational replies in JSON.
         # next step boundary so the producer thread is torn down, not leaked.
         self._cancel_event: Optional[threading.Event] = None
 
-        # Read base_url from environment if not provided
+        # Resolve the same endpoint as TUI setup, including an isolated runtime.
         if base_url is None:
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+            from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+            base_url = resolve_lemonade_base_url()
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or use_chatgpt or skip_lemonade):
+            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            LemonadeManager.ensure_ready(
-                min_context_size=min_context_size,
-                quiet=silent_mode,
-                base_url=base_url,
-                required_min_device=required_min_device,
-                device=device,
-            )
+            if cloud_model_provider(model_id):
+                # The local manager preloads a chat model even on an idle server.
+                LemonadeClient(base_url=base_url, verbose=False).health_check()
+            else:
+                LemonadeManager.ensure_ready(
+                    min_context_size=min_context_size,
+                    quiet=silent_mode,
+                    base_url=base_url,
+                    required_min_device=required_min_device,
+                    device=device,
+                )
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -973,6 +1326,11 @@ Do NOT wrap conversational replies in JSON.
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
+        from gaia.agents.base.artifacts import ArtifactStore
+
+        self._output_artifacts = ArtifactStore()
+        if any(name != "read_tool_output" for name in self._tools_registry):
+            self._register_output_reader()
 
         # Declarative skills (#2466, #2467 scope D): compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -1306,8 +1664,42 @@ Do NOT wrap conversational replies in JSON.
         """
         raise NotImplementedError("Subclasses must implement _register_tools")
 
+    def _register_output_reader(self):
+        from gaia.agents.base.artifacts import store_for
+
+        def read_tool_output(artifact: str, offset: int = 0, limit: int = 2000) -> dict:
+            """Read exact omitted tool output by handle, without rerunning the tool.
+
+            Args:
+                artifact: Output handle returned by a truncated result.
+                offset: Zero-based character offset in the original output.
+                limit: Page size in characters, 1 to 8000.
+            """
+            return store_for(self).read(artifact, offset, limit)
+
+        self._output_reader_entry = {
+            "name": "read_tool_output",
+            "description": read_tool_output.__doc__,
+            "parameters": {
+                "artifact": {"type": "string", "required": True},
+                "offset": {"type": "integer", "required": False},
+                "limit": {"type": "integer", "required": False},
+            },
+            "function": read_tool_output,
+            "atomic": True,
+            "display_label": None,
+            "timeout": None,
+        }
+        if not hasattr(self, "_tool_overrides"):
+            self._tool_overrides = {}
+        self._tool_overrides["read_tool_output"] = self._output_reader_entry
+        if self._instance_tools is not None:
+            self._instance_tools["read_tool_output"] = self._output_reader_entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+
     @property
-    def _tools_registry(self) -> Dict[str, Any]:
+    def _tools_registry(self) -> MutableMapping[str, Any]:
         """Return this agent's effective tool registry.
 
         Uses the per-instance snapshot if ``_snapshot_tools()`` was called,
@@ -1316,6 +1708,10 @@ Do NOT wrap conversational replies in JSON.
         """
         if self._instance_tools is not None:
             return self._instance_tools
+        if hasattr(self, "_tool_overrides"):
+            # Keep legacy in-place registry additions visible across lookups,
+            # without sharing this agent's continuation reader with another one.
+            return ChainMap(self._tool_overrides, _TOOL_REGISTRY)
         return _TOOL_REGISTRY
 
     def _snapshot_tools(self) -> None:
@@ -1326,6 +1722,8 @@ Do NOT wrap conversational replies in JSON.
         will not affect other agents or the global dict.
         """
         self._instance_tools = dict(_TOOL_REGISTRY)
+        if hasattr(self, "_tool_overrides"):
+            self._instance_tools.update(self._tool_overrides)
 
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
@@ -1368,11 +1766,55 @@ Do NOT wrap conversational replies in JSON.
     def _openai_tools(self):
         """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
         if self._uses_native_tool_calls():
-            return (
+            schemas = (
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
             )
-        return None
+        else:
+            schemas = None
+        # The trace reports the object that went out as ``tools=``, never a
+        # re-render — a mid-loop load_tools expansion must show up there.
+        self._last_tool_schemas = schemas
+        self._last_tool_filter = (
+            None if self._active_tool_filter is None else list(self._active_tool_filter)
+        )
+        return schemas
+
+    def _trace_tool_schema(self) -> Dict[str, Any]:
+        """The ``tool_schema`` block of a ``--trace`` artifact.
+
+        Reports what the backend was actually handed this turn: the names, the
+        active per-turn filter, the serialized size (so system / tools / history
+        shares of the prompt are computable from one file), and the schema text
+        itself. Content comes only from tool names, signatures and docstrings —
+        no user data rides along into a file people attach to bug reports.
+        """
+        from gaia.agents.base.turn_metrics import count_tokens
+
+        schemas = getattr(self, "_last_tool_schemas", None)
+        # ensure_ascii=False: a \uXXXX escape is six chars the model never
+        # sees, and the size here has to match what went over the wire.
+        schema_json = json.dumps(schemas, ensure_ascii=False) if schemas else ""
+        block: Dict[str, Any] = {
+            "sent": schemas is not None,
+            # How this model takes tools, independent of whether any were sent:
+            # an empty registry on a native model is "native, nothing to send".
+            "render": ("native" if self._uses_native_tool_calls() else "prompt_text"),
+            "tools_sent": len(schemas or []),
+            "tools_registered": len(self._tools_registry),
+            "tool_names": [s["function"]["name"] for s in schemas or []],
+            "filter": getattr(self, "_last_tool_filter", None),
+            "schema_chars": len(schema_json),
+            "schema_tokens": count_tokens(schema_json),
+        }
+        if _trace_includes_schema_text():
+            block["schemas"] = schemas or []
+        else:
+            block["schemas_omitted"] = (
+                "schema text dropped by GAIA_TRACE_TOOL_SCHEMA=0; "
+                "unset it (or set 1) to record the full schema"
+            )
+        return block
 
     def _select_tools_for_turn(  # pylint: disable=unused-argument
         self, user_input: str
@@ -1383,6 +1825,17 @@ Do NOT wrap conversational replies in JSON.
         with a dynamic tool loader override this to return a selection.
         """
         return None
+
+    def _on_task_start(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> None:
+        """Hook run at the top of every turn, before the prompt is composed.
+
+        Default: no-op. Mixins that orient the agent in its environment — the
+        project map (#3379) is the first — override this and must call
+        ``super()._on_task_start(user_input)``. Anything expensive belongs
+        behind a once-per-session guard inside the override, not here.
+        """
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Hook called when a tool is about to execute (after registry lookup).
@@ -1478,11 +1931,24 @@ Do NOT wrap conversational replies in JSON.
         Reuses ChatAgent's tool-selection query when the agent has one, so a
         follow-up ("and the one before that?") still carries the prior turn's
         subject instead of matching on four pronouns.
+
+        ``user_input`` may already carry ``MemoryMixin``'s per-turn dynamic
+        context (current time, upcoming/overdue items) prepended to it —
+        ``process_query`` augments the message before this ever runs. That
+        preamble is real content to the LLM but pure noise to a lexical BM25
+        matcher: "Current time: 2026-09-18T00:14 (Friday)" dilutes a genuine
+        match enough to drop it below the auto-load floor on turn 1 of every
+        session (measured: a workout-video request scored 0.61 clean, 0.27
+        augmented — the difference between auto-loading and merely being
+        shortlisted). ``self._original_user_input`` is the clean text
+        ``MemoryMixin.process_query`` saved before augmenting; prefer it here
+        so discovery scores what the user actually said.
         """
+        clean = getattr(self, "_original_user_input", None) or user_input
         builder = getattr(self, "_build_tool_selection_query", None)
         if callable(builder):
-            return builder(user_input)
-        return user_input
+            return builder(clean)
+        return clean
 
     def get_skill_discovery_system_prompt(self) -> str:
         """Sourcing rule + this turn's discovery note.
@@ -2361,6 +2827,22 @@ Do NOT wrap conversational replies in JSON.
         """Get a list of registered tools for the agent."""
         return list(self._tools_registry.values())
 
+    def _tool_call_retry_prompt(self, reason: Exception) -> str:
+        """Build the recovery turn sent after a tool-call parse failure.
+
+        ``reason`` is the parser's own message — it names the specific defect
+        (ambiguous fenced blocks, malformed arguments, unparseable envelope),
+        which is what lets the model correct the real problem instead of
+        guessing from generic advice.
+        """
+        return (
+            f"Your last tool call could not be used: {reason}\n"
+            "Please try again. Emit exactly ONE tool call as raw JSON — no code "
+            "fences, no repeated blocks — and use ONLY the documented enum values "
+            "for each argument (e.g. 'brief', 'detailed', 'bullets' — never a long "
+            "sentence). If you don't need a tool, answer in plain text."
+        )
+
     def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
         """
         Detect and extract a tool call JSON embedded in a text response.
@@ -2373,7 +2855,10 @@ Do NOT wrap conversational replies in JSON.
         each tagged fenced/unfenced:
           1. ≥1 unfenced candidate → return the first (unchanged — zero regression).
           2. else exactly one fenced candidate → return it (the fix for #1428).
-          3. else >1 fenced, 0 unfenced → ambiguous (looks like docs) → None + warning.
+          3. else >1 fenced, 0 unfenced → ambiguous: with prose around the
+             fences it looks like docs → None + warning; with no prose at all
+             it is a fumbled tool call → return it if every block is identical,
+             else ValueError (#3596).
           4. else → fall back to Python-call syntax detection (#2521), e.g.
              ``remember(fact="...", category="preference")``.
 
@@ -2386,7 +2871,9 @@ Do NOT wrap conversational replies in JSON.
             ValueError: propagated from the Python-call-syntax fallback (#2521)
                 when a *registered* tool's name is followed by an argument list
                 that can't be parsed — a loud failure rather than echoing the
-                raw syntax to the user as an answer.
+                raw syntax to the user as an answer.  Also raised for rule 3
+                above when the response is nothing but differing fenced tool
+                calls.
         """
         # Quick check: must contain "tool" to be worth scanning for the JSON
         # shape. Responses without it may still carry the #2521 Python-call
@@ -2498,7 +2985,30 @@ Do NOT wrap conversational replies in JSON.
             return fenced[0]
 
         if len(fenced) > 1:
-            # Rule 3: multiple fenced calls — ambiguous, likely documentation examples
+            # Rule 3: multiple fenced calls — ambiguous, likely documentation
+            # examples. Prose outside the fences is what makes it readable as an
+            # answer; with none, returning it would hand the user raw JSON.
+            prose = response
+            for fence_start, fence_end in reversed(_code_ranges):
+                prose = prose[:fence_start] + prose[fence_end:]
+            if not prose.strip():
+                distinct = {
+                    json.dumps(c, sort_keys=True, default=str, ensure_ascii=False)
+                    for c in fenced
+                }
+                if len(distinct) == 1:
+                    logger.debug(
+                        "[PARSE] %d identical fenced tool calls — running one: %s",
+                        len(fenced),
+                        fenced[0].get("tool"),
+                    )
+                    return fenced[0]
+                raise ValueError(
+                    f"Ambiguous tool call: {len(fenced)} different fenced "
+                    "tool-call blocks and no other text, so the intended call is "
+                    f"undecidable (candidates: {[c.get('tool') for c in fenced]}). "
+                    "Emit exactly one tool call, unfenced."
+                )
             logger.warning(
                 "[PARSE] ambiguous: %d fenced tool-call candidates found and no "
                 "unfenced call; cannot determine which is real — returning None",
@@ -2845,6 +3355,9 @@ Do NOT wrap conversational replies in JSON.
         """
 
         def _python_to_json_type(py_type: str) -> str:
+            # Accepts both the registry's JSON names (what @tool emits) and raw
+            # Python names (programmatically registered schemas). Without the
+            # former, "integer"/"array" fell through to the "string" default.
             return {
                 "str": "string",
                 "int": "integer",
@@ -2852,6 +3365,12 @@ Do NOT wrap conversational replies in JSON.
                 "bool": "boolean",
                 "list": "array",
                 "dict": "object",
+                "string": "string",
+                "integer": "integer",
+                "number": "number",
+                "boolean": "boolean",
+                "array": "array",
+                "object": "object",
             }.get(py_type.lower().strip(), "string")
 
         if filter_to is None:
@@ -3099,11 +3618,43 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("Empty LLM response received")
             self.error_history.append("Empty LLM response")
 
+            edited_files = self._turn_file_edits
+            if edited_files:
+                lines = ["Files modified before the turn failed:"]
+                seen = set()
+
+                for edit in edited_files:
+                    file_path = edit.get("file_path")
+                    if not file_path or file_path in seen:
+                        continue
+
+                    seen.add(file_path)
+                    backup_path = edit.get("backup_path")
+
+                    if backup_path:
+                        lines.append(f"- {file_path} (backup: {backup_path})")
+                    else:
+                        lines.append(f"- {file_path} (backup unavailable)")
+
+                edit_summary = "\n".join(lines)
+            else:
+                edit_summary = ""
+
             # Provide more helpful error message based on context
             if hasattr(self, "api_mode") and self.api_mode:  # pylint: disable=no-member
-                answer = "I encountered an issue processing your request. This might be due to a connection problem with the language model. Please try again."
+                answer = (
+                    "I encountered an issue processing your request. "
+                    "This might be due to a connection problem with the language model. "
+                    "Please try again."
+                )
             else:
-                answer = "I apologize, but I received an empty response from the language model. Please try again."
+                answer = (
+                    "I apologize, but I received an empty response from the language model. "
+                    "Please try again."
+                )
+
+            if edit_summary:
+                answer += f"\n\n{edit_summary}"
 
             return {
                 "thought": "LLM returned empty response",
@@ -3412,18 +3963,39 @@ Do NOT wrap conversational replies in JSON.
         timeout. On success the worker's return value is returned and any
         exception it raised is re-raised in the caller (so the existing
         ``_execute_tool`` error handling applies unchanged). On timeout a
-        ``ToolExecutionTimeout`` is raised — the worker keeps running (Python
-        cannot kill a thread) but it is a daemon, so it cannot block process
-        exit and the agent loop is freed immediately.
+        ``ToolExecutionTimeout`` is raised and the worker's cancellation flag is
+        set. Python cannot kill a thread, so a tool that runs for minutes opts
+        out by polling ``tools.tool_cancelled()``; without that the abandoned
+        worker runs to completion and a retry puts a second copy of the same
+        expensive job on the same hardware (#2600).
+
+        Log isolation: the worker's log calls stay attributed to it via
+        ``AbandonedWorkerLogFilter`` (``tools.py``), which any handler wired
+        onto ``tool_cancelled()``'s thread-local flag can use to drop its
+        records after this timeout fires -- so a zombie worker's later log
+        lines cannot land in an unrelated caller's log-capture window.
+        GAIA's own root handlers (``logger.py``) get this automatically.
+
+        Shared state: this bounds log output only. A tool body that has not
+        opted into ``raise_if_cancelled()`` can still write to a DB handle,
+        cache, or other shared state after the caller gives up -- there is no
+        general mechanism here to stop that, and there isn't one planned;
+        each such tool must poll the cancellation flag around its own writes.
         """
+        from gaia.agents.base.tools import set_tool_cancel_event
+
         timeout = self._resolve_tool_timeout(tool_name)
         holder: Dict[str, Any] = {}
+        cancel = threading.Event()
 
         def _target():
+            set_tool_cancel_event(cancel)
             try:
                 holder["result"] = tool(**tool_args)
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
                 holder["exc"] = exc
+            finally:
+                set_tool_cancel_event(None)
 
         # A new thread starts with an EMPTY context, so the agent-identity
         # contextvar bound by process_query would be None inside every tool
@@ -3437,6 +4009,7 @@ Do NOT wrap conversational replies in JSON.
         worker.start()
         worker.join(timeout)
         if worker.is_alive():
+            cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
         if "exc" in holder:
             raise holder["exc"]
@@ -3553,6 +4126,19 @@ Do NOT wrap conversational replies in JSON.
             return bool(flag)
         return tool_name.startswith("mcp_")
 
+    def _tool_can_touch_disk(self, tool_name: str) -> bool:
+        """Whether a call that already ran could have put bytes on disk.
+
+        Deliberately not ``_tool_requires_confirmation``: that one exempts a
+        pre-authorized write and treats an unclassified ``mcp_`` tool as
+        consequential, and both of those readings are inverted here. A
+        third-party tool counts only when it declared the flag itself.
+        """
+        if tool_name in _DISK_TOUCHING_TOOLS:
+            return True
+        entry = self._tools_registry.get(tool_name) or {}
+        return bool(entry.get("requires_confirmation"))
+
     def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
         """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
         against this turn's running total. Called from the single success path
@@ -3620,6 +4206,12 @@ Do NOT wrap conversational replies in JSON.
         """
         Execute a tool by name with the provided arguments.
 
+        Every exit that returns BEFORE the tool body runs carries
+        ``NOT_EXECUTED``. ``_execute_tool_timed`` records each return for the
+        verification footer, which otherwise reads a call rejected at dispatch
+        — unknown name, missing/unexpected/uncoercible argument, guardrail
+        refusal — as a check that ran and failed (#3677).
+
         Args:
             tool_name: Name of the tool to execute
             tool_args: Arguments to pass to the tool
@@ -3635,15 +4227,18 @@ Do NOT wrap conversational replies in JSON.
                 "error_displayed": True,
             }
 
-        # Normalize common model name-construction errors before registry lookup:
-        # strip trailing "()" some models append, and convert hyphens to underscores
-        # (tool names are always snake_case; hyphens are never valid).
-        tool_name = tool_name.removesuffix("()").replace("-", "_")
+        # Strip whitespace before matching: a stray space fails exact match,
+        # suffix-resolve, and prefix-candidate search identically.
+        # Exact name first — skill tools register with a literal hyphen
+        # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
+        tool_name = tool_name.strip().removesuffix("()").strip()
+        if tool_name not in self._tools_registry:
+            tool_name = tool_name.replace("-", "_")
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if not tool_name:
-            return {"status": "error", "error": "No tool name provided"}
+            return {**NOT_EXECUTED, "status": "error", "error": "No tool name provided"}
 
         if tool_name not in self._tools_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
@@ -3683,13 +4278,13 @@ Do NOT wrap conversational replies in JSON.
                     # here would point them at something that isn't there.
                     err = "Unknown tool name. Use only the tools you were given."
                 logger.error(err)
-                return {"status": "error", "error": err}
+                return {**NOT_EXECUTED, "status": "error", "error": err}
 
         # Validate first, confirm second: a call the guardrails already refuse
         # must never reach a prompt.
         refusal = self._policy_refusal(tool_name, tool_args)
         if refusal is not None:
-            return refusal
+            return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
         # Guardrail: require explicit user confirmation for high-risk tools.
         # Consoles that cannot reach a human deny rather than answer for them
@@ -3742,7 +4337,14 @@ Do NOT wrap conversational replies in JSON.
                 f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
             )
             logger.error(error_msg)
-            return {"status": "error", "error": error_msg}
+            # Tagged so callers can tell a malformed call (retryable — the model
+            # can re-emit it) from a tool that ran and failed (#3581).
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": error_msg,
+            }
 
         # Reject arguments the tool does not accept before dispatch. A model that
         # hallucinates a kwarg (e.g. mailbox= on archive_message_batch) would
@@ -3772,7 +4374,12 @@ Do NOT wrap conversational replies in JSON.
                     f"Accepted argument(s): {', '.join(sorted(accepted_args)) or 'none'}."
                 )
                 logger.error(error_msg)
-                return {"status": "error", "error": error_msg}
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error_type": "invalid_arguments",
+                    "error": error_msg,
+                }
 
         # Models routinely send numbers as JSON strings ("120" for timeout: int).
         # Every tool body would otherwise have to defend itself, and the ones
@@ -3780,7 +4387,12 @@ Do NOT wrap conversational replies in JSON.
         tool_args, coercion_error = self._coerce_tool_args(tool_name, sig, tool_args)
         if coercion_error is not None:
             logger.error(coercion_error)
-            return {"status": "error", "error": coercion_error}
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": coercion_error,
+            }
 
         # Before dispatch, not after: a tool that times out or raises may still
         # have pulled content into the turn, and its error string can carry it.
@@ -3940,7 +4552,26 @@ Do NOT wrap conversational replies in JSON.
             )
 
             return budget_for_ctx(CLAUDE_CTX_SIZE)
-        return truncation_budget(self.device)
+        device = self.device
+        if str(getattr(self, "model_id", "")).lower().endswith("-flm"):
+            device = "npu"
+        elif device is None:
+            from gaia.config import GaiaConfig
+            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+
+            model = getattr(self, "model_id", None)
+            backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
+            cloud = (
+                backend.cloud_model_provider(model)
+                if isinstance(backend, LemonadeClient)
+                else cloud_model_provider(model)
+            )
+            # Gateway sessions do not depend on local hardware configuration.
+            # Preserve their conservative admission budget until metadata supplies
+            # a provider-specific window; do not guess one from the host profile.
+            if not cloud:
+                device = GaiaConfig.load().default_device
+        return truncation_budget(device)
 
     #: Scalar annotations worth coercing, by name as well as by type: a module
     #: using postponed annotations hands us the string "int", not ``int``, and
@@ -4034,6 +4665,28 @@ Do NOT wrap conversational replies in JSON.
             )
         return converted, None
 
+    @staticmethod
+    def _as_structured_payload(tool_result: Any) -> Optional[Any]:
+        """The dict/list to truncate item-by-item, or ``None`` for plain text.
+
+        A JSON object or array that arrived as a ``str`` counts: dropping whole
+        records from it keeps every surviving record parseable, where a
+        head-and-tail excerpt would cut one in half at each end.
+
+        A bare JSON scalar (``"null"``, a quoted word, a number) does not — it
+        carries no records to drop, and prose that happens to be a valid JSON
+        scalar should still read as prose.
+        """
+        if isinstance(tool_result, (dict, list)):
+            return tool_result
+        if not isinstance(tool_result, str):
+            return None
+        try:
+            parsed = json.loads(tool_result)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, (dict, list)) else None
+
     def _handle_large_tool_result(
         self,
         tool_name: str,
@@ -4054,27 +4707,71 @@ Do NOT wrap conversational replies in JSON.
             The truncated result or original if within limits
         """
         truncated_result = tool_result
-        if isinstance(tool_result, (dict, list)):
+        if isinstance(tool_result, (dict, list, str)):
             # Use custom encoder to handle bytes and other non-serializable types.
             # ensure_ascii=False: this text reaches the model as prose, not a
             # wire format re-parsed on the other end -- escaping would hand it
             # literal \uXXXX sequences instead of the actual characters.
-            result_str = json.dumps(
-                tool_result, default=self._json_serialize_fallback, ensure_ascii=False
+            result_str = (
+                tool_result
+                if isinstance(tool_result, str)
+                else json.dumps(
+                    tool_result,
+                    default=self._json_serialize_fallback,
+                    ensure_ascii=False,
+                )
             )
             threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
-                # Truncate large results to prevent overwhelming the LLM. The
-                # result is re-parsed just below, so this path must always
-                # come back as valid JSON (#2620).
-                truncated_str = self._truncate_large_content(
-                    tool_result, max_chars=target, as_json=True
-                )
-                try:
+                from gaia.agents.base.artifacts import store_for
+
+                if not hasattr(self, "_output_reader_entry"):
+                    self._register_output_reader()
+                handle = store_for(self).put(result_str)
+                metadata = {
+                    "artifact": handle,
+                    "continuation": "read_tool_output",
+                    "total_chars": len(result_str),
+                }
+                target -= len(json.dumps(metadata, ensure_ascii=False)) + 4
+                # Some tools hand back json.dumps(...) as a str (code search,
+                # index status). Eliding those mid-record leaves the model half
+                # an entry at each end, so parse first and let the structured
+                # path drop whole items instead.
+                structured = self._as_structured_payload(tool_result)
+                if structured is None:
+                    from gaia.agents.base.tool_output import elide_text
+
+                    truncated_result = elide_text(tool_result, target)
+                else:
+                    # Structured results must remain valid JSON for the model.
+                    truncated_str = self._truncate_large_content(
+                        structured, max_chars=target, as_json=True
+                    )
                     truncated_result = json.loads(truncated_str)
-                except json.JSONDecodeError:
-                    # If truncated string isn't valid JSON, use it as-is
-                    truncated_result = truncated_str
+                    if isinstance(tool_result, str):
+                        # It arrived as text; hand text back so the tool's
+                        # declared result type does not change under the caller.
+                        truncated_result = json.dumps(
+                            truncated_result, ensure_ascii=False
+                        )
+                was_text = isinstance(truncated_result, str)
+                if was_text:
+                    truncated_result = json.loads(truncated_result)
+                if isinstance(truncated_result, dict):
+                    truncated_result.update(metadata)
+                elif (
+                    truncated_result
+                    and isinstance(truncated_result[-1], dict)
+                    and truncated_result[-1].get("truncated") is True
+                    and truncated_result != structured
+                ):
+                    truncated_result[-1].update(metadata)
+                else:
+                    # Whitespace-heavy JSON can fit after parsing, with no marker.
+                    truncated_result.append(metadata)
+                if was_text:
+                    truncated_result = json.dumps(truncated_result, ensure_ascii=False)
                 # Notify user about truncation
                 self.console.print_info(
                     f"Note: Large result ({len(result_str)} chars) truncated for LLM context"
@@ -4128,10 +4825,14 @@ Do NOT wrap conversational replies in JSON.
             import httpx
 
             from gaia.llm.lemonade_client import (
+                cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_lemonade_api_key,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
+
+            if cloud_model_provider(getattr(self, "model_id", None)):
+                return False
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
             # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
@@ -4141,7 +4842,9 @@ Do NOT wrap conversational replies in JSON.
             resp = httpx.get(
                 health_url,
                 timeout=3.0,
-                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+                headers=lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                ),
             )
             if resp.status_code != 200:
                 return False
@@ -4184,11 +4887,10 @@ Do NOT wrap conversational replies in JSON.
         Returns ``None`` for unrelated exceptions so the caller falls
         through to its normal generic copy.
         """
-        try:
-            from gaia.llm.providers.lemonade import LemonadeError
-            from gaia.ui._chat_helpers import _classify_chat_exception
-        except Exception:  # pylint: disable=broad-except
-            return None
+        from gaia.llm.providers.lemonade import (
+            LemonadeError,
+            classify_lemonade_exception,
+        )
 
         # 1. Direct match anywhere in the cause chain.
         cur: Optional[BaseException] = exc
@@ -4203,13 +4905,29 @@ Do NOT wrap conversational replies in JSON.
 
         # 2. String-based reclassification — covers the case where the typed
         # exception was stringified into a generic ``Exception`` by AgentSDK.
-        # ``_classify_chat_exception`` already does the timeout-vs-network
+        # ``classify_lemonade_exception`` already does the timeout-vs-network
         # split we need for #1030.
-        classified = _classify_chat_exception(exc)
+        classified = classify_lemonade_exception(exc)
         if classified is not None:
             msg = getattr(classified, "user_message", None)
             if msg:
                 return str(msg)
+        return None
+
+    def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
+        """The user's message when a cloud provider refused the account itself.
+
+        Out of funds or suspended: no retry can succeed, so the turn ends as an
+        error instead of an answer.
+        """
+        from gaia.llm.providers.lemonade import (
+            LemonadeCloudAccountError,
+            classify_lemonade_exception,
+        )
+
+        classified = classify_lemonade_exception(exc)
+        if isinstance(classified, LemonadeCloudAccountError):
+            return classified.user_message
         return None
 
     def _shrink_messages_for_overflow(
@@ -4260,13 +4978,12 @@ Do NOT wrap conversational replies in JSON.
                 and isinstance(m.get("content"), str)
                 and len(m.get("content", "")) > 800
             ):
-                # Truncate verbose assistant chain-of-thought too.
-                shrunk_rest.append(
-                    {
-                        "role": "assistant",
-                        "content": m["content"][:800] + "... (truncated)",
-                    }
-                )
+                # Truncate verbose assistant chain-of-thought, but keep the
+                # rest of the turn — dropping ``tool_calls`` here orphans the
+                # tool results that follow it.
+                shrunk = dict(m)
+                shrunk["content"] = m["content"][:800] + "... (truncated)"
+                shrunk_rest.append(shrunk)
             else:
                 shrunk_rest.append(m)
         return [first] + shrunk_rest
@@ -4712,21 +5429,50 @@ Do NOT wrap conversational replies in JSON.
     def _note_verification_signal(
         self, tool_name: str, tool_args: Dict[str, Any], result: Any
     ) -> None:
-        """Record one executed tool call for this turn's verification scope.
+        """Record one dispatched tool call for this turn's verification scope.
 
         Called from the single execution seam so every loop path — legacy,
-        native tool-calling, and the forced-call branch — is covered.
+        native tool-calling, and the forced-call branch — is covered. That seam
+        also returns for calls that never ran (allowlist refusal, declined
+        confirmation), so ``ran`` says which this was: without it a refused
+        ``pytest`` was reported as a test that ran and failed (#3677).
         """
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
             return
-        log.append(
-            {
-                "tool": tool_name,
-                "check_label": verification_check_label(tool_name, tool_args),
-                "failed": self._is_error_result(result),
-            }
+        record = verification_record(
+            tool_name, tool_args, result, errored=self._is_error_result(result)
         )
+        # A snippet that prints a failing summary still exits 0.
+        record["failed"] = record["failed"] or summary_reports_failure(
+            tool_name, result
+        )
+        record["args"] = tool_args if isinstance(tool_args, dict) else {}
+        record["output"] = check_output(tool_name, result)
+        log.append(record)
+
+    def _verification_project_root(self) -> Optional[str]:
+        """The project this turn works in, from the shared project-root resolver."""
+        for hook in ("_project_map_root", "_script_project_root"):
+            if callable(getattr(self, hook, None)):
+                return getattr(self, hook)()
+        explicit = getattr(getattr(self, "config", None), "project_root", None)
+        return resolve_project_root(explicit)
+
+    def _verify_after_change_prompt(self) -> Optional[str]:
+        """Corrective message when files changed after the last check, else ``None``.
+
+        Judged from this turn's tool record, never the answer's wording. Silent
+        for read-only turns and for projects with no test suite.
+        """
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        if not executions:
+            return None
+        root = self._verification_project_root()
+        changed = unverified_change(executions, root)
+        if changed is None or not project_has_tests(root):
+            return None
+        return verify_after_change_correction(changed)
 
     def verification_scope_statement(self) -> str:
         """This turn's bounded verified / partially verified / unverified line."""
@@ -4735,14 +5481,25 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
-        """Append the scope statement to a non-empty answer (#3376).
+        """Give a non-empty answer exactly one scope statement (#3376, #3675).
+
+        Any statement the model wrote itself comes out first. The line rides in
+        the answer and the answer comes back as conversation history, so a model
+        can and does echo a previous turn's — and the user then read the same
+        verification paragraph twice, once from the model and once from here.
+        Only the one derived from this turn's tool log is authoritative.
 
         Empty stays empty — a blank answer is a signal downstream (cancelled
         turns skip persistence), and a scope line would make it non-blank.
         """
         if not answer or not answer.strip():
             return answer
-        return f"{answer.rstrip()}\n\n{self.verification_scope_statement()}"
+        body = strip_verification_scope(answer)
+        statement = self.verification_scope_statement()
+        if not body.strip():
+            # The whole "answer" was an echoed scope line; one is still one.
+            return statement
+        return f"{body.rstrip()}\n\n{statement}"
 
     def process_query(
         self,
@@ -4787,7 +5544,16 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+        self._turn_seq += 1
         self._begin_turn_provenance()
+        # Cleared per turn: a trace must never report the previous turn's
+        # schema for a turn that never reached the backend.
+        self._last_tool_schemas = None
+        self._last_tool_filter = None
+
+        # Orientation. Runs before the prompt is composed so anything it
+        # establishes is in the prompt on the turn that established it.
+        self._on_task_start(user_input)
 
         # Proactive skill discovery: a skill the user never named can become
         # loaded here, registering its tools — so it must run BEFORE the tool
@@ -4833,6 +5599,10 @@ Do NOT wrap conversational replies in JSON.
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
+        unfinished_answer_reprompts = 0
+        verify_after_change_reprompted = False
+        test_claim_corrections = 0
+        file_write_claim_reprompts = 0
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -4862,9 +5632,14 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Files edited this turn, so an empty response can name what it left
+        # behind (#3733). Per-turn: an instance persists across queries.
+        self._turn_file_edits: List[Dict[str, Any]] = []
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
+        # A refused cloud account ends the turn with nothing to verify.
+        account_refused = False
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -5034,6 +5809,18 @@ Do NOT wrap conversational replies in JSON.
 
                     # Store full result for parameter substitution in subsequent plan steps
                     step_results.append(tool_result)
+                    if (
+                        isinstance(tool_result, dict)
+                        and tool_result.get("status") == "success"
+                        and tool_result.get("operation") == "edit_file"
+                        and tool_result.get("file_path")
+                    ):
+                        self._turn_file_edits.append(
+                            {
+                                "file_path": tool_result["file_path"],
+                                "backup_path": tool_result.get("backup_path"),
+                            }
+                        )
 
                     # Share tool output with subsequent LLM calls
                     messages.append(
@@ -5411,11 +6198,23 @@ Do NOT wrap conversational replies in JSON.
                             # shrink it, so every retry looked identical.
                             final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
-                            final_answer = (
-                                f"Sorry, I ran into a problem while processing your request. "
-                                f"This might be a temporary issue — try again in a moment.\n\n"
-                                f"*Technical details: {str(e)}*"
+                            # Streaming is the TUI's path; it must surface the
+                            # same typed messages the non-streaming path does.
+                            refusal = self._cloud_account_refusal(e)
+                            if refusal is not None:
+                                self.console.print_error(refusal)
+                                account_refused = True
+                            typed_msg = refusal or self._extract_lemonade_user_message(
+                                e
                             )
+                            if typed_msg is not None:
+                                final_answer = typed_msg
+                            else:
+                                final_answer = (
+                                    f"Sorry, I ran into a problem while processing your request. "
+                                    f"This might be a temporary issue — try again in a moment.\n\n"
+                                    f"*Technical details: {str(e)}*"
+                                )
                         break
                 if final_answer is not None or cancelled_by_console:
                     break
@@ -5566,7 +6365,13 @@ Do NOT wrap conversational replies in JSON.
                             # with the generic "try again in a moment" copy —
                             # that wrapper actively misleads users on
                             # non-retryable failures.
-                            typed_msg = self._extract_lemonade_user_message(e)
+                            refusal = self._cloud_account_refusal(e)
+                            if refusal is not None:
+                                self.console.print_error(refusal)
+                                account_refused = True
+                            typed_msg = refusal or self._extract_lemonade_user_message(
+                                e
+                            )
                             if typed_msg is not None:
                                 final_answer = typed_msg
                             else:
@@ -5650,16 +6455,8 @@ Do NOT wrap conversational replies in JSON.
                             "rephrase or break the request into smaller pieces?"
                         )
                     break
-                assistant_msg = (
-                    "[I tried to call a tool but my arguments were malformed.]"
-                )
-                user_msg = (
-                    "Your last tool call had malformed arguments. "
-                    "Please try again. Use ONLY the documented enum "
-                    "values for each argument (e.g. 'brief', "
-                    "'detailed', 'bullets' — never a long sentence). "
-                    "If you don't need a tool, answer in plain text."
-                )
+                assistant_msg = "[I tried to call a tool but it could not be parsed.]"
+                user_msg = self._tool_call_retry_prompt(parse_exc)
                 if _last_image_path:
                     user_msg += (
                         f"\n\nYour previous step generated an image at "
@@ -5805,7 +6602,42 @@ Do NOT wrap conversational replies in JSON.
                 ).strip()
 
                 # Parse the plan response
-                parsed_plan = self._parse_llm_response(plan_response)
+                try:
+                    parsed_plan = self._parse_llm_response(plan_response)
+                except ValueError as plan_parse_exc:
+                    logger.warning(
+                        "Plan parse failed (step %d): %s — recovering with retry prompt",
+                        steps_taken,
+                        plan_parse_exc,
+                    )
+                    self.error_history.append(
+                        {
+                            "step": steps_taken,
+                            "error": str(plan_parse_exc),
+                            "type": "tool_call_parse_error",
+                        }
+                    )
+                    error_count += 1
+                    if error_count >= 3:
+                        final_answer = (
+                            "I had trouble formatting my plan. Could you "
+                            "rephrase or break the request into smaller pieces?"
+                        )
+                        break
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": "[I tried to send a plan but it could not be parsed.]",
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._tool_call_retry_prompt(plan_parse_exc),
+                        }
+                    )
+                    steps_taken += 1
+                    continue
                 logger.debug(f"Parsed plan response: {parsed_plan}")
                 conversation.append({"role": "assistant", "content": parsed_plan})
 
@@ -5944,6 +6776,7 @@ Do NOT wrap conversational replies in JSON.
                 any_error = False
                 last_error = None
                 fanout_repeat_break = False
+                post_tool_messages = []
 
                 for fan_idx, tc in enumerate(tc_list):
                     tool_name = tc["name"]
@@ -6022,7 +6855,9 @@ Do NOT wrap conversational replies in JSON.
                                 "relevant data, OR state that the "
                                 "information was not found in the document."
                             )
-                            messages.append({"role": "user", "content": dedup_msg})
+                            post_tool_messages.append(
+                                {"role": "user", "content": dedup_msg}
+                            )
 
                     # Input-based dedup for mutation tools (#1317): catch an
                     # identical mutation re-issue at the first repeat. Errored
@@ -6032,7 +6867,7 @@ Do NOT wrap conversational replies in JSON.
                         tool_name,
                         tool_args,
                         mutation_call_cache,
-                        messages,
+                        post_tool_messages,
                         tool_result,
                     )
 
@@ -6111,6 +6946,11 @@ Do NOT wrap conversational replies in JSON.
                             # (#2515, the archive_message_batch repro).
                             self.console.print_error(last_error, recoverable=True)
                         any_error = True
+
+                # Anthropic and other spec-strict providers require all native
+                # tool results to immediately follow the assistant tool-call
+                # turn. Dedup guidance belongs after the complete result group.
+                messages.extend(post_tool_messages)
 
                 if fanout_repeat_break:
                     break  # break outer while
@@ -6231,6 +7071,18 @@ Do NOT wrap conversational replies in JSON.
                 # canonical ``image_path`` — without this append, the
                 # legacy single-tool path leaves them empty-handed.
                 step_results.append(tool_result)
+                if (
+                    isinstance(tool_result, dict)
+                    and tool_result.get("status") == "success"
+                    and tool_result.get("operation") == "edit_file"
+                    and tool_result.get("file_path")
+                ):
+                    self._turn_file_edits.append(
+                        {
+                            "file_path": tool_result["file_path"],
+                            "backup_path": tool_result.get("backup_path"),
+                        }
+                    )
 
                 # Result-based dedup: if this tool (query family) returns the same result
                 # it returned in a prior call, inject a correction so the agent stops looping.
@@ -6504,6 +7356,43 @@ Do NOT wrap conversational replies in JSON.
                         )
                     continue
 
+                unfinished_kind = _unfinished_answer_kind(answer_candidate)
+                can_reprompt_unfinished = (
+                    steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                )
+                if unfinished_kind and not can_reprompt_unfinished:
+                    logger.warning(
+                        "[WORKFLOW] Not re-prompting unfinished %s answer: re-prompt "
+                        "budget or step limit reached (%d/%d re-prompts, "
+                        "step %d/%d): %s",
+                        unfinished_kind,
+                        unfinished_answer_reprompts,
+                        _MAX_UNFINISHED_ANSWER_REPROMPTS,
+                        steps_taken,
+                        steps_limit,
+                        answer_candidate[-120:],
+                    )
+                if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
+                    unfinished_answer_reprompts += 1
+                    logger.debug(
+                        "[WORKFLOW] Blocking tool-call markup as final answer: %s",
+                        answer_candidate[:120],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your answer contains a tool call written out as "
+                                'text (for example `<invoke name=...>` or a `{"tool": '
+                                "...}` object), so it was never run. Issue it as a "
+                                "real tool call now, or give the final answer if the "
+                                "task is complete."
+                            ),
+                        }
+                    )
+                    continue
+
                 # Universal planning-text guard: catch any short response that is
                 # only an intent sentence ("I'll check...", "Let me query...") with
                 # no actual answer, regardless of whether tools were already called.
@@ -6540,6 +7429,24 @@ Do NOT wrap conversational replies in JSON.
                         )
                     messages.append({"role": "user", "content": correction})
                     continue  # Don't set final_answer — loop again to force the query
+
+                if unfinished_kind == "narration" and can_reprompt_unfinished:
+                    unfinished_answer_reprompts += 1
+                    logger.debug(
+                        "[WORKFLOW] Blocking narrated next step as final answer: %s",
+                        answer_candidate[-120:],
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You described your next step instead of doing it. "
+                                "Do it now with a tool call, or give the final "
+                                "answer if the task is complete."
+                            ),
+                        }
+                    )
+                    continue
 
                 # Tool-syntax artifact guard: catch responses that are just a tool-call label
                 # like "[tool:query_specific_file]" — Qwen3 confusion where the model writes
@@ -6599,6 +7506,50 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     continue
+
+                # Fabricated-save guard: the answer says a file was written but
+                # no tool that can touch disk ran this turn, so nothing was.
+                if (
+                    file_write_claim_reprompts < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                    and steps_taken < steps_limit - 1
+                    and _claims_file_write(answer_candidate)
+                ):
+                    _registry = self._tools_registry
+                    _write_tool = next(
+                        (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
+                    )
+                    # Read the execution log, not tool_call_log: the latter is
+                    # appended before the call runs, so a refused, errored or
+                    # declined write would silence the guard on the exact harm
+                    # it exists to catch.
+                    _wrote_this_turn = any(
+                        _entry["ran"]
+                        and not _entry["failed"]
+                        and self._tool_can_touch_disk(_entry["tool"])
+                        for _entry in (self._turn_tool_executions or [])
+                    )
+                    if _write_tool and not _wrote_this_turn:
+                        file_write_claim_reprompts += 1
+                        logger.debug(
+                            "[WORKFLOW] Blocking unbacked file-write claim as final "
+                            "answer: %s",
+                            answer_candidate[:120],
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: Your answer says a file was saved, but no "
+                                    "file-writing tool ran in this turn — nothing was "
+                                    "written to disk. If the file is still needed, call "
+                                    f"`{_write_tool}` now with the full content and the "
+                                    "exact path. If you mean a file written earlier in "
+                                    "the conversation, say that explicitly instead of "
+                                    "claiming you just saved it."
+                                ),
+                            }
+                        )
+                        continue
 
                 # Capability-claim-without-attempt guard: catch responses that declare
                 # a tool's availability or unavailability (e.g. "I can generate images
@@ -6737,6 +7688,59 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
+                # Changed code after the last test run: ask once for the run.
+                if not verify_after_change_reprompted and steps_taken < steps_limit - 1:
+                    _correction = self._verify_after_change_prompt()
+                    if _correction:
+                        verify_after_change_reprompted = True
+                        logger.info(
+                            "%s fired at step %d", VERIFY_AFTER_CHANGE_TAG, steps_taken
+                        )
+                        messages.append({"role": "user", "content": _correction})
+                        conversation.append({"role": "user", "content": _correction})
+                        continue
+                # Last guard before the answer is sealed: the footer below
+                # already knows whether a test ran, so an answer that reports a
+                # pass count the record cannot show gets one chance to fix it.
+                test_claim = unsupported_test_claim(
+                    answer_candidate, self._turn_tool_executions
+                )
+                if test_claim:
+                    claim, why = test_claim
+                    can_correct_claim = (
+                        steps_taken < steps_limit - 1
+                        and test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
+                    )
+                    if not can_correct_claim:
+                        logger.warning(
+                            "[WORKFLOW] Emitting unsupported test claim %r (%s): "
+                            "%d/%d corrections used, step %d/%d",
+                            claim,
+                            why,
+                            test_claim_corrections,
+                            _MAX_TEST_CLAIM_CORRECTIONS,
+                            steps_taken,
+                            steps_limit,
+                        )
+                    else:
+                        test_claim_corrections += 1
+                        logger.debug(
+                            "[WORKFLOW] Correcting unsupported test claim %r (%s)",
+                            claim,
+                            why,
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f'Your answer says "{claim}", but {why}. '
+                                    "Either run the check now, or answer "
+                                    "without that claim."
+                                ),
+                            }
+                        )
+                        continue
+
                 # Scope line goes on AFTER the subclass hook: a subclass that
                 # rewrites the answer must not be able to drop it (#3376).
                 final_answer = self._with_verification_scope(
@@ -6762,6 +7766,7 @@ Do NOT wrap conversational replies in JSON.
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
                     ttft_seconds=_query_ttft_seconds(conversation),
+                    tok_per_s=_query_tok_per_s(conversation),
                 )
                 break
 
@@ -6845,7 +7850,7 @@ Do NOT wrap conversational replies in JSON.
         # disproportionately the runs that went wrong, so they need the scope
         # line most (#3376). The console-cancellation path returns above with a
         # deliberately empty result and is excluded (#3386).
-        if not verification_scope_applied:
+        if not verification_scope_applied and not account_refused:
             final_answer = self._with_verification_scope(final_answer)
 
         # Return the result
@@ -6878,7 +7883,17 @@ Do NOT wrap conversational replies in JSON.
             + total_output_tokens,  # Combined token count
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
+            "tool_schema": self._trace_tool_schema(),
         }
+
+        # Catches the exits that never printed an answer (max steps). Sealed
+        # BEFORE the trace write — attached after, the artifact never saw it.
+        turn_record = (
+            self._finish_turn_record(result.get("result", ""), steps_taken)
+            or turn_record
+        )
+        if turn_record is not None:
+            result["turn_metrics"] = turn_record
 
         # Write trace to file if requested
         if trace:
@@ -6886,14 +7901,6 @@ Do NOT wrap conversational replies in JSON.
             result["output_file"] = file_path
 
         logger.debug(f"Query processing complete: {result}")
-
-        # Catches the exits that never printed an answer (max steps).
-        turn_record = (
-            self._finish_turn_record(result.get("result", ""), steps_taken)
-            or turn_record
-        )
-        if turn_record is not None:
-            result["turn_metrics"] = turn_record
 
         # Store the result internally
         self.last_result = result
@@ -6939,7 +7946,15 @@ Do NOT wrap conversational replies in JSON.
                 "I couldn't recover from this — please rephrase the request "
                 "or check that the underlying service is running."
             )
-        return f"Task completed with {tool_name}. No further action needed."
+        # A loop break is evidence of neither outcome: the work may be done
+        # (the model kept re-verifying it) or never started (it had no tool for
+        # the job). Say which is unknown instead of claiming either (#3750).
+        return (
+            f"I stopped after calling `{tool_name}` {consecutive_count} times "
+            "in a row without making progress, so I can't confirm the task is "
+            "finished. Please check the result before relying on it, or "
+            "rephrase the request."
+        )
 
     def _dedup_mutation_call(
         self,

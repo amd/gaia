@@ -27,6 +27,8 @@ from fastapi import HTTPException
 
 from gaia.agents.install_hints import agent_not_installed_message
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.llm.providers.lemonade import classify_lemonade_exception
+from gaia.security import BLOCKED_DIRECTORIES
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -162,126 +164,14 @@ _mcp_status_lock = threading.Lock()
 model_load_lock = threading.Lock()
 
 
-# ── Lemonade error classification (chat-side helper) ───────────────────────
+# ── Lemonade error classification ──────────────────────────────────────────
 #
-# AgentSDK + the agent loop wrap LLM errors in their own exception types,
-# so a raw ``LemonadeError`` raised by the provider often arrives at the
-# chat layer as ``ValueError("...")`` or ``RuntimeError("...")`` with the
-# original message preserved as text.  We walk the exception chain and
-# also pattern-match the message string so retry decisions don't depend
-# on the exception type bubbling through unchanged.
+# The classifier itself lives with the error classes it returns, in
+# ``gaia.llm.providers.lemonade``, so the CLI can reach it without fastapi.
 
-
-def _classify_chat_exception(exc: BaseException):
-    """Return a typed ``LemonadeError`` instance if *exc* (or anything in
-    its ``__cause__`` chain) corresponds to a known Lemonade failure mode.
-
-    Returns ``None`` when the exception is unrelated.  Used by the chat
-    streaming/non-streaming paths to decide whether to auto-retry and
-    what user-facing message to surface.
-    """
-    from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
-        LemonadeContextOverflowError,
-        LemonadeError,
-        LemonadeModelNotFoundError,
-        LemonadeModelNotLoadedError,
-        LemonadeNetworkError,
-        LemonadeUpstreamTimeoutError,
-    )
-
-    # 1. Direct typed match anywhere in the cause chain.
-    # Walk both ``__cause__`` (explicit ``raise ... from e``) and ``__context__``
-    # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
-    # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
-    # for handlers that re-raise without ``from``.
-    #
-    # Cycle protection: tracking visited ids defends against pathological
-    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
-    # Without it the walker would loop forever and freeze the chat handler.
-    cur: Optional[BaseException] = exc
-    _seen: set = set()
-    while cur is not None and id(cur) not in _seen:
-        _seen.add(id(cur))
-        if isinstance(cur, LemonadeError):
-            return cur
-        cur = cur.__cause__ or cur.__context__
-
-    # 2. Substring match on the stringified exception — covers the case
-    # where AgentSDK re-raises with ``str(original)`` as the message,
-    # losing the typed-class info.
-    raw = str(exc)
-    text = raw.lower()
-    if "no model loaded" in text or "model_not_loaded" in text:
-        return LemonadeModelNotLoadedError()
-    # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
-    # model was never pulled, so this is NOT retryable and NOT the same as
-    # "not loaded". Naming the missing model is actionable (#2243).
-    # "was not found" is anchored to a nearby "model" token so an unrelated
-    # 404 ("file X was not found") isn't mislabelled as a missing model.
-    if (
-        "model_not_found" in text
-        or _re.search(r"\bmodel\b[^\n]{0,80}?\bwas not found\b", text)
-        or ("model not found" in text and "not loaded" not in text)
-    ):
-        m = _re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
-        return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
-    if "exceed_context_size" in text or "exceeds the available context size" in text:
-        err = LemonadeContextOverflowError()
-        # If the textual error mentions a small n_ctx, the model was
-        # loaded with the wrong context size — reload via pre-flight
-        # will fix it, so make the error retryable.
-        m = _re.search(r"context size \((\d+) tokens?\)", text)
-        if not m:
-            m = _re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
-        if m:
-            try:
-                n_ctx = int(m.group(1))
-                # Threshold tracks the chat / rag profile default
-                # (65536) — see lemonade.py:_classify_lemonade_response.
-                if 0 < n_ctx < 65536:
-                    err.retryable = True
-            except ValueError:
-                pass
-        return err
-    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
-    # hung) from real connectivity failures (#1030). The user-facing remediation
-    # is very different.
-    is_timeout = (
-        "timeout was reached" in text
-        or "timed out" in text
-        or "operation_timeout" in text
-    )
-    is_unreachable = (
-        "connection refused" in text
-        or "could not resolve host" in text
-        or "no route to host" in text
-        or "couldn't connect" in text
-    )
-    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between
-    # models or hit an internal recovery state. ``LemonadeClient._send_request``
-    # raises ``LemonadeClientError("Request failed with status 503: ...")`` /
-    # 500/502/504 for these. Pre-iter2 these fell through to the generic
-    # "trouble connecting" UI fallback and the chat layer never retried —
-    # so a transient model-swap stall surfaced as a hard FAIL. Treat them
-    # as the network-flavour transient: retryable=True kicks the chat
-    # layer's auto-reload + one-retry path, which usually recovers.
-    is_backend_5xx = bool(
-        _re.search(r"failed with status 5\d\d", text)
-        or "internal server error" in text
-        or "service unavailable" in text
-        or "bad gateway" in text
-        or "gateway timeout" in text
-    )
-    if is_timeout and not is_unreachable:
-        return LemonadeUpstreamTimeoutError()
-    if (
-        "network_error" in text
-        or "curl error" in text
-        or is_unreachable
-        or is_backend_5xx
-    ):
-        return LemonadeNetworkError()
-    return None
+#: Kept as a module attribute so the many call sites below (and their tests)
+#: keep importing it from here.
+_classify_chat_exception = classify_lemonade_exception
 
 
 # ── Auto-titling ────────────────────────────────────────────────────────────
@@ -385,7 +275,9 @@ async def _generate_session_title(
                     # for the same conversation.
                     "temperature": 0.3,
                 },
-                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+                headers=lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                ),
             )
             if resp.status_code != 200:
                 logger.debug(
@@ -484,6 +376,10 @@ def _build_create_kwargs(
 
     Note: if registry.resolve_model() already promoted model_id before this
     call, it is forwarded as-is via branch 2 (resolve_model result ≠ default).
+    A session created against a *configured* default_model (see
+    ChatDatabase.resolved_default_model) also takes branch 2, not branch 3 —
+    its stored model differs from _DB_DEFAULT_MODEL too, so the configured
+    model reaches the agent instead of being silently dropped.
 
     ``device``/``min_context_size`` flow through to the agent's config so the
     requested device is validated at runtime. Agent factories filter unknown
@@ -923,20 +819,85 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
         return [], []
 
 
-def _compute_allowed_paths(rag_file_paths: list) -> list:
-    """Derive allowed filesystem paths from document locations.
+def _managed_documents_dir() -> Path:
+    """The Agent UI's own documents folder — the session's writable scratch space.
 
-    Collects the unique parent directories of all RAG document paths.
-    Falls back to the current working directory when no document paths
-    are provided, to avoid granting unnecessarily broad access across
-    unrelated projects on the same machine.
+    Resolved late rather than imported as a constant so a test that relocates
+    ``Path.home()`` gets the relocated directory.
     """
-    dirs = set()
+    return (Path.home() / ".gaia" / "documents").resolve()
+
+
+def _unsafe_directory_grant_reason(directory: Path) -> str:
+    """Why *directory* is too broad to hand a session, or ``""`` if it is fine.
+
+    Args:
+        directory: A resolved directory being considered as a session scope.
+
+    Returns:
+        A reason naming what the grant would expose, empty when it is safe.
+    """
+    if directory == Path(directory.anchor):
+        return "it is a filesystem root"
+    if directory == Path.home().resolve():
+        return "it is your home directory"
+    for blocked in BLOCKED_DIRECTORIES:
+        blocked_path = Path(blocked).resolve()
+        if directory == blocked_path or blocked_path.is_relative_to(directory):
+            return f"it contains the protected directory '{blocked}'"
+        if directory.is_relative_to(blocked_path):
+            return f"it is inside the protected directory '{blocked}'"
+    return ""
+
+
+def _compute_allowed_paths(rag_file_paths: list) -> list:
+    """Derive a session's filesystem scope from its attached documents.
+
+    Grants each document **file**, never the directory it sits in.
+    ``PathValidator`` matches exact paths, so a session that attached
+    ``~/notes.txt`` gets ``~/notes.txt`` — granting ``Path.home()`` because a
+    document happened to be saved there handed the whole home tree to an agent
+    with ``write_file`` and shell tools.
+
+    Always adds GAIA's own managed documents directory so the agent still has
+    somewhere to *write* — a bounded, GAIA-owned folder the Agent UI already
+    surfaces, rather than whichever of the user's folders a document came from.
+
+    Falls back to the current working directory only when nothing is attached,
+    and refuses even that when the CWD is a root, ``$HOME``, or overlaps a
+    protected directory — a scope that broad is not a scope.
+
+    Args:
+        rag_file_paths: Paths of the documents attached to this session.
+
+    Returns:
+        The allowlist, always including the managed documents directory.
+    """
+    allowed = set()
     for fp in rag_file_paths:
-        dirs.add(str(Path(fp).parent))
-    if not dirs:
-        dirs.add(str(Path.cwd()))
-    return list(dirs)
+        if not fp:
+            continue
+        try:
+            allowed.add(str(Path(fp).resolve()))
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping unresolvable document path %r: %s", fp, exc)
+    managed = str(_managed_documents_dir())
+    if allowed:
+        allowed.add(managed)
+        return sorted(allowed)
+
+    cwd = Path.cwd().resolve()
+    reason = _unsafe_directory_grant_reason(cwd)
+    if reason:
+        logger.warning(
+            "Refusing to grant this session file access to %s because %s. The "
+            "session keeps only the managed documents directory. Attach "
+            "a document, or start the Agent UI backend from a project directory.",
+            cwd,
+            reason,
+        )
+        return [managed]
+    return sorted({managed, str(cwd)})
 
 
 def _session_agent_kwargs(
@@ -1113,6 +1074,33 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _canonicalize_user_input_request(event: dict) -> dict:
+    """Translate a raw ``user_input_request`` event (emitted by
+    ``SSEOutputHandler.request_user_input_blocking()``) into the ``needs_input``
+    wire shape (#2595) — the same shape the email-relay path produces via
+    ``CanonicalTranslator``, so the frontend's NeedsInputCard renders either
+    source identically.
+
+    Options normalization is delegated to ``sse_translation._normalize_options``
+    rather than re-derived here: a caller using the documented ``choices``
+    form (a flat list of strings — see ``request_user_input``'s docstring)
+    must get pickable options exactly like a caller using the richer
+    ``options`` form, and duplicating that fallback here is how the two
+    would silently drift apart.
+    """
+    from gaia.ui.sse_translation import _normalize_options
+
+    return {
+        "type": "needs_input",
+        "request_id": str(event.get("request_id") or ""),
+        "question": str(event.get("message") or ""),
+        "options": _normalize_options(event),
+        "allow_free_text": bool(event.get("allow_free_text", True)),
+        "sensitive": bool(event.get("sensitive", False)),
+        "timeout_seconds": event.get("timeout_seconds"),
+    }
+
+
 # Remediation copy for a turn that produced no answer at all — reserved for a
 # genuine backend failure, never a deliberate cancel or an intentionally-empty
 # final (see _empty_answer_outcome).
@@ -1199,7 +1187,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
 
         base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
             return
@@ -1347,7 +1335,7 @@ async def _get_chat_response(
 
     def _do_chat():
         # Build conversation history from database
-        messages = db.get_messages(request.session_id, limit=20)
+        messages = db.get_recent_messages(request.session_id, limit=20)
         history_pairs = _build_history_pairs(messages)
 
         # Resolve document IDs to file paths.
@@ -1745,7 +1733,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         )
 
         # Build conversation history
-        messages = db.get_messages(request.session_id, limit=20)
+        messages = db.get_recent_messages(request.session_id, limit=20)
         history_pairs = _build_history_pairs(messages)
 
         # Resolve document IDs to file paths.
@@ -2466,6 +2454,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                     if (event.get("decision") or "BLOCK").upper() == "BLOCK":
                         _persist_policy_block_if_needed()
+                elif event_type == "user_input_request":
+                    event = _canonicalize_user_input_request(event)
 
                 # Pad each event so Chromium's receive buffer flushes immediately.
                 # Events < 512 bytes are held by Chromium until the buffer fills.
@@ -2603,7 +2593,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 base_url = (
                     LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
                 )
-                _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+                _auth = lemonade_auth_headers(
+                    resolve_lemonade_api_key(base_url=base_url)
+                )
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
                     stats_resp = await stats_client.get(
                         f"{base_url}/stats", headers=_auth

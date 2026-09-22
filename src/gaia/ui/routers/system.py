@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
     lemonade_auth_headers,
+    resolve_effective_ctx_size,
     resolve_lemonade_api_key,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
@@ -74,7 +75,7 @@ async def _lemonade_post(
         import httpx  # pylint: disable=import-outside-toplevel
 
         base_url = _get_lemonade_base_url()
-        headers = lemonade_auth_headers(resolve_lemonade_api_key())
+        headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
                 f"{base_url}/{path}", json=payload, headers=headers
@@ -253,7 +254,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     # download itself can take many minutes between progress events on a slow
     # link, and we'd rather hold open than wrongly bail.
     client_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-    headers = lemonade_auth_headers(resolve_lemonade_api_key())
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
     try:
         async with httpx.AsyncClient(timeout=client_timeout) as client:
             async with client.stream(
@@ -450,7 +451,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     try:
         from gaia.llm.lemonade_launcher import describe_start_hint
 
-        hint = describe_start_hint()
+        # Resolve WITH the required ctx so the rendered command carries it;
+        # callers must print it verbatim, never append their own flag.
+        hint = describe_start_hint(_MIN_CONTEXT_SIZE)
         status.start_instruction = hint.instruction
         status.start_command = hint.command
     except Exception as exc:  # noqa: BLE001
@@ -464,7 +467,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             base_url = _get_lemonade_base_url()
-            _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Derive the Lemonade web UI URL (scheme://host:port without /api/v1)
             try:
@@ -503,10 +506,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                 status.model_loaded = m_name
                             status.model_device = m.get("device")
                             # Actual loaded context size (preferred over catalog
-                            # default).
+                            # default) — clamped against the model's real
+                            # max_context_window (#2992). recipe_options.ctx_size
+                            # is a config echo, not a measurement: Lemonade can
+                            # report the ctx_size it was ASKED for even after
+                            # silently capping it lower, which without this
+                            # clamp made the UI report a different (higher, wrong)
+                            # context than the CLI for the same running server.
                             ctx = m.get("recipe_options", {}).get("ctx_size")
                             if ctx is not None:
-                                status.model_context_size = ctx
+                                status.model_context_size = resolve_effective_ctx_size(
+                                    ctx, m.get("max_context_window")
+                                )
                             _llm_found = True  # take only the first matching LLM
 
                 # Fallback: older Lemonade versions expose context_size at root level
@@ -523,11 +534,17 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             status.model_size_gb = m.get("size")
                             status.model_labels = m.get("labels")
                             # Only use catalog ctx_size when health data didn't
-                            # provide it (e.g. model not yet fully loaded)
+                            # provide it (e.g. model not yet fully loaded) —
+                            # clamped the same way as the health-derived value
+                            # above.
                             if status.model_context_size is None:
                                 ctx = m.get("recipe_options", {}).get("ctx_size")
                                 if ctx is not None:
-                                    status.model_context_size = ctx
+                                    status.model_context_size = (
+                                        resolve_effective_ctx_size(
+                                            ctx, m.get("max_context_window")
+                                        )
+                                    )
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 
@@ -804,7 +821,7 @@ async def _check_model_status(model_name: str) -> ModelStatus:
         import httpx
 
         base_url = _get_lemonade_base_url()
-        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Check catalog: is model known and downloaded?
             models_resp = await client.get(

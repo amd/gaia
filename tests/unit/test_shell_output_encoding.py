@@ -30,25 +30,13 @@ class _Host(ShellToolsMixin):
 
 def _shell_tool():
     """Return the registered run_shell_command callable."""
-    captured = {}
-    import gaia.agents.base.tools as tools_module
+    from gaia.agents.base.tools import get_tool_metadata
 
-    original = tools_module.tool
-
-    def spy(**kwargs):
-        def decorate(fn):
-            captured[kwargs.get("name")] = fn
-            return original(**kwargs)(fn)
-
-        return decorate
-
-    tools_module.tool = spy
-    try:
-        host = _Host()
-        host.register_shell_tools()
-    finally:
-        tools_module.tool = original
-    return captured["run_shell_command"]
+    host = _Host()
+    host.register_shell_tools()
+    entry = get_tool_metadata("run_shell_command")
+    assert entry is not None, "register_shell_tools did not register run_shell_command"
+    return entry["function"]
 
 
 NON_CP1252 = "⚠️ café ✓ 日本語"

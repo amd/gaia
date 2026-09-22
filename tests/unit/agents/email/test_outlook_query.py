@@ -142,5 +142,37 @@ def test_is_unsupported_value_raises_before_the_mixed_family_check():
         translate_query("is:unread is:starred", now=_NOW)
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_search"),
+    [
+        ('subject:"check in: monday"', '"subject:\\"check in: monday\\""'),
+        ('subject:"Q3 has: numbers"', '"subject:\\"Q3 has: numbers\\""'),
+    ],
+)
+def test_colon_word_inside_quoted_phrase_is_not_an_operator(query, expected_search):
+    # #3592: the colon word is part of the quoted phrase's text, not an
+    # operator, so the guard above must not fire on it. Asserting the
+    # $search value too, so masking the guard's copy can never start
+    # mangling the phrase the user actually typed.
+    result = translate_query(query, now=_NOW)
+    assert result.search == expected_search
+    assert result.filter is None
+
+
+def test_unsupported_operator_after_a_quoted_phrase_still_raises():
+    # A quoted colon word must not blind the guard to a real one that
+    # follows outside the quotes.
+    with pytest.raises(ValueError, match="'has:attachment' is not supported"):
+        translate_query('subject:"check in: monday" has:attachment', now=_NOW)
+
+
+def test_unsupported_operator_with_a_quoted_value_names_the_original_text():
+    # The guard matches against a masked copy, so the error has to slice the
+    # unmasked remainder or it reports the mask characters instead of the
+    # operator's real quoted value.
+    with pytest.raises(ValueError, match=r"'has:\"my file\"' is not supported"):
+        translate_query('has:"my file"', now=_NOW)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
