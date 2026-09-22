@@ -344,17 +344,14 @@ class EmailToolsMixin:
         def read_email(message_id: str) -> str:
             """Read one message in full, including its body.
 
-            Use after `list_inbox` or `search_email` has given you a message id.
-            Fetching bodies is the expensive call — read the messages you
-            actually need to judge, not every message in a listing.
+            Use after `list_inbox` or `search_email` gives you a message id.
+            Bodies are expensive — read only what you must judge.
 
-            Very long bodies are truncated; when that happens the result says
-            so and gives the original length, so never describe a truncated
-            message as if you read all of it.
-
-            A turn that has already read enough mail to fill its context
-            budget gets `turn_budget_exhausted: true` instead of a body — stop
-            reading, don't retry, and tell the user reading stopped there.
+            A long body is truncated and says so, with its original
+            length. When the turn's mail budget is spent you get
+            `turn_budget_exhausted: true` instead: stop, don't retry,
+            say so. Never report a truncated or refused read as
+            complete.
 
             Args:
                 message_id: The message id from a listing or search result
