@@ -44,9 +44,14 @@ jobs:
     # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-    timeout-minutes: 25
+    # 22 (checkout ceiling below) + 10 (Initialize SD Profile's own cap) + 2 (every
+    # other step; worst measured 58s). The old 25 could not cover a slow fetch (#4135).
+    timeout-minutes: 34
     steps:
+      # Devlab wipes the workspace every job, so this is always a cold ~107MB fetch over
+      # a link that stalls and restarts from zero; worst measured 19.9 min (#4135).
       - uses: actions/checkout@v7
+        timeout-minutes: 22
 
       - name: Kill Stuck Processes (MSI and Lemonade Server)
         if: always()
