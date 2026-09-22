@@ -849,6 +849,26 @@ def test_the_bot_token_is_never_sent_outside_slack(adapter, monkeypatch, tmp_pat
     assert calls == [], "no request may be made to a non-Slack host"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        SLACK_FILE_URL,
+        "https://FILES.SLACK.COM/files-pri/T1-F1/download/report.pdf",
+        "https://files.slack.com:443/files-pri/T1-F1/download/report.pdf",
+        "https://cdn.slack-edge.com/T1/avatar.png",
+        "https://slack.com/files-pri/T1-F1/x.pdf",
+    ],
+)
+def test_a_slack_hosted_url_is_accepted(url):
+    """The refusal tests above pass even if the guard rejects everything.
+
+    Matching on ``netloc`` rather than ``hostname`` would drop a URL carrying an
+    explicit port while still refusing every hostile host, so only this side
+    catches an over-tightened guard.
+    """
+    assert ad._is_slack_file_url(url)
+
+
 def test_a_slack_download_sends_the_token_without_following_redirects(
     adapter, monkeypatch, tmp_path
 ):
