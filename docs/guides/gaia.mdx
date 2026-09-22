@@ -274,5 +274,5 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, all eight [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
+- **No server-side confirmation flow** — over `/query`, every [confirmation-gated tool](#tools-that-need-your-approval) ends the run with a refusal instead of prompting over the stream.
 - **Image generation evicts the chat model** — the SD model has to be resident to draw, so the first reply after an image waits for the chat model to reload. Ask for pictures at a natural pause, not mid-thread.
