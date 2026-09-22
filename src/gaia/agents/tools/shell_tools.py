@@ -1352,17 +1352,23 @@ class ShellToolsMixin:
         return error
 
     def _approval_is_blanket_only(self) -> bool:
-        """True when only a blanket pre-approval would answer a prompt.
+        """True when no prompt a person answers stands behind this call.
 
         ``GAIA_AUTO_APPROVE_TOOLS`` and ``auto_approve_gated_tools=True`` both
         pre-approve for unattended runs. They were granted when commands outside
         the no-prompt list could not be approved at all, so neither widens what
         such a run executes. Only the console's ``full_access`` (the TUI's
         ``/full-access``, on screen for the whole session) runs them unasked.
+
+        A host with no console is the same situation with nothing granted at
+        all: there is no surface to show the prompt on, so the confirmation the
+        CONFIRM tier assumes never happened (#2210).
         """
         console = getattr(self, "console", None)
         if getattr(console, "full_access", False) is True:
             return False
+        if console is None:
+            return True
         if getattr(console, "auto_approve_gated_tools", False):
             return True
         # Deferred: the console module imports the package root.
@@ -1370,17 +1376,25 @@ class ShellToolsMixin:
 
         return console_mod.auto_approve_env_enabled()
 
-    @staticmethod
-    def _blanket_approval_refusal(error: Dict[str, Any]) -> Dict[str, Any]:
-        """A confirmable command's block, re-explained for an unattended run."""
+    def _blanket_approval_refusal(self, error: Dict[str, Any]) -> Dict[str, Any]:
+        """A confirmable command's block, re-explained for an unasked run."""
+        if getattr(self, "console", None) is None:
+            why = (
+                "This run has no console, so nothing could show the confirmation "
+                "prompt this command needs."
+            )
+        else:
+            why = (
+                "This run approves prompts automatically (GAIA_AUTO_APPROVE_TOOLS "
+                "or auto_approve_gated_tools), which does not extend to commands "
+                "outside the no-prompt list."
+            )
         return {
             **error,
             "tier": TIER_REFUSE,
             "hint": (
-                "This run approves prompts automatically (GAIA_AUTO_APPROVE_TOOLS "
-                "or auto_approve_gated_tools), which does not extend to commands "
-                "outside the no-prompt list. Run it interactively to approve it, "
-                "or turn on full access in the TUI."
+                f"{why} Run it interactively to approve it, or turn on full "
+                "access in the TUI."
             ),
         }
 
