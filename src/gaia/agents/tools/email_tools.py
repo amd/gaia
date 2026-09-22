@@ -234,7 +234,7 @@ class EmailToolsMixin:
 
         mixin = self
 
-        def _fail(exc: Exception, action: str, **extra) -> str:
+        def _fail(exc, action: str, *, refusal: bool = False, **extra) -> str:
             """Render an exception (or a refusal) as an actionable tool result.
 
             Errors are surfaced, never swallowed: the model needs to tell the
@@ -242,7 +242,10 @@ class EmailToolsMixin:
             reads as "your inbox is empty". ``extra`` carries structured fields
             for a refusal (e.g. ``turn_budget_exhausted``) alongside the error.
             """
-            logger.warning("email tool failed during %s: %s", action, exc)
+            if refusal:
+                logger.info("email: %s refused — %s", action, exc)
+            else:
+                logger.warning("email tool failed during %s: %s", action, exc)
             payload = {"error": str(exc), "action": action, "success": False}
             payload.update(extra)
             return json.dumps(payload, indent=2)
@@ -379,6 +382,7 @@ class EmailToolsMixin:
                     "user reading stopped here, and ask them to narrow the "
                     f"request or continue in a new turn. See {_EMAIL_DOCS_URL}",
                     "read_email",
+                    refusal=True,
                     turn_budget_exhausted=True,
                     messages_read_this_turn=reads,
                     budget_chars=budget,

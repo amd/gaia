@@ -828,9 +828,7 @@ def test_email_tools_are_bundled_for_the_loader():
 
 
 def _big_body_message(chars):
-    return dict(
-        GRAPH_MESSAGE, body={"contentType": "text", "content": "x" * chars}
-    )
+    return dict(GRAPH_MESSAGE, body={"contentType": "text", "content": "x" * chars})
 
 
 def test_turn_budget_refuses_once_the_turn_is_full(harness_factory):
