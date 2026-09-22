@@ -506,3 +506,248 @@ async def test_cancelled_startup_waits_for_owned_daemon_cleanup(
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=5)
     assert stopped == [{"expected_pid": 1234}]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "GAIA_SERVICE_MAX_REQUEST_BYTES",
+        "GAIA_SERVICE_MAX_CONCURRENT_RUNS",
+        "GAIA_SERVICE_MAX_STEPS",
+        "GAIA_SERVICE_RUN_TIMEOUT_SECONDS",
+    ],
+)
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "1.5", ""])
+def test_service_limits_require_positive_integers(configured, monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=name):
+        service.ServiceConfig.from_environment()
+
+
+def test_service_limits_defaults_and_environment(configured, monkeypatch):
+    assert configured.max_request_bytes == 1048576
+    assert configured.max_concurrent_runs == 1
+    assert configured.max_steps == 20
+    assert configured.run_timeout_seconds == 300
+    monkeypatch.setenv("GAIA_SERVICE_MAX_CONCURRENT_RUNS", "2")
+    assert service.ServiceConfig.from_environment().max_concurrent_runs == 2
+
+
+def test_service_rejects_large_body_before_agent_construction(configured, monkeypatch):
+    def unexpected(**_kwargs):
+        pytest.fail("Rejected request constructed an agent")
+
+    monkeypatch.setattr(server, "build_query_agent", unexpected)
+    with TestClient(
+        service.create_app(replace(configured, max_request_bytes=128)),
+        base_url="http://worker.internal",
+    ) as client:
+        response = client.post(
+            "/v1/gaia/query",
+            headers={"Authorization": "Bearer test-service-secret"},
+            json={"query": "x" * 129, "context": [], "run_id": str(uuid.uuid4())},
+        )
+        assert response.status_code == 413
+        assert response.json() == {"detail": "Request body exceeds 128 bytes."}
+        assert client.get("/health").status_code == 200
+
+
+@pytest.mark.parametrize("action", ["deadline", "cancel"])
+def test_capacity_held_until_worker_exits(configured, monkeypatch, action):
+    entered, release, closed = (threading.Event() for _ in range(3))
+    calls = []
+
+    class Agent:
+        def process_query(self, _query, max_steps=None):
+            calls.append(max_steps)
+            entered.set()
+            assert release.wait(5)
+            return {"answer": "done"}
+
+        def close(self):
+            closed.set()
+
+    monkeypatch.setattr(server, "build_query_agent", lambda **_kw: Agent())
+    app = service.create_app(configured)
+    if action == "deadline":
+        app.state.query_timeout_seconds = 0.1
+    with TestClient(app, base_url="http://worker.internal") as client:
+        headers = {"Authorization": "Bearer test-service-secret"}
+        body = {"query": "test", "context": [], "run_id": str(uuid.uuid4())}
+        results = []
+        thread = threading.Thread(
+            target=lambda: results.append(
+                client.post("/v1/gaia/query", json=body, headers=headers)
+            )
+        )
+        thread.start()
+        try:
+            assert entered.wait(2)
+            assert client.get("/health").status_code == 200
+            response = client.post(
+                "/v1/gaia/query",
+                json={**body, "run_id": str(uuid.uuid4())},
+                headers=headers,
+            )
+            assert response.status_code == 503
+            assert response.headers["Retry-After"] == "1"
+            if action == "cancel":
+                response = client.post(
+                    f"/v1/gaia/query/{body['run_id']}/cancel", headers=headers
+                )
+                assert response.json()["cancelled"] is True
+            thread.join(2)
+            assert not thread.is_alive()
+            events = [
+                json.loads(line[6:])
+                for line in results[0].text.splitlines()
+                if line.startswith("data: ")
+            ]
+            assert events[-1]["status"] == (504 if action == "deadline" else 499)
+            assert (
+                client.post(
+                    "/v1/gaia/query",
+                    json={**body, "run_id": str(uuid.uuid4())},
+                    headers=headers,
+                ).status_code
+                == 503
+            )
+            assert calls == [20]
+        finally:
+            release.set()
+            thread.join(2)
+        assert closed.wait(2)
+        # Closing the agent precedes releasing admission; wait on the actual semaphore.
+        assert app.state.query_slots.acquire(timeout=2)
+        app.state.query_slots.release()
+        response = client.post(
+            "/v1/gaia/query",
+            json={**body, "run_id": str(uuid.uuid4()), "max_steps": 2},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert calls == [20, 2]
+
+
+def test_step_ceiling_and_failed_setup_leave_capacity_available(
+    configured, monkeypatch
+):
+    def fail(**_kwargs):
+        raise RuntimeError("setup failed")
+
+    monkeypatch.setattr(server, "build_query_agent", fail)
+    app = service.create_app(configured)
+    with TestClient(app, base_url="http://worker.internal") as client:
+        headers = {"Authorization": "Bearer test-service-secret"}
+        body = {"query": "test", "context": [], "run_id": str(uuid.uuid4())}
+        assert (
+            client.post(
+                "/v1/gaia/query", json={**body, "max_steps": 21}, headers=headers
+            ).status_code
+            == 422
+        )
+        for _ in range(2):
+            assert (
+                client.post("/v1/gaia/query", json=body, headers=headers).status_code
+                == 500
+            )
+        assert app.state.query_slots.acquire(blocking=False)
+        app.state.query_slots.release()
+
+
+@pytest.mark.asyncio
+async def test_deadline_cancels_worker_even_when_sse_client_stops_reading(
+    configured, monkeypatch
+):
+    stopped = threading.Event()
+    send_blocked, resume_send = asyncio.Event(), asyncio.Event()
+
+    class Agent:
+        def process_query(self, _query, max_steps=None):
+            self.console.print_processing_start("working", 20)
+            assert self._cancel_event.wait(3), "Deadline depended on blocked SSE send"
+            assert self.console.cancelled.wait(1)
+            stopped.set()
+            return {"answer": "cancelled"}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(server, "build_query_agent", lambda **_kw: Agent())
+    app = service.create_app(configured)
+    app.state.query_timeout_seconds = 0.15
+    response = await server.query(
+        server.QueryRequest(query="test", context=[], run_id=str(uuid.uuid4())),
+        SimpleNamespace(app=app),
+    )
+
+    async def receive():
+        await asyncio.sleep(5)
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] == "http.response.body" and not send_blocked.is_set():
+            send_blocked.set()
+            await resume_send.wait()
+
+    stream = asyncio.create_task(
+        response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+    )
+    try:
+        await asyncio.wait_for(send_blocked.wait(), 2)
+        assert await asyncio.to_thread(stopped.wait, 2)
+        assert not stream.done(), "Send was not stalled during cancellation"
+    finally:
+        resume_send.set()
+        await asyncio.wait_for(stream, 2)
+    assert app.state.query_slots.acquire(timeout=2)
+    app.state.query_slots.release()
+
+
+def test_configured_parallel_capacity_admits_two_and_rejects_third(
+    configured, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    release, both_started = threading.Event(), threading.Event()
+    lock = threading.Lock()
+    active = []
+
+    class Agent:
+        def process_query(self, query, max_steps=None):
+            with lock:
+                active.append(query)
+                if len(active) == 2:
+                    both_started.set()
+            assert release.wait(5)
+            return {"answer": query}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(server, "build_query_agent", lambda **_kw: Agent())
+    app = service.create_app(replace(configured, max_concurrent_runs=2))
+    with TestClient(app, base_url="http://worker.internal") as client:
+
+        def submit(query):
+            return client.post(
+                "/v1/gaia/query",
+                json={"query": query, "context": [], "run_id": str(uuid.uuid4())},
+                headers={"Authorization": "Bearer test-service-secret"},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(submit, name) for name in ("first", "second")]
+            try:
+                assert both_started.wait(2)
+                assert submit("third").status_code == 503
+            finally:
+                release.set()
+            assert all(
+                future.result(timeout=3).status_code == 200 for future in futures
+            )
+        assert sorted(active) == ["first", "second"]
+        assert app.state.query_slots.acquire(timeout=2)
+        assert app.state.query_slots.acquire(timeout=2)
+        app.state.query_slots.release()
+        app.state.query_slots.release()

@@ -63,6 +63,7 @@ jobs:
           mkdir -p test-results
           python -m pytest \
             hub/agents/gaia/python/tests/test_service.py \
+            hub/agents/gaia/python/tests/test_service_limits.py \
             hub/agents/gaia/python/tests/test_service_client.py \
             hub/agents/gaia/python/tests/test_server_query.py \
             hub/agents/gaia/python/tests/test_server_memory.py \
@@ -102,6 +103,11 @@ jobs:
           set -euo pipefail
           mkdir -p test-results
           docker build --progress=plain -f deploy/service/Dockerfile -t gaia-service:test . 2>&1 | tee test-results/build.log
+      - name: Verify overload, upload bounds and cancellation recovery
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 deploy/service/limits_smoke_test.py 2>&1 | tee test-results/limits.log
       - name: Verify embedded runtime and service boundaries
         run: |
           set -euo pipefail

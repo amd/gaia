@@ -153,7 +153,12 @@ def parser():
     query.add_argument(
         "--context-file", type=Path, help="JSON transcript array from prior turns"
     )
-    query.add_argument("--max-steps", type=int, default=10)
+    query.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Override the server step default within its ceiling",
+    )
     query.add_argument(
         "--json", action="store_true", help="Emit canonical JSONL events to stdout"
     )
@@ -201,7 +206,7 @@ def main(argv=None):
                 )
             )
             return 0
-        if args.max_steps < 1:
+        if args.max_steps is not None and args.max_steps < 1:
             raise ClientError("--max-steps must be positive")
         if args.interactive and not sys.stdin.isatty():
             raise ClientError("--interactive requires terminal input")
@@ -217,10 +222,11 @@ def main(argv=None):
             "query": prompt,
             "run_id": run_id,
             "context": context,
-            "max_steps": args.max_steps,
             "can_answer_questions": args.interactive,
             "can_confirm_tools": args.interactive,
         }
+        if args.max_steps is not None:
+            body["max_steps"] = args.max_steps
         if args.session_id:
             body["session_id"] = args.session_id
 

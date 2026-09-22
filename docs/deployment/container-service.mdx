@@ -65,6 +65,10 @@ can use the existing `packaging/freeze.py --onefile` option.
 | `HOME` | Required writable absolute directory for state; image default `/data` |
 | `GAIA_HOME` | Embedded Lemonade state override; image sets `/data/.gaia` |
 | `PORT` | HTTP port, default `8080` |
+| `GAIA_SERVICE_MAX_REQUEST_BYTES` | Maximum actual HTTP body bytes, including chunked uploads; default `1048576` (1 MiB), overflow returns 413 |
+| `GAIA_SERVICE_MAX_CONCURRENT_RUNS` | Active agent threads per worker, default `1`; busy queries return 503 with `Retry-After: 1` |
+| `GAIA_SERVICE_MAX_STEPS` | Default and maximum requested agent-loop steps, default `20`; larger requests return 422 |
+| `GAIA_SERVICE_RUN_TIMEOUT_SECONDS` | Cooperative wall-clock run deadline, default `300`; stream ends with error status 504 |
 | `GAIA_SERVICE_HOST` | Bind address, default `0.0.0.0` |
 | `LEMONADE_BASE_URL` | When set, use this external Lemonade endpoint instead of starting embedded Lemonade |
 | `LEMONADE_API_KEY` | Optional external Lemonade credential; must be unset in embedded mode |
@@ -72,6 +76,17 @@ can use the existing `packaging/freeze.py --onefile` option.
 | `GAIA_SERVICE_CLOUD_PROVIDER` | Optional cloud provider identifier for embedded Lemonade; requires cloud URL |
 | `GAIA_SERVICE_CLOUD_URL` | HTTPS OpenAI-compatible provider/gateway base URL; requires provider identifier |
 | `LEMONADE_<PROVIDER>_API_KEY` | Required credential for cloud bootstrap, e.g. `LEMONADE_FIREWORKS_API_KEY` |
+
+All four limits require positive integers. HTTP body reads have a separate
+30-second deadline (408). The byte limit is not a model context limit.
+Run admission occurs before agent construction; health and cancellation remain
+available while the agent thread runs. Synchronous agent construction can briefly
+occupy the HTTP event loop. An independent timer requests cancellation even if
+the client stops reading the stream. A cancellation, disconnect or run deadline
+does **not** release capacity until the agent thread and cleanup finish. Blocking
+provider/tool calls may outlast the deadline: it requests cancellation, not a hard
+process kill. Use container resource limits and an orchestrator kill deadline for
+hard isolation. The limits apply only to `--service`, preserving desktop behavior.
 
 The Host allowlist is independent of the bind address. Browser Origin headers are
 rejected in service mode; this surface is for server-to-server clients. Forwarded
@@ -288,3 +303,28 @@ cloud-host deployment or sustained throughput: those remain separate live-provid
 and deployment acceptance checks. ARM64 checks have been run locally; the x86-64
 lane must pass on GitHub before merge. Branch-protection configuration is managed
 separately from this workflow.
+
+## Load and failure regression
+
+`python3 deploy/service/limits_smoke_test.py` tests the built `gaia-service:test`
+image with deterministic inference: oversized fixed/chunked requests, step caps,
+an eight-request burst, cooperative deadlines, disconnects, capacity recovery
+and inference outage/restart.
+It creates and removes its own containers/network; it makes no provider calls.
+Both native Linux architecture CI jobs run this alongside lifecycle/query/Compose
+checks. This is bounded overload testing, not a sustained-load benchmark.
+
+### Embedded cloud model names
+
+Use the exact ID advertised by Lemonade, not necessarily the provider's full
+request-path ID. In the September 22, 2026 live test, embedded Lemonade advertised
+`fireworks.kimi-k2p6`, while the direct Fireworks gateway used
+`accounts/fireworks/models/kimi-k2p6`. Setting the latter with a `fireworks.` prefix
+correctly kept `/ready` at 503 because no such catalog entry existed.
+A live frozen query through the bundled daemon succeeded with the advertised ID.
+Catalogs change: verify the chosen ID via Lemonade's authenticated `/api/v1/models`
+API and check `gaia-agent --client status` before sending queries.
+
+The remote CLI omits `max_steps` unless `--max-steps` is supplied, so ordinary
+queries use the service's configured default even when its ceiling is below ten.
+Explicit values must be positive and within the server ceiling.

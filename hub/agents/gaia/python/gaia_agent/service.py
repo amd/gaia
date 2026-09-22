@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -37,6 +38,16 @@ def _directory(name: str) -> Path:
     return path.resolve()
 
 
+def _positive_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer.") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer.")
+    return value
+
+
 @dataclass(frozen=True)
 class ServiceConfig:
     host: str
@@ -47,6 +58,10 @@ class ServiceConfig:
     auth: caller_auth.CallerAuthConfig
     cloud_provider: str | None = None
     cloud_url: str | None = None
+    max_request_bytes: int = 1048576
+    max_concurrent_runs: int = 1
+    max_steps: int = 20
+    run_timeout_seconds: int = 300
 
     @classmethod
     def from_environment(cls) -> "ServiceConfig":
@@ -136,6 +151,10 @@ class ServiceConfig:
             auth=replace(auth, allowed_hosts=hosts, allowed_origin_hosts=frozenset()),
             cloud_provider=provider,
             cloud_url=cloud_url,
+            max_request_bytes=_positive_int("GAIA_SERVICE_MAX_REQUEST_BYTES", 1048576),
+            max_concurrent_runs=_positive_int("GAIA_SERVICE_MAX_CONCURRENT_RUNS", 1),
+            max_steps=_positive_int("GAIA_SERVICE_MAX_STEPS", 20),
+            run_timeout_seconds=_positive_int("GAIA_SERVICE_RUN_TIMEOUT_SECONDS", 300),
         )
 
 
@@ -166,6 +185,7 @@ def _configure_cloud(config: ServiceConfig, base_url: str) -> None:
 
 def create_app(config: ServiceConfig):
     from gaia_agent import server
+    from gaia_agent.service_limits import RequestBodyLimitMiddleware
     from starlette.responses import JSONResponse
 
     app = server.build_app(
@@ -178,6 +198,11 @@ def create_app(config: ServiceConfig):
         },
         warmup=False,
     )
+
+    app.state.query_slots = threading.BoundedSemaphore(config.max_concurrent_runs)
+    app.state.query_max_steps = config.max_steps
+    app.state.query_timeout_seconds = config.run_timeout_seconds
+    app.add_middleware(RequestBodyLimitMiddleware, max_bytes=config.max_request_bytes)
 
     if config.base_url is None:
         original_lifespan = app.router.lifespan_context

@@ -110,6 +110,7 @@ def test_query_json_and_request_context(endpoint, tmp_path, capsys):
     assert body["run_id"] == run_id
     assert body["session_id"] == "conversation"
     assert body["can_answer_questions"] is False
+    assert "max_steps" not in body
     assert auth == "Bearer fixture-token"
 
 
@@ -310,3 +311,13 @@ def test_interactive_tool_decision_is_explicit(endpoint, monkeypatch, answer, ap
     assert endpoint.posts[0][1]["can_confirm_tools"] is True
     assert endpoint.posts[-1][0].endswith("/confirm")
     assert endpoint.posts[-1][1] == {"confirm_id": "call", "approved": approved}
+
+
+def test_explicit_step_limit_sent_to_server(endpoint):
+    assert cli.main(["--url", endpoint.url, "query", "hello", "--max-steps", "2"]) == 0
+    assert endpoint.posts[0][1]["max_steps"] == 2
+
+
+def test_nonpositive_step_limit_is_not_dispatched(endpoint):
+    assert cli.main(["--url", endpoint.url, "query", "hello", "--max-steps", "0"]) == 1
+    assert endpoint.posts == []

@@ -567,6 +567,31 @@ async def query(request: QueryRequest, raw_request: Request):
         )
 
     handler = SSEOutputHandler()
+    step_limit = getattr(raw_request.app.state, "query_max_steps", None)
+    effective_steps = request.max_steps
+    if step_limit is not None:
+        if effective_steps is not None and effective_steps > step_limit:
+            raise HTTPException(
+                status_code=422, detail=f"max_steps exceeds service limit {step_limit}."
+            )
+        effective_steps = effective_steps or step_limit
+    slots = getattr(raw_request.app.state, "query_slots", None)
+    if slots is not None and not slots.acquire(blocking=False):
+        raise HTTPException(
+            status_code=503,
+            detail="Service run capacity is occupied. Retry after the active run stops.",
+            headers={"Retry-After": "1"},
+        )
+    slot_owned = slots is not None
+    timeout = getattr(raw_request.app.state, "query_timeout_seconds", None)
+    deadline = time.monotonic() + timeout if timeout is not None else None
+
+    def _release_slot() -> None:
+        nonlocal slot_owned
+        if slot_owned:
+            slot_owned = False
+            slots.release()
+
     session = None
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
@@ -578,6 +603,7 @@ async def query(request: QueryRequest, raw_request: Request):
 
     def _unwind_setup() -> None:
         """Undo the setup done so far, on a path that never reaches the loop."""
+        _release_slot()
         if registered:
             _registry.remove(request.run_id)
         if session is not None:
@@ -696,11 +722,19 @@ async def query(request: QueryRequest, raw_request: Request):
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
 
+    deadline_expired = threading.Event()
+    deadline_timer: Optional[threading.Timer] = None
+
+    def _expire_run() -> None:
+        deadline_expired.set()
+        run.cancel_event.set()
+        handler.cancelled.set()
+
     def _run_agent() -> None:
         try:
-            if request.max_steps is not None:
+            if effective_steps is not None:
                 run.result = agent.process_query(
-                    request.query, max_steps=request.max_steps
+                    request.query, max_steps=effective_steps
                 )
             else:
                 run.result = agent.process_query(request.query)
@@ -708,6 +742,8 @@ async def query(request: QueryRequest, raw_request: Request):
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
             handler.print_error(_terminal_error_detail(exc))
         finally:
+            if deadline_timer is not None:
+                deadline_timer.cancel()
             handler.signal_done()
             # Release only after the agent is done touching the instance, so the
             # next turn on this session cannot start mid-run.
@@ -719,13 +755,28 @@ async def query(request: QueryRequest, raw_request: Request):
             # leaked agent per request for the life of the process. Covers the
             # client-disconnect path too: the stream sets the cancel flag, which
             # ends the loop, which lands here.
-            if one_shot_agent is not None:
-                close_agent(one_shot_agent)
+            try:
+                if one_shot_agent is not None:
+                    close_agent(one_shot_agent)
+            finally:
+                # A closed/cancelled stream is not proof that blocking tool or
+                # provider work stopped. Only the worker releases admission.
+                _release_slot()
 
     thread = threading.Thread(target=_run_agent, daemon=True)
     try:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _expire_run()
+            else:
+                deadline_timer = threading.Timer(remaining, _expire_run)
+                deadline_timer.daemon = True
+                deadline_timer.start()
         thread.start()
     except Exception as exc:
+        if deadline_timer is not None:
+            deadline_timer.cancel()
         # _run_agent never got to run, so its own finally: never fires —
         # release the run_lock here or a thread-exhaustion failure leaves
         # this session_id permanently 409ing for the life of the process.
@@ -740,6 +791,16 @@ async def query(request: QueryRequest, raw_request: Request):
         last_write = time.monotonic()
         try:
             while True:
+                if deadline_expired.is_set():
+                    yield _sse(
+                        {
+                            "type": "error",
+                            "detail": "Service run deadline exceeded.",
+                            "status": 504,
+                        }
+                    )
+                    terminated = True
+                    return
                 if run.cancel_event.is_set():
                     yield _sse(
                         {"type": "error", "detail": "Run cancelled.", "status": 499}

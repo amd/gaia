@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Let the remote CLI honor the server step default unless explicitly overridden, fixing queries against workers configured below ten steps.
+
+- Bound container HTTP bodies, concurrent runs, loop steps and elapsed time with configurable service limits; preserve capacity until cancelled work actually stops, including stalled SSE clients.
+
 - Contract 2.14 adds opt-in per-call HTTP tool approval; the remote interactive CLI can approve or deny without granting future calls.
 - Accepted HTTP cancellation now terminates the stream explicitly instead of forwarding a late model answer.
 - Add `gaia-agent --client` / `gaia-agent-client` for authenticated worker status, streaming queries, questions and cancellation; include a Compose deployment and deterministic container query test.
