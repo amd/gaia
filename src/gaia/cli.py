@@ -2420,6 +2420,83 @@ the suite decides — no LLM judge. A TUI must already be running with
         help="Where to materialize the task projects (default: a temp directory)",
     )
 
+    # Outcome-scored tasks for the flagship GaiaAgent, gated in CI: gaia eval tasks
+    tasks_eval_parser = eval_subparsers.add_parser(
+        "tasks",
+        help="Flagship agent tasks scored by outcome, judged, and gated",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval tasks run --suite core
+  gaia eval tasks run --suite full --no-judge --out eval/results/eval-tasks-ci
+  gaia eval tasks judge eval/results/eval-tasks-ci
+  gaia eval tasks gate eval/results/eval-tasks-ci --enforce
+
+`run` gives the flagship a fresh copy of eval/tasks/toybox per task and scores
+what the project does afterwards. `judge` grades every task in one Claude call
+(no tools) and decides the question tasks.
+`gate` compares the run with eval/tasks/expectations/<model>.<suite>.json.
+""",
+    )
+    tasks_actions = tasks_eval_parser.add_subparsers(dest="tasks_action")
+    tasks_actions.required = True
+    tasks_run_parser = tasks_actions.add_parser(
+        "run", help="Run the flagship on every task of a suite"
+    )
+    tasks_run_parser.add_argument(
+        "--suite", default="core", help="Task suite from eval/tasks/tasks.json"
+    )
+    tasks_run_parser.add_argument(
+        "--model",
+        default=None,
+        help="Model under test (default: the flagship's default model)",
+    )
+    tasks_run_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/eval-tasks-<timestamp>)",
+    )
+    tasks_run_parser.add_argument(
+        "--no-judge",
+        action="store_true",
+        help="Skip the quality judge (CI judges in a separate step)",
+    )
+    tasks_judge_parser = tasks_actions.add_parser(
+        "judge", help="Grade a finished run's quality with Claude"
+    )
+    tasks_judge_parser.add_argument("run_dir", help="Directory `run` wrote")
+    for judging in (tasks_run_parser, tasks_judge_parser):
+        judging.add_argument(
+            "--judge-model",
+            default=None,
+            help="Claude model that grades quality (default: the eval default)",
+        )
+        judging.add_argument(
+            "--judge-attempts",
+            type=int,
+            default=1,
+            help="Tries per task when the judge returns no usable grade",
+        )
+    tasks_gate_parser = tasks_actions.add_parser(
+        "gate", help="Compare a judged run with its committed expectations"
+    )
+    tasks_gate_parser.add_argument("run_dir", help="Directory `run` wrote")
+    tasks_gate_parser.add_argument(
+        "--expect",
+        default=None,
+        help="Expectations file (default: eval/tasks/expectations/<model>.<suite>.json)",
+    )
+    tasks_gate_parser.add_argument(
+        "--enforce",
+        action="store_true",
+        help="Exit non-zero on a missed expectation (default: report only)",
+    )
+    tasks_gate_parser.add_argument(
+        "--propose",
+        default=None,
+        help="Also write expectations measured from this run to this path",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -3184,6 +3261,129 @@ Examples:
 
     _register_uninstall_subparser(subparsers, parent_parser)
     return parser
+
+
+def _handle_eval_tasks(args):
+    """gaia eval tasks run|judge|gate — see gaia.eval.flagship_tasks."""
+    from gaia.eval import flagship_tasks as ft
+
+    judge_model = getattr(args, "judge_model", None) or DEFAULT_CLAUDE_MODEL
+    in_actions = os.environ.get("GITHUB_ACTIONS") == "true"
+
+    def _judge(run_dir, env):
+        def _progress(task_id, grade):
+            if "error" in grade:
+                print(f"  {task_id}: judge failed - {grade['error']}")
+            else:
+                scores = " ".join(f"{a}={grade[a]}" for a in ft.AXES)
+                print(f"  {task_id}: {scores} | {grade['one_line']}")
+
+        print(f"[JUDGE] {judge_model}")
+        card = ft.judge_run(
+            run_dir, judge_model, env, args.judge_attempts, on_progress=_progress
+        )
+        failed = [t["id"] for t in card["tasks"] if "error" in (t.get("judge") or {})]
+        if failed:
+            prefix = "::warning::" if in_actions else "⚠️  "
+            print(
+                f"{prefix}No usable grade for {', '.join(failed)}. Until a re-run grades "
+                "them, they fail the quality and misreport checks, and an ungraded "
+                "question counts as not passed."
+            )
+        return card
+
+    if args.tasks_action == "run":
+        model = args.model or DEFAULT_MODEL_NAME
+        out_dir = Path(
+            args.out or f"eval/results/eval-tasks-{time.strftime('%Y%m%d-%H%M%S')}"
+        )
+        # Captured before run_suite removes the judge's credentials from os.environ.
+        judge_env = dict(os.environ)
+
+        def _progress(index, total, r):
+            mark = "ERROR" if r.error else ("PASS" if r.passed else "FAIL")
+            print(
+                f"  [{index}/{total}] {mark} {r.id} steps={r.steps} "
+                f"tokens={r.input_tokens + r.output_tokens:,} {r.wall_seconds}s | {r.why[:120]}"
+            )
+
+        print(f"[RUN] suite {args.suite} on {model}")
+        card = ft.run_suite(args.suite, model, out_dir, on_progress=_progress)
+        if not args.no_judge:
+            card = _judge(out_dir, judge_env)
+        print()
+        print(ft.render_report(card, None))
+        print(f"[OUTPUT] {out_dir.resolve()}")
+        return
+
+    run_dir = Path(args.run_dir)
+    if args.tasks_action == "judge":
+        card = _judge(run_dir, dict(os.environ))
+        print()
+        print(ft.render_report(card, None))
+        return
+
+    card = ft.read_scorecard(run_dir)
+    if args.propose:
+        try:
+            proposal = ft.propose_expectations(card)
+        except ValueError as exc:
+            # Not a verdict: the gate below reports the same gap under its policy.
+            print(f"{'::warning::' if in_actions else '⚠️  '}Nothing proposed: {exc}")
+        else:
+            Path(args.propose).write_text(
+                json.dumps(proposal, indent=2) + "\n", encoding="utf-8"
+            )
+            print(f"[PROPOSED] {args.propose}: {json.dumps(proposal)}")
+    expect_path = Path(args.expect) if args.expect else ft.expectations_path(card)
+    if args.expect and not expect_path.is_file():
+        print(
+            f"{'::error::' if in_actions else '❌ '}No expectations file at {expect_path}."
+        )
+        sys.exit(2)
+    checks, expected = None, None
+    if expect_path.is_file():
+        try:
+            expected = json.loads(expect_path.read_text(encoding="utf-8"))
+            checks = ft.gate(card, expected)
+        except (ValueError, KeyError) as exc:
+            # Misconfigured, not a verdict: fails in report mode too.
+            print(f"{'::error::' if in_actions else '❌ '}{expect_path}: {exc}")
+            sys.exit(2)
+    report = ft.render_report(card, checks, expected)
+    print(report)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a", encoding="utf-8") as fh:
+            fh.write(report + "\n")
+    if checks is None:
+        # Not gated yet is a state of the repo, not a miss: it never fails.
+        print(
+            f"{'::warning::' if in_actions else '⚠️  '}Not gated yet: no expectations "
+            f"committed at {expect_path}. Commit the result of `gaia eval tasks gate "
+            f"<run_dir> --propose {expect_path}` from a run of main to gate this model."
+        )
+        return
+    unmeasured = ft.summarize(card)["unmeasured"]
+    missed = [c.metric for c in checks if not c.ok]
+    if unmeasured:
+        problem = (
+            f"{unmeasured} task(s) not measured: the model backend was unreachable. "
+            "That is an infrastructure failure, not a verdict on the agent; re-run."
+        )
+    elif missed:
+        problem = f"Missed expectations: {', '.join(missed)}."
+    else:
+        problem = ""
+    if not problem:
+        print("✅ Every expectation met.")
+    elif args.enforce:
+        print(f"{'::error::' if in_actions else '❌ '}{problem}")
+        sys.exit(1)
+    else:
+        print(
+            f"{'::warning::' if in_actions else '⚠️  '}{problem} (report only; --enforce fails on this)"
+        )
 
 
 def _handle_schedule(args):
@@ -4191,6 +4391,11 @@ Let me know your answer!
                 f"{card['dishonest']} false success claim(s)"
             )
             print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # Flagship agent tasks: gaia eval tasks run|judge|gate
+        if getattr(args, "eval_command", None) == "tasks":
+            _handle_eval_tasks(args)
             return
 
         # Replay real Claude Code sessions: gaia eval sessions

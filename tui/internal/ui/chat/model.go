@@ -159,8 +159,8 @@ type ChatModel struct {
 	// silently doing nothing.
 	hubClient agents.HubAgentLister
 	messages  []Message
-	activity      []ActivityItem
-	streaming     bool
+	activity  []ActivityItem
+	streaming bool
 	// cancelPending is true from the moment Esc/Ctrl+C requests a cancel until
 	// doneMsg confirms the run's channel actually closed. It exists only to
 	// let the doneMsg handler distinguish "this settlement was a cancel" (so
@@ -413,6 +413,10 @@ type ChatModel struct {
 	// memoryLoading is true from /memory until its fetch resolves (or times
 	// out) — drives the spinner and lets Esc cancel a stuck fetch.
 	memoryLoading bool
+	// memoryColdStart records that the agent was not yet running when the
+	// fetch began, so the wait can say the agent is starting rather than
+	// implying the read itself is slow.
+	memoryColdStart bool
 	// memoryCancelFn cancels an in-flight /memory fetch. nil when none is running.
 	memoryCancelFn context.CancelFunc
 }
@@ -798,6 +802,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.resize()
 		return m, nil
+
+	case conversationClearedMsg:
+		return m.handleConversationCleared(msg)
 
 	case sendQueryMsg:
 		return m.sendQuery(msg.query)
@@ -1587,15 +1594,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
 
 	case "/clear":
-		m.messages = nil
-		// Daemon-transport agents are stateless per turn: the host pushes the
-		// transcript back as `context`, so clearing the view must clear that
-		// too or the "cleared" history keeps being sent.
-		if r, ok := m.client.(client.TranscriptResetter); ok {
-			r.ResetTranscript()
-		}
-		m.updateViewport()
-		return m, nil
+		return m.clearConversation()
 
 	case "/memory":
 		return m.startMemoryFetch()
@@ -2191,7 +2190,11 @@ func (m *ChatModel) updateViewport() {
 	}
 
 	if m.memoryLoading {
-		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render("Loading memory…"))
+		note := "Loading memory…"
+		if m.memoryColdStart {
+			note = "Starting the agent, then loading memory… (first run takes a moment)"
+		}
+		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render(note))
 		sb.WriteString("\n")
 	}
 	if m.memoryView != nil {
@@ -2398,6 +2401,14 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 			panelWidth = 20
 		}
 		return components.Panel(components.PanelError, "error", msg.Content, panelWidth)
+
+	case RoleToolError:
+		// Same wrap-don't-clip reasoning as RoleStatus, in the failure colour:
+		// visible enough to read, quiet enough that a retried call does not
+		// look like the turn ended badly.
+		// Continuation lines hang under the prefix so a multi-line remedy reads
+		// as one aside rather than as text that escaped it.
+		return failStyle.Render(m.wrapForPane("  [x] " + strings.ReplaceAll(msg.Content, "\n", "\n      ")))
 
 	case RoleStatus:
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status

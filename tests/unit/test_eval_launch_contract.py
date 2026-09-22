@@ -60,6 +60,8 @@ def test_eval_launch_preserves_auth_and_mcp_contract(
     assert command[:2] == ["/test/claude", "-p"]
     assert ("--bare" in command) == bool(api_key)
     assert "--strict-mcp-config" in command
+    # The driver holds the judge's credentials: no shell, file or web tools.
+    assert command[command.index("--tools") + 1] == ""
     assert Path(command[command.index("--mcp-config") + 1]) == runner.MCP_CONFIG
     assert runner.MCP_CONFIG.is_file()
     assert run.call_args.kwargs["cwd"] == str(runner.REPO_ROOT)

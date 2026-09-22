@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -54,10 +55,12 @@ type row struct {
 }
 
 type loadedMsg struct {
-	source HubAgentLister
-	// ctx is the context the fetch ran under, so a result from a load the
-	// panel has since abandoned can be told apart from the current one.
-	ctx          context.Context
+	// gen is the load generation this fetch belongs to, so a result from a
+	// load the panel has since abandoned can be told apart from the current
+	// one. A plain counter rather than the client or the context: comparing
+	// interface values panics at runtime if the dynamic type is uncomparable,
+	// which a HubAgentLister passed by value could be.
+	gen          int64
 	rows         []row
 	onlyFlagship bool
 	err          error
@@ -78,12 +81,31 @@ type Model struct {
 
 	selected      int
 	width, height int
+	// gen identifies the load that is currently current for this panel. Unique
+	// process-wide (see loadGen), so a result can be matched not only against
+	// an earlier load of THIS panel but against one from a panel already gone.
+	gen int64
 }
+
+// loadGen hands out generation numbers that are unique across every panel this
+// process ever opens, not just within one. A per-panel counter starting at zero
+// would let a closed panel's in-flight fetch land on a freshly opened one —
+// both would be at generation zero — and replace its list with the cancelled
+// load's error.
+var loadGen atomic.Int64
 
 // New builds a panel that will load its data on Init. client must not be nil.
 func New(client HubAgentLister, width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
-	return Model{ctx: ctx, cancel: cancel, client: client, loading: true, width: width, height: height}
+	return Model{
+		ctx:     ctx,
+		cancel:  cancel,
+		client:  client,
+		gen:     loadGen.Add(1),
+		loading: true,
+		width:   width,
+		height:  height,
+	}
 }
 
 func (m Model) Init() tea.Cmd { return m.load() }
@@ -99,6 +121,7 @@ func (m Model) Init() tea.Cmd { return m.load() }
 func (m *Model) abandonLoad() {
 	m.cancel()
 	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.gen = loadGen.Add(1)
 }
 
 // load attaches to a running daemon only (start=false), matching `gaia tui
@@ -107,21 +130,22 @@ func (m *Model) abandonLoad() {
 func (m Model) load() tea.Cmd {
 	c := m.client
 	ctx := m.ctx
+	gen := m.gen
 	return func() tea.Msg {
 		cat, err := c.Catalog(ctx, false, true, false)
 		if err != nil {
-			return loadedMsg{source: c, ctx: ctx, err: err}
+			return loadedMsg{gen: gen, err: err}
 		}
 		// Zero agents (a fresh pip install the daemon is up for another
 		// reason) has no other agent to switch to either — same message as
 		// the flagship-only case.
 		if len(cat.Agents) == 0 || (len(cat.Agents) == 1 && cat.Agents[0].ID == catalog.FlagshipID) {
-			return loadedMsg{source: c, ctx: ctx, onlyFlagship: true}
+			return loadedMsg{gen: gen, onlyFlagship: true}
 		}
 
 		runtimes, err := c.Agents(ctx, false)
 		if err != nil {
-			return loadedMsg{source: c, ctx: ctx, err: err}
+			return loadedMsg{gen: gen, err: err}
 		}
 		running := make(map[string]bool, len(runtimes))
 		for _, rt := range runtimes {
@@ -147,7 +171,7 @@ func (m Model) load() tea.Cmd {
 			}
 			return rows[i].id < rows[j].id
 		})
-		return loadedMsg{source: c, ctx: ctx, rows: rows}
+		return loadedMsg{gen: gen, rows: rows}
 	}
 }
 
@@ -161,7 +185,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Drop a result from a load the panel has abandoned (a selection the
 		// host did not follow through on, then a re-show) — it would
 		// overwrite the live list with a "context canceled" error.
-		if (v.source != nil && v.source != m.client) || (v.ctx != nil && v.ctx != m.ctx) {
+		if v.gen != m.gen {
 			return m, nil
 		}
 		m.loading = false
