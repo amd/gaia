@@ -369,6 +369,28 @@ def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) 
     return ctx
 
 
+def active_profile_ctx_size() -> int:
+    """Context window this machine's configured device profile expects.
+
+    For callers that must judge a reported ``n_ctx`` but carry no device of
+    their own — the context-overflow classifiers. A machine runs one profile,
+    so the persisted ``GaiaConfig.default_device`` is the answer; deriving it
+    here is what keeps a correctly loaded NPU model at ``NPU_CTX_SIZE`` from
+    reading as an undersized load.
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        device = GaiaConfig.load().default_device
+    except GaiaConfigError as exc:
+        raise GaiaConfigError(
+            f"Cannot resolve the inference device to size the expected context "
+            f"window: {exc} Fix or delete {GaiaConfig.config_path()}, or run "
+            "`gaia config set default_device gpu`."
+        ) from exc
+    return profile_ctx_size(device)
+
+
 def resolve_effective_ctx_size(
     requested_ctx: int, max_context_window: Optional[int]
 ) -> int:
