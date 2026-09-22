@@ -86,6 +86,21 @@ class TestGitGlobalFlags:
         # -c can set core.fsmonitor / core.pager, which run a command on `status`.
         assert _split(command) is not None
 
+    def test_an_attached_short_option_says_how_to_rewrite_it(self):
+        # Valid git, but the walk matches whole tokens — refusing it is fine,
+        # refusing it without naming the fix is what burned a turn.
+        error = _split("git -C/tmp status")["error"]
+        assert "'-C /tmp'" in error
+        assert "not recognized" not in error
+
+    def test_an_attached_forbidden_option_gives_the_real_reason(self):
+        error = _split("git -ccore.fsmonitor=evil status")["error"]
+        assert "'-c' is not allowed" in error
+
+    def test_a_genuinely_unknown_option_still_says_so(self):
+        error = _split("git --frobnicate status")["error"]
+        assert "'--frobnicate' is not recognized" in error
+
     def test_path_flags_resolve_like_git(self, tmp_path):
         values = _git_path_flag_values(
             ["git", "-C", "a", "--git-dir=b", "-C", "c", "status"], str(tmp_path)

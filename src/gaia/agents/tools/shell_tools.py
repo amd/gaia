@@ -202,6 +202,32 @@ GIT_FORBIDDEN_GLOBAL_FLAGS = {
 }
 
 
+def _unrecognized_git_option_error(name: str) -> str:
+    """Why *name* stopped the walk, phrased so the caller can act on it.
+
+    Git lets a short option carry its value attached (``-C/tmp``), but the walk
+    matches whole tokens, so the plain "not recognized" text named a flag the
+    caller never wrote and left nothing to change. The attached form stays
+    refused — teaching the `-C` sandbox check a second way to split a token is
+    how that sandbox springs a leak.
+    """
+    prefix = name[:2]
+    if prefix in GIT_FORBIDDEN_GLOBAL_FLAGS:
+        return (
+            f"Git global option '{prefix}' is not allowed: "
+            f"{GIT_FORBIDDEN_GLOBAL_FLAGS[prefix]}."
+        )
+    if prefix in GIT_GLOBAL_FLAGS_WITH_VALUE:
+        return (
+            f"Git global option '{prefix}' needs its value as a separate word: "
+            f"write '{prefix} {name[2:]}', not '{name}'."
+        )
+    return (
+        f"Git global option '{name}' is not recognized, so the subcommand "
+        "behind it cannot be identified."
+    )
+
+
 def _resolve_git_subcommand(cmd_parts: list) -> tuple:
     """Step over git's global options to find the real subcommand.
 
@@ -234,10 +260,7 @@ def _resolve_git_subcommand(cmd_parts: list) -> tuple:
         if name in GIT_GLOBAL_FLAGS_NO_VALUE:
             index += 1
             continue
-        return None, (
-            f"Git global option '{name}' is not recognized, so the subcommand "
-            "behind it cannot be identified."
-        )
+        return None, _unrecognized_git_option_error(name)
 
     return None, "No git subcommand was given."
 
