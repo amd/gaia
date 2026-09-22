@@ -380,7 +380,16 @@ class GaiaCliClient:
                 yield chunk
 
         except Exception as e:
-            error_message = f"❌ Error: {str(e)}"
+            # A backend string like "Max length reached!" tells the user
+            # nothing — hand back the typed remediation when we recognise it.
+            from gaia.llm.providers.lemonade import classify_lemonade_exception
+
+            classified = classify_lemonade_exception(e)
+            error_message = (
+                f"❌ Error: {classified.user_message}\n   Details: {e}"
+                if classified
+                else f"❌ Error: {e}"
+            )
             self.log.error(error_message)
             print(error_message)
             yield error_message
@@ -453,7 +462,8 @@ class GaiaCliClient:
 
             self.log.error(f"Error in chat: {str(e)}")
             classified = classify_lemonade_exception(e)
-            print(f"❌ Error: {classified.user_message if classified else str(e)}")
+            detail = f"\n   Details: {e}" if classified else ""
+            print(f"❌ Error: {classified.user_message if classified else e}{detail}")
             sys.exit(1)
 
 

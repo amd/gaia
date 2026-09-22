@@ -322,6 +322,120 @@ def test_cli_chat_still_prints_an_unclassifiable_error(capsys) -> None:
     assert "disk on fire" in out
 
 
+def _run_cli_send_message_raising(exc: Exception, capsys) -> str:
+    """Drive the live ``gaia prompt`` error path and return what it printed.
+
+    ``async_main`` routes ``prompt`` to ``GaiaCliClient.prompt`` ->
+    ``send_message``; ``GaiaCliClient.chat`` has no in-tree caller.
+    """
+    import asyncio
+    import logging
+
+    from gaia import cli as cli_mod
+
+    client = object.__new__(cli_mod.GaiaCliClient)
+    client.log = logging.getLogger("test_cli_send_message")
+    client.model = "test-model"
+    client.max_tokens = 64
+
+    class _RaisingLLM:
+        def generate(self, *_args, **_kwargs):
+            raise exc
+
+    client.llm_client = _RaisingLLM()
+
+    async def _drain() -> None:
+        async for _ in client.send_message("hello"):
+            pass
+
+    asyncio.run(_drain())
+    return capsys.readouterr().out
+
+
+def test_cli_prompt_surfaces_the_typed_message_not_the_backend_string(capsys) -> None:
+    _set_device("npu")
+
+    out = _run_cli_send_message_raising(
+        RuntimeError(
+            "request (67000 tokens) exceeds the available context size "
+            f"({NPU_CTX_SIZE} tokens)"
+        ),
+        capsys,
+    )
+
+    assert "context window" in out, "names what failed"
+    assert "fresh task" in out, "names what to do next"
+
+
+def test_cli_prompt_keeps_the_backend_detail_alongside_the_typed_message(
+    capsys,
+) -> None:
+    """The typed sentence replaces the raw string as the headline, not the
+    diagnostics — a connection failure still names the server it tried."""
+    _set_device("gpu")
+
+    out = _run_cli_send_message_raising(
+        ConnectionError("Connection refused to http://localhost:8000"), capsys
+    )
+
+    assert "Details:" in out
+    assert "http://localhost:8000" in out
+
+
+def test_cli_prompt_still_prints_an_unclassifiable_error(capsys) -> None:
+    out = _run_cli_send_message_raising(RuntimeError("disk on fire"), capsys)
+
+    assert "disk on fire" in out
+
+
+# ── A corrupt config must not replace the error being handled ───────────
+
+
+def _corrupt_config() -> None:
+    config_mod.GAIA_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    config_mod.GAIA_CONFIG_FILE.write_text("{not json", encoding="utf-8")
+
+
+def test_payload_classifier_survives_a_corrupt_config() -> None:
+    """Classifiers run inside ``except`` handlers — raising there would
+    replace the overflow the user actually hit with a config traceback."""
+    _corrupt_config()
+
+    err, handled = _classify_lemonade_response(_overflow_payload(NPU_CTX_SIZE))
+
+    assert handled
+    assert isinstance(err, LemonadeContextOverflowError)
+    assert err.retryable is False, "cannot promise a reload it cannot size"
+
+
+def test_exception_classifier_survives_a_corrupt_config() -> None:
+    from gaia.llm.providers.lemonade import classify_lemonade_exception
+
+    _corrupt_config()
+
+    err = classify_lemonade_exception(_overflow_exception(NPU_CTX_SIZE))
+
+    assert isinstance(err, LemonadeContextOverflowError)
+    assert err.retryable is False
+
+
+def test_cli_prompt_survives_a_corrupt_config(capsys) -> None:
+    """End to end: the user still gets the overflow remediation, not a
+    ``GaiaConfigError`` traceback from inside the handler."""
+    _corrupt_config()
+
+    out = _run_cli_send_message_raising(
+        RuntimeError(
+            "request (67000 tokens) exceeds the available context size "
+            f"({NPU_CTX_SIZE} tokens)"
+        ),
+        capsys,
+    )
+
+    assert "context window" in out
+    assert "GaiaConfigError" not in out
+
+
 # ── The non-retryable message has to stand on its own ───────────────────
 
 

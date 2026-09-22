@@ -110,6 +110,22 @@ class LemonadeContextOverflowError(LemonadeError):
     )
 
 
+def _loaded_below_profile(n_ctx: int) -> bool:
+    """Was the model loaded below the active profile's window?
+
+    Classifiers run inside ``except`` handlers, so an unreadable config must
+    not raise here and replace the error the user actually hit; log it and
+    leave the overflow non-retryable rather than promise a reload.
+    """
+    from gaia.config import GaiaConfigError
+
+    try:
+        return 0 < n_ctx < active_profile_ctx_size()
+    except GaiaConfigError as exc:
+        logger.error("Cannot size the expected context window: %s", exc)
+        return False
+
+
 class LemonadeNetworkError(LemonadeError):
     """Lemonade Server is unreachable (connection refused / DNS / TLS).
 
@@ -262,7 +278,7 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         if not n_ctx_reported and isinstance(err, dict):
             n_ctx_reported = err.get("n_ctx") or 0
         err_instance = LemonadeContextOverflowError(payload=response)
-        if 0 < n_ctx_reported < active_profile_ctx_size():
+        if _loaded_below_profile(n_ctx_reported):
             err_instance.retryable = True
         return err_instance, True
     # Distinguish "upstream model call timed out" (reachable Lemonade,
@@ -358,7 +374,7 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             m = re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
         # Same threshold as ``_classify_lemonade_response``: below the active
         # profile's window the model was loaded wrong and a reload fixes it.
-        if m and 0 < int(m.group(1)) < active_profile_ctx_size():
+        if m and _loaded_below_profile(int(m.group(1))):
             err.retryable = True
         return err
     # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
