@@ -205,6 +205,62 @@ def _matches_dev_src_dir_shape(path: Path, agent_id: str) -> bool:
     return tuple(p.lower() for p in tail) == tuple(t.lower() for t in expected_tail)
 
 
+def _dev_src_dir_agent_id(path: Path) -> Optional[str]:
+    """The agent id *path* is the dev-src dir of, or ``None`` if it isn't one.
+
+    Matches ``hub/agents/<any-id>/python`` with the agent slot wildcarded, so a
+    caller who pointed at ANOTHER agent's source tree can be told that, rather
+    than being told they passed a checkout root.
+    """
+    parts = path.parts
+    if len(parts) < 4:
+        return None
+    head, agents, _, tail = (p.lower() for p in parts[-4:])
+    if (head, agents, tail) != ("hub", "agents", "python"):
+        return None
+    return parts[-2]
+
+
+def _dev_src_dir_shape_error(resolved: Path, agent_id: str) -> str:
+    """Explain why *resolved* isn't ``agent_id``'s dev-src dir (issue #3852).
+
+    A concrete "pass this instead" path is only named when it exists on disk —
+    blindly joining the expected tail onto whatever was typed turns a typo into
+    a longer typo and sends the caller to a path that was never there.
+    """
+    expected = "/".join(_dev_src_dir_tail(agent_id))
+    other_id = _dev_src_dir_agent_id(resolved)
+    if other_id is not None:
+        sibling = resolved.parent.parent / agent_id / "python"
+        instead = (
+            f"pass '{sibling}' instead"
+            if sibling.is_dir()
+            else f"pass that checkout's {expected} directory instead"
+        )
+        return (
+            f"--dev-src-dir points at the '{other_id}' agent's source "
+            f"directory, but the agent requested is '{agent_id}'. Got "
+            f"'{resolved}'; {instead}, or start the other agent with "
+            f"`gaia daemon start-agent {other_id}`."
+        )
+
+    corrected = agent_dev_src_dir(resolved, agent_id)
+    if corrected.is_dir():
+        return (
+            f"--dev-src-dir must point at the {expected} directory inside a "
+            f"checkout, not the checkout root. Got '{resolved}'; pass "
+            f"'{corrected}' instead."
+        )
+
+    return (
+        f"--dev-src-dir must be an absolute path ending in {expected} — the "
+        f"agent's source directory inside a checkout. Got '{resolved}', which "
+        f"is neither that shape nor a checkout containing it. Check it for a "
+        f"typo, or pass the {expected} directory of the checkout you want to "
+        f"run from."
+    )
+
+
 def repo_root_from_agent_dev_src_dir(dev_src_dir: Path, agent_id: str) -> Path:
     """Invert :func:`agent_dev_src_dir`: recover the repo root a per-agent
     dev-mode source dir was joined from.
@@ -302,10 +358,10 @@ def resolve_caller_dev_src_dir(
 
     *explicit* is validated client-side against the ``hub/agents/<agent_id>/
     python`` shape (issue #2742) before it is ever sent to the daemon — a repo
-    root passed by mistake fails here, naming the exact corrected path,
-    instead of reaching the daemon and failing with
-    :func:`repo_root_from_agent_dev_src_dir`'s internal "restart remedy"
-    wording.
+    root passed by mistake fails here, naming the corrected path when that
+    path exists (see :func:`_dev_src_dir_shape_error`), instead of reaching
+    the daemon and failing with :func:`repo_root_from_agent_dev_src_dir`'s
+    internal "restart remedy" wording.
 
     Raises:
         DevSrcDirResolutionError: *explicit* is not an absolute path (a
@@ -326,12 +382,7 @@ def resolve_caller_dev_src_dir(
             )
         resolved = candidate.expanduser().resolve()
         if not _matches_dev_src_dir_shape(resolved, agent_id):
-            corrected = agent_dev_src_dir(resolved, agent_id)
-            raise DevSrcDirResolutionError(
-                f"--dev-src-dir must point at the hub/agents/{agent_id}/python "
-                f"directory inside a checkout, not the checkout root. Got "
-                f"'{resolved}'; pass '{corrected}' instead."
-            )
+            raise DevSrcDirResolutionError(_dev_src_dir_shape_error(resolved, agent_id))
         return resolved
 
     resolved_cwd = cwd or Path.cwd()

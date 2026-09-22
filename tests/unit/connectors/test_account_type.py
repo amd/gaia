@@ -79,7 +79,11 @@ def test_msa_tenant_is_the_documented_consumers_guid():
     ],
 )
 def test_provider_classify_account_type(claims, expected):
-    assert MicrosoftOAuthProvider.classify_account_type(claims) == expected
+    # `common` admits both kinds, so the authority contributes nothing here and
+    # the claims alone decide — the authority path is covered in
+    # test_microsoft_no_openid.py.
+    provider = MicrosoftOAuthProvider(client_id="test-client", tenant="common")
+    assert provider.classify_account_type(claims) == expected
 
 
 # ----------------------------------------------------------------------
