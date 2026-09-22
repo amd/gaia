@@ -235,6 +235,124 @@ _STARTUP_OVERHEAD_S = (
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
 
+def _resolve_scenario_agent_type(scenario_data: dict, cli_agent_type):
+    """Return the agent a scenario asks for: its own ``agent_type:`` wins."""
+    return scenario_data.get("agent_type") or cli_agent_type
+
+
+def _canonical_agent_type(value):
+    """Resolve legacy aliases so ``doc-lite`` and ``doc`` compare equal.
+
+    Alias resolution alone — no registry discovery, which would need the hub
+    wheels installed in whatever process reads a result back.
+    """
+    if not value:
+        return None
+    from gaia.agents.registry import AgentRegistry
+
+    return AgentRegistry().canonical_id(value)
+
+
+def _read_session_agent_type(backend_url: str, session_id: str, timeout: float = 15.0):
+    """Return the ``agent_type`` the backend stored for *session_id*.
+
+    Raises on any transport or parse failure — a provenance check that guesses
+    is worth nothing.
+    """
+    import requests  # local import — only needed when a scenario actually runs
+
+    url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json().get("agent_type")
+
+
+# Statuses meaning the scenario produced NO measurement, as distinct from
+# "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
+# death scores 0.0 (or null), which is indistinguishable from a model that
+# answered badly, so comparing the two reports infrastructure as a regression.
+# BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
+# integrity gate also counts blocked/skipped outcomes as incomplete.
+_NO_MEASUREMENT_STATUSES = frozenset(
+    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
+)
+
+
+def _stamp_agent_provenance(
+    result: dict,
+    scenario_data: dict,
+    cli_agent_type,
+    backend_url: str,
+    read_session_agent_type=_read_session_agent_type,
+) -> None:
+    """Record requested vs observed agent, failing the scenario on a mismatch.
+
+    The runner asks for an agent in prompt prose, so a driver that drops the
+    kwarg runs the backend default while the result still claims the requested
+    id (#4069). Over HTTP a dropped kwarg reads back as the string ``"chat"``,
+    never ``None`` — so a scenario legitimately requesting ``chat`` is the one
+    case this cannot tell apart.
+
+    Two rules, and they are not the same severity. A **mismatch** is always
+    fatal: the score belongs to an agent nobody asked for. Being **unable to
+    verify** only discards a score, so it downgrades a PASS/FAIL and leaves
+    every other status intact. Nothing is checked when no agent was requested —
+    the backend default is the right answer by definition.
+    """
+    requested = _resolve_scenario_agent_type(scenario_data, cli_agent_type)
+    result["agent_type_requested"] = requested
+    result.setdefault("agent_type_observed", None)
+
+    if not requested:
+        return
+
+    # A scenario that never produced a measurement never got a session either.
+    if result.get("status") in _NO_MEASUREMENT_STATUSES:
+        return
+
+    scenario_id = result.get("scenario_id", scenario_data.get("id", "<unknown>"))
+
+    def _unverifiable(reason: str) -> None:
+        """Discard a score that cannot be attributed; keep any other status."""
+        message = (
+            f"{scenario_id}: requested agent_type '{requested}' but {reason}, so "
+            "the agent that answered cannot be verified."
+        )
+        if result.get("status") in ("PASS", "FAIL"):
+            result["status"] = "INFRA_ERROR"
+            result["error"] = message
+        else:
+            result.setdefault("provenance_warning", []).append(message)
+        print(f"[WARN] {message}", file=sys.stderr)
+
+    session_id = result.get("session_id")
+    if not session_id:
+        _unverifiable(
+            "the eval driver returned no session_id (it must return the one "
+            "create_session gave it in Phase 1)"
+        )
+        return
+
+    try:
+        observed = read_session_agent_type(backend_url, session_id)
+    except Exception as e:  # transport, HTTP status, or malformed body
+        _unverifiable(
+            f"session {session_id} could not be read back from {backend_url} "
+            f"({e}); check the Agent UI backend is still up at that URL"
+        )
+        return
+
+    result["agent_type_observed"] = observed
+    if _canonical_agent_type(observed) != _canonical_agent_type(requested):
+        result["status"] = "INFRA_ERROR"
+        result["error"] = (
+            f"{scenario_id}: requested agent_type '{requested}' but session "
+            f"{session_id} ran '{observed}'. The eval driver dropped the "
+            "agent_type kwarg on create_session; the score measures the wrong "
+            "agent and is discarded."
+        )
+
+
 def _compute_effective_timeout(base_timeout: int, scenario_data: dict) -> int:
     """Return per-scenario timeout covering startup overhead + turns + docs."""
     num_turns = len(scenario_data.get("turns", []))
@@ -536,9 +654,12 @@ Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
 Do NOT call delete_session. Leave the session intact so it can be reviewed in the Agent UI after the eval completes.
 
 ### Phase 6: Return result
-Return a single JSON object to stdout with this structure:
+Return a single JSON object to stdout with this structure.
+`session_id` MUST be the id returned by create_session in Phase 1 — the runner
+reads that session back to verify which agent actually answered.
 {{
   "scenario_id": "...",
+  "session_id": "...",
   "status": "PASS|FAIL|BLOCKED_BY_ARCHITECTURE|INFRA_ERROR|SETUP_ERROR|TIMEOUT|ERRORED",
   "overall_score": 0-10,
   "turns": [
@@ -588,16 +709,6 @@ _SCORE_WEIGHTS = {
 
 # Significant score drop within the same pass/fail status warrants a warning
 _SCORE_REGRESSION_THRESHOLD = 2.0
-
-# Statuses meaning the scenario produced NO measurement, as distinct from
-# "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
-# death scores 0.0 (or null), which is indistinguishable from a model that
-# answered badly, so comparing the two reports infrastructure as a regression.
-# BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
-# integrity gate also counts blocked/skipped outcomes as incomplete.
-_NO_MEASUREMENT_STATUSES = frozenset(
-    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
-)
 
 
 @functools.lru_cache(maxsize=1)
@@ -938,6 +1049,11 @@ def run_scenario_subprocess(
             "required": ["scenario_id", "status", "overall_score", "turns"],
             "properties": {
                 "scenario_id": {"type": "string"},
+                # Not `required`: a driver that aborts before create_session
+                # (Phase 1 step 1) has no id to give. Whether its absence is
+                # fatal depends on the scenario, which a static schema cannot
+                # see, so _stamp_agent_provenance owns that rule.
+                "session_id": {"type": ["string", "null"]},
                 "status": {"type": "string"},
                 "overall_score": {"type": ["number", "null"]},
                 "turns": {"type": "array"},
@@ -1129,6 +1245,9 @@ def run_scenario_subprocess(
 
     # Inject category from scenario YAML — eval agent doesn't include this field
     result.setdefault("category", scenario_data.get("category", "unknown"))
+
+    # Provenance: which agent answered, not which one the runner asked for.
+    _stamp_agent_provenance(result, scenario_data, agent_type, backend_url)
 
     # Trust dimension scores, not LLM arithmetic — overwrite per-turn overall_score
     # with the recomputed weighted sum.  Log when the LLM's value differed by > 0.25.
@@ -1772,6 +1891,8 @@ class AgentEvalRunner:
         extra_corpus_dirs=None,
         tags=None,
         output_format=None,
+        # Not None: _stamp_agent_provenance skips a scenario that requested no
+        # agent, so a null default would silently disarm the provenance check.
         agent_type=DEFAULT_AGENT_TYPE,
     ):
         self.backend_url = backend_url
@@ -1926,6 +2047,10 @@ class AgentEvalRunner:
                 result = {
                     "scenario_id": sid,
                     "category": scenario_data.get("category", "unknown"),
+                    "agent_type_requested": _resolve_scenario_agent_type(
+                        scenario_data, self.agent_type
+                    ),
+                    "agent_type_observed": None,
                     "status": "SKIPPED_NO_DOCUMENT",
                     "overall_score": None,
                     "turns": [],
@@ -1946,6 +2071,9 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
+            scenario_agent_type = _resolve_scenario_agent_type(
+                scenario_data, self.agent_type
+            )
             result = run_scenario_subprocess(
                 scenario_path,
                 scenario_data,
@@ -1958,7 +2086,7 @@ class AgentEvalRunner:
                 extra_corpus_dirs=(
                     self.extra_corpus_dirs if self.extra_corpus_dirs else None
                 ),
-                agent_type=self.agent_type,
+                agent_type=scenario_agent_type,
             )
             results.append(result)
 
@@ -2041,6 +2169,9 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
+                scenario_agent_type = _resolve_scenario_agent_type(
+                    scenario_data, self.agent_type
+                )
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
@@ -2053,7 +2184,7 @@ class AgentEvalRunner:
                     extra_corpus_dirs=(
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
-                    agent_type=self.agent_type,
+                    agent_type=scenario_agent_type,
                 )
                 rerun_results.append(result)
 
