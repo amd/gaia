@@ -1824,12 +1824,11 @@ class ShellToolsMixin:
             """
             Execute a shell command and return its output.
 
-            Chain on one line: 'a && b' on success, 'a || b' on failure,
-            'a; b' always, 'a | b' pipes, 'cd <dir> && b' runs b there. Each
-            is allowlist-checked; one approval covers the line. '2>&1' keeps
-            stderr and '2>/dev/null' drops it; 'PYTHONPATH=. pytest -q' scopes
-            a variable to one command. Other redirections and ` $() &
-            newline are refused.
+            Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
+            'cd <dir> && b'. One approval covers the line; every part is
+            allowlist-checked. '2>&1' keeps stderr, '2>/dev/null' drops it,
+            'VAR=x cmd' scopes a variable. Other redirections and
+            ` $() & newline are refused.
 
             Args:
                 command: Shell command to execute
@@ -1837,8 +1836,7 @@ class ShellToolsMixin:
                 timeout: Max execution time in seconds, for the whole line
 
             Returns:
-                Dictionary with status, combined output, the last command's
-                exit code, and 'steps' (each command with its own code)
+                status, combined output, the last exit code, and 'steps'
             """
             try:
                 # Check rate limits first to prevent DOS

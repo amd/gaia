@@ -228,18 +228,15 @@ class EmailToolsMixin:
         def check_mailbox_access() -> str:
             """Check whether a mailbox is connected and readable.
 
-            Call this first when the user asks about email and you are unsure a
-            mailbox is set up, or when another email tool has just failed. It
-            reports which mailbox was chosen, the connected address, and the
-            inbox unread count.
+            Call this first when the user asks about email and you are
+            unsure a mailbox is set up, or after an email tool fails.
 
-            If `alternatives` is non-empty, another usable mailbox was
-            available and this one won on precedence — tell the user, and that
-            switching means revoking this agent's grant for the mailbox it
-            picked: `gaia connectors grants revoke <provider> installed:gaia`.
+            `alternatives` non-empty means another usable mailbox lost on
+            precedence; switching needs `gaia connectors grants revoke
+            <provider> installed:gaia`.
 
-            Returns the mailbox address and folder counts, or an error naming
-            what the user must do to connect one.
+            Returns the address and folder counts, or an error naming what
+            to fix.
             """
             try:
                 address = mixin._email_call("get_user_email")
