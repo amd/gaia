@@ -1022,7 +1022,9 @@ class LemonadeInstaller:
             )
             # apt-get update exits 0 when only *some* indexes fail, so a Launchpad
             # outage is silent here and resurfaces as "Unable to locate package".
-            outage = diagnose_launchpad_outage(update_result.stdout + update_result.stderr)
+            outage = diagnose_launchpad_outage(
+                update_result.stdout + update_result.stderr
+            )
             if outage:
                 return InstallResult(success=False, error=outage)
             if update_result.returncode != 0:
