@@ -24,7 +24,6 @@ import json
 import pytest
 
 from gaia import config as config_mod
-from gaia.config import GaiaConfigError
 from gaia.llm.lemonade_client import (
     GPU_CTX_SIZE,
     NPU_CTX_SIZE,
@@ -91,6 +90,10 @@ def test_active_profile_ctx_size_defaults_when_no_config_written() -> None:
 
 def test_active_profile_ctx_size_raises_actionably_on_corrupt_config() -> None:
     """A corrupt config must not be guessed past — the device decides the ctx."""
+    # Resolved here, not at module import: test_cli_config.py reloads
+    # gaia.config, which rebinds this class to a new object.
+    from gaia.config import GaiaConfigError
+
     config_mod.GAIA_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     config_mod.GAIA_CONFIG_FILE.write_text("{not json", encoding="utf-8")
 
