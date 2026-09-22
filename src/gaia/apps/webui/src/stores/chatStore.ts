@@ -6,6 +6,10 @@
 import { create } from 'zustand';
 import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData } from '../types';
 
+/** Agent selected for a new task when nothing is stored, and the target the
+ *  selection falls back to when the stored agent is no longer offered. */
+export const FLAGSHIP_AGENT_ID = 'gaia';
+
 interface ChatState {
     // Agents
     agents: AgentInfo[];
@@ -128,10 +132,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Agents
     agents: [],
     activeAgentId: (() => {
-        try { return localStorage.getItem('gaia-active-agent-id') || 'chat'; }
-        catch { return 'chat'; }
+        try { return localStorage.getItem('gaia-active-agent-id') || FLAGSHIP_AGENT_ID; }
+        catch { return FLAGSHIP_AGENT_ID; }
     })(),
-    setAgents: (agents) => set({ agents }),
+    // Re-point a stored selection that the backend no longer offers (a retired
+    // agent, an uninstalled one) so the picker is never highlighting nothing.
+    // An empty list means discovery is still in flight — keep the selection.
+    setAgents: (agents) => set((state) => {
+        if (!agents.length || agents.some((a) => a.id === state.activeAgentId)) {
+            return { agents };
+        }
+        const next = agents.find((a) => a.id === FLAGSHIP_AGENT_ID) ?? agents[0];
+        try { localStorage.setItem('gaia-active-agent-id', next.id); } catch { /* noop */ }
+        return { agents, activeAgentId: next.id };
+    }),
     setActiveAgentId: (id) => {
         try { localStorage.setItem('gaia-active-agent-id', id); } catch { /* noop */ }
         set({ activeAgentId: id });
