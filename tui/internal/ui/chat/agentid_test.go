@@ -11,8 +11,8 @@ func TestChatModelAgentIDIsCatalogIDNotDisplayNameForBothLaunchPaths(t *testing.
 		name string
 		m    ChatModel
 	}{
-		{"direct-CLI (RunAgent)", NewChatModelForCatalogAgent(&nullClient{}, "email", "Email", false)},
-		{"flagship launch", NewChatModelForFlagship(&nullClient{}, "email", "Email", false, false)},
+		{"direct-CLI (RunAgent)", NewChatModelForCatalogAgent(&nullClient{}, "email", "Email", "", false)},
+		{"flagship launch", NewChatModelForFlagship(&nullClient{}, "email", "Email", "", false, false)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -30,13 +30,13 @@ func TestChatModelAgentIDIsCatalogIDNotDisplayNameForBothLaunchPaths(t *testing.
 // --check`. Arming the chat's own first-boot check as well spawns a SECOND
 // Python interpreter for up to 30s on every cold launch.
 func TestAVerifiedFlagshipLaunchDoesNotReCheckSetup(t *testing.T) {
-	verified := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", false, true)
+	verified := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", "", false, true)
 	if verified.setupChecking {
 		t.Error("the gate already proved setup, and the chat is checking it again")
 	}
 
 	// Unverified is the path with no gate in front of it, and it must still ask.
-	unverified := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", false, false)
+	unverified := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", "", false, false)
 	if !unverified.setupChecking {
 		t.Error("an unverified flagship launch skipped the first-boot check entirely")
 	}

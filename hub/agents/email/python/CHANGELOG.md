@@ -9,6 +9,12 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Received-invite grounding now recognizes Google events with omitted
+  organizer flags (#2787).** Calendar tools preserve the provider's explicit
+  organizer signal and treat the authenticated attendee as externally invited
+  when Google omits its default-false `organizer.self` and attendee organizer
+  fields. Mixed sent/received claims remain guarded, so self-organized events
+  cannot be mistaken for received invites.
 - **A content question ("who signed this?", "what date was agreed?") no
   longer comes back unanswerable when the answer is sitting in the mailbox
   (#3773).** `search_messages` used to fetch full bodies only when the model
@@ -131,6 +137,15 @@ contract version is tracked separately as
   anywhere in the query with no notion of quoting, so a colon word inside a
   quoted value was mistaken for an operator. It now only matches outside a
   quoted span; a real unsupported operator that follows one still raises.
+- **A triage summary no longer reads as complete when one mailbox failed
+  during the scan (#3768).** When a provider outage skipped a connected
+  mailbox, the pre-scan envelope recorded it (`degraded`, `mailbox_errors`)
+  but the grounded fallback sentence quoted its counts unqualified — so an
+  urgent message in the skipped mailbox vanished behind a confident
+  all-covered answer. That sentence now carries the same "Outlook couldn't be
+  scanned (token expired); results below are from the rest of your mailboxes
+  only" caveat the suspicious-mail summary already used. A scan where every
+  mailbox answered reads exactly as before.
 
 ### Changed
 
