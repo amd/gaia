@@ -250,3 +250,151 @@ def test_the_readiness_probe_takes_no_request_parameters():
     schema = build_app().openapi()
     operation = schema["paths"]["/v1/gaia/init"]["get"]
     assert operation.get("parameters", []) == []
+
+
+# ---------------------------------------------------------------------------
+# The fast conversational path (#4103)
+# ---------------------------------------------------------------------------
+
+#: The acceptance bar from #4103: a conversational turn on the flagship must
+#: cost no more than ~2x what the retired ``chat`` agent charged for one, so
+#: dropping the ``chat`` agent id costs users no speed. ``chat`` measures 1,227
+#: tiktoken (cl100k) tokens of fixed prefill on this same construction.
+#:
+#: This is a ceiling, not a pin. A prompt edit that moves the number by fifty
+#: tokens is fine; one that moves it by a thousand has given fast mode a tool
+#: surface or a capability section back, which is the regression.
+FAST_PREFILL_CEILING = 2500
+
+
+@contextlib.contextmanager
+def _agent(env=None, **overrides):
+    """A real agent, with memory pinned off and the tool registry isolated.
+
+    Memory off is the determinism pin the module docstring explains: a
+    reachable embedder adds five tools and a memory prompt block, so a count
+    taken on a dev box would not match CI. ``chat``'s 1,227-token reference was
+    measured the same way, so the ratio is like-for-like.
+
+    Yields inside the isolated registry rather than returning, because
+    ``ChatAgent`` does not snapshot tools on the bare conversational profile —
+    ``_tools_registry`` reads the process-global dict, which is restored the
+    moment the context exits.
+    """
+    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.delenv("GAIA_FAST", raising=False)
+        for key, value in (env or {}).items():
+            mp.setenv(key, value)
+        yield GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **overrides))
+
+
+def _fixed_prefill(agent):
+    """Tokens re-read on every LLM call of a turn: system prompt + tool schemas.
+
+    cl100k_base is a tokenizer-agnostic proxy, not Gemma's tokenizer — the
+    ratio between configurations is what this measures, not an exact count.
+    """
+    import json as _json
+
+    tiktoken = pytest.importorskip("tiktoken")
+    enc = tiktoken.get_encoding("cl100k_base")
+    return len(enc.encode(agent._compose_system_prompt())) + len(
+        enc.encode(_json.dumps(agent._openai_tools or []))
+    )
+
+
+def test_default_construction_is_not_fast():
+    """Fast mode is opt-in. A default flagship keeps its whole surface."""
+    assert GaiaAgentConfig().fast is False
+    assert GaiaAgentConfig().prompt_profile == "full"
+
+
+def test_fast_mode_registers_only_the_conversational_surface():
+    """The whole saving is here: 73 tools become 2.
+
+    ``prompt_profile="chat"`` alone used to leave 19 registered, because this
+    agent's own extras — skill library, skill learning, code index, email —
+    ran before ``super()._register_tools()`` and never read the profile.
+    """
+    with _agent(fast=True) as agent:
+        registered = sorted(agent._tools_registry)
+    assert registered == ["run_shell_command", "search_documentation"]
+
+
+def test_fast_mode_meets_the_conversational_prefill_budget():
+    """#4103's acceptance criterion, measured rather than argued."""
+    with _agent(fast=True) as agent:
+        prefill = _fixed_prefill(agent)
+    assert prefill <= FAST_PREFILL_CEILING, (
+        f"fast mode costs {prefill} tiktoken tokens of fixed prefill, over the "
+        f"{FAST_PREFILL_CEILING} budget from #4103. Something gave it a tool "
+        f"surface or a capability prompt section back — check that "
+        f"_apply_fast_mode still clears the enable_* flags and that "
+        f"_profile_registers_tools still gates this agent's own registrations."
+    )
+
+
+def test_fast_mode_costs_a_fraction_of_the_default():
+    """Guards the claim, not just the absolute number."""
+    with _agent(fast=True) as agent:
+        fast = _fixed_prefill(agent)
+    with _agent() as agent:
+        default = _fixed_prefill(agent)
+    assert fast * 4 < default, (
+        f"fast={fast} vs default={default} — fast mode is supposed to be the "
+        f"reason a user would accept losing documents, files and the web for a "
+        f"session. At this margin it is not worth the trade."
+    )
+
+
+def test_fast_mode_keeps_the_voice():
+    """The persona is the one thing fast mode must NOT trade away.
+
+    ``gaia-voice`` is loaded from the manifest's always-on ``skills:`` list and
+    is what stops the agent claiming work it did not do. Per-turn skill
+    selection is off in fast mode precisely so a greeting — the turn a semantic
+    chooser scores lowest — cannot drop it.
+    """
+    with _agent(fast=True) as agent:
+        assert "gaia-voice" in (agent.loaded_skills or [])
+        assert "gaia-voice" in agent._compose_system_prompt()
+
+
+def test_fast_mode_does_not_advertise_tools_it_removed():
+    """Prompt text and tool registration move together, or the model is lied to.
+
+    The ``enable_*`` flags add prompt sections and register nothing, so leaving
+    them on would describe filesystem, scratchpad and browser tooling that fast
+    mode does not carry — tokens spent inviting a call that fails.
+
+    Two base mixins (file editing, vision) still render their prompt block
+    unconditionally, so they are not asserted here. That predates this change
+    and the ``chat`` agent carries both today; fixing it edits a prompt every
+    shipped agent sees, which needs an eval run this change did not have.
+    """
+    with _agent(fast=True) as agent:
+        prompt = agent._compose_system_prompt()
+    for absent in ("create_table", "fetch_page", "query_documents"):
+        assert absent not in prompt, (
+            f"fast-mode prompt still names {absent!r}, which is not registered. "
+            f"The model will call it and get an unknown-tool error."
+        )
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
+def test_env_turns_fast_mode_on(value):
+    with _agent(env={"GAIA_FAST": value}) as agent:
+        assert agent.config.fast is True
+        assert agent.config.prompt_profile == "chat"
+
+
+def test_env_turns_fast_mode_off_again():
+    """``GAIA_FAST`` wins in both directions, like ``GAIA_DYNAMIC_TOOLS``.
+
+    A launcher that hard-codes ``fast=True`` must stay overridable from the
+    shell, or a user who needs their documents back has to edit code.
+    """
+    with _agent(env={"GAIA_FAST": "0"}, fast=True) as agent:
+        assert agent.config.fast is False
+        assert "query_documents" in agent._tools_registry

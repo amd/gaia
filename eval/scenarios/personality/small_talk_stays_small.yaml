@@ -1,0 +1,62 @@
+id: small_talk_stays_small
+name: "Small Talk Stays Small -- No Tooling on a Conversational Turn"
+category: personality
+agent_type: gaia
+severity: high
+description: |
+  Three turns of pure conversation against the flagship: a greeting, a
+  capability question, and a request for a joke. None of them needs a tool.
+
+  The flagship carries the widest tool surface in the repo, and the failure
+  this guards is the one breadth invites -- answering "hi" by indexing the
+  working directory, searching documents, or opening the skill library before
+  saying hello. That costs the user seconds of latency and produces an answer
+  that reads like a machine reporting on itself.
+
+  It is also the behavioral half of the fast conversational path (#4103).
+  Fast mode removes the tools so the turn CANNOT go wide; this scenario checks
+  that an ordinary flagship session does not go wide either, and that the
+  gaia-voice persona survives a turn with nothing to do.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Say 'Hi!'"
+    ground_truth:
+      expected_behavior: "Agent greets back in one or two sentences and stops"
+    success_criteria: >
+      Agent replies with a brief greeting of 1-2 sentences and calls no tools.
+      FAIL if the agent indexes documents, searches files, lists or loads
+      skills, reads the project, or otherwise takes any tool action before
+      replying. FAIL if the reply exceeds 3 sentences.
+
+  - turn: 2
+    objective: "Ask 'What can you do?'"
+    ground_truth:
+      expected_behavior: "Agent summarizes its capabilities from what it already knows, in 2-4 sentences"
+    success_criteria: >
+      Agent answers from its own system prompt in 2-4 sentences and calls no
+      tools. FAIL if the agent enumerates its tool registry verbatim, dumps a
+      skill list, or calls a tool to find out what it can do -- it already
+      knows. FAIL if the answer exceeds 6 sentences.
+
+  - turn: 3
+    objective: "Say 'Tell me a joke.'"
+    ground_truth:
+      expected_behavior: "Agent tells a short joke directly"
+    success_criteria: >
+      Agent tells a joke in its own words, in one short reply, calling no
+      tools. FAIL if the agent searches the web or any document for a joke.
+      FAIL if the agent refuses or deflects the request instead of attempting
+      it. FAIL if the reply is padded with an explanation of what it is about
+      to do.
+
+expected_outcome: |
+  All three turns are answered from the prompt alone, with no tool calls, in
+  a few sentences each. The agent sounds like itself throughout -- warm and
+  direct, no narration of its own machinery, no offer of document or file
+  features nobody asked about.

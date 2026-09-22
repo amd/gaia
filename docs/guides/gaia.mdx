@@ -111,6 +111,28 @@ That count is what the agent *can* do, not what it sees at once: per-turn tool s
 
 **Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
 
+### Fast mode — for a session that's only conversation
+
+Breadth is not free. The tool descriptions and capability instructions are re-read by the model on **every** call of a turn, and a turn is two to five calls — so a session spent entirely on conversation pays for documents, files, and the web without ever using them.
+
+Fast mode drops the agent to a plain conversational surface for the whole session: **1,919 tokens of fixed prompt instead of 17,194**, against the 1,227 the retired Chat agent cost for the same greeting. The personality and honesty rules stay; nothing else does.
+
+```bash
+GAIA_FAST=1               # environment
+```
+
+```python
+GaiaAgentConfig(fast=True)   # GAIA_FAST still overrides this, in both directions
+```
+
+<Warning>
+  **It's session-scoped and one-way.** A fast session has no documents, no files, no web,
+  no images, and no skill library, and it cannot pick them up mid-conversation — the tools
+  were never registered. Start an ordinary session when you need them.
+</Warning>
+
+Use it when you know the session is chat: a voice front-end, a quick question, a kiosk. Leave it off otherwise — the default agent already trims what the model sees per turn, and keeps every capability available.
+
 ### Tools that need your approval
 
 Seven tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
