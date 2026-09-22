@@ -819,10 +819,11 @@ def test_email_tools_are_bundled_for_the_loader():
         "gaia_agent_chat.tool_bundles.FULL_BUNDLES or the loader can never "
         "pull the email tools in as a cohort"
     )
+    assert email.members == set(_inbox_triage_skill().gaia.tools_required)
 
 
 # --------------------------------------------------------------------------
-# per-turn read budget — issue #4086
+# per-turn read budget
 # --------------------------------------------------------------------------
 
 
