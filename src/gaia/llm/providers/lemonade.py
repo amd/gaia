@@ -4,6 +4,7 @@
 
 import json
 import logging
+import re
 from typing import Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
@@ -298,6 +299,102 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         ),
         True,
     )
+
+
+def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
+    """Return a typed ``LemonadeError`` for *exc*, or ``None`` if unrelated.
+
+    Lives here rather than in the chat layer so every surface can reach it —
+    ``gaia.ui`` needs fastapi, which the plain CLI does not have (#2884).
+
+    AgentSDK and the agent loop wrap LLM errors in their own exception types,
+    so a provider-raised ``LemonadeError`` often arrives as a plain
+    ``ValueError``/``RuntimeError`` carrying only the original text. Walk the
+    cause chain first, then pattern-match the message, so a retry decision
+    never depends on the exception type bubbling through unchanged.
+    """
+    # Walk both ``__cause__`` (explicit ``raise ... from e``) and ``__context__``
+    # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
+    # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
+    # for handlers that re-raise without ``from``.
+    #
+    # Cycle protection: tracking visited ids defends against pathological
+    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, LemonadeError):
+            return cur
+        cur = cur.__cause__ or cur.__context__
+
+    raw = str(exc)
+    text = raw.lower()
+    # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412. The
+    # message itself is kept: it names the provider and where to add funds.
+    refused = re.search(
+        r"[^\n:]*refused the request \(http 4(?:02|12)\):[^\n]*", raw, re.IGNORECASE
+    )
+    if refused:
+        return LemonadeCloudAccountError(user_message=refused.group(0).strip())
+    if "no model loaded" in text or "model_not_loaded" in text:
+        return LemonadeModelNotLoadedError()
+    # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
+    # model was never pulled, so this is NOT retryable and NOT the same as
+    # "not loaded". Naming the missing model is actionable (#2243).
+    # "was not found" is anchored to a nearby "model" token so an unrelated
+    # 404 ("file X was not found") isn't mislabelled as a missing model.
+    if (
+        "model_not_found" in text
+        or re.search(r"\bmodel\b[^\n]{0,80}?\bwas not found\b", text)
+        or ("model not found" in text and "not loaded" not in text)
+    ):
+        m = re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
+        return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
+    if "exceed_context_size" in text or "exceeds the available context size" in text:
+        err = LemonadeContextOverflowError()
+        m = re.search(r"context size \((\d+) tokens?\)", text)
+        if not m:
+            m = re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
+        # Same threshold as ``_classify_lemonade_response``: below the active
+        # profile's window the model was loaded wrong and a reload fixes it.
+        if m and 0 < int(m.group(1)) < active_profile_ctx_size():
+            err.retryable = True
+        return err
+    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
+    # hung) from real connectivity failures (#1030). The user-facing remediation
+    # is very different.
+    is_timeout = (
+        "timeout was reached" in text
+        or "timed out" in text
+        or "operation_timeout" in text
+    )
+    is_unreachable = (
+        "connection refused" in text
+        or "could not resolve host" in text
+        or "no route to host" in text
+        or "couldn't connect" in text
+    )
+    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between models
+    # or hit an internal recovery state. Treat them as the network-flavour
+    # transient so the chat layer's reload-and-retry path gets a chance.
+    is_backend_5xx = bool(
+        re.search(r"failed with status 5\d\d", text)
+        or "internal server error" in text
+        or "service unavailable" in text
+        or "bad gateway" in text
+        or "gateway timeout" in text
+    )
+    if is_timeout and not is_unreachable:
+        return LemonadeUpstreamTimeoutError()
+    if (
+        "network_error" in text
+        or "curl error" in text
+        or is_unreachable
+        or is_backend_5xx
+    ):
+        return LemonadeNetworkError()
+    return None
 
 
 class LemonadeProvider(LLMClient):

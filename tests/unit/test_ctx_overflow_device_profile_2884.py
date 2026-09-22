@@ -190,6 +190,77 @@ def test_ui_gpu_threshold_is_the_gpu_profile_window() -> None:
     )
 
 
+# ── The plain-CLI path has to say something actionable ──────────────────
+#
+# ``gaia chat "<message>"`` printed ``str(exc)`` verbatim, so a backend
+# overflow arrived as a bare ``❌ Error: Max length reached!`` — no cause, no
+# next step. The UI path had the classifier; the CLI could not import it,
+# because it lives behind the fastapi-dependent ``gaia.ui`` package.
+
+
+def test_classifier_is_importable_without_the_ui_extras() -> None:
+    """The CLI must reach it without pulling in gaia.ui (fastapi)."""
+    from gaia.llm.providers.lemonade import classify_lemonade_exception
+
+    classified = classify_lemonade_exception(
+        RuntimeError("the request exceeds the available context size (32768 tokens)")
+    )
+    assert isinstance(classified, LemonadeContextOverflowError)
+
+
+def test_ui_helper_still_exposes_the_classifier() -> None:
+    """Existing ``gaia.ui`` callers keep the name they import today."""
+    from gaia.llm.providers.lemonade import classify_lemonade_exception
+
+    assert _classify_chat_exception is classify_lemonade_exception
+
+
+def _run_cli_chat_raising(exc: Exception, capsys) -> str:
+    """Drive ``GaiaCliClient.chat`` to its error path and return what it printed."""
+    import logging
+
+    from gaia import cli as cli_mod
+
+    client = object.__new__(cli_mod.GaiaCliClient)
+    client.log = logging.getLogger("test_cli_chat")
+
+    class _RaisingSDK:
+        def __init__(self, *_args, **_kwargs):
+            raise exc
+
+    original = __import__("gaia.chat.sdk", fromlist=["AgentSDK"])
+    saved = original.AgentSDK
+    original.AgentSDK = _RaisingSDK
+    try:
+        with pytest.raises(SystemExit):
+            client.chat(message="hello")
+    finally:
+        original.AgentSDK = saved
+    return capsys.readouterr().out
+
+
+def test_cli_chat_surfaces_the_typed_message_not_the_backend_string(capsys) -> None:
+    _set_device("npu")
+
+    out = _run_cli_chat_raising(
+        RuntimeError(
+            "request (67000 tokens) exceeds the available context size "
+            f"({NPU_CTX_SIZE} tokens)"
+        ),
+        capsys,
+    )
+
+    assert "context window" in out, "names what failed"
+    assert "fresh task" in out, "names what to do next"
+
+
+def test_cli_chat_still_prints_an_unclassifiable_error(capsys) -> None:
+    """Nothing is swallowed — an unrelated failure keeps its own text."""
+    out = _run_cli_chat_raising(RuntimeError("disk on fire"), capsys)
+
+    assert "disk on fire" in out
+
+
 # ── The non-retryable message has to stand on its own ───────────────────
 
 

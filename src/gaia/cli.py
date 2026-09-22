@@ -447,9 +447,13 @@ class GaiaCliClient:
                 return full_response
 
         except Exception as e:
-            # Check if it's a connection error and provide helpful message
+            # A backend string like "Max length reached!" tells the user
+            # nothing — hand back the typed remediation when we recognise it.
+            from gaia.llm.providers.lemonade import classify_lemonade_exception
+
             self.log.error(f"Error in chat: {str(e)}")
-            print(f"❌ Error: {str(e)}")
+            classified = classify_lemonade_exception(e)
+            print(f"❌ Error: {classified.user_message if classified else str(e)}")
             sys.exit(1)
 
 
