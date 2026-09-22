@@ -1,0 +1,67 @@
+id: skill_file_ops_discovery
+name: "Skill: file-ops -- Find Before You Touch"
+category: tool_selection
+agent_type: gaia
+severity: high
+description: |
+  Golden path for the bundled `file-ops` skill (hub/skills/file-ops). The skill's
+  step 1 is a routing rule the tools themselves do not state: locate by
+  description with `find_files`, locate by contents with `search_file_content`,
+  and confirm the exact path with `get_file_info` BEFORE acting on it. An agent
+  without the skill reads a guessed path directly.
+
+  Read-only by design. No eval scenario writes to disk, and this one does not
+  either -- the skill's write-path rules are covered by the denial in
+  skill_file_ops_guardrails, which creates nothing.
+
+  Skill-dependence: turn 1 requires `load_skill`, and the get_file_info
+  confirmation step appears only in SKILL.md.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load its file-ops skill, then find the Acme API reference file somewhere under eval/corpus without giving it the path, and tell you how long an auth token stays valid."
+    ground_truth:
+      expected_answer: "eval/corpus/documents/api_reference.py -- tokens are issued via /auth/token and expire after 24 hours."
+    success_criteria: |
+      ALL THREE must hold:
+        (1) This turn's agent_tools includes `load_skill` for `file-ops`.
+        (2) The agent locates the file with `find_files` (or
+            `search_file_content`) rather than reading a guessed path, and
+            confirms the path with `get_file_info` before reading it.
+        (3) It answers "24 hours" and names the resolved path.
+      FAIL if the agent calls `read_file` on a path it never discovered or
+      confirmed -- guessing the path from the description is exactly what the
+      skill's step 1 forbids.
+
+  - turn: 2
+    objective: "Ask which file under eval/corpus mentions HTTP 429, without naming the file."
+    ground_truth:
+      expected_answer: "eval/corpus/documents/api_reference.py -- requests are limited to 1000 per hour per token, and exceeding the limit returns HTTP 429."
+    success_criteria: |
+      Agent uses `search_file_content` for this, not `find_files` -- the skill
+      splits the two by what the user knows: a description of the file goes to
+      find_files, a string that must be INSIDE the file goes to
+      search_file_content. Naming the right file via a filename-only search
+      would be luck, since no filename contains "429".
+      Answer must identify api_reference.py and state the 1000 requests/hour
+      limit.
+
+  - turn: 3
+    objective: "Ask for the production and staging base URLs from that same file."
+    ground_truth:
+      expected_answer: "Production https://api.acmecorp.com/v2 and staging https://api-staging.acmecorp.com/v2"
+    success_criteria: |
+      Both URLs are correct, and the agent reports the path it read them from.
+      The skill's step 6 is to state the path rather than answering as if the
+      content arrived from nowhere.
+      FAIL if either URL is wrong or invented.
+
+expected_outcome: |
+  Agent loads the file-ops skill and follows its discovery routing: find by
+  description, search by content, confirm with get_file_info before acting, and
+  name the path it used.

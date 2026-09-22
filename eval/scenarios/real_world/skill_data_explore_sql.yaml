@@ -1,0 +1,72 @@
+id: skill_data_explore_sql
+name: "Skill: data-explore -- Load, Verify, Query"
+category: real_world
+agent_type: gaia
+severity: high
+description: |
+  Golden path for the bundled `data-explore` skill (hub/skills/data-explore).
+  The skill's premise is that an LLM reading numbers off a table gets them
+  subtly wrong, so the data moves into a SQL scratchpad table first. Every
+  question here is an aggregate over all 12 months -- none is answerable by
+  spotting a single cell, which is what separates this from the existing
+  us_labor_statistics_xlsx scenario (single-value lookup on the same file).
+
+  Skill-dependence: turn 1 requires `load_skill`; the COUNT(*)-against-source
+  verification step (step 4) and "show the SQL you ran alongside the result"
+  (step 5) appear only in SKILL.md -- no scratchpad tool docstring asks for
+  either.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: us_labor_xlsx
+      path: "eval/corpus/real_world/spreadsheets/us_labor_statistics_2024.xlsx"
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load its data-explore skill, then load the Monthly Unemployment sheet of the 2024 labor statistics spreadsheet into a scratchpad table and confirm it landed correctly."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: "12 monthly rows loaded (January-December 2024), verified with SELECT COUNT(*) against the source row count."
+    success_criteria: |
+      ALL THREE must hold:
+        (1) This turn's agent_tools includes `load_skill` for `data-explore`.
+        (2) The agent creates a table and inserts all 12 monthly rows -- the
+            skill says load everything, not a sample.
+        (3) The agent VERIFIES the load with a COUNT(*) query and compares the
+            result to the source row count, reporting 12.
+      FAIL if the agent loads the data and answers without the count check.
+      That verification step is the skill's step 4 and is not suggested by any
+      tool docstring.
+
+  - turn: 2
+    objective: "Ask for the total nonfarm payroll change across all of 2024, and how the first half compared with the second half."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: "Total 2024 nonfarm payroll change: 2,522,000. First half (Jan-Jun): 1,493,000. Second half (Jul-Dec): 1,029,000. H1 exceeded H2 by 464,000."
+    success_criteria: |
+      All three figures correct: 2,522,000 total; 1,493,000 H1; 1,029,000 H2
+      (a stated H1-over-H2 gap of 464,000 also passes).
+      The agent must show the SQL it ran alongside the result, per the skill's
+      step 5. FAIL if the numbers arrive with no query shown.
+      FAIL on any wrong total. None of these figures appear in the sheet's own
+      Note rows, so they cannot be lifted -- they must be computed.
+
+  - turn: 3
+    objective: "Ask for the average unemployment rate across 2024, and how many months were strictly above 4.0 percent."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: "Average 2024 unemployment rate: 4.025% (mean of the twelve decimal values). Seven months were strictly above 4.0%: June, July, August, September, October, November, December. May was exactly 4.0% and is excluded."
+    success_criteria: |
+      Average is 4.025% (4.0% or 4.03% after rounding is acceptable if the
+      agent says it rounded). Count of months strictly above 4.0% is 7.
+      Accept 8 ONLY if the agent explicitly states it is counting May's exact
+      4.0% as included and flags the boundary -- naming the ambiguity is the
+      skill's step 6 behaviour. An unexplained 8 is a FAIL.
+      SQL shown alongside the result.
+
+expected_outcome: |
+  Agent loads the data-explore skill, moves the sheet into a scratchpad table,
+  verifies the row count before answering, and computes every aggregate in SQL
+  with the query visible rather than reading figures off the sheet.

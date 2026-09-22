@@ -1,0 +1,79 @@
+id: skill_data_explore_prefix
+name: "Skill: data-explore -- Prefix Rule and Data Limits"
+category: real_world
+agent_type: gaia
+severity: high
+description: |
+  Failure-path counterpart to skill_data_explore_sql. Covers the two things
+  hub/skills/data-explore/SKILL.md calls out as the ways this goes wrong: the
+  `scratch_` table-name prefix ("the single most common failure here"), and
+  answering a question the data cannot support instead of naming the limit.
+
+  Honest note on attribution: the prefix rule is also stated in the `query_data`
+  tool docstring, so a correct prefix alone does not prove the skill loaded.
+  What is skill-only here is the RECOVERY -- the skill says no amount of
+  rephrasing the question fixes a missing prefix, so the agent must fix the
+  table name rather than retry the same query or re-ask the user. Turn 3's
+  reconciliation limit is skill-only outright.
+
+  Skill-dependence: turn 1 requires `load_skill`.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: us_labor_xlsx
+      path: "eval/corpus/real_world/spreadsheets/us_labor_statistics_2024.xlsx"
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load its data-explore skill, then load the Industry Breakdown sheet into a scratchpad table named industries and list the tables it now has."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: "Ten industry rows loaded. The table created as 'industries' is listed and queried as scratch_industries."
+    success_criteria: |
+      ALL THREE must hold:
+        (1) This turn's agent_tools includes `load_skill` for `data-explore`.
+        (2) All 10 industry rows are inserted.
+        (3) Any SELECT the agent runs uses the `scratch_` prefix. If a query
+            errors on a missing table, the agent must CORRECT THE TABLE NAME --
+            not retry the same SQL, not rephrase the question, not ask the user
+            what went wrong. The skill states outright that rephrasing never
+            fixes this.
+      FAIL if the agent loops on the same failing query or hands the error back
+      to the user as if it were unrecoverable.
+
+  - turn: 2
+    objective: "Ask for the net year-over-year job change across all listed industries, and which industries lost jobs and by how much in total."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: "Net across the ten listed industries: +2,020,000. Four industries lost jobs, totalling -195,000: Manufacturing -100,000, Retail Trade -60,000, Information -20,000, Mining & Logging -15,000."
+    success_criteria: |
+      Net figure 2,020,000; exactly 4 industries identified as losing jobs
+      (Manufacturing, Retail Trade, Information, Mining & Logging) totalling
+      -195,000.
+      FAIL if only Manufacturing is named -- that single figure IS in the
+      sheet's Note row and can be lifted without loading anything, so naming it
+      alone does not demonstrate the aggregate was computed.
+      SQL shown alongside the result.
+
+  - turn: 3
+    objective: "Ask whether the industry figures add up to the total nonfarm payroll change for 2024, and what this spreadsheet cannot tell you about it."
+    ground_truth:
+      doc_id: us_labor_xlsx
+      expected_answer: "No. The ten listed industries net +2,020,000 against a monthly total of +2,522,000 -- a gap of about 502,000, because the Industry Breakdown sheet lists only ten industries and is not an exhaustive split of the economy."
+    success_criteria: |
+      Agent states the two totals do NOT reconcile, gives the approximate gap
+      (~502,000), and attributes it to the industry sheet not being exhaustive
+      rather than to an error in the data or its own load.
+      It must also name at least one genuine limit of the dataset -- the sheet
+      carries no demographic or age breakdowns, and no industry-level
+      unemployment rates, only job counts.
+      FAIL if the agent asserts the figures reconcile, or explains the gap by
+      inventing an industry that is not in the sheet.
+
+expected_outcome: |
+  Agent loads the data-explore skill, recovers from a prefix mistake by fixing
+  the table name rather than rephrasing, computes the industry aggregates
+  instead of lifting the sheet's own annotation, and names what the data cannot
+  support instead of forcing a reconciliation.
