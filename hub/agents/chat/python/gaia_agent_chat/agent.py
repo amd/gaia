@@ -28,6 +28,11 @@ from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
 from gaia.agents.base.agent import Agent, default_max_steps
+from gaia.agents.base.checks import (
+    attach_check,
+    check_from_python_run,
+    snippet_target,
+)
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 
@@ -1491,14 +1496,22 @@ No documents are currently indexed.
                     )
                     from gaia.agents.base.artifacts import retain_excerpt
 
-                    return {
-                        "status": "success",
-                        "stdout": retain_excerpt(self, r.stdout, 8000),
-                        "stderr": retain_excerpt(self, r.stderr, 2000),
-                        "return_code": r.returncode,
-                        "has_errors": r.returncode != 0,
-                        "duration_seconds": round(time.monotonic() - start, 2),
-                    }
+                    return attach_check(
+                        {
+                            "status": "success",
+                            "stdout": retain_excerpt(self, r.stdout, 8000),
+                            "stderr": retain_excerpt(self, r.stderr, 2000),
+                            "return_code": r.returncode,
+                            "has_errors": r.returncode != 0,
+                            "duration_seconds": round(time.monotonic() - start, 2),
+                        },
+                        check_from_python_run(
+                            " ".join([file_path, args]).strip(),
+                            r.returncode,
+                            r.stdout,
+                            r.stderr,
+                        ),
+                    )
                 except subprocess.TimeoutExpired:
                     return {
                         "status": "error",
@@ -1595,14 +1608,19 @@ No documents are currently indexed.
                     }
                 finally:
                     snippet.unlink(missing_ok=True)
-                return {
-                    "status": "success",
-                    "stdout": r.stdout[:8000],
-                    "stderr": r.stderr[:2000],
-                    "return_code": r.returncode,
-                    "has_errors": r.returncode != 0,
-                    "duration_seconds": round(time.monotonic() - start, 2),
-                }
+                return attach_check(
+                    {
+                        "status": "success",
+                        "stdout": r.stdout[:8000],
+                        "stderr": r.stderr[:2000],
+                        "return_code": r.returncode,
+                        "has_errors": r.returncode != 0,
+                        "duration_seconds": round(time.monotonic() - start, 2),
+                    },
+                    check_from_python_run(
+                        snippet_target(code), r.returncode, r.stdout, r.stderr
+                    ),
+                )
 
         # VLM tools — analyze_image, answer_question_about_image
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
