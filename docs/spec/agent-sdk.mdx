@@ -75,6 +75,8 @@ class AgentResponse:
     history: Optional[List[str]] = None
     stats: Optional[Dict[str, Any]] = None
     is_complete: bool = True
+    usage: Optional[Dict[str, Any]] = None  # per-call token usage, when reported
+    finish_reason: Optional[str] = None  # "length" = output-token limit cut it off
 ```
 
 ### AgentSDK

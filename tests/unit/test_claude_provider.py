@@ -989,3 +989,77 @@ class TestToolNameSanitization:
         )
         (call,) = json.loads(chunks[-1])[_NATIVE_TC_KEY]
         assert call["function"]["name"] == "rss-digest/fetch_rss"
+
+
+# ---------------------------------------------------------------------------
+# finish_reason (#4054)
+# ---------------------------------------------------------------------------
+
+
+def test_max_tokens_is_reported_as_a_length_finish(fake_anthropic):
+    """The agent loop only continues a cut-off reply if the provider says so."""
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [_text_block("The fix: add")], stop_reason="max_tokens"
+    )
+
+    text = provider.chat([{"role": "user", "content": "q"}])
+
+    assert text == "The fix: add"
+    assert provider.get_last_finish_reason() == "length"
+
+
+def test_a_complete_reply_is_not_reported_as_cut_off(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [_text_block("done")], stop_reason="end_turn"
+    )
+
+    provider.chat([{"role": "user", "content": "q"}])
+
+    assert provider.get_last_finish_reason() == "stop"
+
+
+def test_stream_reports_a_length_finish_once_consumed(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = iter(
+        [
+            SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=10, output_tokens=1)
+                ),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="text_delta", text="The fix: add"),
+            ),
+            SimpleNamespace(
+                type="message_delta",
+                delta=SimpleNamespace(stop_reason="max_tokens"),
+                usage=SimpleNamespace(output_tokens=8192),
+            ),
+        ]
+    )
+
+    chunks = list(provider.chat([{"role": "user", "content": "q"}], stream=True))
+
+    assert chunks == ["The fix: add"]
+    assert provider.get_last_finish_reason() == "length"
+
+
+def test_a_new_call_clears_the_previous_finish_reason(fake_anthropic):
+    """A stale "length" would make the next good reply look cut off."""
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [_text_block("The fix: add")], stop_reason="max_tokens"
+    )
+    provider.chat([{"role": "user", "content": "q"}])
+
+    provider._client.messages.create.return_value = _response(
+        [_text_block("done")], stop_reason="end_turn"
+    )
+    provider.chat([{"role": "user", "content": "q"}])
+
+    assert provider.get_last_finish_reason() == "stop"

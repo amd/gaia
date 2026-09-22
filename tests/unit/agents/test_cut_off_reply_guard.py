@@ -152,6 +152,36 @@ def _stub_chat(agent, *replies):
     return sent
 
 
+def _stub_chat_stream(agent, *replies):
+    """Same contract as ``_stub_chat``, over the streaming API.
+
+    The loop reads the finish reason off the terminator chunk here, not the
+    response object, so the non-streaming tests cannot cover this path — and
+    streaming is what the Agent UI runs.
+    """
+    replies = list(replies)
+    sent = []
+
+    def _send_stream(messages, *_, **__):
+        sent.append([dict(m) for m in messages])
+        text, finish_reason = replies.pop(0)
+        for piece in (text[: len(text) // 2], text[len(text) // 2 :]):
+            chunk = MagicMock()
+            chunk.is_complete = False
+            chunk.text = piece
+            yield chunk
+        terminator = MagicMock()
+        terminator.is_complete = True
+        terminator.text = ""
+        terminator.stats = {}
+        terminator.finish_reason = finish_reason
+        yield terminator
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages_stream = MagicMock(side_effect=_send_stream)
+    return sent
+
+
 def _final(result):
     return strip_verification_scope(result["result"]).strip()
 
@@ -173,6 +203,36 @@ def test_cut_off_reply_is_continued_not_answered(agent, reply):
     assert "cut off at the output-token limit" in sent[1][-1]["content"]
     assert edits == ["build_tools/github_actions/amdgpu_family_matrix.py"]
     assert _final(result) == "Added trigger_test_label_only to gfx90a."
+
+
+def test_cut_off_reply_is_continued_when_streaming(agent):
+    agent.streaming = True
+    edits = _register_edit_file(agent)
+    sent = _stub_chat_stream(
+        agent,
+        (TR8319_CB_REPLY, "length"),
+        (EDIT_CALL, "tool_calls"),
+        ("Added trigger_test_label_only to gfx90a.", "stop"),
+    )
+
+    result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
+
+    assert len(sent) == 3
+    assert sent[1][-2] == {"role": "assistant", "content": TR8319_CB_REPLY}
+    assert "cut off at the output-token limit" in sent[1][-1]["content"]
+    assert edits == ["build_tools/github_actions/amdgpu_family_matrix.py"]
+    assert _final(result) == "Added trigger_test_label_only to gfx90a."
+
+
+def test_complete_streamed_reply_is_not_reprompted(agent):
+    agent.streaming = True
+    answer = "gfx90a is AMD's CDNA 2 architecture, used by the MI200 series."
+    sent = _stub_chat_stream(agent, (answer, "stop"))
+
+    result = agent.process_query("What about gfx90a?", max_steps=10)
+
+    assert len(sent) == 1
+    assert _final(result) == answer
 
 
 def test_repeated_cut_offs_end_with_an_honest_failure(agent):
