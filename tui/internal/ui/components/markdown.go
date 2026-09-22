@@ -21,6 +21,25 @@ var (
 	styleName = styles.DarkStyle
 )
 
+// blockquoteIndentDeficit compensates for a bug in glamour itself: its
+// wrap-budget math (ansi.BlockStack.Width) charges one column per unit of
+// StyleBlock.Indent for a blockquote's indent token, but the indent writer
+// (muesli/reflow's indent.Writer) renders that token verbatim regardless of
+// its actual display width — and both glamour's own shipped styles and ours
+// (markdown_style.go) use the two-column "│ " token with Indent left at its
+// default of 1. Every wrapped blockquote line therefore comes out one column
+// over the requested width, which used to force the chat panel's own re-wrap
+// step to split the overflow onto a new line with no indent at all (#2518).
+//
+// Indent and IndentToken are the same field in glamour's config — raising
+// Indent to 2 to match the token's real width would make the indent writer
+// print the token TWICE ("│ │ ") instead of charging more for one write, so
+// the budget can't be fixed at the token's own level. Charging every element
+// one column less here closes the gap for blockquotes and, since answers
+// rarely fill every last column anyway, costs nothing visible on anything
+// else.
+const blockquoteIndentDeficit = 1
+
 // PrimeRenderer resolves the style and builds the renderer BEFORE Bubble Tea
 // owns stdin. Call it once per process, from the launch path.
 //
@@ -71,6 +90,11 @@ func buildLocked() error {
 	}
 	built = true
 
+	effectiveWrap := wordWrap - blockquoteIndentDeficit
+	if effectiveWrap < 1 {
+		effectiveWrap = 1
+	}
+
 	// PreservedNewLines because this renders CHAT, not a document. Markdown
 	// folds a single newline into a space, which is right for prose a human
 	// wrote in a file and wrong for an answer a model laid out line by line:
@@ -78,7 +102,7 @@ func buildLocked() error {
 	// straddles the reflowed wrap gets split across two lines. The model's own
 	// line structure is the closest thing to its intent about layout.
 	opts := []glamour.TermRendererOption{
-		glamour.WithWordWrap(wordWrap),
+		glamour.WithWordWrap(effectiveWrap),
 		glamour.WithPreservedNewLines(),
 	}
 	switch {

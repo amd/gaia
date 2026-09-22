@@ -269,6 +269,8 @@ class AgentLoop:
             return LoopDirective("paused", reason="agent_mode=manual")
 
         # ── Hourly rate limit ────────────────────────────────────────────
+        # Check before the session/goal lookups so a spent budget short-circuits;
+        # the counter is only incremented once a tick reaches _execute_tick.
         now = time.time()
         if now - self._hour_start > 3600:
             self._hour_start = now
@@ -278,7 +280,6 @@ class AgentLoop:
                 "AgentLoop: hourly rate limit reached (%d calls)", _HOURLY_LIMIT
             )
             return LoopDirective("idle", reason="hourly rate limit")
-        self._calls_this_hour += 1
 
         # ── Session selection ────────────────────────────────────────────
         session_id = trigger.session_id or await self._get_active_session()
@@ -299,6 +300,8 @@ class AgentLoop:
             return LoopDirective("idle")
 
         # ── Execute tick ─────────────────────────────────────────────────
+        # Only a tick that reaches here spends hourly budget.
+        self._calls_this_hour += 1
         directive = await self._execute_tick(session_id, session, goals)
         return directive
 

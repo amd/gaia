@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -499,11 +500,66 @@ func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
 		t.Fatalf("decode ensure request body: %v", err)
 	}
+	if _, ok := body["mode"]; ok {
+		t.Fatalf("a caller with no mode preference must not request one, got %q", body["mode"])
+	}
+	if _, ok := body["dev_src_dir"]; ok {
+		t.Fatal("a preference-free ensure request must not contain dev_src_dir")
+	}
+}
+
+// A launch that expresses no preference must not ask for one. The daemon only
+// conflicts on an EXPLICIT, differing mode, so sending "user" on everyone's
+// behalf 409s against a sidecar someone already started in dev.
+func TestEnsureAgentOmitsModeWithoutAPreference(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
+
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+
+	if got := strings.TrimSpace(string(f.lastEnsureBody())); got != "{}" {
+		t.Fatalf("ensure request body = %s, want {}", got)
+	}
+}
+
+// The other half of the contract: an explicit preference is still sent, so a
+// user who asked for a mode still gets the daemon's loud conflict.
+func TestEnsureAgentSendsAnExplicitUserMode(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "user")
+
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
+		t.Fatalf("decode ensure request body: %v", err)
+	}
 	if body["mode"] != "user" {
 		t.Fatalf("ensure request mode = %q, want user", body["mode"])
 	}
 	if _, ok := body["dev_src_dir"]; ok {
 		t.Fatal("user-mode ensure request must not contain dev_src_dir")
+	}
+}
+
+func TestCallerModeReportsWhetherThePreferenceIsExplicit(t *testing.T) {
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
+	if mode, explicit := CallerMode("email"); explicit {
+		t.Fatalf("an unset variable is no preference, got %q explicit=%v", mode, explicit)
+	}
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+	if mode, explicit := CallerMode("email"); !explicit || mode != "dev" {
+		t.Fatalf("CallerMode = %q, %v; want dev, true", mode, explicit)
+	}
+	// An agent with no mode variable at all can never express a preference.
+	if mode, explicit := CallerMode("word-count"); explicit {
+		t.Fatalf("an agent with no mode switch must report no preference, got %q", mode)
 	}
 }
 
@@ -961,6 +1017,12 @@ func TestDoFailsWhenTheRefreshedTokenIsAlsoRejected(t *testing.T) {
 // that leads with `pip install -e .` points at a workflow they cannot perform.
 func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	// Isolate from any real install evidence on the box running this test
+	// (a dev machine's own ~/.gaia or active venv), so the "genuinely
+	// uninstalled" branch is the one exercised here.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("VIRTUAL_ENV", "")
 
 	_, err := gaiaDaemonStart(context.Background())
 	if err == nil {
@@ -985,6 +1047,76 @@ func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	if repoPath >= 0 && repoPath < installer {
 		t.Errorf("the repo-only remediation leads the message:\n%s", msg)
 	}
+}
+
+// TestGaiaDaemonStartInstalledButUnresolvable guards the other half of #2539:
+// someone who already has GAIA installed (a venv whose bin dir isn't on this
+// process's PATH, or a machine with a prior `gaia init`) must not be told to
+// (re)install it — the curl/pip remediation is actively wrong advice there.
+func TestGaiaDaemonStartInstalledButUnresolvable(t *testing.T) {
+	t.Run("active venv missing from PATH", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+
+		venv := t.TempDir()
+		binDir := filepath.Join(venv, "bin")
+		if runtime.GOOS == "windows" {
+			binDir = filepath.Join(venv, "Scripts")
+		}
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		name := "gaia"
+		if runtime.GOOS == "windows" {
+			name = "gaia.exe"
+		}
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("VIRTUAL_ENV", venv)
+
+		_, err := gaiaDaemonStart(context.Background())
+		if err == nil {
+			t.Fatal("expected an error with `gaia` absent from PATH")
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "curl -fsSL") {
+			t.Errorf("someone with an installed venv should not be told to reinstall:\n%s", msg)
+		}
+		if !strings.Contains(msg, "installed") || !strings.Contains(msg, venv) {
+			t.Errorf("message should name the venv it found as evidence:\n%s", msg)
+		}
+	})
+
+	t.Run("prior gaia init leaves ~/.gaia/config.json", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("VIRTUAL_ENV", "")
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+
+		gaiaDir := filepath.Join(home, ".gaia")
+		if err := os.MkdirAll(gaiaDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gaiaDir, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := gaiaDaemonStart(context.Background())
+		if err == nil {
+			t.Fatal("expected an error with `gaia` absent from PATH")
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "curl -fsSL") {
+			t.Errorf("someone with a prior `gaia init` should not be told to reinstall:\n%s", msg)
+		}
+		if !strings.Contains(msg, "config.json") {
+			t.Errorf("message should name the config file it found as evidence:\n%s", msg)
+		}
+	})
 }
 
 // TestVersionErrorNamesBothVersions pins the two halves of a skew message.
