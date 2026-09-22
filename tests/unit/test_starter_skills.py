@@ -230,7 +230,7 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
         encoding="utf-8"
     )
-    inline = {"execute_python_file", "list_files", "request_user_input"}
+    inline = {"execute_python_file", "run_python", "list_files", "request_user_input"}
     return frozenset(t for t in inline if f"def {t}(" in source)
 
 

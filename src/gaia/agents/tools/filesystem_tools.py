@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from gaia.agents.tools.search_scope import search_roots
+from gaia.agents.tools.search_scope import root_depth, search_roots
 
 logger = logging.getLogger(__name__)
 
@@ -769,6 +769,7 @@ class FileSystemToolsMixin:
                 # Filesystem search
                 # Determine search roots based on scope
                 search_roots = _get_search_roots(scope)
+                resolved_roots = [Path(r).expanduser().resolve() for r in search_roots]
 
                 query_lower = query.lower()
                 is_glob = "*" in query or "?" in query
@@ -780,6 +781,15 @@ class FileSystemToolsMixin:
                     root = Path(root_path).expanduser().resolve()
                     if not root.exists() or not root.is_dir():
                         continue
+                    # A workspace scope takes its depth from the shared policy,
+                    # so this tool and ``search_file`` cannot disagree on how
+                    # deep the project is. An explicit scope was named by the
+                    # caller and keeps this tool's own defaults.
+                    scoped_depth = (
+                        root_depth(root, resolved_roots)
+                        if scope in ("cwd", "smart")
+                        else None
+                    )
 
                     if effective_type == "content":
                         # Content search (grep-like)
@@ -793,6 +803,12 @@ class FileSystemToolsMixin:
                             max_size,
                             min_date,
                             max_date,
+                            # Grep cost scales with file bytes, not directory
+                            # entries, so the project is not read to
+                            # DEEP_ROOT_DEPTH the way a name search walks it.
+                            max_depth=(
+                                min(8, scoped_depth) if scoped_depth is not None else 8
+                            ),
                         )
                     else:
                         # Name/metadata search
@@ -808,6 +824,9 @@ class FileSystemToolsMixin:
                             max_size,
                             min_date,
                             max_date,
+                            max_depth=(
+                                scoped_depth if scoped_depth is not None else 10
+                            ),
                         )
 
                 # Sort results
@@ -1280,6 +1299,7 @@ class FileSystemToolsMixin:
             max_size,
             min_date,
             max_date,
+            max_depth=10,
         ):
             """Search for files by name."""
             import fnmatch
@@ -1287,7 +1307,7 @@ class FileSystemToolsMixin:
             default_excludes = mixin._get_default_excludes()
 
             def _walk(current, depth):
-                if depth > 10 or len(results) >= max_results:
+                if depth > max_depth or len(results) >= max_results:
                     return
                 try:
                     for entry in os.scandir(str(current)):
@@ -1366,6 +1386,7 @@ class FileSystemToolsMixin:
             max_size,
             _min_date,
             _max_date,
+            max_depth=8,
         ):
             """Search inside file contents."""
             default_excludes = mixin._get_default_excludes()
@@ -1402,7 +1423,7 @@ class FileSystemToolsMixin:
             query_lower = query.lower()
 
             def _walk(current, depth):
-                if depth > 8 or len(results) >= max_results:
+                if depth > max_depth or len(results) >= max_results:
                     return
                 try:
                     for entry in os.scandir(str(current)):

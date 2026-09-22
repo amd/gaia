@@ -41,14 +41,20 @@ from typing import (
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
+from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
+    VERIFY_AFTER_CHANGE_TAG,
     build_verification_scope,
-    check_was_executed,
+    check_output,
+    project_has_tests,
     strip_verification_scope,
-    verification_check_label,
-    verification_check_target,
+    summary_reports_failure,
+    unsupported_test_claim,
+    unverified_change,
+    verification_record,
+    verify_after_change_correction,
 )
 
 # First-party imports
@@ -270,6 +276,28 @@ def tool_execution_timeout() -> float:
             f"got {value}. Unset it to use the default ({DEFAULT_TOOL_TIMEOUT})."
         )
     return value
+
+
+def _trace_includes_schema_text() -> bool:
+    """Whether a ``--trace`` artifact carries the full tool-schema text.
+
+    On by default: the schema is the thing #3774 exists to make measurable, and
+    a trace that only counts it cannot answer "which schema did the model get".
+    ``GAIA_TRACE_TOOL_SCHEMA=0`` drops the text for anyone who needs a smaller
+    file — the names and sizes stay, and the artifact records the omission.
+    """
+    raw = os.environ.get("GAIA_TRACE_TOOL_SCHEMA")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_TRACE_TOOL_SCHEMA must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to record the full schema."
+    )
 
 
 class ToolExecutionTimeout(Exception):
@@ -646,6 +674,11 @@ _SINGLE_TOOL_DONE_SUFFIX = (
     "Do not call any more tools.]"
 )
 
+# Test-claim guard: an answer reporting a pass count the turn never produced.
+# One correction — a second disagreement is better than a loop, and the
+# verification footer states the truth either way.
+_MAX_TEST_CLAIM_CORRECTIONS = 1
+
 # Unfinished-answer guard (#3887): a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
 _MAX_UNFINISHED_ANSWER_REPROMPTS = 2
@@ -707,6 +740,158 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+# Fabricated-save guard (#4010): a final answer that asserts a file was
+# written when no write tool ran this turn.
+_MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
+# File-writing tools the guard can name in its correction. Presence of one of
+# these in the registry is what makes the claim checkable at all.
+_FILE_WRITE_TOOLS: Tuple[str, ...] = (
+    "write_file",
+    "write_markdown_file",
+    "write_python_file",
+    "edit_file",
+)
+# Tools whose completed call makes a save claim believable. Two sources: the
+# confirmation set covers the write/execute tools (minus the one entry that
+# merely spawns a notifier), and the names below write a file as a side effect
+# of doing something else, so they are gated on cost rather than on danger and
+# never reach that set.
+_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
+    "notify_desktop"
+} | {
+    "take_screenshot",
+    "text_to_speech",
+    "transcribe_media",
+    "refine_transcript",
+}
+_FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
+# Adverbs the model sprinkles around the verb. They carry no meaning for the
+# guard, but every slot they can occupy has to be spelled out or the claim
+# reads as unmatched ("has been successfully written" vs "has been written").
+_WRITE_ADVERBS = r"(?:(?:just|now|already|successfully)\s+)*"
+_FILE_WRITE_CLAIM_PATTERNS = (
+    # "I saved …", "I've written …", "I have now created …"
+    re.compile(
+        rf"\bi(?:'ve|\s+have)?\s+{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
+        re.IGNORECASE,
+    ),
+    # "… has been saved", "… was written", "… has been successfully written"
+    re.compile(
+        rf"\b(?:has|have|had|was|were|is|are)\s+{_WRITE_ADVERBS}"
+        rf"(?:been\s+)?{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
+        re.IGNORECASE,
+    ),
+    # A bare "Saved to …" / "Report saved successfully at …" opening a line.
+    # The subject slot refuses negations, or "Nothing saved to disk" reads as
+    # a claim and burns the turn's only re-prompt.
+    re.compile(
+        rf"(?:^|[.!?]\s+|\n)\s*(?:the\s+)?"
+        rf"(?:(?!(?:not|never|no|nothing|none)\b)[\w'-]+\s+)?{_FILE_WRITE_VERBS}\s+"
+        rf"{_WRITE_ADVERBS}(?:it\s+|them\s+|the\s+\S+\s+)?(?:to|at|in|into)\b",
+        re.IGNORECASE,
+    ),
+    # "Created the file X", "The script successfully wrote the file X" — the
+    # file is the direct object, so no preposition follows the verb.
+    re.compile(
+        rf"(?<!\bnot\s)(?<!\bnever\s)\b{_FILE_WRITE_VERBS}\s+{_WRITE_ADVERBS}"
+        rf"(?:the|a|an|your|this|that)\s+(?:new\s+)?files?\b",
+        re.IGNORECASE,
+    ),
+)
+# Plan prose names a save the model still intends to make ("**Completion:**
+# Conclude by stating the path where the summary was saved"). Reading that as
+# a claim spends the turn's single re-prompt, so a real fabrication later in
+# the same turn goes through unblocked (#4057). Plan text belongs to the
+# narration guard above, not to this one.
+_PLAN_FRAME_PATTERN = re.compile(
+    r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?[*_#>\s]*"
+    r"(?:step\s*\d*|phase\s*\d*|completion|plan|next steps?|final step"
+    r"|approach|goal)\b[^:\n]{0,30}:"
+    r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
+    re.IGNORECASE,
+)
+# A plan label alone cannot exempt a sentence — "Step 3: I saved it to x.md"
+# would then be a one-token bypass. The save also has to sit in a subordinate
+# clause, which is where a step that has not happened yet puts it. The "by
+# stating" alternatives are repeated from the frame pattern on purpose: they
+# are both a frame label and a subordinate cue, and the two gates are checked
+# independently.
+_SUBORDINATE_CUE_PATTERN = re.compile(
+    r"\b(?:where|which|that|whether|if)\b"
+    r"|\bby\s+(?:stating|reporting|confirming|mentioning|noting|telling)\b",
+    re.IGNORECASE,
+)
+_FILE_TARGET_PATTERN = re.compile(
+    r"\b(?:file|files|filename|path|directory|folder|disk)\b"
+    r"|[A-Za-z]:[\\/]"
+    r"|(?:^|\s)[~/][\w./\\-]+"
+    # "…to `routine.md`" — a backticked destination is a path even when the
+    # model invents a bare name with no extension.
+    r"|(?:to|at|in|into)\s+`[^`]+`",
+    re.IGNORECASE,
+)
+# Links and addresses are dotted but never save targets, so they are removed
+# before a dotted token is read as a filename.
+_URL_OR_EMAIL_PATTERN = re.compile(
+    r"\b(?:[A-Za-z][\w+.-]*://\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)",
+    re.IGNORECASE,
+)
+# Bounded on purpose: unbounded, the run scans quadratically and a 32KB hex
+# digest in one answer stalls the whole process for over a second under the
+# GIL. No coverage is lost — with no leading \b a longer path still matches
+# from a later offset.
+_DOTTED_TOKEN_PATTERN = re.compile(r"[\w~./\\-]{1,80}\.([A-Za-z0-9]{1,6})\b")
+# Suffixes that make a dotted token a hostname rather than a file.
+_NON_FILE_SUFFIXES = frozenset(
+    {"com", "org", "net", "io", "ai", "co", "gov", "edu", "dev", "app"}
+)
+
+
+def _names_a_file(sentence: str) -> bool:
+    """True when the sentence names somewhere on disk."""
+    if _FILE_TARGET_PATTERN.search(sentence):
+        return True
+    # A suffix with no letter is a version or a clock time, not an extension.
+    return any(
+        any(char.isalpha() for char in suffix)
+        and suffix.lower() not in _NON_FILE_SUFFIXES
+        for suffix in _DOTTED_TOKEN_PATTERN.findall(sentence)
+    )
+
+
+def _is_plan_narration(sentence: str) -> bool:
+    """True when the sentence frames a save as a step still to be taken."""
+    if not _PLAN_FRAME_PATTERN.search(sentence):
+        return False
+    cue = _SUBORDINATE_CUE_PATTERN.search(sentence)
+    if cue is None:
+        return False
+    return all(
+        (match := pattern.search(sentence)) is None or match.start() > cue.start()
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+    )
+
+
+def _claims_file_write(answer: str) -> bool:
+    """True when the prose asserts a file has already been written to disk.
+
+    A sentence must carry both a completed write verb and a file/path target,
+    so "I saved the routine to notes/routine.md" fires while "I created a
+    summary of the meeting" does not. Fenced code is ignored — a sample
+    command is not a claim — and so is a sentence in a planning frame.
+    """
+    prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
+    prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", prose):
+        if _is_plan_narration(sentence):
+            continue
+        if not _names_a_file(sentence):
+            continue
+        if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
+            return True
+    return False
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -738,6 +923,12 @@ class Agent(abc.ABC):
     # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
     # both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
+
+    # Last value handed to the backend as ``tools=``, and the filter in force
+    # when it was built. Stamped by the ``_openai_tools`` property so a trace
+    # reports what went out rather than re-deriving it (#3774).
+    _last_tool_schemas: Optional[List[Dict[str, Any]]] = None
+    _last_tool_filter: Optional[List[str]] = None
 
     # Re-entrancy guard for tool timing. A tool body may call another tool
     # (CodeAgent orchestrates that way); only the outermost call is timed.
@@ -1567,11 +1758,55 @@ Do NOT wrap conversational replies in JSON.
     def _openai_tools(self):
         """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
         if self._uses_native_tool_calls():
-            return (
+            schemas = (
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
             )
-        return None
+        else:
+            schemas = None
+        # The trace reports the object that went out as ``tools=``, never a
+        # re-render — a mid-loop load_tools expansion must show up there.
+        self._last_tool_schemas = schemas
+        self._last_tool_filter = (
+            None if self._active_tool_filter is None else list(self._active_tool_filter)
+        )
+        return schemas
+
+    def _trace_tool_schema(self) -> Dict[str, Any]:
+        """The ``tool_schema`` block of a ``--trace`` artifact.
+
+        Reports what the backend was actually handed this turn: the names, the
+        active per-turn filter, the serialized size (so system / tools / history
+        shares of the prompt are computable from one file), and the schema text
+        itself. Content comes only from tool names, signatures and docstrings —
+        no user data rides along into a file people attach to bug reports.
+        """
+        from gaia.agents.base.turn_metrics import count_tokens
+
+        schemas = getattr(self, "_last_tool_schemas", None)
+        # ensure_ascii=False: a \uXXXX escape is six chars the model never
+        # sees, and the size here has to match what went over the wire.
+        schema_json = json.dumps(schemas, ensure_ascii=False) if schemas else ""
+        block: Dict[str, Any] = {
+            "sent": schemas is not None,
+            # How this model takes tools, independent of whether any were sent:
+            # an empty registry on a native model is "native, nothing to send".
+            "render": ("native" if self._uses_native_tool_calls() else "prompt_text"),
+            "tools_sent": len(schemas or []),
+            "tools_registered": len(self._tools_registry),
+            "tool_names": [s["function"]["name"] for s in schemas or []],
+            "filter": getattr(self, "_last_tool_filter", None),
+            "schema_chars": len(schema_json),
+            "schema_tokens": count_tokens(schema_json),
+        }
+        if _trace_includes_schema_text():
+            block["schemas"] = schemas or []
+        else:
+            block["schemas_omitted"] = (
+                "schema text dropped by GAIA_TRACE_TOOL_SCHEMA=0; "
+                "unset it (or set 1) to record the full schema"
+            )
+        return block
 
     def _select_tools_for_turn(  # pylint: disable=unused-argument
         self, user_input: str
@@ -3813,6 +4048,19 @@ Do NOT wrap conversational replies in JSON.
             return bool(flag)
         return tool_name.startswith("mcp_")
 
+    def _tool_can_touch_disk(self, tool_name: str) -> bool:
+        """Whether a call that already ran could have put bytes on disk.
+
+        Deliberately not ``_tool_requires_confirmation``: that one exempts a
+        pre-authorized write and treats an unclassified ``mcp_`` tool as
+        consequential, and both of those readings are inverted here. A
+        third-party tool counts only when it declared the flag itself.
+        """
+        if tool_name in _DISK_TOUCHING_TOOLS:
+            return True
+        entry = self._tools_registry.get(tool_name) or {}
+        return bool(entry.get("requires_confirmation"))
+
     def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
         """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
         against this turn's running total. Called from the single success path
@@ -5113,18 +5361,39 @@ Do NOT wrap conversational replies in JSON.
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
             return
-        label = verification_check_label(tool_name, tool_args, result)
-        log.append(
-            {
-                "tool": tool_name,
-                "check_label": label,
-                "check_target": (
-                    verification_check_target(tool_name, tool_args) if label else None
-                ),
-                "failed": self._is_error_result(result),
-                "ran": check_was_executed(result),
-            }
+        record = verification_record(
+            tool_name, tool_args, result, errored=self._is_error_result(result)
         )
+        # A snippet that prints a failing summary still exits 0.
+        record["failed"] = record["failed"] or summary_reports_failure(
+            tool_name, result
+        )
+        record["args"] = tool_args if isinstance(tool_args, dict) else {}
+        record["output"] = check_output(tool_name, result)
+        log.append(record)
+
+    def _verification_project_root(self) -> Optional[str]:
+        """The project this turn works in, from the shared project-root resolver."""
+        for hook in ("_project_map_root", "_script_project_root"):
+            if callable(getattr(self, hook, None)):
+                return getattr(self, hook)()
+        explicit = getattr(getattr(self, "config", None), "project_root", None)
+        return resolve_project_root(explicit)
+
+    def _verify_after_change_prompt(self) -> Optional[str]:
+        """Corrective message when files changed after the last check, else ``None``.
+
+        Judged from this turn's tool record, never the answer's wording. Silent
+        for read-only turns and for projects with no test suite.
+        """
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        if not executions:
+            return None
+        root = self._verification_project_root()
+        changed = unverified_change(executions, root)
+        if changed is None or not project_has_tests(root):
+            return None
+        return verify_after_change_correction(changed)
 
     def verification_scope_statement(self) -> str:
         """This turn's bounded verified / partially verified / unverified line."""
@@ -5197,6 +5466,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
         self._begin_turn_provenance()
+        # Cleared per turn: a trace must never report the previous turn's
+        # schema for a turn that never reached the backend.
+        self._last_tool_schemas = None
+        self._last_tool_filter = None
 
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
@@ -5241,6 +5514,9 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        verify_after_change_reprompted = False
+        test_claim_corrections = 0
+        file_write_claim_reprompts = 0
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -7145,6 +7421,50 @@ Do NOT wrap conversational replies in JSON.
                     )
                     continue
 
+                # Fabricated-save guard: the answer says a file was written but
+                # no tool that can touch disk ran this turn, so nothing was.
+                if (
+                    file_write_claim_reprompts < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                    and steps_taken < steps_limit - 1
+                    and _claims_file_write(answer_candidate)
+                ):
+                    _registry = self._tools_registry
+                    _write_tool = next(
+                        (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
+                    )
+                    # Read the execution log, not tool_call_log: the latter is
+                    # appended before the call runs, so a refused, errored or
+                    # declined write would silence the guard on the exact harm
+                    # it exists to catch.
+                    _wrote_this_turn = any(
+                        _entry["ran"]
+                        and not _entry["failed"]
+                        and self._tool_can_touch_disk(_entry["tool"])
+                        for _entry in (self._turn_tool_executions or [])
+                    )
+                    if _write_tool and not _wrote_this_turn:
+                        file_write_claim_reprompts += 1
+                        logger.debug(
+                            "[WORKFLOW] Blocking unbacked file-write claim as final "
+                            "answer: %s",
+                            answer_candidate[:120],
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: Your answer says a file was saved, but no "
+                                    "file-writing tool ran in this turn — nothing was "
+                                    "written to disk. If the file is still needed, call "
+                                    f"`{_write_tool}` now with the full content and the "
+                                    "exact path. If you mean a file written earlier in "
+                                    "the conversation, say that explicitly instead of "
+                                    "claiming you just saved it."
+                                ),
+                            }
+                        )
+                        continue
+
                 # Capability-claim-without-attempt guard: catch responses that declare
                 # a tool's availability or unavailability (e.g. "I can generate images
                 # when the --sd flag is active") without having tried the tool first.
@@ -7281,6 +7601,59 @@ Do NOT wrap conversational replies in JSON.
                             "Image generation is not available in this session — "
                             "start GAIA with the `--sd` flag to enable it."
                         )
+
+                # Changed code after the last test run: ask once for the run.
+                if not verify_after_change_reprompted and steps_taken < steps_limit - 1:
+                    _correction = self._verify_after_change_prompt()
+                    if _correction:
+                        verify_after_change_reprompted = True
+                        logger.info(
+                            "%s fired at step %d", VERIFY_AFTER_CHANGE_TAG, steps_taken
+                        )
+                        messages.append({"role": "user", "content": _correction})
+                        conversation.append({"role": "user", "content": _correction})
+                        continue
+                # Last guard before the answer is sealed: the footer below
+                # already knows whether a test ran, so an answer that reports a
+                # pass count the record cannot show gets one chance to fix it.
+                test_claim = unsupported_test_claim(
+                    answer_candidate, self._turn_tool_executions
+                )
+                if test_claim:
+                    claim, why = test_claim
+                    can_correct_claim = (
+                        steps_taken < steps_limit - 1
+                        and test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
+                    )
+                    if not can_correct_claim:
+                        logger.warning(
+                            "[WORKFLOW] Emitting unsupported test claim %r (%s): "
+                            "%d/%d corrections used, step %d/%d",
+                            claim,
+                            why,
+                            test_claim_corrections,
+                            _MAX_TEST_CLAIM_CORRECTIONS,
+                            steps_taken,
+                            steps_limit,
+                        )
+                    else:
+                        test_claim_corrections += 1
+                        logger.debug(
+                            "[WORKFLOW] Correcting unsupported test claim %r (%s)",
+                            claim,
+                            why,
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f'Your answer says "{claim}", but {why}. '
+                                    "Either run the check now, or answer "
+                                    "without that claim."
+                                ),
+                            }
+                        )
+                        continue
 
                 # Scope line goes on AFTER the subclass hook: a subclass that
                 # rewrites the answer must not be able to drop it (#3376).
@@ -7424,7 +7797,17 @@ Do NOT wrap conversational replies in JSON.
             + total_output_tokens,  # Combined token count
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
+            "tool_schema": self._trace_tool_schema(),
         }
+
+        # Catches the exits that never printed an answer (max steps). Sealed
+        # BEFORE the trace write — attached after, the artifact never saw it.
+        turn_record = (
+            self._finish_turn_record(result.get("result", ""), steps_taken)
+            or turn_record
+        )
+        if turn_record is not None:
+            result["turn_metrics"] = turn_record
 
         # Write trace to file if requested
         if trace:
@@ -7432,14 +7815,6 @@ Do NOT wrap conversational replies in JSON.
             result["output_file"] = file_path
 
         logger.debug(f"Query processing complete: {result}")
-
-        # Catches the exits that never printed an answer (max steps).
-        turn_record = (
-            self._finish_turn_record(result.get("result", ""), steps_taken)
-            or turn_record
-        )
-        if turn_record is not None:
-            result["turn_metrics"] = turn_record
 
         # Store the result internally
         self.last_result = result
