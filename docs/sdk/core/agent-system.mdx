@@ -157,13 +157,27 @@ the recorded errors; the base class initializes this history at construction and
 does not clear it automatically for each query. Hosts reusing an instance must
 account for that when interpreting status. Not every failure becomes a result:
 initialization errors and some backend recovery errors can raise to the caller.
-A call counts as a check when the tool is one of `run_tests`, `run_lint`,
-`typecheck`, or `build`, or when its `command` argument names a known runner
-(`pytest`, `ruff`, `npm test`, `cargo test`, `go test`, `tsc`, …). The
-classifier also recognizes completed `execute_python_file` and `run_python`
-results containing a pytest summary or unittest run summary and an integer exit
-code. Reading a file containing test output, a refusal, or an ordinary script
-exit does not establish that tests ran. Other unrecognized runners remain `unverified`.
+
+The tool that ran the check says so. `run_shell_command`, `run_python`, and
+`execute_python_file` put a `check_result` on every result for a call that ran:
+a `CheckResult` (`label`, `target`, `kind`, `passed`, `summary`) when the program
+was a test, lint, typecheck, or build runner, and `null` when it was not. The
+footer reads that and nothing else. A shell run counts only when the program
+itself is the runner (`pytest -q`, `python -m pytest`, `uv run pytest`), so
+`cat pytest.ini` is not a test run; a failing summary line wins over a zero exit
+code, so `pytest | tail` that failed reads as failed.
+
+Results that carry no `check_result` — MCP tools, hub agents built before the
+field existed — are still classified from their text: a tool named `run_tests`,
+`run_lint`, `typecheck`, or `build`, a `command` argument naming a known runner,
+or a `run_python` / `execute_python_file` output with a pytest or unittest
+summary. Other unrecognized runners remain `unverified`.
+
+Before the answer goes out, the loop also checks it against the same record. An
+answer that reports a test outcome (`111 passed`, "all tests pass") when no test
+run passed after the last file edit gets one correction naming the gap; the
+second answer is emitted as written, with the footer beside it. A turn on its
+last step gets no correction.
 
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix reads `verified`; one that passed

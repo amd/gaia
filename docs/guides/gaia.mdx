@@ -97,12 +97,12 @@ content through a local SQL scratchpad. Audio tools save and refine transcripts;
 see [Transcription](/guides/transcription). Image generation uses local Stable
 Diffusion and can evict the resident chat model, requiring a reload afterward.
 
-`run_shell_command` applies an allowlist and rate limit. An active skill grant
-can allow a named CLI under its command policy: covered read-only calls can run
-without another prompt, while confirmable writes still require approval. This
-is not unrestricted shell execution. `run_python` runs a Python snippet from the
-project root and returns its output, so the agent can compute or check something
-without leaving a script in your project.
+`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused. Commands can be chained on one line (`cd src && ls | grep agent`) so looking something up and checking it is a single step — every command on the line is checked against the same allowlist before any of it runs, and one approval covers the line. A leading `VAR=value` (`PYTHONPATH=. pytest -q`) sets that one command's environment and nothing else's; the variables that decide which binary runs or what code it loads — `PATH`, `LD_PRELOAD`, `GIT_SSH_COMMAND` and their families — stay refused. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project.
+
+An active skill grant is the one way past that allowlist, and it is narrow: a
+skill can be granted one named CLI under its own command policy, where covered
+read-only calls run without another prompt and confirmable writes still require
+approval. Everything outside that CLI's policy stays refused.
 
 ## Permissions and file scope
 

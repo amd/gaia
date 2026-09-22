@@ -642,7 +642,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
 | `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search, page fetch, download |
-| `email` | `gaia.agents.tools.email_tools.EmailToolsMixin` | Read-only mailbox tools (Outlook / Microsoft Graph) |
+| `email` | `gaia.agents.tools.email_tools.EmailToolsMixin` | Read-only mailbox tools (Gmail / Outlook) |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
