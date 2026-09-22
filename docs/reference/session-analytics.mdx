@@ -161,8 +161,9 @@ and — because the corpus grows while you work — gives a different answer eve
 run. So the first `context` run freezes its measurement into `requests.json` and
 both reports reuse it, which is what makes a published median reproducible.
 
-Once `scan` has seen sessions that snapshot doesn't cover, both refuse to run
-rather than narrate figures that disagree with `tables.md`:
+Once the corpus changes under that snapshot — new sessions, or ones already in it
+that have since grown — both refuse to run rather than narrate figures that
+disagree with `tables.md`:
 
 ```bash
 python -m gaia.factory.harvest.context --refresh > "$FACTORY/context.md"   # re-measure
@@ -171,8 +172,15 @@ python -m gaia.factory.harvest.context --frozen  > "$FACTORY/context.md"   # kee
 
 The two flags are mutually exclusive; passing both is rejected.
 
-Both outputs carry a line naming the snapshot they were measured on, so a report
-always says which corpus it describes.
+The check compares a fingerprint of `traces.jsonl` recorded inside
+`requests.json`, so re-running `scan` and finding nothing new does **not** trip
+it — `scan` rewrites that file on every run regardless. A snapshot frozen before
+this fingerprint existed has none to compare, so it falls back to file timestamps
+and may ask you to choose after a no-op rescan; `--refresh` once re-freezes it
+with a fingerprint.
+
+Both outputs carry a line naming the snapshot they were measured on — timestamped
+in UTC — so a report always says which corpus it describes.
 
 ## Classifying intent
 

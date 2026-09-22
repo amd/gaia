@@ -18,9 +18,10 @@ Usage::
 """
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -116,23 +117,63 @@ def _requests(path: Path) -> List[int]:
 
 SNAPSHOT = "requests.json"
 
+# Key under which a snapshot records the corpus it was measured against.
+CORPUS_KEY = "corpus"
 
-def snapshot_age(cache: Path) -> Optional[bool]:
-    """Is the frozen snapshot older than the corpus it claims to describe?
 
-    ``None`` when there is no snapshot yet.  Otherwise True once ``scan`` has
-    rewritten ``traces.jsonl`` more recently than the snapshot was taken — the
-    point past which every figure derived here describes a corpus that no
-    longer matches the one ``report`` renders.
-    """
+def corpus_digest(traces: Path) -> str:
+    """Content fingerprint of ``traces.jsonl``."""
+
+    h = hashlib.sha256()
+    with traces.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _recorded_corpus(frozen: Path) -> Optional[str]:
+    """The digest a snapshot recorded, or ``None`` if it predates the key."""
+
+    try:
+        blob = json.loads(frozen.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"{frozen} is not valid JSON ({e}). Delete it and re-run with "
+            "--refresh to re-measure the snapshot."
+        ) from e
+    value = blob.get(CORPUS_KEY)
+    return value if isinstance(value, str) else None
+
+
+def _staleness(cache: Path) -> Tuple[Optional[bool], bool]:
+    """``(is the snapshot stale, was that decided on content)``."""
 
     frozen = cache / SNAPSHOT
     traces = cache / "traces.jsonl"
     if not frozen.exists():
-        return None
+        return None, False
     if not traces.exists():
-        return False
-    return traces.stat().st_mtime > frozen.stat().st_mtime
+        return False, False
+    recorded = _recorded_corpus(frozen)
+    if recorded is not None:
+        return recorded != corpus_digest(traces), True
+    return traces.stat().st_mtime > frozen.stat().st_mtime, False
+
+
+def snapshot_is_stale(cache: Path) -> Optional[bool]:
+    """Has the corpus changed under the frozen snapshot?
+
+    ``None`` when there is no snapshot yet.  Otherwise True past the point
+    where every figure derived here describes a corpus that no longer matches
+    the one ``report`` renders.
+
+    Keyed on the *content* of ``traces.jsonl``, not its mtime: ``scan``
+    rewrites that file whole on every run, so its mtime advances even when the
+    rescan found nothing new.  Snapshots frozen before the fingerprint existed
+    carry no digest and fall back to mtime.
+    """
+
+    return _staleness(cache)[0]
 
 
 def snapshot_stamp(cache: Path) -> str:
@@ -141,7 +182,9 @@ def snapshot_stamp(cache: Path) -> str:
     frozen = cache / SNAPSHOT
     if not frozen.exists():
         return ""
-    taken = datetime.fromtimestamp(frozen.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    taken = datetime.fromtimestamp(frozen.stat().st_mtime, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
     return (
         f"_Measured on the request snapshot frozen at {taken} "
         f"(`{SNAPSHOT}`). Re-run with `--refresh` to re-measure._"
@@ -156,14 +199,24 @@ def require_fresh_snapshot(cache: Path, refresh: bool, frozen_ok: bool) -> None:
     in one report.  Make the caller choose.
     """
 
-    if refresh or frozen_ok or not snapshot_age(cache):
+    stale, on_content = _staleness(cache)
+    if refresh or frozen_ok or stale is not True:
         return
+    frozen, traces = cache / SNAPSHOT, cache / "traces.jsonl"
+    if on_content:
+        problem = (
+            f"{frozen} no longer matches {traces}: the corpus has changed under "
+            "it, so these figures no longer describe the sessions report renders"
+        )
+    else:
+        problem = (
+            f"{frozen} predates the corpus fingerprint and {traces} has been "
+            "rewritten since it was taken, so these figures may disagree with "
+            "the tables report renders"
+        )
     raise SystemExit(
-        f"{cache / SNAPSHOT} is older than {cache / 'traces.jsonl'}: scan has "
-        "seen sessions this snapshot does not cover, so these figures would "
-        "disagree with the tables report renders. Pass --refresh to re-measure "
-        "against the current corpus, or --frozen to keep the existing snapshot "
-        "on purpose."
+        f"{problem}. Pass --refresh to re-measure against the current corpus, "
+        "or --frozen to keep the existing snapshot on purpose."
     )
 
 
@@ -188,7 +241,8 @@ def collect(
 
     sessions: List[dict] = []
     everything: List[int] = []
-    with (cache / "traces.jsonl").open(encoding="utf-8") as fh:
+    traces = cache / "traces.jsonl"
+    with traces.open(encoding="utf-8") as fh:
         for line in fh:
             t = json.loads(line)
             root = projects_root / t["project"]
@@ -222,7 +276,15 @@ def collect(
             everything.extend(reqs)
     if freeze:
         frozen.write_text(
-            json.dumps({"sessions": sessions, "requests": everything}),
+            json.dumps(
+                {
+                    "sessions": sessions,
+                    "requests": everything,
+                    # Fingerprint the corpus, not its mtime: scan rewrites
+                    # traces.jsonl whole even when the rescan found nothing.
+                    CORPUS_KEY: corpus_digest(traces),
+                }
+            ),
             encoding="utf-8",
         )
     return sessions, everything
