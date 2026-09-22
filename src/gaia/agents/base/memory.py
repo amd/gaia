@@ -2370,7 +2370,6 @@ class MemoryMixin(ProceduralMemoryMixin):
     def _build_dynamic_memory_context(self) -> str:
         """Dynamic per-turn context: current time + upcoming/overdue items."""
         store = self._memory_store
-        ctx = self._memory_context
         lines = []
 
         # Current time
