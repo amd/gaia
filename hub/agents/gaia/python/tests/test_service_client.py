@@ -214,3 +214,77 @@ def test_open_reports_remote_disconnect_as_client_error(monkeypatch):
         client.open("/health")
     assert error.value.__cause__ is failure
     assert attempts == [1]
+
+
+def test_sensitive_answer_uses_hidden_input(endpoint, monkeypatch, capsys):
+    endpoint.frames = [
+        {
+            "type": "needs_input",
+            "request_id": "secret",
+            "question": "Token?",
+            "sensitive": True,
+        },
+        {"type": "final", "answer": "done"},
+    ]
+    stdin = io.StringIO()
+    monkeypatch.setattr(stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.sys, "stdin", stdin)
+    monkeypatch.setattr(
+        stdin, "readline", lambda: pytest.fail("Secret read with terminal echo")
+    )
+    monkeypatch.setattr(
+        cli.getpass, "getpass", lambda *args, **kwargs: "private-answer"
+    )
+    assert cli.main(["--url", endpoint.url, "query", "hello", "--interactive"]) == 0
+    assert endpoint.posts[-1][1]["response"] == "private-answer"
+    output = capsys.readouterr()
+    assert "private-answer" not in output.out + output.err
+
+
+@pytest.mark.parametrize(
+    "failure", [EOFError(), cli.getpass.GetPassWarning("Echo unavailable")]
+)
+def test_sensitive_input_failure_cancels_without_plaintext_fallback(
+    endpoint, monkeypatch, failure
+):
+    endpoint.frames = [
+        {"type": "needs_input", "request_id": "secret", "sensitive": True}
+    ]
+    stdin = io.StringIO("do-not-read\n")
+    monkeypatch.setattr(stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.sys, "stdin", stdin)
+
+    def unavailable(*args, **kwargs):
+        if isinstance(failure, cli.getpass.GetPassWarning):
+            cli.warnings.warn(failure)
+        else:
+            raise failure
+
+    monkeypatch.setattr(cli.getpass, "getpass", unavailable)
+    assert cli.main(["--url", endpoint.url, "query", "hello", "--interactive"]) == 1
+    assert endpoint.posts[-1][0].endswith("/cancel")
+    assert not any(path.endswith("/respond") for path, _, _ in endpoint.posts)
+    assert stdin.tell() == 0
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), -float("inf"), 0, -1])
+def test_nonfinite_or_nonpositive_timeout_rejected(timeout):
+    with pytest.raises(cli.ClientError, match="finite and positive"):
+        cli.Client("http://localhost:8080", "token", timeout=timeout)
+
+
+def test_unacknowledged_interactive_answer_cancels(endpoint, monkeypatch):
+    endpoint.frames = [{"type": "needs_input", "request_id": "question"}]
+    stdin = io.StringIO("answer\n")
+    monkeypatch.setattr(stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.sys, "stdin", stdin)
+    original = cli.Client.json
+
+    def json_response(self, path, body=None, timeout=None):
+        if path.endswith("/respond"):
+            return {"delivered": False}
+        return original(self, path, body, timeout)
+
+    monkeypatch.setattr(cli.Client, "json", json_response)
+    assert cli.main(["--url", endpoint.url, "query", "hello", "--interactive"]) == 1
+    assert endpoint.posts[-1][0].endswith("/cancel")

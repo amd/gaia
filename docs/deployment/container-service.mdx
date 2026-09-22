@@ -148,7 +148,9 @@ prints its run UUID to stderr before sending the request. Ctrl-C requests
 cancellation; another terminal can run `cancel RUN_UUID`. An accepted cancellation
 ends the stream with an `error` event carrying status `499`. Already-running
 model/tool calls stop cooperatively; cancellation cannot undo completed effects. `--interactive` permits
-mid-run questions and reads answers from the terminal; `respond RUN_UUID
+mid-run questions and reads answers from the terminal. Sensitive questions use
+hidden input and fail if terminal echo cannot be disabled; an unacknowledged
+answer requests cancellation instead of waiting indefinitely. `respond RUN_UUID
 REQUEST_ID "answer"` can answer from a second client while the original stream
 stays open. This does not add approval support for confirmation-gated tools.
 
@@ -156,7 +158,7 @@ For multiple turns, reuse `--session-id NAME` for retained runtime state and pas
 `--context-file transcript.json` with a JSON array of `{role, content}` messages.
 A session ID alone does not supply conversation history or survive worker restart.
 `--json` emits canonical JSONL on stdout for traces; diagnostics stay on stderr.
-The default socket idle timeout is 120 seconds (`--timeout`). A dropped stream
+The default socket idle timeout is 120 seconds (`--timeout`, finite and positive). A dropped stream
 without a terminal event fails, requests cancellation and never replays the task.
 
 ## Embedded Lemonade lifecycle

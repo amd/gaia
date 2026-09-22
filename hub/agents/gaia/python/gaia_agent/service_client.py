@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import math
 import os
 import sys
 import uuid
+import warnings
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -68,8 +71,8 @@ class Client:
             )
         if not token.strip():
             raise ClientError("Set GAIA_GAIA_SIDECAR_TOKEN or use --token-file")
-        if timeout <= 0:
-            raise ClientError("Timeout must be positive")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ClientError("Timeout must be finite and positive")
         self.url = url.rstrip("/")
         self.token = token.strip()
         self.timeout = timeout
@@ -233,17 +236,36 @@ def main(argv=None):
                     json.dumps(event, ensure_ascii=False), file=sys.stderr, flush=True
                 )
             if kind == "needs_input" and args.interactive:
-                print("Answer: ", end="", file=sys.stderr, flush=True)
-                answer = sys.stdin.readline()
-                if not answer:
-                    raise ClientError("Input closed while answering a question")
-                client.json(
+                if event.get("sensitive") is True:
+                    try:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("error", getpass.GetPassWarning)
+                            answer = getpass.getpass(
+                                "Answer (hidden): ", stream=sys.stderr
+                            )
+                    except (getpass.GetPassWarning, EOFError) as exc:
+                        raise ClientError(
+                            "Cannot read a hidden answer securely; use a terminal with echo control."
+                        ) from exc
+                else:
+                    print("Answer: ", end="", file=sys.stderr, flush=True)
+                    answer = sys.stdin.readline()
+                    if not answer:
+                        raise ClientError("Input closed while answering a question")
+                delivered = client.json(
                     f"/v1/gaia/query/{run_id}/respond",
                     {
                         "request_id": event["request_id"],
                         "response": answer.rstrip("\n"),
                     },
                 )
+                if (
+                    not isinstance(delivered, dict)
+                    or delivered.get("delivered") is not True
+                ):
+                    raise ClientError(
+                        "GAIA did not acknowledge the answer; cancellation requested"
+                    )
 
         return client.query(body, display)
     except KeyboardInterrupt:

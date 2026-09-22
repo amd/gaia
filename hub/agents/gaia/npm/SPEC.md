@@ -562,3 +562,5 @@ remains unchanged; HTTP confirmation-gated tools still refuse the action.
 The frozen binary also supports `gaia-agent --client` for deployed-worker
 status, streaming queries, mid-run responses and cancellation. Source installs
 expose `gaia-agent-client`; see the container service guide for credentials and examples.
+Interactive sensitive answers require hidden terminal input; failed answer delivery
+requests cancellation. Socket timeouts must be finite and positive.

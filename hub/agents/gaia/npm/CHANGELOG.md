@@ -4,6 +4,7 @@
 
 - Accepted HTTP cancellation now terminates the stream explicitly instead of forwarding a late model answer.
 - Add `gaia-agent --client` / `gaia-agent-client` for authenticated worker status, streaming queries, questions and cancellation; include a Compose deployment and deterministic container query test.
+- Respect hidden-input questions in the remote CLI, fail on unacknowledged answers, and reject nonfinite timeouts.
 
 - Add `gaia-agent --service` to the frozen binary: authenticated single-tenant HTTP, managed embedded Lemonade, explicit workspace configuration and readiness probes. Container images run the PyInstaller bundle without a GAIA virtual environment; Python script tools use an explicitly configured separate interpreter.
 
