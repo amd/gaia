@@ -320,7 +320,7 @@ class TestCarryForwardPatch:
     def test_carry_forward_sets_inherited_from(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         result = carry_forward(card_path, "0.2.4")
         assert result.inherited_from == "0.2.3"
@@ -328,7 +328,7 @@ class TestCarryForwardPatch:
     def test_carry_forward_copies_metrics_verbatim(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         result = carry_forward(card_path, "0.2.4")
         assert result.metrics == src.metrics
@@ -352,7 +352,7 @@ class TestCarryForwardPatch:
             "hardware": "AMD Ryzen AI MAX+ (Strix Halo)",
         }
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         result = carry_forward(card_path, "0.2.4")
         assert result.breakdown == src.breakdown
@@ -363,7 +363,7 @@ class TestCarryForwardPatch:
         src = _make_payload(version="0.2.3", accuracy=0.75)
         # Use a different filename to confirm it's not read from stem
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         result = carry_forward(card_path, "0.2.4")
         assert result.agent_version == "0.2.4"
@@ -379,7 +379,7 @@ class TestCarryForwardMinorBumpRefuses:
     def test_minor_bump_raises_value_error(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         with pytest.raises(ValueError, match="re-run"):
             carry_forward(card_path, "0.3.0")
@@ -387,7 +387,7 @@ class TestCarryForwardMinorBumpRefuses:
     def test_major_bump_raises_value_error(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
         card_path = tmp_path / "SCORECARD.md"
-        card_path.write_text(render_scorecard(src))
+        card_path.write_text(render_scorecard(src), encoding="utf-8")
 
         with pytest.raises(ValueError, match="re-run"):
             carry_forward(card_path, "1.0.0")
@@ -949,7 +949,7 @@ class TestPerformanceRoundTrip:
         src = _make_payload(version="0.2.3", accuracy=0.75)
         src.performance = self._make_perf()
         card = tmp_path / "SCORECARD.md"
-        card.write_text(render_scorecard(src))
+        card.write_text(render_scorecard(src), encoding="utf-8")
         result = carry_forward(card, "0.2.4")
         assert result.performance is not None
         assert result.performance["throughput_tps"] == 12.1
@@ -1012,7 +1012,7 @@ class TestCapabilityQualityRoundTrip:
         src = _make_payload(version="0.2.3", accuracy=0.75)
         src.capability_quality = self._make_capq()
         card = tmp_path / "SCORECARD.md"
-        card.write_text(render_scorecard(src))
+        card.write_text(render_scorecard(src), encoding="utf-8")
         result = carry_forward(card, "0.2.4")
         assert result.capability_quality is not None
         assert result.capability_quality["briefing"]["approval"] == 0.95
