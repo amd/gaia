@@ -48,7 +48,8 @@ from gaia.eval.tool_cost import (  # noqa: E402
 )
 
 # --- Pinned baseline (#1448, doc profile, deterministic tool set) ----------
-EXPECTED_DOC_TOOL_COUNT = 37
+# 38 since #3670 added `read_tool_output` to the doc profile.
+EXPECTED_DOC_TOOL_COUNT = 38
 BASELINE_TEXT_CHARS = 4863
 # Re-pinned after the tool-description budget landed: dropping the duplicated
 # `Args:` block from `description` and trimming 21 docstrings took the native

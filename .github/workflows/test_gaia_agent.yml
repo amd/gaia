@@ -104,6 +104,20 @@ jobs:
             tests/unit/test_skill_sets.py \
             -v --tb=short
 
+      - name: Run Tool-Prompt Budget Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "================================================================"
+          echo "                  TOOL-PROMPT BUDGET TESTS"
+          echo "================================================================"
+          # The file opens with importorskip("gaia_agent_chat"), so it silently
+          # skipped in test_unit.yml and ran in no lane at all (#3294). This is
+          # the cheapest lane that installs that wheel.
+          python -m pytest \
+            tests/unit/test_tool_loader_token_budget.py \
+            -v --tb=short
+
       - name: Run Command-Injection Regression Tests
         env:
           GAIA_MEMORY_DISABLED: "1"
