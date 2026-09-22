@@ -25,6 +25,7 @@ from gaia_agent_chat.agent import (  # noqa: E402
 from gaia_agent_chat.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
+from gaia.agents.base.checks import CHECK_RESULT_KEY, CheckResult  # noqa: E402
 from gaia.agents.base.project_map import PROJECT_ROOT_ENV  # noqa: E402
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 
@@ -305,3 +306,59 @@ def test_the_docstring_warns_against_importing_tools(make_run_python, project):
 
     assert "from gaia import" in doc
     assert "directly as a tool" in doc
+
+
+# ---------------------------------------------------------------------------
+# A snippet that runs the tests reports the outcome as a fact
+# ---------------------------------------------------------------------------
+
+_RUN_PYTEST = (
+    "import sys, pytest\n"
+    "sys.exit(pytest.main(['-q', '-p', 'no:cacheprovider', 'test_toy.py']))\n"
+)
+
+
+@pytest.mark.parametrize(
+    "test_body,passed,summary_word",
+    [
+        ("def test_ok():\n    assert 1 + 1 == 2\n", True, "1 passed"),
+        ("def test_bad():\n    assert 1 + 1 == 3\n", False, "1 failed"),
+        (
+            "def test_many(subtests):\n"
+            "    for i in range(3):\n"
+            "        with subtests.test(i=i):\n"
+            "            assert i >= 0\n",
+            True,
+            "3 subtests passed",
+        ),
+    ],
+    ids=["pass", "fail", "subtests"],
+)
+def test_a_pytest_run_attaches_its_check(
+    make_run_python, project, monkeypatch, test_body, passed, summary_word
+):
+    if "subtests" in test_body and not hasattr(pytest, "Subtests"):
+        pytest.importorskip("pytest_subtests")
+    (project / "test_toy.py").write_text(test_body, encoding="utf-8")
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code=_RUN_PYTEST)
+
+    check = CheckResult.from_result(result)
+    assert check is not None, result
+    assert check.label == "pytest"
+    assert check.kind == "test"
+    assert check.passed is passed
+    assert summary_word in check.summary
+
+
+def test_a_snippet_that_is_not_a_test_run_declares_no_check(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code="print('5 passed')")
+
+    assert result[CHECK_RESULT_KEY] is None
