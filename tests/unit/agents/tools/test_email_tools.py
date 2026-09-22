@@ -338,9 +338,7 @@ def test_403_html_body_is_dropped_not_echoed():
     assert "<html" not in msg
 
 
-@pytest.mark.parametrize(
-    "body", ["[1,2]", '{"error": "denied"}', '"just a string"']
-)
+@pytest.mark.parametrize("body", ["[1,2]", '{"error": "denied"}', '"just a string"'])
 def test_403_non_object_json_body_is_dropped_not_a_crash(body):
     """A body that parses as JSON but isn't the documented `{error: {code}}`
     shape must not surface as an AttributeError."""
