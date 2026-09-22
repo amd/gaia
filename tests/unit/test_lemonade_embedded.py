@@ -537,3 +537,84 @@ class TestFailureMessages:
         assert kwargs["capture_output"] is True
         assert kwargs["text"] is True
         assert kwargs["check"] is False
+
+
+def test_exclusive_start_rejects_existing_daemon(manager, monkeypatch):
+    monkeypatch.setattr(
+        manager, "_status", lambda: SimpleNamespace(running=True, unresponsive_pid=None)
+    )
+    monkeypatch.setattr(manager, "_start", lambda *args: pytest.fail("Must not adopt"))
+    with pytest.raises(EmbeddedLemonadeError, match="exclusive ownership"):
+        manager.start(reuse_existing=False)
+
+
+def test_lifecycle_lock_excludes_other_process_and_releases(manager):
+    import subprocess
+    import sys
+
+    code = """
+import sys
+from pathlib import Path
+from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+manager = EmbeddedLemonade(home=Path(sys.argv[1]))
+try:
+    with manager._lifecycle_lock():
+        print('acquired')
+except EmbeddedLemonadeError:
+    print('busy')
+"""
+
+    def attempt():
+        return subprocess.check_output(
+            [sys.executable, "-c", code, str(manager.root.parent)],
+            text=True,
+            timeout=10,
+        ).strip()
+
+    with manager._lifecycle_lock():
+        assert attempt() == "busy"
+    assert attempt() == "acquired"
+
+
+def test_owned_stop_does_not_stop_replacement_daemon(manager, monkeypatch):
+    manager._write_state(
+        {"pid": 2345, "port": 1234, "api_key": "key", "version": manager.version}
+    )
+    monkeypatch.setattr(
+        manager, "_stop", lambda *args: pytest.fail("Must not stop replacement")
+    )
+    assert manager.stop(expected_pid=1234) is False
+    assert manager._read_state()["pid"] == 2345
+
+
+@pytest.mark.parametrize("failing_write", ["_write_state", "_write_env_file"])
+def test_start_cleans_up_process_when_publishing_state_fails(
+    manager, monkeypatch, failing_write
+):
+    import subprocess
+
+    process = SimpleNamespace(pid=1234, poll=lambda: None)
+    terminated = []
+    monkeypatch.setattr(manager, "is_installed", lambda: True)
+    monkeypatch.setattr(manager, "write_config", lambda: None)
+    monkeypatch.setattr(manager, "_health", lambda *args, **kwargs: {})
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(manager, "_terminate", terminated.append)
+
+    def fail(*args):
+        raise OSError("state volume unavailable")
+
+    monkeypatch.setattr(manager, failing_write, fail)
+    with pytest.raises(OSError, match="state volume"):
+        manager.start(install_if_missing=False, reuse_existing=False)
+    assert terminated == [process]
+    assert not manager.state_path.exists()
+
+
+@pytest.mark.parametrize(
+    "operation", ["status", "install", "start", "stop", "uninstall"]
+)
+def test_lifecycle_operations_refuse_concurrent_mutation(manager, operation):
+    with manager._lifecycle_lock():
+        with pytest.raises(EmbeddedLemonadeError, match="lifecycle operation"):
+            getattr(manager, operation)()

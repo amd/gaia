@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Container configuration and real ASGI route integration."""
 
+import asyncio
 import json
 import os
 import socket
@@ -24,6 +25,7 @@ from gaia_agent import caller_auth, server, service
 def configured(monkeypatch, tmp_path):
     values = {
         "HOME": str(tmp_path),
+        "GAIA_HOME": str(tmp_path / ".gaia"),
         "GAIA_SERVICE_WORKSPACE": str(tmp_path),
         "GAIA_SERVICE_MODEL": "fireworks.test-model",
         "GAIA_SERVICE_ALLOWED_HOSTS": "worker.internal,localhost",
@@ -291,11 +293,11 @@ def test_embedded_lifecycle_owns_start_and_stop(configured, monkeypatch):
 
     def start(self, **kwargs):
         calls.append(("start", kwargs))
-        return SimpleNamespace(base_url="http://localhost:43210/api/v1")
+        return SimpleNamespace(base_url="http://localhost:43210/api/v1", pid=1234)
 
     monkeypatch.setattr(EmbeddedLemonade, "start", start)
     monkeypatch.setattr(
-        EmbeddedLemonade, "stop", lambda self: calls.append(("stop", {}))
+        EmbeddedLemonade, "stop", lambda self, **kwargs: calls.append(("stop", kwargs))
     )
     with TestClient(
         service.create_app(replace(configured, base_url=None)),
@@ -305,10 +307,13 @@ def test_embedded_lifecycle_owns_start_and_stop(configured, monkeypatch):
             client.app.state.agent_config["base_url"] == "http://localhost:43210/api/v1"
         )
         assert len(calls) == 1
-    assert calls == [("start", {"install_if_missing": False}), ("stop", {})]
+    assert calls == [
+        ("start", {"install_if_missing": False, "reuse_existing": False}),
+        ("stop", {"expected_pid": 1234}),
+    ]
 
 
-def test_failed_embedded_start_cleans_up(configured, monkeypatch):
+def test_failed_embedded_start_does_not_stop_an_unowned_daemon(configured, monkeypatch):
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
     stopped = []
@@ -327,7 +332,7 @@ def test_failed_embedded_start_cleans_up(configured, monkeypatch):
     with pytest.raises(RuntimeError, match="backend did not start"):
         with TestClient(service.create_app(replace(configured, base_url=None))):
             pass
-    assert stopped == [True]
+    assert stopped == []
 
 
 def test_service_cli_real_http_and_shutdown(configured, tmp_path):
@@ -409,3 +414,95 @@ def test_service_cli_real_http_and_shutdown(configured, tmp_path):
         upstream.shutdown()
         upstream.server_close()
         upstream_thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "catalog_id,expected", [("Qwen3-4B-GGUF", 503), ("Qwen3", 200)]
+)
+def test_service_readiness_requires_exact_model_id(
+    configured, monkeypatch, catalog_id, expected
+):
+    import requests
+
+    def get(url, **kwargs):
+        body = (
+            {"data": [{"id": catalog_id, "checkpoint": "unsloth/Qwen3-4B-GGUF:Q4_K_M"}]}
+            if "/models" in url
+            else {"version": "11.8.1"}
+        )
+        return SimpleNamespace(
+            ok=True, json=lambda: body, raise_for_status=lambda: None
+        )
+
+    monkeypatch.setattr(requests, "get", get)
+    with TestClient(
+        service.create_app(replace(configured, model="Qwen3")),
+        base_url="http://worker.internal",
+    ) as client:
+        assert client.get("/ready").status_code == expected
+        response = client.get(
+            "/v1/gaia/init", headers={"Authorization": "Bearer test-service-secret"}
+        )
+        assert response.status_code == expected
+        assert response.json()["model"]["present"] is (expected == 200)
+
+
+def test_racing_embedded_start_does_not_adopt_or_stop_existing_daemon(
+    configured, monkeypatch
+):
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+
+    states = iter(
+        [
+            SimpleNamespace(running=False, unresponsive_pid=None),
+            SimpleNamespace(running=True, unresponsive_pid=None),
+        ]
+    )
+    monkeypatch.setattr(EmbeddedLemonade, "_status", lambda self: next(states))
+    monkeypatch.setattr(
+        EmbeddedLemonade,
+        "stop",
+        lambda *args, **kwargs: pytest.fail("Must not stop an unowned process"),
+    )
+    with pytest.raises(EmbeddedLemonadeError, match="exclusive ownership"):
+        with TestClient(service.create_app(replace(configured, base_url=None))):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_cancelled_startup_waits_for_owned_daemon_cleanup(
+    configured, monkeypatch
+):
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    entered = threading.Event()
+    release = threading.Event()
+    stopped = []
+    monkeypatch.delenv("GAIA_SERVICE_LEMONADE_BUNDLE", raising=False)
+    monkeypatch.setattr(
+        EmbeddedLemonade,
+        "status",
+        lambda self: SimpleNamespace(running=False, unresponsive_pid=None),
+    )
+
+    def start(self, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return SimpleNamespace(base_url="http://localhost:43210/api/v1", pid=1234)
+
+    monkeypatch.setattr(EmbeddedLemonade, "start", start)
+    monkeypatch.setattr(
+        EmbeddedLemonade, "stop", lambda self, **kwargs: stopped.append(kwargs)
+    )
+    app = service.create_app(replace(configured, base_url=None))
+    lifespan = app.router.lifespan_context(app)
+    task = asyncio.create_task(lifespan.__aenter__())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+    assert stopped == [{"expected_pid": 1234}]

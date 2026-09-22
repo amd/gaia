@@ -386,6 +386,7 @@ def _probe_lemonade(
     base = resolve_lemonade_base_url(
         base_url or os.environ.get("LEMONADE_BASE_URL")
     ).rstrip("/")
+    explicit_model = model_id is not None
     model_id = model_id or DEFAULT_MODEL_NAME
     headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base))
 
@@ -406,8 +407,8 @@ def _probe_lemonade(
         out["reachable"] = True
         data = r.json().get("data") or []
         for entry in data:
-            if entry.get("id") == model_id or model_id in str(
-                entry.get("checkpoint", "")
+            if entry.get("id") == model_id or (
+                not explicit_model and model_id in str(entry.get("checkpoint", ""))
             ):
                 out["present"] = True
                 ctx = entry.get("ctx_size") or entry.get("context_length")

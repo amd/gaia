@@ -41,6 +41,14 @@ def endpoint(monkeypatch):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             state.posts.append((self.path, body, self.headers.get("Authorization")))
             if self.path == "/v1/gaia/query":
+                if getattr(state, "broken_chunk", False):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    self.wfile.write(b"20\r\ndata: {")
+                    self.close_connection = True
+                    return
                 if getattr(state, "reject_query", False):
                     self.reply(409, b'{"detail":"Run already active"}')
                     return
@@ -180,3 +188,10 @@ def test_duplicate_run_rejection_does_not_cancel_existing_run(endpoint):
     endpoint.reject_query = True
     assert cli.main(["--url", endpoint.url, "query", "hello"]) == 1
     assert [path for path, _, _ in endpoint.posts] == ["/v1/gaia/query"]
+
+
+def test_broken_http_chunk_is_reported_and_cancelled(endpoint, capsys):
+    endpoint.broken_chunk = True
+    assert cli.main(["--url", endpoint.url, "query", "hello"]) == 1
+    assert endpoint.posts[-1][0].endswith("/cancel")
+    assert "Error:" in capsys.readouterr().err

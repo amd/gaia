@@ -201,17 +201,28 @@ def create_app(config: ServiceConfig):
                 raise RuntimeError(
                     "Service requires exclusive ownership of embedded Lemonade. Stop the existing instance first."
                 )
+            status = None
             try:
-                status = await asyncio.to_thread(
-                    manager.start, install_if_missing=False
+                startup = asyncio.create_task(
+                    asyncio.to_thread(
+                        manager.start, install_if_missing=False, reuse_existing=False
+                    )
                 )
+                try:
+                    status = await asyncio.shield(startup)
+                except asyncio.CancelledError:
+                    # Cancelling an await cannot stop the startup thread. Recover
+                    # its owned PID before the finally block tears it down.
+                    status = await startup
+                    raise
                 app.state.agent_config["base_url"] = status.base_url
                 if config.cloud_provider:
                     await asyncio.to_thread(_configure_cloud, config, status.base_url)
                 async with original_lifespan(app):
                     yield
             finally:
-                await asyncio.to_thread(manager.stop)
+                if status is not None:
+                    await asyncio.to_thread(manager.stop, expected_pid=status.pid)
 
         app.router.lifespan_context = embedded_lifespan
 

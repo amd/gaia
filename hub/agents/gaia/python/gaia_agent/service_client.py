@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import uuid
+from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -120,7 +121,7 @@ class Client:
             # running, and do not retry queries that may have executed tools.
             try:
                 self.cancel(body["run_id"])
-            except (ClientError, OSError, ValueError) as exc:
+            except (ClientError, OSError, ValueError, HTTPException) as exc:
                 print(f"Cancellation could not be confirmed: {exc}", file=sys.stderr)
             raise
 
@@ -246,7 +247,7 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("Interrupted; cancellation requested.", file=sys.stderr)
         return 130
-    except (ClientError, OSError, ValueError) as exc:
+    except (ClientError, OSError, ValueError, HTTPException) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
