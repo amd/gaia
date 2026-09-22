@@ -111,7 +111,9 @@ class TestSchemaPresentInTrace:
         written = _run_trace(agent)
         block = written["tool_schema"]
 
-        assert block["schema_chars"] == len(json.dumps(block["schemas"]))
+        assert block["schema_chars"] == len(
+            json.dumps(block["schemas"], ensure_ascii=False)
+        )
         assert block["schema_tokens"] > 0
         # The other half of the fixed prefill has to be in the same file.
         assert "system_prompt" in written
