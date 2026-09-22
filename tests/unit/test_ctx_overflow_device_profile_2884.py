@@ -141,12 +141,14 @@ def test_provider_gpu_overflow_at_the_npu_window_is_retryable() -> None:
 def test_provider_gpu_threshold_is_the_gpu_profile_window() -> None:
     _set_device("gpu")
 
-    assert _classify_lemonade_response(_overflow_payload(GPU_CTX_SIZE - 1))[
-        0
-    ].retryable is True
-    assert _classify_lemonade_response(_overflow_payload(GPU_CTX_SIZE))[
-        0
-    ].retryable is False
+    assert (
+        _classify_lemonade_response(_overflow_payload(GPU_CTX_SIZE - 1))[0].retryable
+        is True
+    )
+    assert (
+        _classify_lemonade_response(_overflow_payload(GPU_CTX_SIZE))[0].retryable
+        is False
+    )
 
 
 # ── UI side: stringified-exception classification ───────────────────────
@@ -173,9 +175,7 @@ def test_ui_npu_overflow_below_the_profile_window_is_retryable() -> None:
 def test_ui_gpu_overflow_at_the_npu_window_is_retryable() -> None:
     _set_device("gpu")
 
-    assert (
-        _classify_chat_exception(_overflow_exception(NPU_CTX_SIZE)).retryable is True
-    )
+    assert _classify_chat_exception(_overflow_exception(NPU_CTX_SIZE)).retryable is True
 
 
 def test_ui_gpu_threshold_is_the_gpu_profile_window() -> None:
@@ -198,14 +198,41 @@ def test_ui_gpu_threshold_is_the_gpu_profile_window() -> None:
 # because it lives behind the fastapi-dependent ``gaia.ui`` package.
 
 
-def test_classifier_is_importable_without_the_ui_extras() -> None:
-    """The CLI must reach it without pulling in gaia.ui (fastapi)."""
-    from gaia.llm.providers.lemonade import classify_lemonade_exception
+def test_classifier_is_reachable_without_importing_the_ui_package() -> None:
+    """A fresh interpreter must classify without gaia.ui (and so fastapi).
 
-    classified = classify_lemonade_exception(
-        RuntimeError("the request exceeds the available context size (32768 tokens)")
+    Asserted in a subprocess because this test module itself imports
+    ``gaia.ui``, which would mask a regression here.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys;"
+        "from gaia.llm.providers.lemonade import classify_lemonade_exception as c,"
+        " LemonadeContextOverflowError as E;"
+        "assert isinstance(c(RuntimeError('exceeds the available context size"
+        " (32768 tokens)')), E);"
+        "assert not [m for m in sys.modules if m.startswith('gaia.ui')], "
+        "sorted(m for m in sys.modules if m.startswith('gaia.ui'))"
     )
-    assert isinstance(classified, LemonadeContextOverflowError)
+    import os
+    import pathlib
+
+    import gaia
+
+    # Point the child at THIS checkout — the editable install may resolve
+    # ``gaia`` to a different worktree (see the root conftest's path pin).
+    src_root = str(pathlib.Path(gaia.__file__).resolve().parent.parent)
+    env = {**os.environ, "PYTHONPATH": src_root}
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_ui_helper_still_exposes_the_classifier() -> None:
