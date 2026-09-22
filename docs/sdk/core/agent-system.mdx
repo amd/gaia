@@ -910,13 +910,32 @@ turn — no extra model call:
 | `partially verified` | Checks ran, but not all of them passed. |
 | `unverified` | No check ran. Names how many tools did run, if any. |
 
-A call counts as a check when the tool is one of `run_tests`, `run_lint`,
-`typecheck`, or `build`, or when its `command` argument names a known runner
-(`pytest`, `ruff`, `npm test`, `cargo test`, `go test`, `tsc`, …). The
-classifier also recognizes completed `execute_python_file` results containing a
-pytest summary or unittest run summary and an integer exit code. Reading a file
-containing test output, a refusal, or an ordinary script exit does not establish
-that tests ran. Other unrecognized runners remain `unverified`.
+The tool that ran the check says so. `run_shell_command`, `run_python`, and
+`execute_python_file` put a `check_result` on every result for a call that ran:
+a `CheckResult` (`label`, `target`, `kind`, `passed`, `summary`) when the program
+was a test, lint, typecheck, or build runner, and `null` when it was not. The
+footer reads that and nothing else. A shell run counts only when the program
+itself is the runner (`pytest -q`, `python -m pytest`, `uv run pytest`), so
+`cat pytest.ini` is not a test run; a failing summary line wins over a zero exit
+code, so `pytest | tail` that failed reads as failed.
+
+Results that carry no `check_result` — MCP tools, hub agents built before the
+field existed — are still classified from their text: a tool named `run_tests`,
+`run_lint`, `typecheck`, or `build`, a `command` argument naming a known runner,
+or a `run_python` / `execute_python_file` output with a pytest or unittest
+summary. Other unrecognized runners remain `unverified`.
+
+Before the answer goes out, the loop also checks it against the same record. An
+answer that reports a test outcome (`111 passed`, "all tests pass") when no test
+run passed after the last file edit gets one correction naming the gap; the
+second answer is emitted as written, with the footer beside it. A turn on its
+last step gets no correction.
+
+A check that ran more than once in the turn is judged by its most recent run. A
+test that failed and then passed after a fix reads `verified`; one that passed
+and then failed after an edit reads `ran and did not pass`. Only a rerun of the
+same command replaces an earlier run: if `pytest tests/` failed and
+`pytest tests/test_cart.py` then passed, the line still reports the failure.
 
 The statement rides in the emitted answer, so it reaches every surface — the
 CLI console, the SSE `answer` event, and `process_query`'s return value — and
