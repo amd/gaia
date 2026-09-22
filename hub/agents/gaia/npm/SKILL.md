@@ -356,7 +356,7 @@ data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary
 data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
-So: **`/query` cannot run any of those eight tools.** If your integration needs
+So: **`/query` cannot run any of those nine tools.** If your integration needs
 that, drive the agent from a surface that can prompt — its stdio transport is the
 one that can, because its control channel carries an approval back to a turn
 already in flight (SPEC §5.5) — or perform the mutation yourself from your own
