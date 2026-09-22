@@ -732,12 +732,17 @@ jobs:
           # for weeks because the key existed and the account behind it was out
           # of credit: the preflight passed and all five scenarios then died in
           # three seconds each with their stdout discarded.
-          claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String -OutVariable probe | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::The Claude credential is present but a one-line probe was rejected, so every scenario would error. Response: $probe"
-            exit 1
-          }
-          Write-Host "Claude credential accepted by a live probe."
+          # A rejected probe has two causes needing two different people: the org is
+          # out of budget (billing admin) or the credential is bad (secrets change).
+          # The exit code cannot tell them apart, so classify the response body and
+          # name the right owner - see util/classify_claude_probe.py (#4080).
+          $global:LASTEXITCODE = 0
+          $probe = (claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String)
+          $probeExit = $LASTEXITCODE
+          $probeFile = Join-Path $env:RUNNER_TEMP "claude_probe.txt"
+          Set-Content -Path $probeFile -Value $probe -Encoding UTF8
+          python util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
           # No baseline is a legitimate state right now, and it is reported, never
           # assumed away. Enforcing against a baseline that does not exist is the

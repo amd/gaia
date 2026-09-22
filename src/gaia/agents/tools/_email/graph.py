@@ -16,9 +16,13 @@ contract (Graph ``message`` resource) is the shared truth, not the Python.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from urllib.parse import quote
 
 import httpx
+
+from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +41,9 @@ _FULL_SELECT = _LIST_SELECT + ",body"
 # Graph caps $top at 999; asking for more is a 400, not a truncation.
 _MAX_TOP = 999
 
-
-class MailboxError(RuntimeError):
-    """A mailbox request failed in a way the caller should surface verbatim."""
-
-
-class MailboxAuthError(MailboxError):
-    """The mailbox rejected our credentials or refused the requested scope."""
+# The shape Graph issues for a message id: standard base64, so `+`, `/` and the
+# `=` padding are all legitimate, as are base64url's `-` and `_`.
+_MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9+/=_-]{1,512}")
 
 
 def _address(entity: Optional[Dict[str, Any]]) -> str:
@@ -216,7 +216,15 @@ class OutlookReadBackend:
         """One message, body included."""
         if not message_id or not message_id.strip():
             raise ValueError("message_id must be a non-empty message id")
-        data = self._get(f"/me/messages/{message_id}", params={"$select": _FULL_SELECT})
+        # Ids arrive from the model; accept only the shape Graph issues.
+        if not _MESSAGE_ID_RE.fullmatch(message_id):
+            raise ValueError(
+                f"message_id {message_id!r} is not a Microsoft Graph message "
+                "id. Use an id returned by list_inbox or search."
+            )
+        # Quoted whole: a base64 id's `/` is data, never a path separator.
+        path = f"/me/messages/{quote(message_id, safe='')}"
+        data = self._get(path, params={"$select": _FULL_SELECT})
         return message_summary(data, include_body=True)
 
     def list_folders(self, *, limit: int = 50) -> List[Dict[str, Any]]:
