@@ -540,6 +540,10 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		m.phase = phaseFixing
 		m.note = "Starting the " + m.cfg.AgentName + " agent…"
 		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixStartSidecar, ensureTimeout), m.spin.Tick)
+	case FixRestartSidecar:
+		m.phase = phaseFixing
+		m.note = "Restarting the " + m.cfg.AgentName + " agent in the requested mode…"
+		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixRestartSidecar, ensureTimeout), m.spin.Tick)
 	case FixPullModel, FixRunSetup:
 		return m.startProvision()
 	case FixConnectMailbox:

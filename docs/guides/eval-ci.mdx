@@ -73,7 +73,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: eval-results
-          path: eval/results/
+          path: |
+            eval/results/*/scorecard.json
+            eval/results/*/summary.md
+          retention-days: 14
 ```
 
 <Warning>
@@ -195,8 +198,9 @@ jobs:
         with:
           name: eval-scorecard
           path: |
-            eval/results/latest/scorecard.json
-            eval/results/latest/summary.md
+            eval/results/*/scorecard.json
+            eval/results/*/summary.md
+          retention-days: 14
 ```
 
 ---
@@ -304,7 +308,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: core-eval-results
-          path: eval/results/
+          path: |
+            eval/results/*/scorecard.json
+            eval/results/*/summary.md
+          retention-days: 14
 
   # Manual or main push: full benchmark (~$3.00)
   full-eval:
@@ -338,7 +345,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: full-eval-results
-          path: eval/results/
+          path: |
+            eval/results/*/scorecard.json
+            eval/results/*/summary.md
+          retention-days: 14
 ```
 
 ---
@@ -466,7 +476,7 @@ gaia eval agent --corpus-dir ~/my-project/eval-corpus
     - Run `--audit-only` on every push (free)
     - Use `--category` to limit CI costs on PRs
     - Save baselines after each release
-    - Upload `eval/results/` as artifacts
+    - Upload only `scorecard.json` and `summary.md` as artifacts
     - Set `timeout-minutes` on the job
     - Use `--budget` to cap per-scenario costs
     - Trigger full benchmarks via `workflow_dispatch`
@@ -478,8 +488,14 @@ gaia eval agent --corpus-dir ~/my-project/eval-corpus
     - Use `--fix` in CI (patches should be reviewed by humans)
     - Ignore `BLOCKED_BY_ARCHITECTURE` -- track these as known issues
     - Set budget too low ($0.50) -- scenarios may hit `BUDGET_EXCEEDED`
+    - Give the Agent UI backend your Claude credentials -- start it in its own step, without them
+    - Upload `traces/` or backend logs -- artifacts are not secret-masked
   </Card>
 </CardGroup>
+
+<Warning>
+  The agent under test can run shell commands, so its backend must never inherit `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; only the `gaia eval agent` step needs them. On a public repository anyone can download workflow artifacts, and GitHub masks secrets only in job logs. Keep uploads to scorecards and reproduce a regression locally for its traces.
+</Warning>
 
 <Warning>
   Never use `--fix` in CI pipelines. Fix mode patches source code directly and should only be used in local development where changes can be reviewed before committing.

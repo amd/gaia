@@ -17,8 +17,9 @@ import platform
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     record_read,
@@ -26,6 +27,7 @@ from gaia.agents.tools.file_edit import (
 )
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
+    is_broad_root,
     root_depth,
     search_roots,
 )
@@ -116,7 +118,7 @@ class FileSearchToolsMixin:
             return None
         is_allowed, reason = validator.validate_read(path)
         if not is_allowed:
-            return {"status": "error", "error": reason}
+            return {**NOT_EXECUTED, "status": "error", "error": reason}
         return None
 
     def register_file_search_tools(self) -> None:
@@ -408,12 +410,15 @@ class FileSearchToolsMixin:
                     for location in common_locations:
                         if len(matching_files) >= 20:
                             break
-                        # Skip anything already covered by a searched root
+                        # Skip anything already covered by a searched root. A
+                        # broad root was only walked shallowly, so it covers
+                        # nothing.
                         try:
                             resolved = location.resolve()
                             if any(
-                                resolved == root or str(resolved).startswith(str(root))
+                                resolved.is_relative_to(root.resolve())
                                 for root in roots
+                                if not is_broad_root(root)
                             ):
                                 continue
                         except (OSError, ValueError):
@@ -622,7 +627,9 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
         )
-        def read_file(file_path: str) -> Dict[str, Any]:
+        def read_file(
+            file_path: str, offset: int = 0, limit: Optional[int] = None
+        ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
             Automatically detects file type and provides appropriate analysis:
@@ -632,6 +639,8 @@ class FileSearchToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for a bounded text page.
+                limit: Page size (1..8000 characters); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -707,6 +716,17 @@ class FileSearchToolsMixin:
                             "then use query_specific_file or query_documents to retrieve content. "
                             "If index_document returns 'Access denied', ask the user to index the "
                             "file via the Document Library (attachment icon in the UI)."
+                        ),
+                    }
+
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    return {
+                        "status": "success",
+                        "file_path": file_path,
+                        **read_text_page(
+                            file_path, offset, 8000 if limit is None else limit
                         ),
                     }
 
@@ -1062,6 +1082,7 @@ class FileSearchToolsMixin:
                         )
                         logger.warning(f"Write denied: {reason}")
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "write_file",
@@ -1384,6 +1405,7 @@ class FileSearchToolsMixin:
                                 "edit", str(resolved_path), 0, "denied", reason
                             )
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": reason,
                                 "operation": "edit_file",
@@ -1393,6 +1415,7 @@ class FileSearchToolsMixin:
                             "edit", str(resolved_path), 0, "denied", reason
                         )
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "edit_file",

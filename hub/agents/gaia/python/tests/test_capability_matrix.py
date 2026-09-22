@@ -58,12 +58,12 @@ _spec.loader.exec_module(capability_matrix)
 # the flagship eval dataset §1/§3).
 # ---------------------------------------------------------------------------
 
-# 79: 69 after #3023's `remember_skill_lesson`, plus the email and image_gen
-# bundles from main and this branch's `capture_skill`.
-_EXPECTED_TOOLS_TOTAL = 79
+# 81: 69 after #3023's `remember_skill_lesson`, plus the email and image_gen
+# bundles and `run_python` from main, and this branch's `capture_skill`.
+_EXPECTED_TOOLS_TOTAL = 81
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
-_EXPECTED_CORE_COUNT = 13
+_EXPECTED_CORE_COUNT = 15
 _EXPECTED_BUNDLE_COUNT = 21
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
@@ -88,11 +88,12 @@ _EXPECTED_REST_OP_NAMES = {
     "query",
     "query/{run_id}/cancel",
     "query/{run_id}/respond",
+    "memory",
 }
-_EXPECTED_REST_FUNCTIONAL_COUNT = 3
+_EXPECTED_REST_FUNCTIONAL_COUNT = 4
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 7
+_EXPECTED_REST_IN_CONTRACT_COUNT = 8
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 

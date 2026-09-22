@@ -16,9 +16,13 @@ contract (Graph ``message`` resource) is the shared truth, not the Python.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from urllib.parse import quote
 
 import httpx
+
+from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +41,33 @@ _FULL_SELECT = _LIST_SELECT + ",body"
 # Graph caps $top at 999; asking for more is a 400, not a truncation.
 _MAX_TOP = 999
 
+# The shape Graph issues for a message id: standard base64, so `+`, `/` and the
+# `=` padding are all legitimate, as are base64url's `-` and `_`.
+_MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9+/=_-]{1,512}")
 
-class MailboxError(RuntimeError):
-    """A mailbox request failed in a way the caller should surface verbatim."""
+# The shape Graph documents for `error.code` — a short token like
+# `ErrorAccessDenied`. Anything else means the body isn't the documented
+# error shape (an HTML error page, a proxy notice) and gets dropped.
+_ERROR_CODE_RE = re.compile(r"[A-Za-z0-9_.]{1,64}")
 
 
-class MailboxAuthError(MailboxError):
-    """The mailbox rejected our credentials or refused the requested scope."""
+def _error_detail(response: httpx.Response) -> str:
+    """Graph's structured `error.code` field, or "" if the body isn't that shape.
+
+    Deliberately never `error.message` or the raw body: both are
+    upstream-controlled prose and echoing them puts arbitrary text (or an
+    HTML error page) in front of the user.
+    """
+    try:
+        parsed = response.json()
+    except ValueError:
+        return ""
+    # A parsed body or its `error` field can be any JSON type, not just an object.
+    err = parsed.get("error") if isinstance(parsed, dict) else None
+    if not isinstance(err, dict):
+        return ""
+    code = str(err.get("code") or "")
+    return code if _ERROR_CODE_RE.fullmatch(code) else ""
 
 
 def _address(entity: Optional[Dict[str, Any]]) -> str:
@@ -114,9 +138,11 @@ class OutlookReadBackend:
         return {"Authorization": f"Bearer {self._access_token_fn()}"}
 
     def _raise(self, response: httpx.Response, where: str) -> None:
-        # Built from status + truncated body only. Never from a wrapper
-        # exception, which can carry the Authorization header into a log.
-        detail = response.text[:300]
+        # Built from status + the documented `error.code` field only. Never
+        # from a wrapper exception (can carry the Authorization header into a
+        # log) or the raw body (upstream-controlled — an HTML error page or
+        # proxy notice would land verbatim in front of the user).
+        code = _error_detail(response)
         if response.status_code == 401:
             raise MailboxAuthError(
                 "Microsoft Graph rejected the access token (401). The Outlook "
@@ -130,7 +156,7 @@ class OutlookReadBackend:
                 "permissions). The connected account has not granted "
                 "Mail.ReadWrite to this agent. Reconnect Microsoft with "
                 "`gaia connectors` and approve mail access. "
-                f"(request: {where}; detail: {detail})"
+                f"(request: {where}; code: {code or 'forbidden'})"
             )
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After", "unknown")
@@ -141,7 +167,9 @@ class OutlookReadBackend:
             )
         raise MailboxError(
             f"Microsoft Graph request failed: {where} returned "
-            f"{response.status_code}. Detail: {detail}"
+            f"{response.status_code}" + (f" ({code})" if code else "") + ". "
+            "Retry; if it persists, check Microsoft 365 service status and "
+            "reconnect with `gaia connectors`."
         )
 
     def _get(self, path: str, *, params: Optional[dict] = None) -> Any:
@@ -216,7 +244,15 @@ class OutlookReadBackend:
         """One message, body included."""
         if not message_id or not message_id.strip():
             raise ValueError("message_id must be a non-empty message id")
-        data = self._get(f"/me/messages/{message_id}", params={"$select": _FULL_SELECT})
+        # Ids arrive from the model; accept only the shape Graph issues.
+        if not _MESSAGE_ID_RE.fullmatch(message_id):
+            raise ValueError(
+                f"message_id {message_id!r} is not a Microsoft Graph message "
+                "id. Use an id returned by list_inbox or search."
+            )
+        # Quoted whole: a base64 id's `/` is data, never a path separator.
+        path = f"/me/messages/{quote(message_id, safe='')}"
+        data = self._get(path, params={"$select": _FULL_SELECT})
         return message_summary(data, include_body=True)
 
     def list_folders(self, *, limit: int = 50) -> List[Dict[str, Any]]:

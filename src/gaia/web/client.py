@@ -567,11 +567,12 @@ class WebClient:
         except Exception:
             return BeautifulSoup(html, "html.parser")
 
-    def extract_text(self, soup: "BeautifulSoup", max_length: int = 5000) -> str:
+    def extract_text(self, soup: "BeautifulSoup", max_length: int | None = 5000) -> str:
         """Extract readable text from parsed HTML.
 
         Removes script/style/nav/footer tags, preserves heading hierarchy,
         paragraph breaks, and list structure. Collapses whitespace.
+        Set max_length=None when the caller archives the complete extraction.
         """
         # Remove unwanted tags
         for tag_name in REMOVE_TAGS:
@@ -625,7 +626,7 @@ class WebClient:
         result = re.sub(r"\n{3,}", "\n\n", result)
 
         # Truncate at word boundary
-        if len(result) > max_length:
+        if max_length is not None and len(result) > max_length:
             truncated = result[:max_length]
             last_space = truncated.rfind(" ")
             if last_space > max_length * 0.8:

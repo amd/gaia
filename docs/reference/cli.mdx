@@ -1358,7 +1358,7 @@ gaia connectors <subcommand> [OPTIONS]
 | `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys, OAuth client creds) |
 | `test <id>` | Run a health check for a configured connector |
-| `disconnect <id>` | Remove credentials and reset a connector's state |
+| `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
 | `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
 
@@ -1419,7 +1419,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt` |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 
@@ -1430,6 +1430,11 @@ For `gaia chat`, `gaia llm`, and `gaia prompt`, the model is resolved highest-wi
 1. An explicit `--model <id>` flag
 2. `default_model` from `~/.gaia/config.json`
 3. The command's built-in default (`DEFAULT_MODEL_NAME`)
+
+The Agent UI resolves a new session's model the same way: an explicit pick
+in the UI wins, then `default_model`, then the built-in floor. So
+`gaia config set default_model <id>` also changes what a brand-new "New
+Chat" lands on, not just the CLI.
 
 So `gaia config set default_model <id>` lets you skip `--model` entirely, while
 `--model` still overrides it for a single run. For `gaia chat`, passing an
@@ -1806,6 +1811,21 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 </Note>
 
 [→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
+
+---
+
+### Flagship Agent Tasks
+
+Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, quality, honesty, tokens, steps and runtime, against main's committed results.
+
+```bash
+gaia eval tasks run --suite core                   # Run the core tasks, then judge them
+gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
+gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
+gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
+```
+
+[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks)
 
 ---
 
