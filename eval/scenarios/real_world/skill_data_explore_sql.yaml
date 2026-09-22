@@ -1,7 +1,6 @@
 id: skill_data_explore_sql
 name: "Skill: data-explore -- Load, Verify, Query"
 category: real_world
-agent_type: gaia
 severity: high
 description: |
   Golden path for the bundled `data-explore` skill (hub/skills/data-explore).

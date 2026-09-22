@@ -1,7 +1,6 @@
 id: skill_data_explore_prefix
 name: "Skill: data-explore -- Prefix Rule and Data Limits"
 category: real_world
-agent_type: gaia
 severity: high
 description: |
   Failure-path counterpart to skill_data_explore_sql. Covers the two things

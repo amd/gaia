@@ -1,7 +1,6 @@
 id: skill_summarize_styles
 name: "Skill: summarize -- Document Style Contract"
 category: rag_quality
-agent_type: gaia
 severity: high
 description: |
   Golden path for the bundled `summarize` skill (hub/skills/summarize). The

@@ -1,7 +1,6 @@
 id: skill_file_ops_discovery
 name: "Skill: file-ops -- Find Before You Touch"
 category: tool_selection
-agent_type: gaia
 severity: high
 description: |
   Golden path for the bundled `file-ops` skill (hub/skills/file-ops). The skill's

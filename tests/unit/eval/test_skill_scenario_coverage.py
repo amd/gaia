@@ -26,6 +26,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.runner import SCENARIOS_DIR, validate_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -135,19 +137,25 @@ def test_skill_scenario_validates(path: Path):
     validate_scenario(path, data)
 
 
-@pytest.mark.parametrize("path", SKILL_SCENARIOS, ids=lambda p: p.stem)
-def test_skill_scenario_targets_the_flagship_agent(path: Path):
-    """Only GaiaAgent composes SkillLibraryToolsMixin.
+def test_the_default_agent_can_load_skills():
+    """Every scenario here needs an agent that actually has ``load_skill``.
 
-    The chat/doc/file profiles run ChatAgent, which has no ``load_skill`` tool at
-    all, and the backend defaults to ``chat`` when ``agent_type`` is absent. A
-    skill scenario on any other agent type cannot load the skill it is testing.
+    Scenarios no longer pin ``agent_type`` -- the runner passes the one default
+    for the whole run -- so this is the only place the requirement can be
+    checked. Only the flagship composes ``SkillLibraryToolsMixin``; ChatAgent
+    (the chat/doc/file profiles) has no ``load_skill`` tool at all, so a default
+    pointed back at it would make all eight scenarios fail on turn 1 for a
+    reason that has nothing to do with the skills.
     """
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert data.get("agent_type") == "gaia", (
-        f"{path.name}: skill scenarios must set agent_type: gaia, got "
-        f"{data.get('agent_type')!r}"
+    from gaia_agent.agent import GaiaAgent
+
+    assert DEFAULT_AGENT_TYPE == "gaia", (
+        f"the eval default agent is {DEFAULT_AGENT_TYPE!r}, which is not the "
+        f"flagship. Skill scenarios assert `load_skill` on turn 1 and only the "
+        f"flagship provides it."
     )
+    assert SkillLibraryToolsMixin in GaiaAgent.__mro__
+    assert hasattr(GaiaAgent, "load_skill")
 
 
 @pytest.mark.parametrize("path", SKILL_SCENARIOS, ids=lambda p: p.stem)

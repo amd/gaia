@@ -1,7 +1,6 @@
 id: skill_summarize_action_items
 name: "Skill: summarize -- Unsupported Style Names"
 category: rag_quality
-agent_type: gaia
 severity: high
 description: |
   Failure-path counterpart to skill_summarize_styles. The summarize skill names

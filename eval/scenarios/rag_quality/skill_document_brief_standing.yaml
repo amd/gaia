@@ -1,7 +1,6 @@
 id: skill_document_brief_standing
 name: "Skill: document-brief -- Standing Brief Format"
 category: rag_quality
-agent_type: gaia
 severity: high
 description: |
   Golden path for the bundled `document-brief` skill (hub/skills/document-brief).

@@ -1,7 +1,6 @@
 id: skill_file_ops_guardrails
 name: "Skill: file-ops -- Guardrails Are the Answer"
 category: tool_selection
-agent_type: gaia
 severity: high
 description: |
   Failure-path counterpart to skill_file_ops_discovery. Covers the two things

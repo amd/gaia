@@ -1,7 +1,6 @@
 id: skill_document_brief_gaps
 name: "Skill: document-brief -- Gaps and Index Failure"
 category: rag_quality
-agent_type: gaia
 severity: high
 description: |
   Failure-path counterpart to skill_document_brief_standing. Exercises the two
