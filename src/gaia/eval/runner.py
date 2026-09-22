@@ -265,6 +265,17 @@ def _read_session_agent_type(backend_url: str, session_id: str, timeout: float =
     return response.json().get("agent_type")
 
 
+# Statuses meaning the scenario produced NO measurement, as distinct from
+# "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
+# death scores 0.0 (or null), which is indistinguishable from a model that
+# answered badly, so comparing the two reports infrastructure as a regression.
+# BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
+# integrity gate also counts blocked/skipped outcomes as incomplete.
+_NO_MEASUREMENT_STATUSES = frozenset(
+    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
+)
+
+
 def _stamp_agent_provenance(
     result: dict,
     scenario_data: dict,
@@ -696,16 +707,6 @@ _SCORE_WEIGHTS = {
 
 # Significant score drop within the same pass/fail status warrants a warning
 _SCORE_REGRESSION_THRESHOLD = 2.0
-
-# Statuses meaning the scenario produced NO measurement, as distinct from
-# "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
-# death scores 0.0 (or null), which is indistinguishable from a model that
-# answered badly, so comparing the two reports infrastructure as a regression.
-# BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
-# integrity gate also counts blocked/skipped outcomes as incomplete.
-_NO_MEASUREMENT_STATUSES = frozenset(
-    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
-)
 
 
 @functools.lru_cache(maxsize=1)

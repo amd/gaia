@@ -152,7 +152,10 @@ def test_a_mismatch_overrides_even_a_more_specific_status():
     assert result["status"] == "INFRA_ERROR"
 
 
-@pytest.mark.parametrize("status", ["TIMEOUT", "SETUP_ERROR", "ERRORED"])
+@pytest.mark.parametrize(
+    "status",
+    ["TIMEOUT", "SETUP_ERROR", "ERRORED", "BUDGET_EXCEEDED", "INFRA_ERROR"],
+)
 def test_a_scenario_that_never_measured_keeps_its_own_status(status):
     # These never got far enough to create a session; relabelling them
     # INFRA_ERROR would erase the real failure.
