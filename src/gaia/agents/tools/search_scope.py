@@ -18,9 +18,8 @@ One module rather than a method on each mixin, so the two cannot drift.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Optional
 
 #: Depth the primary root is walked to — effectively unlimited. The project the
 #: user is working in is the one place worth an exhaustive walk.
@@ -47,12 +46,50 @@ def path_validator_of(host: Any) -> Any:
     )
 
 
+def is_broad_root(root: Path) -> bool:
+    """The filesystem root or the user's home — a boundary, never a project.
+
+    Full access grants ``/``; the flagship's default grants ``~``. Either walked
+    exhaustively is a whole-disk crawl.
+
+    Deliberately just those two. A container of homes (``/home``, ``C:\\Users``)
+    is as expensive to walk, but only reaches the approved set by a user
+    approving it by name — and demoting a root someone chose on purpose is the
+    bug this module exists to avoid.
+    """
+    resolved = Path(root).expanduser().resolve()
+    return resolved == Path(resolved.anchor) or resolved == Path.home().resolve()
+
+
+def session_workspace(host: Any) -> Optional[Path]:
+    """Where this session is working: its project root, else the process cwd.
+
+    ``None`` when that is a broad root, or GAIA's own source tree — the cwd a
+    dev-mode sidecar is spawned in, which says nothing about the user's work.
+    """
+    project_root = getattr(host, "_project_map_root", None)
+    recorded = project_root() if callable(project_root) else None
+    if recorded:
+        workspace = Path(recorded).resolve()
+    else:
+        from gaia.agents.base.project_map import is_agent_own_source
+
+        workspace = Path.cwd().resolve()
+        if is_agent_own_source(workspace):
+            return None
+    return None if is_broad_root(workspace) else workspace
+
+
 def search_roots(host: Any) -> List[Path]:
     """Allowed paths, **most specific first**, then a working-directory fallback.
 
     Most specific first is load-bearing: it decides which root a relative
     directory like ``tui/internal`` is resolved against, and the deepest match
     is the one the user meant. Sorting by string put ``/a`` before ``/a/b``.
+
+    The allowed paths are a permission boundary, not a search scope. When the
+    only ones holding the session's workspace are broad (``/`` under full
+    access), the workspace goes first — otherwise the "project" is the disk.
 
     The fallback is only for library use with no sandbox declared at all.
     """
@@ -64,79 +101,24 @@ def search_roots(host: Any) -> List[Path]:
     ]
     if not roots:
         return [Path.cwd().resolve()]
-    return sorted(roots, key=lambda p: (-len(p.parts), str(p)))
+    roots = sorted(roots, key=lambda p: (-len(p.parts), str(p)))
+    workspace = session_workspace(host)
+    if workspace is None or workspace in roots:
+        return roots
+    holders = [r for r in roots if r.resolve() in workspace.parents]
+    if holders and all(is_broad_root(r) for r in holders):
+        return [workspace, *roots]
+    return roots
 
 
 def root_depth(root: Path, roots: List[Path]) -> int:
     """How deep to walk *root* given the whole set.
 
     The first (most specific) root is the project; the rest are approvals that
-    accumulated, and are capped.
+    accumulated, and are capped. A broad root is capped even when first.
     """
+    if is_broad_root(root):
+        return SHALLOW_ROOT_DEPTH
     if roots and Path(root) == Path(roots[0]):
         return DEEP_ROOT_DEPTH
     return SHALLOW_ROOT_DEPTH
-
-
-def _is_gaia_install_dir(path: Path) -> bool:
-    """True when *path* is where GAIA itself lives, not where the user works.
-
-    Covers the installed ``gaia`` package's parent (``src/`` or
-    ``site-packages``), the running interpreter's prefix, and a hub agent's
-    ``hub/agents/<id>/python`` directory — the cwd a dev-mode sidecar is
-    spawned in.
-    """
-    import gaia
-
-    own = [Path(gaia.__file__).resolve().parent.parent, Path(sys.prefix).resolve()]
-    if any(path == d or d in path.parents for d in own):
-        return True
-    parts = path.parts
-    return any(
-        parts[i : i + 2] == ("hub", "agents") and parts[i + 3] == "python"
-        for i in range(len(parts) - 3)
-    )
-
-
-def is_broad_root(path: Path) -> bool:
-    """True for a root so wide that walking it exhaustively is the #3889 bug.
-
-    Only ``$HOME`` and a filesystem root qualify. A project-sized sandbox, even
-    one several levels above the cwd, stays deep — demoting it would silently
-    put its own deeply-nested files out of reach.
-    """
-    path = Path(path)
-    try:
-        home = Path.home().resolve()
-    except RuntimeError:
-        home = None
-    return path == home or path == Path(path.anchor)
-
-
-def walk_plan(host: Any) -> List[Tuple[Path, int]]:
-    """``(root, max_depth)`` pairs for a search with no ``directory`` given.
-
-    Normally :func:`search_roots` with :func:`root_depth`. Only when the cwd
-    sits inside a root as broad as ``$HOME`` or a filesystem root is the cwd
-    walked deep first and that root dropped to :data:`SHALLOW_ROOT_DEPTH`, so a
-    lookup cannot turn into a walk of the whole home folder (#3889). A
-    project-sized sandbox keeps its full depth: it is small enough to walk, and
-    demoting it would hide its own deeply-nested files. A cwd that is not
-    inside the sandbox, or is GAIA's own install/package directory, is ignored:
-    that is how the process was launched, not where the user's work is (#3576).
-    """
-    roots = search_roots(host)
-    plan = [(root, root_depth(root, roots)) for root in roots]
-    cwd = Path.cwd().resolve()
-    resolved = [Path(r).resolve() for r in roots]
-    if cwd in resolved:
-        return plan
-    container = next((r for r in resolved if r in cwd.parents), None)
-    if container is None or _is_gaia_install_dir(cwd):
-        return plan
-    if not is_broad_root(container):
-        return plan
-    return [(cwd, DEEP_ROOT_DEPTH)] + [
-        (root, SHALLOW_ROOT_DEPTH if res == container else depth)
-        for (root, depth), res in zip(plan, resolved)
-    ]

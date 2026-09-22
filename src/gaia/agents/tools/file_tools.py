@@ -10,7 +10,7 @@ These tools are agent-agnostic and don't depend on specific agent functionality.
 import ast
 import csv
 import fnmatch
-import logging
+import heapq
 import mimetypes
 import os
 import platform
@@ -18,8 +18,9 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools import search_scope
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
@@ -28,11 +29,30 @@ from gaia.agents.tools.file_edit import (
 )
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
+    is_broad_root,
+    root_depth,
     search_roots,
-    walk_plan,
 )
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+def _python_syntax_error(source: str, filename: str) -> str | None:
+    """The SyntaxError *source* would raise on import, or None if it is valid.
+
+    Uses ``compile`` rather than ``ast.parse``: the parser accepts a dedented
+    ``return``, a stray ``yield``/``await``, ``break`` outside a loop and
+    duplicate argument names — all of which fail at import. #3733's own
+    corruption (``return 0`` dedented out of ``main()``) is one of them.
+    Grammar is the running interpreter's, so syntax newer than the host
+    Python reads as invalid.
+    """
+    try:
+        compile(source, filename, "exec")
+    except (SyntaxError, ValueError) as e:  # ValueError: source has null bytes
+        return str(e)
+    return None
 
 
 class FileSearchToolsMixin:
@@ -100,7 +120,7 @@ class FileSearchToolsMixin:
             return None
         is_allowed, reason = validator.validate_read(path)
         if not is_allowed:
-            return {"status": "error", "error": reason}
+            return {**NOT_EXECUTED, "status": "error", "error": reason}
         return None
 
     def register_file_search_tools(self) -> None:
@@ -426,8 +446,7 @@ class FileSearchToolsMixin:
                     # Phase 0+1: the agent's allowed paths AND common document
                     # locations (always both, so a Documents file isn't missed
                     # just because a workspace root had some matches).
-                    plan = walk_plan(self)
-                    roots = [root for root, _ in plan]
+                    roots = self._search_roots()
                     if hasattr(self, "console") and hasattr(
                         self.console, "start_progress"
                     ):
@@ -435,11 +454,11 @@ class FileSearchToolsMixin:
                             f"🔍 Searching the workspace for '{file_pattern}'..."
                         )
                     logger.debug("Phase 0: searching %s", [str(r) for r in roots])
-                    for root, max_depth in plan:
+                    for root in roots:
                         # Only the project gets an exhaustive walk. The rest of
                         # the sandbox is approvals that accumulated over time,
                         # and a zero-result search would traverse all of them.
-                        search_location(root, max_depth=max_depth)
+                        search_location(root, max_depth=root_depth(root, roots))
 
                     # Always also search common locations (Documents, Downloads, etc.)
                     if hasattr(self, "console") and hasattr(
@@ -461,14 +480,19 @@ class FileSearchToolsMixin:
                     ]
 
                     # By path, not string prefix: a root ~/Doc must not cover ~/Documents.
-                    resolved_roots = [Path(root).resolve() for root in roots]
                     for location in common_locations:
                         if len(matching_files) >= 20:
                             break
-                        # Skip anything already covered by a searched root
+                        # Skip anything already covered by a searched root. A
+                        # broad root was only walked shallowly, so it covers
+                        # nothing.
                         try:
                             resolved = location.resolve()
-                            if any(resolved.is_relative_to(r) for r in resolved_roots):
+                            if any(
+                                resolved.is_relative_to(root.resolve())
+                                for root in roots
+                                if not is_broad_root(root)
+                            ):
                                 continue
                         except (OSError, ValueError) as e:
                             logger.debug(
@@ -692,7 +716,9 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
         )
-        def read_file(file_path: str) -> Dict[str, Any]:
+        def read_file(
+            file_path: str, offset: int = 0, limit: Optional[int] = None
+        ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
             Automatically detects file type and provides appropriate analysis:
@@ -702,6 +728,8 @@ class FileSearchToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for a bounded text page.
+                limit: Page size (1..8000 characters); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -737,6 +765,19 @@ class FileSearchToolsMixin:
                         ),
                     }
 
+                # os.path.exists() is true for a directory too, so without this
+                # check open() below raises IsADirectoryError into the generic
+                # except Exception handler as a raw errno string (amd/gaia#3890).
+                if os.path.isdir(file_path):
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"'{file_path}' is a directory, not a file. Use "
+                            "search_directory to list its contents, then call "
+                            "read_file on a file inside it."
+                        ),
+                    }
+
                 # Document formats must be indexed via index_document, not read directly.
                 # The tool docstring explicitly scopes read_file to text files (Python,
                 # Markdown, etc.); binary document types are not supported.  Returning
@@ -764,6 +805,17 @@ class FileSearchToolsMixin:
                             "then use query_specific_file or query_documents to retrieve content. "
                             "If index_document returns 'Access denied', ask the user to index the "
                             "file via the Document Library (attachment icon in the UI)."
+                        ),
+                    }
+
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    return {
+                        "status": "success",
+                        "file_path": file_path,
+                        **read_text_page(
+                            file_path, offset, 8000 if limit is None else limit
                         ),
                     }
 
@@ -1011,8 +1063,9 @@ class FileSearchToolsMixin:
                                         if len(matches) >= 100:
                                             return False
                         return True
-                    except Exception:
-                        return True  # Continue searching
+                    except (OSError, UnicodeError) as exc:
+                        logger.warning("Could not search %s: %s", file_path, exc)
+                        return True
 
                 # Search files
                 for file_path in directory.rglob("*"):
@@ -1118,6 +1171,7 @@ class FileSearchToolsMixin:
                         )
                         logger.warning(f"Write denied: {reason}")
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "write_file",
@@ -1440,6 +1494,7 @@ class FileSearchToolsMixin:
                                 "edit", str(resolved_path), 0, "denied", reason
                             )
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": reason,
                                 "operation": "edit_file",
@@ -1449,6 +1504,7 @@ class FileSearchToolsMixin:
                             "edit", str(resolved_path), 0, "denied", reason
                         )
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "edit_file",
@@ -1474,6 +1530,36 @@ class FileSearchToolsMixin:
                             "edit", str(resolved_path), 0, "denied", edit_error["error"]
                         )
                     return {**edit_error, "operation": "edit_file"}
+
+                # Validate Python syntax before editing. Existing syntax errors
+                # are allowed so an edit can repair a broken file incrementally.
+                if resolved_path.suffix.lower() == ".py":
+                    was_broken = _python_syntax_error(
+                        current_content, str(resolved_path)
+                    )
+                    if was_broken is not None:
+                        logger.debug(
+                            "Allowing edit to already-invalid Python file %s: %s",
+                            resolved_path,
+                            was_broken,
+                        )
+                    else:
+                        would_break = _python_syntax_error(
+                            updated_content, str(resolved_path)
+                        )
+                        if would_break is not None:
+                            return {
+                                "status": "error",
+                                "error": (
+                                    f"Edit refused: it would leave {resolved_path} "
+                                    f"with invalid Python syntax ({would_break}). "
+                                    f"The file is unchanged — fix the replacement "
+                                    f"text and retry."
+                                ),
+                                "syntax_errors": [would_break],
+                                "file_path": str(resolved_path),
+                                "operation": "edit_file",
+                            }
 
                 # Create backup before editing
                 backup_path = None
@@ -1511,6 +1597,7 @@ class FileSearchToolsMixin:
 
                 result = {
                     "status": "success",
+                    "operation": "edit_file",
                     "file_path": str(resolved_path),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
@@ -2593,13 +2680,19 @@ class FileSearchToolsMixin:
             Args:
                 location: 'all', 'documents', 'downloads', or 'desktop'
                 file_types: Comma-separated extensions to filter
-                max_results: Maximum number of results to return
+                max_results: Maximum results across all output fields (1-200)
                 days: Only show files modified within this many days
 
             Returns:
                 Dictionary with list of recent files sorted by modification time
             """
             try:
+                if (
+                    not isinstance(max_results, int)
+                    or isinstance(max_results, bool)
+                    or not 1 <= max_results <= 200
+                ):
+                    raise ValueError("max_results must be an integer between 1 and 200")
                 home = Path.home()
 
                 # Determine directories to scan
@@ -2660,6 +2753,7 @@ class FileSearchToolsMixin:
 
                 cutoff = datetime.now() - timedelta(days=days)
                 recent_files = []
+                total_found = 0
 
                 for scan_dir in dirs_to_scan:
                     if not scan_dir.exists():
@@ -2686,37 +2780,33 @@ class FileSearchToolsMixin:
                                 if modified_dt < cutoff:
                                     continue
 
-                                recent_files.append(
-                                    {
-                                        "file_name": item.name,
-                                        "file_path": str(item),
-                                        "size_bytes": stat_info.st_size,
-                                        "size": _human_readable_size(stat_info.st_size),
-                                        "modified": modified_dt.strftime(
-                                            "%Y-%m-%d %H:%M"
-                                        ),
-                                        "modified_ago": _relative_time(modified_dt),
-                                        "extension": item.suffix.lower(),
-                                        "directory": str(item.parent),
-                                    }
-                                )
-                            except (PermissionError, OSError):
+                                total_found += 1
+                                item_info = {
+                                    "file_name": item.name,
+                                    "file_path": str(item),
+                                    "size_bytes": stat_info.st_size,
+                                    "size": _human_readable_size(stat_info.st_size),
+                                    "modified": modified_dt.strftime("%Y-%m-%d %H:%M"),
+                                    "modified_ago": _relative_time(modified_dt),
+                                    "extension": item.suffix.lower(),
+                                    "directory": str(item.parent),
+                                }
+                                entry = (stat_info.st_mtime_ns, total_found, item_info)
+                                if len(recent_files) < max_results:
+                                    heapq.heappush(recent_files, entry)
+                                else:
+                                    heapq.heappushpop(recent_files, entry)
+                            except (PermissionError, OSError) as exc:
+                                logger.debug("Could not inspect %s: %s", item, exc)
                                 continue
 
                     except (PermissionError, OSError) as e:
                         logger.debug(f"Could not scan {scan_dir}: {e}")
                         continue
 
-                # Sort by modification time (most recent first)
-                recent_files.sort(key=lambda x: x["modified"], reverse=True)
-
-                total_found = len(recent_files)
+                shown = [entry[2] for entry in sorted(recent_files, reverse=True)]
                 locations_searched = [d.name for d in dirs_to_scan if d.exists()]
-
-                # Return all files — first batch shown directly, rest in a
-                # collapsible section so the LLM doesn't truncate them.
-                shown = recent_files[:max_results]
-                extra = recent_files[max_results:]
+                truncated = total_found > len(shown)
 
                 # Build display_message with collapsible extra files
                 loc_str = ", ".join(locations_searched)
@@ -2725,18 +2815,16 @@ class FileSearchToolsMixin:
                 ]
                 for f in shown:
                     display_parts.append(f"  {f['file_name']} ({f['directory']})")
-                if extra:
+                if truncated:
                     display_parts.append(
-                        f"\n<details><summary>+{len(extra)} more files</summary>\n"
+                        f"Showing {len(shown)} of {total_found}; {total_found - len(shown)} "
+                        "files omitted. Narrow location, file_types, or days to see other matches."
                     )
-                    for f in extra:
-                        display_parts.append(f"  {f['file_name']} ({f['directory']})")
-                    display_parts.append("</details>")
 
                 return {
                     "status": "success",
-                    "files": recent_files[:max_results],
-                    "all_files": recent_files,
+                    "files": shown,
+                    "truncated": truncated,
                     "count": len(shown),
                     "total_found": total_found,
                     "locations_searched": locations_searched,
