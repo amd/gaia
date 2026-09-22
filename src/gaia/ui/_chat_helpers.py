@@ -181,6 +181,7 @@ def _classify_chat_exception(exc: BaseException):
     streaming/non-streaming paths to decide whether to auto-retry and
     what user-facing message to surface.
     """
+    from gaia.llm.lemonade_client import active_profile_ctx_size
     from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
         LemonadeCloudAccountError,
         LemonadeContextOverflowError,
@@ -243,14 +244,10 @@ def _classify_chat_exception(exc: BaseException):
         if not m:
             m = _re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
         if m:
-            try:
-                n_ctx = int(m.group(1))
-                # Threshold tracks the chat / rag profile default
-                # (65536) — see lemonade.py:_classify_lemonade_response.
-                if 0 < n_ctx < 65536:
-                    err.retryable = True
-            except ValueError:
-                pass
+            # Threshold is the active device profile's window — see
+            # lemonade.py:_classify_lemonade_response.
+            if 0 < int(m.group(1)) < active_profile_ctx_size():
+                err.retryable = True
         return err
     # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
     # hung) from real connectivity failures (#1030). The user-facing remediation
