@@ -918,6 +918,9 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Class-level so a subclass that never runs ``__init__`` still increments.
+    _turn_seq: int = 0
+
     # Dynamic tool loader (#1449): the sorted subset of tool names to surface
     # this turn, or ``None`` to render the full registry (legacy, byte-identical).
     # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
@@ -5545,6 +5548,7 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+        self._turn_seq += 1
         self._begin_turn_provenance()
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
