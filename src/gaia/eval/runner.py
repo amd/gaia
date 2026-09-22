@@ -279,42 +279,58 @@ def _stamp_agent_provenance(
     id (#4069). Over HTTP a dropped kwarg reads back as the string ``"chat"``,
     never ``None`` — so a scenario legitimately requesting ``chat`` is the one
     case this cannot tell apart.
+
+    Two rules, and they are not the same severity. A **mismatch** is always
+    fatal: the score belongs to an agent nobody asked for. Being **unable to
+    verify** only discards a score, so it downgrades a PASS/FAIL and leaves
+    every other status intact. Nothing is checked when no agent was requested —
+    the backend default is the right answer by definition.
     """
     requested = _resolve_scenario_agent_type(scenario_data, cli_agent_type)
     result["agent_type_requested"] = requested
     result.setdefault("agent_type_observed", None)
 
-    # A scenario that never produced a measurement never got a session either;
-    # relabelling it would erase the real failure.
+    if not requested:
+        return
+
+    # A scenario that never produced a measurement never got a session either.
     if result.get("status") in _NO_MEASUREMENT_STATUSES:
         return
 
     scenario_id = result.get("scenario_id", scenario_data.get("id", "<unknown>"))
+
+    def _unverifiable(reason: str) -> None:
+        """Discard a score that cannot be attributed; keep any other status."""
+        message = (
+            f"{scenario_id}: requested agent_type '{requested}' but {reason}, so "
+            "the agent that answered cannot be verified."
+        )
+        if result.get("status") in ("PASS", "FAIL"):
+            result["status"] = "INFRA_ERROR"
+            result["error"] = message
+        else:
+            result.setdefault("provenance_warning", []).append(message)
+        print(f"[WARN] {message}", file=sys.stderr)
+
     session_id = result.get("session_id")
     if not session_id:
-        result["status"] = "INFRA_ERROR"
-        result["error"] = (
-            f"{scenario_id}: the eval driver returned no session_id, so the agent "
-            "that answered cannot be verified. The driver must return the "
-            "session_id from Phase 1 in its result JSON."
+        _unverifiable(
+            "the eval driver returned no session_id (it must return the one "
+            "create_session gave it in Phase 1)"
         )
         return
 
     try:
         observed = read_session_agent_type(backend_url, session_id)
     except Exception as e:  # transport, HTTP status, or malformed body
-        result["status"] = "INFRA_ERROR"
-        result["error"] = (
-            f"{scenario_id}: could not read session {session_id} back from "
-            f"{backend_url} to verify which agent ran ({e}). Check the Agent UI "
-            "backend is still up at that URL."
+        _unverifiable(
+            f"session {session_id} could not be read back from {backend_url} "
+            f"({e}); check the Agent UI backend is still up at that URL"
         )
         return
 
     result["agent_type_observed"] = observed
-    if requested and _canonical_agent_type(observed) != _canonical_agent_type(
-        requested
-    ):
+    if _canonical_agent_type(observed) != _canonical_agent_type(requested):
         result["status"] = "INFRA_ERROR"
         result["error"] = (
             f"{scenario_id}: requested agent_type '{requested}' but session "
@@ -1030,6 +1046,10 @@ def run_scenario_subprocess(
             "required": ["scenario_id", "status", "overall_score", "turns"],
             "properties": {
                 "scenario_id": {"type": "string"},
+                # Not `required`: a driver that aborts before create_session
+                # (Phase 1 step 1) has no id to give. Whether its absence is
+                # fatal depends on the scenario, which a static schema cannot
+                # see, so _stamp_agent_provenance owns that rule.
                 "session_id": {"type": ["string", "null"]},
                 "status": {"type": "string"},
                 "overall_score": {"type": ["number", "null"]},

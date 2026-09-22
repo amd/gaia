@@ -105,7 +105,7 @@ def test_legacy_alias_is_not_a_mismatch():
 # ---------------------------------------------------------------------------
 
 
-def test_missing_session_id_is_an_infra_error():
+def test_missing_session_id_discards_a_score():
     result = _passing_result()
     del result["session_id"]
     _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="gaia")
@@ -114,7 +114,7 @@ def test_missing_session_id_is_an_infra_error():
     assert "session_id" in result["error"]
 
 
-def test_unreachable_backend_is_an_infra_error_naming_the_url():
+def test_unreachable_backend_discards_a_score_and_names_the_url():
     result = _stamp(
         _passing_result(),
         {"id": "s", "agent_type": "gaia"},
@@ -124,6 +124,32 @@ def test_unreachable_backend_is_an_infra_error_naming_the_url():
     )
     assert result["status"] == "INFRA_ERROR"
     assert "127.0.0.1:4200" in result["error"]
+
+
+def test_unverifiable_does_not_overwrite_a_more_specific_status():
+    # BLOCKED_BY_ARCHITECTURE says something INFRA_ERROR does not. Being unable
+    # to verify only discards a score, and this status carries none.
+    result = {
+        "scenario_id": "s",
+        "status": "BLOCKED_BY_ARCHITECTURE",
+        "turns": [{"turn": 1}],
+    }
+    _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="gaia")
+    assert result["status"] == "BLOCKED_BY_ARCHITECTURE"
+    assert "session_id" in result["provenance_warning"][0]
+    assert "error" not in result
+
+
+def test_a_mismatch_overrides_even_a_more_specific_status():
+    # "the architecture blocks gaia" is a false claim if chat answered.
+    result = {
+        "scenario_id": "s",
+        "status": "BLOCKED_BY_ARCHITECTURE",
+        "session_id": "sess-1",
+        "turns": [{"turn": 1}],
+    }
+    _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="chat")
+    assert result["status"] == "INFRA_ERROR"
 
 
 @pytest.mark.parametrize("status", ["TIMEOUT", "SETUP_ERROR", "ERRORED"])
@@ -137,13 +163,15 @@ def test_a_scenario_that_never_measured_keeps_its_own_status(status):
     assert "error" not in result
 
 
-def test_no_agent_requested_records_observation_without_a_verdict():
-    # Neither the scenario nor the CLI named an agent, so there is nothing to
-    # disagree with — record what ran and leave the status alone.
-    result = _stamp(_passing_result(), {"id": "s"}, None, observed="chat")
+def test_no_agent_requested_checks_nothing():
+    # Neither the scenario nor the CLI named an agent, so the backend default
+    # is right by definition — and a missing session_id costs nothing.
+    result = _passing_result()
+    del result["session_id"]
+    _stamp(result, {"id": "s"}, None, observed="chat")
     assert result["agent_type_requested"] is None
-    assert result["agent_type_observed"] == "chat"
     assert result["status"] == "PASS"
+    assert "error" not in result
 
 
 # ---------------------------------------------------------------------------
