@@ -6,6 +6,7 @@ import io
 import json
 import threading
 import uuid
+from http.client import RemoteDisconnected
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -195,3 +196,21 @@ def test_broken_http_chunk_is_reported_and_cancelled(endpoint, capsys):
     assert cli.main(["--url", endpoint.url, "query", "hello"]) == 1
     assert endpoint.posts[-1][0].endswith("/cancel")
     assert "Error:" in capsys.readouterr().err
+
+
+def test_open_reports_remote_disconnect_as_client_error(monkeypatch):
+    client = cli.Client("http://127.0.0.1:8080", "fixture-token")
+    failure = RemoteDisconnected("Remote end closed connection without response")
+    attempts = []
+
+    def disconnect(*args, **kwargs):
+        attempts.append(1)
+        raise failure
+
+    monkeypatch.setattr(client.opener, "open", disconnect)
+    with pytest.raises(
+        cli.ClientError, match="Cannot reach GAIA: Remote end closed"
+    ) as error:
+        client.open("/health")
+    assert error.value.__cause__ is failure
+    assert attempts == [1]

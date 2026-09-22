@@ -92,6 +92,8 @@ class Client:
             raise RequestRejected(f"HTTP {exc.code} from {path}: {detail}") from exc
         except URLError as exc:
             raise ClientError(f"Cannot reach GAIA: {exc.reason}") from exc
+        except (OSError, HTTPException) as exc:
+            raise ClientError(f"Cannot reach GAIA: {exc}") from exc
 
     def json(self, path, body=None, timeout=None):
         with self.open(path, body, timeout) as response:
