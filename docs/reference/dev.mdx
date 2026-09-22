@@ -133,9 +133,11 @@ uv pip install -e ".[dev,talk,rag,ui]"
 <Note>
 On Linux the flag is required for **every** `uv pip install`, with or without
 extras — `accelerate` is an unconditional base dependency, so PyTorch is always
-resolved. The `[tool.uv.sources]` block in `pyproject.toml` does not help here:
-it applies only to uv's project interface (`uv sync`, `uv lock`, `uv add`), never
-to `uv pip install`. Omit the flag and PyTorch resolves from PyPI as a CUDA
+resolved. There is no config block that removes the need for it: uv's
+`[tool.uv.sources]` and `[[tool.uv.index]]` apply only to the project interface
+(`uv sync`, `uv lock`, `uv add`), never to `uv pip install`, and `[tool.uv.pip]`
+was rejected for the same reason — see the note in `pyproject.toml`. Omit the
+flag and PyTorch resolves from PyPI as a CUDA
 build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
 1.5 GB.
 </Note>
@@ -456,6 +458,20 @@ Token counts marked *cached* / *new* come from a client-side estimator
 ratios and deltas — how much a prompt shrank, what share was cache-eligible —
 not as exact model token counts. `out` is the backend's own count.
 </Note>
+
+### Seeing which tools the model was given
+
+A `--trace` run writes `agent_output_<timestamp>.json`, and its `tool_schema`
+block records what went out to the backend as `tools=` on that run — the tool
+names, the per-turn filter (`null` when the full registry was sent), the
+serialized schema size in chars and tokens, and the schema text itself. With
+the file's `system_prompt` and `conversation` alongside it, a prompt can be
+split into system / tools / history shares from one artifact, and a tool that
+never reached the model is visible by its absence from `tool_names`.
+
+The schema text is the bulky part. Set `GAIA_TRACE_TOOL_SCHEMA=0` to drop just
+that text — the names and sizes stay, and the artifact records a
+`schemas_omitted` note so a smaller trace never looks like a full one.
 
 ---
 
