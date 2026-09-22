@@ -595,3 +595,17 @@ downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B I
 when available. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.
+
+
+## Container service (Python distribution)
+
+The Python package also ships `gaia-agent --service` (or source-installed `gaia-agent-service`), an opt-in, single-tenant HTTP
+worker with required authentication, explicit workspace/Host configuration,
+readiness checks and managed embedded Lemonade. This entrypoint is separate from
+the npm sidecar lifecycle. See [Container service](../../../../docs/deployment/container-service.mdx)
+for image configuration and operational limits. The canonical query contract
+remains unchanged; HTTP confirmation-gated tools still refuse the action.
+
+The frozen binary also supports `gaia-agent --client` for deployed-worker
+status, streaming queries, mid-run responses and cancellation. Source installs
+expose `gaia-agent-client`; see the container service guide for credentials and examples.

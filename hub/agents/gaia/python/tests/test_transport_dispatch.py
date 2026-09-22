@@ -57,6 +57,27 @@ def test_no_arguments_at_all_is_the_stdio_wire(served, piped):
     assert served == []
 
 
+def test_service_selects_strict_runtime(served, piped, monkeypatch):
+    from gaia_agent import service
+
+    calls = []
+    monkeypatch.setattr(service, "main", lambda: calls.append(True))
+    assert server_mod.main(["--service"]) == 0
+    assert calls == [True]
+    assert served == []
+    assert piped == []
+
+
+@pytest.mark.parametrize("flag", ["--serve", "--host=0.0.0.0", "--json-events"])
+def test_service_rejects_mixed_mode_flags(flag, monkeypatch):
+    from gaia_agent import service
+
+    monkeypatch.setattr(service, "main", lambda: pytest.fail("Must not start"))
+    with pytest.raises(SystemExit) as excinfo:
+        server_mod.main(["--service", flag])
+    assert excinfo.value.code == 2
+
+
 def test_the_tui_argv_reaches_the_stdio_parser_verbatim(served, piped):
     argv = ["--json-events", "--dev", "--model", "Gemma-4-E4B-it-GGUF"]
     server_mod.main(list(argv))
@@ -151,7 +172,7 @@ def test_the_caller_auth_banner_still_reaches_the_http_startup(caplog, monkeypat
     monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN", raising=False)
     monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
     with caplog.at_level(logging.WARNING):
-        with TestClient(server_mod.build_app()):
+        with TestClient(server_mod.build_app(warmup=False)):
             pass
     assert any("authentication DISABLED" in r.getMessage() for r in caplog.records)
 

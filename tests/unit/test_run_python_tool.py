@@ -276,3 +276,40 @@ def test_a_snippet_that_is_not_a_test_run_declares_no_check(
     result = run_python(code="print('5 passed')")
 
     assert result[CHECK_RESULT_KEY] is None
+
+
+@pytest.mark.parametrize("tool_name", ["run_python", "execute_python_file"])
+def test_frozen_tools_use_explicit_interpreter(
+    make_run_python, project, monkeypatch, tool_name
+):
+    import sys
+
+    monkeypatch.chdir(project)
+    _agent, _run = make_run_python(project)
+    monkeypatch.setenv("GAIA_PYTHON_EXECUTABLE", sys.executable)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/opt/gaia-agent/gaia-agent")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/fake/frozen/libraries")
+    monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+    code = "import os; assert 'LD_LIBRARY_PATH' not in os.environ; print(6 * 7)"
+    fn = _TOOL_REGISTRY[tool_name]["function"]
+    if tool_name == "run_python":
+        result = fn(code=code)
+    else:
+        script = project / "test_script.py"
+        script.write_text(code)
+        result = fn(file_path=str(script))
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "42"
+
+
+def test_frozen_python_tool_requires_interpreter(make_run_python, project, monkeypatch):
+    import sys
+
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.delenv("GAIA_PYTHON_EXECUTABLE", raising=False)
+    result = run_python(code="print(42)")
+    assert result["status"] == "error"
+    assert "GAIA_PYTHON_EXECUTABLE" in result["error"]

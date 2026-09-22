@@ -1,0 +1,32 @@
+services:
+  gaia:
+    image: gaia-service:local
+    build:
+      context: ../..
+      dockerfile: deploy/service/Dockerfile
+    init: false # Image already runs tini.
+    ports:
+      - "127.0.0.1:${GAIA_SERVICE_PORT:-8080}:8080"
+    environment:
+      GAIA_GAIA_SIDECAR_TOKEN: ${GAIA_GAIA_SIDECAR_TOKEN:?Set a service caller token}
+      GAIA_SERVICE_ALLOWED_HOSTS: localhost,127.0.0.1
+      GAIA_SERVICE_MODEL: ${GAIA_SERVICE_MODEL:?Set the Lemonade model ID}
+      LEMONADE_BASE_URL: ${LEMONADE_BASE_URL:-}
+      LEMONADE_API_KEY: ${LEMONADE_API_KEY:-}
+      GAIA_SERVICE_CLOUD_PROVIDER: ${GAIA_SERVICE_CLOUD_PROVIDER:-}
+      GAIA_SERVICE_CLOUD_URL: ${GAIA_SERVICE_CLOUD_URL:-}
+      LEMONADE_FIREWORKS_API_KEY: ${LEMONADE_FIREWORKS_API_KEY:-}
+    volumes:
+      - state:/data
+      - workspace:/workspace
+    stop_grace_period: 50s
+    cpus: 2
+    mem_limit: 4g
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  state:
+  workspace:

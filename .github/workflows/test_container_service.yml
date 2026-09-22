@@ -1,0 +1,123 @@
+name: Container service
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  merge_group:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/service/**'
+      - 'hub/agents/gaia/python/**'
+      - 'hub/agents/chat/python/**'
+      - 'src/gaia/**'
+      - 'tests/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'MANIFEST.in'
+      - '.github/workflows/test_container_service.yml'
+  pull_request:
+    paths:
+      - 'deploy/service/**'
+      - 'hub/agents/gaia/python/**'
+      - 'hub/agents/chat/python/**'
+      - 'src/gaia/**'
+      - 'tests/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'MANIFEST.in'
+      - '.github/workflows/test_container_service.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  regression:
+    name: Service and client regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install pinned runtime and test dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps --index-url https://download.pytorch.org/whl/cpu torch==2.14.0+cpu
+          python -m pip install -r deploy/service/requirements.txt
+          python -m pip install --no-deps --no-build-isolation . ./hub/agents/chat/python ./hub/agents/gaia/python
+          python -m pip install pytest==9.1.1 pytest-asyncio==1.4.0 pytest-mock==3.15.1
+          python -m pip check
+      - name: Test configuration, auth, transport, lifecycle and Python tools
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          python -m pytest \
+            hub/agents/gaia/python/tests/test_service.py \
+            hub/agents/gaia/python/tests/test_service_client.py \
+            hub/agents/gaia/python/tests/test_server_query.py \
+            hub/agents/gaia/python/tests/test_server_memory.py \
+            hub/agents/gaia/python/tests/test_caller_auth.py \
+            hub/agents/gaia/python/tests/test_transport_dispatch.py \
+            hub/agents/gaia/python/tests/test_session_registry.py \
+            tests/unit/test_sidecar_caller_auth.py \
+            tests/unit/test_lemonade_embedded.py \
+            tests/unit/test_run_python_tool.py \
+            --junitxml=test-results/service.xml -q -ra
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('test-results/service.xml').getroot()
+          assert root.findall('.//testcase'), 'No tests executed'
+          assert not root.findall('.//skipped'), 'Service regression tests must not skip'
+          PY
+      - name: Retain test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-service-regression
+          path: test-results/
+          retention-days: 7
+
+  smoke:
+    name: Build and exercise ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build runtime image including frozen Python tool checks
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          docker build --progress=plain -f deploy/service/Dockerfile -t gaia-service:test . 2>&1 | tee test-results/build.log
+      - name: Verify embedded runtime and service boundaries
+        run: |
+          set -euo pipefail
+          python3 deploy/service/smoke_test.py 2>&1 | tee test-results/lifecycle.log
+      - name: Exercise frozen client and real agent with deterministic inference
+        run: |
+          set -euo pipefail
+          python3 deploy/service/query_smoke_test.py 2>&1 | tee test-results/query.log
+      - name: Verify Compose configuration and volume persistence after recreation
+        run: |
+          set -euo pipefail
+          python3 deploy/service/compose_smoke_test.py 2>&1 | tee test-results/compose.log
+      - name: Retain build and runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-service-${{ matrix.runner }}
+          path: test-results/
+          retention-days: 7

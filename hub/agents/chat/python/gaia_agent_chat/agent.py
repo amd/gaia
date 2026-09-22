@@ -1460,7 +1460,6 @@ No documents are currently indexed.
                 """
                 import shlex
                 import subprocess
-                import sys
                 import time
 
                 if not self.path_validator.is_path_allowed(file_path):
@@ -1475,7 +1474,13 @@ No documents are currently indexed.
                         "status": "error",
                         "error": f"File not found: {file_path}",
                     }
-                cmd = [sys.executable, str(p.resolve())] + (
+                from gaia_agent_chat.python_runtime import python_tool_runtime
+
+                try:
+                    interpreter, env = python_tool_runtime()
+                except ValueError as exc:
+                    return {"status": "error", "error": str(exc), "has_errors": True}
+                cmd = [interpreter, str(p.resolve())] + (
                     shlex.split(args) if args.strip() else []
                 )
                 start = time.monotonic()
@@ -1483,6 +1488,7 @@ No documents are currently indexed.
                     r = subprocess.run(
                         cmd,
                         cwd=str(p.parent.resolve()),
+                        env=env,
                         capture_output=True,
                         # An inherited stdin leaves the child waiting on a pipe
                         # nobody writes to, and the run only ends at the timeout.
@@ -1539,7 +1545,6 @@ No documents are currently indexed.
                     Dictionary with stdout, stderr, return_code, and duration
                 """
                 import subprocess
-                import sys
                 import tempfile
                 import time
 
@@ -1564,7 +1569,12 @@ No documents are currently indexed.
                         "allowed project.",
                         "has_errors": True,
                     }
-                env = dict(os.environ)
+                from gaia_agent_chat.python_runtime import python_tool_runtime
+
+                try:
+                    interpreter, env = python_tool_runtime()
+                except ValueError as exc:
+                    return {"status": "error", "error": str(exc), "has_errors": True}
                 if project:
                     existing = env.get("PYTHONPATH")
                     env["PYTHONPATH"] = (
@@ -1584,7 +1594,7 @@ No documents are currently indexed.
                 start = time.monotonic()
                 try:
                     r = subprocess.run(
-                        [sys.executable, str(snippet)],
+                        [interpreter, str(snippet)],
                         cwd=str(run_dir),
                         env=env,
                         capture_output=True,
@@ -1603,7 +1613,7 @@ No documents are currently indexed.
                 except OSError as e:
                     return {
                         "status": "error",
-                        "error": f"Could not start {sys.executable}: {e}",
+                        "error": f"Could not start {interpreter}: {e}",
                         "has_errors": True,
                     }
                 finally:

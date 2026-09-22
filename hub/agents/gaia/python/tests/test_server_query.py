@@ -428,6 +428,12 @@ def test_cancelling_a_live_run_reports_it_stopped(built, monkeypatch):
         assert _wait_until(lambda: server_mod._registry.get(run_id) is not None)
         cancel = client.post(f"/v1/gaia/query/{run_id}/cancel")
         assert cancel.json()["cancelled"] is True
+        # The stream must end even while a model/tool call has not returned.
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert _terminals(result["response"]) == [
+            {"type": "error", "detail": "Run cancelled.", "status": 499}
+        ]
     finally:
         gate.set()
         worker.join(timeout=10)

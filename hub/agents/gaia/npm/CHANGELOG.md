@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Accepted HTTP cancellation now terminates the stream explicitly instead of forwarding a late model answer.
+- Add `gaia-agent --client` / `gaia-agent-client` for authenticated worker status, streaming queries, questions and cancellation; include a Compose deployment and deterministic container query test.
+
+- Add `gaia-agent --service` to the frozen binary: authenticated single-tenant HTTP, managed embedded Lemonade, explicit workspace configuration and readiness probes. Container images run the PyInstaller bundle without a GAIA virtual environment; Python script tools use an explicitly configured separate interpreter.
+
 All notable changes to `@amd-gaia/gaia` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
