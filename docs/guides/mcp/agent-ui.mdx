@@ -42,6 +42,11 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 | `memory_clear` | Clear memory rows |
 | `open_session_in_browser` | Open a session in the default browser |
 
+`get_messages` retrieves every page up to the message count reported at the
+start of the call. Messages added during retrieval are available on the next
+call. A failed or prematurely empty page returns an explicit error rather than
+a partial transcript. Existing content and tool-result excerpt limits still apply.
+
 <Note>
   The `memory_*` tools are **conditional**. The read tools (`memory_stats`, `memory_list`,
   `memory_recall`, `memory_get`, `memory_get_by_entity`, `memory_get_conversation_turns`)

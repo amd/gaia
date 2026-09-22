@@ -375,7 +375,7 @@ gaia uninstall [OPTIONS]
 
 <CodeGroup>
 ```bash Preview
-gaia uninstall --dry-run
+gaia uninstall --purge --dry-run
 ```
 
 ```bash Remove Python Environment Only
@@ -397,7 +397,7 @@ gaia uninstall --purge --purge-lemonade --yes
 
 <Warning>
 `--purge` permanently deletes your chat history, uploaded documents, configuration,
-and embedded Lemonade downloads. Use `--dry-run` first to preview what will be removed.
+and embedded Lemonade downloads. Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
 </Warning>
 
 <Note>
@@ -615,12 +615,11 @@ automatically:
 
 ```bash From PyPI (pip)
 pip install gaia-agent-email          # one agent
-pip install "amd-gaia[agents]"            # every AMD production agent
 ```
 
 <Note>
 PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
-[#2240](https://github.com/amd/gaia/issues/2240)), so the commands above don't
+[#2240](https://github.com/amd/gaia/issues/2240)), so the command above doesn't
 resolve yet. Until publishing lands, install an agent straight from this repo:
 
 ```bash From source (works today)
@@ -1083,8 +1082,11 @@ curl http://localhost:8080/health
     gaia api start --debug
     ```
 
-    Custom host/port:
+    Custom host/port. Binding beyond loopback is refused unless
+    `GAIA_API_KEY` is set, since the agent loop would otherwise be open to the
+    network ([Authentication](/sdk/infrastructure/api-server#authentication)):
     ```bash
+    export GAIA_API_KEY=$(openssl rand -hex 32)
     gaia api start --host 0.0.0.0 --port 8888
     ```
 
@@ -1252,6 +1254,15 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
 
+##### Browser origins
+
+A web page can reach `http://localhost:8765` from the user's own browser, so
+the bridge refuses any request whose `Origin` is not loopback (`localhost`,
+`127.0.0.1`, `[::1]`) with **403**, and never answers
+`Access-Control-Allow-Origin: *`. Clients that send no `Origin` — curl, MCP
+clients, n8n — are unaffected. To allow a browser app on another origin, list
+it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
+
 ##### Authentication
 
 The bridge is **unauthenticated by default**. Anything that can reach the port
@@ -1347,7 +1358,7 @@ gaia connectors <subcommand> [OPTIONS]
 | `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys, OAuth client creds) |
 | `test <id>` | Run a health check for a configured connector |
-| `disconnect <id>` | Remove credentials and reset a connector's state |
+| `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
 | `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
 
@@ -1408,7 +1419,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt` |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 
@@ -1419,6 +1430,11 @@ For `gaia chat`, `gaia llm`, and `gaia prompt`, the model is resolved highest-wi
 1. An explicit `--model <id>` flag
 2. `default_model` from `~/.gaia/config.json`
 3. The command's built-in default (`DEFAULT_MODEL_NAME`)
+
+The Agent UI resolves a new session's model the same way: an explicit pick
+in the UI wins, then `default_model`, then the built-in floor. So
+`gaia config set default_model <id>` also changes what a brand-new "New
+Chat" lands on, not just the CLI.
 
 So `gaia config set default_model <id>` lets you skip `--model` entirely, while
 `--model` still overrides it for a single run. For `gaia chat`, passing an
@@ -1794,6 +1810,21 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 </Note>
 
 [→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
+
+---
+
+### Flagship Agent Tasks
+
+Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, quality, honesty, tokens, steps and runtime, against main's committed results.
+
+```bash
+gaia eval tasks run --suite core                   # Run the core tasks, then judge them
+gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
+gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
+gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
+```
+
+[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks)
 
 ---
 
@@ -2532,23 +2563,19 @@ gaia test --test-type TYPE [OPTIONS]
 
   <Tab title="ASR Tests">
     **Test Types:**
-    - `asr-file-transcription` - Test ASR file transcription
     - `asr-microphone` - Test ASR microphone input
     - `asr-list-audio-devices` - List audio input devices
 
     **Options:**
-    - `--input-audio-file` - Input audio file path
     - `--recording-duration` - Recording duration (default: 10s)
     - `--audio-device-index` - Audio input device index
     - `--whisper-model-size` - Whisper model size (default: base)
 
-    **Examples:**
+    <Note>
+      These test the **live microphone** path. To transcribe a file you already have, ask the GAIA agent — see [Transcription & Meeting Notes](/guides/transcription).
+    </Note>
 
-    Test file transcription:
-    ```bash
-    gaia test --test-type asr-file-transcription \
-      --input-audio-file ./data/audio/test.m4a
-    ```
+    **Examples:**
 
     Test microphone (30 seconds):
     ```bash
@@ -2648,7 +2675,7 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |
-| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). |
+| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/email/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
@@ -2831,11 +2858,16 @@ ctrl+c.
 | Key | Action |
 |-----|--------|
 | `f` | Apply the focused row's fix — shown only when that row has one |
+| `p` | Choose Local, Fireworks AI, or AMD LLM Gateway (flagship setup) |
 | `r` | Re-check everything |
 | `d` | Toggle the raw answer behind the focused row |
 | `↑` / `↓` (or `k` / `j`) | Move between rows |
 | `enter` | Continue anyway — offered only when nothing is outright broken |
 | `esc`, `ctrl+c` | Quit. There is no screen behind the gate to go back to |
+
+In chat, `/provider` opens the same provider panel with masked key entry and a
+searchable model list. See [AI providers](/guides/ai-providers) for credentials,
+Gemma 4 31B, and gateway settings.
 
 #### Waiting on a consequential readiness problem
 
@@ -2880,7 +2912,7 @@ token.
 ```bash
 gaia tui --control                 # auto-assign a port
 gaia tui --control-port 8770       # explicit port (implies --control)
-gaia tui --control --debug         # log every injected key, state change, and wait
+gaia tui --control --dev           # input counts, state changes, and waits; no input contents
 ```
 
 <Note>
@@ -2893,7 +2925,7 @@ gaia tui --control --debug         # log every injected key, state change, and w
 |------|------|---------|-------------|
 | `--control` | flag | off | Start the control API on an auto-assigned loopback port. |
 | `--control-port` | integer | `0` | Bind a specific port. Implies `--control`. `0` auto-assigns. Port `4001` is reserved and rejected. |
-| `--debug` | flag | off | Log every injected key, state transition, and wait resolution/timeout to stderr. |
+| `--dev` | flag | off | Show developer details and log input counts, state transitions, and wait outcomes to the TUI log; input contents are omitted. `--debug` remains an alias. |
 
 On start the TUI writes `~/.gaia/tui/control.json` (mode `0600`) holding the
 pid, port, and token, and removes it on exit. Clients find the TUI by reading

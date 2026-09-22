@@ -1,27 +1,28 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Guided Outlook mailbox setup — device-code sign-in and step walkthrough (#2590).
+"""Guided mailbox setup — device-code/loopback sign-in and step walkthrough
+(#2590, #2594).
 
 Extends, rather than rewrites, ``onboarding_tools`` (#2469): the scripted
 repair conversation stays there, this module holds the walkthrough that
-conversation hands off to for a first-time Microsoft connect. Kept separate
-because ``onboarding_tools.py`` is already ~600 lines scoped to *repair*, and
-the guided walkthrough is a different concern.
+conversation hands off to for a first-time Microsoft or Google connect. Kept
+separate because ``onboarding_tools.py`` is already ~600 lines scoped to
+*repair*, and the guided walkthrough is a different concern.
 
-**Outlook only.** No ``google_personal`` route, no account-kind interview, no
-resumability — see ``gaia.connectors.setup_routes`` and the #2590 plan for
-why those are out of scope here.
+``gaia.connectors.setup_routes`` now authors work/school Microsoft 365 and
+Google Workspace routes too (#4090), but this module still drives only the
+two personal ones: ``onboarding_tools._run_connect`` sends ``microsoft_work``
+down the generic browser-loopback path, and there is no account-kind
+interview to pick the Workspace route. Neither route is unreachable content —
+``microsoft_work``'s drives the not-configured console error — but wiring
+them into this walkthrough is a separate change.
 
-**Navigation prompts keep free text (and the FAQ lane) for the WHOLE route
-here** — Microsoft has no client secret, and the Application (client) ID is
-public by design, so there is nothing on this route worth hiding from the
-TUI's cleartext echo. The Google route (#2594) will carry real secrets
-through its later steps; ITS navigation prompts must drop free text from the
-key-creation step onward so an open box right after the portal displays a
-secret never invites pasting it into scrollback (the TUI renders typed text
-in cleartext unless a prompt is marked ``sensitive``). That rule does not
-apply here — do not port it into this module without re-deriving it for a
-route that actually has something to hide.
+**Credential prompts hide free text only when ``Step.sensitive`` says so.**
+Microsoft's Application (client) ID is public by design — nothing on that
+route is worth hiding from the TUI's cleartext echo. Google's client secret
+IS worth hiding: the TUI renders typed text in cleartext unless a prompt is
+marked ``sensitive``, so ``_collect_credential`` threads ``step.sensitive``
+through to ``ask(..., sensitive=...)`` rather than hard-coding it per route.
 """
 
 from __future__ import annotations
@@ -37,7 +38,12 @@ from gaia_agent_email.tools.onboarding_tools import (
     narrate,
 )
 
-from gaia.connectors.setup_routes import SIGN_IN_DEVICE_CODE, Step, SetupRoute, steps_for
+from gaia.connectors.setup_routes import (
+    SIGN_IN_DEVICE_CODE,
+    SetupRoute,
+    Step,
+    steps_for,
+)
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -132,7 +138,7 @@ _STEP_TIMEOUT_SECONDS = 480
 #: Said ONCE, at the first non-verifiable step — never repeated per step.
 _CANNOT_SEE_PORTAL_NOTICE = (
     "A heads up: I can't see your screen or your provider's portal — I can "
-    "only tell you what to click and check what I can. Say \"I'm stuck\" any "
+    'only tell you what to click and check what I can. Say "I\'m stuck" any '
     "time and I'll hand you off to the written guide instead."
 )
 
@@ -146,6 +152,17 @@ _CLIENT_ID_SHAPE_ERROR = (
     "That doesn't look like an Application (client) ID — it should be a GUID "
     "like 11112222-bbbb-3333-cccc-4444dddd5555. Copy it again from the app's "
     "Overview page and paste just that."
+)
+
+#: Google's Client ID always ends this way (it's a project-numbered OAuth
+#: client id, not a GUID) — the console shows only the one credential, so
+#: unlike Microsoft's three-GUIDs-on-one-page problem there is nothing to
+#: disambiguate; this exists purely to catch a paste of the wrong field.
+_GOOGLE_CLIENT_ID_SUFFIX = ".apps.googleusercontent.com"
+_GOOGLE_CLIENT_ID_SHAPE_ERROR = (
+    "That doesn't look like a Google Client ID — it should end in "
+    "'.apps.googleusercontent.com'. Copy it again from the OAuth client's "
+    "page and paste just that."
 )
 
 
@@ -173,6 +190,21 @@ def _shape_check_client_id(value: str) -> Optional[str]:
     return _CLIENT_ID_SHAPE_ERROR
 
 
+def _shape_check_google_client_id(value: str) -> Optional[str]:
+    if (value or "").strip().endswith(_GOOGLE_CLIENT_ID_SUFFIX):
+        return None
+    return _GOOGLE_CLIENT_ID_SHAPE_ERROR
+
+
+#: (provider, step id) -> shape-check function. Keyed by provider as well as
+#: step id because both routes happen to name their client-id step
+#: ``"client_id"``, but the two credentials have different shapes.
+_SHAPE_CHECKS = {
+    ("microsoft", "client_id"): _shape_check_client_id,
+    ("google", "client_id"): _shape_check_google_client_id,
+}
+
+
 def _collect_credential(agent: Any, step: Step, route: SetupRoute) -> str:
     """Ask for *step*'s credential value — a plain free-text prompt, never
     the navigation lane's Done/I'm-stuck OPTIONS (a credential prompt keeps
@@ -184,16 +216,22 @@ def _collect_credential(agent: Any, step: Step, route: SetupRoute) -> str:
     who asks "which one?" must get answered, not just re-shown the same
     generic error. A genuine GUID never matches an FAQ hint (the hints are
     English words), so this can never misfire on a real value.
+
+    A step with no registered shape check (e.g. Google's client secret, or
+    any step with ``collects_credential=False``) is taken on the user's word
+    — this driver has no way to check it, and claiming otherwise is exactly
+    the ``verifiable`` field's honesty this feature exists to uphold.
     """
     prompt = f"Paste the value for: {step.title}."
-    value = ask(agent, prompt, allow_free_text=True, sensitive=False)
-    if step.id == "client_id":
-        error = _shape_check_client_id(value)
+    value = ask(agent, prompt, allow_free_text=True, sensitive=step.sensitive)
+    check = _SHAPE_CHECKS.get((route.provider, step.id))
+    if check is not None:
+        error = check(value)
         while error is not None:
             answer = _faq_answer(step, route, value)
             narrate(agent, answer if answer is not None else error)
-            value = ask(agent, prompt, allow_free_text=True, sensitive=False)
-            error = _shape_check_client_id(value)
+            value = ask(agent, prompt, allow_free_text=True, sensitive=step.sensitive)
+            error = check(value)
     return value
 
 
@@ -208,7 +246,7 @@ _FAQ_MAX_TURNS = 3
 #: invent an answer instead of admitting it doesn't have one.
 _FAQ_NO_MATCH = (
     "I don't have a written answer for that one. Say \"I'm stuck\" and I'll "
-    "hand you off to the full guide, or \"Done\" once you've finished this "
+    'hand you off to the full guide, or "Done" once you\'ve finished this '
     "step."
 )
 
@@ -264,9 +302,15 @@ def _ask_nav(agent: Any, step: Step, route: SetupRoute) -> str:
 
 
 def run_setup_walkthrough(
-    agent: Any, route: SetupRoute
+    agent: Any, route: SetupRoute, *, sign_in: str = SIGN_IN_DEVICE_CODE
 ) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
-    """Walk *route*'s device-code steps one at a time.
+    """Walk *route*'s steps one at a time.
+
+    ``sign_in`` defaults to the device-code filtering the Outlook route has
+    always used; Google's route has no ``loopback_only`` steps to drop, so
+    passing ``sign_in=SIGN_IN_LOOPBACK`` for it is a no-op filter-wise — it
+    exists so a future route that DOES mix both (or a Microsoft caller that
+    wants the loopback flow) does not have to special-case this driver.
 
     Returns ``(collected, trace)``: ``collected`` maps credential step id ->
     the value entered (e.g. ``{"client_id": "..."}``); ``trace`` has one
@@ -281,7 +325,7 @@ def run_setup_walkthrough(
     collected: Dict[str, str] = {}
     told_cannot_see = False
 
-    for step in steps_for(route, sign_in=SIGN_IN_DEVICE_CODE):
+    for step in steps_for(route, sign_in=sign_in):
         narrate(agent, f"{step.title}\n{step.instruction}")
         if not step.verifiable and not told_cannot_see:
             narrate(agent, _CANNOT_SEE_PORTAL_NOTICE)

@@ -73,8 +73,8 @@ func (m ChatModel) armBypass() (tea.Model, tea.Cmd) {
 		Content: "[!] Bypass permissions would let " + m.agentName +
 			" run every tool with no prompt — shell commands, file writes, " +
 			"anything it decides to do — for the rest of this session.\n" +
-			"    It also takes the shell guardrails off: compound commands " +
-			"run, and the read-only allowlist is replaced by a developer set " +
+			"    It also takes the shell guardrails off: it can redirect " +
+			"output, and the read-only allowlist is replaced by a developer set " +
 			"(node, npm, make, go, cargo, python, pytest, gh) that can execute " +
 			"arbitrary code in this directory.\n" +
 			"    Type /bypass confirm to turn it on, or /bypass off at any " +
