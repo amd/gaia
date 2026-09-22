@@ -17,7 +17,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.verification import NOT_EXECUTED
