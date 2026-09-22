@@ -119,7 +119,7 @@ def build_doc():
         icon="file-text",
         # Introspected registry size for prompt_profile="doc" — drift-guarded
         # by tests/unit/test_chat_fix_contracts.py.
-        tools_count=40,
+        tools_count=41,
         model_tiers=tiers,
     )
 
@@ -149,6 +149,6 @@ def build_file():
         # Introspected registry size for prompt_profile="file" (with
         # enable_filesystem=True, matching this factory's extra kwarg) —
         # drift-guarded by tests/unit/test_chat_fix_contracts.py.
-        tools_count=36,
+        tools_count=38,
         model_tiers=tiers,
     )

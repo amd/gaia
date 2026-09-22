@@ -185,6 +185,21 @@ class LemonadeModelNotFoundError(LemonadeError):
         super().__init__(user_message=message, payload=payload)
 
 
+class LemonadeCloudAccountError(LemonadeError):
+    """The cloud provider refused the account itself (HTTP 402 / 412).
+
+    Suspended, out of credit, or over a spending limit. No retry can succeed,
+    so the generic "temporary issue — try again" copy is wrong here.
+    """
+
+    retryable = False
+    user_message = (
+        "Your cloud provider refused the request: the account may be suspended, "
+        "out of credit, or over its spending limit. Retrying won't help — check "
+        "billing in the provider's console, then send the message again."
+    )
+
+
 def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError], bool]:
     """Inspect a Lemonade response dict for a known error shape.
 
@@ -514,6 +529,10 @@ class LemonadeProvider(LLMClient):
                 for key, value in (self._last_usage or {}).items()
                 if key != "tokens_per_second"
             }
+        # A non-streaming local call carries its own usage. /stats counts only
+        # the uncached part of whichever request the server served last.
+        if self._last_usage:
+            return dict(self._last_usage)
         return self._backend.get_stats() or {}
 
     def get_last_usage(self) -> Optional[dict]:

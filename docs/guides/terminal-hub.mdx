@@ -33,12 +33,15 @@ gaia-tui
 </Note>
 
 <Warning>
-  GAIA ships **one** agent through this binary: there is nothing to browse and nothing
-  to pick. An earlier version of the TUI opened on an Agent Hub browser — install,
-  uninstall, search, vote — with the flagship agent listed as "Coming Soon." That
-  screen, and the `list` / `install` / `uninstall` / `hub` subcommands that drove it,
-  are gone. Installing a hub sidecar agent (`email`) is now the Python CLI's job —
-  `gaia hub install <id>` — not the terminal's.
+  This binary boots straight into the flagship, and it does not install, uninstall,
+  search, or vote on agents — that stays the Python CLI's job, `gaia hub install <id>`.
+  An earlier version of the TUI opened on an Agent Hub browser that did all of that,
+  with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
+  `uninstall` / `hub` subcommands that drove it, are gone for good.
+
+  What did come back, scoped down: type `/agents` in chat to list every agent already
+  installed on this machine and switch to one, without quitting the TUI. See
+  [`/agents`](#3-chat) below.
 </Warning>
 
 ## Installing
@@ -224,17 +227,22 @@ broken.
 Once the gate clears, GAIA starts the agent and drops you into the conversation:
 
 ```
- GAIA  │ <agent>
+GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 ────────────────────────────────────────────────────────────────────────────────
 Welcome to GAIA
-Connected to: <agent>
+Connected to: agent gaia v0.2.0
 
 Type a message and press Enter to start chatting.
 Type /help for available commands.
 ────────────────────────────────────────────────────────────────────────────────
 ┃ Ask anything... (Enter to send, Ctrl+C to quit)
-  ● <agent> connected                                                Ctrl+C quit
+  ● agent gaia v0.2.0 connected                                     Ctrl+C quit
 ```
+
+The `agent <id>` segment is always the stable id, lowercased — the same string
+`--agent <id>` takes, so you can read it straight off the header and pass it back.
+On a narrow terminal this segment is the first thing to give way, never the model
+chip next to it.
 
 | Key | What it does |
 |---|---|
@@ -249,14 +257,19 @@ Type /help for available commands.
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
 
-By default your terminal owns the mouse, so drag-to-select and its own copy/paste
-(right-click, `Ctrl+Shift+C`, `Cmd+C`) work everywhere with nothing to learn. Two
-things borrow it back, each only for as long as they are on screen:
+By default GAIA owns the mouse, so the wheel scrolls the conversation — a
+full-screen terminal app has no scrollback of its own behind it — and a printed
+link is clickable. Hold `Shift` (`Option` in iTerm2) to drag-select without
+leaving that mode, or press `Ctrl+T` to hand the mouse back to your terminal
+outright.
 
 | Mouse | What it does |
 |---|---|
-| Wheel, with `Ctrl+T` on | Scrolls the conversation. Selection is off while `Ctrl+T` is on; `Ctrl+T` or `Esc` gives it back |
-| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. Released the instant the palette or question closes — a wheel-mode `Ctrl+T` you turned on yourself survives that unaffected |
+| Wheel | Scrolls the conversation |
+| Click, on a printed `http(s)` link | Opens it in your browser. Only `http(s)` is clickable, so agent output cannot launch an arbitrary handler. Printed links are also marked up as real terminal hyperlinks, so a terminal that supports them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) underlines them on hover and offers its own right-click menu — and those keep working in select mode, where no click reaches GAIA |
+| Double-click, on a message | Copies that message |
+| `Ctrl+T` | Select mode — hands the mouse to your terminal for plain drag-select and its own copy/paste (right-click, `Ctrl+Shift+C`, `Cmd+C`). The wheel stops scrolling and links stop being clickable while it is on; `Ctrl+T` or `Esc` gives both back, and a banner says so meanwhile |
+| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. A `Ctrl+T` you turned on yourself survives the palette or question opening and closing |
 
 | Command | What it does |
 |---|---|
@@ -266,6 +279,18 @@ things borrow it back, each only for as long as they are on screen:
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model |
 | `/bypass` | Let the agent run tools without asking (off by default) |
+| `/agents` | List agents installed on this machine and switch to one, without quitting |
+
+Commands the current agent can't run drop out of `/help` and the `/` palette on
+their own — `/model`, `/setup`, and `/provider` are flagship-only, and `/memory`
+needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-hub-memory)).
+`/agents` is always available.
+
+Selecting a different agent from `/agents` reconnects in place and re-runs the
+readiness gate for it; the transcript stays on screen with a divider noting the
+switch, but the new agent never sees the conversation above that line. Backing
+out of the picker (`Esc`) returns to the chat you were already in — it does not
+quit the TUI.
 
 Typing `/` as the first character of an empty composer opens a palette listing every
 command above with a one-line description, so there's no need to already know them or

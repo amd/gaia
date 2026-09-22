@@ -8,6 +8,8 @@ Purpose: Verify that the tool decorator correctly registers tools
 with all metadata including the atomic parameter.
 """
 
+from typing import Dict, List, Optional
+
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
@@ -124,6 +126,101 @@ class TestToolDecorator:
         assert "enabled" in params
         assert params["enabled"]["type"] == "boolean"
         assert params["enabled"]["required"] is False
+
+    def test_arg_descriptions_parsed_from_docstring(self):
+        """The Args: block lands on each parameter, not just the blob (#3581)."""
+
+        @tool
+        def documented(name: str, limit: int = 10) -> dict:
+            """Do a thing.
+
+            Args:
+                name: Human-readable agent name, required.
+                limit: How many results to return.
+
+            Returns:
+                A dict.
+            """
+            return {}
+
+        params = _TOOL_REGISTRY["documented"]["parameters"]
+        assert params["name"]["description"] == "Human-readable agent name, required."
+        assert params["limit"]["description"] == "How many results to return."
+
+    def test_arg_description_joins_continuation_lines(self):
+        """A wrapped argument description is collapsed into one string."""
+
+        @tool
+        def wrapped(system_prompt: str = "") -> dict:
+            """Do a thing.
+
+            Args:
+                system_prompt: The generated agent's own system prompt — its
+                    personality and instructions.
+
+            Returns:
+                A dict.
+            """
+            return {}
+
+        params = _TOOL_REGISTRY["wrapped"]["parameters"]
+        assert params["system_prompt"]["description"] == (
+            "The generated agent's own system prompt — its personality and "
+            "instructions."
+        )
+
+    def test_undocumented_arg_has_no_description_key(self):
+        """Absent docstring text leaves the key off rather than emitting ''."""
+
+        @tool
+        def undocumented(value: str) -> dict:
+            """No Args block here."""
+            return {}
+
+        assert (
+            "description" not in _TOOL_REGISTRY["undocumented"]["parameters"]["value"]
+        )
+
+    def test_container_and_optional_types_inferred(self):
+        """List/Dict and Optional[...] resolve instead of falling back."""
+
+        @tool
+        def containers(
+            starters: Optional[List[str]] = None,
+            tags: list[str] | None = None,
+            meta: Optional[Dict[str, str]] = None,
+            plain: dict = None,
+        ) -> dict:
+            """Tool with container parameters."""
+            return {}
+
+        params = _TOOL_REGISTRY["containers"]["parameters"]
+        assert params["starters"]["type"] == "array"
+        assert params["tags"]["type"] == "array"
+        assert params["meta"]["type"] == "object"
+        assert params["plain"]["type"] == "object"
+
+    def test_optional_scalar_unwrapped(self):
+        """Optional[str] is still a string, not 'unknown'."""
+
+        @tool
+        def maybe(value: Optional[str] = None, count: Optional[int] = None) -> dict:
+            """Tool with optional scalars."""
+            return {}
+
+        params = _TOOL_REGISTRY["maybe"]["parameters"]
+        assert params["value"]["type"] == "string"
+        assert params["count"]["type"] == "integer"
+
+    def test_unannotated_param_stays_unknown(self):
+        """No annotation means no declared type — downstream reads it as such."""
+
+        @tool
+        def bare(value) -> dict:
+            """Tool with an unannotated parameter."""
+            return {}
+
+        assert _TOOL_REGISTRY["bare"]["parameters"]["value"]["type"] == "unknown"
 
     def test_tool_function_callable(self):
         """Test that the registered function is callable and works."""

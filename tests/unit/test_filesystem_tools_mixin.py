@@ -681,10 +681,64 @@ class TestFindFiles:
         ]
         self.agent._fs_index = mock_index
 
-        result = self.find(query="indexed", search_type="name", scope="cwd")
+        result = self.find(query="indexed", search_type="name", scope=str(tmp_path))
         assert "indexed.txt" in result
         assert "index" in result.lower()
         mock_index.query_files.assert_called_once()
+
+    def test_index_hits_outside_scope_are_dropped(self, tmp_path):
+        """An index row outside the caller's scope is not reported."""
+        _populate_directory(tmp_path)
+        scoped = tmp_path / "subdir"
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(tmp_path / "elsewhere.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="nested", search_type="name", scope=str(scoped))
+        assert "elsewhere.txt" not in result
+        # Falls through to the filesystem search of the scoped directory.
+        assert "nested.txt" in result
+
+    def test_index_hits_inside_scope_are_kept(self, tmp_path):
+        """An index row nested under the caller's scope still counts."""
+        scoped = tmp_path / "subdir"
+        scoped.mkdir()
+        nested = scoped / "deeper"
+        nested.mkdir()
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(nested / "report.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="report", search_type="name", scope=str(scoped))
+        assert "report.txt" in result
+        assert "index" in result.lower()
+
+    def test_unbounded_scope_keeps_every_index_hit(self, tmp_path):
+        """'smart' reaches indexed directories, so nothing is filtered out."""
+        mock_index = MagicMock()
+        mock_index.query_files.return_value = [
+            {
+                "path": str(tmp_path / "indexed.txt"),
+                "size": 1024,
+                "modified_at": "2026-01-01",
+            }
+        ]
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="indexed", search_type="name", scope="smart")
+        assert "indexed.txt" in result
 
     def test_find_missing_scope_errors_before_index(self, tmp_path):
         """A missing caller scope errors even when the index could answer."""
@@ -773,6 +827,24 @@ class TestReadFile:
         assert "File too large" in result
         assert "1.0 KB" in result or "1024" in result  # mentions the cap
         assert "preview" in result.lower()  # suggests recovery path
+
+    def test_bounded_pages_recover_oversized_file_middle(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
+        path = tmp_path / "huge.txt"
+        path.write_text("x" * 4096 + "EXACT-TAIL", encoding="utf-8")
+        page = json.loads(self.read(str(path), offset=4096, limit=10))
+        assert page["content"] == "EXACT-TAIL"
+        assert page["next_offset"] is None
+
+    def test_non_utf8_page_matches_normal_read(self, tmp_path):
+        path = tmp_path / "legacy.txt"
+        text = "café résumé\n" * 103
+        path.write_bytes(text.encode("cp1252"))
+        normal = self.read(str(path), lines=2)
+        assert "café" in normal
+        page = json.loads(self.read(str(path), offset=24, limit=12))
+        assert page["content"] == text[24:36]
+        assert page["encoding"] != "utf-8"
 
     def test_read_file_preview_still_works_on_oversized(self, tmp_path, monkeypatch):
         """mode='preview' bypasses the total-size check and streams lines."""

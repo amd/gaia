@@ -100,6 +100,41 @@ class TestBuilderFencedIntegration:
         assert result["answer"] == tool_result
         assert agent.chat.send_messages.call_count == 1
 
+    def test_undecidable_fenced_calls_retry_instead_of_crashing(self, tmp_path):
+        """An unparseable reply must become a retry turn, not an agent error.
+
+        The base parser raises for a reply that is nothing but differing fenced
+        tool calls; the builder loop has to recover from that the way the base
+        loop does.
+        """
+        agent = _make_agent(tmp_path)
+        agent.console = MagicMock()
+
+        undecidable = (
+            '```json\n{"tool": "create_agent", "tool_args": {"name": "A"}}\n```\n'
+            '```json\n{"tool": "list_templates", "tool_args": {}}\n```'
+        )
+        responses = iter([undecidable, "I need the agent name first."])
+        agent.chat = MagicMock()
+        agent.chat.send_messages.side_effect = lambda **kwargs: _mock_resp(
+            next(responses)
+        )
+
+        result = agent._process_query_impl("create an agent")
+
+        assert agent.chat.send_messages.call_count == 2
+        assert result["answer"] == "I need the agent name first."
+        assert any(
+            e.get("type") == "tool_call_parse_error" for e in agent.error_history
+        )
+        retry_msgs = [
+            m["content"]
+            for call in agent.chat.send_messages.call_args_list
+            for m in call.kwargs["messages"]
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        ]
+        assert any("Ambiguous tool call" in c for c in retry_msgs)
+
     def test_bare_call_still_fires(self, tmp_path):
         """Bare (unfenced) tool calls must still work — zero regression."""
         agent = _make_agent(tmp_path)
