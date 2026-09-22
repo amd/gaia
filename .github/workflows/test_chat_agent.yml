@@ -19,8 +19,17 @@ on:
       # test_registry.py's importorskip cases actually run (#2240).
       - 'src/gaia/agents/registry.py'
       - 'tests/unit/agents/test_registry.py'
+      - 'src/gaia/web/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/chat/**'
+      - 'tests/unit/test_browser_tools.py'
+      - 'tests/unit/test_file_tools.py'
+      - 'tests/unit/test_filesystem_tools_mixin.py'
+      - 'tests/unit/test_chat_tool_bundles.py'
+      - 'tests/unit/api/test_sse_confirmation_gate.py'
+      - 'tests/unit/agents/test_output_artifacts.py'
+      - 'tests/unit/agents/test_large_tool_result_truncation.py'
+      - 'tests/unit/agents/test_parallel_tool_calls.py'
       - 'tests/test_chat_agent.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
@@ -35,8 +44,17 @@ on:
       # test_registry.py's importorskip cases actually run (#2240).
       - 'src/gaia/agents/registry.py'
       - 'tests/unit/agents/test_registry.py'
+      - 'src/gaia/web/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/chat/**'
+      - 'tests/unit/test_browser_tools.py'
+      - 'tests/unit/test_file_tools.py'
+      - 'tests/unit/test_filesystem_tools_mixin.py'
+      - 'tests/unit/test_chat_tool_bundles.py'
+      - 'tests/unit/api/test_sse_confirmation_gate.py'
+      - 'tests/unit/agents/test_output_artifacts.py'
+      - 'tests/unit/agents/test_large_tool_result_truncation.py'
+      - 'tests/unit/agents/test_parallel_tool_calls.py'
       - 'tests/test_chat_agent.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
@@ -73,11 +91,21 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -e .[dev,rag]
+          uv pip install --system -e .[dev,rag,api]
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
           # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
           uv pip install --system -e hub/agents/chat/python
+
+      - name: Test bounded tool output
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          python -m pytest tests/unit/agents/test_output_artifacts.py \
+            tests/unit/agents/test_large_tool_result_truncation.py \
+            tests/unit/agents/test_parallel_tool_calls.py tests/unit/test_browser_tools.py \
+            tests/unit/test_file_tools.py tests/unit/test_filesystem_tools_mixin.py \
+            tests/unit/test_chat_tool_bundles.py tests/unit/api/test_sse_confirmation_gate.py -v --tb=short
 
       - name: Run Chat Agent Package Tests
         env:
@@ -175,6 +203,30 @@ jobs:
             echo "[SUCCESS] Path validation tests passed"
           else
             echo "[FAILURE] Path validation tests failed"
+            exit 1
+          fi
+
+      - name: Run Chat Agent Host-Attribute Contract Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "         CHAT AGENT HOST-ATTRIBUTE CONTRACT TESTS"
+          echo "================================================================"
+          echo "Testing ChatAgent/ChatAgentLite are unaffected by the"
+          echo "RAGToolsMixin/FileIOToolsMixin host-attribute contract fix..."
+          echo ""
+
+          python -m pytest tests/test_chat_agent.py::TestChatAgentHostAttributeContract -v --tb=short
+
+          # Store the result
+          CONTRACT_TEST_EXIT=$?
+
+          if [ $CONTRACT_TEST_EXIT -eq 0 ]; then
+            echo "[SUCCESS] Host-attribute contract tests passed"
+          else
+            echo "[FAILURE] Host-attribute contract tests failed"
             exit 1
           fi
 

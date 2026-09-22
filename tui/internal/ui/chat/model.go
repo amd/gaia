@@ -19,6 +19,7 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
 	"github.com/amd/gaia/tui/internal/ui/providers"
@@ -145,9 +146,20 @@ var (
 
 type ChatModel struct {
 	providerPanel *providers.Model
-	messages      []Message
-	activity      []ActivityItem
-	streaming     bool
+	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
+	// lists and selects (agents.SelectedMsg's own doc comment); switching to
+	// the picked agent is the root model's job, so a SelectedMsg is left to
+	// propagate past this package rather than handled here.
+	agentsPanel *agents.Model
+	// hubClient feeds agentsPanel — injected by the host rather than built
+	// here, so a test can stub which agents "/agents" sees without a real
+	// daemon. Nil only in a ChatModel nothing ever called WithHubClient on;
+	// the /agents case below refuses with an actionable message instead of
+	// silently doing nothing.
+	hubClient agents.HubAgentLister
+	messages  []Message
+	activity  []ActivityItem
+	streaming bool
 	// cancelPending is true from the moment Esc/Ctrl+C requests a cancel until
 	// doneMsg confirms the run's channel actually closed. It exists only to
 	// let the doneMsg handler distinguish "this settlement was a cancel" (so
@@ -184,7 +196,11 @@ type ChatModel struct {
 	cancelFn  context.CancelFunc
 	agentName string
 	agentID   string
-	dev       bool
+	// agentVersion is the synchronous value known at construction time (the
+	// catalog's installed version) — see renderIdentityChip for the live
+	// refinement once the peer's own version has been probed.
+	agentVersion string
+	dev          bool
 
 	width  int
 	height int
@@ -391,6 +407,10 @@ type ChatModel struct {
 	// memoryLoading is true from /memory until its fetch resolves (or times
 	// out) — drives the spinner and lets Esc cancel a stuck fetch.
 	memoryLoading bool
+	// memoryColdStart records that the agent was not yet running when the
+	// fetch began, so the wait can say the agent is starting rather than
+	// implying the read itself is slow.
+	memoryColdStart bool
 	// memoryCancelFn cancels an in-flight /memory fetch. nil when none is running.
 	memoryCancelFn context.CancelFunc
 }
@@ -439,9 +459,10 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 // setupVerified says the readiness gate in front of this launch already ran
 // `gaia init --check` and it passed, so the first-boot gate must not ask again
 // — see ChatModel.setupVerified.
-func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, dev, setupVerified bool) ChatModel {
+func NewChatModelForFlagship(c client.AgentClient, agentID, agentName, agentVersion string, dev, setupVerified bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
+	m.agentVersion = agentVersion
 	m.setupVerified = setupVerified
 	return m.applyFirstBootGate()
 }
@@ -449,10 +470,58 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, de
 // NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
 // CanReturnToHub) for a real catalog agent, so agentID is the catalog id
 // rather than NewChatModel's default of the display name.
-func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
+func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName, agentVersion string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
+	m.agentVersion = agentVersion
 	return m.applyFirstBootGate()
+}
+
+// WithHubClient wires the "/agents" panel's data source into this model. The
+// host injects it (root.FlagshipModel does, via its own lazily-built
+// catalog.HubClient) rather than this package constructing one itself, so a
+// test can hand it a stub HubAgentLister.
+func (m ChatModel) WithHubClient(hc agents.HubAgentLister) ChatModel {
+	m.hubClient = hc
+	return m
+}
+
+// Messages returns the transcript as it stands. Exported for the agent-switch
+// path (root.FlagshipModel): the replacement ChatModel a switch builds must
+// carry the outgoing one's transcript forward rather than silently discard
+// it, and root cannot reach the unexported field itself.
+func (m ChatModel) Messages() []Message {
+	return m.messages
+}
+
+// WithMessages prepends msgs to whatever transcript this model already
+// starts with (typically none, on a fresh launch). Used only by the
+// agent-switch path, which is the sole caller that has a transcript to carry
+// over — a fresh launch never calls it.
+func (m ChatModel) WithMessages(msgs []Message) ChatModel {
+	m.messages = append(append([]Message(nil), msgs...), m.messages...)
+	return m
+}
+
+// AppendStatus appends a status-role line the app itself needs to say — not
+// something that arrived from the agent — straight to the transcript. Used
+// by the agent-switch path to report an outcome (already running that agent,
+// or the switch was cancelled) without discarding what came before it.
+func (m *ChatModel) AppendStatus(text string) {
+	m.messages = append(m.messages, Message{Role: RoleStatus, Content: text})
+	m.updateViewport()
+}
+
+// CloseAgentsPanel dismisses the "/agents" panel, if one is open.
+//
+// agents.SelectedMsg is deliberately not a case update() handles for
+// agentsPanel (see its own doc comment) — picking an agent is the root
+// model's job. This is the other half of that split: the root calls it the
+// moment it acts on the pick, before writing anything to this transcript.
+// View() draws agentsPanel first when it is set, so leaving it open would
+// hide every status line the switch (or its refusal) writes underneath it.
+func (m *ChatModel) CloseAgentsPanel() {
+	m.agentsPanel = nil
 }
 
 // preScanAgentID is the one agent this on-open fetch applies to today.
@@ -475,6 +544,11 @@ func (m ChatModel) Init() tea.Cmd {
 		// only way to scroll an alt-screen app, which has no terminal
 		// scrollback behind it. Ctrl+T hands it back — see selectmode.go.
 		tea.EnableMouseCellMotion,
+		// Warms up capability gating (availableCommandSet) for a daemon-relay
+		// session, whose Supports answer is otherwise "unknown" until a query
+		// or /memory has already run negotiate once — see
+		// probeCapabilitiesCmd.
+		m.probeCapabilitiesCmd(),
 	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
@@ -618,7 +692,8 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if len(next.queued) == 0 || next.streaming ||
-		next.setupChecking || next.setupRunning || next.providerPanel != nil {
+		next.setupChecking || next.setupRunning ||
+		next.providerPanel != nil || next.agentsPanel != nil {
 		return next, cmd
 	}
 	// A question or confirmation still on screen owns the conversation; the
@@ -679,6 +754,29 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.agentsPanel != nil {
+		switch msg.(type) {
+		case agents.ClosedMsg:
+			m.agentsPanel = nil
+			return m, nil
+		default:
+			// agents.SelectedMsg is deliberately NOT a case here: the root
+			// model intercepts it before this Update ever runs again, because
+			// picking an agent replaces this whole ChatModel — there is
+			// nothing for the panel field to clean up. This default only
+			// forwards keys/resizes to the still-open panel.
+			if size, ok := msg.(tea.WindowSizeMsg); ok {
+				m.width = size.Width
+				m.height = size.Height
+				m.resize()
+			}
+			updated, cmd := m.agentsPanel.Update(msg)
+			panel := updated.(agents.Model)
+			m.agentsPanel = &panel
+			return m, cmd
+		}
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -690,6 +788,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.resize()
 		return m, nil
+
+	case conversationClearedMsg:
+		return m.handleConversationCleared(msg)
 
 	case sendQueryMsg:
 		return m.sendQuery(msg.query)
@@ -948,10 +1049,16 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case capabilitiesProbedMsg:
+		if msg.err != nil && m.dev {
+			fmt.Fprintf(os.Stderr, "[DEBUG] capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state\n", msg.err)
+		}
+		return m, nil
+
 	case ToggleHelpMsg:
 		// Only ever seen when nothing wrapped this model: root consumes this
 		// message itself and never forwards it.
-		m.help.Toggle(components.HelpContextChat)
+		m.help.Toggle(components.HelpContextChat, m.availableCommandNames())
 		return m, nil
 
 	case tea.MouseMsg:
@@ -1444,19 +1551,27 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		m.providerPanel = &panel
 		m.palette.open = false
 		return m, panel.Init()
+
+	case "/agents":
+		if m.hubClient == nil {
+			m.messages = append(m.messages, Message{
+				Role: RoleError,
+				Content: "Agent list is unavailable — this session has no hub client wired in. " +
+					"Report this with `gaia diagnostics`.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		panel := agents.New(m.hubClient, m.width, m.height)
+		m.agentsPanel = &panel
+		m.palette.open = false
+		return m, panel.Init()
+
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
 
 	case "/clear":
-		m.messages = nil
-		// Daemon-transport agents are stateless per turn: the host pushes the
-		// transcript back as `context`, so clearing the view must clear that
-		// too or the "cleared" history keeps being sent.
-		if r, ok := m.client.(client.TranscriptResetter); ok {
-			r.ResetTranscript()
-		}
-		m.updateViewport()
-		return m, nil
+		return m.clearConversation()
 
 	case "/memory":
 		return m.startMemoryFetch()
@@ -1488,7 +1603,13 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/setup":
 		if m.agentID != setupAgentID {
-			return m.statusNote(m.agentName + " does not have a local setup step."), nil
+			m.messages = append(m.messages, Message{
+				Role: RoleError,
+				Content: m.agentName + " does not have a local setup step " +
+					"— only the gaia flagship agent runs `gaia init`.",
+			})
+			m.updateViewport()
+			return m, nil
 		}
 		if m.setupRunning {
 			return m.statusNote("Setup is already running. Esc cancels it."), nil
@@ -2033,7 +2154,11 @@ func (m *ChatModel) updateViewport() {
 	}
 
 	if m.memoryLoading {
-		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render("Loading memory…"))
+		note := "Loading memory…"
+		if m.memoryColdStart {
+			note = "Starting the agent, then loading memory… (first run takes a moment)"
+		}
+		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render(note))
 		sb.WriteString("\n")
 	}
 	if m.memoryView != nil {
@@ -2063,14 +2188,12 @@ func (m ChatModel) renderWelcome() string {
 
 	hint := activityStyle.Render("Ask a question, or type /help for what else this can do.")
 
-	// "Connected to: GAIA" under "Welcome to GAIA" is the same word twice; the
-	// line only earns its place when a DIFFERENT agent is on the other end.
-	if isBrandName(m.agentName) {
-		return title + "\n\n" + hint
-	}
+	// Named even for the flagship: "Welcome to GAIA" is the product, this line
+	// is which agent picked up the conversation — the same distinction the
+	// header draws.
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
-		Render("Connected to: " + m.agentName)
+		Render("Connected to: " + m.agentIdentity())
 	return title + "\n" + agent + "\n\n" + hint
 }
 
@@ -2242,6 +2365,14 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 			panelWidth = 20
 		}
 		return components.Panel(components.PanelError, "error", msg.Content, panelWidth)
+
+	case RoleToolError:
+		// Same wrap-don't-clip reasoning as RoleStatus, in the failure colour:
+		// visible enough to read, quiet enough that a retried call does not
+		// look like the turn ended badly.
+		// Continuation lines hang under the prefix so a multi-line remedy reads
+		// as one aside rather than as text that escaped it.
+		return failStyle.Render(m.wrapForPane("  [x] " + strings.ReplaceAll(msg.Content, "\n", "\n      ")))
 
 	case RoleStatus:
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
@@ -2851,6 +2982,9 @@ func (m ChatModel) View() string {
 	if m.providerPanel != nil {
 		return m.providerPanel.View()
 	}
+	if m.agentsPanel != nil {
+		return m.agentsPanel.View()
+	}
 	if m.width == 0 {
 		return m.renderWelcome()
 	}
@@ -2888,7 +3022,7 @@ func (m ChatModel) View() string {
 	// under --dev. Passing it kept a second renderer for one number alive, one
 	// that would print it in user mode the day the hint did come back empty.
 	statusBar := components.RenderStatusBar(components.StatusBarState{
-		AgentName:        m.agentName,
+		AgentName:        m.agentIdentity(),
 		Connected:        m.connected,
 		Streaming:        m.streaming,
 		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
@@ -2980,25 +3114,36 @@ func extractCommandFromArgs(raw json.RawMessage) string {
 	return ""
 }
 
-// renderHeader draws the product name, and the agent's name only when it adds
-// something. The flagship agent is itself called GAIA, so the generic form
-// rendered "GAIA │ GAIA" — a divider separating a word from itself.
+// renderHeader draws the product name, then the running agent's identity —
+// its stable id, because --agent takes the id, not the display name — kept
+// distinct from "GAIA" even for the flagship: one names the product, the
+// other names which agent is answering, and a user cannot read that off a
+// bare "GAIA │ GAIA" repeating the same word.
 func (m ChatModel) renderHeader() string {
-	title := headerStyle.Render("GAIA")
-	if !isBrandName(m.agentName) {
-		title += lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentName)
-	}
+	prefix := headerStyle.Render("GAIA")
+	identity := m.renderIdentityChip()
+
 	// Developer mode is worth stating on every frame: it also redirects the
 	// agent's file logging to DEBUG, so someone reading a log full of detail —
 	// or an empty one — needs to be able to see which mode produced it.
-	if m.dev {
-		title += activityStyle.Render(" │ dev")
-	}
+	//
 	// Names the specific model in use (never a bare "claude") and colors it
 	// when inference is remote — worth stating on every frame so the user can
 	// always tell where inference runs and which model answered.
-	title += m.renderModelChip()
-	title += m.renderLemonadeChip()
+	var rest string
+	if m.dev {
+		rest += activityStyle.Render(" │ dev")
+	}
+	rest += m.renderModelChip()
+	rest += m.renderLemonadeChip()
+
+	title := prefix + identity + rest
+	if m.width > 0 && ansi.StringWidth(title) > m.width {
+		// Which agent is answering matters less than which model is: on a
+		// narrow terminal the identity chip is what gives way, never the model
+		// chip it would otherwise crowd out.
+		title = prefix + rest
+	}
 	if m.width > 0 {
 		// Never let the header wrap: contentHeaderRows budgets it as exactly
 		// one row, and a wrapped header shifts every mouse hit-test below it.
@@ -3007,8 +3152,31 @@ func (m ChatModel) renderHeader() string {
 	return title
 }
 
-// isBrandName reports whether an agent's display name is just the product name,
-// so callers can drop the duplicate rather than print it twice.
-func isBrandName(agent string) bool {
-	return strings.EqualFold(strings.TrimSpace(agent), "gaia")
+// agentIdentity is "agent <id>", optionally with a "v<version>" suffix — the
+// one string a user can read off the screen and pass straight back to
+// --agent. The id is always lowercased regardless of how the catalog
+// capitalizes the display name, so the header never disagrees with itself on
+// two different launches of the same agent.
+//
+// version prefers a live probe of the peer's own reported version over the
+// value known at construction time (the catalog's installed version), read
+// through an optional interface so this package never has to import the
+// client that implements it.
+func (m ChatModel) agentIdentity() string {
+	version := m.agentVersion
+	if v, ok := m.client.(interface{ AgentVersion() string }); ok {
+		if live := v.AgentVersion(); live != "" {
+			version = live
+		}
+	}
+	identity := "agent " + strings.ToLower(m.agentID)
+	if version != "" {
+		identity += " v" + version
+	}
+	return identity
+}
+
+// renderIdentityChip is agentIdentity styled as a header segment.
+func (m ChatModel) renderIdentityChip() string {
+	return lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentIdentity())
 }
