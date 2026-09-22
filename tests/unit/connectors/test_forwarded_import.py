@@ -114,6 +114,38 @@ class TestPersistence:
         blob = peek_connection("google")
         assert blob["account_email"] == "default"
 
+    def test_marks_connection_forwarded(self):
+        # #2591 review: this marker is what stops a later disconnect from
+        # revoking the host app's own OAuth grant (flow.revoke_provider_token
+        # reads it). Without it, GAIA cannot tell a forwarded connection
+        # apart from one it authenticated itself.
+        _do_import()
+        blob = peek_connection("google")
+        assert blob["forwarded"] is True
+
+
+class TestForwardedConnectionDisconnect:
+    """#2591 review's critical finding, exercised through the real
+    ``import_forwarded_connection`` entry point rather than a hand-built
+    keyring blob: disconnecting a forwarded connection must never revoke
+    the host app's own grant with the provider."""
+
+    @respx.mock
+    def test_disconnect_does_not_call_provider_revoke(self):
+        from gaia.connectors.api import revoke_connection
+
+        revoke_route = respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(200)
+        )
+        _do_import()
+        result = revoke_connection("google")
+        assert not revoke_route.called
+        assert result["revoke_supported"] is False
+        assert result["revoked_remotely"] is False
+        assert "forwarded" in result["revoke_error"]
+        # Local state is still cleared — the disconnect intent is honored.
+        assert peek_connection("google") is None
+
 
 class TestCacheEviction:
     def test_evicts_provider_cache(self):
