@@ -1,0 +1,271 @@
+---
+title: "Claude Code Session Analytics"
+description: "Mine your local Claude Code session transcripts for usage patterns, effectiveness, and cost"
+icon: "chart-line"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/factory/harvest/`](https://github.com/amd/gaia/tree/main/src/gaia/factory/harvest)
+</Info>
+
+## What this is
+
+Claude Code writes a full JSONL transcript of every session to `~/.claude/projects/`
+— every prompt, every tool call, every failure, every token spent. This tool turns
+that exhaust into an evidence-backed report: what you actually use the agent for,
+how often it fails and recovers, and what it costs.
+
+The four core steps are deterministic Python — no LLM calls, no network access, no
+dependencies beyond the standard library. Two further steps are optional and do call
+a model through your local Claude Code install: `classify` labels each session's use
+case, and `synthesize` writes the analysis of the tables. Neither is required, and
+neither changes a figure the deterministic steps produced.
+
+<Warning>
+  This analyzes your own local transcripts and writes reports to your own machine.
+  Nothing here is a GAIA product feature end users interact with — it's a
+  contributor/maintainer tool for understanding how Claude Code is actually being
+  used on this codebase.
+</Warning>
+
+## Prerequisites
+
+If you can already run `gaia` commands in this repo, you're set — the harvest
+scripts need nothing beyond the base install (no `[dev]`, `[eval]`, or other
+extras). If not, follow the [Dev Guide](/reference/dev) first
+(`uv venv && uv pip install -e .`). The two optional LLM steps need the
+[Claude Code](https://claude.com/claude-code) CLI on your `PATH` — your existing
+subscription, not an API key. Set `GAIA_CLAUDE_BIN` if it lives somewhere unusual.
+
+## Quick start
+
+Never redirect output into the repository. These tables are built from real
+transcripts — an untracked `tables.md` at the repo root is one `git add -A` away
+from being published. Everything below defaults to `~/.gaia/cache/factory/`
+(created automatically), which lives outside any repo so it can't get committed
+by accident. As a second safety net, this repo's `.gitignore` also blocks these
+four filenames at its own root, in case you forget `$FACTORY` and redirect bare.
+
+```bash
+FACTORY=~/.gaia/cache/factory
+```
+
+<Info>
+  On Windows, run these in **Git Bash** (installed alongside Git for Windows),
+  not PowerShell. This output has em dashes and other non-ASCII characters;
+  PowerShell's console encoding silently corrupts them on redirect (`>`),
+  while Git Bash writes clean UTF-8 like macOS/Linux.
+</Info>
+
+<Steps>
+  <Step title="Extract — deterministic, no LLM, no network">
+    Roughly linear in transcript count. Writes `traces.jsonl`, `intents.jsonl`, and
+    `stats.json` into `$FACTORY`.
+
+    ```bash
+    python -m gaia.factory.harvest.scan
+    ```
+  </Step>
+
+  <Step title="Tables — absolute counts and share-of-total for every figure">
+    ```bash
+    python -m gaia.factory.harvest.report > "$FACTORY/tables.md"
+    ```
+
+    With use-case labels, once you've done [Classifying intent](#classifying-intent) below:
+
+    ```bash
+    python -m gaia.factory.harvest.report --labels "$FACTORY/labels.txt" > "$FACTORY/tables.md"
+    ```
+  </Step>
+
+  <Step title="Context — per-request prompt size and local KV-cache memory">
+    Re-reads the raw transcripts, because `scan`/`report` aggregate per session and
+    that hides how large any single request got.
+
+    ```bash
+    python -m gaia.factory.harvest.context > "$FACTORY/context.md"
+    ```
+
+    With use-case labels:
+
+    ```bash
+    python -m gaia.factory.harvest.context --labels "$FACTORY/labels.txt" > "$FACTORY/context.md"
+    ```
+  </Step>
+
+  <Step title="Savings — what a proposed fix would actually save">
+    In tokens and dollars.
+
+    ```bash
+    python -m gaia.factory.harvest.savings > "$FACTORY/savings.md"
+    ```
+  </Step>
+
+  <Step title="Label use cases — optional, needs Claude Code">
+    Writes `labels.txt`, which unlocks the "by use case" sections. Re-run `report`
+    and `context` with `--labels` afterwards.
+
+    ```bash
+    python -m gaia.factory.harvest.classify
+    ```
+  </Step>
+
+  <Step title="Analysis — optional, needs Claude Code">
+    The written findings the tables do not state on their own.
+
+    ```bash
+    python -m gaia.factory.harvest.synthesize > "$FACTORY/analysis.md"
+    ```
+  </Step>
+</Steps>
+
+No transcripts yet? `scan` fails loudly and tells you which directory it searched
+instead of silently reporting zero — that's expected on a machine that has never
+run Claude Code.
+
+### Flags
+
+| Script | Extra flags |
+|---|---|
+| `scan` | `--root` (transcripts elsewhere), `--out` (default `$FACTORY`) |
+| `report` | `--cache` (default `$FACTORY`), `--labels` |
+| `context` | `--cache`, `--projects` (raw transcripts, if not under `~/.claude/projects`), `--labels` |
+| `savings` | `--cache`, `--projects` |
+| `classify` | `--cache`, `--out`, `--batch`, `--model`, `--timeout`, `--claude-bin` |
+| `synthesize` | `--cache`, `--model`, `--timeout`, `--claude-bin` |
+
+`--root` relocates the scan, it does not narrow it. The path it takes is the
+directory *holding* your projects — sessions are read as `<root>/<project>/*.jsonl`
+— so pointing it at one project directory matches nothing and exits with the
+"no sessions found" error. There is no supported way to scan a single project.
+
+## Output files
+
+| File | Contents |
+|---|---|
+| `traces.jsonl` | One normalized trace per session: ordered steps, outcomes, tokens, subagents |
+| `intents.jsonl` | One line per session: goal, title, steps, turns, tokens, cost, duration |
+| `stats.json` | Every aggregate, including `effectiveness` (which nests `error_profile`, corrections, thrash, and more) |
+| `tables.md` | Human-readable tables rendered from `stats.json` (your redirect target) |
+| `context.md` | Per-request prompt-size and KV-cache figures |
+| `savings.md` | Token/dollar savings estimates per proposed fix |
+| `labels.txt` | `<8-char-session-prefix> <use-case>`, one per line (from `classify`) |
+| `analysis.md` | Written findings over the tables (from `synthesize`) |
+
+## Classifying intent
+
+*Optional — the reports above already work without this; it only adds a
+"by use case" breakdown.*
+
+`scan` produces `intents.jsonl` but assigns no use-case label. `classify` does
+that step against a closed taxonomy, in batches, and writes `labels.txt`:
+
+```bash
+python -m gaia.factory.harvest.classify
+python -m gaia.factory.harvest.report --labels "$FACTORY/labels.txt" > "$FACTORY/tables.md"
+python -m gaia.factory.harvest.context --labels "$FACTORY/labels.txt" > "$FACTORY/context.md"
+```
+
+The taxonomy is closed on purpose — a batch that invents its own tags makes the
+per-use-case tables incomparable with the batch before it. Sessions whose
+transcript carries no opening instruction are tagged `no_instruction` locally,
+without a model call, because "unclassifiable" is a fact about the transcript
+rather than a judgement. A batch whose labels don't cover it exactly is an
+error, and nothing is written until every batch has validated — a partial
+`labels.txt` silently shrinks the population every use-case table is drawn over.
+
+Sessions are classified from the **first user message**, not the auto-generated
+session title — the title summarizes what happened, which leaks the outcome
+into the label.
+
+To label by hand instead, write `$FACTORY/labels.txt` as
+`<8-char-session-prefix> <use-case>`, one per line. It carries session-id
+prefixes, so it stays in the cache directory, never in a repo.
+
+Prefixes are checked against the corpus. A file where nothing matches stops the
+run rather than rendering an empty table, and a partially-matched file prints how
+many sessions it covers — on stderr and inside each use-case table — so the
+labelled subset is never mistaken for the whole corpus.
+
+## Writing the analysis
+
+*Optional, and the second of the two steps that call a model.*
+
+The tables are evidence, not a report: nothing in them ranks what matters or
+connects two sections. `synthesize` does that, reading only what the other
+steps already wrote:
+
+```bash
+python -m gaia.factory.harvest.synthesize > "$FACTORY/analysis.md"
+```
+
+The honesty rules below are sent as a binding contract, not as advice — no
+figure that isn't in the tables, no tool-failure rate presented as a
+task-failure rate, cost always named as API-equivalent. Check the figures
+against the tables anyway before sharing it; a generated analysis is a draft
+with citations, not a verified one.
+
+## Things that will mislead you if you skip them
+
+- **Subagents are not sessions.** A delegated `Task`/`Agent` run gets its own
+  transcript under `<session-uuid>/subagents/`. Say explicitly which scope a number
+  covers (main session only, or including subagents).
+- **There is no ground truth for task success.** Nothing in a transcript says
+  whether the goal was actually met — never present a tool-failure rate as a
+  task-failure rate.
+- **Friction signals are proxies, not proof.** Corrections and interrupts are
+  evidence of friction, not confirmation of it.
+- **Cost is API-equivalent**, not money spent, if the sessions ran on a subscription
+  rather than metered API usage.
+- **Duration is unusable past the median.** A session left open overnight reports
+  the whole night as active time.
+- **The corpus grows while you analyze it.** The session doing the analysis is
+  itself being recorded. Timestamp the snapshot you're reporting on.
+
+## Privacy
+
+By default, `scan` covers **every Claude Code project on your machine** — not just
+this repo — because `~/.claude/projects/` holds one subdirectory per project you've
+ever used Claude Code in, and there's no per-project filter. `tables.md` doesn't
+break the count down by project; check the `top_projects` field in `stats.json` if
+you want to see the mix before sharing anything.
+
+Transcripts contain absolute paths, branch names, repository content, and anything
+pasted into a prompt. The pipeline writes only to `~/.gaia/cache/factory/`. If a
+report needs to be shared, put it somewhere private and scrub paths first — nothing
+derived from a corpus belongs in a public repository or a GitHub comment.
+
+The four deterministic steps never leave the machine. The two optional ones do:
+`classify` sends the opening instruction of every session, and `synthesize` sends
+the rendered tables. Both go to the same Claude Code install you already use and
+nowhere else, but if your opening instructions are sensitive, label by hand
+instead.
+
+## Driving this from Claude Code
+
+If you want Claude Code itself to run this pipeline, review the output, and produce
+a written report, use the `analyzing-claude-sessions` skill
+(`.claude/skills/analyzing-claude-sessions/SKILL.md`) — it carries the same
+commands above plus guidance on what to actually report and how to verify the
+analysis before publishing it.
+
+## Roadmap
+
+The current pipeline covers extraction and reporting only. A broader design —
+turning harvested sessions into eval scenarios and distilled skills for local
+models — is proposed but **not implemented** in
+[`docs/plans/claude-session-harvest.md`](https://github.com/amd/gaia/blob/main/docs/plans/claude-session-harvest.md).
+Nothing on this page depends on that plan landing.
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
