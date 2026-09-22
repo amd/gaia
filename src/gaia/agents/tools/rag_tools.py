@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from gaia.agents.base.errors import require_host_attr
+from gaia.agents.base.verification import NOT_EXECUTED
 
 logger = logging.getLogger(__name__)
 
@@ -567,6 +568,7 @@ class RAGToolsMixin:
                                 self, "_is_path_allowed"
                             ) and not self._is_path_allowed(resolved):
                                 return {
+                                    **NOT_EXECUTED,
                                     "status": "error",
                                     "error": f"Access denied: '{resolved}' is not in allowed paths",
                                 }
@@ -1210,6 +1212,7 @@ class RAGToolsMixin:
                 if hasattr(self, "_is_path_allowed"):
                     if not self._is_path_allowed(real_file_path):
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": f"Access denied: {real_file_path} is not in allowed paths",
                         }
