@@ -43,10 +43,13 @@ redeeming an authorization code. This is the key difference from Google, which
 Client ID; ``token_request_body`` / ``refresh_request_body`` omit the secret
 unless one is explicitly configured (a confidential web-app edge case).
 
-The shared ``flow.py`` requires a refresh token (Microsoft returns one only
-when ``offline_access`` is requested) and decodes the account email from the
-id_token (returned only when ``openid`` is requested). Both scopes are in
-``default_scopes`` so a first connect succeeds without any flow.py change.
+The shared ``flow.py`` requires a refresh token, which Microsoft returns only
+when ``offline_access`` is requested — so that scope is in ``default_scopes``
+and a first connect succeeds without any flow.py change. ``openid`` is NOT:
+an Entra tenant may reject the whole authorization request over it
+(``AADSTS65002``), and everything it carried has a tenant-independent source —
+the account email from Graph ``/me`` (``userinfo_url``), the account kind from
+this connector's own authority (``classify_account_type``).
 """
 
 from __future__ import annotations
@@ -114,6 +117,31 @@ def account_type_for_tenant(tenant_id: str | None) -> str | None:
     return ACCOUNT_TYPE_PERSONAL if tid == _MSA_TENANT_ID else ACCOUNT_TYPE_WORK
 
 
+def account_type_for_authority(authority: str | None) -> str | None:
+    """Classify a Microsoft account from the OAuth authority it signed in against.
+
+    Used when no id_token is available (GAIA does not request ``openid``, #4079).
+    Entra enforces the audience per authority: ``consumers`` admits only personal
+    Microsoft accounts and ``organizations`` only work/school ones, so the
+    connector's own authority is an exact discriminator — not a heuristic.
+
+    Args:
+        authority: The tenant segment of the login URL — ``consumers``,
+            ``organizations``, ``common``, or a Directory (tenant) GUID.
+
+    Returns:
+        ``"personal"`` for ``consumers``, ``"work"`` for ``organizations`` or a
+        specific tenant id, ``None`` for ``common`` (which admits both kinds, so
+        it discriminates nothing) and for a blank value.
+    """
+    value = (authority or "").strip().lower()
+    if not value or value == "common":
+        return None
+    if value == "consumers":
+        return ACCOUNT_TYPE_PERSONAL
+    return ACCOUNT_TYPE_WORK
+
+
 # Plain-language descriptions for the AgentUI consent dialog, mirroring the
 # Google provider's SCOPE_DESCRIPTIONS. The router/CLI render these strings;
 # agents declare the Graph scope URLs in REQUIRED_CONNECTORS.
@@ -146,11 +174,9 @@ class MicrosoftOAuthProvider:
     log correlation / the ``store.load_connection`` tripwire compare.
     """
 
-    # offline_access => refresh token; openid => id_token (account email).
-    # The shared flow depends on both; keep them in the default set so a bare
-    # connect (no explicit scopes) still works end-to-end.
+    # offline_access => refresh token, which the shared flow requires. No
+    # `openid`: AMD's Entra tenant rejects the request with AADSTS65002 (#4079).
     default_scopes: Sequence[str] = (
-        "openid",
         "offline_access",
         "https://graph.microsoft.com/User.Read",
     )
@@ -162,17 +188,21 @@ class MicrosoftOAuthProvider:
         "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName"
     )
 
-    @staticmethod
-    def classify_account_type(claims: dict) -> str | None:
-        """Derive ``personal`` / ``work`` from an id_token's claims (#2466).
+    def classify_account_type(self, claims: dict) -> str | None:
+        """Derive ``personal`` / ``work`` at connect time (#2466).
 
         Duck-typed hook: ``flow.py`` calls this when the provider defines it, so
-        the account kind is recorded on the connection at connect time and no
-        agent has to re-derive it (or make a Graph call) later. Reads only the
-        ``tid`` claim; returns ``None`` when it is absent, which callers must
-        treat as unknown.
+        the account kind is recorded on the connection and no agent has to
+        re-derive it (or make a Graph call) later.
+
+        Prefers the id_token's ``tid`` claim, which describes the account itself.
+        GAIA no longer requests ``openid`` (#4079), so in practice there are no
+        claims and the connector's own authority decides. Returns ``None`` when
+        neither is conclusive — callers must treat that as unknown.
         """
-        return account_type_for_tenant(claims.get("tid"))
+        return account_type_for_tenant(
+            (claims or {}).get("tid")
+        ) or account_type_for_authority(self.tenant)
 
     @staticmethod
     def parse_account_email(userinfo: dict) -> str | None:
