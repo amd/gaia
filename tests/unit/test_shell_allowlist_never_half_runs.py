@@ -1,14 +1,17 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A command that needs approval must not run when nothing can approve it.
+"""A command outside the read-only allowlist must not run, and must not half-run.
 
 Every assertion here checks the *side effect*, not the status string. A tool
 that reports an error while having already deleted the file is the failure this
 guards against, and a status-only assertion cannot tell the two apart.
 
-The host is a bare ``ShellToolsMixin`` with no ``console`` attribute: the shape
-a unit test, a script, or an embedding application produces. Approval belongs to
-the console, so with no console the answer is no.
+The host is a bare ``ShellToolsMixin``: the shape a unit test, a script, or an
+embedding application produces. The allowlist refusal is enforced inside the
+tool itself, so it holds with no console and with blanket approval enabled.
+
+The agent-level confirmation gate is a separate tier, covered in
+``tests/unit/agents/test_console_tool_confirmation.py``.
 """
 
 import os
@@ -16,12 +19,14 @@ import tempfile
 
 import pytest
 
+import gaia
+from gaia.agents.base.console import auto_approve_env_enabled
 from gaia.agents.base.tools import get_tool_metadata
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 
 
 class _NoConsoleHost(ShellToolsMixin):
-    """No console, so no way to ask the user anything."""
+    """No console, so nothing in the call path could prompt or approve."""
 
 
 @pytest.fixture
@@ -41,7 +46,7 @@ def _run(command, cwd):
 def test_a_destructive_command_leaves_the_file_alone(workdir):
     result = _run("rm keep.txt", workdir)
 
-    assert (workdir / "keep.txt").exists(), "the file was deleted without approval"
+    assert (workdir / "keep.txt").exists(), "the file was deleted despite the refusal"
     assert result["status"] == "error", result
 
 
@@ -61,7 +66,7 @@ def test_a_command_that_writes_creates_nothing(workdir):
         "npm install left-pad",
     ],
 )
-def test_commands_outside_the_no_prompt_list_do_not_run(command, workdir):
+def test_commands_outside_the_allowlist_do_not_run(command, workdir):
     result = _run(command, workdir)
 
     assert result["status"] == "error", result
@@ -76,11 +81,15 @@ def test_a_read_only_command_still_runs(workdir):
     assert "keep.txt" in result["stdout"]
 
 
-def test_the_blanket_approval_env_does_not_extend_to_prompted_commands(
-    workdir, monkeypatch
-):
-    """An unattended run pre-approves prompts; it does not widen what may run."""
-    monkeypatch.setenv("GAIA_AUTO_APPROVE_TOOLS", "1")
+def test_blanket_approval_does_not_widen_the_allowlist(workdir, monkeypatch):
+    """An unattended run pre-approves prompts; it does not widen what may run.
+
+    The opt-in is read from the startup environment snapshot, so
+    ``monkeypatch.setenv`` would be a no-op here — patch the reader instead, and
+    assert it took, or the rest of the test cannot fail.
+    """
+    monkeypatch.setattr(gaia, "pre_dotenv_env", lambda name: "1")
+    assert auto_approve_env_enabled(), "the opt-in never took; the test is vacuous"
 
     result = _run("rm keep.txt", workdir)
 
@@ -88,12 +97,11 @@ def test_the_blanket_approval_env_does_not_extend_to_prompted_commands(
     assert result["status"] == "error", result
 
 
-def test_the_system_temp_dir_is_not_writable_by_default(tmp_path):
-    """A host with no path validator must not fall back to unrestricted access."""
-    target = os.path.join(tempfile.gettempdir(), "gaia-should-not-exist.txt")
-    if os.path.exists(target):
-        os.unlink(target)
+def test_the_system_temp_dir_is_not_written_to(tmp_path):
+    """An absolute path outside the working directory is not a way around this."""
+    target = os.path.join(tempfile.gettempdir(), f"gaia-should-not-exist-{os.getpid()}")
 
-    _run(f"touch {target}", tmp_path)
+    result = _run(f"touch {target}", tmp_path)
 
-    assert not os.path.exists(target), "wrote outside any allowed path"
+    assert result["status"] == "error", result
+    assert not os.path.exists(target), "wrote outside the working directory"
