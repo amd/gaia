@@ -38,10 +38,13 @@ func TestFailedNonRenderToolSurfacesItsErrorText(t *testing.T) {
 	}
 }
 
-// AC-1, rendered: the text must actually reach the viewport, not just the
-// message slice. Asserted on a short unwrappable token for the 80-column
-// harness (the cards_test.go idiom).
-func TestFailedNonRenderToolIsVisibleInTheTranscript(t *testing.T) {
+// AC-1, rendered and DURABLE. The activity work log already carried a
+// truncated detail, but the final event clears it (canonical.go sets
+// m.activity = nil), so the only text explaining the failure vanished the
+// moment the turn ended. Asserting after `final` is what distinguishes the
+// transcript from the transient log. Short unwrappable token, per the
+// 80-column harness idiom in cards_test.go.
+func TestFailedNonRenderToolSurvivesTheEndOfTheTurn(t *testing.T) {
 	m := feed(t, newTestChat(t),
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "archive_message"},
 		event.CanonicalToolResultEvent{
@@ -49,11 +52,15 @@ func TestFailedNonRenderToolIsVisibleInTheTranscript(t *testing.T) {
 			Tool: "archive_message",
 			Data: json.RawMessage(`{"status":"error","error":"boom"}`),
 		},
+		event.CanonicalFinalEvent{Type: "final", Answer: "Sorry, I could not archive it."},
 	)
+	if len(m.activity) != 0 {
+		t.Fatalf("the work log is expected to be cleared by `final`, got %+v", m.activity)
+	}
 	m.updateViewport()
 	rendered := ansi.Strip(m.viewport.View())
 	if !strings.Contains(rendered, "boom") {
-		t.Errorf("a failed non-render tool printed nothing the user can read:\n%s", rendered)
+		t.Errorf("the failure explanation did not outlive the turn:\n%s", rendered)
 	}
 }
 
@@ -100,15 +107,17 @@ func TestRecoveredMidTurnFailureStaysInline(t *testing.T) {
 	}
 }
 
-// AC-1 companion: the activity tick must agree with the transcript. A tool
-// whose payload says it failed cannot keep a green ✓.
+// AC-1 companion: the activity tick must agree with the transcript. The
+// fixture carries `status: "error"` and no top-level ok/success bool, which
+// the old markToolDone classifier read as a pass — so the tick was green
+// above an error the transcript never showed.
 func TestFailedNonRenderToolTicksFailed(t *testing.T) {
 	m := feed(t, newTestChat(t),
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "archive_message"},
 		event.CanonicalToolResultEvent{
 			Type: "tool_result",
 			Tool: "archive_message",
-			Data: json.RawMessage(`{"ok":false,"error":"mailbox is read-only"}`),
+			Data: json.RawMessage(`{"status":"error","error":"mailbox is read-only"}`),
 		},
 	)
 	if len(m.activity) != 1 {
