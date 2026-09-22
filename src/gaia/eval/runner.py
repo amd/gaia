@@ -233,6 +233,95 @@ _STARTUP_OVERHEAD_S = (
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
 
+def _resolve_scenario_agent_type(scenario_data: dict, cli_agent_type):
+    """Return the agent a scenario asks for: its own ``agent_type:`` wins."""
+    return scenario_data.get("agent_type") or cli_agent_type
+
+
+def _canonical_agent_type(value):
+    """Resolve legacy aliases so ``doc-lite`` and ``doc`` compare equal.
+
+    Alias resolution alone — no registry discovery, which would need the hub
+    wheels installed in whatever process reads a result back.
+    """
+    if not value:
+        return None
+    from gaia.agents.registry import AgentRegistry
+
+    return AgentRegistry().canonical_id(value)
+
+
+def _read_session_agent_type(backend_url: str, session_id: str, timeout: float = 15.0):
+    """Return the ``agent_type`` the backend stored for *session_id*.
+
+    Raises on any transport or parse failure — a provenance check that guesses
+    is worth nothing.
+    """
+    import urllib.request
+
+    url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
+    with urllib.request.urlopen(url, timeout=timeout) as response:  # nosec B310
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload.get("agent_type")
+
+
+def _stamp_agent_provenance(
+    result: dict,
+    scenario_data: dict,
+    cli_agent_type,
+    backend_url: str,
+    read_session_agent_type=_read_session_agent_type,
+) -> None:
+    """Record requested vs observed agent, failing the scenario on a mismatch.
+
+    The runner asks for an agent in prompt prose, so a driver that drops the
+    kwarg runs the backend default while the result still claims the requested
+    id (#4069). Over HTTP a dropped kwarg reads back as the string ``"chat"``,
+    never ``None`` — so a scenario legitimately requesting ``chat`` is the one
+    case this cannot tell apart.
+    """
+    requested = _resolve_scenario_agent_type(scenario_data, cli_agent_type)
+    result["agent_type_requested"] = requested
+    result.setdefault("agent_type_observed", None)
+
+    # A scenario that never produced a measurement never got a session either;
+    # relabelling it would erase the real failure.
+    if result.get("status") in _NO_MEASUREMENT_STATUSES:
+        return
+
+    scenario_id = result.get("scenario_id", scenario_data.get("id", "<unknown>"))
+    session_id = result.get("session_id")
+    if not session_id:
+        result["status"] = "INFRA_ERROR"
+        result["error"] = (
+            f"{scenario_id}: the eval driver returned no session_id, so the agent "
+            "that answered cannot be verified. The driver must return the "
+            "session_id from Phase 1 in its result JSON."
+        )
+        return
+
+    try:
+        observed = read_session_agent_type(backend_url, session_id)
+    except Exception as e:  # transport, HTTP status, or malformed body
+        result["status"] = "INFRA_ERROR"
+        result["error"] = (
+            f"{scenario_id}: could not read session {session_id} back from "
+            f"{backend_url} to verify which agent ran ({e}). Check the Agent UI "
+            "backend is still up at that URL."
+        )
+        return
+
+    result["agent_type_observed"] = observed
+    if requested and _canonical_agent_type(observed) != _canonical_agent_type(requested):
+        result["status"] = "INFRA_ERROR"
+        result["error"] = (
+            f"{scenario_id}: requested agent_type '{requested}' but session "
+            f"{session_id} ran '{observed}'. The eval driver dropped the "
+            "agent_type kwarg on create_session; the score measures the wrong "
+            "agent and is discarded."
+        )
+
+
 def _compute_effective_timeout(base_timeout: int, scenario_data: dict) -> int:
     """Return per-scenario timeout covering startup overhead + turns + docs."""
     num_turns = len(scenario_data.get("turns", []))
@@ -534,9 +623,12 @@ Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
 Do NOT call delete_session. Leave the session intact so it can be reviewed in the Agent UI after the eval completes.
 
 ### Phase 6: Return result
-Return a single JSON object to stdout with this structure:
+Return a single JSON object to stdout with this structure.
+`session_id` MUST be the id returned by create_session in Phase 1 — the runner
+reads that session back to verify which agent actually answered.
 {{
   "scenario_id": "...",
+  "session_id": "...",
   "status": "PASS|FAIL|BLOCKED_BY_ARCHITECTURE|INFRA_ERROR|SETUP_ERROR|TIMEOUT|ERRORED",
   "overall_score": 0-10,
   "turns": [
@@ -936,6 +1028,7 @@ def run_scenario_subprocess(
             "required": ["scenario_id", "status", "overall_score", "turns"],
             "properties": {
                 "scenario_id": {"type": "string"},
+                "session_id": {"type": ["string", "null"]},
                 "status": {"type": "string"},
                 "overall_score": {"type": ["number", "null"]},
                 "turns": {"type": "array"},
@@ -1127,6 +1220,9 @@ def run_scenario_subprocess(
 
     # Inject category from scenario YAML — eval agent doesn't include this field
     result.setdefault("category", scenario_data.get("category", "unknown"))
+
+    # Provenance: which agent answered, not which one the runner asked for.
+    _stamp_agent_provenance(result, scenario_data, agent_type, backend_url)
 
     # Trust dimension scores, not LLM arithmetic — overwrite per-turn overall_score
     # with the recomputed weighted sum.  Log when the LLM's value differed by > 0.25.
@@ -1924,6 +2020,10 @@ class AgentEvalRunner:
                 result = {
                     "scenario_id": sid,
                     "category": scenario_data.get("category", "unknown"),
+                    "agent_type_requested": _resolve_scenario_agent_type(
+                        scenario_data, self.agent_type
+                    ),
+                    "agent_type_observed": None,
                     "status": "SKIPPED_NO_DOCUMENT",
                     "overall_score": None,
                     "turns": [],
@@ -1944,8 +2044,9 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
-            # Per-scenario agent_type from YAML overrides CLI --agent-type
-            scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
+            scenario_agent_type = _resolve_scenario_agent_type(
+                scenario_data, self.agent_type
+            )
             result = run_scenario_subprocess(
                 scenario_path,
                 scenario_data,
@@ -2041,7 +2142,9 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
-                scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
+                scenario_agent_type = _resolve_scenario_agent_type(
+                    scenario_data, self.agent_type
+                )
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,

@@ -1,0 +1,231 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""Guard: a scenario result records the agent that ran, not the one requested.
+
+The runner asks for an agent in prompt prose, so a driver that drops the
+``agent_type`` kwarg silently runs the backend default while the result still
+carries the requested id (#4069). Provenance is only trustworthy when the
+requested and observed ids are recorded separately and a disagreement fails the
+scenario.
+"""
+
+import json
+
+import pytest
+
+from gaia.eval.runner import (
+    _canonical_agent_type,
+    _read_session_agent_type,
+    _stamp_agent_provenance,
+    build_scenario_prompt,
+)
+
+
+def _passing_result(session_id="sess-1"):
+    return {
+        "scenario_id": "smart_discovery",
+        "status": "PASS",
+        "overall_score": 8.0,
+        "turns": [{"turn": 1}],
+        "session_id": session_id,
+    }
+
+
+def _stamp(result, scenario_data, cli_agent_type, observed, backend_url="http://x"):
+    """Run the provenance stamp with the HTTP read-back stubbed to *observed*.
+
+    *observed* may be an exception instance to simulate an unreachable backend.
+    """
+
+    def fake_read(_backend_url, _session_id):
+        if isinstance(observed, Exception):
+            raise observed
+        return observed
+
+    _stamp_agent_provenance(
+        result,
+        scenario_data,
+        cli_agent_type,
+        backend_url,
+        read_session_agent_type=fake_read,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# The happy path and the bug this issue is about
+# ---------------------------------------------------------------------------
+
+
+def test_agreement_records_both_ids_and_preserves_status():
+    result = _stamp(
+        _passing_result(), {"id": "s", "agent_type": "gaia"}, None, observed="gaia"
+    )
+    assert result["agent_type_requested"] == "gaia"
+    assert result["agent_type_observed"] == "gaia"
+    assert result["status"] == "PASS"
+
+
+def test_dropped_kwarg_is_caught_and_fails_the_scenario():
+    # The driver was told to create a `gaia` session and didn't; the backend
+    # default answered instead. Scoring that as a `gaia` PASS is the bug.
+    result = _stamp(
+        _passing_result(), {"id": "s", "agent_type": "gaia"}, None, observed="chat"
+    )
+    assert result["status"] == "INFRA_ERROR"
+    assert result["agent_type_requested"] == "gaia"
+    assert result["agent_type_observed"] == "chat"
+    assert "gaia" in result["error"] and "chat" in result["error"]
+
+
+def test_scenario_agent_type_beats_the_cli_flag_as_the_requested_id():
+    result = _stamp(
+        _passing_result(), {"id": "s", "agent_type": "doc"}, "gaia", observed="doc"
+    )
+    assert result["agent_type_requested"] == "doc"
+    assert result["status"] == "PASS"
+
+
+def test_cli_flag_is_the_requested_id_when_the_scenario_declares_none():
+    result = _stamp(_passing_result(), {"id": "s"}, "gaia", observed="gaia")
+    assert result["agent_type_requested"] == "gaia"
+    assert result["status"] == "PASS"
+
+
+def test_legacy_alias_is_not_a_mismatch():
+    # `doc-lite` sessions are stored and read back as `doc`.
+    result = _stamp(
+        _passing_result(), {"id": "s", "agent_type": "doc-lite"}, None, observed="doc"
+    )
+    assert result["status"] == "PASS"
+    assert result["agent_type_observed"] == "doc"
+
+
+# ---------------------------------------------------------------------------
+# Failure modes that must not degrade to a guess
+# ---------------------------------------------------------------------------
+
+
+def test_missing_session_id_is_an_infra_error():
+    result = _passing_result()
+    del result["session_id"]
+    _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="gaia")
+    assert result["status"] == "INFRA_ERROR"
+    assert result["agent_type_observed"] is None
+    assert "session_id" in result["error"]
+
+
+def test_unreachable_backend_is_an_infra_error_naming_the_url():
+    result = _stamp(
+        _passing_result(),
+        {"id": "s", "agent_type": "gaia"},
+        None,
+        observed=RuntimeError("connection refused"),
+        backend_url="http://127.0.0.1:4200",
+    )
+    assert result["status"] == "INFRA_ERROR"
+    assert "127.0.0.1:4200" in result["error"]
+
+
+@pytest.mark.parametrize("status", ["TIMEOUT", "SETUP_ERROR", "ERRORED"])
+def test_a_scenario_that_never_measured_keeps_its_own_status(status):
+    # These never got far enough to create a session; relabelling them
+    # INFRA_ERROR would erase the real failure.
+    result = {"scenario_id": "s", "status": status, "turns": []}
+    _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="chat")
+    assert result["status"] == status
+    assert result["agent_type_requested"] == "gaia"
+    assert "error" not in result
+
+
+def test_no_agent_requested_records_observation_without_a_verdict():
+    # Neither the scenario nor the CLI named an agent, so there is nothing to
+    # disagree with — record what ran and leave the status alone.
+    result = _stamp(_passing_result(), {"id": "s"}, None, observed="chat")
+    assert result["agent_type_requested"] is None
+    assert result["agent_type_observed"] == "chat"
+    assert result["status"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# The two layers that launder a dropped kwarg into the string "chat".
+# Pinning them is what stops a naive `observed is None` test being written —
+# over HTTP the dropped kwarg is never None.
+# ---------------------------------------------------------------------------
+
+
+def test_database_stores_a_dropped_agent_type_as_chat(tmp_path):
+    from gaia.ui.database import ChatDatabase
+
+    db = ChatDatabase(db_path=str(tmp_path / "chat.db"))
+    session = db.create_session(title="t", agent_type=None)
+    assert db.get_session(session["id"])["agent_type"] == "chat"
+
+
+def test_session_response_serialises_a_missing_agent_type_as_chat():
+    from gaia.ui.models import SessionResponse
+
+    response = SessionResponse(
+        id="s",
+        title="t",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+        model="m",
+    )
+    assert response.agent_type == "chat"
+
+
+def test_a_chat_scenario_cannot_distinguish_a_drop_from_a_request():
+    # Known limitation, pinned so it is read rather than rediscovered: over
+    # HTTP a scenario that legitimately asks for `chat` looks identical to a
+    # dropped kwarg. Harmless for every non-`chat` scenario, which is the case
+    # the guard exists for.
+    result = _stamp(
+        _passing_result(), {"id": "s", "agent_type": "chat"}, None, observed="chat"
+    )
+    assert result["status"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# Plumbing: the driver has to hand back a session_id for any of this to work
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_tells_the_driver_to_return_the_session_id(monkeypatch):
+    monkeypatch.setattr("gaia.eval.runner._load_simulator_content", lambda: "sim")
+    monkeypatch.setattr("gaia.eval.runner._load_judge_turn_content", lambda: "turn")
+    monkeypatch.setattr("gaia.eval.runner._load_judge_scenario_content", lambda: "scen")
+
+    prompt = build_scenario_prompt(
+        {"id": "s", "turns": []}, {}, "http://x", agent_type="gaia"
+    )
+    assert '"session_id"' in prompt
+
+
+def test_read_back_parses_the_agent_type_from_the_session_endpoint(monkeypatch):
+    calls = {}
+
+    class _Resp:
+        def read(self):
+            return json.dumps({"id": "sess-1", "agent_type": "gaia"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def fake_urlopen(url, timeout=None):  # noqa: ARG001
+        calls["url"] = url
+        return _Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    assert _read_session_agent_type("http://x/", "sess-1") == "gaia"
+    assert calls["url"] == "http://x/api/sessions/sess-1"
+
+
+def test_canonical_agent_type_resolves_aliases_without_discovery():
+    assert _canonical_agent_type("doc-lite") == "doc"
+    assert _canonical_agent_type("gaia") == "gaia"
+    assert _canonical_agent_type(None) is None
