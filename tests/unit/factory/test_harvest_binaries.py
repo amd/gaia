@@ -91,6 +91,75 @@ def test_single_quotes_make_substitution_literal():
     assert _binaries("echo '$(date)'") == ["echo"]
 
 
+def test_double_quotes_do_not_suppress_substitution():
+    """The other direction: `"$(date)"` really runs date, so it must be counted."""
+    assert _binaries('echo "today is $(date)"') == ["echo", "date"]
+    assert _binaries('cd "$(dirname "$0")" && git status') == [
+        "cd",
+        "dirname",
+        "git",
+    ]
+
+
+def test_backtick_inside_quotes_stays_literal():
+    """Deliberately narrower than `$(`: see the _split_segments docstring.
+
+    Splitting on a *closing* backtick inside quotes would start counting the
+    word after it, so quoted backticks are left alone until that is handled.
+    """
+    assert _binaries('echo "`hostname` is up"') == ["echo"]
+
+
+@pytest.mark.parametrize(
+    "cmd,expected",
+    [
+        # `sh` inside `ssh`: the command list used to be truncated at -c.
+        ("ssh -c aes128 host uptime && git push", ["ssh", "git"]),
+        ("flash -ce firmware.bin && echo ok", ["flash", "echo"]),
+    ],
+)
+def test_interpreter_marker_is_word_anchored(cmd, expected):
+    assert _binaries(cmd) == expected
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        '.venv/bin/python -c "import os"',
+        'python3.12 -c "import os"',
+        '/usr/bin/node -e "require(1)"',
+        'xargs -I{} sh -c "echo {}"',
+        "python3 - <<'EOF'\nimport sys\nEOF",
+    ],
+)
+def test_real_inline_scripts_still_match(cmd):
+    """Anchoring must not stop recognising the interpreters it was written for."""
+    assert _strip_inline_script(cmd) != cmd
+    # The interpreter, and nothing its script body happens to spell.
+    assert len(_binaries(cmd)) == 1, _binaries(cmd)
+
+
+def test_flag_value_does_not_hide_the_head():
+    """`sudo -u $USER git push` reported nothing: the $ bail was position-blind."""
+    assert _binaries("sudo -u $USER git push") == ["git"]
+    # A $ token that really is in head position is still unknowable.
+    assert _binaries("$EDITOR notes.txt") == []
+    assert _segment_head("sudo $CMD --force") is None
+
+
+def test_unterminated_quote_does_not_swallow_the_rest():
+    """arg_digest is capped, so a long command can reach the parser mid-quote."""
+    assert _binaries('echo "unterminated ; git status') == ["echo", "git"]
+    assert _split_segments('echo "a ; ls') == ['echo "a ', " ls"]
+
+
+def test_select_is_a_construct_not_a_binary():
+    """`select opt in a b` names a loop variable, the same as `for`."""
+    found = _binaries("select opt in a b; do echo $opt; done")
+    assert "select" not in found and "opt" not in found
+    assert found == ["echo"]
+
+
 def test_both_tables_see_the_same_segments():
     """The switch table and the binary table must not disagree (#3935).
 

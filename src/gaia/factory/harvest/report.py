@@ -321,14 +321,21 @@ def _segment_head(seg: str) -> Optional[tuple]:
     """
 
     toks = seg.strip().split()
+    after_flag = False
     for i, tok in enumerate(toks):
+        flagged, after_flag = after_flag, False
         if "=" in tok and not tok.startswith("-") and not tok.startswith("/"):
             continue  # VAR=value prefix
         if tok.startswith("$"):
+            # After a flag this is that flag's value, not the command — the
+            # head is still ahead (`sudo -u $USER git push` ran git).
+            if flagged:
+                continue
             # A variable-expanded command path: which binary ran is unknowable,
             # and sliding to the next token reports its first argument instead.
             return None
         if tok.startswith(("-", "(", "{", "'", '"')):
+            after_flag = tok.startswith("-")
             continue
         name = tok.split("/")[-1].strip("\"'()").lower()
         if name.endswith(".exe"):
@@ -346,8 +353,10 @@ def _segment_head(seg: str) -> Optional[tuple]:
 # An interpreter invoked with an inline script or a heredoc: everything after
 # this is source text, not a command list.  ``python3.12 -c`` and
 # ``.venv/bin/python -c`` both have to match, so the version suffix is optional.
+# ``\b`` keeps ``sh`` from matching inside ``ssh -c aes128 …``, which would
+# truncate a real command list at its cipher flag.
 _INLINE_SCRIPT = re.compile(
-    r"(?:python[0-9.]*|py|node|perl|ruby|bash|sh|zsh)\s+-[a-z]*[ce]\s|<<"
+    r"\b(?:python[0-9.]*|py|node|perl|ruby|bash|sh|zsh)\s+-[a-z]*[ce]\s|<<"
 )
 
 
@@ -358,7 +367,7 @@ def _strip_inline_script(cmd: str) -> str:
     return cmd[: m.end()] if m else cmd
 
 
-def _split_segments(cmd: str) -> List[str]:
+def _split_segments(cmd: str, _literal: str = "") -> List[str]:
     """Split a command on shell operators, ignoring operators inside quotes.
 
     Splitting with a plain regex shreds quoted arguments: ``grep -n "def .*("``
@@ -366,8 +375,13 @@ def _split_segments(cmd: str) -> List[str]:
     read as fresh commands and their first words get counted as binaries. That
     is where ``def``, ``import`` and ``assert`` came from.
 
-    ``$(`` and a backtick still separate, because a substitution really does run
-    a process — but not inside single quotes, where they are literal text.
+    ``$(`` still separates, because a substitution really does run a process —
+    inside double quotes as well as bare, since they do not suppress expansion.
+    Single quotes do, so there it stays literal text. A backtick only separates
+    unquoted: splitting on a *closing* one inside quotes would count the word
+    after it, which is fresh noise for a rarer construct.
+
+    ``_literal`` is set only by the unbalanced-quote retry below.
     """
 
     segs: List[str] = []
@@ -377,6 +391,12 @@ def _split_segments(cmd: str) -> List[str]:
     while i < len(cmd):
         ch = cmd[i]
         if quote:
+            # `$(…)` expands inside double quotes — it really runs a process.
+            if quote == '"' and cmd.startswith("$(", i):
+                segs.append("".join(buf))
+                buf = []
+                i += 2
+                continue
             # Only double quotes honour backslash escapes.
             if ch == "\\" and quote == '"' and i + 1 < len(cmd):
                 buf.append(cmd[i : i + 2])
@@ -387,7 +407,7 @@ def _split_segments(cmd: str) -> List[str]:
             buf.append(ch)
             i += 1
             continue
-        if ch in "'\"":
+        if ch in "'\"" and ch != _literal:
             quote = ch
             buf.append(ch)
             i += 1
@@ -410,6 +430,10 @@ def _split_segments(cmd: str) -> List[str]:
         buf.append(ch)
         i += 1
     segs.append("".join(buf))
+    if quote and not _literal:
+        # Unbalanced. ``arg_digest`` truncates long commands, so the scan can
+        # start inside a quote and then swallow every operator after it.
+        return _split_segments(cmd, quote)
     return segs
 
 
@@ -418,7 +442,8 @@ def _binaries(cmd: str) -> List[str]:
 
     Splits on shell operators and takes the head of each segment, skipping
     leading ``VAR=value`` assignments and wrappers like ``sudo``.  Substitutions
-    (``$(...)``) are counted too — they run a real process.
+    (``$(...)``) are counted too — they run a real process, inside double
+    quotes as much as bare.
     """
 
     found = []
@@ -440,7 +465,7 @@ def binary_table(traces: List[dict], top: int = 40) -> str:
     for c in cmds:
         counts.update(_binaries(c))
     total = sum(counts.values()) or 1
-    # A long tail of single sightings survives even with quote-aware splitting.
+    # A long tail of rare names survives even with quote-aware splitting.
     # Report only what recurs.
     recurring = {k: v for k, v in counts.items() if v >= 10}
     out = [
@@ -449,8 +474,8 @@ def binary_table(traces: List[dict], top: int = 40) -> str:
         f"{sum(recurring.values()):,} invocations "
         f"({100 * sum(recurring.values()) / total:.1f}%). Segments are split with "
         "quoting honoured and inline script bodies dropped, so a quoted `grep` "
-        "pattern no longer reads as a command; the single-sighting tail that "
-        "remains is parsing noise and is not a measurement._\n",
+        "pattern no longer reads as a command; the tail below that threshold is "
+        "parsing noise and is not a measurement._\n",
         "| # | Binary | Invocations | % of invocations | Cumulative |",
         "|---:|---|---:|---:|---:|",
     ]
