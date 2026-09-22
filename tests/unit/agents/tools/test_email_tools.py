@@ -55,6 +55,16 @@ def json_response(payload, status=200):
     return httpx.Response(status, json=payload)
 
 
+def graph_error(status, code=None, body=None):
+    """A Graph error response: either a structured `{error: {code}}` body, or
+    a raw text body (HTML, plain text) to simulate what Graph and proxies
+    actually send on failure."""
+    if body is not None:
+        return httpx.Response(status, text=body)
+    payload = {"error": {"code": code, "message": "Access is denied."}}
+    return httpx.Response(status, json=payload)
+
+
 # --------------------------------------------------------------------------
 # message_summary — provider-neutral flattening
 # --------------------------------------------------------------------------
@@ -306,6 +316,44 @@ def test_error_message_never_contains_the_bearer_token():
         backend.list_inbox()
     assert "test-token" not in str(err.value)
     assert "Bearer" not in str(err.value)
+
+
+def test_403_names_the_structured_error_code():
+    backend = make_backend(lambda r: graph_error(403, code="ErrorAccessDenied"))
+    with pytest.raises(MailboxAuthError) as err:
+        backend.list_inbox()
+    assert "ErrorAccessDenied" in str(err.value)
+    assert '{"error"' not in str(err.value)
+
+
+def test_403_html_body_is_dropped_not_echoed():
+    backend = make_backend(
+        lambda r: graph_error(403, body="<html><body>Blocked by proxy</body></html>")
+    )
+    with pytest.raises(MailboxAuthError) as err:
+        backend.list_inbox()
+    msg = str(err.value)
+    assert "forbidden" in msg
+    assert "Blocked by proxy" not in msg
+    assert "<html" not in msg
+
+
+@pytest.mark.parametrize("body", ["[1,2]", '{"error": "denied"}', '"just a string"'])
+def test_403_non_object_json_body_is_dropped_not_a_crash(body):
+    """A body that parses as JSON but isn't the documented `{error: {code}}`
+    shape must not surface as an AttributeError."""
+    backend = make_backend(lambda r: graph_error(403, body=body))
+    with pytest.raises(MailboxAuthError) as err:
+        backend.list_inbox()
+    assert "forbidden" in str(err.value)
+
+
+def test_generic_error_surfaces_structured_code_not_body():
+    backend = make_backend(lambda r: graph_error(500, code="InternalServerError"))
+    with pytest.raises(MailboxError) as err:
+        backend.list_inbox()
+    assert "InternalServerError" in str(err.value)
+    assert '{"error"' not in str(err.value)
 
 
 def test_network_failure_is_actionable():
