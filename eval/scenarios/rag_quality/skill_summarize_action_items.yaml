@@ -20,14 +20,14 @@ persona: power_user
 
 setup:
   index_documents:
-    - corpus_doc: meeting_notes_q3
+    - corpus_doc: meeting_notes
       path: "eval/corpus/documents/meeting_notes_q3.txt"
 
 turns:
   - turn: 1
     objective: "Ask the agent to load its summarize skill, then ask what the action items were from the Q3 business review meeting notes."
     ground_truth:
-      doc_id: meeting_notes_q3
+      doc_id: meeting_notes
       fact_ids: [action_items]
       expected_answer: "Six action items with owners and due dates: Tom Nguyen - API deprecation comm plan (Oct 10); Raj Patel - October docs sprint (Oct 3); Marcus Webb - executive outreach for 2 at-risk deals (Oct 1); Linda Torres - update Q4 financial model (Oct 7); Sandra Kim - confirm Android QA timeline (Oct 10); All VPs - submit Q4 OKR check-ins to Jane Smith (Oct 14)."
     success_criteria: |
@@ -46,7 +46,7 @@ turns:
   - turn: 2
     objective: "Ask who attended the meeting and who did not."
     ground_truth:
-      doc_id: meeting_notes_q3
+      doc_id: meeting_notes
       fact_ids: [attendees]
       expected_answer: "Eight attended: Jane Smith (CEO), Marcus Webb (VP Sales), Linda Torres (VP Finance), Raj Patel (Director of Product) in person; Sandra Kim (VP Engineering), Tom Nguyen (Director of Marketing), Priya Okonjo (Head of Customer Success), Derek Walsh (Regional Sales Manager, East) remotely. Carlos Rivera (Director of Operations) sent apologies -- traveling."
     success_criteria: |
@@ -59,7 +59,7 @@ turns:
   - turn: 3
     objective: "Ask for a brief summary of the meeting."
     ground_truth:
-      doc_id: meeting_notes_q3
+      doc_id: meeting_notes
       expected_answer: "2-3 sentences on the key outcomes and decisions -- Q3 revenue $14.2M (+23% YoY), Q4 launch dates locked with no scope changes after Oct 1, mobile app slips before the Salesforce integration does."
     success_criteria: |
       Response is 2-3 sentences and is OUTCOME-focused -- decisions and results,

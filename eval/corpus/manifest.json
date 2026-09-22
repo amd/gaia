@@ -1,7 +1,7 @@
 {
   "generated_at": "2026-03-20T02:10:00Z",
-  "total_documents": 9,
-  "total_facts": 27,
+  "total_documents": 11,
+  "total_facts": 33,
   "notes": "CSV redesigned 2026-03-22: replaced 11k-token transaction CSV with compact 25-row monthly summary. Q1 total updated to $340,000 (was $342,150), March Widget Pro X updated to 150 units/$30,000 (was 142 units/$28,400). Sarah Chen still top at $70,000. Handbook 2026-03-22: added 'Remote Work Allowance Summary: up to 3 days per week' header to Section 7 to improve RAG retrieval distinctiveness for remote work queries.",
   "documents": [
     {
@@ -28,6 +28,7 @@
         {"id": "pto_days", "question": "How many PTO days do first-year employees get?", "answer": "15 days", "difficulty": "easy"},
         {"id": "remote_work", "question": "What is the remote work policy?", "answer": "Up to 3 days/week with manager approval. Fully remote requires VP approval.", "difficulty": "medium"},
         {"id": "contractor_benefits", "question": "Are contractors eligible for health benefits?", "answer": "No — benefits are for full-time employees only", "difficulty": "hard"},
+        {"id": "eap_eligibility", "question": "Who is eligible for the Employee Assistance Program?", "answer": "All full-time, part-time, and temporary employees. Contractors are NOT eligible, as they are not classified as direct employees.", "difficulty": "hard"},
         {"id": "contractor_entitlements", "question": "What benefits or entitlements are contractors eligible for?", "answer": null, "difficulty": "hard", "note": "NOT in document — the handbook does not list any contractor entitlements. Agent must not invent any."}
       ]
     },
@@ -39,6 +40,7 @@
       "facts": [
         {"id": "q3_revenue", "question": "What was Acme Corp's Q3 2025 revenue?", "answer": "$14.2 million", "difficulty": "easy"},
         {"id": "yoy_growth", "question": "What was the year-over-year revenue growth?", "answer": "23% increase from Q3 2024's $11.5 million", "difficulty": "medium"},
+        {"id": "gross_margin", "question": "What was the Q3 2025 gross margin?", "answer": "68%, up from 65% in Q2 2025", "difficulty": "medium"},
         {"id": "ceo_outlook", "question": "What is the CEO's Q4 outlook?", "answer": "Projected 15-18% growth driven by enterprise segment expansion", "difficulty": "medium"},
         {"id": "employee_count", "question": "How many employees does Acme have?", "answer": null, "difficulty": "hard", "note": "NOT in document — agent must say it doesn't know"},
         {"id": "cfo_name", "question": "Who is Acme Corp's CFO?", "answer": null, "difficulty": "hard", "note": "NOT in document — agent must not invent a name"}
@@ -70,7 +72,9 @@
       "format": "text",
       "domain": "general",
       "facts": [
-        {"id": "next_meeting", "question": "When is the next meeting?", "answer": "October 15, 2025 at 2:00 PM", "difficulty": "easy"}
+        {"id": "next_meeting", "question": "When is the next meeting?", "answer": "October 15, 2025 at 2:00 PM", "difficulty": "easy"},
+        {"id": "action_items", "question": "What action items were assigned, to whom, and when are they due?", "answer": "Six: Tom Nguyen — draft API deprecation customer comm plan (Oct 10); Raj Patel — schedule October docs sprint (Oct 3); Marcus Webb — executive outreach for 2 at-risk deals (Oct 1); Linda Torres — update Q4 financial model with revised pipeline data (Oct 7); Sandra Kim — confirm final QA timeline for Android mobile app (Oct 10); All VPs — submit department Q4 OKR check-ins to Jane Smith (Oct 14).", "difficulty": "medium"},
+        {"id": "attendees", "question": "Who attended the meeting and in what role?", "answer": "Eight attended: Jane Smith (CEO), Marcus Webb (VP of Sales, facilitator), Linda Torres (VP of Finance, note-taker) and Raj Patel (Director of Product) in person; Sandra Kim (VP of Engineering), Tom Nguyen (Director of Marketing), Priya Okonjo (Head of Customer Success) and Derek Walsh (Regional Sales Manager, East) remotely. Carlos Rivera (Director of Operations) sent apologies and did not attend.", "difficulty": "medium"}
       ]
     },
     {
