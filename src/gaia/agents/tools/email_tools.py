@@ -17,13 +17,17 @@ arrive with the reversible-action ledger in a later phase. See
 
 Provider support: Gmail and Outlook / Microsoft Graph, behind one set of tool
 names. Both backends return the same provider-neutral shape, so neither the
-skill nor the model has to care which mailbox is connected. When both are
-usable, Gmail wins and ``GAIA_MAIL_PROVIDER`` overrides that choice.
+skill nor the model has to care which mailbox is connected.
+
+Selection is connector-derived and has no override: a mailbox is eligible only
+if it is connected, carries a read scope, and this agent holds a grant for it.
+With both eligible, Gmail wins on registry order, and the way to change that is
+to revoke the grant — not to set an environment variable, which would bypass
+the gate that makes any of this checkable.
 """
 
 import json
 import logging
-import os
 from typing import Dict, List, Optional, Tuple
 
 from gaia.agents.tools._email.scopes import (
@@ -48,7 +52,6 @@ GMAIL_SCOPES: tuple = DECLARED_SCOPES[GOOGLE_CONNECTOR_ID]
 # Registry order, matching connectors.api.connected_mailbox_providers().
 MAILBOX_PROVIDERS: tuple = (GOOGLE_CONNECTOR_ID, MICROSOFT_CONNECTOR_ID)
 
-MAIL_PROVIDER_ENV = "GAIA_MAIL_PROVIDER"
 _EMAIL_DOCS_URL = "https://amd-gaia.ai/docs/guides/email"
 
 _MAX_LIMIT = 100
@@ -133,22 +136,6 @@ class EmailToolsMixin:
 
         states = {p: _classify_mailbox(p) for p in MAILBOX_PROVIDERS}
         usable = [p for p, (scope, _) in states.items() if scope]
-
-        override = (os.environ.get(MAIL_PROVIDER_ENV) or "").strip().lower()
-        if override:
-            if override not in states:
-                raise MailboxError(
-                    f"{MAIL_PROVIDER_ENV} is set to {override!r}, which is not "
-                    f"a mailbox provider. Use one of {', '.join(MAILBOX_PROVIDERS)}, "
-                    f"or unset it. See {_EMAIL_DOCS_URL}"
-                )
-            scope, why = states[override]
-            if scope is None:
-                raise MailboxError(
-                    f"{MAIL_PROVIDER_ENV} selects {override!r}, but that mailbox "
-                    f"is {why}. See {_EMAIL_DOCS_URL}"
-                )
-            return override, scope, "env-override", [p for p in usable if p != override]
 
         if not usable:
             raise MailboxError(_no_mailbox_error(states))
@@ -246,10 +233,10 @@ class EmailToolsMixin:
             reports which mailbox was chosen, the connected address, and the
             inbox unread count.
 
-            If `alternatives` is non-empty, another connected mailbox was
-            available and this one won on precedence — tell the user they can
-            set the GAIA_MAIL_PROVIDER environment variable to the other name
-            to switch.
+            If `alternatives` is non-empty, another usable mailbox was
+            available and this one won on precedence — tell the user, and that
+            switching means revoking this agent's grant for the mailbox it
+            picked: `gaia connectors grants revoke <provider> installed:gaia`.
 
             Returns the mailbox address and folder counts, or an error naming
             what the user must do to connect one.
@@ -389,7 +376,6 @@ __all__ = [
     "EmailToolsMixin",
     "EMAIL_AGENT_ID",
     "GMAIL_SCOPES",
-    "MAIL_PROVIDER_ENV",
     "MAIL_SCOPES",
     "MAILBOX_PROVIDERS",
     "MICROSOFT_CONNECTOR_ID",

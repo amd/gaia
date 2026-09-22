@@ -430,15 +430,24 @@ The agent **never** auto-acts on links or instructions inside a phishing message
 The flagship `gaia` agent reads mail through the same five tools regardless of which
 mailbox you connected. It picks one like this:
 
-1. **`GAIA_MAIL_PROVIDER`** — set it to `google` or `microsoft` to force the choice.
-   If that mailbox is not usable, the agent says so rather than quietly using the other.
-2. **The only usable mailbox**, if exactly one is.
-3. **Gmail**, when both are usable. `check_mailbox_access` reports which mailbox was
+1. **The only usable mailbox**, if exactly one is.
+2. **Gmail**, when both are usable. `check_mailbox_access` reports which mailbox was
    chosen, why, and what the alternatives were, so you can tell at a glance.
 
 "Usable" means the account is connected, the connection carries a mail read scope, and
 the flagship holds a matching grant. When none is usable the agent names each mailbox's
 own state and the one command that fixes it — connect, reconnect, or grant.
+
+**There is no environment-variable override, by design.** Provider selection is derived
+from connector and grant state so that what the agent can reach is always visible in
+`gaia connectors`. To make it use Outlook when both are connected, revoke the flagship's
+Gmail grant:
+
+```bash
+gaia connectors grants revoke google installed:gaia
+```
+
+Gmail then stops being eligible and Outlook is selected. Re-grant to switch back.
 
 ### Granting Gmail to the flagship
 

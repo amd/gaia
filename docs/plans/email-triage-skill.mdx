@@ -321,8 +321,9 @@ against the committed baseline.
 either mailbox. Google's consent declares `gmail.readonly` only, while the scope
 actually requested at token time resolves against what the connection already
 carries, so an existing `gmail.modify` user is never sent through a browser
-reconnect. When both mailboxes are usable, Gmail wins and `GAIA_MAIL_PROVIDER`
-overrides that.
+reconnect. When both mailboxes are usable, Gmail wins on registry order, and the
+way to change that is to revoke the flagship's grant for it — selection stays
+connector-derived, with no environment-variable override.
 
 `read_email` caps one body at 12,000 characters and says so in the result when it
 truncates — roughly 12% of the 32K NPU context at the worst measured density

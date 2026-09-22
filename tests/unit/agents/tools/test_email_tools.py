@@ -484,7 +484,40 @@ def test_both_usable_prefers_google_and_announces_the_alternative(mailbox_env):
     assert mixin._email_alternatives == ["microsoft"]
 
 
-def test_env_override_picks_the_other_mailbox(mailbox_env, monkeypatch):
+def test_revoking_the_grant_switches_the_selected_mailbox(mailbox_env):
+    """The only way to change the pick, and the one `check_mailbox_access` names.
+
+    Selection is connector-derived on purpose: an env-var override would choose
+    a mailbox without consulting the grant ledger, which is the gate that makes
+    the choice auditable in the first place.
+    """
+    both_connected = {
+        "google": connection([GMAIL_READONLY]),
+        "microsoft": connection([MAIL_READWRITE]),
+    }
+    mailbox_env(
+        both_connected,
+        {
+            "google": {"installed:gaia": [GMAIL_READONLY]},
+            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
+        },
+    )
+    mixin = _Bare()
+    mixin._build_email_backend()
+    assert mixin._email_provider == "google"
+
+    # `gaia connectors grants revoke google installed:gaia` — the google row
+    # is gone, so microsoft becomes the only eligible mailbox.
+    mailbox_env(both_connected, {"microsoft": {"installed:gaia": [MAIL_READWRITE]}})
+    switched = _Bare()
+    switched._build_email_backend()
+    assert switched._email_provider == "microsoft"
+    assert switched._email_provider_source == "only-granted"
+    assert switched._email_alternatives == []
+
+
+def test_no_environment_variable_can_choose_the_mailbox(mailbox_env, monkeypatch):
+    """A hidden env override would bypass the grant gate entirely."""
     mailbox_env(
         {
             "google": connection([GMAIL_READONLY]),
@@ -495,25 +528,13 @@ def test_env_override_picks_the_other_mailbox(mailbox_env, monkeypatch):
             "microsoft": {"installed:gaia": [MAIL_READWRITE]},
         },
     )
-    monkeypatch.setenv("GAIA_MAIL_PROVIDER", "microsoft")
+    for name in ("GAIA_MAIL_PROVIDER", "GAIA_EMAIL_PROVIDER", "MAIL_PROVIDER"):
+        monkeypatch.setenv(name, "microsoft")
+
     mixin = _Bare()
     mixin._build_email_backend()
-    assert mixin._email_provider == "microsoft"
-    assert mixin._email_provider_source == "env-override"
-
-
-def test_env_override_naming_an_unusable_mailbox_fails_loudly(mailbox_env, monkeypatch):
-    from gaia.agents.tools._email import MailboxError
-
-    mailbox_env(
-        {"google": connection([GMAIL_READONLY])},
-        {"google": {"installed:gaia": [GMAIL_READONLY]}},
-    )
-    monkeypatch.setenv("GAIA_MAIL_PROVIDER", "microsoft")
-    with pytest.raises(MailboxError) as err:
-        _Bare()._build_email_backend()
-    assert "GAIA_MAIL_PROVIDER" in str(err.value)
-    assert "microsoft" in str(err.value)
+    assert mixin._email_provider == "google"
+    assert mixin._email_provider_source == "precedence"
 
 
 @pytest.mark.parametrize(
