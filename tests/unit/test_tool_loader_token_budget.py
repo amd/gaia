@@ -55,7 +55,10 @@ from gaia.eval.tool_cost import (  # noqa: E402
 )
 
 # --- Pinned baseline (#1448, doc profile, deterministic tool set) ----------
-EXPECTED_DOC_TOOL_COUNT = 37
+# 38 since #3670 added `read_tool_output` to the doc profile. The char/token
+# pins below stay as they are: #4038 trims the docstrings they measure, so a
+# value re-pinned here is wrong the moment it lands.
+EXPECTED_DOC_TOOL_COUNT = 38
 BASELINE_TEXT_CHARS = 4863
 BASELINE_NATIVE_CHARS = 21957
 BASELINE_TEXT_TOKENS = 1014
