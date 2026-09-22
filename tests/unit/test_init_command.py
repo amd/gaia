@@ -226,6 +226,9 @@ class TestLemonadeInstaller(unittest.TestCase):
         Drives the REAL resolver through injected platform + filesystem probes
         — patching resolve_lemonade here would only prove it was called, not
         that macOS detection works.
+
+        Paths are compared as POSIX: a Windows host renders `Path("/usr/...")`
+        with backslashes, which would otherwise match nothing.
         """
         from pathlib import Path
 
@@ -238,7 +241,7 @@ class TestLemonadeInstaller(unittest.TestCase):
             patch.dict("os.environ", {}, clear=True),
             patch("shutil.which", return_value=None),
             patch.object(
-                Path, "exists", lambda self: str(self.expanduser()) in present
+                Path, "exists", lambda self: self.expanduser().as_posix() in present
             ),
         ):
             info = LemonadeInstaller().check_installation()
@@ -246,7 +249,7 @@ class TestLemonadeInstaller(unittest.TestCase):
         self.assertIs(Path.exists, real_exists, "Path.exists must be restored")
         self.assertTrue(info.installed, f"macOS install missed: {info.error}")
         self.assertEqual(info.version, "10.10.0")
-        self.assertEqual(info.path, "/usr/local/bin/lemonade")
+        self.assertEqual(Path(info.path).as_posix(), "/usr/local/bin/lemonade")
         self.assertIsNone(info.error)
 
 
@@ -1436,7 +1439,11 @@ class TestLegacyFallback(unittest.TestCase):
 
 
 class TestInstallViaPpa(unittest.TestCase):
-    """Tests for _install_via_ppa — the Linux PPA-based install path."""
+    """Tests for _install_via_ppa — the Linux PPA-based install path.
+
+    The `os.geteuid` patches carry `create=True` because the attribute is
+    POSIX-only; without it these never reach their assertions on a Windows host.
+    """
 
     def _make_linux_installer(self):
         with patch("platform.system", return_value="Linux"):
@@ -1456,7 +1463,7 @@ class TestInstallViaPpa(unittest.TestCase):
         result.stderr = stderr
         return result
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_runs_commands_in_order(
@@ -1495,7 +1502,7 @@ class TestInstallViaPpa(unittest.TestCase):
         for call in calls:
             self.assertEqual(call[1].get("stdin"), _sub.DEVNULL)
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_noninteractive_sets_env_and_devnull_stdin(
@@ -1524,7 +1531,7 @@ class TestInstallViaPpa(unittest.TestCase):
             if call[0][0] != ["sudo", "-n", "true"]:
                 self.assertEqual(env.get("DEBIAN_FRONTEND"), "noninteractive")
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_sudo_password_required_returns_clear_error(
@@ -1542,7 +1549,7 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("passwordless", result.error.lower())
         mock_run.assert_called_once()
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_apt_install_failure_returns_actionable_error(
@@ -1562,7 +1569,7 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("lemonade-server", result.error)
         self.assertIn("amd-gaia.ai", result.error)
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_unsupported_distro_returns_clear_error(
@@ -1581,7 +1588,7 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("Ubuntu 22.04", result.error)
         mock_run.assert_not_called()
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
     def test_install_via_ppa_missing_add_apt_repository_clear_error(
@@ -1597,7 +1604,7 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("software-properties-common", result.error)
         mock_run.assert_not_called()
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_returns_real_version_from_check_installation(
