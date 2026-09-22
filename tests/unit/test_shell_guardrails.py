@@ -165,14 +165,24 @@ class TestDangerousOperators:
     def test_command_substitution_dollar(self):
         assert DANGEROUS_SHELL_OPERATORS.search("echo $(whoami)")
 
-    def test_semicolon(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls; rm -rf /")
+    def test_chaining_is_split_off_before_this_scan(self):
+        """`&&`, `||` and `;` pick which commands run; they do not change what
+        a command IS, so each one goes through the whole allowlist on its own.
 
-    def test_logical_and(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls && rm -rf /")
+        `rm` is refused here for being `rm`, not for the operator in front of it.
+        """
+        for command in ("ls; rm -rf /", "ls && rm -rf /", "ls || rm -rf /"):
+            error, _ = ShellToolsMixin()._validate_shell_command(command)
+            assert error is not None, command
+            assert "not in the allowed list" in error["error"]
 
-    def test_logical_or(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls || rm -rf /")
+    def test_a_lone_ampersand_is_not_a_chaining_operator(self):
+        """`&` backgrounds a command, and cmd.exe runs `dir&whoami` as two."""
+        assert DANGEROUS_SHELL_OPERATORS.search("dir&whoami")
+        assert DANGEROUS_SHELL_OPERATORS.search("ls & rm -rf /")
+
+    def test_newline(self):
+        assert DANGEROUS_SHELL_OPERATORS.search("ls\nrm -rf /")
 
     def test_pipe_is_safe(self):
         # Single pipe is allowed (handled by pipe logic, not this regex)
