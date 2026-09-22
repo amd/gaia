@@ -684,8 +684,20 @@ class ProjectMapMixin:
         return render_project_map(
             pm,
             index_status=self._code_index_status(pm),
-            has_shell_tool="run_shell_command" in (self._tool_names()),
+            has_shell_tool=self._shell_tool_offered(),
         )
+
+    def _shell_tool_offered(self) -> bool:
+        """Whether *this turn* offers the shell, not whether the agent owns it.
+
+        A dynamic tool loader narrows the registry per turn, so reading the
+        registry would name a tool the model was not given — the guaranteed
+        failed call ``has_shell_tool`` exists to prevent.
+        """
+        offered = getattr(self, "_active_tool_filter", None)
+        if offered is None:
+            offered = self._tool_names()
+        return "run_shell_command" in offered
 
     def _tool_names(self) -> Dict[str, Any]:
         return getattr(self, "_tools_registry", {}) or {}

@@ -28,13 +28,16 @@ the terminal UI meant building it from source.
   printed, instead of a throwaway script left in your repository. It joins the
   always-on tool set (about 250 more prompt tokens per call) and the `shell`
   bundle.
-- **The shell, always on inside a code repository.** When the session's project
-  is a repository (a VCS directory or a known manifest at its root),
+- **The shell, always on inside a code repository.** When the project map
+  resolves to a repository (a VCS directory or a known manifest at its root),
   `run_shell_command` is offered on every turn instead of only when the request
   happens to sound like a shell request. Coding tasks such as "skip these tests
   on PRs" previously ran without a shell and did every grep through `run_python`.
-  Outside a repository nothing changes. The shell's own approval gate still
-  applies.
+  It follows the *same* root the map already uses, so the sidecar needs
+  `GAIA_PROJECT_ROOT=/path/to/repo` (or `GaiaAgentConfig(project_root=...)` when
+  embedding) to see your repository — its own working directory is whatever
+  started it, not yours. With no repository nothing changes, and the shell's
+  approval gate still applies either way. See SKILL §11.
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it
