@@ -788,16 +788,20 @@ jobs:
           # [dev] + [eval] for the eval harness and the Anthropic judge deps;
           # [ui] for fastapi/uvicorn + the RAG deps gaia.ui.server imports at boot
           # ([dev] alone fails at import), [api] for the connectors layer.
-          # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102) and is
-          # NOT pulled by those extras — gaia.ui.server imports gaia_agent_chat to
-          # build the backend-default agent these scenarios run against, so install
-          # the LOCAL editable hub package or every scenario dies at session
-          # creation. Core gaia stays editable so eval fixtures resolve in-repo.
+          # Both hub packages are REQUIRED, and neither is pulled by those extras.
+          # Every scenario runs the flagship `gaia` agent (DEFAULT_AGENT_TYPE in
+          # src/gaia/eval/config.py), which is not a builtin — it registers only
+          # through the `gaia.agent` entry point in gaia-agent-gaia, and GaiaAgent
+          # subclasses ChatAgent from gaia-agent-chat (#1102). Miss either and
+          # POST /api/sessions 422s for every scenario in this lane. The "default
+          # agent is registered" preflight below asserts this at runtime so the
+          # gap costs seconds, not a whole lane. Core gaia stays editable so eval
+          # fixtures resolve in-repo.
           # `mcp` is not optional for this gate: every scenario is driven through
           # the Agent UI MCP server, and without the extra that server exits with
           # ModuleNotFoundError before writing a protocol frame — which the client
           # reports only as CONNECTION_CLOSED.
-          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python'
+          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python -e hub/agents/gaia/python'
 
       # `gaia eval agent` does not merely call the Anthropic API - it shells out
       # to `claude -p` with an MCP config to DRIVE each scenario (runner.py:937),
@@ -1355,6 +1359,37 @@ jobs:
               exit 1
             }
             Write-Host "Backend healthy."
+
+            # Healthy is not the same as "can run these scenarios". The eval asks
+            # the backend for DEFAULT_AGENT_TYPE on every scenario, and an agent
+            # that ships as a hub package is simply absent when its editable
+            # install is missing: POST /api/sessions 422s, every scenario in this
+            # lane records INFRA_ERROR, and the eval still exits 0 because it
+            # produced a scorecard. Assert the id resolves BEFORE spending the
+            # slot - with five jobs installing their own venv there are five
+            # places this can regress, and each costs a full lane to discover.
+            # Deliberately not asserting a literal "gaia": the id is read from
+            # gaia.eval.config so this check tracks the default instead of
+            # becoming a second place to update.
+            $defaultAgent = (python -c "from gaia.eval.config import DEFAULT_AGENT_TYPE; print(DEFAULT_AGENT_TYPE)" 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or -not $defaultAgent) {
+              Write-Host "::error::Could not read DEFAULT_AGENT_TYPE from gaia.eval.config - the venv install is broken. Output: $defaultAgent"
+              exit 1
+            }
+            try {
+              $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -TimeoutSec 30 -ErrorAction Stop
+            } catch {
+              Write-Host "::error::GET $env:BACKEND_URL/api/agents failed after the backend reported healthy: $($_.Exception.Message). Backend log follows."
+              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+              exit 1
+            }
+            $agentIds = @($agentList.agents | ForEach-Object { $_.id })
+            if ($agentIds -notcontains $defaultAgent) {
+              Write-Host "::error::The eval's default agent '$defaultAgent' is not registered in this backend, so every scenario would 422 at session creation and record INFRA_ERROR. Registered ids: $($agentIds -join ', '). Fix: add the hub package that ships '$defaultAgent' to install-package in this job's Setup Python Environment step (hub/agents/<id>/python; the flagship is hub/agents/gaia/python). See src/gaia/eval/config.py for the default and src/gaia/agents/registry.py for how entry-point agents register."
+              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+              exit 1
+            }
+            Write-Host "Default agent '$defaultAgent' is registered. Agents: $($agentIds -join ', ')"
 
             # Per-category wall clock. The job timeout was guessed once and cost a
             # 148-min run (30869194618) that produced one category out of three;
