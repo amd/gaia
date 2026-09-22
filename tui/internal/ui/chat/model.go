@@ -2377,6 +2377,14 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		}
 		return components.Panel(components.PanelError, "error", msg.Content, panelWidth)
 
+	case RoleToolError:
+		// Same wrap-don't-clip reasoning as RoleStatus, in the failure colour:
+		// visible enough to read, quiet enough that a retried call does not
+		// look like the turn ended badly.
+		// Continuation lines hang under the prefix so a multi-line remedy reads
+		// as one aside rather than as text that escaped it.
+		return failStyle.Render(m.wrapForPane("  [x] " + strings.ReplaceAll(msg.Content, "\n", "\n      ")))
+
 	case RoleStatus:
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
 		// line longer than the pane loses its tail — and for the ones that

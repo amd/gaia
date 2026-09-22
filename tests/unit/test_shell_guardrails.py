@@ -230,14 +230,24 @@ class TestDangerousOperators:
     def test_command_substitution_dollar(self):
         assert DANGEROUS_SHELL_OPERATORS.search("echo $(whoami)")
 
-    def test_semicolon(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls; rm -rf /")
+    def test_chaining_is_split_off_before_this_scan(self):
+        """`&&`, `||` and `;` pick which commands run; they do not change what
+        a command IS, so each one goes through the whole allowlist on its own.
 
-    def test_logical_and(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls && rm -rf /")
+        `rm` is refused here for being `rm`, not for the operator in front of it.
+        """
+        for command in ("ls; rm -rf /", "ls && rm -rf /", "ls || rm -rf /"):
+            error, _ = ShellToolsMixin()._validate_shell_command(command)
+            assert error is not None, command
+            assert "not in the allowed list" in error["error"]
 
-    def test_logical_or(self):
-        assert DANGEROUS_SHELL_OPERATORS.search("ls || rm -rf /")
+    def test_a_lone_ampersand_is_not_a_chaining_operator(self):
+        """`&` backgrounds a command, and cmd.exe runs `dir&whoami` as two."""
+        assert DANGEROUS_SHELL_OPERATORS.search("dir&whoami")
+        assert DANGEROUS_SHELL_OPERATORS.search("ls & rm -rf /")
+
+    def test_newline(self):
+        assert DANGEROUS_SHELL_OPERATORS.search("ls\nrm -rf /")
 
     def test_pipe_is_safe(self):
         # Single pipe is allowed (handled by pipe logic, not this regex)
@@ -571,7 +581,7 @@ class TestQuotedOperatorsAreData:
 
     @pytest.mark.parametrize(
         "command",
-        ['dir "a" &calc', 'dir "a&b" & calc', 'echo "a" & calc', 'cat "a.txt" ; id'],
+        ['dir "a" &calc', 'dir "a&b" & calc', 'echo "a" & calc', 'cat "a.txt" > f'],
     )
     def test_an_operator_outside_the_quotes_is_still_an_operator(self, command):
         assert refused(command)
@@ -694,9 +704,7 @@ class TestTiers:
     def test_an_undescribable_escalation_is_refused(self, command):
         assert validate(command)["tier"] == TIER_REFUSE
 
-    @pytest.mark.parametrize(
-        "command", ["cat a && rm b", "echo hi > f", "cat 'unterminated"]
-    )
+    @pytest.mark.parametrize("command", ["echo hi > f", "cat 'unterminated"])
     def test_what_the_runner_cannot_execute_is_refused(self, command):
         error, _ = _Host()._validate_shell_command(command)
         assert error["tier"] == TIER_REFUSE
@@ -756,7 +764,7 @@ class TestConfirmableCommandsReachThePrompt:
         assert refusal(command) is None
 
     @pytest.mark.parametrize(
-        "command", ["git -c core.pager=evil.sh status", "cat a && rm b"]
+        "command", ["git -c core.pager=evil.sh status", "echo hi > f"]
     )
     def test_refused_escalations_stay_refused_even_with_full_access(self, command):
         assert refusal(command, full_access=True) is not None
