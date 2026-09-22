@@ -1,21 +1,30 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Guard: every eval scenario's ``agent_type`` names an agent that exists.
+"""Guard: one eval, one agent — no scenario pins its own ``agent_type``.
 
-A scenario pointed at a removed agent never reaches the model — every turn
-gets the backend's "couldn't load the agent" reply and the scenario reports
-INFRA_ERROR forever (#3883). This check needs no Lemonade, so the drift is
-caught in CI instead of in an eval run.
+Every scenario scores the flagship, so a scorecard names a single agent and two
+scorecards are comparable. A per-scenario pin breaks both halves of that: it
+silently overrode ``--agent-type`` (so the flag did nothing), and it let one run
+mix agents, which ``compare_scorecards`` cannot see because it keys on
+``scenario_id`` alone and would report "improved/regressed" across two different
+agents.
+
+The original hazard this file guarded still applies to the one remaining pin —
+the default: a scenario pointed at an agent that does not exist never reaches
+the model, every turn gets the backend's "couldn't load the agent" reply, and
+the scenario reports INFRA_ERROR forever (#3883). So the default is checked
+against the registry here too. Neither check needs Lemonade, so the drift is
+caught in CI rather than in an eval run.
 """
 
 import re
 from pathlib import Path
 
-import pytest
 import yaml
 
 from gaia.agents.registry import AgentRegistry
+from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.ui._chat_helpers import _SIDECAR_AGENT_TYPES
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -43,15 +52,6 @@ def _hub_agent_ids() -> set[str]:
     return ids
 
 
-def _scenario_agent_types() -> list[tuple[str, str]]:
-    pairs = []
-    for path in sorted(SCENARIO_DIR.rglob("*.yaml")):
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and "agent_type" in data:
-            pairs.append((str(path.relative_to(REPO_ROOT)), data["agent_type"]))
-    return pairs
-
-
 def _builtin_registry() -> AgentRegistry:
     registry = AgentRegistry()
     registry._register_builtin_agents()
@@ -67,32 +67,47 @@ def _known_agent_ids(registry: AgentRegistry) -> set[str]:
     return {reg.id for reg in registry.list()} | _hub_agent_ids() | _SIDECAR_AGENT_TYPES
 
 
-def test_a_sidecar_agent_type_passes_the_guard():
-    registry = _builtin_registry()
-    assert registry.canonical_id("email") in _known_agent_ids(registry)
+def _scenario_paths() -> list[Path]:
+    return sorted(SCENARIO_DIR.rglob("*.yaml"))
 
 
-def test_scenarios_declare_agent_types():
-    assert _scenario_agent_types(), f"no scenario declares agent_type in {SCENARIO_DIR}"
+def test_scenarios_exist():
+    # Without this the pin check below would pass vacuously on a bad glob or a
+    # moved scenario directory.
+    assert _scenario_paths(), f"no scenarios found under {SCENARIO_DIR}"
 
 
 def test_hub_entry_points_parsed():
-    # The chat wheel's three profile ids and the flagship must be visible, or
-    # the guard below would pass vacuously on a parsing regression.
-    assert {"chat", "doc", "file", "gaia"} <= _hub_agent_ids()
+    # The flagship must be visible, or the default check below would pass
+    # vacuously on a pyproject-parsing regression.
+    assert {"chat", "gaia"} <= _hub_agent_ids()
 
 
-@pytest.mark.parametrize(
-    "scenario,agent_type",
-    _scenario_agent_types(),
-    ids=lambda v: v if "/" in str(v) else None,
-)
-def test_scenario_agent_type_resolves(scenario, agent_type):
+def test_default_agent_type_resolves():
     registry = _builtin_registry()
     known = _known_agent_ids(registry)
 
-    assert registry.canonical_id(agent_type) in known, (
-        f"{scenario} sets agent_type '{agent_type}', which no registered agent "
-        f"or legacy alias resolves to. Valid ids: {', '.join(sorted(known))}. "
-        "Point the scenario at one of these (see src/gaia/agents/registry.py)."
+    assert registry.canonical_id(DEFAULT_AGENT_TYPE) in known, (
+        f"the eval default agent_type '{DEFAULT_AGENT_TYPE}' resolves to no "
+        f"registered agent, so every scenario would report INFRA_ERROR. "
+        f"Valid ids: {', '.join(sorted(known))}. Fix DEFAULT_AGENT_TYPE in "
+        "src/gaia/eval/config.py or register the agent "
+        "(src/gaia/agents/registry.py)."
+    )
+
+
+def test_no_scenario_pins_an_agent_type():
+    pinned = []
+    for path in _scenario_paths():
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and "agent_type" in data:
+            pinned.append(f"{path.relative_to(REPO_ROOT)} -> {data['agent_type']}")
+
+    assert not pinned, (
+        f"{len(pinned)} scenario(s) set 'agent_type', which the eval no longer "
+        f"honours — the runner passes --agent-type (default "
+        f"'{DEFAULT_AGENT_TYPE}') for every scenario, so the key is dead weight "
+        "that reads as if it still pins an agent. Delete the line; to measure a "
+        "different agent pass --agent-type on the command line for the whole "
+        "run. Offenders: " + "; ".join(pinned)
     )

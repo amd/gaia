@@ -216,7 +216,41 @@ permissions:
   contents: read
 
 env:
-  BASELINE_DIR: tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914
+  # NOTHING IS COMMITTED HERE YET, and the steps below say so loudly rather than
+  # passing by default. The previous baselines were recorded against the `doc`
+  # ChatAgent profile; every scenario now scores the flagship, and
+  # `compare_scorecards` keys on scenario_id alone, so diffing the two would
+  # report "improved/regressed" across two different agents. They were deleted
+  # rather than reinterpreted. This path is where the first flagship baseline
+  # goes, captured by a real run on this hardware.
+  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
+  # Every category the eval measures, in ONE place: four steps consume this and
+  # three of them had already drifted to different hardcoded lists.
+  #
+  # NEVER ADD web_system OR vision: they read this runner's clipboard, windows
+  # and screen into a scorecard that uploads as a public artifact.
+  EVAL_CATEGORIES: >-
+    adversarial captured context_retention error_recovery mcp_reliability
+    memory personality rag_quality real_world tool_selection
+  # What still means something when the RAG embedder will not load (#3016).
+  # Not the whole list above: for the categories left out, only a real run says
+  # whether they stay interpretable without retrieval, and guessing would put
+  # unmeasurable categories in a scorecard. `memory` needs no such run - 0 of
+  # its 25 scenarios carry a non-empty `setup.index_documents`, so the embedder
+  # is not what would stop them scoring, and leaving it out meant a degraded
+  # run measured 2 scenarios out of 82.
+  # Scenarios inside a listed category may still fail on their own - 3 of
+  # tool_selection's 5 do index documents, and the cross-session memory
+  # scenarios want the store GAIA_MEMORY_DISABLED turns off. That is the
+  # posture on purpose: run the category, let the scenario fail, do not call
+  # the whole category unmeasurable.
+  # BEFORE WIDENING FURTHER, do the timeout arithmetic. These two categories
+  # sum to a 579 min worst case against the eval step's 600 min cap (every one
+  # of the 30 scenarios hitting its own _compute_effective_timeout ceiling;
+  # the expected cost is ~131 min). There is no room for a third category
+  # without raising the cap.
+  # Everything in EVAL_CATEGORIES but not here is reported NOT MEASURED.
+  EVAL_CATEGORIES_NO_EMBEDDER: memory tool_selection
   BACKEND_URL: http://127.0.0.1:4200
   # This runner's home is C:\Windows\System32\config\systemprofile and the
   # checkout is not under it, so without this every scenario carrying a
@@ -233,14 +267,15 @@ env:
   # be able to launch a multi-hour run on the shared slot. So retitling alone
   # does not re-run the gate: add the tag, then push (or close/reopen).
   ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
-  # PINNED TO THE BASELINE'S JUDGE, and that is not a stale value to bump.
-  # `--model` is not a judge-only knob: runner.py passes it to `claude -p`, which
-  # DRIVES every scenario as well as scoring it. The committed baselines record
-  # `eval_model: claude-sonnet-4-6` (meta.json), so driving with anything else
-  # compares two different agents-under-test and folds the new driver's wall
-  # clock into the same >2x time verdict. #2859 moved every Claude workflow to
-  # Opus 5; this one value is exempt until the baselines are regenerated with
-  # that driver. Override per-run via the dispatch input above.
+  # PINNED, and that is not a stale value to bump. `--model` is not a judge-only
+  # knob: runner.py passes it to `claude -p`, which DRIVES every scenario as well
+  # as scoring it. So the driver is part of the agent under test, and the first
+  # flagship baseline will be recorded under whatever is set here. Changing it
+  # after that point compares two different agents and folds the new driver's
+  # wall clock into the same >2x time verdict. #2859 moved every Claude workflow
+  # to Opus 5; this one value stays put so the baseline about to be captured and
+  # every run compared to it share a driver. Override per-run via the dispatch
+  # input above.
   EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
   # Deep ladder is opt-in. Its rungs purge the embedder from disk and unload every
   # resident model, which is fine while investigating and wrong to repeat on every
@@ -411,7 +446,7 @@ jobs:
           retention-days: 14
 
   agent-eval:
-    name: rag_quality + context_retention + tool_selection vs Gemma baselines
+    name: Scenario eval - flagship agent, all categories
     # After flagship-tasks whatever its result (`!cancelled()` below): the two
     # jobs share one runner, so the order is fixed rather than incidental.
     needs: flagship-tasks
@@ -471,45 +506,45 @@ jobs:
         shell: powershell
     # BUDGET DERIVATION — measured on this runner, not guessed.
     #
-    # The first clean run (30869194618) was CANCELLED by a hand-picked
-    # `timeout-minutes: 150` after 148 min, having finished exactly ONE of three
-    # categories. It produced the only real numbers this pool has:
+    # Sized from the [TIMING] lines of 19 complete runs (2026-09-17 .. 09-21) plus
+    # the per-scenario [DONE] timings inside 8 of them, which is what makes this a
+    # per-SCENARIO rate rather than a per-category one:
     #
-    #   setup (checkout -> preflight, inclusive)                    0:01:18
-    #   rag_quality        8 scenarios                            2:04:07  measured
-    #   context_retention  1 of 4 scenarios before the cancel      0:23:06  partial
-    #   tool_selection     never reached                                 —
+    #   17 scenarios, 3 categories      46.3 min min / 58.5 mean / 69.6 max
+    #   120 healthy scenarios sampled   4.23 min mean, 6.73 max, 2.30 min
+    #   per-category overhead           none measurable — summing a category's
+    #                                   scenarios reproduces its [TIMING] to 0.1 min
     #
-    # rag_quality alone ran 124 min against a 22.4-min committed baseline — 5.5x,
-    # because that baseline was captured on different hardware over a remote
-    # Lemonade (see meta.json). The old 150 was sized off the ~55-min baseline sum
-    # and never had a chance. Per-category CEILINGS from the measured rates:
+    # So a category costs exactly what its scenarios cost, and capacity planning is
+    # one multiplication. At 82 scenarios across 10 categories:
     #
-    #   rag_quality        measured 124                                 -> 150
-    #   context_retention  4 x the 23.1-min scenario measured above = 92 -> 110
-    #   tool_selection     4 scenarios, same shape as context_retention  -> 110
-    #   eval step ceiling  150+110+110 = 370                            -> 400
+    #   expected   82 x 4.23 =  347 min  (~5.8 h)
+    #   ceiling    82 x 6.73 =  552 min  -> eval step 600
     #   setup (the Lemonade start step already carries its own 15-min cap) -> 20
-    #   collect + integrity + compare + upload                          -> 15
-    #   job: 400+20+15 = 435                                            -> 450
+    #   collect + integrity + compare + upload                             -> 15
+    #   job: 600+20+15 = 635                                               -> 660
     #
-    # These are CEILINGS, not expectations — expected wall clock is ~5h. Sizing
-    # generously is close to free here: the pool is self-hosted (no per-minute
-    # billing, and the 6h job cap is a GitHub-HOSTED limit; self-hosted is 5 days),
-    # and the shared `lemonade-eval` concurrency group already serialises the pool,
-    # so a high ceiling cannot let this job trample another eval. The asymmetry is
-    # what matters: too low costs hours of runner time AND the evidence, too high
-    # costs nothing. email_scorecard_refresh.yml sits at 840 on this same pool for
-    # exactly this reason (#2094: a hand-typed 90 against a measured 2h workload
-    # burned 100 consecutive dispatches without one completing).
+    # The old 400/450 were sized off run 30869194618, which measured rag_quality at
+    # 124 min for 8 scenarios — 6x slower than anything this pool has produced
+    # since. Those ceilings looked generous against 17 scenarios and would have
+    # truncated 82: expected wall clock alone lands at 347, and one bad run at the
+    # observed 1.19x spread reaches ~413, past the old 400.
+    #
+    # These are CEILINGS, not expectations. Sizing generously is close to free
+    # here: the pool is self-hosted (no per-minute billing, and the 6h job cap is a
+    # GitHub-HOSTED limit; self-hosted is 5 days), and the shared `lemonade-eval`
+    # concurrency group already serialises the pool, so a high ceiling cannot let
+    # this job trample another eval. It does mean this job HOLDS that shared slot
+    # for ~6 h per run — the real cost of the wider category set, and the number to
+    # revisit if the queue backs up.
     #
     # The eval step carries its OWN timeout-minutes below so an overrun fails at a
     # NAMED step instead of a silent job-level `cancelled` — a job-level timeout
     # skips the `!cancelled()` collect/integrity/compare steps, which is precisely
     # how run 30869194618 threw away the 124 min of rag_quality data it had already
-    # produced. Re-tighten both once a few complete runs establish the true wall
-    # time; the per-category [TIMING] lines in the eval step exist to supply it.
-    timeout-minutes: 450
+    # produced. Re-tighten both once a few complete 82-scenario runs land; the
+    # per-category [TIMING] lines in the eval step exist to supply the real number.
+    timeout-minutes: 660
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -521,16 +556,20 @@ jobs:
           # [dev] + [eval] for the eval harness and the Anthropic judge deps;
           # [ui] for fastapi/uvicorn + the RAG deps gaia.ui.server imports at boot
           # ([dev] alone fails at import), [api] for the connectors layer.
-          # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102) and is
-          # NOT pulled by those extras — gaia.ui.server imports gaia_agent_chat to
-          # build the backend-default agent these scenarios run against, so install
-          # the LOCAL editable hub package or every scenario dies at session
-          # creation. Core gaia stays editable so eval fixtures resolve in-repo.
+          # Both hub packages are REQUIRED, and neither is pulled by those extras.
+          # Every scenario runs the flagship `gaia` agent (DEFAULT_AGENT_TYPE in
+          # src/gaia/eval/config.py), which is not a builtin — it registers only
+          # through the `gaia.agent` entry point in gaia-agent-gaia, and GaiaAgent
+          # subclasses ChatAgent from gaia-agent-chat (#1102). Miss either and
+          # POST /api/sessions 422s for all 82 scenarios. The "backend default
+          # agent id" preflight below asserts this at runtime so the gap costs
+          # seconds, not a multi-hour slot. Core gaia stays editable so eval
+          # fixtures resolve in-repo.
           # `mcp` is not optional for this gate: every scenario is driven through
           # the Agent UI MCP server, and without the extra that server exits with
           # ModuleNotFoundError before writing a protocol frame — which the client
           # reports only as CONNECTION_CLOSED.
-          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python'
+          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python -e hub/agents/gaia/python'
 
       # `gaia eval agent` does not merely call the Anthropic API - it shells out
       # to `claude -p` with an MCP config to DRIVE each scenario (runner.py:937),
@@ -700,13 +739,27 @@ jobs:
           }
           Write-Host "Claude credential accepted by a live probe."
 
-          foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
-            $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
-            if (-not (Test-Path $baseline)) {
-              Write-Host "::error::Missing baseline $baseline. Pick the baseline matching the model under test; do not substitute another directory."
+          # No baseline is a legitimate state right now, and it is reported, never
+          # assumed away. Enforcing against a baseline that does not exist is the
+          # pass-by-default trap this gate exists to prevent, so enforce=true with
+          # no baseline is a hard error rather than a silent green.
+          $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+          if (-not (Test-Path $env:BASELINE_DIR)) {
+            if ($env:ENFORCE -eq 'true') {
+              Write-Host "::error::enforce=true but no baseline exists at $env:BASELINE_DIR, so there is nothing to enforce against and every category would pass by default. Land a flagship baseline first (run the eval on this hardware and commit the scorecards as $env:BASELINE_DIR\scorecard_<category>.json), or re-run without [eval-enforce]."
               exit 1
             }
-            Write-Host "baseline ok: $baseline"
+            Write-Host "::warning::NO BASELINE COMMITTED. Regression detection is OFF for this run: the eval still measures every category and uploads its scorecards, but nothing compares them to a known-good run. The previous baselines scored the doc agent, not the flagship, so they were deleted rather than diffed against. First flagship baseline goes in $env:BASELINE_DIR."
+            "REGRESSION DETECTION OFF: no baseline at ``$env:BASELINE_DIR``. Scorecards are produced and uploaded; nothing is compared." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          } else {
+            foreach ($category in $categories) {
+              $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
+              if (-not (Test-Path $baseline)) {
+                Write-Host "::error::Missing baseline $baseline. Pick the baseline matching the model under test; do not substitute another directory."
+                exit 1
+              }
+              Write-Host "baseline ok: $baseline"
+            }
           }
 
           # Resolve the URL and the model under test through the client's own
@@ -990,7 +1043,7 @@ jobs:
         # A job-level timeout instead CANCELS, which skips every `!cancelled()`
         # step and discards the categories that did finish. See the budget
         # derivation on the job above. Same convention as email_scorecard_refresh.yml.
-        timeout-minutes: 400
+        timeout-minutes: 600
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Blank when the OAuth token is present, deliberately: runner.py adds
@@ -1075,6 +1128,35 @@ jobs:
             }
             Write-Host "Backend healthy."
 
+            # Healthy is not the same as "can run these scenarios". The eval asks
+            # the backend for DEFAULT_AGENT_TYPE on every scenario, and an agent
+            # that ships as a hub package is simply absent when its editable
+            # install is missing: POST /api/sessions 422s, all 82 scenarios
+            # record INFRA_ERROR, and the eval still exits 0 because it produced a
+            # scorecard. Assert the id resolves BEFORE spending the slot.
+            # Deliberately not asserting a literal "gaia": the id is read from
+            # gaia.eval.config so this check tracks the default instead of
+            # becoming a second place to update.
+            $defaultAgent = (python -c "from gaia.eval.config import DEFAULT_AGENT_TYPE; print(DEFAULT_AGENT_TYPE)" 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or -not $defaultAgent) {
+              Write-Host "::error::Could not read DEFAULT_AGENT_TYPE from gaia.eval.config - the venv install is broken. Output: $defaultAgent"
+              exit 1
+            }
+            try {
+              $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -TimeoutSec 30 -ErrorAction Stop
+            } catch {
+              Write-Host "::error::GET $env:BACKEND_URL/api/agents failed after the backend reported healthy: $($_.Exception.Message). Backend log follows."
+              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+              exit 1
+            }
+            $agentIds = @($agentList.agents | ForEach-Object { $_.id })
+            if ($agentIds -notcontains $defaultAgent) {
+              Write-Host "::error::The eval's default agent '$defaultAgent' is not registered in this backend, so every scenario would 422 at session creation and record INFRA_ERROR. Registered ids: $($agentIds -join ', '). Fix: add the hub package that ships '$defaultAgent' to install-package in this job's Setup Python Environment step (hub/agents/<id>/python; the flagship is hub/agents/gaia/python). See src/gaia/eval/config.py for the default and src/gaia/agents/registry.py for how entry-point agents register."
+              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+              exit 1
+            }
+            Write-Host "Default agent '$defaultAgent' is registered. Agents: $($agentIds -join ', ')"
+
             # Per-category wall clock. The job timeout was guessed once and cost a
             # 148-min run (30869194618) that produced one category out of three;
             # these lines are what replaces the guess with a measurement. Each is
@@ -1107,14 +1189,18 @@ jobs:
             # harness crash, never a regression; the regression verdict comes from
             # the --compare step below.
             #
-            # No --agent-type: the committed baselines were produced against the
-            # backend default (their `config` records only backend_url/model/budget),
-            # so passing one here would compare against a different agent.
+            # No --agent-type: the eval already defaults to the flagship
+            # (gaia.eval.config.DEFAULT_AGENT_TYPE) and every scenario scores it,
+            # so naming one here would only be a second place to drift.
             #
-            # Never add web_system or vision here: they read this runner's
-            # clipboard, windows and screen into the scorecard.
-            $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
-            if ($env:EMBEDDER_OK -eq 'false') { Write-Host "::warning::Embedder unavailable (#3016) - measuring tool_selection only. rag_quality and context_retention answer out of embedder-produced chunks and cannot be measured; the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true)." }
+            # Category list comes from EVAL_CATEGORIES at the top of this file -
+            # do not hardcode one here. That is what let four steps drift apart.
+            $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+            if ($env:EMBEDDER_OK -eq 'false') {
+              $categories = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
+              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The run is cut to the categories listed in EVAL_CATEGORIES_NO_EMBEDDER; the rest are not run and the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true). Not every skipped category needs the embedder - the list is what this runner has been shown to measure without it, not a claim about the others."
+            }
+            Write-Host "Categories this run: $($categories -join ', ') ($($categories.Count) of $((($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }).Count))"
             foreach ($category in $categories) {
               Write-Host "=================================================================="
               Write-Host "  gaia eval agent --category $category"
@@ -1136,7 +1222,7 @@ jobs:
               $swCat.Stop()
 
               $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
-              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 400-min step budget)"
+              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 600-min step budget)"
               Add-Summary "| ``$category`` | $mins |"
 
               if ($code -ne 0) {
@@ -1150,7 +1236,7 @@ jobs:
 
             $swTotal.Stop()
             $totalMins = [math]::Round($swTotal.Elapsed.TotalMinutes, 1)
-            Write-Host "[TIMING] all three categories: $totalMins min"
+            Write-Host "[TIMING] all $($categories.Count) categories: $totalMins min"
             Add-Summary "| **total** | **$totalMins** |"
           }
           finally {
@@ -1177,7 +1263,8 @@ jobs:
           # A genuine harness crash still fails at the eval step itself.
           $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
 
-          $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
+          $listVar = if ($env:EMBEDDER_OK -eq 'false') { $env:EVAL_CATEGORIES_NO_EMBEDDER } else { $env:EVAL_CATEGORIES }
+          $categories = ($listVar -split '\s+') | Where-Object { $_ }
           foreach ($category in $categories) {
             $log = "eval-out\$category.log"
             if (-not (Test-Path $log)) {
@@ -1236,17 +1323,27 @@ jobs:
           # `skipped` (SKIPPED_NO_DOCUMENT) counts as unmeasured for a subtle reason
           # documented in the module: those scenarios keep their ids, so the
           # missing-scenario check stays clean, and compare files them under
-          # "not a quality signal". All three committed baselines have skipped=0.
+          # "not a quality signal".
+          #
+          # With no baseline committed the gate keeps working on everything that
+          # does not need one - a scorecard has to exist, and its scenarios have
+          # to have produced a measurement. Only the "a baseline scenario went
+          # missing" check goes dark, and it says so per category.
+          $all = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+          $measured = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
           $gateArgs = @(
             "--baseline-dir", $env:BASELINE_DIR,
             "--results-dir", "eval-out"
           )
           if ($env:EMBEDDER_OK -eq 'false') {
-            $gateArgs += @("--category", "tool_selection")
-            $gateArgs += @("--not-measured", "rag_quality", "--not-measured", "context_retention")
-            $gateArgs += @("--not-measured-reason", "the RAG embedder will not load on this runner (#3016), and this category answers out of embedder-produced chunks")
+            foreach ($c in $measured) { $gateArgs += @("--category", $c) }
+            foreach ($c in ($all | Where-Object { $measured -notcontains $_ })) { $gateArgs += @("--not-measured", $c) }
+            # One reason covers every skipped category, so it can only say why
+            # the RUN was cut - not why each category needs the embedder, which
+            # for several of them it does not.
+            $gateArgs += @("--not-measured-reason", "the RAG embedder will not load on this runner (#3016), so the run was cut to EVAL_CATEGORIES_NO_EMBEDDER and this category was not on that list")
           } else {
-            $gateArgs += @("--category", "rag_quality", "--category", "context_retention", "--category", "tool_selection")
+            foreach ($c in $all) { $gateArgs += @("--category", $c) }
           }
           if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
 
@@ -1260,13 +1357,28 @@ jobs:
             exit 1
           }
 
-      - name: Compare each category against its committed Gemma baseline
+      - name: Compare each category against its committed flagship baseline
         if: ${{ !cancelled() }}
         run: |
           $regressed = @()
           $failedCompare = $false
 
-          $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
+          # Say it, do not skip quietly. With nothing to compare against, this
+          # step has no verdict to give, and a green check that looks like
+          # "no regression" when nothing was checked is the failure mode the
+          # whole gate exists to avoid. The preflight already hard-failed the
+          # enforce=true case, so reaching here with no baseline means report mode.
+          if (-not (Test-Path $env:BASELINE_DIR)) {
+            Write-Host "::warning::NO REGRESSION VERDICT: no baseline at $env:BASELINE_DIR, so nothing was compared. The scorecards this run produced are uploaded as the 'agent-eval-gemma-consolidation' artifact - they are the raw material for the first flagship baseline, not a pass."
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "### Regression check: NOT PERFORMED" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "No flagship baseline is committed at ``$env:BASELINE_DIR``, so this run measured quality but compared it to nothing. A green check here does NOT mean no regression." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            exit 0
+          }
+
+          $listVar = if ($env:EMBEDDER_OK -eq 'false') { $env:EVAL_CATEGORIES_NO_EMBEDDER } else { $env:EVAL_CATEGORIES }
+          $categories = ($listVar -split '\s+') | Where-Object { $_ }
           foreach ($category in $categories) {
             $current = "eval-out\$category\scorecard.json"
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
@@ -1317,10 +1429,9 @@ jobs:
           Write-Host "Read the per-scenario diff above before treating a regression as a bug."
           Write-Host ""
           Write-Host "TIME regressions (>2x per-scenario wall clock) count toward the same"
-          Write-Host "verdict but are NOT comparable to this baseline: it was captured against"
-          Write-Host "a remote Lemonade over ngrok on different hardware. Treat a time-only"
-          Write-Host "regression as a hardware artifact until the baselines are regenerated"
-          Write-Host "on this runner."
+          Write-Host "verdict. They are only meaningful against a baseline captured on THIS"
+          Write-Host "runner; a baseline recorded elsewhere makes every time verdict a"
+          Write-Host "hardware artifact rather than a signal."
           Write-Host "=================================================================="
 
           # A compare that exits with something other than 0 or 2 is the TOOL

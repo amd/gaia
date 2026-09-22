@@ -1,7 +1,6 @@
 id: clipboard_tools
 name: "Clipboard Tools -- Graceful Degradation"
 category: web_system
-agent_type: chat
 severity: low
 description: |
   Tests clipboard read/write tools. These gracefully degrade if pyperclip is not installed.

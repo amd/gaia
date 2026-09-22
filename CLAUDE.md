@@ -387,7 +387,11 @@ want to test an installed wheel.
 
 ### IMPORTANT: Run agent evals when changing LLM-affecting code paths — do NOT skip
 
-**Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category and compare to the committed baseline before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
+**Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
+
+**Every scenario scores the flagship `gaia` agent.** That is the `--agent-type` default and scenarios no longer pin their own, so a scorecard names one agent and two scorecards are comparable. Pass `--agent-type` only to measure a different agent — and never compare that result to a scorecard captured under another one, because `compare_scorecards` keys on `scenario_id` alone and will happily report "improved/regressed" across two different agents.
+
+**There is no committed baseline right now.** The previous ones scored the `doc` ChatAgent profile, so diffing a flagship run against them is exactly the cross-agent comparison above; they were deleted rather than reinterpreted. Until the first flagship baseline lands (a real run on AMD hardware, committed to `tests/fixtures/eval_baselines/gaia-flagship/`), `--compare` has nothing to diff and CI reports scores without a regression verdict. **Never hand-author, estimate, or copy forward a baseline number to fill the gap** — a fabricated baseline is worse than none, because it looks like a verdict.
 
 **Changes that REQUIRE an eval run before merge:**
 
@@ -415,19 +419,21 @@ Only if the eval genuinely requires the key (the subprocess errors with `ANTHROP
 # Terminal 1 — backend (needed by gaia eval agent)
 python -m gaia.ui.server --port 4200 --host 127.0.0.1
 
-# Terminal 2 — run the eval, then compare its scorecard to the committed baseline.
-# NOTE: `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT run an eval.
-#       Run the eval first; it prints the run dir and writes <run-dir>/scorecard.json.
-gaia eval agent --category rag_quality --agent-type doc
+# Terminal 2 — run the eval. Scores the flagship; no --agent-type needed.
+gaia eval agent --category rag_quality
 # → prints an ABSOLUTE path, e.g.  Output: /…/gaia/eval/results/<run-id>/   ← use it as printed, + /scorecard.json
-# Pick the BASELINE matching your model; don't `ls -t` to find it — a fresh clone stamps
-# every baseline with the checkout time, so an mtime sort picks arbitrarily.
+
+# Compare to a baseline ONLY once one is committed and it was captured under the
+# same agent. `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT
+# run an eval, so run the eval above first.
 gaia eval agent --compare \
-  tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json \
+  tests/fixtures/eval_baselines/gaia-flagship/scorecard_rag_quality.json \
   <printed-output-path>/scorecard.json
 ```
 
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
+
+With no baseline committed, the eval still tells you plenty: a category full of `INFRA_ERROR` or a score that cratered against the run you did an hour ago is a signal. What you cannot do is claim "no regression" — say what you measured, not what you compared.
 
 **#1030 (the Gemma-4 RAG-PDF timeout) is the canonical example of what happens when this rule is skipped:** a prompt change passed every unit test, then broke document Q&A in production. #1033 tracks the systemic CI gaps that let it through.
 

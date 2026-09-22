@@ -1,7 +1,6 @@
 id: mit_license
 name: "MIT License Short-Form Legal Parsing"
 category: real_world
-agent_type: doc
 severity: medium
 description: |
   Agent must parse the MIT License text and answer compliance questions.

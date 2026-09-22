@@ -113,6 +113,12 @@ Run all scenarios across every category (91 scenarios in 12 categories at the ti
 gaia eval agent
 ```
 
+Every scenario scores the flagship `gaia` agent. That is the `--agent-type`
+default and no scenario pins its own, so a scorecard names one agent and two
+scorecards are comparable. Pass `--agent-type` to measure a different agent, but
+never compare that result to a scorecard captured under another one —
+`--compare` matches on scenario ID alone and cannot tell two agents apart.
+
 ### 4. Architecture Audit (Free)
 
 Check for structural limitations without making any LLM calls:
@@ -216,13 +222,20 @@ The benchmark includes 91 scenarios across 12 categories (counts as of this writ
 | `error_recovery` | 3 | Graceful handling of missing files, empty results, vague requests |
 | `captured` | 2 | Golden-path replays from real user sessions |
 
+CI runs all of these except `vision` and `web_system`, which read the runner's
+own screen, windows and clipboard into a scorecard that uploads as a public
+artifact. Run those two locally.
+
 ---
 
 ## Common Workflows
 
 ### Regression Testing
 
-Save a baseline after a known-good run, then compare future runs:
+Save a baseline after a known-good run, then compare future runs. A baseline is
+only valid against runs of the **same agent** under the **same judge model** —
+`--model` drives each scenario as well as scoring it, so changing either makes
+the diff meaningless rather than merely noisy:
 
 ```bash
 # Save current results as baseline

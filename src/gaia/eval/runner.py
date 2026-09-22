@@ -32,6 +32,8 @@ from typing import Optional
 
 import yaml
 
+from gaia.eval.config import DEFAULT_AGENT_TYPE
+
 logger = logging.getLogger(__name__)
 
 # fcntl is POSIX-only — on Windows the eval lock degrades to a no-op (the
@@ -1770,7 +1772,7 @@ class AgentEvalRunner:
         extra_corpus_dirs=None,
         tags=None,
         output_format=None,
-        agent_type=None,
+        agent_type=DEFAULT_AGENT_TYPE,
     ):
         self.backend_url = backend_url
         self.model = model
@@ -1944,8 +1946,6 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
-            # Per-scenario agent_type from YAML overrides CLI --agent-type
-            scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
             result = run_scenario_subprocess(
                 scenario_path,
                 scenario_data,
@@ -1958,7 +1958,7 @@ class AgentEvalRunner:
                 extra_corpus_dirs=(
                     self.extra_corpus_dirs if self.extra_corpus_dirs else None
                 ),
-                agent_type=scenario_agent_type,
+                agent_type=self.agent_type,
             )
             results.append(result)
 
@@ -2041,7 +2041,6 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
-                scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
@@ -2054,7 +2053,7 @@ class AgentEvalRunner:
                     extra_corpus_dirs=(
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
-                    agent_type=scenario_agent_type,
+                    agent_type=self.agent_type,
                 )
                 rerun_results.append(result)
 
