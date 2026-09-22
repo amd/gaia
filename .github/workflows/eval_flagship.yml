@@ -274,11 +274,25 @@ env:
   # and tests/unit/eval/test_ci_lanes.py fails the build if either appears.
   EVAL_LANES_FILE: eval/ci_lanes.json
   # What still means something when the RAG embedder will not load (#3016).
-  # Deliberately NOT widened alongside the list above: which of the other
-  # categories stay interpretable without retrieval is a question only a real
-  # run answers, and guessing would put unmeasurable categories in a scorecard.
+  # Not the whole list above: for the categories left out, only a real run says
+  # whether they stay interpretable without retrieval, and guessing would put
+  # unmeasurable categories in a scorecard. `memory` needs no such run - 0 of
+  # its 25 scenarios carry a non-empty `setup.index_documents`, so the embedder
+  # is not what would stop them scoring, and leaving it out meant a degraded
+  # run measured 2 scenarios out of 82.
+  # Scenarios inside a listed category may still fail on their own - 3 of
+  # tool_selection's 5 do index documents. That is the posture on purpose: run
+  # the category, let the scenario fail, do not call the whole category
+  # unmeasurable.
+  # BEFORE WIDENING FURTHER, do the timeout arithmetic - but do it per LANE,
+  # not across this list. A degraded run only ever cuts a lane down to its own
+  # categories (the intersection in the run step), so the budget that can
+  # overflow is the lane's, and it is always smaller than the full run the job
+  # ceiling above was sized for. Widening is therefore free on time and costs
+  # only interpretability; what it must not do is add a category no run has
+  # shown to be measurable without retrieval.
   # Everything in EVAL_CATEGORIES but not here is reported NOT MEASURED.
-  EVAL_CATEGORIES_NO_EMBEDDER: tool_selection
+  EVAL_CATEGORIES_NO_EMBEDDER: memory tool_selection
   BACKEND_URL: http://127.0.0.1:4200
   # This runner's home is C:\Windows\System32\config\systemprofile and the
   # checkout is not under it, so without this every scenario carrying a
@@ -964,12 +978,17 @@ jobs:
           # for weeks because the key existed and the account behind it was out
           # of credit: the preflight passed and all five scenarios then died in
           # three seconds each with their stdout discarded.
-          claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String -OutVariable probe | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::The Claude credential is present but a one-line probe was rejected, so every scenario would error. Response: $probe"
-            exit 1
-          }
-          Write-Host "Claude credential accepted by a live probe."
+          # A rejected probe has two causes needing two different people: the org is
+          # out of budget (billing admin) or the credential is bad (secrets change).
+          # The exit code cannot tell them apart, so classify the response body and
+          # name the right owner - see util/classify_claude_probe.py (#4080).
+          $global:LASTEXITCODE = 0
+          $probe = (claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String)
+          $probeExit = $LASTEXITCODE
+          $probeFile = Join-Path $env:RUNNER_TEMP "claude_probe.txt"
+          Set-Content -Path $probeFile -Value $probe -Encoding UTF8
+          python util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
           # No baseline is a legitimate state right now, and it is reported, never
           # assumed away. Enforcing against a baseline that does not exist is the
@@ -1275,7 +1294,11 @@ jobs:
         # A job-level timeout instead CANCELS, which skips every `!cancelled()`
         # step and discards the categories that did finish. See the budget
         # derivation on the job above. Same convention as email_scorecard_refresh.yml.
-        timeout-minutes: 600
+        #
+        # MUST stay below the job's timeout-minutes, or the job cancels first and
+        # this is dead code - the 60 min gap is the setup + collect + upload the
+        # budget table prices.
+        timeout-minutes: 240
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Blank when the OAuth token is present, deliberately: runner.py adds
@@ -1366,8 +1389,9 @@ jobs:
             # install is missing: POST /api/sessions 422s, every scenario in this
             # lane records INFRA_ERROR, and the eval still exits 0 because it
             # produced a scorecard. Assert the id resolves BEFORE spending the
-            # slot - with five jobs installing their own venv there are five
-            # places this can regress, and each costs a full lane to discover.
+            # slot - the install line is one place to get wrong but four lanes
+            # build their own venv from it, so the check runs four times and a
+            # miss costs seconds rather than a whole lane each.
             # Deliberately not asserting a literal "gaia": the id is read from
             # gaia.eval.config so this check tracks the default instead of
             # becoming a second place to update.
@@ -1443,10 +1467,10 @@ jobs:
                 # whether the harness ran - and an empty foreach exits 0, so this
                 # lane's green would be the absence of a measurement dressed as one.
                 Add-Summary "| **NOTHING MEASURED** | - |"
-                Write-Host "::error::Lane '$env:EVAL_LANE' measured NOTHING. Every one of its categories ($($all -join ', ')) answers out of embedder-produced chunks and the RAG embedder will not load on this runner (#3016). This lane's green/red says nothing about quality. Fix the embedder on the devlab-dispatch image, or re-dispatch once #3016 is resolved; the embedder ladder output is in the preflight step above."
+                Write-Host "::error::Lane '$env:EVAL_LANE' measured NOTHING. The RAG embedder will not load on this runner (#3016), the run is cut to EVAL_CATEGORIES_NO_EMBEDDER, and none of this lane's categories ($($all -join ', ')) are on that list. This lane's green/red says nothing about quality. Fix the embedder on the devlab-dispatch image, or re-dispatch once #3016 is resolved; the embedder ladder output is in the preflight step above."
                 exit 1
               }
-              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The rest of this lane answers out of embedder-produced chunks and cannot be measured; the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true)."
+              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The run is cut to the categories listed in EVAL_CATEGORIES_NO_EMBEDDER; the rest of this lane is not run and the integrity gate below reports it as NOT MEASURED (and fails the job when enforce=true). Not every skipped category needs the embedder - the list is what this runner has been shown to measure without it, not a claim about the others."
             }
             Write-Host "Lane '$env:EVAL_LANE' categories this run: $($categories -join ', ') ($($categories.Count) of $($all.Count))"
             foreach ($category in $categories) {
@@ -1613,7 +1637,10 @@ jobs:
           if ($env:EMBEDDER_OK -eq 'false') {
             foreach ($c in $measured) { $gateArgs += @("--category", $c) }
             foreach ($c in ($all | Where-Object { $measured -notcontains $_ })) { $gateArgs += @("--not-measured", $c) }
-            $gateArgs += @("--not-measured-reason", "the RAG embedder will not load on this runner (#3016), and this category answers out of embedder-produced chunks")
+            # One reason covers every skipped category, so it can only say why
+            # the RUN was cut - not why each category needs the embedder, which
+            # for several of them it does not.
+            $gateArgs += @("--not-measured-reason", "the RAG embedder will not load on this runner (#3016), so the run was cut to EVAL_CATEGORIES_NO_EMBEDDER and this category was not on that list")
           } else {
             foreach ($c in $all) { $gateArgs += @("--category", $c) }
           }
