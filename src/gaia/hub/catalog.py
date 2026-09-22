@@ -422,7 +422,8 @@ def merge_with_registry(
         ``status``, ``installed_version`` / ``latest_version``, and a
         ``requires_trust`` flag. Skills-lane entries (#2467) are excluded — they
         are not agent packages and install through ``gaia skill install``; read
-        them with :func:`skill_entries`.
+        them with :func:`skill_entries`. Registry-only agents marked ``hidden``
+        are excluded too, for the same reason the UI picker drops them.
     """
     installed_versions = installed_versions or {}
 
@@ -492,6 +493,11 @@ def merge_with_registry(
     # 2. Registry-only agents (builtins / custom not published to the hub).
     for agent_id, reg in registered.items():
         if agent_id in by_id:
+            continue
+        # Hidden means "not offered as a choice" — the same reason it is absent
+        # from the UI picker keeps it out of the browse listing. Lookups above
+        # still see it, so a published hidden agent stays marked installed.
+        if reg.hidden:
             continue
         reg_tier = "verified" if reg.source == "builtin" else "experimental"
         by_id[agent_id] = {
