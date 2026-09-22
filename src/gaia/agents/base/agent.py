@@ -272,6 +272,28 @@ def tool_execution_timeout() -> float:
     return value
 
 
+def _trace_includes_schema_text() -> bool:
+    """Whether a ``--trace`` artifact carries the full tool-schema text.
+
+    On by default: the schema is the thing #3774 exists to make measurable, and
+    a trace that only counts it cannot answer "which schema did the model get".
+    ``GAIA_TRACE_TOOL_SCHEMA=0`` drops the text for anyone who needs a smaller
+    file — the names and sizes stay, and the artifact records the omission.
+    """
+    raw = os.environ.get("GAIA_TRACE_TOOL_SCHEMA")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_TRACE_TOOL_SCHEMA must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to record the full schema."
+    )
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -890,6 +912,12 @@ class Agent(abc.ABC):
     # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
     # both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
+
+    # Last value handed to the backend as ``tools=``, and the filter in force
+    # when it was built. Stamped by the ``_openai_tools`` property so a trace
+    # reports what went out rather than re-deriving it (#3774).
+    _last_tool_schemas: Optional[List[Dict[str, Any]]] = None
+    _last_tool_filter: Optional[List[str]] = None
 
     # Re-entrancy guard for tool timing. A tool body may call another tool
     # (CodeAgent orchestrates that way); only the outermost call is timed.
@@ -1724,11 +1752,55 @@ Do NOT wrap conversational replies in JSON.
     def _openai_tools(self):
         """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
         if self._uses_native_tool_calls():
-            return (
+            schemas = (
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
             )
-        return None
+        else:
+            schemas = None
+        # The trace reports the object that went out as ``tools=``, never a
+        # re-render — a mid-loop load_tools expansion must show up there.
+        self._last_tool_schemas = schemas
+        self._last_tool_filter = (
+            None if self._active_tool_filter is None else list(self._active_tool_filter)
+        )
+        return schemas
+
+    def _trace_tool_schema(self) -> Dict[str, Any]:
+        """The ``tool_schema`` block of a ``--trace`` artifact.
+
+        Reports what the backend was actually handed this turn: the names, the
+        active per-turn filter, the serialized size (so system / tools / history
+        shares of the prompt are computable from one file), and the schema text
+        itself. Content comes only from tool names, signatures and docstrings —
+        no user data rides along into a file people attach to bug reports.
+        """
+        from gaia.agents.base.turn_metrics import count_tokens
+
+        schemas = getattr(self, "_last_tool_schemas", None)
+        # ensure_ascii=False: a \uXXXX escape is six chars the model never
+        # sees, and the size here has to match what went over the wire.
+        schema_json = json.dumps(schemas, ensure_ascii=False) if schemas else ""
+        block: Dict[str, Any] = {
+            "sent": schemas is not None,
+            # How this model takes tools, independent of whether any were sent:
+            # an empty registry on a native model is "native, nothing to send".
+            "render": ("native" if self._uses_native_tool_calls() else "prompt_text"),
+            "tools_sent": len(schemas or []),
+            "tools_registered": len(self._tools_registry),
+            "tool_names": [s["function"]["name"] for s in schemas or []],
+            "filter": getattr(self, "_last_tool_filter", None),
+            "schema_chars": len(schema_json),
+            "schema_tokens": count_tokens(schema_json),
+        }
+        if _trace_includes_schema_text():
+            block["schemas"] = schemas or []
+        else:
+            block["schemas_omitted"] = (
+                "schema text dropped by GAIA_TRACE_TOOL_SCHEMA=0; "
+                "unset it (or set 1) to record the full schema"
+            )
+        return block
 
     def _select_tools_for_turn(  # pylint: disable=unused-argument
         self, user_input: str
@@ -5431,6 +5503,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
         self._begin_turn_provenance()
+        # Cleared per turn: a trace must never report the previous turn's
+        # schema for a turn that never reached the backend.
+        self._last_tool_schemas = None
+        self._last_tool_filter = None
 
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
@@ -7709,7 +7785,17 @@ Do NOT wrap conversational replies in JSON.
             + total_output_tokens,  # Combined token count
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
+            "tool_schema": self._trace_tool_schema(),
         }
+
+        # Catches the exits that never printed an answer (max steps). Sealed
+        # BEFORE the trace write — attached after, the artifact never saw it.
+        turn_record = (
+            self._finish_turn_record(result.get("result", ""), steps_taken)
+            or turn_record
+        )
+        if turn_record is not None:
+            result["turn_metrics"] = turn_record
 
         # Write trace to file if requested
         if trace:
@@ -7717,14 +7803,6 @@ Do NOT wrap conversational replies in JSON.
             result["output_file"] = file_path
 
         logger.debug(f"Query processing complete: {result}")
-
-        # Catches the exits that never printed an answer (max steps).
-        turn_record = (
-            self._finish_turn_record(result.get("result", ""), steps_taken)
-            or turn_record
-        )
-        if turn_record is not None:
-            result["turn_metrics"] = turn_record
 
         # Store the result internally
         self.last_result = result
