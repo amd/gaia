@@ -18,8 +18,9 @@ invariants that the later mail/calendar leads depend on:
   carry NO ``client_secret`` unless one is explicitly configured (Microsoft
   forbids secrets for public clients — unlike Google, which requires one).
 - ``default_scopes`` include ``offline_access`` (so the shared flow obtains a
-  refresh token) and ``openid`` (so the shared flow can decode the account
-  email from the id_token) — without these the shared ``flow.py`` would raise.
+  refresh token) — without it the shared ``flow.py`` would raise. They must
+  NOT include ``openid`` (#4079); that is pinned in
+  ``test_microsoft_no_openid.py``.
 - The catalog declares Mail.Read, Mail.Send, Calendars.ReadWrite so the grant
   ledger accepts those scopes for the future Outlook agents.
 
@@ -305,14 +306,13 @@ class TestClientIdHash:
 
 
 class TestDefaultScopes:
-    def test_default_scopes_include_offline_access_and_openid(self, _ms_env):
-        # offline_access => refresh_token is returned by the token endpoint;
-        # openid => id_token is returned so the shared flow can decode the
-        # account email. The shared flow.py REQUIRES a refresh_token, so a
-        # Microsoft connect without offline_access would raise — pin it here.
+    def test_default_scopes_include_offline_access(self, _ms_env):
+        # offline_access => refresh_token is returned by the token endpoint.
+        # The shared flow.py REQUIRES a refresh_token, so a Microsoft connect
+        # without it would raise — pin it here. The exact scope tuple (and the
+        # absence of `openid`) is pinned in test_microsoft_no_openid.py.
         prov = providers.get("microsoft")
         assert "offline_access" in prov.default_scopes
-        assert "openid" in prov.default_scopes
 
 
 class TestAuthorizationUrl:
@@ -468,13 +468,13 @@ class TestCatalog:
             assert scope in MICROSOFT_SPEC.available_scopes, scope
 
     def test_catalog_default_scopes_enable_refresh_and_account(self):
-        # The shared flow requires a refresh_token and decodes the account
-        # email from the id_token; both depend on these two scopes being in
-        # the default set used by a first connect.
+        # The shared flow requires a refresh_token, and resolves the account
+        # email from Graph /me; both depend on these scopes being in the
+        # default set used by a first connect.
         from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
 
         assert "offline_access" in MICROSOFT_SPEC.default_scopes
-        assert "openid" in MICROSOFT_SPEC.default_scopes
+        assert "https://graph.microsoft.com/User.Read" in MICROSOFT_SPEC.default_scopes
 
     def test_catalog_is_oauth_pkce_pointing_at_microsoft_provider(self):
         from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
