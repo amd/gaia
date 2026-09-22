@@ -1359,22 +1359,30 @@ class ShellToolsMixin:
         the no-prompt list could not be approved at all, so neither widens what
         such a run executes. Only the console's ``full_access`` (the TUI's
         ``/full-access``, on screen for the whole session) runs them unasked.
-
-        A host with no console is the same situation with nothing granted at
-        all: there is no surface to show the prompt on, so the confirmation the
-        CONFIRM tier assumes never happened (#2210).
         """
         console = getattr(self, "console", None)
         if getattr(console, "full_access", False) is True:
             return False
         if console is None:
-            return True
+            return False
         if getattr(console, "auto_approve_gated_tools", False):
             return True
         # Deferred: the console module imports the package root.
         from gaia.agents.base import console as console_mod
 
         return console_mod.auto_approve_env_enabled()
+
+    def _nothing_could_have_confirmed(self) -> bool:
+        """True when this call reached execution without anyone approving it.
+
+        The execution-path counterpart of :meth:`_approval_is_blanket_only`: it
+        also covers a host with no console, which the pre-flight leaves alone so
+        the confirmation gate can deny it itself (#2210). Reaching a direct tool
+        call on such a host means that gate was never consulted.
+        """
+        if getattr(self, "console", None) is None:
+            return True
+        return self._approval_is_blanket_only()
 
     def _blanket_approval_refusal(self, error: Dict[str, Any]) -> Dict[str, Any]:
         """A confirmable command's block, re-explained for an unasked run."""
@@ -2136,11 +2144,11 @@ class ShellToolsMixin:
                 # A CONFIRM-tier command has already been through
                 # ``Agent._execute_tool``'s gate, so it runs here unless the
                 # only approval was a blanket pre-approval.
-                blanket_only = self._approval_is_blanket_only()
+                unconfirmed = self._nothing_could_have_confirmed()
                 error, steps = self._validate_shell_command(command)
                 if error and not _reaches_the_prompt(error):
                     return error
-                if error and blanket_only:
+                if error and unconfirmed:
                     return self._blanket_approval_refusal(error)
 
                 granted = skill_granted_binaries(self)
