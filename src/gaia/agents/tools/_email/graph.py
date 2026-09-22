@@ -22,6 +22,8 @@ from urllib.parse import quote
 
 import httpx
 
+from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
+
 logger = logging.getLogger(__name__)
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
@@ -42,14 +44,6 @@ _MAX_TOP = 999
 # The shape Graph issues for a message id: standard base64, so `+`, `/` and the
 # `=` padding are all legitimate, as are base64url's `-` and `_`.
 _MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9+/=_-]{1,512}")
-
-
-class MailboxError(RuntimeError):
-    """A mailbox request failed in a way the caller should surface verbatim."""
-
-
-class MailboxAuthError(MailboxError):
-    """The mailbox rejected our credentials or refused the requested scope."""
 
 
 def _address(entity: Optional[Dict[str, Any]]) -> str:
