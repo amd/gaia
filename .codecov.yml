@@ -21,7 +21,6 @@ ignore:
   - "tests/"
   - "docs/"
   - "scripts/"
-  - "workshop/"
   - "src/gaia/eval/"
   - "src/gaia/apps/webui/"
   - "setup.py"

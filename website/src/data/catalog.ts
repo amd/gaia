@@ -86,8 +86,8 @@ export interface Agent {
   // when none was published or parseable. Drives the sidebar score badge.
   eval_score?: number;
   // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
-  // distributed as an npm client + frozen sidecar. Present → npm is the install
-  // path. Absent → the agent installs via pip/GAIA (language-driven).
+  // distributed as an npm client + frozen sidecar. Present → GAIA install is
+  // shown first, with npm as the embed path. Absent → pip/GAIA (language-driven).
   npm_package?: string;
   // Localhost URL of the agent's interactive playground, served by its sidecar
   // (e.g. "http://127.0.0.1:8131/v1/email/playground"). Only resolves once the
@@ -440,17 +440,6 @@ export interface InstallMethod {
   note: string;
 }
 
-/**
- * Install methods for an agent, derived from the MANIFEST — never from README
- * markup. We only ever show channels that actually work:
- *
- *  - An agent with `npm_package` (the email sidecar) is distributed as an npm
- *    client + frozen binary, NOT a PyPI wheel. npm is its single supported path,
- *    so we show only that — no broken `pip install` (there's no wheel) and no
- *    unverified source build.
- *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
- *    source build (language-driven, the long-standing default).
- */
 /** An entry's package type, defaulting to 'agent' as the manifest schema does. */
 export function packageType(agent: Agent): PackageType {
   return agent.type ?? "agent";
@@ -466,6 +455,30 @@ export function isSkill(agent: Agent): boolean {
   return packageType(agent) === "skill";
 }
 
+/**
+ * True when an entry ships as an npm client + a frozen binary sidecar — the
+ * agent lane's npm packaging, which is what the "sidecar" wording describes.
+ *
+ * Read off installMethods() rather than `npm_package`, so the packaging text can
+ * never contradict the command beside it: an app/component with an npm_package
+ * installs as a global CLI, not a sidecar (#3298).
+ */
+export function isNpmSidecar(agent: Agent): boolean {
+  const keys = new Set(installMethods(agent).map((m) => m.key));
+  return keys.has("gaia") && keys.has("npm");
+}
+
+/**
+ * Install methods for an agent, derived from the MANIFEST — never from README
+ * markup. We only ever show channels that actually work:
+ *
+ *  - An agent with `npm_package` (the email sidecar) is distributed as an npm
+ *    client + frozen binary, NOT a PyPI wheel. We show GAIA first (recommended)
+ *    and npm as the embed option — no broken `pip install` (there's no wheel)
+ *    and no unverified source build.
+ *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
+ *    source build (language-driven, the long-standing default).
+ */
 export function installMethods(agent: Agent): InstallMethod[] {
   // A skill is not an agent package: it installs into ~/.gaia/skills/ and is
   // composed by any agent, so `gaia agent install` would not work for it.
@@ -510,10 +523,16 @@ export function installMethods(agent: Agent): InstallMethod[] {
   if (agent.npm_package) {
     return [
       {
+        key: "gaia",
+        label: "GAIA",
+        command: `gaia agent install ${agent.id}`,
+        note: "Recommended — installs the binary sidecar into your GAIA app and registers the agent automatically.",
+      },
+      {
         key: "npm",
         label: "npm",
         command: `npm i ${agent.npm_package}`,
-        note: "",
+        note: "For embedding the agent in a JS/TS app — fetches the same binary at build time or first run.",
       },
     ];
   }
@@ -541,6 +560,27 @@ export function installMethods(agent: Agent): InstallMethod[] {
     note: "Build from the GAIA repository — clone, then follow the agent README to install it.",
   });
   return methods;
+}
+
+/** Which buttons the detail card's install CTA row shows. */
+export type InstallCta = "gaia" | "gaia+npm" | "npm";
+
+/**
+ * The install buttons for an entry, read off the methods the card already
+ * shows — so a button can never offer a path the command above it did not.
+ *
+ * `gaia://hub/install/<id>` installs INTO the GAIA app, which only the agent
+ * and skill lanes do. A component/app is a per-platform download, so when it
+ * ships an npm CLI that npm page is its only real CTA (#3231).
+ *
+ * A download-only entry keeps the GAIA link it has always had — the deep link
+ * for a component is a separate, pre-existing question.
+ */
+export function installCta(agent: Agent): InstallCta {
+  const keys = new Set(installMethods(agent).map((m) => m.key));
+  const gaia = keys.has("gaia") || keys.has("skill");
+  if (keys.has("npm")) return gaia ? "gaia+npm" : "npm";
+  return "gaia";
 }
 
 // Describe only what the hub actually enforces — there is no publisher-signing

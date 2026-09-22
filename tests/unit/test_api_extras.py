@@ -18,6 +18,12 @@ So this file now asserts the thin-host arrangement instead:
 * gaia-agent-email still depends on ``amd-gaia[api]`` so its sidecar gets the
   REST-server deps (fastapi/uvicorn) automatically.
 
+It also guards the daemon's dependency contract (#3056): the one-line installer
+installs exactly ``amd-gaia[api]``, and ``gaia daemon`` — which the terminal hub
+cannot run without — hard-exits when fastapi/uvicorn/psutil are absent. Both the
+extra's contents and the error message's suggested remedy are checked against the
+module list in ``cli.py::_check_daemon_deps`` so neither can drift from it.
+
 These are static packaging/source assertions (no runtime import), so they work
 in the CI unit-tests venv that does not actually install [api]. Same framing as
 test_ui_extras.py's #845 docstring.
@@ -25,6 +31,7 @@ test_ui_extras.py's #845 docstring.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -32,6 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SETUP_PY = REPO_ROOT / "setup.py"
 OPENAI_SERVER = REPO_ROOT / "src" / "gaia" / "api" / "openai_server.py"
 EMAIL_PYPROJECT = REPO_ROOT / "hub" / "agents" / "email" / "python" / "pyproject.toml"
+CLI_PY = REPO_ROOT / "src" / "gaia" / "cli.py"
 
 
 def _parse_extra(name: str) -> list[str]:
@@ -78,6 +86,23 @@ def _parse_install_requires() -> list[str]:
     return re.findall(r'"([^"]+)"', "\n".join(body))
 
 
+def _daemon_required_packages() -> list[str]:
+    """The distributions ``_check_daemon_deps`` refuses to start the daemon without.
+
+    Read out of cli.py rather than hardcoded, so adding a module to the check
+    without declaring it in [api] fails here instead of at a user's first
+    ``gaia daemon start``.
+    """
+    tree = ast.parse(CLI_PY.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_check_daemon_deps":
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.ListComp):
+                    pairs = ast.literal_eval(inner.generators[0].iter)
+                    return [pkg for _mod, pkg in pairs]
+    raise AssertionError("Could not find the dep list in cli.py::_check_daemon_deps")
+
+
 def test_api_server_does_not_mount_email_in_process() -> None:
     """The API server must not import/mount the email agent in-process (#2176).
 
@@ -113,6 +138,49 @@ def test_keyring_guaranteed_for_api_installs_via_core() -> None:
         "install_requires dep (#1621) and the in-process email mount that "
         f"needed it in [api] was removed (#2176). Current [api] extra: {api_reqs}"
     )
+
+
+def test_api_extra_covers_every_daemon_dep() -> None:
+    """``pip install 'amd-gaia[api]'`` must be enough to start ``gaia daemon``.
+
+    The installer installs exactly this extra, and the terminal hub is dead
+    without the daemon. psutil was only ever present transitively (accelerate
+    pulls it), so a resolver change could have re-broken the bug this guards.
+    """
+    api_reqs = [
+        r.split(">")[0].split("=")[0].split("<")[0].lower() for r in _parse_extra("api")
+    ]
+    missing = [
+        pkg for pkg in _daemon_required_packages() if pkg.lower() not in api_reqs
+    ]
+    assert not missing, (
+        f"setup.py[api] must declare {missing} — cli.py::_check_daemon_deps "
+        "hard-exits without them, and installer/scripts/install.{sh,ps1} "
+        "install 'amd-gaia[api]' as the only route to a working `gaia daemon`."
+    )
+
+
+def test_daemon_deps_error_names_an_extra_that_satisfies_it() -> None:
+    """The remedy must point at an extra that actually declares the deps.
+
+    The message used to name ``[dev]``, which declares none of fastapi,
+    uvicorn or psutil — following it left the daemon just as dead.
+    """
+    src = CLI_PY.read_text(encoding="utf-8")
+    body = src[
+        src.index("def _check_daemon_deps") : src.index("def handle_daemon_command")
+    ]
+    named = set(re.findall(r"\[([a-z]+)\]", body.split('"""', 2)[-1]))
+    required = {p.lower() for p in _daemon_required_packages()}
+    for extra in named:
+        declared = {
+            r.split(">")[0].split("=")[0].split("<")[0].lower()
+            for r in _parse_extra(extra)
+        }
+        assert required <= declared, (
+            f"cli.py::_check_daemon_deps tells the user to install [{extra}], "
+            f"but that extra does not declare {sorted(required - declared)}."
+        )
 
 
 def test_email_wheel_requires_amd_gaia_api_extra() -> None:

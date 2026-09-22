@@ -5,7 +5,8 @@
 Covers:
   - ConnectionForwarder: forwards only GRANTED connectors, scopes the forward to
     the grant, skips ungranted/unconnected providers in the on-spawn push, and
-    withdraws a stale forward when a mint fails (revocation path).
+    withdraws a stale forward on authorization failures while retaining it for
+    unclassified mint failures.
   - The /daemon/v1/agents/{id}/connections routes: ungranted forward is DENIED
     at the HTTP boundary (403); every route requires the client token.
 
@@ -14,9 +15,14 @@ Pure fakes — no keyring, no real sidecar, no subprocess.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
-from gaia.connectors.errors import AuthRequiredError
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConfigurationError,
+    ConnectionRevokedError,
+)
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.daemon.forward import (
     ConnectionForwarder,
@@ -243,18 +249,25 @@ def test_forward_provider_unforwardable_provider_raises():
         )
 
 
-def test_forward_provider_mint_failure_withdraws_stale_forward_and_reraises():
-    """Revocation path: the connection is gone, so the mint raises NOT_CONNECTED.
-    The forwarder must re-raise loudly AND withdraw any stale token on the
-    sidecar so it cannot keep operating on it."""
+@pytest.mark.parametrize(
+    "error",
+    [
+        AuthRequiredError(AuthRequiredError.Reason.NOT_CONNECTED, provider="google"),
+        ConnectionRevokedError("google"),
+        ConfigurationError("OAuth client is not configured"),
+    ],
+    ids=["auth-required", "connection-revoked", "configuration"],
+)
+def test_forward_provider_authorization_mint_failure_withdraws_stale_forward_and_reraises(
+    error,
+):
+    """Authorization failures withdraw stale forwards and re-raise loudly."""
 
     def _mint(*, provider, scopes, agent_id):
-        raise AuthRequiredError(
-            AuthRequiredError.Reason.NOT_CONNECTED, provider=provider
-        )
+        raise error
 
     fwd, http = _forwarder(grants={"google": {"installed:email": ["s1"]}}, mint=_mint)
-    with pytest.raises(AuthRequiredError):
+    with pytest.raises(type(error)):
         fwd.forward_provider(
             "email", "google", base_url="http://127.0.0.1:9", bearer="b"
         )
@@ -262,6 +275,24 @@ def test_forward_provider_mint_failure_withdraws_stale_forward_and_reraises():
     assert http.posts == []
     assert len(http.deletes) == 1
     assert http.deletes[0]["url"] == "http://127.0.0.1:9/v1/connections/google"
+
+
+def test_forward_provider_transport_mint_failure_retains_stale_forward(caplog):
+    """A transient transport failure must leave a valid stale forward alone."""
+
+    def _mint(*, provider, scopes, agent_id):
+        raise httpx.ConnectTimeout("OAuth provider timed out")
+
+    fwd, http = _forwarder(grants={"google": {"installed:email": ["s1"]}}, mint=_mint)
+    with caplog.at_level("WARNING"):
+        with pytest.raises(httpx.ConnectTimeout):
+            fwd.forward_provider(
+                "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+            )
+
+    assert http.posts == []
+    assert http.deletes == []
+    assert "retaining any existing forward" in caplog.text
 
 
 def test_forward_provider_delivery_failure_raises_forward_delivery_error():

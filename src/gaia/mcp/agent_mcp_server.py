@@ -12,7 +12,7 @@ import json
 import sys
 from typing import Any, Dict, Literal, Type
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from gaia.agents.base.mcp_agent import MCPAgent
 from gaia.logger import get_logger, route_console_logging_to_stderr
@@ -30,7 +30,7 @@ MCP_DEFAULT_HOST = "localhost"
 Transport = Literal["streamable-http", "stdio"]
 
 # JSON-Schema -> python annotation for typed tool registration. Anything not
-# listed maps to ``Any`` (FastMCP then emits an open schema for that param).
+# listed maps to ``Any`` (MCPServer then emits an open schema for that param).
 _JSON_TYPE_TO_PY = {
     "string": str,
     "integer": int,
@@ -92,19 +92,15 @@ class AgentMCPServer:
         self.transport: Transport = transport
         self.register_typed_tools = register_typed_tools
 
-        # Create FastMCP server
+        # Create mcp 2.x MCPServer
         server_info = self.agent.get_mcp_server_info()
-        self.mcp = FastMCP(name=server_info.get("name", self.name))
-
-        # Configure server settings (host, port)
-        self.mcp.settings.host = self.host
-        self.mcp.settings.port = self.port
+        self.mcp = MCPServer(name=server_info.get("name", self.name))
 
         # Register tools dynamically from agent
         self._register_agent_tools()
 
     def _register_agent_tools(self):
-        """Dynamically register agent tools with FastMCP"""
+        """Dynamically register agent tools with MCPServer"""
         tools = self.agent.get_mcp_tool_definitions()
 
         if self.register_typed_tools:
@@ -119,7 +115,7 @@ class AgentMCPServer:
 
             # Create a wrapper function for this tool
             # We need to capture tool_name in the closure properly
-            # NOTE: Using **kwargs means FastMCP won't validate parameters,
+            # NOTE: Using **kwargs means MCPServer won't validate parameters,
             # allowing us to handle both standard and VSCode's kwargs format
             def create_tool_wrapper(name: str, description: str, verbose: bool):
                 async def tool_wrapper(**kwargs) -> Dict[str, Any]:
@@ -229,7 +225,7 @@ class AgentMCPServer:
             # Create the tool function
             tool_func = create_tool_wrapper(tool_name, tool_description, self.verbose)
 
-            # Register using FastMCP's decorator API
+            # Register using MCPServer's decorator API
             # This ensures proper registration using the public API
             self.mcp.tool()(tool_func)
 
@@ -239,8 +235,8 @@ class AgentMCPServer:
     def _register_typed_tool(self, tool_def: Dict[str, Any]) -> None:
         """Register one tool with an explicit, typed signature.
 
-        FastMCP derives a tool's JSON schema from the wrapper function's
-        signature + annotations. A bare ``**kwargs`` wrapper makes FastMCP emit
+        MCPServer derives a tool's JSON schema from the wrapper function's
+        signature + annotations. A bare ``**kwargs`` wrapper makes MCPServer emit
         a single required ``kwargs`` property — which standard MCP clients
         cannot satisfy. So when ``register_typed_tools`` is set we synthesize a
         signature whose keyword-only parameters mirror the tool's
@@ -339,8 +335,8 @@ class AgentMCPServer:
             # Run with streamable-http transport (industry standard)
             # This automatically serves at /mcp endpoint
             # Supports both HTTP POST and SSE streaming
-            # Host and port are configured via mcp.settings
-            self.mcp.run(transport="streamable-http")
+            # mcp 2.x takes host and port as run arguments.
+            self.mcp.run(transport="streamable-http", host=self.host, port=self.port)
         except KeyboardInterrupt:
             print("\n✅ Server stopped")
 

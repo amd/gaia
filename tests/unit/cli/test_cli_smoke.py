@@ -215,3 +215,31 @@ def test_gaia_binary_minimum_count() -> None:
         f"`gaia` binary missing from console_scripts metadata. "
         f"Found: {_GAIA_BINARIES}. Is the package installed?"
     )
+
+
+def test_stats_action_filters_non_constructor_kwargs() -> None:
+    """Regression for #2971: `gaia stats`/`prompt` forward every parsed CLI flag
+    to GaiaCliClient. Global flags like --ui are not constructor parameters, so
+    they must be filtered out or the command crashes with
+    ``TypeError: ... unexpected keyword argument 'ui'``.
+    """
+    import inspect
+
+    from gaia.cli import GaiaCliClient, _gaia_cli_client_params
+
+    accepted = set(inspect.signature(GaiaCliClient.__init__).parameters) - {"self"}
+
+    kwargs = {
+        "model": "some-model",
+        "max_tokens": 512,
+        "logging_level": "INFO",
+        "ui": False,  # a global flag, not a constructor parameter
+        "action": "stats",
+        "message": "hi",
+    }
+    params = _gaia_cli_client_params(kwargs)
+
+    assert "ui" not in params
+    assert set(params) <= accepted
+    # the filtered params bind to the constructor without raising
+    inspect.signature(GaiaCliClient.__init__).bind(object(), **params)

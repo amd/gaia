@@ -210,3 +210,26 @@ def _common_prefix(a: str, b: str) -> str:
 )
 def test_the_known_volatile_fragments_are_declared(name):
     assert name in Agent.VOLATILE_PROMPT_FRAGMENTS
+
+
+@pytest.mark.parametrize(
+    "model_id,use_claude",
+    [
+        ("Gemma-4-E4B-it-GGUF", False),
+        (None, False),
+        (None, True),
+        ("some-text-only-model", False),
+    ],
+)
+def test_the_schema_path_and_the_prose_gate_read_one_predicate(model_id, use_claude):
+    """``_uses_native_tool_calls`` documents itself as the single source of
+    truth for "schemas, not prose". ``_openai_tools`` used to re-derive the
+    same condition, so a change to one silently sent a model both or neither."""
+    agent = _StubAgent(model_id=model_id)
+    agent._use_claude = use_claude
+
+    native = agent._uses_native_tool_calls()
+    prompt = agent._compose_system_prompt()
+
+    assert (agent._openai_tools is not None) is native
+    assert ("==== AVAILABLE TOOLS ====" in prompt) is not native

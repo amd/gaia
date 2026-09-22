@@ -56,6 +56,10 @@ The server exposes one model, `gaia` — the flagship agent. Capability that use
       }'
     ```
     </CodeGroup>
+
+    The health response includes API, Lemonade LLM, and RAG component status.
+    A running API returns HTTP 200 with top-level status `degraded` when
+    Lemonade is unavailable or has no LLM loaded.
   </Step>
 </Steps>
 
@@ -323,6 +327,8 @@ Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`]
     ```bash
     curl http://localhost:8080/health
     ```
+
+    Check `components.llm` when the top-level status is `degraded`.
   </Accordion>
 
   <Accordion title="Agent Errors" icon="triangle-exclamation">

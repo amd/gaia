@@ -55,6 +55,18 @@ class TestApiStatus:
         check_status("myhost", 9999)
         get.assert_called_once_with("http://myhost:9999/health", timeout=5)
 
+    def test_degraded_server_still_reports_running(self, mocker, capsys):
+        mocker.patch(
+            "requests.get",
+            return_value=_health_response(
+                payload={"status": "degraded", "service": "gaia-api"}
+            ),
+        )
+        check_status("localhost", 8080)
+        out = capsys.readouterr().out
+        assert "✅ GAIA API server is running" in out
+        assert "Health: degraded" in out
+
     def test_unreachable_server_exits_nonzero(self, mocker, capsys):
         mocker.patch(
             "requests.get", side_effect=requests.exceptions.ConnectionError("refused")
@@ -96,6 +108,33 @@ class TestApiStatus:
         checker = mocker.patch("gaia.api.app.check_status")
         handle_api_command(Namespace(subcommand="status", host="127.0.0.1", port=8123))
         checker.assert_called_once_with("127.0.0.1", 8123)
+
+    def test_stop_reports_success_when_a_process_was_killed(self, mocker, capsys):
+        killer = mocker.patch(
+            "gaia.cli.kill_process_by_port",
+            return_value={"success": True, "message": "killed"},
+        )
+
+        handle_api_command(Namespace(subcommand="stop", host="localhost", port=8080))
+
+        killer.assert_called_once_with(8080)
+        assert "✅ API server stopped" in capsys.readouterr().out
+
+    def test_stop_returns_nonzero_when_no_process_was_found(self, mocker, capsys):
+        mocker.patch(
+            "gaia.cli.kill_process_by_port",
+            return_value={"success": False, "message": "No process found"},
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            handle_api_command(
+                Namespace(subcommand="stop", host="localhost", port=8080)
+            )
+
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "❌ No process found" in out
+        assert "✅ API server stopped" not in out
 
 
 # ---------------------------------------------------------------------------

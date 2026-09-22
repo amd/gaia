@@ -224,3 +224,92 @@ def test_manifest_ships_default_skill_set_disabled(manifest):
         "default_skill_set is live — skills would load for every user before an "
         "eval has measured their prompt-token cost (see #2848)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Construction contract
+# ---------------------------------------------------------------------------
+
+
+def test_passing_both_a_config_and_kwargs_is_refused():
+    """``config or GaiaAgentConfig(**kwargs)`` dropped the kwargs on the floor,
+    so a caller that set a field this way got an agent silently ignoring it."""
+    with pytest.raises(TypeError) as exc:
+        GaiaAgent(config=GaiaAgentConfig(), model_id="some-model")
+
+    message = str(exc.value)
+    assert "model_id" in message  # names what would have been dropped
+    assert "not both" in message
+
+
+def test_the_readiness_probe_takes_no_request_parameters():
+    """``init(response: Any = None)`` was unused, and FastAPI published it as a
+    real query parameter — an argument callers could pass that does nothing."""
+    from gaia_agent.server import build_app
+
+    schema = build_app().openapi()
+    operation = schema["paths"]["/v1/gaia/init"]["get"]
+    assert operation.get("parameters", []) == []
+
+
+# ---------------------------------------------------------------------------
+# Mailbox consent contract
+# ---------------------------------------------------------------------------
+
+
+def _requirement(connector_id):
+    return next(
+        (
+            cr
+            for cr in GaiaAgent.REQUIRED_CONNECTORS
+            if cr.connector_id == connector_id
+        ),
+        None,
+    )
+
+
+def test_required_connectors_declare_google_read_only():
+    """The consent screen renders this. A first Gmail user sees read, only read."""
+    from gaia.agents.tools._email.scopes import (
+        SCOPE_GMAIL_MODIFY,
+        SCOPE_GMAIL_READONLY,
+    )
+
+    google = _requirement("google")
+    assert google is not None, "the flagship declares no Google mailbox requirement"
+    assert list(google.scopes) == [SCOPE_GMAIL_READONLY]
+    assert SCOPE_GMAIL_MODIFY not in google.scopes
+    assert "https://mail.google.com/" not in google.scopes
+
+
+def test_both_mailbox_requirements_say_which_mailbox_they_are_for():
+    """`reason` is the sentence shown in the OAuth consent dialog."""
+    for connector_id, mailbox in (("google", "gmail"), ("microsoft", "outlook")):
+        requirement = _requirement(connector_id)
+        assert requirement is not None
+        assert mailbox in requirement.reason.lower()
+
+
+def test_every_declared_scope_has_a_consent_description():
+    """A scope with no description renders as a raw URL to the user."""
+    from gaia.connectors.providers.google import (
+        SCOPE_DESCRIPTIONS as GOOGLE_DESCRIPTIONS,
+    )
+    from gaia.connectors.providers.microsoft import (
+        SCOPE_DESCRIPTIONS as MICROSOFT_DESCRIPTIONS,
+    )
+
+    descriptions = {
+        "google": GOOGLE_DESCRIPTIONS,
+        "microsoft": MICROSOFT_DESCRIPTIONS,
+    }
+    for requirement in GaiaAgent.REQUIRED_CONNECTORS:
+        known = descriptions.get(requirement.connector_id)
+        if known is None:
+            continue
+        missing = [s for s in requirement.scopes if s not in known]
+        assert not missing, (
+            f"{requirement.connector_id} declares {missing} with no entry in that "
+            "provider's SCOPE_DESCRIPTIONS, so the consent dialog would show the "
+            "raw scope URL"
+        )

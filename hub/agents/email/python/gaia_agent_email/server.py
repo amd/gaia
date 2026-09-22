@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from pathlib import Path
 
 # How --skill-set reaches the per-request agent sessions (#2466): via the env var
@@ -52,6 +53,45 @@ DEFAULT_HOST = "127.0.0.1"
 # Import string uvicorn's reloader needs — reload requires an import-string app,
 # not a pre-built object (which is what ``uvicorn.run(app, ...)`` uses).
 _APP_IMPORT_STRING = "gaia_agent_email.server:app"
+
+
+def install_email_unhandled_exception_handler(app):
+    """Return structured JSON for unexpected /v1/email/* exceptions (#3000).
+
+    Registered for ``Exception``, so it runs as ``ServerErrorMiddleware``'s
+    handler — outside the ``ExceptionMiddleware`` that already converts
+    route-raised HTTPException and validation errors. Those never reach here;
+    the passthrough branches cover the same errors raised from outer middleware.
+    Anything else is a 500 with an error_id; the traceback is logged only.
+    """
+    from fastapi.exception_handlers import (
+        http_exception_handler,
+        request_validation_exception_handler,
+    )
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    @app.exception_handler(Exception)
+    async def _unhandled_email_exception(request, exc):
+        # Delegate rather than re-render: FastAPI's handler also forwards
+        # exc.headers and drops the body on statuses that forbid one.
+        # fastapi.HTTPException subclasses the Starlette one, so this covers both.
+        if isinstance(exc, StarletteHTTPException):
+            return await http_exception_handler(request, exc)
+        if isinstance(exc, RequestValidationError):
+            return await request_validation_exception_handler(request, exc)
+        error_id = uuid.uuid4().hex[:12]
+        log.exception(
+            "Unhandled email API exception on %s %s error_id=%s",
+            request.method,
+            request.url.path,
+            error_id,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "error_id": error_id},
+        )
 
 
 def build_app():
@@ -133,6 +173,7 @@ def build_app():
         description="Email triage REST sidecar.",
         lifespan=lifespan,
     )
+    install_email_unhandled_exception_handler(app)
 
     # Caller authentication (#1706). The sidecar binds 127.0.0.1 and exposes
     # draft/send, so it MUST authenticate its caller — a no-auth localhost API is

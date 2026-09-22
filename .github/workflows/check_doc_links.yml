@@ -62,6 +62,8 @@ jobs:
           python-version: '3.12'
 
       - name: Check external documentation links
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Checking external URLs (with rate limiting)..."
           python util/check_doc_links.py --external-only --max-workers 5

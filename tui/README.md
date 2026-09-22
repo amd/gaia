@@ -1,53 +1,73 @@
-# GAIA Terminal Hub
+# GAIA Terminal UI
 
-Browse, install, and chat with GAIA agents without leaving the terminal.
+Chat with GAIA in your terminal — no browser, no account, nothing you type
+leaves your machine.
 
-GAIA agents do real work for you — triage your inbox, answer questions about
-your files, write code. The terminal hub is how you find them, install them,
-and talk to them. Everything runs on your own machine: no account, and nothing
-you type is sent to a hosted service.
+`gaia-tui` boots straight into the flagship `gaia` agent: conversation,
+documents, data, web research, memory, skills. There is nothing to browse and
+nothing to pick — one binary, one agent, unless you ask for another by id
+(see [Running another agent](#running-another-agent)).
 
-> **Heads up — this is early.** There is no download yet. Getting the hub means
-> building it yourself, so you will need `git`, [Go](https://go.dev/dl/), and
-> [uv](https://docs.astral.sh/uv/) installed, and about half an hour. If that is
-> not what you were hoping for, come back when it ships.
+## Install
 
-## Getting set up
-
-Three one-time steps, in this order.
-
-**1. Get GAIA itself.** The hub needs changes that are not in a published
-release yet, so install from source rather than from PyPI:
+One command installs the `gaia` CLI, the local model runtime, and the terminal
+UI itself:
 
 ```bash
-git clone https://github.com/amd/gaia.git
-cd gaia
-uv venv && uv pip install -e .
+# macOS and Linux
+curl -fsSL https://amd-gaia.ai/install.sh | sh
 ```
 
-That gives you `gaia`, GAIA's main command.
+```powershell
+# Windows
+irm https://amd-gaia.ai/install.ps1 | iex
+```
 
-**2. Get a local AI running.** Because agents run on your machine, something on
-your machine has to do the thinking. That is a local model server, and GAIA
-sets it up for you:
+Then set up the local model — several GB, so give it a while — and launch:
 
 ```bash
 gaia init
+gaia-tui
 ```
 
-It downloads a model — several GB, so give it a while. If you skip this, the
-hub will stop you before an agent starts and tell you the same thing.
+`gaia init` installs Lemonade Server, the runtime that does the thinking on your
+machine. Skip it and the readiness gate stops you before the agent starts and
+tells you the same thing.
 
-**3. Build the hub.** From the same folder:
+### Or download the binary directly
+
+The installer fetches these and verifies their SHA-256; you can also take one
+yourself. Rename it to `gaia-tui` and put it on your `PATH`:
+
+| Platform | Download |
+|---|---|
+| Windows x64 | [`gaia-win-x64.exe`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-win-x64.exe) |
+| Windows ARM64 | [`gaia-win-arm64.exe`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-win-arm64.exe) |
+| macOS Apple Silicon | [`gaia-darwin-arm64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-darwin-arm64) |
+| macOS Intel | [`gaia-darwin-x64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-darwin-x64) |
+| Linux x64 | [`gaia-linux-x64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-linux-x64) |
+| Linux ARM64 | [`gaia-linux-arm64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-linux-arm64) |
+
+`https://hub.amd-gaia.ai/agents/terminal-hub/manifest.json` lists what is
+published, with the SHA-256 of each build. A direct download still needs the
+`gaia` CLI on your `PATH` — first-time setup (`gaia init`) and the `email`
+agent's daemon both go through it — so the one-line installer above is the
+shorter route.
+
+The binary is installed as `gaia-tui`, never as `gaia`: the two have different
+subcommands and would collide on your `PATH`.
+
+### Building from source
+
+For working on the TUI itself. Needs `git`, [Go](https://go.dev/dl/), and
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
-cd tui && make build                # -> tui/bin/gaia
-cp bin/gaia ~/.local/bin/gaia-tui   # somewhere on your PATH
+git clone https://github.com/amd/gaia.git
+cd gaia && uv venv && uv pip install -e .
+cd tui && make build                # -> tui/bin/gaia-tui
+cp bin/gaia-tui ~/.local/bin/       # somewhere on your PATH
 ```
-
-That gives you `gaia-tui`, the command in this README. It is a separate name
-from `gaia` because the two have different subcommands and would otherwise
-collide on your `PATH`.
 
 ## Your first run
 
@@ -55,38 +75,58 @@ collide on your `PATH`.
 gaia-tui
 ```
 
-That opens the hub — a list of agents, what each one does, and whether you have
-it. Pick one and it walks you through installing it, then drops you into a chat
-with it.
+That opens on a splash frame (the GAIA mascot), then a readiness gate, then
+chat. The gate checks the few things that would otherwise make the agent fail —
+is `gaia-agent` on this machine, is the local model server running, are the
+models downloaded. Anything not ready is shown with the exact command that
+fixes it, and `f` runs the fix that can be automated (downloading the models)
+without leaving the terminal.
 
-Before an agent starts, the hub checks the few things that would otherwise make
-it fail — is the model server running, is the model downloaded, does the agent
-have what it needs. Anything not ready is shown with the exact command that
-fixes it, so a failed check is a to-do list rather than a dead end.
+If `gaia-agent` itself is missing, the gate stops there and points you at the
+installer — there is no in-TUI download for the agent binary.
 
 Colours adapt to your terminal automatically. Some terminals never answer that
-query (SSH, tmux, a CI log) — if the hub comes out hard to read, force it:
+query (SSH, tmux, a CI log) — if the screen comes out hard to read, force it:
 
 ```bash
 GAIA_TUI_THEME=light gaia-tui    # or dark; unset or "auto" = detect
 ```
 
+## Running another agent
+
+`gaia-tui` ships one agent by default, but it can also drive `email` by id —
+it keeps its own readiness gate (background service, sidecar, local model,
+mailbox):
+
+```bash
+gaia-tui run email                             # chat with it
+gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout
+gaia-tui chat --agent email                    # same as `run email`
+```
+
+Installing and uninstalling a hub sidecar agent like `email` is the Python
+CLI's job, not the terminal UI's:
+
+```bash
+gaia hub list                 # what the Agent Hub offers, and what you have
+gaia hub install email --trust
+gaia hub uninstall email
+```
+
 ## Commands worth knowing
 
 ```bash
-gaia-tui                                     # open the hub
-gaia-tui list                                # what the hub offers, and what you have
-gaia-tui list --installed                    # local only, works offline
-gaia-tui install email --trust               # install an agent
-gaia-tui run email                           # chat with it
-gaia-tui run email --query "triage my inbox" # one-shot: answer on stdout
-gaia-tui uninstall email                     # remove it
-gaia-tui status                              # is everything running, and what do I have
+gaia-tui                    # launch straight into the flagship agent's chat
+gaia-tui run <id>           # chat with an agent by id (e.g. email)
+gaia-tui run <id> --query "…"  # one-shot: answer on stdout, exit 0/1/3
+gaia-tui chat --agent <id>  # same idea, via the chat subcommand
+gaia-tui status             # is the background service running, and what do I have
 gaia-tui version
 ```
 
-`--trust` on `install` is not a formality: an agent GAIA has not verified runs
-third-party code on your machine, so the hub refuses until you say so.
+`--bypass-permissions` is available only for agents launched as subprocesses.
+Daemon-backed agents, including a Hub-installed flagship, reject it before
+readiness checks; omit the flag to run with confirmation prompts enabled.
 
 Full command reference: <https://amd-gaia.ai/docs/reference/cli>
 
@@ -113,6 +153,20 @@ already done.
 In the pre-run checks, a condition that cannot be determined renders `[?]`
 rather than a checkmark and never counts as ready — unknown is never treated as
 fine.
+
+## Choosing an AI provider
+
+Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
+**Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
+the masked field; it stays in Lemonade memory until the server restarts. Provider
+settings are shared with other clients of that server. Fireworks suggests
+`fireworks.gemma-4-31b-it` when your account exposes it. AMD Gateway accepts your
+organization's HTTPS endpoint and authentication header.
+
+Type to search discovered models, then press Enter to select. The header shows
+the active provider; remote chat sends conversation history to that provider.
+Embeddings remain on Lemonade. Cloud setup skips downloading a local chat model.
+See [AI providers](../docs/guides/ai-providers.mdx) for key handling and recovery.
 
 ## Testing the harness against Claude
 
@@ -141,8 +195,8 @@ Anthropic to come back a 404 mid-turn.
 is skipped, so `LemonadeServer.exe` is never launched and the first answer is
 not held behind an install. The transcript says so, and says what it costs:
 retrieval, memory and the code index still embed through Lemonade (Anthropic
-has no embeddings API), so those need `gaia init --profile chat
---skip-chat-model`, or `/setup` in the composer, before they work.
+has no embeddings API), so those need `gaia init --skip-chat-model`, or
+`/setup` in the composer, before they work.
 
 Paths that cannot honour the flag say so instead of quietly ignoring it: the
 daemon transport refuses it, `--claude-model` without `--use-claude` refuses,
@@ -150,7 +204,7 @@ and `chat --subprocess` tells you to put the flag in the command line you own.
 
 **Switching models mid-session:** the gaia agent also takes `/model` in the
 chat composer — `/model` alone lists every switchable id (the curated Claude
-5 family, plus whatever Lemonade currently has downloaded), and `/model <id>`
+5 family, downloaded local models, and discovered Fireworks/AMD models), and `/model <id>`
 swaps the live client without losing conversation history or loaded skills.
 Typing the space in `/model ` turns the slash palette into a model picker, so
 the Claude ids are pickable rather than remembered; local ids stay behind bare
@@ -166,7 +220,7 @@ or name a Claude id), never silently answered somewhere else.
 
 Three independent layers, and only one of them has a flag.
 
-**The hub binary** — just rebuild it: `cd tui && go build -o bin/gaia ./cmd/gaia`.
+**The TUI binary** — just rebuild it: `cd tui && go build -o bin/gaia-tui ./cmd/gaia`.
 
 **GAIA core / the daemon** — no flag exists. The daemon serves whichever
 checkout launched it, so you point it at your clone by launching it from an
@@ -182,29 +236,30 @@ The footgun: a per-user daemon keeps serving the checkout that launched it no
 matter which directory you run the CLI from. If your edits do not seem to take,
 that is almost always why.
 
-**An agent from source** — `--mode user` (the default) runs the published frozen
-binary; `--mode dev` runs it from a checkout:
+**An agent from source** — `user` (the default) runs the published frozen
+binary; set the agent's mode environment variable to `dev` on the TUI launch so
+the TUI and daemon request the same checkout:
 
 ```bash
-gaia daemon start-agent email --mode dev [--dev-src-dir <path>]
+GAIA_EMAIL_AGENT_MODE=dev gaia-tui run email
 ```
 
-Dev mode resolves your shell's own checkout (`git rev-parse --show-toplevel`)
-and compares it — never executes it — against the checkout the daemon is
-anchored to; a mismatch is refused loudly, naming both checkouts and the fix.
-`--dev-src-dir` is the explicit escape hatch, and wants the agent's package
-directory (`<clone>/hub/agents/email/python`), not the repo root.
-
+Dev mode resolves the TUI caller's checkout (`git rev-parse --show-toplevel`)
+and sends the agent package directory (`<clone>/hub/agents/email/python`) to
+the daemon. It compares that path — never executes it — against the checkout
+the daemon is anchored to; a mismatch is refused loudly, naming both
+checkouts and the fix. If you start the sidecar manually instead, use the same
+mode with `gaia daemon start-agent email --mode dev`.
 ## An agent that only exists in your clone
 
-**It shows up in the list.** The hub reads `~/.gaia/agents/<id>/.installed`
+**It shows up in `status`.** The catalog reads `~/.gaia/agents/<id>/.installed`
 sentinel files and adds an id it has never seen rather than ignoring it, with
 sparse metadata — a sentinel only proves id and version:
 
 ```bash
 mkdir -p ~/.gaia/agents/myagent
 echo '{"id":"myagent","version":"0.1.0"}' > ~/.gaia/agents/myagent/.installed
-gaia-tui list --installed     # myagent  0.1.0  installed
+gaia-tui status     # lists myagent under "Installed in ~/.gaia/agents"
 ```
 
 **It will not run through the daemon.** Sidecar specs are built into GAIA core
@@ -228,11 +283,21 @@ HOME="$TMPHOME" gaia daemon stop
 rm -rf "$TMPHOME"
 ```
 
+## Clearing a conversation
+
+`/clear` clears the conversation context as well as the visible transcript. The
+flagship keeps its running process, selected model, loaded skills, and permission
+settings. If the agent cannot acknowledge the reset, the transcript remains visible
+with an error. Stored long-term memories are unaffected.
+Legacy `--subprocess` and `--mock` connections clear the view with a visible note
+that their agent-side context is unchanged, because their protocol has no reset.
+
+
 ## The `tui` prefix
 
-A leading `tui` word is accepted and dropped — `gaia-tui tui list` and `gaia-tui
-list` are the same command — so the `gaia tui …` form used elsewhere in the docs
-keeps working.
+A leading `tui` word is accepted and dropped — `gaia-tui tui status` and
+`gaia-tui status` are the same command — so the `gaia tui …` form used
+elsewhere in the docs keeps working.
 
 ## Contributing: colours
 

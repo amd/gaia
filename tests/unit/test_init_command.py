@@ -427,7 +427,10 @@ class TestStartRemedyIsRunnable(unittest.TestCase):
         # systemctl returns immediately — backgrounding it is nonsense.
         self.assertNotIn(f"{self.MODERN_LINUX} &", out)
         if min_ctx:
-            self.assertIn(f"LEMONADE_CTX_SIZE={min_ctx}", out)
+            # A service-managed server takes no context size on the command
+            # line, so the remedy names the size and where to set it instead.
+            self.assertIn(str(min_ctx), out)
+            self.assertIn("model settings", out)
 
     def test_manual_start_prompt_backgrounds_a_blocking_legacy_command(self):
         """A real legacy install DOES block the terminal, and the prompt
@@ -538,7 +541,10 @@ class TestStartRemedyIsRunnable(unittest.TestCase):
         out = buf.getvalue()
         self.assertFalse(result)
         self.assertIn(self.MODERN_LINUX, out)
-        self.assertIn(f"LEMONADE_CTX_SIZE={min_ctx}", out)
+        # Same as above: the size is stated, not passed as an env var, because
+        # restarting a service does not re-read one.
+        self.assertIn(str(min_ctx), out)
+        self.assertIn("model settings", out)
         self.assertNotIn("lemonade-server", out)
 
 
@@ -870,8 +876,9 @@ class TestSkipChatModel(unittest.TestCase):
             with patch(
                 "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
                 return_value=True,
-            ):
+            ) as ensure_ready:
                 result = cmd._verify_setup()
+            ensure_ready.assert_not_called()
             self.assertTrue(result)
             checked = {
                 c.args[0] for c in mock_client.check_model_available.call_args_list
@@ -2037,6 +2044,11 @@ class _HubInstallWiringTestBase(unittest.TestCase):
             ),
             # Never touch the real user's ~/.gaia/config.json during a test.
             patch("gaia.config.GaiaConfig"),
+            # Same reason: _is_hub_agent_available falls back to the install
+            # sentinel under the real ~/.gaia/agents, so without this whether
+            # a developer happens to have run `gaia hub install` would decide
+            # the result of these tests.
+            patch("gaia.hub.installer.read_sentinel", return_value=None),
         ]
         for p in patches:
             p.start()
@@ -2605,10 +2617,10 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
     """AC6/AC7/AC7b/AC8: the pre-branch "GAIA initialization complete!"
     headline (fact 5 -- printed BEFORE any profile branching, in two
     independent Rich/non-Rich copies) must be suppressed exactly when the
-    profile's declared agent is "chat" (covers both the `chat` and `npu`
-    profiles) AND the standalone chat wheel isn't importable -- and must
-    stay byte-identical to today in every other case. Each scenario is
-    exercised against BOTH _print_completion code paths per AC8, since a
+    profile installs a hub agent (the `gaia` flagship, or the `chat` wheel
+    that `chat` and `npu` both declare) AND that wheel isn't importable --
+    and must stay byte-identical to today in every other case. Each scenario
+    is exercised against BOTH _print_completion code paths per AC8, since a
     fix applied to only one copy is the obvious regression.
     """
 
@@ -2617,8 +2629,46 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         with patch("gaia.installer.init_command.LemonadeInstaller"):
             cmd = InitCommand(profile=profile, yes=True)
+        # Two seams, one scenario ("is the agent this profile needs there?").
+        # _chat_agent_available drives the `gaia chat` hint; the headline goes
+        # through _profile_agent_available, which is stubbed at its underlying
+        # probe so its real "does this profile install an agent at all?"
+        # scoping still runs (sd/vlm/minimal must stay unaffected).
         cmd._chat_agent_available = MagicMock(return_value=chat_available)
+        cmd._is_hub_agent_available = MagicMock(return_value=chat_available)
         return cmd
+
+    def test_flagship_profile_unavailable_rich_suppresses_headline(self):
+        """The default profile gets the same gate: `gaia init` must not claim
+        success while the flagship wheel the TUI spawns is still missing."""
+        from gaia.installer import init_command as ic
+
+        if not ic.RICH_AVAILABLE:
+            self.skipTest("rich not installed")
+        cmd = self._make_cmd("gaia", chat_available=False)
+        buf = io.StringIO()
+        cmd.console = ic.Console(file=buf, force_terminal=False, width=300)
+
+        cmd._print_completion()
+
+        self.assertNotIn("GAIA initialization complete!", buf.getvalue())
+
+    def test_flagship_profile_available_rich_reports_complete(self):
+        from gaia.installer import init_command as ic
+
+        if not ic.RICH_AVAILABLE:
+            self.skipTest("rich not installed")
+        cmd = self._make_cmd("gaia", chat_available=True)
+        buf = io.StringIO()
+        cmd.console = ic.Console(file=buf, force_terminal=False, width=300)
+
+        cmd._print_completion()
+
+        out = buf.getvalue()
+        self.assertIn("GAIA initialization complete!", out)
+        # The flagship's own next step -- `gaia chat` runs a different agent
+        # through a wheel this profile never installs.
+        self.assertIn("gaia-tui", out)
 
     # -- AC6: chat/npu profile, chat agent unavailable -> no headline --
 

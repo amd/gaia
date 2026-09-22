@@ -141,6 +141,11 @@ daily timer with no prompt. Off by default — launch with
 `GAIA_EMAIL_BRIEFING_TIME`, 24h local `HH:MM`, default `08:00`), then pull the latest
 run from `GET /v1/email/briefing` with plain `fetch` (no client wrapper yet). 404
 until the first scheduled run; an invalid env value fails sidecar startup loudly.
+The response is a cached run, so it also carries `cache_age_seconds` and `stale`
+(#2759) — `stale` is true once the briefing is at least 24 hours old. **Read them
+and say the age before you show the contents**; the endpoint labels an old briefing
+rather than refusing it or regenerating it, so a host that ignores those two fields
+presents last week's inbox as this morning's.
 
 ## 5. From a renderer (Electron / browser)
 
@@ -414,7 +419,8 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 
 - **Every `/v1/email/*` call needs the session token** (#1706). `sidecar.client`
   carries it automatically; a client you construct yourself must pass `authToken`
-  (from `sidecar.authToken`) or every call is **401**. Non-loopback `Host` → 400,
+  (from `sidecar.authToken`) or every call is **401**. Absent or non-loopback
+  `Host` → 400,
   non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/spec` ·
   `/v1/email/playground` are exempt.
 - **`health()` is liveness-only.** A green `/health` means the REST surface is up,

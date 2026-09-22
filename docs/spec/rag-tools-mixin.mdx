@@ -34,6 +34,46 @@ RAGToolsMixin provides comprehensive document retrieval and query capabilities f
 
 ---
 
+## Host Agent Contract
+
+`RAGToolsMixin` is a mixin, not a base class — it reads state off `self` that it
+never initializes itself. A class mixing it in must set all five attributes
+below before `_register_tools()` runs, or every tool call hits an
+`AttributeError` internally the moment it touches `self.rag` — caught and
+turned into a "temporarily unavailable" fallback response rather than
+surfacing to the caller (see below):
+
+| Attribute | Type | Notes |
+|---|---|---|
+| `self.rag` | `RAGSDK` | The document index and query engine. |
+| `self.indexed_files` | `set` or `list` | Tracks which files are indexed. |
+| `self.max_chunks` | `int` | Default chunk count for retrieval. |
+| `self.current_session` | any, or `None` | `None` is a valid, expected value. |
+| `self.session_manager` | any, or `None` | `None` is a valid, expected value. |
+
+Nothing sets these for you — not the base `Agent` class, not `RAGToolsMixin`
+itself. `ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
+is the reference implementation: it sets all five before calling
+`super().__init__()`, because `_register_tools()` runs inside that call. The
+[custom agent guide](/guides/custom-agent) shows the same pattern for a
+minimal example.
+
+Of the five, only `self.rag` is enforced at the point of use: `query_documents`
+and `query_specific_file` read it through a helper that raises a
+`MissingHostAttributeError` naming the host class, the attribute, and this
+section — instead of letting a bare `AttributeError` get swallowed into a
+"temporarily unavailable" fallback response. `None` remains a valid,
+intentional "RAG disabled" value and does not raise. The other four
+attributes (`indexed_files`, `max_chunks`, `current_session`,
+`session_manager`) are still enforced by convention, matching the reasoning
+in [#3316](https://github.com/amd/gaia/issues/3316): a construction-time
+check was considered and rejected — it would break the Builder's own
+generated agents, run before skill-injected tools exist, and require
+inspecting a process-global tool registry. See the issue for the full
+analysis.
+
+---
+
 ## Requirements
 
 ### Functional Requirements

@@ -114,10 +114,12 @@ def _probe_health(port: int) -> Optional[dict]:
 
 
 def _pid_alive(pid: int) -> bool:
-    """True when *pid* refers to a live process."""
-    import psutil
+    """True when *pid* refers to a live, non-zombie process."""
+    # A zombie leader has already exited — its re-parented child is what still
+    # holds the port, so it belongs on the group-kill path, not the cmdline one.
+    from gaia.daemon.instance import pid_alive
 
-    return psutil.pid_exists(pid)
+    return pid_alive(pid)
 
 
 def _pid_cmdline(pid: int) -> Optional[str]:
@@ -175,7 +177,8 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
       by an innocent process while our orphaned child still serves the port.
       If the cmdline gate fails but the port probe confirms our service, log a
       loud warning and leave both alone.
-    - pid DEAD but the port's ``/health`` answers with our ``service_id`` → the
+    - pid DEAD (a zombie counts as dead — it has already exited) but the port's
+      ``/health`` answers with our ``service_id`` → the
       leader died but a re-parented child survives. POSIX: the process-group id
       survives its leader, so SIGKILL the group using the RECORDED pid as the
       pgid (it was the session leader via ``start_new_session``), then re-probe

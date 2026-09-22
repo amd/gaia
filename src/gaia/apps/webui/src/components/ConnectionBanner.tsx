@@ -216,13 +216,16 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
 
     // Case 2: Backend is up but Lemonade Server is not running
     if (systemStatus && !systemStatus.lemonade_running) {
+        const queryFailed = Boolean(systemStatus.lemonade_error);
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    LLM server is not responding &mdash; it may be busy or not running.{' '}
+                    {queryFailed
+                        ? 'Could not query the LLM server status.'
+                        : 'LLM server is not responding — it may be busy or not running.'}{' '}
                     <span className="connection-banner__hint">
                         {systemStatus.start_command
                             ? <>If not started, run: <code>{systemStatus.start_command}</code></>
@@ -369,13 +372,10 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         >
                             Lemonade
                         </a>
-                        , set ctx&#8209;size to {MIN_CONTEXT_SIZE.toLocaleString()}, or
-                        restart with:{' '}
-                        <code>
-                            {systemStatus?.start_command
-                                ? `${systemStatus.start_command} --ctx-size ${MIN_CONTEXT_SIZE}`
-                                : `LEMONADE_CTX_SIZE=${MIN_CONTEXT_SIZE} (see Settings)`}
-                        </code>
+                        , set ctx&#8209;size to {MIN_CONTEXT_SIZE.toLocaleString()} and reload the model.{' '}
+                        {systemStatus?.start_command
+                            ? <>Restart command: <code>{systemStatus.start_command}</code></>
+                            : systemStatus?.start_instruction}
                     </span>
                 </div>
                 {onRetry && (

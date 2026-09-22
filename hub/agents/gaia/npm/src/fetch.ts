@@ -33,6 +33,7 @@ import {
   type BinaryLockEntry,
   type ComponentName,
   componentBaseUrl,
+  componentLock,
   currentPlatformKey,
   defaultLockPath,
   isPlaceholderSha,
@@ -50,14 +51,81 @@ export function defaultCacheDir(agentVersion: string): string {
   return path.join(os.homedir(), ".gaia", "npm-cache", `gaia-${agentVersion}`);
 }
 
+/** The hub agent id this package installs the sidecar as. */
+export const SIDECAR_AGENT_ID = "gaia";
+
+/** Basename of the hub install record (`gaia.hub.installer.SENTINEL_NAME`). */
+export const INSTALLED_SENTINEL_NAME = ".installed";
+
 /**
  * The daemon's own sidecar cache — `~/.gaia/agents/gaia/`, mirroring
  * `gaia.daemon.sidecars.fetch.default_cache_dir("gaia")`. Staging the verified
  * sidecar here means the daemon's own fetch is a SHA-256 cache hit instead of a
  * second download. This path is a cross-repo contract with the daemon.
  */
-export function daemonSidecarCacheDir(agentId = "gaia"): string {
+export function daemonSidecarCacheDir(agentId = SIDECAR_AGENT_ID): string {
   return path.join(os.homedir(), ".gaia", "agents", agentId);
+}
+
+/**
+ * Whether this fetch produced a runnable local install worth recording.
+ *
+ * `--platform` fetches a binary for a DIFFERENT host — a cross-compile staging
+ * step, not an install. Recording one would hand the daemon a wrong-arch
+ * executable that re-hashes correctly and then fails to exec.
+ */
+function installsForThisHost(component: ComponentName, platformKey: string): boolean {
+  return component === "sidecar" && platformKey === currentPlatformKey();
+}
+
+/**
+ * Record a completed install the way `gaia.hub.installer` does.
+ *
+ * Staging a verified binary is only half the job the CLI claims to do. Without
+ * this file the daemon's `_hub_installed_binary` sees no install, and the TUI
+ * treats `gaia-agent` as its own stdio child — spawning our REST sidecar over
+ * stdio and filling the chat with uvicorn's startup log. With it, the TUI uses
+ * daemon transport and the daemon supervises the process and mints its token.
+ *
+ * Field names and `artifact_kind`/`executable`/`artifact_sha256` are a
+ * cross-repo contract with `InstalledAgent.to_dict()`; the daemon re-hashes the
+ * binary and raises if it does not match `artifact_sha256`, so this must carry
+ * the hash we actually verified.
+ */
+async function writeInstalledSentinel(opts: {
+  outDir: string;
+  version: string;
+  sha256: string;
+  executable: string;
+}): Promise<void> {
+  const sentinel = path.join(opts.outDir, INSTALLED_SENTINEL_NAME);
+  const record = {
+    id: SIDECAR_AGENT_ID,
+    version: opts.version,
+    language: "python",
+    installed_at: new Date().toISOString(),
+    artifact_sha256: opts.sha256,
+    path: opts.outDir,
+    artifact_kind: "binary",
+    executable: opts.executable,
+  };
+  // Temp-then-rename: a truncated sentinel reads as a corrupt install, which
+  // looks identical to "never installed".
+  const tmp = `${sentinel}.tmp.${process.pid}`;
+  try {
+    await fsp.writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await fsp.rename(tmp, sentinel);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw new Error(
+      `verified the sidecar at ${opts.outDir} but could not write its ` +
+        `${INSTALLED_SENTINEL_NAME} record: ${(e as Error).message}. Without it the ` +
+        "daemon does not see a completed install and the TUI falls back to running " +
+        `the sidecar over stdio. Check write permissions on ${opts.outDir}.`,
+      { cause: e },
+    );
+  }
+  log.debug(`wrote ${sentinel} (v${opts.version})`);
 }
 
 export interface FetchOptions {
@@ -103,6 +171,9 @@ function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
+/** Read size for incremental hashing — bounded regardless of artifact size. */
+const HASH_CHUNK_BYTES = 1 << 20;
+
 /**
  * SHA-256 of a file on disk, or null when it is simply absent. Any other error
  * (a permission problem, a directory in the way) is re-raised: reading it as
@@ -110,29 +181,85 @@ function sha256Hex(buf: Buffer): string {
  * less useful message.
  */
 export async function fileSha256(filePath: string): Promise<string | null> {
-  try {
-    return sha256Hex(await fsp.readFile(filePath));
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return null;
-    throw new Error(
+  const unreadable = (e: unknown): Error =>
+    new Error(
       `cannot read the cached binary at ${filePath} to check its hash: ${(e as Error).message}. ` +
         "Fix the permissions on that path, or pass a different --cache-dir / --sidecar-dir.",
       { cause: e },
     );
+
+  let fh: fsp.FileHandle;
+  try {
+    fh = await fsp.open(filePath, "r");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw unreadable(e);
+  }
+  // Chunked, not readFile: this runs on every cache hit, and the sidecar is
+  // ~200MB — buffering it whole is the peak the streaming download removed.
+  try {
+    const hash = crypto.createHash("sha256");
+    const buf = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
+    for (;;) {
+      const { bytesRead } = await fh.read(buf, 0, buf.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buf.subarray(0, bytesRead));
+    }
+    return hash.digest("hex");
+  } catch (e) {
+    throw unreadable(e);
+  } finally {
+    await fh.close();
   }
 }
 
 /**
- * Verify a buffer against an expected SHA-256. Throws `IntegrityError` loudly on
- * mismatch — this is the no-silent-fallback integrity gate.
+ * Stream a response body to `tmp`, hashing as it goes.
+ *
+ * Incremental on purpose: the sidecar is ~200MB and `arrayBuffer()` would peak
+ * at roughly double that. Awaiting each write applies backpressure.
  */
-export function verifySha256(
-  buf: Buffer,
-  expected: string,
-  sourceLabel: string,
-): string {
-  const actual = sha256Hex(buf);
+async function streamToFile(
+  res: Response,
+  tmp: string,
+  url: string,
+): Promise<{ sha256: string; bytes: number }> {
+  if (!res.body) {
+    throw new Error(
+      `download failed: ${url} returned HTTP ${res.status} with no response body. ` +
+        "Check the base URL and that the artifact is published for this platform.",
+    );
+  }
+  const hash = crypto.createHash("sha256");
+  let bytes = 0;
+  let fh: fsp.FileHandle;
+  try {
+    fh = await fsp.open(tmp, "w");
+  } catch (e) {
+    throw new Error(
+      `cannot open ${tmp} to stage the download: ${(e as Error).message}. ` +
+        "Check write permissions on that directory, or pass a different " +
+        "--sidecar-dir / --cache-dir.",
+      { cause: e },
+    );
+  }
+  try {
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      hash.update(chunk);
+      bytes += chunk.byteLength;
+      await fh.write(chunk);
+    }
+  } finally {
+    await fh.close();
+  }
+  return { sha256: hash.digest("hex"), bytes };
+}
+
+/**
+ * Compare an already-computed SHA-256 with the expected one. Throws
+ * `IntegrityError` loudly on mismatch — this is the no-silent-fallback gate.
+ */
+function assertSha256(actual: string, expected: string, sourceLabel: string): string {
   if (actual.toLowerCase() !== expected.toLowerCase()) {
     throw new IntegrityError(
       `SHA-256 mismatch for ${sourceLabel}:\n` +
@@ -145,6 +272,15 @@ export function verifySha256(
     );
   }
   return actual;
+}
+
+/** Verify an in-memory buffer against an expected SHA-256. */
+export function verifySha256(
+  buf: Buffer,
+  expected: string,
+  sourceLabel: string,
+): string {
+  return assertSha256(sha256Hex(buf), expected, sourceLabel);
 }
 
 /**
@@ -196,6 +332,16 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
       // Re-apply the exec bit: an interrupted earlier run or a restrictive umask
       // can leave correct bytes that still cannot be spawned.
       if (process.platform !== "win32") await fsp.chmod(binaryPath, 0o755);
+      // Also on a cache hit: an earlier release staged a verified binary with no
+      // sentinel, and those installs would otherwise never repair themselves.
+      if (installsForThisHost(opts.component, platformKey)) {
+        await writeInstalledSentinel({
+          outDir,
+          version: componentLock(lock, "sidecar").componentVersion,
+          sha256: existing,
+          executable: entry.executable,
+        });
+      }
       return {
         component: opts.component,
         binaryPath,
@@ -211,7 +357,12 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
   const timeoutMs = opts.timeoutMs ?? 300_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let buf: Buffer;
+
+  // Streamed to a temp file while hashing incrementally: the sidecar is ~200MB
+  // and buffering it whole peaks at roughly double that in RSS.
+  const tmp = `${binaryPath}.download.${process.pid}`;
+  let actualSha: string;
+  let bytes: number;
   try {
     const res = await fetchImpl(url, {
       headers: { accept: "application/octet-stream" },
@@ -223,8 +374,9 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
           "Check the base URL and that the artifact is published for this platform.",
       );
     }
-    buf = Buffer.from(await res.arrayBuffer());
+    ({ sha256: actualSha, bytes } = await streamToFile(res, tmp, url));
   } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
     if ((e as Error).name === "AbortError") {
       throw new Error(`download timed out after ${timeoutMs}ms for ${url}`);
     }
@@ -232,23 +384,49 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
   } finally {
     clearTimeout(timer);
   }
-  log.debug(`downloaded ${buf.length} bytes`);
+  log.debug(`downloaded ${bytes} bytes`);
 
-  const sha = verifySha256(buf, entry.sha256, `${opts.component} ${platformKey} (${url})`);
-
-  // Write to a temp then rename, so a crash mid-write never leaves a
-  // half-written file that a later run would treat as a real binary.
-  const tmp = `${binaryPath}.download.${process.pid}`;
+  // Verify BEFORE the rename: unverified bytes must never reach the final path.
+  let sha: string;
   try {
-    await fsp.writeFile(tmp, buf);
-    await fsp.rename(tmp, binaryPath);
+    sha = assertSha256(actualSha, entry.sha256, `${opts.component} ${platformKey} (${url})`);
   } catch (e) {
     await fsp.rm(tmp, { force: true }).catch(() => undefined);
     throw e;
   }
 
-  if (process.platform !== "win32") {
-    await fsp.chmod(binaryPath, 0o755);
+  try {
+    await fsp.rename(tmp, binaryPath);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw new Error(
+      `downloaded and verified the ${opts.component}, but could not move it into place ` +
+        `at ${binaryPath}: ${(e as Error).message}. ` +
+        "The usual cause is that the file is in use — stop any running gaia sidecar " +
+        "or TUI (`gaia kill`) and re-run. Otherwise check write permissions on " +
+        `${outDir}, or pass a different --sidecar-dir / --cache-dir.`,
+      { cause: e },
+    );
+  }
+
+  try {
+    if (process.platform !== "win32") await fsp.chmod(binaryPath, 0o755);
+  } catch (e) {
+    throw new Error(
+      `installed the ${opts.component} at ${binaryPath} but could not make it ` +
+        `executable: ${(e as Error).message}. Run \`chmod +x ${binaryPath}\`, or ` +
+        "pass a --sidecar-dir / --cache-dir you own.",
+      { cause: e },
+    );
+  }
+
+  if (installsForThisHost(opts.component, platformKey)) {
+    await writeInstalledSentinel({
+      outDir,
+      version: componentLock(lock, "sidecar").componentVersion,
+      sha256: sha,
+      executable: entry.executable,
+    });
   }
 
   log.info(`installed verified ${opts.component} -> ${binaryPath}`);

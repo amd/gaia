@@ -402,7 +402,7 @@ def test_stop_running_shuts_down_and_verifies_pid_gone(monkeypatch):
 
     import gaia.daemon.sidecars.registry as registry_mod
 
-    monkeypatch.setattr(registry_mod.psutil, "pid_exists", lambda pid: False)
+    monkeypatch.setattr(registry_mod, "pid_alive", lambda pid: False)
     result = reg.stop("toy-a")
     assert result["state"] == "stopped"
 
@@ -416,10 +416,28 @@ def test_stop_survivor_pid_raises_stop_failed_error(monkeypatch):
     import gaia.daemon.sidecars.registry as registry_mod
 
     # shutdown() "succeeds" but the pid stubbornly still exists afterward.
-    monkeypatch.setattr(registry_mod.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(registry_mod, "pid_alive", lambda pid: True)
     with pytest.raises(StopFailedError) as exc_info:
         reg.stop("toy-a")
     assert str(ensured["pid"]) in str(exc_info.value)
+
+
+def test_stop_treats_an_unreaped_zombie_as_gone(monkeypatch):
+    """A killed sidecar the OS has not reaped yet still has a pid, and
+    ``psutil.pid_exists`` calls that alive — which would 500 an uninstall for a
+    process that has already exited. Liveness must exclude zombies (#3228)."""
+    import psutil
+
+    reg = _make_registry({"toy-a": _TOY_A})
+    ensured = reg.ensure("toy-a")
+
+    class _Zombie:
+        def status(self):
+            return psutil.STATUS_ZOMBIE
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: pid == ensured["pid"])
+    monkeypatch.setattr(psutil, "Process", lambda pid: _Zombie())
+    assert reg.stop("toy-a")["state"] == "stopped"
 
 
 def test_shutdown_all_stops_every_running_manager():
@@ -773,6 +791,72 @@ def test_reap_stale_dead_leader_live_child_group_kills_pid_as_pgid(
     assert result == [4242]
     assert group_killed == [4242]
     assert killed == []  # never the live-pid path for a dead leader
+    assert ledger.read_entries() == []
+
+
+def _fake_pid_status(monkeypatch, status):
+    """Make every pid exist with process status *status* (real `_pid_alive`)."""
+    import psutil
+
+    class _FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def status(self):
+            return status
+
+        def cmdline(self):
+            return []  # a zombie's cmdline reads empty on Linux
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProcess)
+
+
+def test_pid_alive_excludes_zombies(monkeypatch):
+    # A zombie has exited and is only waiting to be reaped — not alive.
+    import psutil
+
+    from gaia.daemon.sidecars import ledger
+
+    _fake_pid_status(monkeypatch, psutil.STATUS_ZOMBIE)
+    assert ledger._pid_alive(4321) is False
+
+    _fake_pid_status(monkeypatch, psutil.STATUS_RUNNING)
+    assert ledger._pid_alive(4321) is True
+
+
+def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeypatch):
+    # An unreaped leader has already exited, so its re-parented child is what
+    # still serves the port: group-kill, NOT the "pid reused, leave it" branch.
+    import psutil
+
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="toy-a",
+        pid=4246,
+        port=51005,
+        mode="user",
+        argv=["/path/to/toy-a-agent", "--port", "51005"],
+        started_at=1.0,
+    )
+
+    killed = []
+    group_killed = []
+    _fake_pid_status(monkeypatch, psutil.STATUS_ZOMBIE)
+    monkeypatch.setattr(ledger.os, "name", "posix")
+    monkeypatch.setattr(
+        ledger,
+        "_probe_health",
+        lambda port: {"service": "gaia-agent-toy-a"} if port == 51005 else None,
+    )
+    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
+    monkeypatch.setattr(ledger, "_group_kill", lambda pid: group_killed.append(pid))
+
+    result = ledger.reap_stale(_reap_specs())
+    assert result == [4246]
+    assert group_killed == [4246]
+    assert killed == []
     assert ledger.read_entries() == []
 
 

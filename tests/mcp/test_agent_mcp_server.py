@@ -20,8 +20,13 @@ from typing import Any, Dict, List
 
 import pytest
 
-from gaia.agents.base.mcp_agent import MCPAgent
-from gaia.mcp.agent_mcp_server import AgentMCPServer
+try:
+    from mcp.server import MCPServer  # noqa: F401
+except ImportError:
+    pytest.skip("mcp 2.x SDK not installed", allow_module_level=True)
+
+from gaia.agents.base.mcp_agent import MCPAgent  # noqa: E402
+from gaia.mcp.agent_mcp_server import AgentMCPServer  # noqa: E402
 
 # ============================================================================
 # TEST: MCPAgent Abstract Interface

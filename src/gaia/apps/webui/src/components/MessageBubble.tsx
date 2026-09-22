@@ -115,85 +115,137 @@ function isErrorContent(content: string): boolean {
 const TOOL_CALL_JSON_RE = /\s*\{\s*"?tool"?\s*:\s*"[^"]+"\s*,\s*"?tool_args"?\s*:\s*\{[^}]*\}\s*\}/g;
 
 /**
- * Strip raw tool-call JSON and other LLM noise from message content.
- * LLMs sometimes emit the tool call as text before the agent framework
- * intercepts it. They also sometimes output trailing code fences,
- * thinking tags, or JSON thought blocks. This function cleans all of that.
+ * Keys that belong to the agent's JSON envelope. An object made up only of
+ * these is machinery; an object that mixes them with anything else is content.
  */
+const ENVELOPE_KEYS = new Set(['thought', 'answer', 'tool', 'tool_args', 'goal']);
+
+/** An envelope always opens with one of its own keys — cheap gate before parsing. */
+const ENVELOPE_OPENER_RE = /^\{\s*"(thought|answer|tool|tool_args|goal)"\s*:/;
+
+/** Index of the `}` matching the `{` at `start`, or -1 if unbalanced. Braces inside JSON strings don't count. */
+function findMatchingBrace(text: string, start: number): number {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === '\\') escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
 /**
- * Find and remove/extract LLM JSON blocks from output.
- * Detects {"thought":...}, {"answer":...}, {"tool":...} patterns.
- * Blocks with "tool"/"tool_args" are removed entirely.
- * Blocks with "answer" have the answer text extracted and kept.
- * Blocks with "thought" only are removed (shown in agent activity).
+ * Pull the `answer` string out of a block JSON.parse rejected — models emit
+ * literal newlines inside string values, which is not valid JSON.
+ * Returns null when the block carries no `answer` field.
  */
-function cleanLLMJsonBlocks(text: string): string {
-    // Markers that indicate an LLM JSON block we should process
-    const MARKERS = ['"thought"', '"answer"', '"tool"'];
+function extractAnswerField(block: string): string | null {
+    const answerKeyIdx = block.indexOf('"answer"');
+    if (answerKeyIdx === -1) return null;
+    const colonIdx = block.indexOf(':', answerKeyIdx + 8);
+    if (colonIdx === -1) return null;
+    let start = colonIdx + 1;
+    while (start < block.length && /\s/.test(block[start])) start++;
+    if (start >= block.length || block[start] !== '"') return null;
+    let content = block.slice(start + 1);
+    if (content.endsWith('"}')) content = content.slice(0, -2);
+    else if (content.endsWith('"')) content = content.slice(0, -1);
+    return content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
+}
+
+type EnvelopeVerdict =
+    | { action: 'drop' }
+    | { action: 'answer'; text: string }
+    | { action: 'keep' };
+
+/**
+ * Decide what a `{...}` region is. Only a complete agent envelope is removed or
+ * unwrapped; anything a user or model could have written as a JSON example —
+ * including one with a `tool` key — is kept verbatim.
+ */
+function classifyEnvelope(block: string): EnvelopeVerdict {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(block);
+    } catch {
+        const answer = extractAnswerField(block);
+        if (answer !== null) return { action: 'answer', text: answer };
+        // A malformed tool call is still machinery; anything else stays visible.
+        if (block.includes('"tool_args"')) return { action: 'drop' };
+        return { action: 'keep' };
+    }
+
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { action: 'keep' };
+    }
+    const obj = parsed as Record<string, unknown>;
+    const keys = Object.keys(obj);
+    const envelopeOnly = keys.length > 0 && keys.every((k) => ENVELOPE_KEYS.has(k));
+
+    if (typeof obj.tool === 'string' && obj.tool_args !== undefined) return { action: 'drop' };
+    if (typeof obj.answer === 'string' && envelopeOnly) return { action: 'answer', text: obj.answer };
+    if (typeof obj.thought === 'string' && obj.answer === undefined && envelopeOnly) {
+        return { action: 'drop' };
+    }
+    return { action: 'keep' };
+}
+
+/**
+ * Remove agent JSON envelopes from assistant output, keeping their `answer` text.
+ *
+ * Primary filtering is server-side (sse_handler.py); this is the safety net for
+ * history persisted before that filter existed. A finished message is never
+ * truncated: an unbalanced `{` (a shell one-liner, a code snippet) emits the
+ * remaining text verbatim. Only while streaming is an unclosed envelope held
+ * back, so a tool call does not flash on screen before its closing brace lands.
+ */
+function cleanLLMJsonBlocks(text: string, streaming: boolean): string {
     let result = '';
     let i = 0;
 
     while (i < text.length) {
         const braceIdx = text.indexOf('{', i);
-        if (braceIdx === -1) { result += text.slice(i); break; }
-
-        // Check if this brace starts an LLM JSON block
-        const lookAhead = text.slice(braceIdx, braceIdx + 50);
-        const isLLMBlock = MARKERS.some((m) => lookAhead.includes(m));
-        if (!isLLMBlock) {
+        if (braceIdx === -1) {
+            result += text.slice(i);
+            break;
+        }
+        if (!ENVELOPE_OPENER_RE.test(text.slice(braceIdx, braceIdx + 40))) {
             result += text.slice(i, braceIdx + 1);
             i = braceIdx + 1;
             continue;
         }
-
-        // Found a potential LLM JSON block — find matching closing brace
+        const closeIdx = findMatchingBrace(text, braceIdx);
+        if (closeIdx === -1) {
+            result += streaming ? text.slice(i, braceIdx) : text.slice(i);
+            break;
+        }
         result += text.slice(i, braceIdx);
-        let depth = 0;
-        let j = braceIdx;
-        for (; j < text.length; j++) {
-            if (text[j] === '{') depth++;
-            else if (text[j] === '}') { depth--; if (depth === 0) break; }
-        }
-        if (depth !== 0) { break; } // suppress partial/unclosed JSON block
 
-        const block = text.slice(braceIdx, j + 1);
-        try {
-            const parsed = JSON.parse(block);
-            if (parsed.answer) {
-                // Extract the answer content — this is the useful text
-                result += parsed.answer;
-            }
-            // thought-only and tool/tool_args blocks are dropped silently
-        } catch {
-            // JSON.parse failed — LLM likely emitted literal newlines inside string
-            // values (e.g. {"thought":"...", "goal":"...", "answer":"line1\nline2"}).
-            // Find the "answer" field anywhere in the block and extract its content.
-            const answerKeyIdx = block.indexOf('"answer"');
-            if (answerKeyIdx !== -1) {
-                const colonIdx = block.indexOf(':', answerKeyIdx + 8);
-                if (colonIdx !== -1) {
-                    let start = colonIdx + 1;
-                    while (start < block.length && /\s/.test(block[start])) start++;
-                    if (start < block.length && block[start] === '"') {
-                        let content = block.slice(start + 1);
-                        // Strip closing "} or trailing " from JSON envelope
-                        if (content.endsWith('"}')) {
-                            content = content.slice(0, -2);
-                        } else if (content.endsWith('"')) {
-                            content = content.slice(0, -1);
-                        }
-                        result += content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
-                    }
-                }
-            }
-            // Blocks without "answer" (thought-only, tool blocks) are dropped silently
-        }
-        i = j + 1;
+        const block = text.slice(braceIdx, closeIdx + 1);
+        const verdict = classifyEnvelope(block);
+        if (verdict.action === 'answer') result += verdict.text;
+        else if (verdict.action === 'keep') result += block;
+        i = closeIdx + 1;
     }
     return result;
 }
 
-/** Known programming language identifiers that should keep code block rendering. */
+/**
+ * Real language tags. Only consulted for 1-2 character tags, so genuine short
+ * languages (c, r, go, js) keep their fence while a stray ```i does not.
+ */
 const KNOWN_CODE_LANGS = new Set([
     'python', 'py', 'javascript', 'js', 'typescript', 'ts', 'java', 'c', 'cpp',
     'csharp', 'cs', 'go', 'rust', 'ruby', 'rb', 'php', 'swift', 'kotlin',
@@ -214,32 +266,28 @@ const KNOWN_CODE_LANGS = new Set([
 ]);
 
 /**
- * Strip bogus code fences from LLM output.
+ * Unwrap fences whose language tag is obvious garbage.
  *
- * Local LLMs (especially Qwen-Coder) frequently wrap prose responses in
- * fenced code blocks with fake 1-2 char "languages" like ```i or ```a.
- * This strips fences whose language tag is NOT a known programming language,
- * unwrapping the content back to plain markdown. Real code blocks
- * (```python, ```bash, etc.) are preserved.
+ * Local LLMs (especially Qwen-Coder) sometimes wrap prose in a fence tagged
+ * with a single stray letter (```i, ```a). Only those are unwrapped: a tag of
+ * 1-2 characters that is not a real language. Every other tag keeps its fence,
+ * including an empty one — a tag list can never keep up with what people write
+ * (shell, console, mermaid, jsonc, env, hcl), and unwrapping a real block turns
+ * `# comment` into a heading and swallows `<tag>`.
  */
 function stripBogusCodeFences(text: string): string {
-    // Match fenced blocks: ```<lang>\n...\n```
-    // Replace bogus ones (unknown lang) with just their inner content
     return text.replace(
         /```(\w*)[ \t]*\n([\s\S]*?)```/g,
-        (_match, lang: string, inner: string) => {
+        (match, lang: string, inner: string) => {
             const langLower = lang.toLowerCase();
-            // Keep fences with known code languages
-            if (langLower && KNOWN_CODE_LANGS.has(langLower)) {
-                return _match;
-            }
-            // Strip the fence — return inner content as plain markdown
-            return inner.trim();
+            const isStrayLetter =
+                langLower.length > 0 && langLower.length <= 2 && !KNOWN_CODE_LANGS.has(langLower);
+            return isStrayLetter ? inner.trim() : match;
         },
     );
 }
 
-function cleanToolCallContent(content: string): string {
+function cleanToolCallContent(content: string, streaming = false): string {
     if (!content) return content;
     let cleaned = content;
 
@@ -249,7 +297,7 @@ function cleanToolCallContent(content: string): string {
     // Remove/extract LLM JSON blocks (thought, answer, tool) from output.
     // These have nested braces so we use a brace-depth parser instead of regex.
     // Blocks with "answer" have their answer text extracted; others are removed.
-    cleaned = cleanLLMJsonBlocks(cleaned);
+    cleaned = cleanLLMJsonBlocks(cleaned, streaming);
 
     // Remove <think>...</think> tags that some models output
     cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
@@ -304,11 +352,13 @@ function formatLatency(ms: number): string {
 
 export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
-    // Memoize the expensive LLM content cleaning (brace-depth parser) so it
-    // doesn't re-run on every render — only when message content changes.
+    // What the user typed is never agent output — render it verbatim.
+    // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
-        () => cleanToolCallContent(message.content),
-        [message.content],
+        () => (message.role === 'user'
+            ? message.content
+            : cleanToolCallContent(message.content, Boolean(isStreaming))),
+        [message.content, message.role, isStreaming],
     );
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);

@@ -34,8 +34,14 @@ func (m ChatModel) turnMetricsBlock(msg *Message) string {
 		shortTurnID(t.TurnID), clockOf(t.StartedAt), clockOf(t.EndedAt), t.TotalS)
 	lines = append(lines, header)
 
-	lines = append(lines, fmt.Sprintf("model %.1fs · tools %.1fs · overhead %.1fs",
-		t.Totals.LLMS, t.Totals.ToolS, t.Totals.OverheadS))
+	split := fmt.Sprintf("model %.1fs · tools %.1fs · overhead %.1fs",
+		t.Totals.LLMS, t.Totals.ToolS, t.Totals.OverheadS)
+	// Only when someone was actually asked to approve something — on every
+	// other turn the figure is zero and the word "waiting" is just noise.
+	if t.Totals.WaitingOnUserS > 0 {
+		split += fmt.Sprintf(" · waiting on you %.1fs", t.Totals.WaitingOnUserS)
+	}
+	lines = append(lines, split)
 
 	in, cached, fresh := turnTokenSplit(t)
 	tokenLine := fmt.Sprintf("in %s tok (%s cached, %s new · %s hit) · out %s tok",
@@ -101,6 +107,9 @@ func stepLines(t *event.CanonicalTurnStats) []string {
 	toolsByStep := map[int][]string{}
 	for _, c := range t.ToolCalls {
 		label := fmt.Sprintf("%s %.1fs", c.Name, c.WallS)
+		if c.WaitedS > 0 {
+			label += fmt.Sprintf(" (+%.1fs waiting on you)", c.WaitedS)
+		}
 		if !c.OK {
 			label += " ✗"
 		}
@@ -110,8 +119,15 @@ func stepLines(t *event.CanonicalTurnStats) []string {
 	lines := make([]string, 0, len(t.LLMCalls))
 	for _, c := range t.LLMCalls {
 		stepIn, stepCached := callTokenSplit(c)
-		row := fmt.Sprintf("step %-2d %5.1fs  ttft %4.1fs  in %s (%s cached)",
-			c.Step, c.WallS, c.TTFTS, commas(stepIn), commas(stepCached))
+		// A backend that reports no ttft (Claude does not) must read as absent,
+		// not as an instant first token. Printing 0.0s there is the fake zero
+		// the recorder deliberately avoids emitting.
+		ttft := "   --"
+		if c.TTFTS > 0 {
+			ttft = fmt.Sprintf("%4.1fs", c.TTFTS)
+		}
+		row := fmt.Sprintf("step %-2d %5.1fs  ttft %s  in %s (%s cached)",
+			c.Step, c.WallS, ttft, commas(stepIn), commas(stepCached))
 		// Prefill rate over the tokens the server actually had to read. Far
 		// above the cold rate means the cache prefix was accepted.
 		if c.PrefillTokPerS > 0 {

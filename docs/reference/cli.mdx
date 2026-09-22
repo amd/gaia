@@ -122,7 +122,7 @@ Each tool call is bounded so a hung tool (e.g. a stuck connector or network requ
 export GAIA_AGENT_TOOL_TIMEOUT=300
 ```
 
-Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
+Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. For relayed agent queries, the same variable also extends the SSE idle-read budget in the daemon relay, API host, and thin client. That transport budget remains at least **300 seconds** and adds a 60-second grace period above a larger configured tool timeout so the sidecar can return its own timeout error. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
 
 ### Confirming dangerous tools
 
@@ -186,7 +186,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, email, npu, all) |
+| `--profile, -p` | string | gaia | Profile to initialize (gaia, minimal, sd, chat, rag, mcp, vlm, email, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -207,10 +207,10 @@ canonical choices list):
 
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
+| `gaia` **(default)** | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | The flagship [GAIA agent](/guides/gaia) — chat, documents, data, web, memory | ~4 GB |
 | `minimal` | Gemma-4-E4B-it-GGUF | Fast setup with Gemma 4 E4B multimodal model | ~3 GB |
 | `sd` | SDXL-Turbo, Gemma-4-E4B-it-GGUF | Image generation with multi-modal AI (LLM + SD) | ~10 GB |
-| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support | ~4 GB |
-| `code` | Gemma-4-E4B-it-GGUF | Autonomous coding assistant | ~3 GB |
+| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support (the flagship's base class, without the flagship itself) | ~4 GB |
 | `rag` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~4 GB |
 | `mcp` | _(none)_ | Sets up the MCP servers config (`~/.gaia/mcp_servers.json`) — no Lemonade install or model downloads | – |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~3 GB |
@@ -219,17 +219,21 @@ canonical choices list):
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
-`gaia init` sets up Lemonade + models only — it does not install the flagship [GAIA
-agent](/guides/gaia) or its terminal UI (`gaia-tui`). Get both with
-`npx @amd-gaia/gaia` (fetches and verifies both binaries, no Python required) or, from a
-checkout, `uv pip install -e hub/agents/gaia/python`. See the
-[flagship installer plan](/plans/flagship-installer) for how the two pieces fit together
-and current release status.
+A bare `gaia init` runs the `gaia` profile: Lemonade, the chat model, the RAG/memory
+embedder, and the flagship [GAIA agent](/guides/gaia) itself from the Agent Hub. It does
+**not** install the terminal UI (`gaia-tui`) — get that with `npx @amd-gaia/gaia`, which
+fetches and verifies both binaries with no Python required.
+</Note>
+
+<Note>
+`gaia init` picks the profile on the *agent* axis only. NPU users must still ask for the
+device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
+their FLM equivalents — the default never switches your backend for you.
 </Note>
 
 <Note>
 The `talk` agent relies on the `chat` profile — there is no dedicated `talk`
-profile. Run `gaia init --profile chat` (or `all`) to prepare its dependencies.
+profile. The default `gaia` profile is a superset, so a bare `gaia init` covers it.
 </Note>
 
 <Note>
@@ -247,16 +251,12 @@ gaia init
 gaia init --minimal
 ```
 
-```bash Code Development
-gaia init --profile code
-```
-
 ```bash Vision Pipeline (Lightweight)
 gaia init --profile vlm
 ```
 
 ```bash Non-Interactive CI/CD
-gaia init --profile chat --yes
+gaia init --yes
 ```
 
 ```bash Remote Lemonade Server
@@ -364,7 +364,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + config + logs |
+| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
@@ -375,14 +375,14 @@ gaia uninstall [OPTIONS]
 
 <CodeGroup>
 ```bash Preview
-gaia uninstall --dry-run
+gaia uninstall --purge --dry-run
 ```
 
 ```bash Remove Python Environment Only
 gaia uninstall --venv
 ```
 
-```bash Full Purge (venv + chats + documents + config)
+```bash Full Purge (venv + chats + documents + embedded Lemonade + config)
 gaia uninstall --purge
 ```
 
@@ -396,8 +396,16 @@ gaia uninstall --purge --purge-lemonade --yes
 </CodeGroup>
 
 <Warning>
-`--purge` permanently deletes your chat history, uploaded documents, and configuration. Use `--dry-run` first to preview what will be removed.
+`--purge` permanently deletes your chat history, uploaded documents, configuration,
+and embedded Lemonade downloads. Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
 </Warning>
+
+<Note>
+`GAIA_HOME` moves the directory this command deletes into, and the resolved path is printed above the plan and in the `--purge` confirmation prompt. It must name a directory GAIA owns, and **both `--venv` and `--purge` check this** before deleting anything:
+
+- If it resolves to your home directory, a directory containing it, or a drive root, `gaia uninstall` refuses and exits `64` rather than deleting `$GAIA_HOME/documents` — which on Windows and macOS is your real `Documents` folder.
+- An existing `$GAIA_HOME` must also be named `.gaia` or hold something GAIA created (`config.json`, `chat/`, `lemonade/`, `memory.db`, …). A bare `venv/` does not count, so neither tier will eat the virtualenv of a project directory that `GAIA_HOME` happens to point at. A `$GAIA_HOME` that does not exist yet is a no-op, not an error.
+</Note>
 
 ### Kill Command
 
@@ -412,7 +420,7 @@ gaia kill [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--lemonade` | flag | Kill Lemonade Server and child processes |
-| `--port` | integer | Kill process on specific port |
+| `--port` | integer | Kill the GAIA/Lemonade process listening on a specific port |
 
 **Examples:**
 
@@ -428,6 +436,10 @@ gaia kill --port 8080
 
 <Note>
 On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
+</Note>
+
+<Note>
+`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. Both stop paths for the API server — `gaia api stop` and `python -m gaia.api.app stop` — use the same targeting.
 </Note>
 
 ### Agent Command
@@ -603,12 +615,11 @@ automatically:
 
 ```bash From PyPI (pip)
 pip install gaia-agent-email          # one agent
-pip install "amd-gaia[agents]"            # every AMD production agent
 ```
 
 <Note>
 PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
-[#2240](https://github.com/amd/gaia/issues/2240)), so the commands above don't
+[#2240](https://github.com/amd/gaia/issues/2240)), so the command above doesn't
 resolve yet. Until publishing lands, install an agent straight from this repo:
 
 ```bash From source (works today)
@@ -780,6 +791,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device — selects the model and backend for this session |
 | `--mcp-tool-limit` | integer | 50 | Maximum MCP tools to register. Larger tool sets bloat the system prompt and degrade small-model tool-calling accuracy — keep as low as your workflow allows |
 | `--allowed-paths` | path(s) | - | Restrict RAG/file tools to these directories (security sandbox) |
+| `--no-learned-skills` | flag | false | Run with no learned skill changes applied. Skills compose exactly as authored, so the prompt is byte-identical to a build with no overlay. Not supported with `--ui` |
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
@@ -998,7 +1010,7 @@ gaia talk -i guide.pdf --no-tts
 </Card>
 
 ```bash
-gaia telegram start --token <BOT_TOKEN> --background
+gaia telegram start --token <BOT_TOKEN> --allowed-users 11111111 --background
 gaia telegram status
 gaia telegram stop
 ```
@@ -1008,11 +1020,12 @@ gaia telegram stop
 | Subcommand | Option | Default | Description |
 |-----------|--------|---------|-------------|
 | `start` | `--token` (required) | – | Telegram bot token. |
-| `start` | `--allowed-users` | allow all | Comma-separated user IDs permitted to interact. |
+| `start` | `--allowed-users` (required) | – | Comma-separated numeric user IDs permitted to interact. Starting without one is refused — a bot with no allowlist is reachable by every Telegram user. |
 | `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
+| `start` | `--health-port` | 8768 | Health server port (background mode). |
 | `stop` | `--force` | false | Force stop if graceful shutdown fails. |
 | `status` | `--health-host` | 127.0.0.1 | Health server host. |
-| `status` | `--health-port` | 8765 | Health server port. |
+| `status` | `--health-port` | 8768 | Health server port. |
 
 [→ Telegram Adapter Guide](/guides/telegram-adapter)
 
@@ -1069,8 +1082,11 @@ curl http://localhost:8080/health
     gaia api start --debug
     ```
 
-    Custom host/port:
+    Custom host/port. Binding beyond loopback is refused unless
+    `GAIA_API_KEY` is set, since the agent loop would otherwise be open to the
+    network ([Authentication](/sdk/infrastructure/api-server#authentication)):
     ```bash
+    export GAIA_API_KEY=$(openssl rand -hex 32)
     gaia api start --host 0.0.0.0 --port 8888
     ```
 
@@ -1238,6 +1254,15 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
 
+##### Browser origins
+
+A web page can reach `http://localhost:8765` from the user's own browser, so
+the bridge refuses any request whose `Origin` is not loopback (`localhost`,
+`127.0.0.1`, `[::1]`) with **403**, and never answers
+`Access-Control-Allow-Origin: *`. Clients that send no `Origin` — curl, MCP
+clients, n8n — are unaffected. To allow a browser app on another origin, list
+it in `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
+
 ##### Authentication
 
 The bridge is **unauthenticated by default**. Anything that can reach the port
@@ -1333,7 +1358,7 @@ gaia connectors <subcommand> [OPTIONS]
 | `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys, OAuth client creds) |
 | `test <id>` | Run a health check for a configured connector |
-| `disconnect <id>` | Remove credentials and reset a connector's state |
+| `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
 | `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
 
@@ -1394,7 +1419,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt` |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 
@@ -1405,6 +1430,11 @@ For `gaia chat`, `gaia llm`, and `gaia prompt`, the model is resolved highest-wi
 1. An explicit `--model <id>` flag
 2. `default_model` from `~/.gaia/config.json`
 3. The command's built-in default (`DEFAULT_MODEL_NAME`)
+
+The Agent UI resolves a new session's model the same way: an explicit pick
+in the UI wins, then `default_model`, then the built-in floor. So
+`gaia config set default_model <id>` also changes what a brand-new "New
+Chat" lands on, not just the CLI.
 
 So `gaia config set default_model <id>` lets you skip `--model` entirely, while
 `--model` still overrides it for a single run. For `gaia chat`, passing an
@@ -1523,6 +1553,122 @@ lemonade-server pull MODEL_NAME [OPTIONS]
 <Tip>
 Use `lemonade-server list` to see all available models and their download status.
 </Tip>
+
+---
+
+## Embedded Lemonade
+
+GAIA can run its own private Lemonade Server instead of the machine-wide install.
+Nothing else on the machine can reach it: it binds a port picked at start time and
+requires an API key GAIA generates, so two apps never fight over one server.
+
+This is the self-contained path — GAIA downloads the server itself, no installer
+and no admin rights. The system-wide install (`gaia init`) is unaffected and keeps
+serving everything else.
+
+```bash
+gaia lemonade embedded start      # download if needed, then run
+gaia lemonade embedded status
+gaia lemonade embedded stop
+gaia lemonade embedded uninstall  # remove the runtime and downloaded backends
+```
+
+Both the port and the API key change on every start, and requests without the key
+get a 401. `start` writes them to a file you source rather than printing the key,
+so the secret never lands in terminal scrollback, shell history or a CI log:
+
+```
+✅ Embedded Lemonade 11.8.1 running on http://localhost:62232/api/v1
+   pid 26080   logs: ~/.gaia/lemonade/lemond.log
+
+   The instance is private. Load its URL and API key with:
+   source ~/.gaia/lemonade/env.sh
+```
+
+The file sets `LEMONADE_BASE_URL` and `LEMONADE_API_KEY`, is owner-readable only,
+and is deleted on `stop` — credentials naming a dead port are worse than none,
+since whatever grabs that port next would inherit the trust. On Windows it is
+`env.ps1`, loaded with `. $HOME\.gaia\lemonade\env.ps1`.
+
+<Note>
+GAIA agents do not pick the embedded instance up on their own yet — source that
+file to point them at it. Automatic preference is coming with the startup wiring.
+</Note>
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `start` | Start the private instance, downloading the artifact if missing |
+| `stop` | Stop the private instance |
+| `status` | Show installed version, running port, and installed backends |
+| `uninstall` | Remove the private runtime and downloaded backends |
+| `install` | Download and unpack the artifact without starting it |
+| `install-backend SPEC` | Download an inference backend, e.g. `llamacpp:vulkan` |
+
+**`start` options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--port` | integer | auto | Port to bind; a free one is chosen when omitted |
+| `--no-install` | flag | false | Fail instead of downloading a missing artifact |
+| `--timeout` | float | 60 | Seconds to wait for the server to become healthy |
+
+**`install` options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--force` | flag | false | Re-download and unpack even if already installed. Refuses while an instance is running — stop it first |
+
+### Inference backends
+
+The downloaded server is small (~5 MB) and ships **no inference backend** — those
+are fetched separately, and only the ones your hardware needs:
+
+| Backend | Size | Covers |
+|---------|------|--------|
+| `llamacpp:cpu` | ~45 MB | CPU inference |
+| `llamacpp:vulkan` | ~96 MB | AMD iGPU / dGPU |
+| `flm:npu` | ~169 MB | Ryzen AI NPU |
+| `llamacpp:rocm` | ~4.3 GB | ROCm, including a per-GPU runtime |
+
+GAIA's default models (`Gemma-4-E4B-it-GGUF`, `embeddinggemma-300m`) run on the
+`llamacpp` backends, so CPU + Vulkan is enough for the common case:
+
+```bash
+gaia lemonade embedded install-backend llamacpp:vulkan
+```
+
+### Where it stores things
+
+Everything lives under `~/.gaia/lemonade` (or `$GAIA_HOME/lemonade`):
+
+| Path | Contents |
+|------|----------|
+| `dist/<version>/` | The unpacked server for one version |
+| `cache/` | Downloaded backends (`bin/`), shared across versions |
+| `config/config.json` | Server configuration |
+| `state.json` | The running instance: pid, port, API key (owner-only) |
+| `env.sh` / `env.ps1` | Sourceable credentials, removed on `stop` (owner-only) |
+| `lemond.log` | Server output — read this first when `start` fails |
+
+Downloaded **models** are not duplicated: the embedded server reads the same
+Hugging Face cache as every other Lemonade install, so models you already have
+are picked up immediately.
+
+<Note>
+`cache/` is deliberately shared across versions. Backends run from 141 MB to
+4.3 GB, so a Lemonade version bump re-downloads the 5 MB server, not the backends.
+`gaia uninstall --purge` and `gaia lemonade embedded uninstall` remove this
+directory, including those downloaded backends.
+</Note>
+
+After a Lemonade version bump, stop the old instance before starting the new one —
+`start` refuses rather than silently leaving the previous version serving:
+
+```bash
+gaia lemonade embedded stop && gaia lemonade embedded start
+```
 
 ---
 
@@ -1664,6 +1810,21 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 </Note>
 
 [→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
+
+---
+
+### Flagship Agent Tasks
+
+Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, quality, honesty, tokens, steps and runtime, against main's committed results.
+
+```bash
+gaia eval tasks run --suite core                   # Run the core tasks, then judge them
+gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
+gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
+gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
+```
+
+[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks)
 
 ---
 
@@ -1824,6 +1985,7 @@ Author and manage agent skills. A skill is a directory whose only required file 
 
 ```bash
 gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
+gaia skill deltas <name> [OPTIONS]                                # what an agent LEARNED
 gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
 gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
 ```
@@ -1884,6 +2046,36 @@ Skills are discovered from three roots, highest precedence first:
     | `--body` | Also print the Markdown instructions |
 
     Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
+  </Tab>
+
+  <Tab title="deltas">
+    ```bash
+    gaia skill deltas <name> [--pending | --archived] [--diff] [--json] [--scope AGENT]
+    gaia skill deltas <name> --approve <id> | --revert <id> | --reset
+    gaia skill deltas <name> --scope AGENT --drop-section <slug>
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--pending` | Show staged changes, if anything ever staged one (an agent's own writes apply directly) |
+    | `--archived` | Show changes reverted with `--revert` or `--reset` |
+    | `--diff` | Unified diff of the shipped skill vs the one this agent runs |
+    | `--scope` | Agent the changes belong to (default: every scope) |
+    | `--approve` | Activate a staged change |
+    | `--revert` | Archive one learned change — listed by `--archived`, never deleted |
+    | `--reset` | Archive **every** learned change, back to the shipped skill |
+    | `--drop-section` | Remove a section this agent never needs (the model cannot do this) |
+    | `--db` | Memory database to read (default: `~/.gaia/memory.db`) |
+
+    Shows what an agent **learned** about a skill and lets you undo it. An agent can adapt a skill it was given — correcting a command that fails on your machine, or reshaping a procedure written around a workflow you do not use — and that adaptation is stored in agent memory, never written to the shipped `SKILL.md`.
+
+    Learned changes are **substitutive**: a correction replaces the text it fixes rather than being appended beneath it, and a second correction to the same section supersedes the first. So a skill an agent has been taught ten things about is no larger than one it has been taught one thing about.
+
+    A learned change applies as soon as the agent makes it, and the agent says so when it does — naming the skill, the section, the reason, and the `--revert` command with the id already filled in. Only a correction that came from you can be recorded: the moment any tool has returned anything in that turn — a fetched page, an email, a command's output — the write is refused and the agent has to tell you the correction instead.
+
+    Nothing is ever deleted. `--revert` and `--reset` archive, and `--archived` lists what they retired; reverting applies from the agent's next launch, not mid-session.
+
+    To run with no learned changes at all, set `GAIA_NO_LEARNED_SKILLS=1`. That covers every agent in every process, including the ones behind the daemon and the Agent UI; `gaia chat --no-learned-skills` is the same switch for a single chat session. Either way the composed prompt is byte-identical to a build with no overlay.
   </Tab>
 
   <Tab title="create">
@@ -2371,23 +2563,19 @@ gaia test --test-type TYPE [OPTIONS]
 
   <Tab title="ASR Tests">
     **Test Types:**
-    - `asr-file-transcription` - Test ASR file transcription
     - `asr-microphone` - Test ASR microphone input
     - `asr-list-audio-devices` - List audio input devices
 
     **Options:**
-    - `--input-audio-file` - Input audio file path
     - `--recording-duration` - Recording duration (default: 10s)
     - `--audio-device-index` - Audio input device index
     - `--whisper-model-size` - Whisper model size (default: base)
 
-    **Examples:**
+    <Note>
+      These test the **live microphone** path. To transcribe a file you already have, ask the GAIA agent — see [Transcription & Meeting Notes](/guides/transcription).
+    </Note>
 
-    Test file transcription:
-    ```bash
-    gaia test --test-type asr-file-transcription \
-      --input-audio-file ./data/audio/test.m4a
-    ```
+    **Examples:**
 
     Test microphone (30 seconds):
     ```bash
@@ -2444,7 +2632,8 @@ daemon client token from `~/.gaia/host/instance.json`; the per-sidecar bearer
 is injected by the daemon and never leaves it for relayed traffic.
 
 Requires the daemon extras (`fastapi`/`uvicorn`/`psutil`) — install with
-`pip install "amd-gaia[ui]"` (or `[api]`/`[dev]`). Running it on a base install
+`pip install "amd-gaia[api]"` (or `[ui]`, which adds the Agent UI's RAG stack on
+top). The one-line installer already does this. Running it on a base install
 fails loudly with that instruction.
 
 #### Model-slot serialization
@@ -2486,7 +2675,7 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |
-| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). |
+| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). `--dev-src-dir` must be an absolute path ending in `hub/agents/<id>/python` (e.g. `/path/to/gaia/hub/agents/email/python`), not the repo root — a mis-shaped path is rejected up front, naming the corrected path to pass instead. |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
@@ -2554,7 +2743,7 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   `security_tier` counts as `experimental` and is gated the same way. Nothing
   infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
   this as a "Trust & Install" confirmation and retries with `trusted: true`.
-- Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
+- Requires the daemon extras (`pip install "amd-gaia[api]"`), same as `gaia daemon`.
 
 <Note>
 `gaia agent install <id>` does the same install **in-process**; `gaia hub
@@ -2567,59 +2756,50 @@ under [Agent Command](#agent-command).
 
 ---
 
-### Terminal hub (`gaia tui`)
+### Terminal UI (`gaia tui`)
 
-`gaia tui` is the Go/Bubble Tea terminal hub: browse agents, install them, and
-chat with them without leaving the terminal. Building from source the binary is
-`tui/bin/gaia` (`cd tui && make build`).
+`gaia tui` is the Go/Bubble Tea terminal client: it boots straight into the
+flagship `gaia` agent's chat, behind a readiness gate. Building from source the
+binary is `tui/bin/gaia-tui` (`cd tui && make build`).
 
 <Note>
-  The binary accepts a leading `tui` word and drops it, so `gaia tui install
-  email` and `gaia install email` are the same command. Running the source build
-  directly, both `./tui/bin/gaia tui list` and `./tui/bin/gaia list` work.
+  The binary accepts a leading `tui` word and drops it, so `gaia tui status`
+  and `gaia status` are the same command. Running the source build directly,
+  both `./tui/bin/gaia-tui tui status` and `./tui/bin/gaia-tui status` work.
 </Note>
 
 ```bash
-gaia tui                                  # open the hub
-gaia tui list                             # what the Agent Hub offers + what you have
-gaia tui list --installed                 # local only, no network call
-gaia tui install email --trust            # download and install
-gaia tui uninstall email                  # stop the agent and remove it
-gaia tui run email                        # interactive chat
+gaia tui                                       # splash -> readiness gate -> chat
+gaia tui run email                             # chat with another agent by id
 gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3
-gaia tui status                           # background service + what is installed
+gaia tui status                                # background service + what is installed
 ```
 
 | Command | Description |
 |---------|-------------|
-| `gaia tui` | Open the Agent Hub. |
-| `gaia tui list [--installed]` | List agents with version, install state, download size, and security tier. `--installed` reads the local `~/.gaia/agents/*/.installed` sentinels and never touches the network. |
-| `gaia tui install <id> [--version X] [--trust]` | Install an agent and wait for it to finish. |
-| `gaia tui uninstall <id>` | Stop the agent's sidecar, verify it is gone, remove its install directory. |
-| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
-| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
+| `gaia tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
+| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
 | `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
-| `gaia tui hub` | The hub screen explicitly (same as bare `gaia tui`). |
+| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
+| `gaia tui version` | Print the build version. |
 
-Install and uninstall are served by the GAIA daemon
-(`POST /daemon/v1/agents/{id}/install`, `DELETE /daemon/v1/agents/{id}`), so the
-TUI, `gaia hub`, and the Agent UI share one integrity check and one install
-lock. The daemon is started automatically for these commands; `gaia tui status`
-only ever attaches, so it reports what *is* running rather than starting
-something.
+There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
+not browse or manage the Agent Hub catalog. Installing or removing a hub
+sidecar agent (`email`) is the Python CLI's job:
 
-#### `--trust`: installing a non-verified agent
+```bash
+gaia hub list                 # what the Agent Hub offers, and what you have
+gaia hub install email --trust
+gaia hub uninstall email
+```
 
 An agent outside the `verified` security tier runs third-party code on your
-machine. The daemon refuses to install one with **HTTP 403** until the caller
-passes an explicit opt-in — there is no bypass, and nothing retries on your
-behalf.
-
-From the CLI, that opt-in is `--trust`. Without it the command prints exactly
-what you would be agreeing to and exits non-zero:
+machine, so `gaia hub install` refuses it with **HTTP 403** from the daemon
+until you pass `--trust` — there is no bypass, and nothing retries on your
+behalf:
 
 ```console
-$ gaia tui install email
+$ gaia hub install email
 
 Refusing to install "email" without --trust.
 
@@ -2631,18 +2811,15 @@ Refusing to install "email" without --trust.
   Access      none declared
 
 If you trust the publisher, re-run:
-  gaia tui install email --trust
+  gaia hub install email --trust
 ```
-
-In the hub screen the same refusal opens a **Trust & Install** confirmation
-showing the same facts. It defaults to *Cancel*, and only an explicit yes
-re-sends the request with the opt-in.
 
 #### `run --query` is a real one-shot
 
 `--query` does not open the alt screen. The answer goes to stdout, progress to
-stderr, and the exit code is `0` on a terminal answer / `1` on an error — so
-`gaia tui run email --query "…" > answer.txt` captures exactly the answer:
+stderr, and the exit code is `0` on a terminal answer, `1` on an error, and `3`
+when a confirmation gate held back a destructive action — so `gaia tui run
+email --query "…" > answer.txt` captures exactly the answer:
 
 ```bash
 gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
@@ -2651,13 +2828,14 @@ echo $?   # 0
 
 It never waits on something that is not there. Before the query is sent, a
 one-shot over the daemon transport (the agents the background service supervises)
-runs the same readiness check the hub's launch gate runs — background service,
-sidecar, local model server, model, and for email the mailbox — and if one of
-them is not ready it prints that row and its remedy to stderr and exits non-zero.
-Against an unreachable dependency that is about a second; the ceiling is the time
-it takes to start the sidecar. Nothing is sent to the agent, and the gate screen
-is never rendered: a script has nobody to press a key. An agent that runs as a
-local subprocess has no readiness route to probe, so it is launched directly.
+runs the same readiness check the interactive launch's gate runs — background
+service, sidecar, local model server, model, and for email the mailbox — and if
+one of them is not ready it prints that row and its remedy to stderr and exits
+non-zero. Against an unreachable dependency that is about a second; the ceiling
+is the time it takes to start the sidecar. Nothing is sent to the agent, and the
+gate screen is never rendered: a script has nobody to press a key. The flagship
+runs as a local subprocess and is checked the same way, just with its own
+three-row gate (agent binary, Lemonade, models) instead of the daemon's five.
 
 ```bash
 $ gaia tui run email --query "triage my inbox"   # with the model server down
@@ -2675,24 +2853,21 @@ timeout kills it. There is no "wait forever": `--timeout 0` is refused. Interact
 `gaia tui run <id>` is unaffected — a person can read what arrives and press
 ctrl+c.
 
-#### Hub keys
+#### Readiness gate keys
 
 | Key | Action |
 |-----|--------|
-| `enter` | Run the selected agent |
-| `i` | Install it (or update it, when a newer version exists) |
-| `d` | Uninstall it (asks first) |
-| `r` | Refresh the agent list from the Agent Hub |
-| `/` | Search |
-| `tab` / `shift+tab` | Next / previous category |
-| `v` | Vote for a coming-soon agent |
-| `?` | Help |
-| `q`, `ctrl+c` | Quit |
+| `f` | Apply the focused row's fix — shown only when that row has one |
+| `p` | Choose Local, Fireworks AI, or AMD LLM Gateway (flagship setup) |
+| `r` | Re-check everything |
+| `d` | Toggle the raw answer behind the focused row |
+| `↑` / `↓` (or `k` / `j`) | Move between rows |
+| `enter` | Continue anyway — offered only when nothing is outright broken |
+| `esc`, `ctrl+c` | Quit. There is no screen behind the gate to go back to |
 
-<Note>
-  `backspace` is deliberately unbound. It used to share the uninstall binding
-  with `d` and `delete`, which made "go back" a destructive action.
-</Note>
+In chat, `/provider` opens the same provider panel with masked key entry and a
+searchable model list. See [AI providers](/guides/ai-providers) for credentials,
+Gemma 4 31B, and gateway settings.
 
 #### Waiting on a consequential readiness problem
 
@@ -2707,7 +2882,7 @@ and the notice lists every such row at once if more than one applies.
 
 #### Theme (light vs dark terminals)
 
-The hub asks the terminal for its background colour on startup and picks a
+The TUI asks the terminal for its background colour on startup and picks a
 light or dark palette to match, so text stays readable either way. Over SSH,
 inside tmux, or in a CI log where the terminal never answers that query, force
 a mode instead of guessing:
@@ -2725,11 +2900,11 @@ GAIA_TUI_THEME=light gaia tui    # or: dark
 
 ### TUI Control API
 
-The terminal hub (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback
+The terminal UI (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback
 HTTP API that drives **the session you are looking at** — not a headless copy.
-An assistant navigates, types, and launches agents while the frames render in
-your terminal in real time. It is how the TUI gets tested without a human at
-the keyboard.
+An assistant navigates, types, and drives the readiness gate while the frames
+render in your terminal in real time. It is how the TUI gets tested without a
+human at the keyboard.
 
 Off by default. Bound to `127.0.0.1` only, and every request needs a bearer
 token.
@@ -2737,20 +2912,20 @@ token.
 ```bash
 gaia tui --control                 # auto-assign a port
 gaia tui --control-port 8770       # explicit port (implies --control)
-gaia tui --control --debug         # log every injected key, state change, and wait
+gaia tui --control --dev           # input counts, state changes, and waits; no input contents
 ```
 
 <Note>
   These are persistent flags on the TUI binary's root command, so they apply to
-  the hub, `hub`, and `chat` alike. Building from source, that binary is
-  `tui/bin/gaia` (`cd tui && make build`).
+  the bare launch, `run`, and `chat` alike. Building from source, that binary is
+  `tui/bin/gaia-tui` (`cd tui && make build`).
 </Note>
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--control` | flag | off | Start the control API on an auto-assigned loopback port. |
 | `--control-port` | integer | `0` | Bind a specific port. Implies `--control`. `0` auto-assigns. Port `4001` is reserved and rejected. |
-| `--debug` | flag | off | Log every injected key, state transition, and wait resolution/timeout to stderr. |
+| `--dev` | flag | off | Show developer details and log input counts, state transitions, and wait outcomes to the TUI log; input contents are omitted. `--debug` remains an alias. |
 
 On start the TUI writes `~/.gaia/tui/control.json` (mode `0600`) holding the
 pid, port, and token, and removes it on exit. Clients find the TUI by reading
@@ -2769,7 +2944,7 @@ Endpoints (all under `/control/v1`, all requiring `Authorization: Bearer <token>
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /status` | `running` plus the active view, active agent, streaming, hub tab, selection, terminal size, and `can_return_to_hub`. |
+| `GET /status` | `running` plus the active view (`splash` \| `preflight` \| `chat` \| `unknown`), active agent, streaming, `overlay` (e.g. `help`, `connect-mailbox`, `halt`), `blocker` (the key of the readiness row refusing a launch, e.g. `binary`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`), and terminal size. |
 | `GET /screen` | The current rendered frame. `?format=plain` (default, ANSI stripped) or `?format=ansi`. |
 | `POST /keys` | Inject named keys — `{"keys": ["tab","down","enter"]}`. |
 | `POST /text` | Type a string as runes — `{"text": "triage my inbox"}`. |
@@ -2794,201 +2969,83 @@ Two response details matter when driving this:
   in that window, so the API refuses instead of reporting a success for keys that
   went nowhere. Reads (`/status`, `/screen`, `/frames`) keep working.
 
-`can_return_to_hub` exists because `esc` is not universally "go back": in a chat
-opened from the hub it returns there, but in a standalone `gaia chat --subprocess`
-session it **quits the program**. A driver that guesses wrong kills the session it
-was asked to drive, so the state says which.
+`esc` is not universally "go back": on the readiness gate it quits (there is no
+screen behind it), in an idle chat it clears the composer, and mid-turn it cancels
+the turn. A driver should read `view` and act on that rather than assume what `esc`
+does.
 
 Most callers should not speak this API directly — the
 [TUI MCP server](/guides/mcp/tui) wraps it as MCP tools.
 
 ---
 
-### Hub Command
+### TUI Event Trace
 
-Browse, install and uninstall agents from the [GAIA Agent Hub](https://hub.amd-gaia.ai).
-`gaia hub` is a thin client over the daemon's install routes, so the CLI, the
-Agent UI and the TUI share **one** installer, one SHA-256 check and one install
-lock — installing from two places at once is a clean 409, never a corrupt
-download. The daemon is started automatically if it is not already running.
-
-Agents install into `~/.gaia/agents/<id>/` (binary + `gaia-agent.yaml` +
-`.installed` sentinel). Every artifact is verified against the SHA-256 in the
-hub manifest before it is written; a mismatch fails the install and leaves
-nothing behind — there is no "use it anyway" path.
+`--trace` writes down what the agent actually did, so a wrong answer can be
+diagnosed from a file instead of from a screenshot. Every event the TUI receives
+is appended to a JSONL file — one JSON object per line, in arrival order, with
+tool calls carrying **their arguments** and tool results carrying **their
+payloads**.
 
 ```bash
-gaia hub list                      # catalog + which agents are installed
-gaia hub list --installed          # only what is installed (works offline)
-gaia hub list --refresh            # bypass the 5-minute catalog cache
-gaia hub install email --trust     # required: email is a non-verified agent
-gaia hub install email --version 0.5.0 --trust
-gaia hub uninstall email           # stops the sidecar first, then removes the dir
+gaia tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
+gaia tui --trace=run.jsonl             # a path you choose
+gaia tui --trace --dev                 # record to a file AND show it on screen
 ```
 
-| Action | Options | Description |
-|--------|---------|-------------|
-| `list` | `--installed`, `--refresh` | Print id, latest version, installed version (`↑` when an update is available), download size and name. Warns when the hub was unreachable and the cached catalog was used. `--installed` is answered from the local `.installed` sentinels and needs no network. |
-| `install <id>` | `--version`, `--trust` | Download + verify + install, printing each phase. Exit 1 on any failure, with the reason. `--trust` is required for any agent outside the `verified` security tier. |
-| `uninstall <id>` | — | Stop the agent's sidecar, verify its pid is gone, then remove `~/.gaia/agents/<id>/`. |
+The path is printed on startup (`trace → …`). An unwritable path is a startup
+error, not a warning: a trace that is silently not being written looks exactly
+like an agent that did nothing.
 
-**Notes**
-
-- Install and uninstall both stop a running sidecar first — the install
-  directory *is* the sidecar's binary cache — and keep it stopped for the whole
-  operation, so nothing can respawn it mid-download. If the process survives the
-  tree-kill, the command aborts loudly and nothing is mutated.
-- Install and uninstall of the same agent are serialized: the second caller gets
-  a clean "already in progress" error instead of racing the first.
-- The catalog only lists agents this GAIA build can actually supervise; anything
-  else is reported as hidden rather than silently dropped.
-- Reserved built-in agents (e.g. `builder`) ship with the wheel and are refused
-  by both `install` and `uninstall`.
-- **Trust gate.** Any agent outside the `verified` security tier runs
-  third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`, with the remedy named in the error. A manifest that omits
-  `security_tier` counts as `experimental` and is gated the same way. Nothing
-  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
-  this as a "Trust & Install" confirmation and retries with `trusted: true`.
-- Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--trace` | string | off | Record every agent event to a JSONL file. Bare `--trace` picks `~/.gaia/traces/<timestamp>-<agent>.jsonl`. |
 
 <Note>
-`gaia agent install <id>` does the same install **in-process**; `gaia hub
-install <id>` routes it through the daemon, which additionally stops the
-agent's running sidecar first and holds it stopped for the download. Prefer
-`gaia hub` when the daemon supervises that agent (today: `email`); `gaia agent`
-is the right call on a machine with no daemon extras installed. See the note
-under [Agent Command](#agent-command).
+  The path must be **attached** — `--trace=run.jsonl`, not `--trace run.jsonl`.
+  A spaced value is read as a command name (the flag is legal with no value, so
+  it never consumes the next argument); the TUI says so and names the working
+  form.
 </Note>
+
+Each line wraps the event with the two things the payload itself does not carry
+— when it arrived, and where it sits in the run:
+
+```json
+{"at":"2026-09-08T18:39:32.455Z","seq":188,"event":{"type":"tool_call","tool":"find_files","args":{"query":"*.go","scope":"smart"}}}
+{"at":"2026-09-08T18:39:32.547Z","seq":189,"event":{"type":"tool_result","tool":"find_files","data":{"success":true,"summary":"Found 25 result(s)…","summary_truncated":true}}}
+```
+
+A frame the TUI could not parse is still recorded — that is the frame a trace is
+most wanted for. It carries `unparsed` (the raw text) instead of `event`, or
+`unparsed_b64` when the bytes are not valid UTF-8, since encoding those as a
+JSON string would replace each bad byte with `U+FFFD` and lose what went wrong.
+A reader must check all three keys. Events are flushed one at a time, so a run
+that crashes mid-turn still leaves everything it received.
+
+`--trace` and `--dev` are independent: `--dev` chooses what is rendered on
+screen, `--trace` chooses what is written to disk. Use both together to watch a
+run and keep it.
+
+<Note>
+  This records the agent's externally visible behaviour — tool calls, arguments,
+  results, errors, and timings. It does **not** capture prompt size or token
+  accounting, which exist only in the agent's own per-turn recorder
+  (`GAIA_TURN_LOG`).
+</Note>
+
+<Warning>
+  A trace contains verbatim tool results — file contents, shell output, email,
+  whatever the agent read on your behalf. The file is written `0600` under a
+  `0700` directory, but attaching one to a bug report shares all of it. Read it
+  before you send it.
+</Warning>
+
+A launch that fails before the agent says anything (a refused port, an unmet
+precondition) removes its own empty trace rather than leaving a 0-byte file
+behind. `~/.gaia/traces` is never pruned otherwise — delete old runs yourself.
 
 ---
-
-### Terminal hub (`gaia tui`)
-
-`gaia tui` is the Go/Bubble Tea terminal hub: browse agents, install them, and
-chat with them without leaving the terminal. Building from source the binary is
-`tui/bin/gaia` (`cd tui && make build`).
-
-<Note>
-  The binary accepts a leading `tui` word and drops it, so `gaia tui install
-  email` and `gaia install email` are the same command. Running the source build
-  directly, both `./tui/bin/gaia tui list` and `./tui/bin/gaia list` work.
-</Note>
-
-```bash
-gaia tui                                  # open the hub
-gaia tui list                             # what the Agent Hub offers + what you have
-gaia tui list --installed                 # local only, no network call
-gaia tui install email --trust            # download and install
-gaia tui uninstall email                  # stop the agent and remove it
-gaia tui run email                        # interactive chat
-gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1
-gaia tui status                           # background service + what is installed
-```
-
-| Command | Description |
-|---------|-------------|
-| `gaia tui` | Open the Agent Hub. |
-| `gaia tui list [--installed]` | List agents with version, install state, download size, and security tier. `--installed` reads the local `~/.gaia/agents/*/.installed` sentinels and never touches the network. |
-| `gaia tui install <id> [--version X] [--trust]` | Install an agent and wait for it to finish. |
-| `gaia tui uninstall <id>` | Stop the agent's sidecar, verify it is gone, remove its install directory. |
-| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). |
-| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
-| `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
-| `gaia tui hub` | The hub screen explicitly (same as bare `gaia tui`). |
-
-Install and uninstall are served by the GAIA daemon
-(`POST /daemon/v1/agents/{id}/install`, `DELETE /daemon/v1/agents/{id}`), so the
-TUI, `gaia hub`, and the Agent UI share one integrity check and one install
-lock. The daemon is started automatically for these commands; `gaia tui status`
-only ever attaches, so it reports what *is* running rather than starting
-something.
-
-#### `--trust`: installing a non-verified agent
-
-An agent outside the `verified` security tier runs third-party code on your
-machine. The daemon refuses to install one with **HTTP 403** until the caller
-passes an explicit opt-in — there is no bypass, and nothing retries on your
-behalf.
-
-From the CLI, that opt-in is `--trust`. Without it the command prints exactly
-what you would be agreeing to and exits non-zero:
-
-```console
-$ gaia tui install email
-
-Refusing to install "email" without --trust.
-
-  Agent       email
-  Version     0.5.0
-  Publisher   AMD
-  Security    experimental (not verified by AMD)
-  Download    31.1 MB
-  Access      none declared
-
-If you trust the publisher, re-run:
-  gaia tui install email --trust
-```
-
-In the hub screen the same refusal opens a **Trust & Install** confirmation
-showing the same facts. It defaults to *Cancel*, and only an explicit yes
-re-sends the request with the opt-in.
-
-#### `run --query` is a real one-shot
-
-`--query` does not open the alt screen. The answer goes to stdout, progress to
-stderr, and the exit code is `0` on a terminal answer / `1` on an error — so
-`gaia tui run email --query "…" > answer.txt` captures exactly the answer:
-
-```bash
-gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
-echo $?   # 0
-```
-
-It never waits on something that is not there. Before the query is sent, a
-one-shot over the daemon transport (the agents the background service supervises)
-runs the same readiness check the hub's launch gate runs — background service,
-sidecar, local model server, model, and for email the mailbox — and if one of
-them is not ready it prints that row and its remedy to stderr and exits non-zero.
-Against an unreachable dependency that is about a second; the ceiling is the time
-it takes to start the sidecar. Nothing is sent to the agent, and the gate screen
-is never rendered: a script has nobody to press a key. An agent that runs as a
-local subprocess has no readiness route to probe, so it is launched directly.
-
-```bash
-$ gaia tui run email --query "triage my inbox"   # with the model server down
-❌ Email is not ready — Local AI: not running at http://localhost:8000/api/v1
-   GAIA needs a local model server. It runs on your machine; no message text ever leaves it.
-…
-        run: lemonade-server serve
-$ echo $?   # 1, after about a second
-```
-
-The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeout
-2h` to change it — so an agent that accepts the query and then stops answering is
-reported with what to read next instead of hanging a CI job until the job's own
-timeout kills it. There is no "wait forever": `--timeout 0` is refused. Interactive
-`gaia tui run <id>` is unaffected — a person can read what arrives and press
-ctrl+c.
-
-#### Hub keys
-
-| Key | Action |
-|-----|--------|
-| `enter` | Run the selected agent |
-| `i` | Install it (or update it, when a newer version exists) |
-| `d` | Uninstall it (asks first) |
-| `r` | Refresh the agent list from the Agent Hub |
-| `/` | Search |
-| `tab` / `shift+tab` | Next / previous category |
-| `v` | Vote for a coming-soon agent |
-| `?` | Help |
-| `q`, `ctrl+c` | Quit |
-
-<Note>
-  `backspace` is deliberately unbound. It used to share the uninstall binding
-  with `d` and `delete`, which made "go back" a destructive action.
-</Note>
 
 ### Cache Command
 

@@ -1,24 +1,18 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Packaging guard for the [mcp] extra's version pin (issue #2885).
+"""Packaging guard for the [mcp] extra's version range (issue #2940).
 
-setup.py's ``extras_require["mcp"]`` block carries a comment saying the mcp
-dependency is "Capped below 2.0" because mcp 2.0.0 (released 2026-07-28)
-removed ``mcp.server.fastmcp`` (``FastMCP`` was renamed to ``MCPServer`` and
-moved to ``mcp.server.mcpserver``), breaking every FastMCP-based server GAIA
-ships. But the pin itself reads ``mcp>=1.1.0,<3.0``, which does NOT enforce
-the cap the comment describes: the comment and the enforced version range
-contradict each other, so ``pip install`` can still resolve an mcp 2.x that
-breaks those servers.
+setup.py's ``extras_require["mcp"]`` block supports the mcp 2.x API. mcp 2.0.0
+(released 2026-07-28) removed ``mcp.server.fastmcp`` (``FastMCP`` was renamed
+to ``MCPServer`` and moved to ``mcp.server.mcpserver``), so the range must
+exclude future incompatible major versions while admitting mcp 2.x.
 
 This file asserts two things, independently:
 
-* the pin is exactly ``mcp>=1.1.0,<2.0`` (the enforced range, not the
-  comment's claim about it);
-* the comment directly above the pin and the pin itself never contradict
-  each other — if the comment still says the dependency is "Capped below
-  2.0", the enforced range must actually be ``<2.0``.
+* the pin is exactly ``mcp>=2.0.0,<3.0``;
+* the comment directly above the pin documents support for mcp 2.x and the
+  upper bound that protects against a future incompatible major release.
 
 This is a static packaging assertion — it reads setup.py's source text and
 never imports or installs anything, so it works in the CI unit-tests venv
@@ -33,18 +27,15 @@ from pathlib import Path
 
 SETUP_PY = Path(__file__).resolve().parents[2] / "setup.py"
 
-# Single source of truth for the expected pin. If a future change legitimately
-# widens the cap (e.g. after porting the client to the mcp 2.x API), update
-# this one constant — and setup.py's pin and comment to match — rather than
-# editing the assertions below.
-EXPECTED_MCP_PIN = "mcp>=1.1.0,<2.0"
-EXPECTED_CAP_COMMENT_SUBSTRING = "capped below 2.0"
+# Single source of truth for the expected range. Update this constant and
+# setup.py's requirement/comment together when supporting another major.
+EXPECTED_MCP_PIN = "mcp>=2.0.0,<3.0"
+EXPECTED_CAP_COMMENT_SUBSTRING = "supports mcp 2.x"
 
 _PORT_INSTRUCTION = (
-    "mcp 2.0.0 removed mcp.server.fastmcp (FastMCP -> MCPServer) — before "
-    "widening the cap past <2.0, port GAIA's FastMCP-based MCP servers "
-    "(src/gaia/mcp/agent_mcp_server.py, src/gaia/mcp/servers/agent_ui_mcp.py, "
-    "src/gaia/mcp/servers/tui_mcp.py) to the mcp 2.x API."
+    "mcp 2.x support requires the MCPServer API in "
+    "src/gaia/mcp/agent_mcp_server.py, src/gaia/mcp/servers/agent_ui_mcp.py, "
+    "and src/gaia/mcp/servers/tui_mcp.py."
 )
 
 
@@ -119,8 +110,8 @@ def _pin_and_preceding_comment(name: str, pin_prefix: str) -> tuple[str, str]:
     return pin_value, " ".join(comment_lines)
 
 
-def test_mcp_extra_pin_is_capped_below_2_0() -> None:
-    """setup.py's mcp extra must pin EXPECTED_MCP_PIN exactly — see #2885.
+def test_mcp_extra_supports_2_x() -> None:
+    """setup.py's mcp extra must use the supported mcp 2.x range — see #2940.
 
     This checks the enforced version range directly (not the comment that
     claims to describe it), so a contradiction between the two can't hide
@@ -128,32 +119,26 @@ def test_mcp_extra_pin_is_capped_below_2_0() -> None:
     """
     mcp_reqs = _parse_extra("mcp")
     assert EXPECTED_MCP_PIN in mcp_reqs, (
-        f'#2885: setup.py\'s "mcp" extras_require block does not pin '
+        f'#2940: setup.py\'s "mcp" extras_require block does not pin '
         f'"{EXPECTED_MCP_PIN}". ' + _PORT_INSTRUCTION + "\n"
         f'Current "mcp" extra: {mcp_reqs}'
     )
 
 
-def test_mcp_extra_capped_comment_matches_pin() -> None:
-    """The "Capped below 2.0" comment above the mcp pin must match the pin — see #2885.
+def test_mcp_extra_support_comment_matches_pin() -> None:
+    """The support comment above the mcp pin must match the pin — see #2940.
 
-    setup.py documents the cap with a comment ("Capped below 2.0: mcp 2.0.0
-    ... removed mcp.server.fastmcp"), but the pin itself can drift out of
-    sync with what the comment claims (it currently reads
-    ``mcp>=1.1.0,<3.0``). This must fail whenever the comment still claims
-    the dependency is capped below 2.0 but the pin's upper bound is anything
-    other than EXPECTED_MCP_PIN — the contradiction must not silently pass.
+    setup.py documents the supported API and upper bound in a comment. This
+    must fail if that comment or the enforced range drifts.
     """
     pin, comment = _pin_and_preceding_comment("mcp", "mcp>=")
     assert EXPECTED_CAP_COMMENT_SUBSTRING in comment.lower(), (
-        "#2885: expected the comment directly above the mcp pin in setup.py "
-        'to still say "Capped below 2.0" (it documents why mcp is capped, '
-        f"following the mcp 2.0.0 mcp.server.fastmcp removal); got: {comment!r}. "
+        "#2940: expected the comment directly above the mcp pin in setup.py "
+        f'to say "supports mcp 2.x"; got: {comment!r}. '
         "If the comment was intentionally reworded, update this test to match "
         "it; otherwise restore the comment."
     )
     assert pin == EXPECTED_MCP_PIN, (
-        f'#2885: setup.py\'s mcp extra comment says "Capped below 2.0" but the '
-        f'enforced pin is "{pin}", not "{EXPECTED_MCP_PIN}" — the comment and '
-        "the enforced version range contradict each other. " + _PORT_INSTRUCTION
+        f"#2940: setup.py's mcp extra comment documents mcp 2.x support but "
+        f'the enforced pin is "{pin}", not "{EXPECTED_MCP_PIN}". ' + _PORT_INSTRUCTION
     )

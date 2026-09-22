@@ -1,3 +1,5 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Run the flagship agent over stdin/stdout as newline-delimited JSON.
 
 The collapsed transport: the TUI spawns this process once and keeps it, writing
@@ -28,10 +30,10 @@ respawn would destroy. Embeddings (RAG, memory, code index) stay on Lemonade
 either way — Anthropic has no embeddings API.
 
 A live switch is process-local: if the child ever respawns (the Go side kills
-and restarts it after a cancelled turn — see ``client.SubprocessClient``'s
-``discard``/respawn), the NEW process comes up from the ORIGINAL
-``--use-claude``/``--claude-model`` argv again, not from whatever ``/model``
-last set. This module cannot prevent that — there is no argv to persist a
+it when a cancelled turn will not stop, or it crashed — see
+``client.SubprocessClient``'s ``discard``/respawn), the NEW process comes up
+from the ORIGINAL ``--use-claude``/``--claude-model`` argv again, not from
+whatever ``/model`` last set. This module cannot prevent that — there is no argv to persist a
 switch into short of the TUI re-issuing it — so the Go side instead detects
 the mismatch from this module's own startup ping and tells the user their
 model reverted (see ``handleCanonicalEvent`` in ``canonical.go``).
@@ -49,7 +51,8 @@ the back-channel a permission prompt needs: without one the agent can ask "may
 I run this?" and the answer has nowhere to travel, so every gated tool
 eventually auto-denies. Control messages are read by a dedicated thread so
 they still land *while* a turn is in flight, which is the only moment a
-confirmation decision is worth anything. ``/model`` is deliberately NOT a
+confirmation decision is worth anything — and the only moment ``cancel`` (stop
+this turn, keep the process) can land. ``/model`` is deliberately NOT a
 control message: its response (the switched-to model, or why it was refused)
 has to reach the transport's reader, which only scans stdout *during* a turn
 (see ``client.SubprocessClient`` on the Go side) — so it rides the query
@@ -60,6 +63,7 @@ window a control ack could not.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import sys
@@ -70,11 +74,40 @@ from typing import Any, Dict, List, Optional
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
 from gaia.llm import create_client
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_client import (
+    DEFAULT_LEMONADE_URL,
+    LemonadeClient,
+    LemonadeClientError,
+    cloud_model_provider,
+)
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
 logger = get_logger(__name__)
+
+#: Level the permission audit trail is pinned at, independent of --dev.
+AUDIT_LEVEL = logging.INFO
+
+#: Logger carrying permission-state history: bypass toggles and every
+#: decision that was denied or dropped.
+#:
+#: It needs a channel of its own because user mode logs ERROR only and the
+#: control channel writes nothing to stdout by design (see ``apply_control``)
+#: — so without this, turning unattended approval ON leaves no record
+#: anywhere. ``_configure_logging`` pins it to the log FILE; it must never
+#: reach stdout, which is the wire.
+AUDIT_LOGGER_NAME = "gaia_agent.stdio.audit"
+audit = get_logger(AUDIT_LOGGER_NAME)
+
+#: Backstop for a confirmation whose client can no longer answer it.
+#:
+#: Deliberately longer than the TUI's own 10-minute bound
+#: (``components.DeliverableConfirmationTimeout``) so the client always wins the
+#: race and the user's real answer is never pre-empted by this. It only fires
+#: when nothing is coming: the TUI exited, or the control channel broke while
+#: the agent was parked. Without it that agent waits forever on a question no
+#: one can see.
+ORPHANED_CONFIRM_TIMEOUT_SECONDS = 15 * 60
 
 AGENT_ID = "gaia"
 
@@ -99,6 +132,10 @@ QUERY_KEY = "gaia_query"
 #: screen; ``bypass`` turns unattended approval on or off for the session.
 CONTROL_TOOL_DECISION = "tool_decision"
 CONTROL_BYPASS = "bypass"
+#: ``cancel`` stops the running turn but not the process, so loaded skills,
+#: "always" grants, history and the bypass mode all survive it.
+CONTROL_CANCEL = "cancel"
+
 
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
@@ -123,6 +160,10 @@ class PermissionState:
         self._bypass = bypass
         self._grants: set = set()
         self._handler: Any = None
+        if bypass:
+            # Starting unattended is the same security event as toggling it on
+            # mid-session, and it never went through set_bypass.
+            audit.warning("Bypass permissions ENABLED at launch")
 
     @property
     def bypass(self) -> bool:
@@ -139,7 +180,7 @@ class PermissionState:
             self._bypass = enabled
             if self._handler is not None:
                 self._handler.auto_approve_gated_tools = enabled
-        logger.warning("Bypass permissions %s", "ENABLED" if enabled else "disabled")
+        audit.warning("Bypass permissions %s", "ENABLED" if enabled else "disabled")
 
     def attach(self, handler: Any) -> None:
         """Hand a turn's handler the session's accumulated permission state."""
@@ -147,8 +188,12 @@ class PermissionState:
             handler.auto_approve_gated_tools = self._bypass
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
-            # so the wait is theirs to end — see confirm_tool_execution.
-            handler.confirm_timeout_seconds = None
+            # so the wait is theirs to end — see confirm_tool_execution. The
+            # TUI answers its own prompt long before this fires (its bound is
+            # 10 minutes); this is the backstop for the case where it cannot,
+            # because the client died or the control channel broke. Unbounded
+            # there leaves an agent parked on a question nobody can answer.
+            handler.confirm_timeout_seconds = ORPHANED_CONFIRM_TIMEOUT_SECONDS
             self._handler = handler
 
     def detach(self, handler: Any) -> None:
@@ -159,17 +204,46 @@ class PermissionState:
                 self._handler = None
 
     def resolve(self, decision: str, confirm_id: Optional[str]) -> None:
-        """Answer the confirmation the agent thread is parked on."""
+        """Answer the confirmation the agent thread is parked on.
+
+        The lock is held across the resolve: dropping it first lets the turn
+        thread detach and the next turn attach a different handler in between,
+        and a decision carrying no ``confirm_id`` would then be accepted by a
+        handler nobody is waiting on while the live prompt keeps waiting.
+        """
         with self._lock:
             handler = self._handler
-        if handler is None:
-            logger.warning("Dropped a '%s' tool decision: no turn is running", decision)
-            return
-        handler.resolve_tool_confirmation(
-            approved=decision in (DECISION_ALLOW, DECISION_ALWAYS),
-            always=decision == DECISION_ALWAYS,
-            confirm_id=confirm_id,
-        )
+            if handler is None:
+                audit.warning(
+                    "Dropped a '%s' tool decision: no turn is running", decision
+                )
+                return
+            handler.resolve_tool_confirmation(
+                approved=decision in (DECISION_ALLOW, DECISION_ALWAYS),
+                always=decision == DECISION_ALWAYS,
+                confirm_id=confirm_id,
+            )
+
+    def cancel_active(self, reason: str = "stdin closed mid-turn") -> bool:
+        """Cancel the turn currently running, if any. True if one was cancelled.
+
+        Two callers. The host's ``cancel`` verb stops a turn while keeping the
+        process. stdin closing means the host is gone, but the sentinel that
+        ends the run loop sits BEHIND the running turn in the query queue — so a
+        turn parked on a confirmation nobody can answer would hold the model
+        slot until ``ORPHANED_CONFIRM_TIMEOUT_SECONDS``, far too long to make an
+        already-exited host pay.
+
+        Either way, cancelling unblocks the wait, which lets the turn finish
+        through its normal path and emit its one terminal event.
+        """
+        with self._lock:
+            handler = self._handler
+            if handler is None:
+                return False
+            handler.cancelled.set()
+        audit.warning("%s — cancelled the in-flight turn", reason)
+        return True
 
 
 def parse_control(line: str) -> Optional[Dict[str, Any]]:
@@ -217,11 +291,14 @@ def apply_control(message: Dict[str, Any], state: PermissionState) -> None:
     verb = message.get(CONTROL_KEY)
     if verb == CONTROL_BYPASS:
         state.set_bypass(bool(message.get("enabled")))
+    elif verb == CONTROL_CANCEL:
+        if not state.cancel_active("host asked to cancel"):
+            logger.info("Cancel requested with no turn running — nothing to stop")
     elif verb == CONTROL_TOOL_DECISION:
         decision = str(message.get("decision") or DECISION_DENY)
         if decision not in (DECISION_ALLOW, DECISION_DENY, DECISION_ALWAYS):
             # Fail closed: an unreadable decision is not consent.
-            logger.warning("Unknown tool decision %r — denying", decision)
+            audit.warning("Unknown tool decision %r — denying", decision)
             decision = DECISION_DENY
         confirm_id = message.get("confirm_id")
         state.resolve(decision, str(confirm_id) if confirm_id else None)
@@ -281,13 +358,14 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
     chat = agent.chat
     is_claude = bool(chat.config.use_claude)
     model_id = chat.effective_model
+    cloud_provider = cloud_model_provider(model_id) if not is_claude else None
     event = {
         "type": "status",
         "message": "",
         "model_id": model_id,
         "model_display": _model_display_name(model_id, is_claude),
-        "model_backend": "claude" if is_claude else "lemonade",
-        "model_remote": is_claude,
+        "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
+        "model_remote": is_claude or bool(cloud_provider),
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
@@ -303,8 +381,13 @@ def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
     """
     try:
         client = LemonadeClient(base_url=base_url, verbose=False)
-    except Exception:  # pylint: disable=broad-exception-caught
-        return {"lemonade_reachable": False}
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # A malformed base_url reads to the user as "Lemonade isn't running",
+        # so name it rather than reporting a bare unreachable. The client
+        # resolves an omitted URL the same way, so report that, not None.
+        tried = base_url or os.environ.get("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+        logger.warning("[lemonade] client construction failed for %r: %s", tried, exc)
+        return {"lemonade_base_url": tried, "lemonade_reachable": False}
     state: Dict[str, Any] = {"lemonade_base_url": client.base_url}
     try:
         health = client.health_check() or {}
@@ -326,7 +409,7 @@ _NON_CHAT_LABELS = frozenset({"embeddings", "image", "reranker"})
 
 
 def _lemonade_models(base_url: Optional[str]) -> List[str]:
-    """Downloaded, chat-capable local model ids Lemonade currently serves.
+    """Downloaded local and discovered Fireworks/AMD chat models Lemonade serves.
 
     Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
     the codebase uses) rather than a bespoke ``requests`` call, so base_url
@@ -352,7 +435,8 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
             m["id"]
             for m in catalog.get("data", [])
             if m.get("id")
-            and m.get("downloaded")
+            and (m.get("downloaded") or cloud_model_provider(m["id"], m))
+            and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
             and not (_NON_CHAT_LABELS & set(m.get("labels") or []))
         }
     )
@@ -409,9 +493,7 @@ def _apply_switch(
     Snapshots everything first and restores it on ANY exception —
     ``rebuild_system_prompt()`` runs inside this same guarded block, so a bug
     in prompt composition rolls back the client swap too, instead of leaving
-    the session on a working new client with a half-composed prompt (the
-    original version of this function called rebuild AFTER mutating, which
-    could not roll back — caught in review).
+    the session on a working new client with a half-composed prompt.
     """
     snapshot = _snapshot_switch_state(agent)
     chat = agent.chat
@@ -480,12 +562,12 @@ def _apply_claude_switch(agent: Any, target: str) -> str:
 
 
 def _apply_local_switch(agent: Any, target: str) -> str:
-    """Swap the live client to local Lemonade model *target*; raise on failure."""
+    """Swap the live client to a local or cloud Lemonade model."""
     chat = agent.chat
     available = _lemonade_models(chat.config.base_url)  # raises if unreachable
     if target not in available:
         raise RuntimeError(
-            f"Unknown local model '{target}'. Downloaded, chat-capable "
+            f"Unknown Lemonade model '{target}'. Downloaded local or discovered cloud "
             "Lemonade models: "
             + (
                 ", ".join(available)
@@ -541,17 +623,29 @@ def _format_model_list(agent: Any) -> str:
         lines.append(f"- `{model_id}` — {label}{marker}")
 
     lines.append("")
-    lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
     try:
-        local_models = _lemonade_models(chat.config.base_url)
+        models = _lemonade_models(chat.config.base_url)
     except RuntimeError as exc:
+        lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
         lines.append(f"- {exc}")
     else:
-        if not local_models:
-            lines.append("- (none downloaded — run `lemonade-server pull <model>`)")
-        for model_id in local_models:
-            marker = " ← current" if model_id == current else ""
-            lines.append(f"- `{model_id}`{marker}")
+        for provider, heading in (
+            (None, "Local (Lemonade — downloaded, chat-capable models)"),
+            ("fireworks", "Fireworks AI (remote — via Lemonade)"),
+            ("amd", "AMD LLM Gateway (remote — via Lemonade)"),
+        ):
+            lines.append(f"**{heading}:**")
+            group = [m for m in models if cloud_model_provider(m) == provider]
+            if not group:
+                lines.append(
+                    "- (none downloaded — run `gaia init`)"
+                    if provider is None
+                    else "- (connect this provider in the TUI provider settings)"
+                )
+            for model_id in group:
+                marker = " ← current" if model_id == current else ""
+                lines.append(f"- `{model_id}`{marker}")
+            lines.append("")
 
     lines.append("")
     lines.append(
@@ -586,6 +680,16 @@ def run_model_command(agent: Any, query: str, out) -> None:
         if agent._use_claude
         else "the local Lemonade backend"
     )
+    cloud_provider = cloud_model_provider(agent.chat.effective_model)
+    if cloud_provider and not agent._use_claude:
+        provider_name = {
+            "fireworks": "Fireworks AI",
+            "amd": "AMD LLM Gateway",
+        }.get(cloud_provider, cloud_provider)
+        where = (
+            f"{provider_name} via Lemonade — this conversation is sent to "
+            f"{provider_name}; embeddings stay on Lemonade"
+        )
     _write(
         {"type": "final", "answer": f"Switched to **{display}**, running on {where}."},
         out,
@@ -599,23 +703,69 @@ def _pump_stdin(queries: "queue.Queue", state: PermissionState) -> None:
     itself, so while a turn ran nothing was reading — which is exactly when a
     confirmation decision needs to arrive. Control messages are handled here,
     inline, while the agent thread is still parked on the prompt.
+
+    The teardown in ``finally`` is the process's only exit signal, so it has to
+    run even if iterating stdin itself raises: without it ``main`` waits on a
+    queue nothing will ever fill again.
     """
-    for raw in sys.stdin:
-        line = raw.strip()
-        if not line:
-            continue
-        control = parse_control(line)
-        if control is None:
-            queries.put(parse_query(line))
-            continue
+    try:
+        for raw in sys.stdin:
+            line = raw.strip()
+            if not line:
+                continue
+            control = parse_control(line)
+            if control is None:
+                queries.put(parse_query(line))
+                continue
+            try:
+                apply_control(control, state)
+            except Exception:  # pylint: disable=broad-exception-caught
+                # A malformed control line must never take the pump down:
+                # losing this thread means every later confirmation hangs with
+                # nothing able to answer it.
+                logger.exception("control message failed: %s", line)
+    finally:
+        # Cancel BEFORE the sentinel: the sentinel is queued behind the running
+        # turn, so a turn parked on a confirmation would never reach it. The
+        # sentinel is the process's only exit signal, so nothing may skip it —
+        # a cancel that raised would recreate the immortal process it prevents.
         try:
-            apply_control(control, state)
-        except Exception:  # pylint: disable=broad-exception-caught
-            # A malformed control line must never take the pump down: losing
-            # this thread means every later confirmation hangs with nothing
-            # able to answer it.
-            logger.exception("control message failed: %s", line)
-    queries.put(None)  # stdin closed
+            state.cancel_active()
+        finally:
+            queries.put(None)  # stdin closed
+
+
+def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
+    """Write one event, reporting whether the wire is still there.
+
+    Only for the writes where a dead pipe means the parent left rather than the
+    turn failed — startup and the run loop's own error handler. Everywhere else
+    a write failure must propagate.
+    """
+    try:
+        _write(event, out)
+        return True
+    except OSError as exc:
+        logger.warning("stdout is gone (%s) — nothing left to report to", exc)
+        return False
+
+
+def _exit_cleanly(out) -> None:
+    """Leave without waiting on the agent's non-daemon threads.
+
+    The agent leaves memory extraction and the filesystem watcher behind, so a
+    plain return hangs the interpreter at shutdown — a one-shot `run --query`
+    sat for 400s until its caller killed it. Nothing here owns unflushed state:
+    events are flushed per line and the DBs commit per write. Both flushes are
+    guarded because the usual way of arriving here is the parent — which owns
+    both pipes — having already gone.
+    """
+    for name, stream in (("stdout", out), ("stderr", sys.stderr)):
+        try:
+            stream.flush()
+        except OSError as exc:
+            logger.warning("%s was already gone at exit: %s", name, exc)
+    os._exit(0)
 
 
 def _write(event: Dict[str, Any], out) -> None:
@@ -646,14 +796,9 @@ def _record_turn(agent: Any, query: str, answer: str) -> None:
 
     Without this the flagship is amnesiac over stdio. ``Agent`` composes each
     request as ``[system, *conversation_history, user]`` (see
-    ``_build_messages``), and nothing in the base class ever appends to
-    ``conversation_history`` — the HTTP surface fills it in per request
-    (``gaia/ui/agent_loop.py``), and this transport did not. So every TUI turn
-    reached the model as exactly two messages, system + the current question.
-
-    The user-visible cost was not subtle: asked "print issue 2975" one turn
-    after a triage of amd/gaia, the agent replied "I need to know which
-    repository it belongs to". It was not being told.
+    ``_build_messages``) and nothing in the base class ever appends to
+    ``conversation_history``, so a turn this transport does not record reaches
+    the model as system + the current question and nothing else.
 
     Only the question and the final answer are kept. Tool calls and their
     results belong to the turn that made them and the agent already threads
@@ -689,7 +834,6 @@ def log_path() -> "Path":
     against yours. Every line also carries its pid (see ``_configure_logging``)
     so the shared default stays attributable when no override is set.
     """
-    import os
     from pathlib import Path
 
     override = os.environ.get(LOG_PATH_ENV, "").strip()
@@ -710,9 +854,9 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
     User mode logs errors only — a healthy run should leave a boring file.
     ``--dev`` turns on DEBUG for the whole tree, because the questions a
     developer asks (which tool, how long, why that step) are answered by the
-    records user mode drops.
+    records user mode drops. The permission audit trail is deliberately outside
+    that split — see ``AUDIT_LOGGER_NAME``.
     """
-    import logging
     from pathlib import Path
 
     sys.stdout = sys.stderr
@@ -752,6 +896,24 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
             # process-wide, so every debug call builds its LogRecord just for
             # the handler to drop it.
             lg.setLevel(logging.NOTSET)
+
+    # Configured last, so the NOTSET sweep above cannot clear it. Its own
+    # handler at AUDIT_LEVEL is what keeps a bypass toggle on the record in
+    # user mode, where the shared handler drops everything below ERROR.
+    # Not merged into the shared handler at an INFO floor: gaia loggers built
+    # after this call default to INFO, so that would put the whole tree back
+    # into the user-mode log.
+    audit_handler = logging.FileHandler(path, encoding="utf-8")
+    audit_handler.setLevel(AUDIT_LEVEL)
+    audit_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s | pid:%(process)d | AUDIT | %(name)s | %(message)s"
+        )
+    )
+    audit_log = logging.getLogger(AUDIT_LOGGER_NAME)
+    audit_log.handlers = [audit_handler]
+    audit_log.setLevel(AUDIT_LEVEL)
+    audit_log.propagate = False
     return Path(path)
 
 
@@ -832,6 +994,7 @@ def run_turn(
     from gaia.ui.sse_handler import SSEOutputHandler
 
     handler = SSEOutputHandler()
+    previous_console = getattr(agent, "console", None)
     agent.console = handler
     if state is not None:
         state.attach(handler)
@@ -936,6 +1099,13 @@ def run_turn(
         # is no longer listening, and the prompt after it would hang.
         if state is not None:
             state.detach(handler)
+        # Base-agent threads outlive their turn (``_call_tool_bounded`` leaves a
+        # timed-out worker running), so a handler left attached between turns
+        # accumulates events on a queue nobody drains.
+        agent.console = previous_console
+
+
+CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
 
 
 def dispatch_query(
@@ -951,6 +1121,10 @@ def dispatch_query(
     the LLM and are never recorded as chat turns (see _record_turn's docstring
     on why a turn's own answer is what gets kept).
     """
+    if query == CLEAR_CONVERSATION_QUERY:
+        agent.conversation_history.clear()
+        _write({"type": "final", "answer": "conversation_cleared"}, out)
+        return
     if query == MEMORY_DUMP_QUERY:
         _write(_memory_dump_event(agent), out)
         return
@@ -1035,7 +1209,7 @@ def main(argv: Optional[list] = None) -> int:
         agent = GaiaAgent(config=GaiaAgentConfig(**config_kwargs))
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
-        _write(_terminal_error(exc), out)
+        _write_if_wire_alive(_terminal_error(exc), out)
         return 1
 
     # The model chip needs the AGENT's resolved model, not the launch flags —
@@ -1043,7 +1217,10 @@ def main(argv: Optional[list] = None) -> int:
     # the wire, read as part of whichever turn the child's first Send()
     # triggers (the transport doesn't scan stdout until then), so it always
     # lands before that turn's own events.
-    _write(_model_state_event(agent), out)
+    if not _write_if_wire_alive(_model_state_event(agent), out):
+        # Model load is the longest window the parent has to leave in, and it
+        # is gone — there is nobody left to serve.
+        _exit_cleanly(out)
 
     # stdin is read by its own thread so it keeps being read DURING a turn —
     # which is the only time a confirmation decision can arrive. The turn loop
@@ -1059,18 +1236,17 @@ def main(argv: Optional[list] = None) -> int:
             break
         try:
             dispatch_query(agent, query, out, dev=args.dev, state=state)
+        except BrokenPipeError:
+            # The wire is the parent. It being gone is not a turn to report.
+            logger.warning("stdout closed mid-turn — ending the run loop")
+            break
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
-            _write(_terminal_error(exc), out)
+            if not _write_if_wire_alive(_terminal_error(exc), out):
+                break
 
-    # stdin closed: the parent is done with us. The agent leaves non-daemon
-    # threads behind (memory extraction, the filesystem watcher), so a plain
-    # return would hang the interpreter at shutdown waiting on them — a one-shot
-    # `run --query` sat for 400s until its caller killed it. Nothing here owns
-    # unflushed state: events are flushed per line and the DBs commit per write.
-    out.flush()
-    sys.stderr.flush()
-    os._exit(0)
+    # stdin closed: the parent is done with us.
+    _exit_cleanly(out)
 
 
 if __name__ == "__main__":

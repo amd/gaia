@@ -11,6 +11,7 @@ This file (conftest.py) is a special pytest file that provides:
 See: https://docs.pytest.org/en/stable/reference/fixtures.html#conftest-py-sharing-fixtures-across-multiple-files
 
 Current fixtures:
+- _block_real_browser_launch: Session-autouse guard so no test can open a real browser
 - api_server: Function-scoped fixture that starts GAIA API server for integration tests
 - api_client: HTTP client (requests.Session) configured for API testing
 - lemonade_available: Session-scoped fixture checking if Lemonade server is running
@@ -27,11 +28,50 @@ To add new fixtures for other test suites, define them in this file and they'll
 be automatically available to all test files.
 """
 
+import os
 import subprocess
 import time
+import webbrowser
 
 import pytest
 import requests
+
+# ── Agent UI request guard (gaia.ui.security) ───────────────────────────────
+# The backend rejects a request whose ``Host`` is a name it does not know, so
+# that a page on ``attacker.example`` cannot rebind DNS to loopback and drive
+# it. Starlette's TestClient sends ``Host: testserver``, so name it here once
+# rather than rewriting every TestClient's ``base_url``. The guard's own tests
+# exercise the rejection path directly and do not rely on this.
+os.environ.setdefault("GAIA_UI_ALLOWED_HOSTS", "testserver")
+
+_BROWSER_LAUNCHERS = ("open", "open_new", "open_new_tab")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _block_real_browser_launch():
+    """Make it impossible for the suite to open the developer's real browser.
+
+    A per-test ``monkeypatch.setattr("webbrowser.open", ...)`` is not enough:
+    ``connectors.flow.start_authorization`` launches the browser from a
+    fire-and-forget ``asyncio.ensure_future`` task that resolves
+    ``webbrowser.open`` when it runs, which can be after the patch was torn
+    down. Session scope means the restored value is always this stub, so the
+    race can only ever reach a no-op.
+    """
+    saved = {name: getattr(webbrowser, name) for name in _BROWSER_LAUNCHERS}
+
+    def _blocked(url, *_args, **_kwargs):
+        raise RuntimeError(
+            f"A test tried to open a real browser at {url!r}. Patch the "
+            "launcher in the test (monkeypatch.setattr('webbrowser.open', ...)) "
+            "or stub the code path that calls it."
+        )
+
+    for name in _BROWSER_LAUNCHERS:
+        setattr(webbrowser, name, _blocked)
+    yield
+    for name, original in saved.items():
+        setattr(webbrowser, name, original)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -136,13 +176,30 @@ def lemonade_available():
     Check if Lemonade server is available and healthy.
 
     This is a session-scoped fixture that checks once at the start of the
-    test session whether Lemonade server is running on localhost:13305.
+    test session whether the configured Lemonade server is responding.
 
     Returns:
         bool: True if Lemonade server is available and responding to health checks
     """
+    # Authenticated servers 401 an unauthenticated probe, which reads as "not
+    # running" and silently skips every integration test that asks for one.
+    from gaia.llm.lemonade_client import (
+        _get_lemonade_config,
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     try:
-        response = requests.get("http://localhost:13305/api/v1/health", timeout=5)
+        response = requests.get(
+            f"{_get_lemonade_config()[2].rstrip('/')}/health",
+            timeout=5,
+            headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        )
+        if response.status_code in (401, 403):
+            pytest.fail(
+                "Lemonade is reachable but rejected authentication. Configure "
+                "LEMONADE_API_KEY for the server selected by LEMONADE_BASE_URL."
+            )
         return response.status_code == 200
     except (requests.RequestException, requests.ConnectionError):
         return False
@@ -421,6 +478,39 @@ def in_memory_keyring():
         keyring.set_keyring(previous)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _testclient_sends_ui_header():
+    """Make every ``TestClient`` carry ``X-Gaia-UI``, as real clients do.
+
+    ``gaia.ui.security.UIRequestGuardMiddleware`` refuses mutating
+    ``/api``/``/v1`` requests without it. Over a hundred call sites across
+    ~40 modules build their own ``TestClient``, so defaulting the header
+    here keeps the guard from turning all of them into header plumbing.
+
+    Tests that assert the guard *rejects* an unheadered request opt out by
+    popping the default — see ``ui_api_client`` below. A future negative
+    test that forgets fails loudly on its own 403 assertion rather than
+    passing for the wrong reason.
+    """
+    try:
+        from starlette.testclient import TestClient
+    except ImportError:
+        yield
+        return
+
+    original_init = TestClient.__init__
+
+    def _init_with_ui_header(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.headers.setdefault("x-gaia-ui", "1")
+
+    TestClient.__init__ = _init_with_ui_header
+    try:
+        yield
+    finally:
+        TestClient.__init__ = original_init
+
+
 @pytest.fixture
 def ui_api_client():
     """
@@ -432,6 +522,10 @@ def ui_api_client():
     on UI-server routes (see plan amendment A12).
 
     Skips the test if the [ui] extras are not installed.
+
+    Deliberately carries no ``X-Gaia-UI`` default: the connectors and
+    agents suites use this client to assert that an unheadered mutating
+    request is refused, so a per-call header is how a test here opts *in*.
     """
     try:
         from starlette.testclient import TestClient
@@ -442,4 +536,5 @@ def ui_api_client():
 
     app = create_app()
     with TestClient(app) as client:
+        client.headers.pop("x-gaia-ui", None)
         yield client

@@ -128,6 +128,7 @@ func LegacyToolErrorOf(e ToolResultEvent) (ToolError, bool) {
 func toolErrorFrom(data json.RawMessage, failedHint bool) (ToolError, bool) {
 	failed := failedHint
 	var te ToolError
+	var summaryTruncated bool
 
 	var payload map[string]json.RawMessage
 	if len(data) > 0 {
@@ -135,6 +136,9 @@ func toolErrorFrom(data json.RawMessage, failedHint bool) (ToolError, bool) {
 			// A payload that is not an object carries no error fields to read.
 			return ToolError{}, failed
 		}
+	}
+	if raw, ok := payload["summary_truncated"]; ok {
+		_ = json.Unmarshal(raw, &summaryTruncated)
 	}
 
 	if s, ok := stringField(payload, "status"); ok && strings.EqualFold(s, "error") {
@@ -175,7 +179,7 @@ func toolErrorFrom(data json.RawMessage, failedHint bool) (ToolError, bool) {
 	// The email sidecar string-encodes the tool's whole return value into
 	// `summary`, so the failure is one level down.
 	if summary, ok := stringField(payload, "summary"); ok {
-		if nested, nestedFailed := toolErrorFromEncoded(summary); nestedFailed {
+		if nested, nestedFailed := toolErrorFromEncoded(summary, summaryTruncated); nestedFailed {
 			failed = true
 			if te.Message == "" {
 				te.Message = nested.Message
@@ -208,7 +212,7 @@ const TruncatedNote = "(the agent cut this message short before sending it — r
 // A payload that was truncated mid-encoding no longer parses, so the raw text is
 // surfaced instead: it is still the tool's own words, and dropping it would
 // leave only the model's paraphrase.
-func toolErrorFromEncoded(encoded string) (ToolError, bool) {
+func toolErrorFromEncoded(encoded string, truncatedHint bool) (ToolError, bool) {
 	trimmed := strings.TrimSpace(encoded)
 	if !strings.HasPrefix(trimmed, "{") {
 		return ToolError{}, false
@@ -217,12 +221,43 @@ func toolErrorFromEncoded(encoded string) (ToolError, bool) {
 		return te, failed
 	}
 	// Unparsable: look for the markers a failed GAIA tool result carries.
-	for _, marker := range []string{`"error"`, `"ok": false`, `"ok":false`} {
+	for _, marker := range []string{`"ok": false`, `"ok":false`} {
+		if strings.Contains(trimmed, marker) {
+			return ToolError{Message: trimmed + "\n" + TruncatedNote}, true
+		}
+	}
+	// Older producers do not send summary_truncated. The encoded summary is
+	// already known to be incomplete because it failed JSON parsing, so visible
+	// successes still settle a batch result without that optional hint.
+	if truncatedPayloadShowsPartialSuccess(trimmed) {
+		return ToolError{}, false
+	}
+	for _, marker := range []string{`"error"`} {
 		if strings.Contains(trimmed, marker) {
 			return ToolError{Message: trimmed + "\n" + TruncatedNote}, true
 		}
 	}
 	return ToolError{}, false
+}
+
+// truncatedPayloadShowsPartialSuccess recognizes the stable batch envelope
+// evidence without trying to parse an intentionally incomplete JSON string.
+func truncatedPayloadShowsPartialSuccess(encoded string) bool {
+	const key = `"succeeded"`
+	idx := strings.Index(encoded, key)
+	if idx < 0 {
+		return false
+	}
+	rest := strings.TrimSpace(encoded[idx+len(key):])
+	if !strings.HasPrefix(rest, ":") {
+		return false
+	}
+	rest = strings.TrimSpace(rest[1:])
+	if strings.HasPrefix(rest, "[") {
+		rest = strings.TrimSpace(rest[1:])
+		return rest != "" && !strings.HasPrefix(rest, "]")
+	}
+	return rest != "" && rest[0] >= '1' && rest[0] <= '9'
 }
 
 func stringField(payload map[string]json.RawMessage, key string) (string, bool) {

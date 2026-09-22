@@ -8,6 +8,8 @@ Purpose: Verify that the tool decorator correctly registers tools
 with all metadata including the atomic parameter.
 """
 
+from typing import Dict, List, Optional
+
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
@@ -69,6 +71,19 @@ class TestToolDecorator:
         assert "explicit_non_atomic" in _TOOL_REGISTRY
         assert _TOOL_REGISTRY["explicit_non_atomic"]["atomic"] is False
 
+    def test_supported_kwargs_are_registered_unchanged(self):
+        """All supported decorator kwargs retain their registry values."""
+
+        @tool(atomic=True, display_label="Run report", timeout=42.5)
+        def configured_tool() -> str:
+            """A configured tool."""
+            return "result"
+
+        metadata = _TOOL_REGISTRY["configured_tool"]
+        assert metadata["atomic"] is True
+        assert metadata["display_label"] == "Run report"
+        assert metadata["timeout"] == 42.5
+
     def test_multiple_tools_mixed_atomic(self):
         """Test that multiple tools can have different atomic values."""
 
@@ -112,6 +127,101 @@ class TestToolDecorator:
         assert params["enabled"]["type"] == "boolean"
         assert params["enabled"]["required"] is False
 
+    def test_arg_descriptions_parsed_from_docstring(self):
+        """The Args: block lands on each parameter, not just the blob (#3581)."""
+
+        @tool
+        def documented(name: str, limit: int = 10) -> dict:
+            """Do a thing.
+
+            Args:
+                name: Human-readable agent name, required.
+                limit: How many results to return.
+
+            Returns:
+                A dict.
+            """
+            return {}
+
+        params = _TOOL_REGISTRY["documented"]["parameters"]
+        assert params["name"]["description"] == "Human-readable agent name, required."
+        assert params["limit"]["description"] == "How many results to return."
+
+    def test_arg_description_joins_continuation_lines(self):
+        """A wrapped argument description is collapsed into one string."""
+
+        @tool
+        def wrapped(system_prompt: str = "") -> dict:
+            """Do a thing.
+
+            Args:
+                system_prompt: The generated agent's own system prompt — its
+                    personality and instructions.
+
+            Returns:
+                A dict.
+            """
+            return {}
+
+        params = _TOOL_REGISTRY["wrapped"]["parameters"]
+        assert params["system_prompt"]["description"] == (
+            "The generated agent's own system prompt — its personality and "
+            "instructions."
+        )
+
+    def test_undocumented_arg_has_no_description_key(self):
+        """Absent docstring text leaves the key off rather than emitting ''."""
+
+        @tool
+        def undocumented(value: str) -> dict:
+            """No Args block here."""
+            return {}
+
+        assert (
+            "description" not in _TOOL_REGISTRY["undocumented"]["parameters"]["value"]
+        )
+
+    def test_container_and_optional_types_inferred(self):
+        """List/Dict and Optional[...] resolve instead of falling back."""
+
+        @tool
+        def containers(
+            starters: Optional[List[str]] = None,
+            tags: list[str] | None = None,
+            meta: Optional[Dict[str, str]] = None,
+            plain: dict = None,
+        ) -> dict:
+            """Tool with container parameters."""
+            return {}
+
+        params = _TOOL_REGISTRY["containers"]["parameters"]
+        assert params["starters"]["type"] == "array"
+        assert params["tags"]["type"] == "array"
+        assert params["meta"]["type"] == "object"
+        assert params["plain"]["type"] == "object"
+
+    def test_optional_scalar_unwrapped(self):
+        """Optional[str] is still a string, not 'unknown'."""
+
+        @tool
+        def maybe(value: Optional[str] = None, count: Optional[int] = None) -> dict:
+            """Tool with optional scalars."""
+            return {}
+
+        params = _TOOL_REGISTRY["maybe"]["parameters"]
+        assert params["value"]["type"] == "string"
+        assert params["count"]["type"] == "integer"
+
+    def test_unannotated_param_stays_unknown(self):
+        """No annotation means no declared type — downstream reads it as such."""
+
+        @tool
+        def bare(value) -> dict:
+            """Tool with an unannotated parameter."""
+            return {}
+
+        assert _TOOL_REGISTRY["bare"]["parameters"]["value"]["type"] == "unknown"
+
     def test_tool_function_callable(self):
         """Test that the registered function is callable and works."""
 
@@ -123,3 +233,28 @@ class TestToolDecorator:
         func = _TOOL_REGISTRY["working_tool"]["function"]
         result = func(value="hello")
         assert result == {"processed": "HELLO"}
+
+    def test_tool_empty_parentheses_registers(self):
+        """The explicit empty-parentheses form remains supported."""
+
+        @tool()
+        def empty_parentheses_tool() -> str:
+            return "result"
+
+        assert "empty_parentheses_tool" in _TOOL_REGISTRY
+
+    @pytest.mark.parametrize("unexpected", ["risk_tier", "atmoic", "timeuot"])
+    def test_unexpected_kwargs_fail_at_decoration(self, unexpected):
+        """Unknown and misspelled kwargs fail before registry insertion."""
+
+        def demo_tool() -> str:
+            return "result"
+
+        with pytest.raises(TypeError) as exc_info:
+            tool(**{unexpected: True})(demo_tool)
+
+        assert str(exc_info.value) == (
+            f"@tool(...) got unexpected keyword argument '{unexpected}' for tool "
+            "'demo_tool'. Accepted: atomic, display_label, timeout."
+        )
+        assert "demo_tool" not in _TOOL_REGISTRY

@@ -10,7 +10,7 @@ Dependabot automatically monitors GAIA's dependencies and opens pull requests fo
 
 ## How GAIA uses Dependabot
 
-Dependabot is configured in [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) and runs every Monday across five entries: one for Python (`pip`), one for GitHub Actions, and three for npm (the root workspace plus two standalone app workspaces). Every entry has `open-pull-requests-limit: 5` — the prior `0` (soft-disabled) state was a "silent fallback" violation that's now retired by design ([#1157](https://github.com/amd/gaia/issues/1157)).
+Dependabot is configured in [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) and runs every Monday across four entries: one for Python (`pip`), one for GitHub Actions, and two for npm (the root workspace plus the standalone Agent UI workspace). Every entry has `open-pull-requests-limit: 5` — the prior `0` (soft-disabled) state was a "silent fallback" violation that's now retired by design ([#1157](https://github.com/amd/gaia/issues/1157)).
 
 A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/dependabot-automerge.yml) auto-merges low-risk Dependabot PRs once required status checks pass.
 
@@ -21,12 +21,11 @@ A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://g
 | `/` | pip | 5 | `python-dependencies` | weekly / monday |
 | `/` | npm | 5 | `root-npm-dependencies` | weekly / monday |
 | `/src/gaia/apps/webui` | npm | 5 | `agent-ui-dependencies` | weekly / monday |
-| `/src/gaia/apps/example/webui` | npm | 5 | `example-app-dependencies` | weekly / monday |
 | `/` | github-actions | 5 | `github-actions` | weekly / monday |
 
 **Why grouping matters.** Each ecosystem uses a wildcard `groups:` stanza so that a week's worth of updates collapse into a single grouped PR per ecosystem. Without grouping, the `limit: 5` would be hit by five individual single-package PRs and the rest would queue — defeating the point of the cap.
 
-**Workspace coverage.** The root npm entry follows the workspaces declaration in `package.json` (`src/gaia/electron`, `src/gaia/apps/*/webui`). The flagship Agent UI at `src/gaia/apps/webui` is **not** matched by that glob (it sits directly under `apps/`, not under `apps/<name>/webui`) so it has its own entry above.
+**Workspace coverage.** The root npm entry follows the workspaces declaration in `package.json` (`src/gaia/electron`, `src/gaia/apps/*/webui`), including the example Electron app. The flagship Agent UI at `src/gaia/apps/webui` is **not** matched by that glob (it sits directly under `apps/`, not under `apps/<name>/webui`) so it has its own entry above. Apps that match `src/gaia/apps/*/webui` should not carry a nested lockfile or a nested Dependabot entry.
 
 ## Auto-merge policy
 

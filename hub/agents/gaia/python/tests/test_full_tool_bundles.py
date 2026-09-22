@@ -22,6 +22,7 @@ the ``doc`` profile is ``tests/unit/test_chat_tool_bundles.py``.
 from __future__ import annotations
 
 import contextlib
+import json
 
 import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -35,7 +36,7 @@ from gaia_agent_chat.tool_bundles import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max leaves 12).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=28 minus 15 CORE leaves 13).
 MAX_BUNDLE_MEMBERS = 6
 
 
@@ -105,6 +106,24 @@ def test_escape_hatch_is_registered_and_core(flagship_registry):
     assert "load_tools" in flagship_registry
 
 
+def test_skill_discovery_loader_is_registered_and_core(flagship_registry):
+    """A shortlist must be able to call the tool its prompt advertises."""
+    assert "load_skill" in FULL_CORE_TOOLS
+    assert "load_skill" in flagship_registry
+
+
+def test_file_edit_tools_are_core(flagship_registry):
+    """Semantic selection cannot rank editing (#3752) — it must be always-on."""
+    assert {"write_file", "edit_file"} <= set(FULL_CORE_TOOLS)
+    assert {"write_file", "edit_file"} <= flagship_registry
+
+
+def test_run_python_is_core(flagship_registry):
+    """Without it the model guesses a number or leaves a script in the repo."""
+    assert "run_python" in FULL_CORE_TOOLS
+    assert "run_python" in flagship_registry
+
+
 def test_bundle_menu_renders_for_the_flagship():
     """An undiscoverable escape hatch is the same as no escape hatch."""
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
@@ -132,7 +151,10 @@ def test_optional_tools_are_present_on_a_full_install(flagship_registry):
 
 def test_core_is_subset_of_bundle_union():
     """Every CORE tool is in a bundle too, except the CORE-only load_tools."""
-    assert set(FULL_CORE_TOOLS) - _bundle_members() == {"load_tools"}
+    assert set(FULL_CORE_TOOLS) - _bundle_members() == {
+        "load_tools",
+        "read_tool_output",
+    }
 
 
 def test_bundles_have_unique_names():
@@ -141,7 +163,11 @@ def test_bundles_have_unique_names():
 
 
 def test_bundles_stay_small():
-    oversized = {b.name: len(b.members) for b in FULL_BUNDLES if len(b.members) > 6}
+    oversized = {
+        b.name: len(b.members)
+        for b in FULL_BUNDLES
+        if len(b.members) > MAX_BUNDLE_MEMBERS
+    }
     assert not oversized, (
         f"bundles over {MAX_BUNDLE_MEMBERS} members: {oversized}. One pull-in "
         "must not be able to exhaust the dynamic slots — split the group."
@@ -159,6 +185,43 @@ def test_full_profile_is_wired_to_the_full_config():
     assert cfg.core is FULL_CORE_TOOLS
     assert cfg.bundles is FULL_BUNDLES
     assert cfg.optional is FULL_OPTIONAL_TOOLS
+
+
+def test_trimming_actually_saves_most_of_the_tool_payload():
+    """The point of the whole change, pinned so a regression is visible.
+
+    Measured on the real renderers with tiktoken (cl100k) as a tokenizer-agnostic
+    proxy — Gemma's own counts differ, but the ratio is what this guards. Uses
+    the offline skeleton: constructing a live GaiaAgent preloads a model.
+    """
+    tiktoken = pytest.importorskip("tiktoken")
+    from gaia.eval.tool_cost import build_full_agent_skeleton
+
+    enc = tiktoken.get_encoding("cl100k_base")
+    agent = build_full_agent_skeleton()
+    registry = agent._tools_registry
+
+    def cost(names):
+        schemas = json.dumps(agent._build_openai_tool_schemas(filter_to=names))
+        return len(enc.encode(schemas)) + len(
+            enc.encode(agent._format_tools_for_prompt(filter_to=names))
+        )
+
+    everything = cost(None)
+    core_only = cost(sorted(n for n in FULL_CORE_TOOLS if n in registry))
+    # A saturated session: CORE plus enough dynamic slots to reach the cap.
+    cap = GaiaAgentConfig().dynamic_tools_max
+    saturated_names = sorted(registry)[:cap]
+    saturated = cost(saturated_names)
+
+    assert core_only < everything * 0.30, (
+        f"CORE-only tool prompt is {core_only} tokens against {everything} for "
+        "the whole registry — the always-on set has grown too expensive."
+    )
+    assert saturated < everything * 0.55, (
+        f"a capped-out session costs {saturated} tokens against {everything} "
+        f"unfiltered (cap={cap}). Either the cap or CORE has drifted up."
+    )
 
 
 def test_cap_leaves_room_for_two_whole_bundles():

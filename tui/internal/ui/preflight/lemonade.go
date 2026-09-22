@@ -42,6 +42,21 @@ var legacyBinaries = []string{"lemonade-server", "lemonade-server-dev"}
 // named a binary meant that binary.
 const serverPathEnv = "LEMONADE_SERVER_PATH"
 
+// lemonadeRowLabel names the local model server on the checklist.
+//
+// "Local AI" said what it does and not what it IS, so every remedy under it —
+// and every doc, log line and support answer — talked about Lemonade while the
+// row the user was looking at never used the word. Naming it is what makes the
+// row searchable.
+const lemonadeRowLabel = "Lemonade"
+
+// modelRowLabel names the weights this agent needs.
+//
+// Not "AI model": on a screen whose other rows are also AI, that names the
+// category rather than the thing, and it gives a user staring at a multi-GB
+// download no word they can search for. "Language model" is what it is.
+const modelRowLabel = "Language model"
+
 // lemonadeDocs is where the run instructions for every platform live.
 const lemonadeDocs = "https://lemonade-server.ai/docs/guide/"
 
@@ -52,6 +67,16 @@ type launcher struct {
 	// Restart is the command for a server that is up but wedged. Equal to Start
 	// where the launcher has no distinct restart form.
 	Restart string
+	// Argv is Start as something this process can SPAWN: program first, then
+	// arguments, already split and unquoted.
+	//
+	// Start is prose — it is quoted for a shell and may carry an env-assignment
+	// prefix, both of which exist so a human can paste it. Splitting that string
+	// back apart to exec it would be a quoting bug waiting to happen, so the
+	// resolver records both forms at the point where it still knows the real
+	// path. Empty means "do not start this automatically" (nothing installed,
+	// or a launcher only a human can drive).
+	Argv []string
 	// AppHint names the way a human is expected to do it when that is not a
 	// command at all — the macOS Applications folder, the Windows tray icon.
 	// Empty on platforms with no such path.
@@ -117,9 +142,12 @@ var macAppBundles = []string{
 // macDaemonPlist is the file whose presence proves it is installed. The daemon is
 // a SYSTEM job (RunAtLoad, no KeepAlive), so it does not come back on its own
 // after it exits, and only launchctl can restart it.
+//
+// The label tracks the pinned Lemonade: upstream renamed it from
+// com.lemonade.server after 11.5.0, so the old one matches nothing on 11.8.1.
 const (
-	macDaemonLabel = "com.lemonade.server"
-	macDaemonPlist = "/Library/LaunchDaemons/com.lemonade.server.plist"
+	macDaemonLabel = "ai.lemonadeserver.server"
+	macDaemonPlist = "/Library/LaunchDaemons/ai.lemonadeserver.server.plist"
 )
 
 // macDaemonBinaries are where the installer puts lemond. Probed by PATH-free
@@ -164,7 +192,7 @@ func resolveLauncherWith(p hostProbe) launcher {
 			return launcher{BadOverride: override}
 		}
 		cmd := quoteCommand(override)
-		return launcher{Start: cmd, Restart: cmd, Found: true}
+		return launcher{Start: cmd, Restart: cmd, Argv: []string{override}, Found: true}
 	}
 
 	switch p.goos {
@@ -188,7 +216,11 @@ func resolveLauncherWith(p hostProbe) launcher {
 	// precise thing to name.
 	if path, err := p.lookPath("lemond"); err == nil {
 		cmd := quoteCommand(path)
-		return launcher{Start: cmd, Restart: cmd, AppHint: appHintFor(p.goos), Found: true}
+		return launcher{
+			Start: cmd, Restart: cmd,
+			Argv:    []string{path},
+			AppHint: appHintFor(p.goos), Found: true,
+		}
 	}
 
 	// 3. Legacy CLI, if this machine really does still have it.
@@ -216,7 +248,13 @@ func resolveLauncherWith(p hostProbe) launcher {
 // AppHint carries a shell-free alternative for exactly that reason: the tray app
 // is what the docs tell a Windows user to use, so it leads the remedy's prose and
 // this line is the terminal fallback.
-func windowsStart(exe string) string { return quoteCommand(exe) + " --silent" }
+// windowsSilentFlag keeps the installer's tray-less start out of a second
+// literal, so the pasted command and the spawned argv cannot drift.
+const windowsSilentFlag = "--silent"
+
+func windowsStart(exe string) string {
+	return quoteCommand(exe) + " " + windowsSilentFlag
+}
 
 const windowsTrayHint = "the 🍋 tray icon → Open Lemonade App"
 
@@ -228,12 +266,20 @@ func resolveWindows(p hostProbe) (launcher, bool) {
 		exe := filepath.Join(local, "lemonade_server", "bin", "LemonadeServer.exe")
 		if p.exists(exe) {
 			cmd := windowsStart(exe)
-			return launcher{Start: cmd, Restart: cmd, AppHint: windowsTrayHint, Found: true}, true
+			return launcher{
+				Start: cmd, Restart: cmd,
+				Argv:    []string{exe, windowsSilentFlag},
+				AppHint: windowsTrayHint, Found: true,
+			}, true
 		}
 	}
 	if path, err := p.lookPath("LemonadeServer.exe"); err == nil {
 		cmd := windowsStart(path)
-		return launcher{Start: cmd, Restart: cmd, AppHint: windowsTrayHint, Found: true}, true
+		return launcher{
+			Start: cmd, Restart: cmd,
+			Argv:    []string{path, windowsSilentFlag},
+			AppHint: windowsTrayHint, Found: true,
+		}, true
 	}
 	return launcher{}, false
 }
@@ -270,12 +316,17 @@ func resolveLinux(p hostProbe) (launcher, bool) {
 		return launcher{
 			Start:          "systemctl --user start lemond",
 			Restart:        "systemctl --user restart lemond",
+			Argv:           []string{"systemctl", "--user", "start", "lemond"},
 			ServiceManaged: true,
 			Found:          true,
 		}, true
 	}
 	if daemon != "" {
-		return launcher{Start: daemon, Restart: daemon, Foreground: true, Found: true}, true
+		return launcher{
+			Start: daemon, Restart: daemon,
+			Argv:       []string{daemon},
+			Foreground: true, Found: true,
+		}, true
 	}
 	return launcher{}, false
 }
@@ -300,7 +351,7 @@ func unitPath(p hostProbe) string {
 //     /Applications/lemonade-app.app on that machine produced only
 //     `/usr/local/bin/lemonade-tray` — no server. It brings up the tray UI; it is
 //     not, on its own, a verified way to get the port listening.
-//   - `launchctl kickstart system/com.lemonade.server` looks canonical (the
+//   - `launchctl kickstart system/<macDaemonLabel>` looks canonical (the
 //     plist is installed, ProgramArguments is [/usr/local/bin/lemond]) but on
 //     that machine the job reports `state = not running` while a lemond outside
 //     launchd serves the port — and driving a system-domain job needs sudo, so
@@ -320,6 +371,7 @@ func resolveDarwin(p hostProbe) (launcher, bool) {
 		if p.exists(path) {
 			return launcher{
 				Start: path, Restart: path,
+				Argv:       []string{path},
 				AppHint:    appHintFor("darwin"),
 				Foreground: true,
 				Found:      true,

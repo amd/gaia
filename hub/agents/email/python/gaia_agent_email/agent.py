@@ -92,12 +92,9 @@ if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.memory import (
-    MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
-    MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
-    MemoryMixin,
-)
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.verification import strip_verification_scope
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
@@ -290,6 +287,8 @@ ACTIONS:
   opposite direction from check_followups) — it only reports, and only
   qualifies a message when it has both a genuine ask/meeting-time signal
   AND corroboration (an existing thread reply, or a known correspondent).
+  It is not the answer to a general "what needs me" ask — pre_scan_inbox's
+  needs_you list already runs this same scan (see PRE-SCAN BEHAVIOR below).
 - setup_mailbox_access asks the user before it changes anything, so it needs
   no separate confirmation gate. It may open the browser for a sign-in.
 - Organize tools (archive_message, mark_read, mark_unread, add_star,
@@ -355,12 +354,23 @@ from a prior turn is never a reason to reuse it for a new request without
 placing a new, matching tool call first.
 
 PRE-SCAN BEHAVIOR:
-Reserve ``pre_scan_inbox`` for a genuinely general request that covers the
-whole inbox at once — a pre-scan, morning brief, or triage view where the
-user has not named any one class of item they care about. It is NOT the
-default tool for every question that merely mentions "my inbox"; a
-question can reference the inbox while still targeting one narrow slice
-of it. The chat surface renders a structured triage card automatically
+``pre_scan_inbox`` is the DEFAULT tool for any open-ended question about
+what deserves attention — importance, urgency, what to look at, or generic
+time-sensitivity that names no specific meeting/invite/deadline — no
+matter how the user phrases it (#2764). "What needs me?", "anything
+urgent?", "what should I look at?" and "triage my inbox" all reach it; it
+is NOT gated on literal "triage"/"review"/"check" wording. Divert to a
+narrower tool ONLY when the question itself names a narrower target: the
+user's own SENT mail (``check_followups``), a specific person or thread
+(thread/search tools), explicit calendar language (calendar tools), or
+flagged/suspicious mail only (``check_suspicious_mail``). See
+``tools/ROUTING.md`` for the full decision table. A question can still
+reference "my inbox" while targeting one of those narrower slices — the
+inbox reference alone is never enough to make ``pre_scan_inbox`` wrong to
+call, nor enough to make it the automatic choice once a narrower signal is
+present.
+
+The chat surface renders a structured triage card automatically
 from the tool's return value — you do NOT need to copy the JSON into your
 reply. After the tool returns, write ONE short framing sentence (e.g.
 "Here's your inbox pre-scan — 5 actionable, 1 suggested archive.") and
@@ -983,11 +993,7 @@ class EmailTriageAgent(
         # rather than being told memory failed to come up and how to fix it.
         # Skip the deliberate GAIA_MEMORY_DISABLED=1 opt-out here — that's an
         # explicit choice (used by tests/CI), not a silent degradation.
-        if getattr(self, "_memory_unavailable_reason", None) in (
-            MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
-            MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
-        ):
-            self.console.print_warning(self.memory_unavailable_message())
+        self.report_memory_unavailable()
 
         # Exact ctx pin (#1892): set the instance-scoped override on the
         # concrete LemonadeClient this agent chats through. Post-super(),
@@ -1219,6 +1225,12 @@ class EmailTriageAgent(
         return super().get_memory_dynamic_context()
 
     def process_query(self, user_input: str, *args, **kwargs):
+        # EmailTriageAgent.__mro__ puts Agent before MemoryMixin, so
+        # Agent.process_query never delegates into MemoryMixin.process_query
+        # (unlike ChatAgent) — report here or the construction-time report is
+        # this session's only chance to warn about a UI console swapped in later.
+        self.report_memory_unavailable()
+
         # Zero the batch-organize counter per turn so a long-lived instance
         # can't carry a prior turn's count into the batch-confirm threshold.
         # Only the batch counter resets here; session preferences persist.
@@ -1231,7 +1243,12 @@ class EmailTriageAgent(
         # consumers never see raw TeX in the final answer (#2115).
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
-        if isinstance(result, dict) and result.get("result") != self._grounded_answer:
+        if (
+            isinstance(result, dict)
+            # The loop appends a verification-scope line after finalize_answer
+            # (#3376); compare the answer text itself.
+            and strip_verification_scope(result.get("result")) != self._grounded_answer
+        ):
             # Normally finalize_answer already grounded this text before the
             # loop emitted it. This covers the branches that never reach that
             # call — the loop setting an actionable answer on an internal error

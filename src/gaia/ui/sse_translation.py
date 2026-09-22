@@ -338,7 +338,13 @@ class CanonicalTranslator:
             # The handler's tool_result event is a summary view; carry the
             # available structured bits so the generic result card has content.
             data = {}
-            for key in ("summary", "success", "command_output", "latency_ms"):
+            for key in (
+                "summary",
+                "success",
+                "summary_truncated",
+                "command_output",
+                "latency_ms",
+            ):
                 if key in event:
                     data[key] = event[key]
         tool = self._last_tool or "unknown"
@@ -375,15 +381,16 @@ class CanonicalTranslator:
 
     def _on_answer(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         usage: Dict[str, Any] = {}
-        # ``tokens`` and ``ttft`` are already omitted upstream when no real
-        # measurement exists (SSEOutputHandler.print_answer), so anything here
-        # is genuine — dropping them cost the TUI its tokens/sec readout.
+        # ``tokens``, ``ttft`` and ``tok_per_s`` are already omitted upstream
+        # when no real measurement exists (SSEOutputHandler.print_answer), so
+        # anything here is genuine — dropping them cost the TUI its readout.
         for src, dst in (
             ("steps", "steps"),
             ("tools_used", "tools_used"),
             ("elapsed", "elapsed"),
             ("tokens", "tokens"),
             ("ttft", "ttft"),
+            ("tok_per_s", "tok_per_s"),
             # Dev-mode per-turn record, passed through verbatim — the client
             # decides what of it to show, so a new field needs no change here.
             ("metrics", "metrics"),
@@ -635,7 +642,11 @@ def render_invocation(args: Dict[str, Any]) -> str:
         parts.append(f'{key}="{text}"')
     clause = ", ".join(parts)
     if len(clause) > INVOCATION_TOTAL_CHARS:
-        clause = clause[:INVOCATION_TOTAL_CHARS] + "…"
+        hidden = len(clause) - INVOCATION_TOTAL_CHARS
+        clause = (
+            clause[:INVOCATION_TOTAL_CHARS]
+            + f"… [+{hidden:,} more characters not shown]"
+        )
     return clause
 
 

@@ -16,24 +16,72 @@ const maxFrames = 200
 // describe itself implements [SnapshotProvider]; anything else is reported with
 // View "unknown" rather than a guess.
 type Snapshot struct {
-	View            string   `json:"view"`
-	Agent           string   `json:"agent"`
-	Streaming       bool     `json:"streaming"`
-	HubTab          string   `json:"hub_tab,omitempty"`
-	HubTabIndex     int      `json:"hub_tab_index"`
-	SelectedAgentID string   `json:"selected_agent_id,omitempty"`
-	VisibleAgentIDs []string `json:"visible_agent_ids"`
-	Filtering       bool     `json:"filtering"`
-	Overlay         string   `json:"overlay,omitempty"`
+	View      string `json:"view"`
+	Agent     string `json:"agent"`
+	Streaming bool   `json:"streaming"`
+	Overlay   string `json:"overlay,omitempty"`
 
-	// CanReturnToHub reports whether esc leaves the chat for the hub. In a
-	// standalone chat (`gaia chat --subprocess`) esc QUITS the program, so a
-	// client that presses it to "go back" would kill the session it is driving.
-	CanReturnToHub bool `json:"can_return_to_hub"`
+	// Blocker is the key of the readiness row refusing the launch, empty when
+	// none is. It exists so a client can assert WHY the gate is holding from
+	// model state instead of grepping the rendered remedy for a phrase — the
+	// screen's wording is allowed to change; the row key is not.
+	Blocker string `json:"blocker,omitempty"`
+
+	// Chat is the conversation view's own diagnostics, nil everywhere else.
+	Chat *ChatState `json:"chat,omitempty"`
 }
 
-// ViewUnknown is reported when the running model cannot describe its own state.
-const ViewUnknown = "unknown"
+// ChatState is what a driver needs to tell a real scroll or mouse defect from
+// a mis-aimed test.
+//
+// Every field here answers a question that the rendered screen cannot: whether
+// the transcript is pinned to the newest content or parked where the reader
+// left it, whether the app or the terminal currently owns the mouse, and how
+// many rows of content exist above the window. Without them, "I scrolled and
+// nothing moved" is indistinguishable from "I was already at the top", and
+// "my click did nothing" from "the app never had the mouse".
+type ChatState struct {
+	Messages int `json:"messages"`
+	// ScrollY is the first content row visible in the window, and ContentRows
+	// the total the transcript has laid out.
+	ScrollY     int  `json:"scroll_y"`
+	ContentRows int  `json:"content_rows"`
+	AtBottom    bool `json:"at_bottom"`
+	// FollowTail is whether streamed output still drags the view down. It goes
+	// false the moment the reader scrolls away and true again at the bottom,
+	// so it is the field that says whether a scroll was registered at all.
+	FollowTail bool `json:"follow_tail"`
+	// MouseOwner is "app" while the TUI is tracking the mouse (the wheel
+	// scrolls, links are clickable) or "terminal" while it is not — either
+	// because the user asked for SELECT MODE or because nothing wants it yet.
+	MouseOwner string `json:"mouse_owner"`
+	// MouseMotion is "cell" or "all" — which tracking mode is armed. An
+	// overlay needs "all" for hover; the plain transcript does not.
+	MouseMotion string `json:"mouse_motion,omitempty"`
+	// SelectMode is the user's own Ctrl+T choice, independent of who happens
+	// to hold the mouse this frame.
+	SelectMode bool `json:"select_mode"`
+	// ViewportRows is the height of the transcript window in rows, and
+	// HeaderRows how many screen rows sit above it — the offset a client adds
+	// to a content row to get a screen row to click.
+	ViewportRows int  `json:"viewport_rows"`
+	HeaderRows   int  `json:"header_rows"`
+	HelpOpen     bool `json:"help_open"`
+}
+
+// Every view the TUI can report. A client waits on one of these, so they are
+// constants rather than literals scattered through the view packages.
+const (
+	// ViewUnknown is reported when the running model cannot describe its own
+	// state.
+	ViewUnknown = "unknown"
+	// ViewSplash is the mascot frame the launch opens on.
+	ViewSplash = "splash"
+	// ViewPreflight is the readiness gate.
+	ViewPreflight = "preflight"
+	// ViewChat is the conversation.
+	ViewChat = "chat"
+)
 
 // SnapshotProvider is implemented by a root model that can report where the
 // user currently is. Keeping it an interface means the control package never
@@ -47,6 +95,11 @@ type Frame struct {
 	Seq    int    `json:"seq"`
 	AtMS   int64  `json:"at_ms"`
 	Screen string `json:"screen"`
+	// Raw is the same frame with its styling intact. Screen stays stripped —
+	// it is what a caller greps — but a picture built from stripped text is a
+	// grey wash that looks nothing like the terminal, so the colours have to
+	// survive the ring too.
+	Raw string `json:"raw,omitempty"`
 }
 
 // MarkMsg is a sentinel the control server injects after a batch of keys.
@@ -63,14 +116,15 @@ type MarkMsg struct{ ID int64 }
 // Bubble Tea calls Update and View from its event loop; HTTP handlers read from
 // their own goroutines. Every field is guarded by mu.
 type State struct {
-	mu      sync.RWMutex
-	seq     int
-	lastRaw string
-	frames  []Frame
-	cols    int
-	rows    int
-	snap    Snapshot
-	started time.Time
+	mu        sync.RWMutex
+	seq       int
+	lastRaw   string
+	lastPlain string
+	frames    []Frame
+	cols      int
+	rows      int
+	snap      Snapshot
+	started   time.Time
 
 	// pendingMark is set when Update sees a MarkMsg; renderedMark is promoted
 	// from it by the View that immediately follows.
@@ -91,10 +145,7 @@ func NewState(debugf func(format string, args ...any)) *State {
 		debugf = func(string, ...any) {}
 	}
 	return &State{
-		// VisibleAgentIDs is set here, not left nil: a Server started without a
-		// Recorder would otherwise serve `"visible_agent_ids": null` and any
-		// client taking its length would crash.
-		snap:    Snapshot{View: ViewUnknown, VisibleAgentIDs: []string{}},
+		snap:    Snapshot{View: ViewUnknown},
 		started: time.Now(),
 		changed: make(chan struct{}),
 		debugf:  debugf,
@@ -128,7 +179,14 @@ func (s *State) recordFrame(raw string) {
 	markAdvanced := s.renderedMark != s.pendingMark
 	s.renderedMark = s.pendingMark
 
-	if raw == s.lastRaw && s.seq > 0 {
+	// Deduped on the VISIBLE screen, not the styled bytes. The composer's
+	// cursor blinks, which changes the bytes a couple of times a second while
+	// the screen says exactly the same thing — and keying the ring on that
+	// filled all 200 slots with one motionless frame, pushing the history
+	// anyone would want to watch out the back.
+	plain := PlainScreen(raw)
+	if plain == s.lastPlain && s.seq > 0 {
+		s.lastRaw = raw
 		if markAdvanced {
 			s.broadcast()
 		}
@@ -136,10 +194,12 @@ func (s *State) recordFrame(raw string) {
 	}
 	s.seq++
 	s.lastRaw = raw
+	s.lastPlain = plain
 	s.frames = append(s.frames, Frame{
 		Seq:    s.seq,
 		AtMS:   time.Since(s.started).Milliseconds(),
-		Screen: PlainScreen(raw),
+		Screen: plain,
+		Raw:    raw,
 	})
 	if len(s.frames) > maxFrames {
 		s.frames = s.frames[len(s.frames)-maxFrames:]
@@ -177,11 +237,6 @@ func (s *State) RenderedMark() int64 {
 
 // setSnapshot stores the model's self-reported state and logs transitions.
 func (s *State) setSnapshot(snap Snapshot) {
-	if snap.VisibleAgentIDs == nil {
-		// Normalized once, here, so every endpoint serves [] and no client has
-		// to guard against null before taking its length.
-		snap.VisibleAgentIDs = []string{}
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prev := s.snap
@@ -250,21 +305,7 @@ func (s *State) UptimeMS() int64 {
 	return time.Since(s.started).Milliseconds()
 }
 
-func snapshotsEqual(a, b Snapshot) bool {
-	if a.View != b.View || a.Agent != b.Agent || a.Streaming != b.Streaming ||
-		a.HubTab != b.HubTab || a.HubTabIndex != b.HubTabIndex ||
-		a.SelectedAgentID != b.SelectedAgentID || a.Filtering != b.Filtering ||
-		a.Overlay != b.Overlay || a.CanReturnToHub != b.CanReturnToHub ||
-		len(a.VisibleAgentIDs) != len(b.VisibleAgentIDs) {
-		return false
-	}
-	for i := range a.VisibleAgentIDs {
-		if a.VisibleAgentIDs[i] != b.VisibleAgentIDs[i] {
-			return false
-		}
-	}
-	return true
-}
+func snapshotsEqual(a, b Snapshot) bool { return a == b }
 
 // PlainScreen strips ANSI styling and trailing padding so the result is what an
 // assistant should read. Lipgloss pads every line to the layout width; keeping
@@ -319,17 +360,25 @@ func (r Recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		r.state.SetSize(m.Width, m.Height)
 	case tea.KeyMsg:
-		r.state.debugf("inject: key %q reached the model", m.String())
+		r.state.debugf("inject: key reached the model (content omitted)")
 	}
 
 	next, cmd := r.inner.Update(msg)
 	r.inner = next
-	r.state.setSnapshot(snapshotOf(next))
 	return r, cmd
 }
 
+// View publishes the snapshot and the frame TOGETHER.
+//
+// The snapshot used to be taken in Update, which runs before Bubble Tea draws.
+// A client that waited on state and then read the screen therefore got the
+// frame from BEFORE the change it had just waited for — POST /wait would
+// return on `blocker: "binary"` and GET /screen would still say "checking…".
+// Current() documents these as read atomically; publishing them a render apart
+// made that untrue at exactly the moment a caller cares.
 func (r Recorder) View() string {
 	view := r.inner.View()
+	r.state.setSnapshot(snapshotOf(r.inner))
 	r.state.recordFrame(view)
 	return view
 }

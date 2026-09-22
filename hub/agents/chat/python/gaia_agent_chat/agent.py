@@ -28,6 +28,11 @@ from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
 from gaia.agents.base.agent import Agent, default_max_steps
+from gaia.agents.base.checks import (
+    attach_check,
+    check_from_python_run,
+    snippet_target,
+)
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 
@@ -41,6 +46,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AudioToolsMixin,
     BrowserToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
@@ -49,7 +55,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ScreenshotToolsMixin,
     ShellToolsMixin,
 )
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, is_tool_calling_model
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    is_tool_calling_model,
+    resolve_lemonade_base_url,
+)
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
@@ -62,6 +72,20 @@ from gaia.vlm.mixin import VLMToolsMixin
 # (which legitimately caches ``None``) is never mistaken for "not attempted
 # yet" and rebuilt on every access.
 _UNSET = object()
+
+# ``notify_desktop``'s Windows fallback: the title and body reach PowerShell
+# through the child's environment, never as text inside ``-Command``. A "'" in
+# a model-supplied message would otherwise close the string literal and the
+# rest of the message would run as PowerShell. ``$env:`` reads are values, not
+# code, so ``NOTIFY_DESKTOP_PS_SCRIPT`` stays a constant no input can alter.
+NOTIFY_TITLE_ENV_VAR = "GAIA_NOTIFY_TITLE"
+NOTIFY_MESSAGE_ENV_VAR = "GAIA_NOTIFY_MESSAGE"
+NOTIFY_DESKTOP_PS_SCRIPT = (
+    "Add-Type -AssemblyName System.Windows.Forms; "
+    "[System.Windows.Forms.MessageBox]::Show("
+    f"[string]$env:{NOTIFY_MESSAGE_ENV_VAR}, "
+    f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
+)
 
 
 @dataclass
@@ -187,6 +211,7 @@ class ChatAgent(
     VLMToolsMixin,
     ScreenshotToolsMixin,
     SDToolsMixin,
+    AudioToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -269,12 +294,10 @@ class ChatAgent(
         # Store max_chunks for adaptive retrieval
         self.base_max_chunks = config.max_chunks
 
-        # Resolve effective base_url: config value > env var > default
-        effective_base_url = (
-            config.base_url
-            if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
-        )
+        # config value > env var > embedded server > packaged default. Resolved
+        # centrally: an inline default here cannot see GAIA's embedded Lemonade,
+        # which binds a port chosen at start time.
+        effective_base_url = resolve_lemonade_base_url(config.base_url)
 
         # Embedder is device-scoped: the NPU profile uses the FLM-native
         # embedder so chat and embeddings stay co-resident on the NPU backend
@@ -352,6 +375,9 @@ class ChatAgent(
 
         # Initialize web client for browser tools (optional)
         self._web_client = None
+        # Guarded client for the inline open_url/fetch_webpage tools; built on
+        # first use (see _inline_web_client).
+        self._inline_web = None
         if config.enable_browser:
             try:
                 from gaia.web.client import WebClient
@@ -449,9 +475,10 @@ class ChatAgent(
         # never register RAG tools and can't use this restore — never trigger
         # the lazy RAG build via ``self.rag`` below; ``and`` short-circuits
         # before evaluating it.
-        _uses_rag = "doc_rag" in get_profile_spec(
-            getattr(config, "prompt_profile", "full")
-        ).tool_groups
+        _uses_rag = (
+            "doc_rag"
+            in get_profile_spec(getattr(config, "prompt_profile", "full")).tool_groups
+        )
         if _uses_rag and config.ui_session_id and self.rag:
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:
@@ -546,6 +573,24 @@ class ChatAgent(
     @session_manager.setter
     def session_manager(self, value: SessionManager) -> None:
         self._session_manager = value
+
+    def _inline_web_client(self):
+        """The SSRF-guarded ``WebClient`` behind ``open_url``/``fetch_webpage``.
+
+        Built on first use so profiles without web tools never pay for it.
+        Kept apart from ``self._web_client`` (the opt-in browser mixin's
+        client) so using these tools does not also switch ``fetch_page`` on.
+        """
+        # getattr: tests build agents via __new__ and skip __init__.
+        if getattr(self, "_inline_web", None) is None:
+            from gaia.web.client import WebClient
+
+            self._inline_web = WebClient(
+                timeout=self.config.browser_timeout,
+                max_download_size=self.config.browser_max_download_size,
+                rate_limit=self.config.browser_rate_limit,
+            )
+        return self._inline_web
 
     def _ensure_tool_loader_reset(self) -> None:
         """Bootstrap a session for a just-created agent, if none exists yet.
@@ -750,12 +795,17 @@ class ChatAgent(
         return super()._post_process_tool_result(tool_name, _tool_args, tool_result)
 
     def _get_mixin_prompts(self) -> list[str]:
-        """Auto-discover mixin prompts, but exclude SD unless actually initialized."""
-        prompts = super()._get_mixin_prompts()
-        # Remove SD prompt if SD was not explicitly initialized (saves ~1000 tokens)
-        if not hasattr(self, "sd_default_model"):
-            prompts = [p for p in prompts if "Stable Diffusion" not in p]
-        return prompts
+        """Auto-discover mixin prompts, minus SD's.
+
+        ``SDToolsMixin.get_sd_system_prompt`` opens with "You are an expert
+        image generation assistant" and runs ~5K chars. It was written for the
+        standalone SD agent, where that persona was the whole job. Auto-
+        discovery pulls it in for any class composing the mixin, so on a
+        general-purpose agent it front-loads the prompt with an identity that
+        is wrong for every other turn. The procedure lives in the ``image-gen``
+        skill instead, which renders only when a turn calls for it.
+        """
+        return [p for p in super()._get_mixin_prompts() if "Stable Diffusion" not in p]
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
@@ -860,7 +910,7 @@ No documents are currently indexed.
 - Common folders: Desktop, Documents, Downloads (under {home_dir})
 - Shell: `systeminfo`, `tasklist`, `ipconfig`, `driverquery`
 - Network: prefer `ipconfig`. Primary adapter has real Default Gateway — ignore virtual adapters.
-- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, @{{N='Memory(MB)';E={{[math]::Round($_.WS/1MB,1)}}}}"`. Avoid `tasklist /V`.
+- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, WS"` (WS is bytes; divide in your answer). Avoid `tasklist /V`.
 - CPU: `powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"`
 - GPU: `powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM"`
 - Prefer `Get-CimInstance` over `wmic` (deprecated). Do NOT use Linux commands.
@@ -1028,7 +1078,7 @@ No documents are currently indexed.
 
 **IMAGE GENERATION (when SD enabled):** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
 
-**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`.
+**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
 """
 
         # Native-only escape-hatch menu (#1450): non-native models already
@@ -1444,14 +1494,24 @@ No documents are currently indexed.
                         timeout=timeout,
                         check=False,
                     )
-                    return {
-                        "status": "success",
-                        "stdout": r.stdout[:8000],
-                        "stderr": r.stderr[:2000],
-                        "return_code": r.returncode,
-                        "has_errors": r.returncode != 0,
-                        "duration_seconds": round(time.monotonic() - start, 2),
-                    }
+                    from gaia.agents.base.artifacts import retain_excerpt
+
+                    return attach_check(
+                        {
+                            "status": "success",
+                            "stdout": retain_excerpt(self, r.stdout, 8000),
+                            "stderr": retain_excerpt(self, r.stderr, 2000),
+                            "return_code": r.returncode,
+                            "has_errors": r.returncode != 0,
+                            "duration_seconds": round(time.monotonic() - start, 2),
+                        },
+                        check_from_python_run(
+                            " ".join([file_path, args]).strip(),
+                            r.returncode,
+                            r.stdout,
+                            r.stderr,
+                        ),
+                    )
                 except subprocess.TimeoutExpired:
                     return {
                         "status": "error",
@@ -1461,11 +1521,114 @@ No documents are currently indexed.
                 except Exception as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
+            @tool
+            def run_python(code: str, timeout: int = 60) -> dict:
+                """Run a Python snippet and return what it prints.
+
+                Use this to compute, transform data, or run a quick check
+                without creating a file. It runs from the project root, so
+                relative paths reach the user's files, and the snippet itself is
+                never saved in the workspace. Report numbers from its printed
+                output — do not work them out in your head.
+
+                Args:
+                    code: Python source to run; print() whatever you need back.
+                    timeout: Max seconds to wait (default 60)
+
+                Returns:
+                    Dictionary with stdout, stderr, return_code, and duration
+                """
+                import subprocess
+                import sys
+                import tempfile
+                import time
+
+                from gaia.agents.base.project_map import resolve_project_root
+
+                try:
+                    if hasattr(self, "_project_map_root"):
+                        project = self._project_map_root()
+                    else:
+                        project = resolve_project_root(
+                            getattr(self.config, "project_root", None)
+                        )
+                except ValueError as e:  # GAIA_PROJECT_ROOT names no directory
+                    return {"status": "error", "error": str(e), "has_errors": True}
+                run_dir = Path(project) if project else Path.cwd()
+                if not self.path_validator.is_path_allowed(str(run_dir)):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {run_dir} is not in allowed "
+                        "paths, so a snippet cannot run from it. Add it to the "
+                        "agent's allowed paths, or set GAIA_PROJECT_ROOT to an "
+                        "allowed project.",
+                        "has_errors": True,
+                    }
+                env = dict(os.environ)
+                if project:
+                    existing = env.get("PYTHONPATH")
+                    env["PYTHONPATH"] = (
+                        os.pathsep.join([project, existing]) if existing else project
+                    )
+
+                # The system temp dir keeps the snippet out of the workspace.
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    suffix=".py",
+                    prefix="gaia-run-",
+                    delete=False,
+                    encoding="utf-8",
+                ) as handle:
+                    handle.write(code)
+                    snippet = Path(handle.name)
+                start = time.monotonic()
+                try:
+                    r = subprocess.run(
+                        [sys.executable, str(snippet)],
+                        cwd=str(run_dir),
+                        env=env,
+                        capture_output=True,
+                        stdin=subprocess.DEVNULL,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=timeout,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    return {
+                        "status": "error",
+                        "error": f"Timed out after {timeout}s",
+                        "has_errors": True,
+                    }
+                except OSError as e:
+                    return {
+                        "status": "error",
+                        "error": f"Could not start {sys.executable}: {e}",
+                        "has_errors": True,
+                    }
+                finally:
+                    snippet.unlink(missing_ok=True)
+                return attach_check(
+                    {
+                        "status": "success",
+                        "stdout": r.stdout[:8000],
+                        "stderr": r.stderr[:2000],
+                        "return_code": r.returncode,
+                        "has_errors": r.returncode != 0,
+                        "duration_seconds": round(time.monotonic() - start, 2),
+                    },
+                    check_from_python_run(
+                        snippet_target(code), r.returncode, r.stdout, r.stderr
+                    ),
+                )
+
         # VLM tools — analyze_image, answer_question_about_image
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
         try:
+            # getattr: tools can register from super().__init__(), before
+            # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                base_url=getattr(self, "_base_url", "http://localhost:13305/api/v1")
+                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
             )
             logger.debug(
                 "VLM tools registered (analyze_image, answer_question_about_image)"
@@ -1477,12 +1640,30 @@ No documents are currently indexed.
         # Only registered when explicitly enabled via config.enable_sd_tools=True.
         # Off by default to prevent image generation being called for document Q&A.
         if getattr(self.config, "enable_sd_tools", False):
+            from gaia.config import GAIA_CONFIG_DIR
+
+            # Absolute, under the user's home. The mixin default is relative to
+            # cwd, which for a daemon-launched sidecar is the package directory.
+            sd_output_dir = GAIA_CONFIG_DIR / "cache" / "sd" / "images"
             try:
-                self.init_sd()
-                logger.debug("SD tools registered (generate_image, list_sd_models)")
-            except Exception as _sd_err:
+                self.init_sd(output_dir=str(sd_output_dir))
                 logger.debug(
-                    "SD tools not available (SD model not loaded): %s", _sd_err
+                    "SD tools registered (generate_image, list_sd_models, "
+                    "get_generation_history), output=%s",
+                    sd_output_dir,
+                )
+            except OSError as _sd_err:
+                # Only the output-dir mkdir can fail here — the SD client makes
+                # no network call at construction — so a down server is not a
+                # trigger. Anything other than OSError is a bug and propagates.
+                logger.warning(
+                    "Image generation unavailable: could not create the SD "
+                    "output directory %s (%s). Fix that directory's "
+                    "permissions, or point GAIA_CONFIG_DIR somewhere writable. "
+                    "Every other tool is unaffected.",
+                    sd_output_dir,
+                    _sd_err,
+                    exc_info=True,
                 )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
@@ -1493,21 +1674,25 @@ No documents are currently indexed.
 
             @tool
             def open_url(url: str) -> dict:
-                """Open a URL in the system's default web browser.
+                """Open a public URL in the system's default web browser.
+
+                Refuses private, loopback, and link-local addresses.
 
                 Args:
-                    url: The URL to open (must start with http:// or https://)
+                    url: Public http:// or https:// URL to open
 
                 Returns:
                     Dictionary with status and confirmation message
                 """
                 import webbrowser
 
-                if not url.startswith(("http://", "https://")):
-                    return {
-                        "status": "error",
-                        "error": "URL must start with http:// or https://",
-                    }
+                try:
+                    # Same SSRF screen as fetch_webpage: an injected link to a
+                    # loopback admin page would open with the user's cookies.
+                    self._inline_web_client().validate_url(url)
+                except (ValueError, OSError, ImportError) as e:
+                    logger.warning("open_url refused %s: %s", url, e)
+                    return {"status": "error", "url": url, "error": str(e)}
                 try:
                     webbrowser.open(url)
                     return {
@@ -1528,15 +1713,10 @@ No documents are currently indexed.
                 Returns:
                     Dictionary with status, content (or html), and url
                 """
-                import httpx
-
-                if not url.startswith(("http://", "https://")):
-                    return {
-                        "status": "error",
-                        "error": "URL must start with http:// or https://",
-                    }
                 try:
-                    resp = httpx.get(url, timeout=15, follow_redirects=True)
+                    # WebClient refuses private/loopback/link-local targets,
+                    # re-checks after DNS and on every redirect hop.
+                    resp = self._inline_web_client().get(url)
                     resp.raise_for_status()
                     if extract_text:
                         try:
@@ -1562,7 +1742,8 @@ No documents are currently indexed.
                         "html": resp.text[:8000],
                         "truncated": len(resp.text) > 8000,
                     }
-                except Exception as e:
+                except Exception as e:  # tool boundary -> structured error
+                    logger.warning("fetch_webpage failed for %s: %s", url, e)
                     return {"status": "error", "url": url, "error": str(e)}
 
         @tool
@@ -1662,18 +1843,20 @@ No documents are currently indexed.
                     try:
                         import subprocess
 
-                        ps_cmd = (
-                            f"Add-Type -AssemblyName System.Windows.Forms; "
-                            f"[System.Windows.Forms.MessageBox]::Show('{message}', '{title}')"
-                        )
                         subprocess.Popen(
                             [
                                 "powershell",
+                                "-NoProfile",
                                 "-WindowStyle",
                                 "Hidden",
                                 "-Command",
-                                ps_cmd,
+                                NOTIFY_DESKTOP_PS_SCRIPT,
                             ],
+                            env={
+                                **os.environ,
+                                NOTIFY_MESSAGE_ENV_VAR: message,
+                                NOTIFY_TITLE_ENV_VAR: title,
+                            },
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
@@ -1958,6 +2141,7 @@ No documents are currently indexed.
         # Snapshot: freeze this agent's tool set so mutations by other agents
         # in the same process do not leak in.  Exclusion replaces the old
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
+        self._register_output_reader()
         self._snapshot_tools()
         if spec.generic_file_ops:
             _chat_exclude = {
@@ -2362,6 +2546,11 @@ No documents are currently indexed.
                 self._web_client.close()
         except Exception as e:
             logger.error(f"Error closing web client during cleanup: {e}")
+        try:
+            if getattr(self, "_inline_web", None):
+                self._inline_web.close()
+        except Exception as e:
+            logger.error(f"Error closing inline web client during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()

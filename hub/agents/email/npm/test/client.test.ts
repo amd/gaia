@@ -400,6 +400,8 @@ describe("EmailClient", () => {
   it("lists calendar events with optional query params (GET)", async () => {
     const calResponse: CalendarEventsResponse = {
       schema_version: "2.2",
+      count: 1,
+      truncated: false,
       events: [
         {
           id: "evt-1",

@@ -160,9 +160,16 @@ type CanonicalFinalEvent struct {
 
 // CanonicalUsage is the shape the TUI reads out of CanonicalFinalEvent.Usage.
 // Fields absent from the payload stay zero and are simply not displayed.
+//
 // Tokens is the real generated-token count. TTFT is the turn's first LLM
-// call's own measured time-to-first-token — the server-measured fallback
-// used when no token ever streamed this turn.
+// call's own measured time-to-first-token and TokPerS its measured generation
+// rate — both come from the backend that did the inference, and both are
+// absent whenever it reported none (an OpenAI-compatible remote endpoint, for
+// instance). Zero therefore means unmeasured, never zero-valued, and the
+// client must print nothing rather than derive a stand-in: a rate or a
+// latency taken off the turn's own wall clock counts tool execution as model
+// time and is wrong by an order of magnitude on any multi-step turn.
+//
 // Metrics is the agent's per-turn performance record, present only when the
 // agent ran with GAIA_TURN_LOG set. Nil on every ordinary turn and from any
 // agent older than the record — callers must treat absence as normal.
@@ -172,6 +179,7 @@ type CanonicalUsage struct {
 	Elapsed   float64             `json:"elapsed"`
 	Tokens    int                 `json:"tokens"`
 	TTFT      float64             `json:"ttft"`
+	TokPerS   float64             `json:"tok_per_s"`
 	Metrics   *CanonicalTurnStats `json:"-"`
 }
 
@@ -238,6 +246,8 @@ type CanonicalTurnTool struct {
 	Name  string  `json:"name"`
 	WallS float64 `json:"wall_s"`
 	OK    bool    `json:"ok"`
+	// Absent unless this call actually waited on a human.
+	WaitedS float64 `json:"waited_s"`
 }
 
 // CanonicalTurnTotals splits the turn's wall time and its token counts. The
@@ -245,8 +255,11 @@ type CanonicalTurnTool struct {
 // the backend: they use different tokenizers, so a cached/new split is only
 // ever valid within one source — never Cached_Server against Local.
 type CanonicalTurnTotals struct {
-	LLMS                    float64 `json:"llm_s"`
-	ToolS                   float64 `json:"tool_s"`
+	LLMS  float64 `json:"llm_s"`
+	ToolS float64 `json:"tool_s"`
+	// Blocked on a human approving a tool. Neither tool nor model cost, so it
+	// gets its own line rather than inflating either.
+	WaitingOnUserS          float64 `json:"waiting_on_user_s"`
 	OverheadS               float64 `json:"overhead_s"`
 	InputTokensLocal        int     `json:"input_tokens_local"`
 	InputTokensCachedLocal  int     `json:"input_tokens_cached_local"`

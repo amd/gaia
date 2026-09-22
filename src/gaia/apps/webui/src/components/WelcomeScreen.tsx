@@ -184,7 +184,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                     <div className="welcome-setup-hint">
                         <Terminal size={14} />
                         <span>
-                            <strong>First time?</strong> Run <code>gaia init --profile chat</code> in a terminal to
+                            <strong>First time?</strong> Run <code>gaia init</code> in a terminal to
                             install Lemonade Server and download the required AI model
                             {systemStatus?.default_model_size_gb
                                 ? ` (~${systemStatus.default_model_size_gb.toFixed(1)} GB).`
@@ -196,7 +196,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                     <div className="welcome-setup-hint">
                         <Terminal size={14} />
                         <span>
-                            No model loaded. Run <code>gaia init --profile chat</code> to download
+                            No model loaded. Run <code>gaia init</code> to download
                             {systemStatus?.default_model_size_gb
                                 ? ` (~${systemStatus.default_model_size_gb.toFixed(1)} GB).`
                                 : '.'}

@@ -64,22 +64,9 @@ updates:
         patterns:
           - "*"
 
-  # JavaScript - Example Electron app
-  - package-ecosystem: "npm"
-    directory: "/src/gaia/apps/example/webui"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels:
-      - "dependencies"
-      - "javascript"
-      - "electron"
-      - "example-app"
-    open-pull-requests-limit: 5
-    groups:
-      example-app-dependencies:
-        patterns:
-          - "*"
+  # The example Electron app is a root workspace member (src/gaia/apps/*/webui).
+  # root-npm-dependencies owns that lockfile. A nested npm entry split upgrades
+  # across two red PRs (amd/gaia#3261).
 
   # GitHub Actions dependencies
   - package-ecosystem: "github-actions"

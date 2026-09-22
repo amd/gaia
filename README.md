@@ -1,6 +1,6 @@
 # <img src="https://raw.githubusercontent.com/amd/gaia/main/src/gaia/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> GAIA: AI Agent Framework for AMD Ryzen AI
 
-[![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
+[![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli_linux.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
 [![PyPI](https://img.shields.io/pypi/v/amd-gaia)](https://pypi.org/project/amd-gaia/)
 [![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://github.com/amd/gaia/releases)
@@ -10,7 +10,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/channels/1392562559122407535/1402013282495102997)
 
-**GAIA** is AMD's open-source framework for building intelligent AI agents that run **100% locally** on AMD Ryzen AI hardware. Keep your data private, eliminate cloud costs, and deploy in air-gapped environments—all with hardware-accelerated performance.
+**GAIA** is AMD's open-source framework for building intelligent AI agents that run **locally by default** on AMD Ryzen AI hardware. Local inference keeps your data private, avoids cloud usage fees, and supports air-gapped deployment with hardware-accelerated performance.
+
+The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx).
 
 <p align="center">
   <a href="https://amd-gaia.ai/docs/quickstart"><strong>Get Started →</strong></a>
@@ -26,14 +28,16 @@
 
 See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup instructions.
 
+> **Note (Email agent):** the Email agent installs with `gaia hub install email`, which fetches a binary sidecar into your GAIA agents directory — no PyPI wheel and no Node.js toolchain required. An npm client is also published for embedding the agent in a JS/TS app.
+
 ---
 
 ## Why GAIA?
 
 | Feature | Description |
 |---------|-------------|
-| **100% Local** | All data stays on your machine—perfect for sensitive workloads and air-gapped deployments |
-| **Zero Cloud Costs** | No API fees, no usage limits, no subscriptions—unlimited AI at no extra cost |
+| **Local Inference** | Run models on your machine for sensitive workloads and air-gapped deployments |
+| **No Cloud Inference Fees** | Local models require no API subscription; optional cloud providers have their own pricing |
 | **Privacy-First** | HIPAA-compliant, GDPR-friendly—ideal for healthcare, finance, and enterprise |
 | **Ryzen AI Optimized** | Hardware-accelerated inference using NPU + iGPU on AMD Ryzen AI processors |
 

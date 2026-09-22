@@ -287,6 +287,32 @@ checked into the repo:
 `MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps artifact size and can be
 overridden per environment without a secret.
 
+### Publishing origins (one Worker, two doors)
+
+There is exactly **one Agent Hub Worker and one R2 bucket** — `hub.amd-gaia.ai`
+and the `workers.dev` URL are two front doors onto the same Worker
+(`workers/agent-hub/wrangler.toml`): the custom domain is the user-facing
+download door, and the `workers.dev` origin is the CI upload door. The managed
+WAF fronting the custom domain **403s large uploads** (the `POST /publish`
+path), so CI publishes through the `workers.dev` origin, which has no such
+ruleset and hits the same Worker + bucket. A publish through the wrong door
+fails loudly at the WAF — it does not land somewhere else.
+
+CI uses two repository variables (set at **repository** level, not environment
+level — the version jobs have no `environment:` and an environment-scoped
+variable would resolve empty and silently fall back to the hardcode):
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `GAIA_HUB_BASE_URL` | `https://hub.amd-gaia.ai` | Downloads + the lock `baseUrl` (GETs aren't WAF-blocked) |
+| `GAIA_HUB_PUBLISH_URL` | `<worker>.workers.dev` | The origin CI POSTs uploads to. **Required** — the release fails loudly if unset (no silent fallback to a hardcoded URL) |
+
+The publish jobs (`release_agent_*.yml`, `release_components.yml`) now assert
+`GAIA_HUB_PUBLISH_URL` is set before publishing, mirroring the existing
+`GAIA_HUB_TOKEN` asserts. A missing variable is a startup-time `::error::`
+naming what is missing and where to set it, not a 403 halfway through a
+release.
+
 ## Publishing artifacts larger than 100 MB
 
 A Worker request body is capped by the Cloudflare **account plan** — 100 MB on

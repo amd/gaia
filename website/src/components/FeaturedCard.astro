@@ -16,9 +16,9 @@ interface Props {
 }
 
 const { agent, eyebrow = 'Featured' } = Astro.props;
-// The canonical primary install command (npm for npm agents, GAIA otherwise) —
-// same source as the detail page, so the card never shows a command the agent
-// cannot actually be installed with.
+// The canonical primary install command (the GAIA install for agents and
+// skills) — same source as the detail page, so the card never shows a command
+// the agent cannot actually be installed with.
 const installCmd = installMethods(agent)[0].command;
 
 // Metadata grid. Every value comes from the catalog; a field the catalog does

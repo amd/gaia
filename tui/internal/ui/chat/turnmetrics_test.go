@@ -229,3 +229,53 @@ func TestLocalEstimateSurvivesOnABackendThatReportsNoCache(t *testing.T) {
 		}
 	}
 }
+
+// Time spent waiting for a human to approve a tool is neither model time nor
+// tool time. It only appears when someone was actually asked — on every other
+// turn the figure is zero and the word "waiting" is noise.
+func TestWaitingOnYouShowsOnlyWhenSomeoneWasAsked(t *testing.T) {
+	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+
+	quiet := dev.turnMetricsBlock(sampleMetricsMessage())
+	if strings.Contains(quiet, "waiting on you") {
+		t.Errorf("a turn nobody was asked about advertised a wait:\n%s", quiet)
+	}
+
+	msg := sampleMetricsMessage()
+	msg.Metrics.Totals.WaitingOnUserS = 322.6
+	msg.Metrics.ToolCalls[0].WaitedS = 322.6
+	block := dev.turnMetricsBlock(msg)
+
+	if !strings.Contains(block, "waiting on you 322.6s") {
+		t.Errorf("the approval wait never reached the split line:\n%s", block)
+	}
+	if !strings.Contains(block, "run_shell_command 2.1s") {
+		t.Errorf("the tool's own cost was rewritten by the wait:\n%s", block)
+	}
+	if !strings.Contains(block, "(+322.6s waiting on you)") {
+		t.Errorf("the step row did not hang the wait off its tool:\n%s", block)
+	}
+}
+
+// Claude reports no time-to-first-token. Printing the absent value as 0.0s
+// reads as an instant first token — the fake zero the recorder itself is
+// careful never to emit.
+func TestAMissingTTFTReadsAsAbsentNotInstant(t *testing.T) {
+	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+	msg := sampleMetricsMessage()
+	msg.Metrics.LLMCalls = []event.CanonicalTurnCall{
+		{Step: 1, WallS: 12.8, TTFTS: 0, InputTokensLocal: 17204},
+		{Step: 2, WallS: 9.1, TTFTS: 0.4, InputTokensLocal: 17260},
+	}
+	block := dev.turnMetricsBlock(msg)
+
+	if strings.Contains(block, "ttft  0.0s") {
+		t.Errorf("an unreported ttft printed as an instant first token:\n%s", block)
+	}
+	if !strings.Contains(block, "ttft    --") {
+		t.Errorf("an unreported ttft did not read as absent:\n%s", block)
+	}
+	if !strings.Contains(block, "ttft  0.4s") {
+		t.Errorf("a real ttft stopped rendering:\n%s", block)
+	}
+}

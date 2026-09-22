@@ -77,8 +77,9 @@ def test_docs_scope_table_is_not_empty():
 def test_documented_scopes_match_available_scopes():
     """The Console list must equal ``available_scopes`` exactly, not just contain it.
 
-    9 of the 10 scopes are declared by some shipped agent; only ``drive.file``
-    has zero consumers today. A containment check would let a genuinely new,
+    10 of the 11 scopes are requested by some shipped agent or by the
+    provider's own identity fallback; only ``drive.file`` has zero consumers
+    today. A containment check would let a genuinely new,
     undocumented scope slip through as long as the existing ones were still
     listed. Equality catches that.
     """

@@ -11,6 +11,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
@@ -244,7 +245,7 @@ func RunOneShot(
 			res.TerminalType = event.CanonicalTypeFinal
 			// `answer` is authoritative; the streamed tokens are the fallback for
 			// a sidecar that streams and then closes with an empty final.
-			res.Answer = e.Answer
+			res.Answer = chat.StripVerificationScope(e.Answer)
 			if res.Answer == "" {
 				res.Answer = streamed.String()
 			}
@@ -285,8 +286,8 @@ func RunOneShot(
 		// pointed at a subprocess agent.
 		case event.AnswerEvent:
 			res.TerminalType = event.CanonicalTypeFinal
-			res.Answer = e.Content
-			fmt.Fprintln(out, e.Content)
+			res.Answer = chat.StripVerificationScope(e.Content)
+			fmt.Fprintln(out, res.Answer)
 		case event.AgentErrorEvent:
 			res.TerminalType = event.CanonicalTypeError
 			res.ErrorDetail = e.Content
@@ -548,6 +549,29 @@ func ReportReadiness(
 	defer cancelCheck()
 
 	rep := preflight.Check(checkCtx, t, cfg)
+	writeReadiness(errW, rep)
+	return rep
+}
+
+// ReportLocalReadiness is the same gate for an agent the TUI spawns itself.
+//
+// It is what makes `gaia-tui chat --agent gaia --query …` on a machine with no
+// gaia-agent print the same three-part refusal a person sees on the readiness
+// screen, and exit 1 — instead of failing at exec with a message that names
+// neither the program nor where to get it.
+//
+// No ensure step: there is no daemon to ask, and starting the child IS the
+// launch this is gating.
+func ReportLocalReadiness(
+	ctx context.Context,
+	local preflight.LocalOptions,
+	cfg preflight.Config,
+	errW io.Writer,
+) preflight.Report {
+	checkCtx, cancel := context.WithTimeout(ctx, readinessCheckTimeout)
+	defer cancel()
+
+	rep := preflight.NewLocalRunner(local).Check(checkCtx, cfg)
 	writeReadiness(errW, rep)
 	return rep
 }
