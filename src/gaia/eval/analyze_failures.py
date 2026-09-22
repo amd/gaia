@@ -535,16 +535,19 @@ def build_failure_records(
             "tool_service_log": service_info,
         }
 
+        # One expression per value: the printed command and the structured
+        # fields must name the same agent and model or the repro is unrunnable.
         repro_agent_type = run_config.get("agent_type") or DEFAULT_AGENT_TYPE
+        repro_model = run_config.get("model") or DEFAULT_CLAUDE_MODEL
         repro_cli = (
             f"gaia eval agent --scenario {sid} --agent-type {repro_agent_type} "
-            f"--iterations 1 --model {run_config.get('model', DEFAULT_CLAUDE_MODEL)}"
+            f"--iterations 1 --model {repro_model}"
         )
         reproduction = {
             "cli": repro_cli,
             "user_messages": user_messages,
             "agent_type": repro_agent_type,
-            "model": run_config.get("model", "claude-opus-5"),
+            "model": repro_model,
             "backend_url": run_config.get("backend_url", "http://localhost:4200"),
             "trace_file": tr.get("_trace_file"),
             "run_id": tr.get("_run_id"),
@@ -677,7 +680,7 @@ def write_failure_reports(
     lines: List[str] = [
         f"# Failure Report — {run_id}",
         f"**Model:** {model}   **Iterations:** {n_iter}   **Agent:** "
-        f"{run_config.get('agent_type', 'tool')}",
+        f"{run_config.get('agent_type') or DEFAULT_AGENT_TYPE}",
         "",
         f"**Total failure records:** {len(records)} across {len(unique_tools)} unique tool(s)",
         "",
@@ -953,8 +956,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Derive run_config from the first scorecard we find (fallbacks if absent)
     run_config = {
         "iterations": len(existing),
-        "agent_type": "tool",
-        "model": "claude-opus-5",
+        "agent_type": DEFAULT_AGENT_TYPE,
+        "model": DEFAULT_CLAUDE_MODEL,
         "backend_url": "http://localhost:4200",
     }
     if scorecards:
