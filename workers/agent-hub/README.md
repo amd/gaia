@@ -114,11 +114,11 @@ Example:
 
 ```
 index.json
-agents/chat/manifest.json
-agents/chat/0.1.0/gaia-agent.yaml
-agents/chat/0.1.0/gaia_agent_chat-0.1.0-py3-none-any.whl
-agents/chat/0.2.0/gaia-agent.yaml
-agents/chat/0.2.0/gaia_agent_chat-0.2.0-py3-none-any.whl
+agents/gaia/manifest.json
+agents/gaia/0.1.0/gaia-agent.yaml
+agents/gaia/0.1.0/gaia_agent-0.1.0-py3-none-any.whl
+agents/gaia/0.2.0/gaia-agent.yaml
+agents/gaia/0.2.0/gaia_agent-0.2.0-py3-none-any.whl
 agents/email/manifest.json
 agents/email/0.1.0/gaia-agent.yaml
 agents/email/0.1.0/email-agent-win32-x64.exe        # multi-platform: 4 binaries,
@@ -203,10 +203,10 @@ PUBLISH_TOKENS='{"dev-token":{"publisher":"AMD","authors":["AMD"]}}' npm run dev
 # Terminal 2
 curl -X POST http://localhost:8787/publish \
   -H "Authorization: Bearer dev-token" \
-  -F "manifest=@hub/agents/chat/python/gaia-agent.yaml" \
-  -F "artifact=@dist/gaia_agent_chat-0.1.0-py3-none-any.whl" \
-  -F "readme=@hub/agents/chat/python/README.md;type=text/markdown" \
-  -F "changelog=@hub/agents/chat/python/CHANGELOG.md;type=text/markdown"
+  -F "manifest=@hub/agents/<id>/python/gaia-agent.yaml" \
+  -F "artifact=@dist/gaia_agent_<id>-0.1.0-py3-none-any.whl" \
+  -F "readme=@hub/agents/<id>/python/README.md;type=text/markdown" \
+  -F "changelog=@hub/agents/<id>/python/CHANGELOG.md;type=text/markdown"
 
 curl http://localhost:8787/index.json
 ```

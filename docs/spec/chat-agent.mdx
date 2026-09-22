@@ -11,14 +11,14 @@ title: "ChatAgent"
 **Module:** `gaia_agent_chat.agent`
 **Inherits:** Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin, FileIOToolsMixin, VLMToolsMixin, ScreenshotToolsMixin, SDToolsMixin, MCPClientMixin
 
-> **Upcoming rename (v0.20.0):** `ChatAgent` will be renamed to `GaiaAgent` as part of the broader branding update (#696). The import path and class name will change; all other behavior remains the same.
+> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. Its `chat` / `doc` / `file` registrations are `hidden` — still resolvable by id, so stored sessions and eval scenarios keep working, but absent from the Agent UI picker and the Hub catalog. New work should target the flagship.
 </Note>
 
 ---
 
 ## Overview
 
-ChatAgent is GAIA's reference implementation for conversational AI with document Q&A (RAG), file operations, and shell command execution. It demonstrates best practices for agent development and serves as the foundation for specialized agents.
+ChatAgent is GAIA's reference implementation for conversational AI with document Q&A (RAG), file operations, and shell command execution. It is the foundation the flagship GaiaAgent builds on — read this page to understand what the flagship inherits, not to choose an agent.
 
 **Key Features:**
 - Document Q&A using RAG (Retrieval-Augmented Generation)

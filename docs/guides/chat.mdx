@@ -316,8 +316,10 @@ LLM every registered tool on every turn. A small always-on CORE set is combined
 with tools whose descriptions best match the conversation, which shrinks the
 first-turn prompt and speeds up the first reply.
 
-It activates only on the `doc` profile (the registered `doc` agent, the SDK with
-`ChatAgentConfig(prompt_profile="doc")`, or `gaia eval agent --agent-type doc`).
+It activates only on the `doc` profile — the SDK with
+`ChatAgentConfig(prompt_profile="doc")`, or `gaia eval agent --agent-type doc`.
+The `doc` id is no longer offered in the agent picker, but it still resolves, so
+the eval command is unchanged.
 Turn it on with the config field, an environment variable, or the Agent UI
 **Settings → Dynamic Tools (Beta)** toggle. The env var wins over both — when it
 is set, the UI toggle reflects the effective value and disables itself — which is
