@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
 from gaia.agents.base.tools import tool
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     check_file_state,
@@ -274,7 +275,7 @@ class FileIOToolsMixin:
                 # a private key safe to read into the conversation.
                 is_allowed, reason = path_validator.validate_read(file_path)
                 if not is_allowed:
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
@@ -447,7 +448,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "write", str(file_path), content_size, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 stale_error = check_file_state(str(file_path))
                 if stale_error is not None:
@@ -528,7 +529,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(file_path)):
@@ -536,7 +537,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Enforce size limit on replacement content
                 new_size = len(new_content.encode("utf-8"))
@@ -552,7 +553,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "edit", str(file_path), new_size, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Read current content
                 if not os.path.exists(file_path):
@@ -665,6 +666,7 @@ class FileIOToolsMixin:
                 # Security check
                 if not path_validator.is_path_allowed(directory):
                     return {
+                        **NOT_EXECUTED,
                         "status": "error",
                         "error": f"Access denied: {directory} is not in allowed paths",
                     }
@@ -747,7 +749,7 @@ class FileIOToolsMixin:
                 # A diff prints the original file, so it is a read.
                 is_allowed, reason = path_validator.validate_read(file_path)
                 if not is_allowed:
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Read original content
                 if os.path.exists(file_path):
@@ -823,7 +825,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "write", str(file_path), content_size, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 stale_error = check_file_state(str(file_path))
                 if stale_error is not None:
@@ -919,7 +921,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "write", str(path), content_size, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 stale_error = check_file_state(str(path))
                 if stale_error is not None:
@@ -1034,13 +1036,13 @@ class FileIOToolsMixin:
                 is_blocked, reason = path_validator.is_write_blocked(str(path))
                 if is_blocked:
                     path_validator.audit_write("edit", str(path), 0, "denied", reason)
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(path)):
                     reason = f"Access denied: {path} is not in allowed paths"
                     path_validator.audit_write("edit", str(path), 0, "denied", reason)
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Enforce MAX_WRITE_SIZE_BYTES on the replacement content.
                 # Previously this path only ran is_path_allowed + is_write_blocked,
@@ -1059,7 +1061,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "edit", str(path), new_size, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not path.exists():
                     return {"status": "error", "error": f"File not found: {file_path}"}
@@ -1171,6 +1173,7 @@ class FileIOToolsMixin:
                 # Security check
                 if not path_validator.is_path_allowed(gaia_path):
                     return {
+                        **NOT_EXECUTED,
                         "status": "error",
                         "error": f"Access denied: {gaia_path} is not in allowed paths",
                     }
@@ -1277,7 +1280,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(file_path)):
@@ -1285,7 +1288,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Enforce size limit on replacement content
                 new_size = len(new_implementation.encode("utf-8"))
@@ -1301,7 +1304,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write(
                         "edit", str(file_path), new_size, "denied", reason
                     )
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
