@@ -868,3 +868,172 @@ def test_email_tools_are_bundled_for_the_loader():
         "pull the email tools in as a cohort"
     )
     assert email.members == set(_inbox_triage_skill().gaia.tools_required)
+
+
+# --------------------------------------------------------------------------
+# per-turn read budget
+# --------------------------------------------------------------------------
+
+
+def _big_body_message(chars):
+    return dict(GRAPH_MESSAGE, body={"contentType": "text", "content": "x" * chars})
+
+
+def test_turn_budget_refuses_once_the_turn_is_full(harness_factory):
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    h = harness_factory(lambda r: json_response(_big_body_message(_MAX_BODY_CHARS)))
+    h._turn_seq = 1
+
+    results = []
+    for _ in range(6):
+        results.append(json.loads(h._tool("read_email")(message_id="AAMk-1")))
+        if results[-1]["success"] is False:
+            break
+
+    successes = [r for r in results if r["success"] is True]
+    refusal = results[-1]
+    assert len(successes) >= 2
+    assert refusal["success"] is False
+    assert refusal["turn_budget_exhausted"] is True
+    assert "message" not in refusal
+
+    budget = h._email_turn_budget_chars()
+    total_charged = sum(len(r["message"]["body"]) for r in successes)
+    assert total_charged == h._email_turn_body_chars
+    assert total_charged <= budget + _MAX_BODY_CHARS
+
+
+def test_turn_budget_refusal_tells_the_model_to_stop_and_say_so(harness_factory):
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    h = harness_factory(lambda r: json_response(_big_body_message(_MAX_BODY_CHARS)))
+    h._turn_seq = 1
+    h._email_turn_body_chars = h._email_turn_budget_chars()
+    h._email_turn_token = 1
+    h._email_turn_reads = 3
+
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    assert out["success"] is False
+    error = out["error"].lower()
+    assert "tell the user" in error
+    assert "stopped" in error
+    assert "new turn" in error or "narrow" in error
+
+
+def test_turn_budget_resets_on_a_new_turn(harness_factory):
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    h = harness_factory(lambda r: json_response(_big_body_message(_MAX_BODY_CHARS)))
+    h._turn_seq = 1
+    h._email_turn_body_chars = h._email_turn_budget_chars()
+    h._email_turn_token = 1
+    h._email_turn_reads = 3
+
+    refused = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    assert refused["success"] is False
+
+    h._turn_seq = 2
+    admitted = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    assert admitted["success"] is True
+
+
+def test_turn_budget_is_derived_from_the_device_profile():
+    from gaia.llm.lemonade_client import (
+        GPU_CTX_SIZE,
+        NPU_CTX_SIZE,
+        budget_for_ctx,
+        truncation_budget,
+    )
+
+    class _ProfileHost(EmailToolsMixin):
+        def __init__(self, ctx_size):
+            self._ctx_size = ctx_size
+
+        def _truncation_budget(self):
+            return budget_for_ctx(self._ctx_size)
+
+    npu_budget = _ProfileHost(NPU_CTX_SIZE)._email_turn_budget_chars()
+    gpu_budget = _ProfileHost(GPU_CTX_SIZE)._email_turn_budget_chars()
+    assert npu_budget == budget_for_ctx(NPU_CTX_SIZE)[0]
+    assert gpu_budget == budget_for_ctx(GPU_CTX_SIZE)[0]
+    assert npu_budget != gpu_budget
+
+    class _DeviceHost(EmailToolsMixin):
+        def __init__(self, device):
+            self.device = device
+
+    assert _DeviceHost("npu")._email_turn_budget_chars() == truncation_budget("npu")[0]
+    assert _DeviceHost("gpu")._email_turn_budget_chars() == truncation_budget("gpu")[0]
+    assert _DeviceHost(None)._email_turn_budget_chars() == truncation_budget(None)[0]
+
+
+def test_turn_budget_guard_runs_before_the_backend_call():
+    """The refusal must not depend on which backend is behind the mailbox."""
+
+    class _AssertingHost(EmailToolsMixin):
+        _email_backend = object()  # any truthy sentinel; must never be used
+
+        def _email_call(self, *args, **kwargs):
+            raise AssertionError("backend must not be called once the turn is full")
+
+        def _tool(self, name):
+            from gaia.agents.base.tools import _TOOL_REGISTRY
+
+            return _TOOL_REGISTRY[name]["function"]
+
+    h = _AssertingHost()
+    h.register_email_tools()
+    h._turn_seq = 1
+    budget = h._email_turn_budget_chars()
+    h._email_turn_token = 1
+    h._email_turn_body_chars = budget
+    h._email_turn_reads = 1
+
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    assert out["success"] is False
+    assert out["turn_budget_exhausted"] is True
+
+
+def test_turn_budget_guard_would_fail_if_the_admission_check_were_removed(
+    harness_factory,
+):
+    """Documents the invariant: deleting the ``used >= budget`` check breaks this."""
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    h = harness_factory(lambda r: json_response(_big_body_message(_MAX_BODY_CHARS)))
+    h._turn_seq = 1
+    budget = h._email_turn_budget_chars()
+    h._email_turn_token = 1
+    h._email_turn_body_chars = budget
+    h._email_turn_reads = 5
+
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    # Without the admission check this would be a success carrying a body —
+    # the assertion below is the one a deleted guard would fail.
+    assert out["success"] is False
+    assert "message" not in out
+
+
+def test_turn_counter_increments_without_agent_init():
+    """A subclass that never runs ``Agent.__init__`` must still count turns.
+
+    Test doubles and lightweight subclasses build instances directly; a
+    counter that only exists after ``__init__`` raises ``AttributeError``
+    in the turn-setup path for all of them.
+    """
+    from gaia.agents.base.agent import Agent
+
+    assert Agent._turn_seq == 0
+
+    class _NoInit(Agent):
+        def __init__(self):  # pylint: disable=super-init-not-called
+            pass
+
+        def _register_tools(self):
+            pass
+
+    bare = _NoInit()
+    bare._turn_seq += 1
+    assert bare._turn_seq == 1
+    assert Agent._turn_seq == 0

@@ -130,6 +130,31 @@ class EmailToolsMixin:
     _email_provider_source: Optional[str] = None
     _email_alternatives: Optional[List[str]] = None
 
+    # Per-turn mail-reading ledger. Reset whenever ``_turn_seq`` moves on.
+    _email_turn_token = None
+    _email_turn_body_chars = 0
+    _email_turn_reads = 0
+
+    def _email_turn_budget_chars(self) -> int:
+        """Chars all mail bodies read in ONE turn may occupy, combined.
+
+        Reuses ``Agent._truncation_budget`` — the same per-tool-result cap
+        already applied to any other large tool output — so mail reading
+        inherits the real device profile instead of a new constant.
+        """
+        if hasattr(self, "_truncation_budget"):
+            return self._truncation_budget()[0]
+        from gaia.llm.lemonade_client import truncation_budget
+
+        return truncation_budget(getattr(self, "device", None))[0]
+
+    def _email_turn_reset_if_stale(self) -> None:
+        token = getattr(self, "_turn_seq", None)
+        if self._email_turn_token != token:
+            self._email_turn_token = token
+            self._email_turn_body_chars = 0
+            self._email_turn_reads = 0
+
     def _resolve_mailbox(self) -> Tuple[str, str, str, List[str]]:
         """``(provider, scope, source, alternatives)``, or raise naming why not."""
         from gaia.agents.tools._email import MailboxError
@@ -209,17 +234,21 @@ class EmailToolsMixin:
 
         mixin = self
 
-        def _fail(exc: Exception, action: str) -> str:
-            """Render an exception as an actionable tool result.
+        def _fail(exc, action: str, *, refusal: bool = False, **extra) -> str:
+            """Render an exception (or a refusal) as an actionable tool result.
 
             Errors are surfaced, never swallowed: the model needs to tell the
             user what to fix, and a tool that returns an empty list on failure
-            reads as "your inbox is empty".
+            reads as "your inbox is empty". ``extra`` carries structured fields
+            for a refusal (e.g. ``turn_budget_exhausted``) alongside the error.
             """
-            logger.warning("email tool failed during %s: %s", action, exc)
-            return json.dumps(
-                {"error": str(exc), "action": action, "success": False}, indent=2
-            )
+            if refusal:
+                logger.info("email: %s refused — %s", action, exc)
+            else:
+                logger.warning("email tool failed during %s: %s", action, exc)
+            payload = {"error": str(exc), "action": action, "success": False}
+            payload.update(extra)
+            return json.dumps(payload, indent=2)
 
         def _clamp(limit: int) -> int:
             return max(1, min(int(limit), _MAX_LIMIT))
@@ -332,14 +361,39 @@ class EmailToolsMixin:
             so and gives the original length, so never describe a truncated
             message as if you read all of it.
 
+            A turn that has already read enough mail to fill its context
+            budget gets `turn_budget_exhausted: true` instead of a body — stop
+            reading, don't retry, and tell the user reading stopped there.
+
             Args:
                 message_id: The message id from a listing or search result
             """
+            mixin._email_turn_reset_if_stale()
+            budget = mixin._email_turn_budget_chars()
+            used = mixin._email_turn_body_chars
+            reads = mixin._email_turn_reads
+            if used >= budget:
+                return _fail(
+                    f"This turn has already read {reads} message body(ies), "
+                    f"filling this turn's mail-reading budget ({used} of "
+                    f"{budget} chars) — further reads are refused so the "
+                    "conversation does not silently overflow the context "
+                    "window. Answer from the messages already read, tell the "
+                    "user reading stopped here, and ask them to narrow the "
+                    f"request or continue in a new turn. See {_EMAIL_DOCS_URL}",
+                    "read_email",
+                    refusal=True,
+                    turn_budget_exhausted=True,
+                    messages_read_this_turn=reads,
+                    budget_chars=budget,
+                    budget_used_chars=used,
+                )
             try:
                 message = mixin._email_call("get_message", message_id)
-                return json.dumps(
-                    {"success": True, "message": _bound_body(message)}, indent=2
-                )
+                bounded = _bound_body(message)
+                mixin._email_turn_body_chars += len(bounded.get("body") or "")
+                mixin._email_turn_reads += 1
+                return json.dumps({"success": True, "message": bounded}, indent=2)
             except Exception as exc:
                 return _fail(exc, "read_email")
 
