@@ -53,22 +53,34 @@ class _Mic:
 class _PlayingTTS:
     """Consumes text like KokoroTTS, then plays until released, sampling the mic."""
 
+    # Sampling enough times is what proves the mic stayed paused *throughout*
+    # playback rather than at one lucky instant, so callers wait on this event
+    # instead of a wall clock — a loaded runner can sleep 0.3s and still not
+    # schedule this thread more than once.
+    SAMPLES_THAT_PROVE_PLAYBACK = 4
+
     def __init__(self, mic):
         self.mic = mic
         self.release = threading.Event()
         self.mic_paused_samples = []
+        self.sampled_enough = threading.Event()
         self.text = ""
+
+    def _sample(self):
+        self.mic_paused_samples.append(self.mic.is_paused)
+        if len(self.mic_paused_samples) >= self.SAMPLES_THAT_PROVE_PLAYBACK:
+            self.sampled_enough.set()
 
     def generate_speech_streaming(
         self, text_queue, status_callback=None, interrupt_event=None
     ):
-        self.mic_paused_samples.append(self.mic.is_paused)
+        self._sample()
         while (chunk := text_queue.get(timeout=5)) != "__END__":
             self.text += chunk
         status_callback(True)
         while not self.release.wait(0.02):
-            self.mic_paused_samples.append(self.mic.is_paused)
-        self.mic_paused_samples.append(self.mic.is_paused)
+            self._sample()
+        self._sample()
         status_callback(False)
 
 
@@ -91,7 +103,7 @@ def test_mic_is_paused_for_the_whole_utterance_and_resumes_after(method):
 
     runner = _speak_in_background(client, "hello there", method)
     try:
-        time.sleep(0.3)
+        assert tts.sampled_enough.wait(10), "playback never got going"
         assert runner.is_alive(), "speak_text returned while audio was still playing"
         assert mic.is_paused is True
         client.transcription_queue.put("hello there")  # the mic heard the speaker
@@ -101,7 +113,7 @@ def test_mic_is_paused_for_the_whole_utterance_and_resumes_after(method):
 
     assert not runner.is_alive()
     assert tts.text == "hello there"
-    assert len(tts.mic_paused_samples) > 3
+    assert len(tts.mic_paused_samples) >= _PlayingTTS.SAMPLES_THAT_PROVE_PLAYBACK
     assert all(tts.mic_paused_samples), "mic was live during playback"
     assert mic.is_paused is False and mic.resumes == 1
     assert client.transcription_queue.empty(), "self-transcription was not dropped"
