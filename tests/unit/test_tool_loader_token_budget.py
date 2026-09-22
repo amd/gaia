@@ -23,11 +23,11 @@ legitimately add or remove a doc-profile tool, update these in the same
 commit (and note it in the PR) — the same discipline as the #1030
 system-prompt budget test.
 
-``test_harness_runs_and_pins_baseline`` is the *only* test that compares
-against those pins, so a registry-wide schema change fails exactly one test
-instead of four. The Part-1 reduction guards below express shares of a
-baseline measured in the same run, which is what makes them detect a real
-regression in the filtered set rather than growth anywhere in the registry.
+Only ``test_harness_runs_and_pins_baseline`` and its token twin compare
+against those pins, so a registry-wide schema change fails there and nowhere
+else. The Part-1 reduction guards below express shares of a baseline measured
+in the same run, which is what makes them detect a real regression in the
+filtered set rather than growth anywhere in the registry.
 """
 
 from __future__ import annotations
@@ -55,23 +55,14 @@ from gaia.eval.tool_cost import (  # noqa: E402
 )
 
 # --- Pinned baseline (#1448, doc profile, deterministic tool set) ----------
-EXPECTED_DOC_TOOL_COUNT = 38
-BASELINE_TEXT_CHARS = 5055
-BASELINE_NATIVE_CHARS = 24122
-BASELINE_TEXT_TOKENS = 1060
-BASELINE_NATIVE_TOKENS = 6121
+EXPECTED_DOC_TOOL_COUNT = 37
+BASELINE_TEXT_CHARS = 4863
+BASELINE_NATIVE_CHARS = 21957
+BASELINE_TEXT_TOKENS = 1014
+BASELINE_NATIVE_TOKENS = 5128
 # Band tolerates trivial wording edits; a real tool add/remove blows past it
 # and should bump the baseline deliberately.
 TOLERANCE = 0.10
-
-# --- Reduction guards: shares of a same-run baseline, never of the pins -----
-# CORE is the always-on floor. Its share of the registry has been stable near
-# 43% native / 40% text; the ceiling leaves room for wording edits and bites
-# on real CORE bloat.
-CORE_NATIVE_SHARE_MAX = 0.45
-CORE_TEXT_SHARE_MAX = 0.45
-# Worst-case max_tools=14 selection measures ~64% of the full registry.
-MAX_LOADED_NATIVE_SHARE_MAX = 0.70
 
 _SCORECARD_FIXTURE = os.path.join(
     os.path.dirname(__file__),
@@ -219,12 +210,18 @@ def test_parse_ttft_from_committed_scorecard():
 # here, on top of the one real failure in the pin test.
 #
 # Measured reality (worth knowing — it tempers the original estimate): the
-# always-on CORE tools alone render ~43% of the native baseline, because the 5
-# memory tools carry verbose docstrings. So CORE-only is the best case (~57%
-# token reduction, right at the gate boundary), and a worst-case
-# ``max_tools=14`` loaded set lands around ~64% of baseline. The first-turn win
+# always-on CORE tools alone render ~40% of the native baseline, because the
+# memory tools carry the longest docstrings. So CORE-only is the best case
+# (~60% token reduction, right at the gate boundary), and a worst-case
+# ``max_tools=14`` loaded set lands around ~60% of baseline. The first-turn win
 # is real and large; whether it clears ≥60% in *TTFT* terms is what the live run
 # decides.
+
+# CORE is the always-on floor; its share of the registry sits near 40% on both
+# paths. The ceilings leave room for wording edits and bite on real bloat.
+CORE_NATIVE_SHARE_MAX = 0.45
+CORE_TEXT_SHARE_MAX = 0.45
+MAX_LOADED_NATIVE_SHARE_MAX = 0.70
 
 
 def _filtered_native_tokens(agent, names, tok) -> int:
