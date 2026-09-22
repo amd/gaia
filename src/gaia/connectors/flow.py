@@ -155,18 +155,18 @@ def _resolve_account_type(provider, id_token: str) -> Optional[str]:
     """Classify the signed-in account from the id_token, if the provider can.
 
     Duck-typed on ``provider.classify_account_type(claims)`` (Microsoft derives
-    ``personal`` vs ``work`` from the ``tid`` claim, #2466). Returns ``None`` when
-    the provider has no notion of account type or the token carries no usable
-    claim — an unknown kind is recorded as unknown, never guessed. Never raises:
-    the account kind is metadata, and failing to derive it must not fail a
-    connect that otherwise succeeded.
+    ``personal`` vs ``work`` from the ``tid`` claim, #2466). The claims may be
+    empty — a provider that does not request ``openid`` gets no id_token at all,
+    and decides from what it does know — so the provider, not this function,
+    owns what is conclusive. Returns ``None`` when the provider has no notion of
+    account type or nothing was conclusive; an unknown kind is recorded as
+    unknown, never guessed. Never raises: the account kind is metadata, and
+    failing to derive it must not fail a connect that otherwise succeeded.
     """
     classify = getattr(provider, "classify_account_type", None)
     if not callable(classify):
         return None
     claims = _decode_id_token_claims(id_token or "")
-    if not claims:
-        return None
     try:
         account_type = classify(claims)
     except Exception as e:  # noqa: BLE001 — metadata only, must not fail connect
@@ -200,17 +200,25 @@ async def _resolve_account_email(provider, id_token: str, access_token: str) -> 
                 )
             if resp.status_code == 200:
                 return parse(resp.json()) or "default"
-            logger.warning(
-                "flow: userinfo lookup for %s returned %s (label only)",
+            logger.error(
+                "flow: userinfo lookup for %s returned HTTP %s at %s — the "
+                "connection is usable but will be labelled 'default' instead "
+                "of the account address. Reconnect with the provider's default "
+                "scopes (a hand-typed --scopes list that drops the profile "
+                "scope cannot resolve an address).",
                 getattr(provider, "provider_id", "?"),
                 resp.status_code,
+                userinfo_url,
             )
         except Exception as e:  # noqa: BLE001 — label-only, never fail connect
-            logger.warning(
-                "flow: userinfo lookup for %s failed (%s); label falls back to "
-                "'default'",
+            logger.error(
+                "flow: userinfo lookup for %s failed (%s) at %s — the "
+                "connection is usable but will be labelled 'default' instead "
+                "of the account address. Check network reachability to the "
+                "provider, then reconnect.",
                 getattr(provider, "provider_id", "?"),
                 e,
+                userinfo_url,
             )
     return "default"
 

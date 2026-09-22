@@ -39,6 +39,7 @@ from gaia.agents.base.verification import (
     check_was_executed,
     split_verification_scope,
     strip_verification_scope,
+    summary_reports_failure,
     verification_check_label,
     verification_check_target,
 )
@@ -351,6 +352,37 @@ def test_a_narrower_rerun_that_passes_does_not_hide_a_failed_suite():
     )
     assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
     assert "did not" in statement
+
+
+def test_one_label_on_both_sides_is_counted_not_named_twice():
+    """ "pytest passed, pytest did not." read as the harness contradicting itself.
+
+    It came from a shell pytest that failed at collection and a later pytest run
+    through run_python that passed: two targets, one label.
+    """
+    statement = build_verification_scope(
+        [
+            _execution("pytest", failed=True, target="pytest -q tests/test_archive.py"),
+            _execution("pytest", target='run_python {"code": "..."}'),
+        ]
+    )
+    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    assert "pytest passed, pytest did not" not in statement
+    assert "1 of 2 pytest runs did not pass" in statement
+
+
+def test_a_split_label_sits_beside_labels_that_did_not_split():
+    statement = build_verification_scope(
+        [
+            _execution("ruff"),
+            _execution("pytest", failed=True, target="pytest tests/"),
+            _execution("pytest", target="pytest tests/test_cart.py"),
+            _execution("mypy", failed=True),
+        ]
+    )
+    assert "ruff passed" in statement
+    assert "1 of 2 pytest runs did not pass" in statement
+    assert "mypy did not" in statement
 
 
 def test_a_rerun_of_the_same_command_replaces_the_earlier_run():
@@ -1385,3 +1417,88 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
         )
         == runner
     )
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "========================= 1 failed, 3 passed in 10.03s =========================",
+        "==================== 3 passed, 1 error in 0.20s ====================",
+        "Ran 4 tests in 0.001s\n\nFAILED (failures=1)",
+    ],
+)
+def test_a_failing_summary_is_a_failed_check_whatever_the_exit_code(
+    agent, tool, summary
+):
+    """A snippet that prints pytest's result exits 0 whatever pytest said.
+
+    A benchmark run read "1 failed, 3 passed" that way and the line said
+    "verified — pytest ran and passed".
+    """
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        tool,
+        {"code": "subprocess.run(['pytest']); print(r.stdout)"},
+        {"status": "success", "stdout": summary + "\nReturn code: 1", "return_code": 0},
+    )
+    assert agent._turn_tool_executions[-1]["failed"] is True
+    statement = agent.verification_scope_statement()
+    assert "ran and passed" not in statement
+    assert "did not pass" in statement
+
+
+def test_a_passing_summary_from_a_snippet_stays_passed(agent):
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "stdout": "4 passed in 0.02s", "return_code": 0},
+    )
+    assert agent._turn_tool_executions[-1]["failed"] is False
+
+
+class TestSubtestSummariesAreRecognised:
+    """pytest-subtests prints `70 passed, 19 subtests passed in 1.32s`.
+
+    The word between the count and the outcome broke the summary pattern, so a
+    run that really did pass was reported `unverified` — and a judge reading
+    that footer scored a truthful agent as fabricating.
+    """
+
+    @pytest.mark.parametrize(
+        "summary,label",
+        [
+            ("70 passed, 19 subtests passed in 1.32s", "pytest"),
+            ("13 failed, 59 passed, 17 subtests passed in 1.37s", "pytest"),
+            ("5 passed, 2 subtests failed in 0.10s", "pytest"),
+            (
+                "3 failed, 966 passed, 3 skipped, 1 warning, 87 subtests passed in 9.23s",
+                "pytest",
+            ),
+        ],
+    )
+    def test_a_subtest_summary_counts_as_a_check(self, summary, label):
+        result = {"status": "success", "stdout": f"....\n{summary}\n", "return_code": 0}
+
+        assert (
+            verification_check_label("run_python", {"code": "pytest"}, result) == label
+        )
+
+    def test_a_subtest_failure_is_reported_as_a_failure(self):
+        result = {
+            "status": "success",
+            "stdout": "5 passed, 2 subtests failed in 0.10s\n",
+            "return_code": 0,
+        }
+
+        assert summary_reports_failure("run_python", result) is True
+
+    def test_a_clean_subtest_summary_is_not_a_failure(self):
+        result = {
+            "status": "success",
+            "stdout": "70 passed, 19 subtests passed in 1.32s\n",
+            "return_code": 0,
+        }
+
+        assert summary_reports_failure("run_python", result) is False
