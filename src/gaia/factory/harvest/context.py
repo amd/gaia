@@ -21,8 +21,13 @@ import argparse
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
+from gaia.factory.harvest.report import (
+    coverage_note,
+    load_labels,
+    reconcile_labels,
+)
 from gaia.factory.harvest.scan import DEFAULT_OUT, percentile
 
 # KV-cache bytes per token, from each model's shipped ``config.json``:
@@ -166,22 +171,6 @@ def collect(
     return sessions, everything
 
 
-def load_labels(path: Optional[Path]) -> Dict[str, str]:
-    if not path:
-        return {}
-    if not path.exists():
-        raise SystemExit(
-            f"label file {path} not found. Generate it as described in "
-            ".claude/skills/analyzing-claude-sessions/SKILL.md, or drop --labels."
-        )
-    out = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        parts = line.split()
-        if len(parts) >= 2:
-            out[parts[0]] = parts[1]
-    return out
-
-
 def _fmt_k(n: float) -> str:
     return f"{n / 1000:.1f}K"
 
@@ -289,8 +278,11 @@ def main() -> None:
     print(kv_table(reqs))
     labels = load_labels(args.labels)
     if labels:
+        note = coverage_note(reconcile_labels(labels, sessions, args.labels))
         print("\n## Peak context by use-case\n")
         print(by_usecase(sessions, labels))
+        if note:
+            print(f"\n{note}")
 
 
 if __name__ == "__main__":
