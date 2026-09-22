@@ -50,6 +50,34 @@ SAVE_CLAIMS = [
         "The extracted steps are stored in /tmp/steps.json for later use.",
         id="are-stored-in-path",
     ),
+    # #4057: phrasings taken verbatim from live Gemma-4-E4B runs that the
+    # first cut of the detector let through.
+    pytest.param(
+        "The report has been successfully written and saved to `out/summary.md`.",
+        id="adverb-between-been-and-verb",
+    ),
+    pytest.param(
+        "Report saved successfully at `out/report.md`.",
+        id="subject-then-bare-participle",
+    ),
+    pytest.param(
+        "Created the file `out/hello.txt` containing the text HELLO.",
+        id="created-the-file-object",
+    ),
+    pytest.param(
+        "The script successfully wrote the file `out/generated.txt`.",
+        id="third-person-wrote-the-file",
+    ),
+    # A plan label in front of a completed save is still a completed save —
+    # otherwise skipping plan prose is a one-token bypass of the guard.
+    pytest.param(
+        "Step 3: I saved the report to out/summary.md.",
+        id="plan-label-in-front-of-a-real-claim",
+    ),
+    pytest.param(
+        "**Plan:** the file was written to out/x.md.",
+        id="plan-label-in-front-of-a-passive-claim",
+    ),
 ]
 
 NON_CLAIMS = [
@@ -99,6 +127,23 @@ NON_CLAIMS = [
         "I wrote to john at acme.com.",
         id="domain-not-a-path",
     ),
+    # #4057: plan steps name a save the model still intends to make. The guard
+    # gets one re-prompt per turn, so spending it here lets a real fabrication
+    # later in the same turn through unblocked.
+    pytest.param(
+        "**Completion:** Conclude by stating the precise path where the summary "
+        "was saved, as requested.",
+        id="plan-step-naming-a-future-save",
+    ),
+    pytest.param(
+        "**Step 3:** Confirm to the user the exact path where the file was written.",
+        id="numbered-plan-step",
+    ),
+    # A negation is the opposite of a claim, so the one-word subject slot must
+    # not read one as one.
+    pytest.param("Nothing saved to disk.", id="nothing-saved"),
+    pytest.param("Not saved to out.md.", id="not-saved"),
+    pytest.param("Never written to the file.", id="never-written"),
     pytest.param("", id="empty"),
 ]
 
