@@ -918,6 +918,9 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Class-level so a subclass that never runs ``__init__`` still increments.
+    _turn_seq: int = 0
+
     # Dynamic tool loader (#1449): the sorted subset of tool names to surface
     # this turn, or ``None`` to render the full registry (legacy, byte-identical).
     # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
@@ -1319,9 +1322,6 @@ Do NOT wrap conversational replies in JSON.
         # the parsing helpers outside the standard query lifecycle don't see
         # the silent False fallback.
         self._single_tool_done: bool = False
-
-        # Monotonic per-turn counter mixins can read to detect a new turn.
-        self._turn_seq: int = 0
 
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).

@@ -965,3 +965,27 @@ def test_turn_budget_guard_would_fail_if_the_admission_check_were_removed(
     # the assertion below is the one a deleted guard would fail.
     assert out["success"] is False
     assert "message" not in out
+
+
+def test_turn_counter_increments_without_agent_init():
+    """A subclass that never runs ``Agent.__init__`` must still count turns.
+
+    Test doubles and lightweight subclasses build instances directly; a
+    counter that only exists after ``__init__`` raises ``AttributeError``
+    in the turn-setup path for all of them.
+    """
+    from gaia.agents.base.agent import Agent
+
+    assert Agent._turn_seq == 0
+
+    class _NoInit(Agent):
+        def __init__(self):  # pylint: disable=super-init-not-called
+            pass
+
+        def _register_tools(self):
+            pass
+
+    bare = _NoInit()
+    bare._turn_seq += 1
+    assert bare._turn_seq == 1
+    assert Agent._turn_seq == 0
