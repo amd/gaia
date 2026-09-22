@@ -437,20 +437,22 @@ With no baseline committed, the eval still tells you plenty: a category full of 
 
 **#1030 (the Gemma-4 RAG-PDF timeout) is the canonical example of what happens when this rule is skipped:** a prompt change passed every unit test, then broke document Q&A in production. #1033 tracks the systemic CI gaps that let it through.
 
-### IMPORTANT: Run agent evals SERIALLY, never in parallel
+### IMPORTANT: Run agent evals SERIALLY per Lemonade backend, never in parallel against one
 
 **Never run two `gaia eval agent` invocations concurrently against the same Lemonade Server.** Each eval scenario forces Lemonade to load a specific model at a specific `ctx_size`; two concurrent runs will race-evict each other's models and you'll see chaotic failures like:
 - `request (NNNN tokens) exceeds the available context size (4096 tokens)` — one run reloaded the model at a smaller ctx
 - Spurious `BLOCKED_BY_ARCHITECTURE` / `INFRA_ERROR` results — process management collisions
 - `model_load_error: llama-server failed to start` — port conflicts on llama-server children
 
-**Rule of thumb:** at most ONE `gaia eval agent ...` process running at any time, period. If a fix-loop or batch-experiment script needs to chain runs, it must do so sequentially (`run-1 && run-2 && run-3`), never via background `&`. Before kicking off a new eval, verify nothing else is running:
+**Rule of thumb:** at most ONE `gaia eval agent ...` process per machine at any time. If a fix-loop or batch-experiment script needs to chain runs, it must do so sequentially (`run-1 && run-2 && run-3`), never via background `&`. Before kicking off a new eval, verify nothing else is running:
 
 ```bash
 ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0"
 ```
 
 This applies to every `gaia eval agent` run — including `--fix` auto-fix runs and any batch fix-loop that chains them. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
+
+**The constraint is the BACKEND, not the clock.** Two evals on two machines, each with its own Lemonade, cannot evict each other's model and are not covered by this rule. That is what lets [`eval_flagship.yml`](.github/workflows/eval_flagship.yml) fan the scenario eval out across parallel lanes on the ephemeral runner pool — every lane gets its own machine, and within a lane the categories still run one at a time. Do not "fix" that workflow back to a single serial job, and do not read this rule as licence to run two evals against one Lemonade because they are in different terminals.
 
 ## Development Workflow
 
