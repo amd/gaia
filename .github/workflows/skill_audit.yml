@@ -477,7 +477,7 @@ jobs:
       - name: Run Claude (skill-intent lens)
         id: claude
         continue-on-error: true   # advisory: a crash here must not gate the merge
-        uses: anthropics/claude-code-action@51db78a4b844e144f8d02425cb280435c04a3474  # v1.0.224
+        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
