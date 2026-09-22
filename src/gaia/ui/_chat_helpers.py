@@ -495,6 +495,10 @@ def _build_create_kwargs(
 
     Note: if registry.resolve_model() already promoted model_id before this
     call, it is forwarded as-is via branch 2 (resolve_model result ≠ default).
+    A session created against a *configured* default_model (see
+    ChatDatabase.resolved_default_model) also takes branch 2, not branch 3 —
+    its stored model differs from _DB_DEFAULT_MODEL too, so the configured
+    model reaches the agent instead of being silently dropped.
 
     ``device``/``min_context_size`` flow through to the agent's config so the
     requested device is validated at runtime. Agent factories filter unknown
@@ -1187,6 +1191,33 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+def _canonicalize_user_input_request(event: dict) -> dict:
+    """Translate a raw ``user_input_request`` event (emitted by
+    ``SSEOutputHandler.request_user_input_blocking()``) into the ``needs_input``
+    wire shape (#2595) — the same shape the email-relay path produces via
+    ``CanonicalTranslator``, so the frontend's NeedsInputCard renders either
+    source identically.
+
+    Options normalization is delegated to ``sse_translation._normalize_options``
+    rather than re-derived here: a caller using the documented ``choices``
+    form (a flat list of strings — see ``request_user_input``'s docstring)
+    must get pickable options exactly like a caller using the richer
+    ``options`` form, and duplicating that fallback here is how the two
+    would silently drift apart.
+    """
+    from gaia.ui.sse_translation import _normalize_options
+
+    return {
+        "type": "needs_input",
+        "request_id": str(event.get("request_id") or ""),
+        "question": str(event.get("message") or ""),
+        "options": _normalize_options(event),
+        "allow_free_text": bool(event.get("allow_free_text", True)),
+        "sensitive": bool(event.get("sensitive", False)),
+        "timeout_seconds": event.get("timeout_seconds"),
+    }
 
 
 # Remediation copy for a turn that produced no answer at all — reserved for a
@@ -2542,6 +2573,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                     if (event.get("decision") or "BLOCK").upper() == "BLOCK":
                         _persist_policy_block_if_needed()
+                elif event_type == "user_input_request":
+                    event = _canonicalize_user_input_request(event)
 
                 # Pad each event so Chromium's receive buffer flushes immediately.
                 # Events < 512 bytes are held by Chromium until the buffer fills.

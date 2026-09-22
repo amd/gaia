@@ -34,6 +34,7 @@ Spec: docs/spec/agent-memory-architecture.md
 """
 
 import concurrent.futures
+import ctypes
 import json
 import logging
 import os
@@ -55,6 +56,7 @@ from gaia.agents.base.memory_store import (
     VALID_CATEGORIES,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
+from gaia.agents.base.verification import check_was_executed
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
@@ -297,6 +299,90 @@ def _omp_conflict_override() -> bool:
         "true",
         "yes",
     }
+
+
+#: Shared-library basenames that are an OpenMP runtime. Two distinct ones in a
+#: process means the second to initialise aborts it ("OMP: Error #15").
+_OMP_RUNTIME_PREFIXES = ("libomp", "libiomp5", "libgomp")
+
+
+def _loaded_omp_runtimes() -> tuple[str, ...]:
+    """Paths of the OpenMP runtimes currently mapped into this process.
+
+    macOS only: the abort is a dyld-level duplicate-runtime check, and on Linux
+    libgomp and libomp coexist routinely, so reporting a "conflict" there would
+    disable recall on healthy hosts. Best-effort — an empty tuple means "could
+    not tell", never "verified safe".
+    """
+    if sys.platform != "darwin":
+        return ()
+    try:
+        libc = ctypes.CDLL(None)
+        libc._dyld_image_count.restype = ctypes.c_uint32
+        libc._dyld_get_image_name.restype = ctypes.c_char_p
+        libc._dyld_get_image_name.argtypes = [ctypes.c_uint32]
+        found = []
+        for i in range(libc._dyld_image_count()):
+            raw = libc._dyld_get_image_name(i)
+            if not raw:
+                continue
+            path = raw.decode("utf-8", "replace")
+            if path.rsplit("/", 1)[-1].startswith(_OMP_RUNTIME_PREFIXES):
+                found.append(path)
+        return tuple(sorted(set(found)))
+    except Exception as e:  # pragma: no cover - platform introspection
+        logger.debug("[MemoryMixin] could not enumerate OpenMP runtimes: %s", e)
+        return ()
+
+
+def assert_faiss_omp_safe(operation: str) -> None:
+    """Refuse a faiss call that would SIGABRT this process.
+
+    faiss-cpu and torch each bundle their own ``libomp.dylib``. Both resident
+    means the next OpenMP region — a faiss search, or torch's first parallel
+    op — initialises the second copy and macOS kills the process. That abort is
+    native: no ``except`` can catch it, so the only place to stop it is before
+    the call. ``_get_cross_encoder`` guards the import direction; this guards
+    the search direction, which is fatal whichever library loaded first.
+
+    Raises:
+        RuntimeError: when a second OpenMP runtime is already resident.
+    """
+    if _omp_conflict_override():
+        return
+    runtimes = _loaded_omp_runtimes()
+    if len(runtimes) < 2:
+        return
+    raise RuntimeError(
+        f"{operation} would abort this process: {len(runtimes)} OpenMP runtimes "
+        f"are loaded ({', '.join(runtimes)}). faiss-cpu and torch each bundle "
+        "one, and the next faiss search initialises the second — macOS aborts "
+        "the process (OMP: Error #15), which no error handler can catch. "
+        "Keep the two out of one process (torch arrives with the [audio] and "
+        "[ui] extras; memory recall needs faiss-cpu), or set "
+        f"{_OMP_OVERRIDE_ENV}=1 on a host where the two runtimes coexist. "
+        "See src/gaia/agents/base/memory.py:_loaded_omp_runtimes."
+    )
+
+
+def _validated_faiss_query(
+    query_vec: np.ndarray, index, index_label: str
+) -> np.ndarray:
+    """Shape a query vector for ``index.search`` and reject a mismatched one.
+
+    A vector whose width is not the index's is a stale or cross-model index,
+    not something to rank anyway — so it raises with the rebuild instruction
+    rather than returning no matches and looking like an empty memory.
+    """
+    query = np.ascontiguousarray(query_vec.reshape(1, -1), dtype=np.float32)
+    if query.shape[1] != index.d:
+        raise RuntimeError(
+            f"Query vector has {query.shape[1]} dimensions but the {index_label} "
+            f"FAISS index has {index.d} — the index was built with a different "
+            "embedding model. Rebuild it (restart the agent, or re-run "
+            "`gaia memory` onboarding) so both sides use one embedder."
+        )
+    return query
 
 
 def _get_cross_encoder():
@@ -1156,24 +1242,26 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         Returns:
             List of (knowledge_id, score) tuples, sorted by score descending.
+
+        Raises:
+            RuntimeError: on a dimension mismatch with the index, or when a
+                second OpenMP runtime makes the native search fatal.
         """
         if self._faiss_index is None or self._faiss_index.ntotal == 0:
             return []
 
-        try:
-            # Clamp top_k to index size
-            k = min(top_k, self._faiss_index.ntotal)
-            query = query_vec.reshape(1, -1).astype(np.float32)
-            scores, indices = self._faiss_index.search(query, k)
+        query = _validated_faiss_query(query_vec, self._faiss_index, "knowledge")
+        k = min(top_k, self._faiss_index.ntotal)
+        if k < 1:
+            raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
+        assert_faiss_omp_safe("Knowledge memory search")
 
-            results = []
-            for score, idx in zip(scores[0], indices[0]):
-                if idx >= 0 and idx < len(self._faiss_id_map):
-                    results.append((self._faiss_id_map[idx], float(score)))
-            return results
-        except Exception as e:
-            logger.debug("[MemoryMixin] FAISS search failed: %s", e)
-            return []
+        scores, indices = self._faiss_index.search(query, k)
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx >= 0 and idx < len(self._faiss_id_map):
+                results.append((self._faiss_id_map[idx], float(score)))
+        return results
 
     # ==================================================================
     # Complexity-Aware Recall Depth
@@ -2445,7 +2533,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         error=error_msg,
                         duration_ms=duration_ms,
                     )
-                    self._auto_store_error(tool_name, error_msg)
+                    self._auto_store_error(tool_name, error_msg, tool_args)
             except Exception as log_error:
                 logger.warning(
                     "[MemoryMixin] failed to record tool exception: %s", log_error
@@ -2473,11 +2561,11 @@ class MemoryMixin(ProceduralMemoryMixin):
 
                 # Auto-store novel errors as knowledge
                 if is_error and error_msg:
-                    self._auto_store_error(tool_name, error_msg)
-                elif not is_error:
-                    # It worked. Retire whatever this tool was once blamed for,
+                    self._auto_store_error(tool_name, error_msg, tool_args, result)
+                elif not is_error and check_was_executed(result):
+                    # It worked. Retire what this same operation was blamed for,
                     # so a fixed bug stops being replayed into every prompt.
-                    self._forget_errors_for_tool(tool_name)
+                    self._forget_errors_for_operation(tool_name, tool_args)
         except Exception as e:
             logger.debug("[MemoryMixin] tool logging failed: %s", e)
 
@@ -2492,9 +2580,8 @@ class MemoryMixin(ProceduralMemoryMixin):
     #: afterwards, and the agent kept telling users that shell commands and the
     #: network were unavailable while running them successfully.
     #:
-    #: A durable constraint is still stored. "Command 'foo' is not in the
-    #: allowed list" is a rule about this agent and worth remembering; "timed
-    #: out" is weather.
+    #: Refusals by the permission layer are skipped separately, from the
+    #: result's ``executed: False`` — see ``_auto_store_error``.
     _TRANSIENT_ERROR_MARKERS: ClassVar[tuple] = (
         "did not return within",
         "timed out",
@@ -2559,34 +2646,110 @@ class MemoryMixin(ProceduralMemoryMixin):
             return False
         return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS)
 
-    def _forget_errors_for_tool(self, tool_name: str) -> None:
-        """Drop stored errors for *tool_name* once it has worked again.
+    #: Argument keys naming what a call acted on, in priority order. A shell
+    #: command is keyed by its binary, so ``pytest -q`` working again retires
+    #: ``pytest tests/`` failing, but ``ls`` working does not.
+    _OPERATION_COMMAND_KEYS: ClassVar[tuple] = ("command", "cmd")
+    _OPERATION_TARGET_KEYS: ClassVar[tuple] = (
+        "file_path",
+        "path",
+        "directory",
+        "name",
+        "skill_name",
+        "url",
+    )
+
+    @staticmethod
+    def _command_program(command: str) -> str:
+        """The program a command runs, past ``env``, ``VAR=value`` and ``-m``.
+
+        ``env TOYBOX_CLOCK=frozen pytest -q`` and ``python -m pytest`` both run
+        pytest, so a fix that adds a variable is the same operation.
+        """
+        tokens = command.split()
+        i = 0
+        while i < len(tokens) and (
+            tokens[i] == "env" or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", tokens[i])
+        ):
+            i += 1
+        if i == len(tokens):
+            return os.path.basename(tokens[0]).lower()
+        program = os.path.basename(tokens[i]).lower()
+        is_module_run = tokens[i + 1 : i + 2] == ["-m"] and i + 2 < len(tokens)
+        if program.startswith("python") and is_module_run:
+            return tokens[i + 2].lower()
+        return program
+
+    @classmethod
+    def _operation_key(cls, tool_name: str, tool_args: Any) -> str:
+        """Identify the operation a call performed: tool plus what it acted on."""
+        args = tool_args if isinstance(tool_args, dict) else {}
+        for key in cls._OPERATION_COMMAND_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return f"{tool_name} {cls._command_program(value)}"
+        for key in cls._OPERATION_TARGET_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return f"{tool_name} {value.strip()}"
+        return f"{tool_name} {json.dumps(args, sort_keys=True, default=str)}"
+
+    def _forget_errors_for_operation(self, tool_name: str, tool_args: Any) -> None:
+        """Drop stored errors for an operation once it has worked again.
 
         The self-healing half. Without it a stored error is permanent doctrine:
         nothing expires it, nothing lowers its confidence, and the model is told
-        to avoid the tool forever — including after the bug is fixed. A tool that
-        just returned successfully is, by direct evidence, not broken.
+        to avoid the call forever — including after the bug is fixed.
+
+        Scoped to the operation, not the tool: a successful ``ls`` is no
+        evidence that ``pytest`` is on PATH now. Rows stored before errors
+        carried an operation key are matched by tool, as they always were.
         """
+        operation = self._operation_key(tool_name, tool_args)
+        prefix = f"{tool_name}: "
         try:
-            prefix = f"{tool_name}: "
             for entry in self._memory_store.get_by_category(
                 "error", context=self._memory_context, limit=50
             ):
-                if str(entry.get("content", "")).startswith(prefix):
+                stored_op = (entry.get("metadata") or {}).get("operation")
+                if stored_op is not None:
+                    matches = stored_op == operation
+                else:
+                    matches = str(entry.get("content", "")).startswith(prefix)
+                if matches:
                     self._memory_store.delete(entry["id"])
                     logger.debug(
                         "[MemoryMixin] dropped a stale error for '%s' — it worked",
-                        tool_name,
+                        operation,
                     )
         except Exception as exc:  # never let bookkeeping break a good call
             logger.debug(
-                "[MemoryMixin] could not clear errors for %s: %s", tool_name, exc
+                "[MemoryMixin] could not clear errors for %s: %s", operation, exc
             )
 
-    def _auto_store_error(self, tool_name: str, error_msg: str) -> None:
-        """Store a novel tool error as knowledge for future avoidance."""
+    def _auto_store_error(
+        self,
+        tool_name: str,
+        error_msg: str,
+        tool_args: Any = None,
+        result: Any = None,
+    ) -> None:
+        """Store a novel tool error as knowledge for future avoidance.
+
+        A call the permission layer refused before running (``executed: False``
+        on the result) is not stored: it describes the current permission
+        settings, not the world, the tool reports it fresh on every call, and
+        replayed later it teaches the model to avoid what is now allowed.
+        """
         try:
             if not error_msg or not error_msg.strip():
+                return
+            if isinstance(result, dict) and not check_was_executed(result):
+                logger.debug(
+                    "[MemoryMixin] not persisting a refusal for '%s': %s",
+                    tool_name,
+                    error_msg[:80],
+                )
                 return
             if self._is_transient_error(error_msg):
                 logger.debug(
@@ -2602,14 +2765,14 @@ class MemoryMixin(ProceduralMemoryMixin):
                 source="error_auto",
                 context=self._memory_context,
                 confidence=0.5,
+                metadata={"operation": self._operation_key(tool_name, tool_args)},
             )
-            # Embed the error
             try:
                 vec = self._embed_text(error_content)
                 self._memory_store.store_embedding(kid, _embedding_to_blob(vec))
                 self._faiss_add(kid, vec)
-            except Exception:
-                pass
+            except Exception as embed_exc:
+                logger.debug("[MemoryMixin] could not embed error: %s", embed_exc)
             logger.debug("[MemoryMixin] auto-stored error: %s", error_content[:80])
         except Exception as e:
             logger.debug("[MemoryMixin] failed to auto-store error: %s", e)

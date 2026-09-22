@@ -402,6 +402,7 @@
               "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
+              "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
               "plans/autonomy-engine"
             ]
@@ -449,7 +450,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
-              "releases/v0.23.1",
+              "releases/v0.24.1",
               "releases/v0.23.0",
               "releases/v0.22.0",
               "releases/v0.21.2",
@@ -510,7 +511,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.23.1 \u00b7 Lemonade 11.8.1",
+        "label": "v0.24.1 \u00b7 Lemonade 11.8.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

@@ -39,6 +39,13 @@ from gaia.llm.lemonade_client import truncation_budget
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def isolated_device_profile(monkeypatch):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="npu"))
+
+
 class _TestAgent(Agent):
     """Minimal concrete Agent: no LLM/network access, no tools."""
 
@@ -570,3 +577,148 @@ class TestTheBudgetFollowsTheModelInUse:
                 f"{method.__name__} still reads the device profile directly, so "
                 f"a remote model gets the local budget"
             )
+
+
+class TestStringResults:
+    @pytest.mark.parametrize(
+        "device,threshold,target",
+        [(None, 30000, 20000), ("npu", 30000, 20000), ("gpu", 60000, 40000)],
+    )
+    def test_large_string_preserves_head_tail_and_reports_loss(
+        self, device, threshold, target
+    ):
+        agent = make_agent(device=device)
+        text = "HEAD_FACT " + "middle " * threshold + " TAIL_FACT"
+        conversation = []
+        result = agent._handle_large_tool_result("read_file", text, conversation)
+        assert result["head"].startswith("HEAD_FACT")
+        assert result["tail"].endswith("TAIL_FACT")
+        assert result["omitted_chars"] == len(text) - len(result["head"]) - len(
+            result["tail"]
+        )
+        assert len(json.dumps(result, ensure_ascii=False)) <= target
+        assert conversation[-1]["content"] == result
+        wire = agent._create_tool_message("read_file", result, tool_call_id="call-1")
+        assert wire["tool_call_id"] == "call-1"
+        assert json.loads(wire["content"][0]["text"]) == result
+
+    def test_a_json_string_drops_whole_records_instead_of_slicing_one(self):
+        """Code search and index status return ``json.dumps(...)`` as a str.
+
+        Head-and-tail eliding leaves the model half a record at each end — the
+        mid-record corruption the structured path exists to avoid. Parsing
+        first sends it down that path, so every record the model sees is whole.
+        """
+        agent = make_agent(device="npu")
+        records = [
+            {"path": f"src/mod_{i}.py", "line": i, "snippet": "y" * 400}
+            for i in range(400)
+        ]
+
+        result = agent._handle_large_tool_result("search_code", json.dumps(records), [])
+
+        # A str in stays a str out: the tool's declared result type is part of
+        # its contract with whatever reads it next.
+        assert isinstance(result, str)
+        items = json.loads(result)
+        assert len(items) < len(records), "nothing was dropped"
+        # Every surviving record is intact, and the tail marker discloses the loss.
+        assert all(set(i) >= {"path", "line", "snippet"} for i in items[:-1])
+        assert items[-1]["truncated"] is True
+        assert items[-1]["total"] == len(records)
+
+    def test_a_json_scalar_string_is_still_treated_as_prose(self):
+        """``"null"`` or a quoted word parses as JSON but has no records."""
+        agent = make_agent(device="npu")
+        text = '"' + "z" * 60000 + '"'
+
+        result = agent._handle_large_tool_result("read_file", text, [])
+
+        assert set(result) >= {"head", "tail", "omitted_chars"}
+
+    @pytest.mark.parametrize("text", ["", "normal output", "λ" * 30000, '"' * 30000])
+    def test_under_threshold_strings_are_byte_identical(self, text):
+        agent = make_agent(device="npu")
+        result = agent._handle_large_tool_result("read_file", text, [])
+        assert isinstance(result, str)
+        assert result == text
+
+    @pytest.mark.parametrize("unit", ['"', "\\", "\n", "\x00", "λ"])
+    def test_escaped_payload_fits_serialized_budget(self, unit):
+        from gaia.agents.base.tool_output import elide_text
+
+        text = unit * 5000
+        result = elide_text(text, 200)
+        assert len(json.dumps(result, ensure_ascii=False)) <= 200
+        assert result["original_chars"] == len(text)
+        assert result["omitted_chars"] > 0
+        assert result["head"] + result["tail"] == unit * (
+            len(text) - result["omitted_chars"]
+        )
+
+    def test_tiny_budget_fails_loudly(self):
+        from gaia.agents.base.tool_output import elide_text
+
+        with pytest.raises(ValueError, match="too small"):
+            elide_text("large output", 1)
+
+    def test_native_loop_receives_bounded_string_result(self):
+        from unittest.mock import patch
+
+        from tests.unit.agents import test_parallel_tool_calls as parallel
+
+        with (
+            patch("gaia.agents.base.agent.AgentSDK"),
+            patch.dict(parallel._TOOL_REGISTRY, clear=True),
+        ):
+            agent = parallel._DummyAgent(silent_mode=True, skip_lemonade=True)
+            agent.streaming = False
+            parallel._register_tool(
+                "large_text", lambda: "HEAD_FACT " + "x" * 100000 + " TAIL_FACT"
+            )
+            chat = parallel._stub_chat(
+                agent,
+                parallel._native_envelope(("call-1", "large_text", {})),
+                "Finished",
+            )
+            result = agent.process_query("Read the tool evidence")
+            assert result["status"] == "success"
+            messages = chat.send_messages.call_args_list[-1].kwargs["messages"]
+            tools = [message for message in messages if message["role"] == "tool"]
+            assert len(tools) == 1
+            evidence = tools[0]["content"][0]["text"]
+            assert len(evidence) <= 20000
+            assert "HEAD_FACT" in evidence and "TAIL_FACT" in evidence
+            assert json.loads(evidence)["omitted_chars"] > 0
+
+
+@pytest.mark.parametrize("profile", ["npu", "gpu", "cpu"])
+def test_unset_device_uses_configured_profile(monkeypatch, profile):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device=profile))
+    agent = make_agent(device=None)
+    assert agent._truncation_budget() == truncation_budget(profile)
+    agent.device = "npu"
+    assert agent._truncation_budget() == truncation_budget("npu")
+
+
+def test_flm_model_keeps_npu_budget_even_with_gpu_profile(monkeypatch):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
+    agent = make_agent(device="gpu", model_id="gemma4-it-e2b-FLM")
+    assert agent._truncation_budget() == truncation_budget("npu")
+
+
+@pytest.mark.parametrize("model", ["fireworks.gemma-4-31b-it", "amd.remote-model"])
+def test_gateway_budget_does_not_load_local_device_config(monkeypatch, model):
+    from gaia.config import GaiaConfig
+
+    agent = make_agent(device=None, model_id=model)
+
+    def invalid_config():
+        raise ValueError("broken local configuration")
+
+    monkeypatch.setattr(GaiaConfig, "load", invalid_config)
+    assert agent._truncation_budget() == truncation_budget(None)
