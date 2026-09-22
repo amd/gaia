@@ -1778,7 +1778,9 @@ Do NOT wrap conversational replies in JSON.
         from gaia.agents.base.turn_metrics import count_tokens
 
         schemas = getattr(self, "_last_tool_schemas", None)
-        schema_json = json.dumps(schemas) if schemas else ""
+        # ensure_ascii=False: a \uXXXX escape is six chars the model never
+        # sees, and the size here has to match what went over the wire.
+        schema_json = json.dumps(schemas, ensure_ascii=False) if schemas else ""
         block: Dict[str, Any] = {
             "sent": schemas is not None,
             # How this model takes tools, independent of whether any were sent:
