@@ -59,8 +59,12 @@ def _error_detail(response: httpx.Response) -> str:
     HTML error page) in front of the user.
     """
     try:
-        err = (response.json() or {}).get("error") or {}
+        parsed = response.json()
     except ValueError:
+        return ""
+    # A parsed body or its `error` field can be any JSON type, not just an object.
+    err = parsed.get("error") if isinstance(parsed, dict) else None
+    if not isinstance(err, dict):
         return ""
     code = str(err.get("code") or "")
     return code if _ERROR_CODE_RE.fullmatch(code) else ""
