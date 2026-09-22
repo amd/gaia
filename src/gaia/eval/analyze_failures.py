@@ -49,6 +49,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -534,15 +535,15 @@ def build_failure_records(
             "tool_service_log": service_info,
         }
 
+        repro_agent_type = run_config.get("agent_type") or DEFAULT_AGENT_TYPE
         repro_cli = (
-            f"gaia eval agent --scenario {sid} --agent-type "
-            f"{run_config.get('agent_type', 'tool')} "
-            f"--iterations 1 --model {run_config.get('model', 'claude-opus-5')}"
+            f"gaia eval agent --scenario {sid} --agent-type {repro_agent_type} "
+            f"--iterations 1 --model {run_config.get('model', DEFAULT_CLAUDE_MODEL)}"
         )
         reproduction = {
             "cli": repro_cli,
             "user_messages": user_messages,
-            "agent_type": run_config.get("agent_type", "tool"),
+            "agent_type": repro_agent_type,
             "model": run_config.get("model", "claude-opus-5"),
             "backend_url": run_config.get("backend_url", "http://localhost:4200"),
             "trace_file": tr.get("_trace_file"),

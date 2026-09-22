@@ -15,6 +15,10 @@ This module contains shared configuration constants used across the evaluation f
 # judge change out explicitly, rather than reading a shifted score as a regression.
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 
+# The agent under test. Every scenario scores the flagship — the agent users
+# actually meet — so a scorecard names one agent and comparing two is valid.
+DEFAULT_AGENT_TYPE = "gaia"
+
 # Claude API pricing (per million tokens) - based on https://www.anthropic.com/pricing
 # Last updated: 2026-08-04
 MODEL_PRICING = {

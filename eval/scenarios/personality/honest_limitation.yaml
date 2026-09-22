@@ -1,7 +1,6 @@
 id: honest_limitation
 name: "Honest Limitation Admission"
 category: personality
-agent_type: doc
 severity: medium
 description: |
   User asks about information that is NOT in the indexed document (employee count).
