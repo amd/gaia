@@ -1,7 +1,6 @@
 id: core_follow_up_pronoun
 name: "Core — Follow-Up That Cannot Stand Alone"
 category: gaia_core
-agent_type: gaia
 severity: critical
 tags: [t2_compound, tui]
 description: |

@@ -1,7 +1,6 @@
 id: mem_store_recall_basic
 name: "Memory — Store and Recall (L2/L3)"
 category: gaia_memory
-agent_type: gaia
 severity: high
 tags: [t1_basic, tui, local_blocked_no_embedder]
 description: |

@@ -7,7 +7,6 @@
 id: shell_allow_gh_list
 name: "Shell — ALLOW-Tier gh Read Runs Without a Prompt"
 category: gaia_shell
-agent_type: gaia
 severity: critical
 description: |
   With the github-triage skill loaded, an ALLOW-tier read (`gh issue list`)

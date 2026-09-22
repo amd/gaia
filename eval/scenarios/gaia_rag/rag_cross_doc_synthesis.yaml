@@ -1,7 +1,6 @@
 id: rag_cross_doc_synthesis
 name: "RAG — Cross-Document Synthesis"
 category: gaia_rag
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

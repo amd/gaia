@@ -1,7 +1,6 @@
 id: skills_load_persists
 name: "Skills — Loaded Skill Survives the Turn (L5/L6)"
 category: gaia_skills_lifecycle
-agent_type: gaia
 severity: critical
 tags: [tui]
 description: |

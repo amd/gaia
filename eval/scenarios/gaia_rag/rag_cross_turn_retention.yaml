@@ -1,7 +1,6 @@
 id: rag_cross_turn_retention
 name: "RAG — Indexed Document Retained Across Turns"
 category: gaia_rag
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

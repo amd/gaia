@@ -3,7 +3,6 @@
 id: task_sourcewatch_no_repeat
 name: "Skill Task — source-watch Reports Nothing Twice"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: critical
 tags: [local_blocked_no_embedder]
 description: |

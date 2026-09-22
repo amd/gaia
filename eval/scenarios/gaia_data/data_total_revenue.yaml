@@ -3,7 +3,6 @@
 id: data_total_revenue
 name: "Data — Load CSV and Compute the Exact Total"
 category: gaia_data
-agent_type: gaia
 severity: high
 description: |
   Load the fixture sales CSV into the scratchpad and answer with the exact

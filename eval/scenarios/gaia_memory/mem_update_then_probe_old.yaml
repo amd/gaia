@@ -1,7 +1,6 @@
 id: mem_update_then_probe_old
 name: "Memory — Superseded Value Must Not Resurface"
 category: gaia_memory
-agent_type: gaia
 severity: high
 tags: [t2_compound, local_blocked_no_embedder]
 description: |

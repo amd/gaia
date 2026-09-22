@@ -281,8 +281,8 @@ class TestAgentEvalRunner:
             assert len(data["turns"]) > 0, f"{path.name} has no turns"
             assert "setup" in data, f"{path.name} missing 'setup'"
 
-    def test_gaia_corpus_categories_and_agent_type(self):
-        """Every gaia_* scenario targets the flagship agent and uses known tags."""
+    def test_gaia_corpus_categories_and_tags(self):
+        """Every gaia_* scenario uses known tags and leaves the agent to the CLI."""
         from gaia.eval.runner import find_scenarios
 
         expected_categories = {
@@ -317,9 +317,10 @@ class TestAgentEvalRunner:
         ]
         assert expected_categories <= {data["category"] for _, data in gaia}
         for path, data in gaia:
-            assert (
-                data.get("agent_type") == "gaia"
-            ), f"{path.name}: gaia_* scenarios must set agent_type: gaia"
+            assert "agent_type" not in data, (
+                f"{path.name}: a scenario may not pin agent_type — one run scores "
+                "one agent, chosen by `gaia eval agent --agent-type`"
+            )
             unknown = set(data.get("tags", [])) - known_tags
             assert not unknown, f"{path.name}: unknown tags {unknown}"
 

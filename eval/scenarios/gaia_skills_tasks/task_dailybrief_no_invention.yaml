@@ -3,7 +3,6 @@
 id: task_dailybrief_no_invention
 name: "Skill Task — daily-brief Refuses to Pad the Brief"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: critical
 description: |
   Probes the hallucination boundary: asked about a topic the sources don't

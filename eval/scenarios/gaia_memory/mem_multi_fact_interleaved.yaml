@@ -1,7 +1,6 @@
 id: mem_multi_fact_interleaved
 name: "Memory — Interleaved Facts, Out-of-Order Recall"
 category: gaia_memory
-agent_type: gaia
 severity: high
 tags: [t2_compound, local_blocked_no_embedder]
 description: |

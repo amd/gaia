@@ -1,7 +1,6 @@
 id: rag_factual_report
 name: "RAG — Factual Extraction From a Financial Report"
 category: gaia_rag
-agent_type: gaia
 severity: critical
 tags: [local_blocked_no_embedder]
 description: |

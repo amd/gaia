@@ -1,7 +1,6 @@
 id: skills_status_tools_honest
 name: "Skills — Honest Report of What a Load Registered"
 category: gaia_skills_lifecycle
-agent_type: gaia
 severity: critical
 description: |
   After loading a skill, the agent is asked exactly what it can now do.

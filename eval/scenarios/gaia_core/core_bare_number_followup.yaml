@@ -1,7 +1,6 @@
 id: core_bare_number_followup
 name: "Core — Bare-Number Follow-Up on a Generated List"
 category: gaia_core
-agent_type: gaia
 severity: high
 tags: [t2_compound]
 description: |

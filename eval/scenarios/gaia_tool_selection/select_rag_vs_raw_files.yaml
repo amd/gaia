@@ -1,7 +1,6 @@
 id: select_rag_vs_raw_files
 name: "Tool Selection — Indexed Question Uses Retrieval"
 category: gaia_tool_selection
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

@@ -4,7 +4,6 @@
 id: task_sourcewatch_detects_change
 name: "Skill Task — source-watch Detects the Planted Diff"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

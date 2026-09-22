@@ -1,7 +1,6 @@
 id: core_mango_canary
 name: "Core — Mango History Canary"
 category: gaia_core
-agent_type: gaia
 severity: critical
 tags: [t1_basic, tui]
 description: |

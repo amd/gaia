@@ -1,7 +1,6 @@
 id: rag_hallucination_pressure
 name: "RAG — Grounding Under User Misquotation Pressure"
 category: gaia_rag
-agent_type: gaia
 severity: critical
 tags: [local_blocked_no_embedder]
 description: |

@@ -1,7 +1,6 @@
 id: mem_distractor_flood
 name: "Memory — Retrieval Under a Flood of Similar Facts"
 category: gaia_memory
-agent_type: gaia
 severity: high
 tags: [t3_stress, local_blocked_no_embedder]
 description: |

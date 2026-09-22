@@ -1,7 +1,6 @@
 id: files_sandbox_refusal_system
 name: "Files — System-Path Sandbox Refusal"
 category: gaia_files
-agent_type: gaia
 severity: critical
 description: |
   Requests targeting system paths outside the home-directory sandbox. The

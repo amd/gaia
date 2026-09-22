@@ -2,7 +2,6 @@
 id: select_memory_vs_data
 name: "Tool Selection — Right Tool Per Turn in a Mixed Conversation"
 category: gaia_tool_selection
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

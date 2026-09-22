@@ -4,7 +4,6 @@
 id: web_fetch_product_fact
 name: "Web — Fetch a Page, Extract Planted Facts"
 category: gaia_web
-agent_type: gaia
 severity: high
 description: |
   Fetch a deterministic local fixture page and answer with its planted

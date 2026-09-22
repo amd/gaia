@@ -1,7 +1,6 @@
 id: select_no_tools
 name: "Tool Selection — Restraint on General Knowledge"
 category: gaia_tool_selection
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

@@ -1,7 +1,6 @@
 id: mem_long_horizon_distractors
 name: "Memory — Long-Horizon Recall With Tool Work Between"
 category: gaia_memory
-agent_type: gaia
 severity: high
 tags: [t3_stress, local_blocked_no_embedder]
 description: |

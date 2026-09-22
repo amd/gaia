@@ -1,7 +1,6 @@
 id: core_contradiction_injection
 name: "Core — In-Session Contradiction Handling (Adversarial)"
 category: gaia_core
-agent_type: gaia
 severity: critical
 tags: [t4_adversarial]
 description: |

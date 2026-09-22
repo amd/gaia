@@ -3,7 +3,6 @@
 id: code_find_class_method
 name: "Code — Locate a Method by Behavior"
 category: gaia_code
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

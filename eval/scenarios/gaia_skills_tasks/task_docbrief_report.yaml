@@ -1,7 +1,6 @@
 id: task_docbrief_report
 name: "Skill Task — document-brief on the Q3 Report"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

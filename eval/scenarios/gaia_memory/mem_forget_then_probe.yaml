@@ -1,7 +1,6 @@
 id: mem_forget_then_probe
 name: "Memory — Forget Then Probe (Adversarial)"
 category: gaia_memory
-agent_type: gaia
 severity: critical
 tags: [t4_adversarial, local_blocked_no_embedder]
 description: |

@@ -3,7 +3,6 @@
 id: task_pricewatch_no_false_alert
 name: "Skill Task — price-watch Stays Quiet Without a New Low"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: critical
 tags: [local_blocked_no_embedder]
 description: |

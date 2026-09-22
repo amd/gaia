@@ -1,7 +1,6 @@
 id: rag_dont_know_absent_fact
 name: "RAG — Don't-Know on Facts Absent From the Document"
 category: gaia_rag
-agent_type: gaia
 severity: critical
 tags: [local_blocked_no_embedder]
 description: |

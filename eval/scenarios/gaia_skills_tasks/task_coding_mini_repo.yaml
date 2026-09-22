@@ -3,7 +3,6 @@
 id: task_coding_mini_repo
 name: "Skill Task — coding Skill Finds Real Symbols"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

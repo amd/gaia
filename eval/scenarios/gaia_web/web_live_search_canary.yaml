@@ -1,7 +1,6 @@
 id: web_live_search_canary
 name: "Web — Live Search Canary (Non-Gating)"
 category: gaia_web
-agent_type: gaia
 severity: low
 tags: [live]
 description: |

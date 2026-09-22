@@ -1,7 +1,6 @@
 id: mem_false_premise_recall
 name: "Memory — Fabricated-Recall Resistance (Adversarial)"
 category: gaia_memory
-agent_type: gaia
 severity: critical
 tags: [t4_adversarial, local_blocked_no_embedder]
 description: |

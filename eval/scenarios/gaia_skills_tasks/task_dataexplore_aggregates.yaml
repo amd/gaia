@@ -2,7 +2,6 @@
 id: task_dataexplore_aggregates
 name: "Skill Task — data-explore Answers With Real Queries"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: high
 description: |
   The data-explore skill loads the fixture CSV into scratchpad tables and

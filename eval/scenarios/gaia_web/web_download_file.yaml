@@ -3,7 +3,6 @@
 id: web_download_file
 name: "Web — Download a File to Disk"
 category: gaia_web
-agent_type: gaia
 severity: medium
 description: |
   Download a fixture URL to a local file and prove it landed by checking

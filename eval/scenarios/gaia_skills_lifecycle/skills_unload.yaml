@@ -1,7 +1,6 @@
 id: skills_unload
 name: "Skills — Unload and Verify Gone"
 category: gaia_skills_lifecycle
-agent_type: gaia
 severity: high
 description: |
   Load, unload, then verify the skill is no longer active — and that the

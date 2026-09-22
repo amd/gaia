@@ -1,7 +1,6 @@
 id: skills_list_installed
 name: "Skills — List What Is Actually Installed"
 category: gaia_skills_lifecycle
-agent_type: gaia
 severity: high
 description: |
   Asking what skills are available must trigger a real list_skills call and

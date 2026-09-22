@@ -1,7 +1,6 @@
 id: task_checkin_records_items
 name: "Skill Task — check-in Records Open Items"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

@@ -1,7 +1,6 @@
 id: mem_update_fact
 name: "Memory — Update a Stored Fact"
 category: gaia_memory
-agent_type: gaia
 severity: high
 tags: [t1_basic, local_blocked_no_embedder]
 description: |

@@ -1,7 +1,6 @@
 id: mem_memory_vs_history
 name: "Memory — Store vs Session-History Disambiguation"
 category: gaia_memory
-agent_type: gaia
 severity: critical
 tags: [t3_stress, local_blocked_no_embedder]
 description: |

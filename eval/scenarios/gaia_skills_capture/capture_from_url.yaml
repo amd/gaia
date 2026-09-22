@@ -4,7 +4,6 @@
 id: capture_from_url
 name: "Capture — Skill Fetched from a URL"
 category: gaia_skills_capture
-agent_type: gaia
 severity: high
 description: |
   The user points the agent at a URL serving a raw SKILL.md. The agent must

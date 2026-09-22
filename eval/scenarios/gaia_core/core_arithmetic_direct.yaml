@@ -1,7 +1,6 @@
 id: core_arithmetic_direct
 name: "Core — Arithmetic Without Tools"
 category: gaia_core
-agent_type: gaia
 severity: high
 tags: [t1_basic, tui]
 description: |

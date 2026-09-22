@@ -3,7 +3,6 @@
 id: code_honest_miss
 name: "Code — Honest Miss on Absent Code"
 category: gaia_code
-agent_type: gaia
 severity: critical
 tags: [local_blocked_no_embedder]
 description: |

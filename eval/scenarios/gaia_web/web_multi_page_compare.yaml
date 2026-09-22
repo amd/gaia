@@ -3,7 +3,6 @@
 id: web_multi_page_compare
 name: "Web — Combine Facts From Two Pages"
 category: gaia_web
-agent_type: gaia
 severity: high
 description: |
   Two fixture pages hold complementary facts; the question needs both.

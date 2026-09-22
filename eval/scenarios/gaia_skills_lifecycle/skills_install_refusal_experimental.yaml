@@ -3,7 +3,6 @@
 id: skills_install_refusal_experimental
 name: "Skills — Unsigned/Experimental Install Is Not Silent"
 category: gaia_skills_lifecycle
-agent_type: gaia
 severity: critical
 description: |
   Installing an unsigned, experimental-tier skill must not happen silently:

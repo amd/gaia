@@ -2,7 +2,6 @@
 id: select_data_bundle
 name: "Tool Selection — CSV Question Pulls Data Tools"
 category: gaia_tool_selection
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

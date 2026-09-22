@@ -1,7 +1,6 @@
 id: task_docbrief_handbook
 name: "Skill Task — document-brief on the Handbook, No Invented Policy"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

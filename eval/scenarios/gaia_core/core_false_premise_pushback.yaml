@@ -1,7 +1,6 @@
 id: core_false_premise_pushback
 name: "Core — False-Premise Restatements (Adversarial)"
 category: gaia_core
-agent_type: gaia
 severity: critical
 tags: [t4_adversarial]
 description: |

@@ -1,7 +1,6 @@
 id: rag_csv_via_retrieval
 name: "RAG — Tabular Facts From an Indexed CSV"
 category: gaia_rag
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

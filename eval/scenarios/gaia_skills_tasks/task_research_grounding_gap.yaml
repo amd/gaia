@@ -3,7 +3,6 @@
 id: task_research_grounding_gap
 name: "Skill Task — research-report Reports What Sources Lack"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: critical
 description: |
   The research question asks for something the sources do not contain. A

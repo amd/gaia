@@ -2,7 +2,6 @@
 id: task_dataexplore_messy_question
 name: "Skill Task — data-explore Handles a Vague Ask Honestly"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: medium
 description: |
   A vague business question ("anything weird in my sales?") must still

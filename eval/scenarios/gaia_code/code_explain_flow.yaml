@@ -3,7 +3,6 @@
 id: code_explain_flow
 name: "Code — Explain a Cross-File Flow With Real Symbols"
 category: gaia_code
-agent_type: gaia
 severity: medium
 tags: [local_blocked_no_embedder]
 description: |

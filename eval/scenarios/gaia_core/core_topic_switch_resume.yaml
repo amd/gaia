@@ -1,7 +1,6 @@
 id: core_topic_switch_resume
 name: "Core — Topic Switch and Resume (Long)"
 category: gaia_core
-agent_type: gaia
 severity: high
 tags: [t3_stress]
 description: |

@@ -3,7 +3,6 @@
 id: task_research_solarium
 name: "Skill Task — research-report Grounded in Fixture Pages"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: high
 description: |
   The research-report skill writes a cited report on the Solarium Project

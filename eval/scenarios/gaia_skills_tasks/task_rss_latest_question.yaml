@@ -2,7 +2,6 @@
 id: task_rss_latest_question
 name: "Skill Task — rss-digest Answers a Specific Feed Question"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: medium
 description: |
   A targeted question ("what did they release most recently?") answered

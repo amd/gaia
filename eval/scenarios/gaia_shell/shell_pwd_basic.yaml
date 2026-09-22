@@ -1,7 +1,6 @@
 id: shell_pwd_basic
 name: "Shell — Run pwd and Report (L4)"
 category: gaia_shell
-agent_type: gaia
 severity: high
 tags: [tui]
 description: |

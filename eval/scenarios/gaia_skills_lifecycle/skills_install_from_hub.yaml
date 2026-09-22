@@ -3,7 +3,6 @@
 id: skills_install_from_hub
 name: "Skills — Full Install Loop From the Hub"
 category: gaia_skills_lifecycle
-agent_type: gaia
 severity: critical
 description: |
   The real search → install → load loop against the fixture hub: find

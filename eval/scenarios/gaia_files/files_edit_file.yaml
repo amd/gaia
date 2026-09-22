@@ -1,7 +1,6 @@
 id: files_edit_file
 name: "Files — Targeted Edit of an Existing File"
 category: gaia_files
-agent_type: gaia
 severity: high
 description: |
   Write a small file, then change ONE line without touching the rest.

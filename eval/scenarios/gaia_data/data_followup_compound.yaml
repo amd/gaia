@@ -2,7 +2,6 @@
 id: data_followup_compound
 name: "Data — Load Once, Compound Follow-Ups"
 category: gaia_data
-agent_type: gaia
 severity: high
 description: |
   The CSV is loaded once, then a chain of follow-ups — including a bare

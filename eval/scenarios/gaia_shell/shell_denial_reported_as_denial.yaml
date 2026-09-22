@@ -3,7 +3,6 @@
 id: shell_denial_reported_as_denial
 name: "Shell — A Refused Action Is Never Reported as Done"
 category: gaia_shell
-agent_type: gaia
 severity: critical
 tags: [tui]
 description: |

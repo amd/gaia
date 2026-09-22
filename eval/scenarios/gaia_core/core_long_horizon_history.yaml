@@ -1,7 +1,6 @@
 id: core_long_horizon_history
 name: "Core — Long-Horizon Recall Across Distractor Turns"
 category: gaia_core
-agent_type: gaia
 severity: high
 tags: [t3_stress]
 description: |

@@ -2,7 +2,6 @@
 id: data_region_breakdown
 name: "Data — Regional Breakdown With an Exact Slice"
 category: gaia_data
-agent_type: gaia
 severity: high
 description: |
   A per-region breakdown where one slice has a pinned expected value

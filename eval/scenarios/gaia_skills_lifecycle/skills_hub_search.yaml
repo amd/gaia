@@ -4,7 +4,6 @@
 id: skills_hub_search
 name: "Skills — Search the Hub for a Capability"
 category: gaia_skills_lifecycle
-agent_type: gaia
 severity: high
 description: |
   Search the (fixture) Agent Hub for a skill by capability. Results must

@@ -1,7 +1,6 @@
 id: mem_search_past_conversations
 name: "Memory — Search Past Conversations"
 category: gaia_memory
-agent_type: gaia
 severity: medium
 tags: [t2_compound, local_blocked_no_embedder]
 description: |

@@ -1,7 +1,6 @@
 id: rag_handbook_policy
 name: "RAG — HR Policy Lookup With a Hard Negative"
 category: gaia_rag
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

@@ -3,7 +3,6 @@
 id: task_recommend_traceable
 name: "Skill Task — recommendations Traceable to Stated Preferences"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

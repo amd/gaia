@@ -7,7 +7,6 @@
 id: task_ghtriage_fixture_triage
 name: "Skill Task — github-triage Against the Fixture Repo (L7)"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: critical
 tags: [tui, local_blocked_win_shim]
 description: |

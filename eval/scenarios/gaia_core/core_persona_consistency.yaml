@@ -1,7 +1,6 @@
 id: core_persona_consistency
 name: "Core — Concise, Non-Sycophantic Conversation"
 category: gaia_core
-agent_type: gaia
 severity: medium
 tags: [t1_basic]
 description: |

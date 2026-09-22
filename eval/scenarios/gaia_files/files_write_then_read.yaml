@@ -1,7 +1,6 @@
 id: files_write_then_read
 name: "Files — Write a File, Read It Back"
 category: gaia_files
-agent_type: gaia
 severity: high
 description: |
   Create a file with specific content, then verify by reading it back. The

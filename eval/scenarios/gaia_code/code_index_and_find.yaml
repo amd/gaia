@@ -3,7 +3,6 @@
 id: code_index_and_find
 name: "Code — Index the Mini Repo, Find the Right Function"
 category: gaia_code
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

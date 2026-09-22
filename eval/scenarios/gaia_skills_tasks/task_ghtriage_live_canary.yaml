@@ -1,7 +1,6 @@
 id: task_ghtriage_live_canary
 name: "Skill Task — github-triage Live Canary (Non-Gating)"
 category: gaia_skills_tasks
-agent_type: gaia
 severity: low
 tags: [live]
 description: |

@@ -2,7 +2,6 @@
 id: select_web_bundle
 name: "Tool Selection — Research Question Pulls Web Tools"
 category: gaia_tool_selection
-agent_type: gaia
 severity: high
 tags: [local_blocked_no_embedder]
 description: |

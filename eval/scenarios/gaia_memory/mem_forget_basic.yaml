@@ -1,7 +1,6 @@
 id: mem_forget_basic
 name: "Memory — Forget on Request"
 category: gaia_memory
-agent_type: gaia
 severity: high
 tags: [t1_basic, local_blocked_no_embedder]
 description: |

@@ -1,7 +1,6 @@
 id: mem_forget_then_verify
 name: "Memory — Forget Semantics Under Indirect Probing"
 category: gaia_memory
-agent_type: gaia
 severity: high
 tags: [t2_compound, local_blocked_no_embedder]
 description: |

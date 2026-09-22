@@ -1,7 +1,6 @@
 id: files_find_read_summarize
 name: "Files — Find, Read, Summarize"
 category: gaia_files
-agent_type: gaia
 severity: high
 description: |
   Locate a file by name, read it, and summarize a fact from it. The whole

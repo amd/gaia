@@ -1,7 +1,6 @@
 id: core_interruption_recovery
 name: "Core — Mid-Task Interruption and Recovery"
 category: gaia_core
-agent_type: gaia
 severity: high
 tags: [t3_stress]
 description: |
