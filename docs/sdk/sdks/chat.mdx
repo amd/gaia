@@ -186,6 +186,10 @@ personal_response = personal_chat.send("What's for dinner?")
 
 ## Conversation History
 
+Failed requests and streams cancelled before the final chunk preserve the previous
+history. Once the final chunk arrives, the completed turn remains in history even
+if the caller stops reading immediately.
+
 ```python
 from gaia.chat.sdk import AgentSDK
 

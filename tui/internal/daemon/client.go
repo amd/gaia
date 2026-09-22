@@ -9,7 +9,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -247,6 +250,13 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
+		if evidence := findInstalledButUnresolvable(); evidence != "" {
+			return nil, &StartError{Reason: fmt.Sprintf(
+				"GAIA appears to be installed (%s), but the `gaia` CLI is not resolvable "+
+					"on this process's PATH, so the daemon cannot be launched. "+
+					"Add its directory to PATH, or launch this TUI from a shell where "+
+					"`gaia --version` already works, then retry.", evidence)}
+		}
 		return nil, &StartError{Reason: "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
 			"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
 			"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or `pip install amd-gaia` " +
@@ -254,6 +264,44 @@ func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 			"From a clone of the repo, `pip install -e .` works too"}
 	}
 	return exec.CommandContext(ctx, bin, "daemon", "start"), nil
+}
+
+// findInstalledButUnresolvable looks for filesystem evidence that GAIA is
+// already installed even though `gaia` didn't resolve on PATH, so the error
+// above can stop telling an existing user to (re)install it. It never runs
+// Python or trusts PATH again — only direct, deterministic file checks:
+//
+//   - $VIRTUAL_ENV/bin/gaia (or Scripts\gaia.exe on Windows): the interpreter
+//     that ran this process activated a venv, but the venv's script dir
+//     itself isn't on this process's PATH.
+//   - ~/.gaia/config.json: `gaia config` and `gaia init` both write here
+//     (see docs/reference/cli.mdx), so its presence means a `gaia` binary
+//     ran successfully on this machine before, just not in this environment.
+//
+// Returns a human-readable description of what was found, or "" if neither
+// check found anything (i.e. GAIA genuinely looks uninstalled).
+func findInstalledButUnresolvable() string {
+	if venv := os.Getenv("VIRTUAL_ENV"); venv != "" {
+		name := "gaia"
+		if runtime.GOOS == "windows" {
+			name = "gaia.exe"
+		}
+		dir := "bin"
+		if runtime.GOOS == "windows" {
+			dir = "Scripts"
+		}
+		candidate := filepath.Join(venv, dir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			return fmt.Sprintf("found %s in the active virtualenv", candidate)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		configPath := filepath.Join(home, ".gaia", "config.json")
+		if _, err := os.Stat(configPath); err == nil {
+			return fmt.Sprintf("found %s from a previous `gaia init`/`gaia config`", configPath)
+		}
+	}
+	return ""
 }
 
 // spawnAndWait launches the daemon and polls until a live instance registers.
@@ -505,6 +553,13 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	if agentID == "" {
 		return nil, &RequestError{Op: "ensure an agent sidecar", Detail: "no agent id was given"}
 	}
+	body, err := ensureRequestBody(agentID)
+	if err != nil {
+		return nil, &RequestError{
+			Op:     fmt.Sprintf("resolve the caller settings for the '%s' sidecar", agentID),
+			Detail: err.Error(),
+		}
+	}
 	inst, err := c.StartOrAttach(ctx)
 	if err != nil {
 		return nil, err
@@ -516,7 +571,7 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	resp, inst, err := c.Do(ctx, inst, Request{
 		Method:     http.MethodPost,
 		Path:       APIPrefix + "/agents/" + agentID + "/ensure",
-		Body:       []byte("{}"),
+		Body:       body,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: c.ensure,
 		Op:         fmt.Sprintf("ensure the '%s' sidecar via the daemon", agentID),
@@ -533,6 +588,84 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 		}
 	}
 	return inst, nil
+}
+
+// ModeEnvVar names the sidecar mode variable for the built-in agents, "" for an
+// agent that has no mode switch. Only registered built-in agents have one.
+func ModeEnvVar(agentID string) string {
+	switch agentID {
+	case "email":
+		return "GAIA_EMAIL_AGENT_MODE"
+	case "gaia":
+		return "GAIA_GAIA_AGENT_MODE"
+	}
+	return ""
+}
+
+// CallerMode mirrors the built-in sidecar mode environment variables used by
+// the Python callers, and reports whether the caller expressed a preference at
+// all. An unset variable is NO preference: the daemon attaches to whatever is
+// running and only conflicts on an explicit, differing mode.
+func CallerMode(agentID string) (string, bool) {
+	envVar := ModeEnvVar(agentID)
+	if envVar == "" {
+		return "", false
+	}
+	if mode := strings.TrimSpace(os.Getenv(envVar)); mode != "" {
+		return mode, true
+	}
+	return "", false
+}
+
+// callerDevSrcDir resolves the same per-agent source layout as the daemon,
+// anchored to the checkout containing the caller's current working directory.
+// The TUI binary's location is not a reliable checkout anchor, especially for
+// installed binaries and Windows development checkouts.
+func callerDevSrcDir(agentID string) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("could not determine the current working directory: %w", err)
+	}
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = cwd
+	raw, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf(
+			"could not determine the git checkout root from %s: %w; run from inside a git work tree",
+			cwd, err,
+		)
+	}
+	root := strings.TrimSpace(string(raw))
+	if root == "" {
+		return "", fmt.Errorf("git returned an empty checkout root; run from inside a git work tree")
+	}
+	if runtime.GOOS == "windows" && len(root) >= 3 && root[0] == '/' &&
+		((root[1] >= 'a' && root[1] <= 'z') || (root[1] >= 'A' && root[1] <= 'Z')) &&
+		root[2] == '/' {
+		// Git for Windows may emit /c/path when invoked from a Unix-like shell.
+		root = string(root[1]) + ":" + root[2:]
+	}
+	root = filepath.Clean(filepath.FromSlash(root))
+	return filepath.Join(root, "hub", "agents", agentID, "python"), nil
+}
+
+func ensureRequestBody(agentID string) ([]byte, error) {
+	body := map[string]string{}
+	mode, explicit := CallerMode(agentID)
+	if !explicit {
+		// No key at all — the daemon reads a present "mode" as a REQUEST and
+		// 409s a sidecar already running in the other one.
+		return json.Marshal(body)
+	}
+	body["mode"] = mode
+	if mode == "dev" {
+		devSrcDir, err := callerDevSrcDir(agentID)
+		if err != nil {
+			return nil, err
+		}
+		body["dev_src_dir"] = devSrcDir
+	}
+	return json.Marshal(body)
 }
 
 // Logf emits a diagnostic through the client's configured logger. Exported so

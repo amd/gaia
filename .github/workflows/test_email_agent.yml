@@ -28,7 +28,7 @@ on:
       - 'tests/integration/test_email_corpus_alignment.py'
       - '.github/workflows/test_email_agent.yml'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/email/python/**'

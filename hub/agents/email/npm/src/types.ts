@@ -822,6 +822,10 @@ export interface CalendarEvent {
 export interface CalendarEventsResponse {
   /** Echoes the contract version. */
   schema_version: string;
+  /** Number of events returned in this page. */
+  count: number;
+  /** True when the provider reported another page; `events` is not the complete calendar window. */
+  truncated: boolean;
   /** Matching events, ordered by start time. */
   events: CalendarEvent[];
 }
@@ -1091,6 +1095,11 @@ export interface QueryUsage {
   tokens?: number;
   /** Time to first inference token, in seconds, when the backend reports it. */
   ttft?: number;
+  /**
+   * Generation rate the inference backend measured for this turn. Absent when
+   * it reported none — never derived from `elapsed`, which counts tool time.
+   */
+  tok_per_s?: number;
   [key: string]: unknown;
 }
 

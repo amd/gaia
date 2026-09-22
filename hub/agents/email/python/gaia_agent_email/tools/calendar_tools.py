@@ -649,6 +649,34 @@ def _extract_attendees(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _extract_organizer_self(event: Mapping[str, Any]) -> Optional[bool]:
+    """Return the provider's explicit user-organizer signal, if present.
+
+    Google normally exposes this as ``organizer.self``. Some event payloads
+    omit that field while still identifying the authenticated calendar in the
+    attendee list. Google also omits the default-false ``organizer`` flag from
+    a self attendee when someone else organized the event, so a self attendee
+    without that key is an explicit external-organizer signal. Never derive
+    the result from an email address.
+    """
+    organizer = event.get("organizer")
+    if isinstance(organizer, Mapping):
+        organizer_self = organizer.get("self")
+        if isinstance(organizer_self, bool):
+            return organizer_self
+
+    attendees = event.get("attendees") or []
+    for attendee in attendees:
+        if not isinstance(attendee, Mapping) or attendee.get("self") is not True:
+            continue
+        attendee_organizer = attendee.get("organizer")
+        if isinstance(attendee_organizer, bool):
+            return attendee_organizer
+        if "organizer" not in attendee:
+            return False
+    return None
+
+
 def intervals_overlap(a_start: Any, a_end: Any, b_start: Any, b_end: Any) -> bool:
     """Half-open ``[start, end)`` overlap test.
 
@@ -722,6 +750,7 @@ def detect_calendar_conflicts_impl(
                         "summary": ev.get("summary", ""),
                         "start": start_obj.get("dateTime") or start_obj.get("date"),
                         "end": end_obj.get("dateTime") or end_obj.get("date"),
+                        "organizer_self": _extract_organizer_self(ev),
                         "attendees": _extract_attendees(ev),
                     }
                 )
@@ -926,6 +955,11 @@ def list_calendar_events_impl(
     backend expand recurring series from their first-ever instance (#2162).
     A bare date or naive datetime is coerced to UTC (#2517) — Google 400s on
     a date-only ``timeMin``/``timeMax``.
+
+    The result includes ``count`` for the number of events returned and
+    ``truncated`` when the provider reports another page. When ``truncated``
+    is true, the returned events are only the first page and must not be
+    presented as the complete calendar window.
     """
     if time_min is None and time_max is None:
         now_dt = now if now is not None else datetime.now(timezone.utc)
@@ -941,7 +975,8 @@ def list_calendar_events_impl(
         data = cal.list_events(time_min=time_min, time_max=time_max)
         events = []
         for e in data.get("items", []):
-            organizer = (e.get("organizer") or {}).get("email")
+            organizer_data = e.get("organizer") or {}
+            organizer = organizer_data.get("email")
             events.append(
                 {
                     "id": e.get("id"),
@@ -952,6 +987,7 @@ def list_calendar_events_impl(
                     or (e.get("end") or {}).get("date"),
                     "location": e.get("location"),
                     "organizer": organizer,
+                    "organizer_self": _extract_organizer_self(e),
                     "missing_organizer": organizer is None,
                     # Real attendees only, [] when the calendar has none
                     # beyond the organizer (#2766) — never inferred from the
@@ -959,8 +995,9 @@ def list_calendar_events_impl(
                     "attendees": _extract_attendees(e),
                 }
             )
-        st["result_summary"] = {"count": len(events)}
-        return {"events": events}
+        truncated = bool(data.get("nextPageToken"))
+        st["result_summary"] = {"count": len(events), "truncated": truncated}
+        return {"events": events, "count": len(events), "truncated": truncated}
 
 
 def update_rsvp_impl(
@@ -1140,7 +1177,19 @@ class CalendarToolsMixin:
             ``attendees`` list; an empty list means say so, not guess. The
             ``organizer`` is who created the event, not evidence that anyone
             was sent or received an invite — never describe the organizer as
-            having "sent an invite"."""
+            having "sent an invite". ``organizer_self`` is the provider's
+            explicit boolean: ``false`` means the user is not the organizer
+            and may be reported as having received an invite for that event;
+            ``true`` means the user organized it, and ``null`` means the
+            provider did not supply the signal. When ``organizer.self`` is
+            omitted, the tool may use the provider's explicit
+            ``attendees[].self`` flag to identify the user. When Google omits the
+            default-false ``attendees[].organizer`` flag for that attendee, the
+            event is externally organized. The result includes ``count`` and a
+            ``truncated`` flag; when ``truncated`` is true, report that only
+            the first page was returned and never present it as the complete
+            calendar window. Never infer ``organizer_self`` from an email
+            address."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(
@@ -1295,12 +1344,14 @@ class CalendarToolsMixin:
             bounding the proposed meeting. Returns an envelope whose
             ``data`` has ``has_conflict`` (bool) and ``conflicts`` (the
             overlapping events, each with ``id``/``summary``/``start``/
-            ``end``/``attendees``). Overlap is half-open: a meeting ending
-            exactly when another begins does NOT conflict. If the calendar
-            can't be read, this surfaces the error rather than reporting a
+            ``end``/``organizer_self``/``attendees``). Overlap is half-open: a
+            meeting ending exactly when another begins does NOT conflict. If
+            the calendar can't be read, this surfaces the error rather than reporting a
             reassuring "no conflicts". Never state an attendee for a
             conflicting event unless that event's own ``attendees`` list
-            actually names them.
+            actually names them. Only ``organizer_self=false`` from this
+            result grounds a received-invite claim; it does not prove that an
+            email was sent or that the user confirmed the invitation.
 
             ``data`` also carries ``truncated`` (bool). When it is true the
             calendar held more events than one page and the window was only
