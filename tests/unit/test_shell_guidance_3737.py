@@ -1,15 +1,16 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""The shell tool has to tell the model its rules, and not refuse ordinary reads.
+"""``git -C <path> status`` is a read, not a ``-C`` subcommand (#3737).
 
-342 of 2,001 tool calls in a benchmark sweep were shell refusals (#3737): the
-operator ban was never stated up front, ``git -C <path> status`` was read as a
-``-C`` subcommand, and a burst of read-only ``ls``/``cat`` hit the 3-per-10s
-limit.
+Git's global options sit before the subcommand, so ``cmd_parts[1]`` is ``-C``,
+not ``status`` — the read was refused as an unknown subcommand. The walk over
+the global flags fixes that, and the paths those flags name get the same
+allowed-paths check ``working_directory`` gets, so ``-C`` is not a way out of
+the sandbox.
 """
 
-import time
+import shlex
 from pathlib import Path
 
 import pytest
@@ -60,81 +61,6 @@ def _split(command: str):
     return validate(parts[0], parts, command)
 
 
-class TestTheDescriptionStatesTheRules:
-    @pytest.fixture
-    def description(self, tmp_path):
-        _run_tool(_Host(tmp_path))
-        return get_tool_metadata("run_shell_command")["description"]
-
-    def test_it_names_the_operator_ban(self, description):
-        for operator in ("&&", "||", ";", ">", "<", "$(", "heredoc"):
-            assert operator in description
-
-    def test_it_says_pipes_are_allowed(self, description):
-        assert "Pipes (|) are allowed" in description
-
-    def test_it_points_at_working_directory_instead_of_cd(self, description):
-        assert "working_directory" in description
-        assert "cd DIR && cmd" in description
-
-    def test_it_says_read_only_and_where_python_goes(self, description):
-        assert "read-only" in description
-        assert "execute_python_file" in description
-
-    def test_it_says_a_skill_grant_can_widen_the_list(self, description):
-        # The allowlist reads as closed, but skills grant gh/pytest and
-        # skill_grant_covers_call runs them unprompted; the description is what
-        # the model reads every turn, so it has to say so.
-        assert "skill" in description.lower()
-        assert "gh" in description
-        assert "pytest" in description
-
-    def test_working_directory_argument_says_use_it_instead_of_cd(self, tmp_path):
-        _run_tool(_Host(tmp_path))
-        props = get_tool_metadata("run_shell_command")["parameters"]
-        assert "instead of cd" in props["working_directory"]["description"]
-
-
-class TestOperatorRefusalNamesWorkingDirectory:
-    def test_cd_chain_hint_names_the_parameter_and_the_rest(self, tmp_path):
-        error, _ = _Host(tmp_path)._validate_shell_command("cd /repo && git status")
-        assert error["status"] == "error"
-        assert error["executed"] is False
-        assert "working_directory='/repo'" in error["hint"]
-        assert "command='git status'" in error["hint"]
-
-    def test_quoted_cd_path(self, tmp_path):
-        error, _ = _Host(tmp_path)._validate_shell_command('cd "my dir" && ls -la')
-        assert "working_directory='my dir'" in error["hint"]
-
-    def test_pre_prompt_refusal_carries_the_hint_too(self, tmp_path):
-        error = _Host(tmp_path).policy_refusal_for_call(
-            "run_shell_command", {"command": "cd src && ls"}
-        )
-        assert "working_directory" in error["hint"]
-
-    def test_other_operator_refusals_keep_the_generic_hint(self, tmp_path):
-        error, _ = _Host(tmp_path)._validate_shell_command("ls && pwd")
-        assert error is not None
-        assert "working_directory" not in error.get("hint", "")
-
-    def test_no_hint_when_the_tail_is_itself_refused(self, tmp_path):
-        error, _ = _Host(tmp_path)._validate_shell_command("cd /repo && rm x")
-        assert error is not None
-        assert "rm x" not in error.get("hint", "")
-
-    def test_no_hint_when_the_tail_still_chains(self, tmp_path):
-        error, _ = _Host(tmp_path)._validate_shell_command("cd /a && ls && pwd")
-        assert error is not None
-        assert "&&" not in error.get("hint", "")
-
-    def test_the_tool_returns_the_hint(self, tmp_path):
-        run = _run_tool(_Host(tmp_path))
-        result = run(command=f"cd {tmp_path} && ls")
-        assert result["status"] == "error"
-        assert "working_directory" in result["hint"]
-
-
 class TestGitGlobalFlags:
     @pytest.mark.parametrize(
         "command",
@@ -173,7 +99,7 @@ class TestGitGlobalFlags:
 
     def test_dash_c_inside_allowed_paths_runs(self, tmp_path):
         run = _run_tool(_Host(tmp_path))
-        result = run(command=f"git -C {tmp_path} status")
+        result = run(command=f"git -C {shlex.quote(str(tmp_path))} status")
         # Not a repo, so git exits non-zero — but it ran, and was not refused.
         assert result["status"] == "success", result
 
@@ -184,7 +110,7 @@ class TestGitGlobalFlags:
         allowed.mkdir()
         outside.mkdir()
         run = _run_tool(host_cls(allowed))
-        result = run(command=f"git -C {outside} status")
+        result = run(command=f"git -C {shlex.quote(str(outside))} status")
         assert result["status"] == "error"
         assert result["executed"] is False
         assert "Access denied" in result["error"]
@@ -202,55 +128,6 @@ class TestGitGlobalFlags:
         allowed = tmp_path / "allowed"
         allowed.mkdir()
         run = _run_tool(_HostWithoutArgScan(allowed))
-        result = run(command=f"git --work-tree={tmp_path} status")
+        result = run(command=f"git --work-tree={shlex.quote(str(tmp_path))} status")
         assert result["status"] == "error"
         assert "--work-tree" in result["error"]
-
-
-class TestAllowlistedCommandsSkipTheBurstLimit:
-    @pytest.mark.parametrize(
-        "command", ["ls -la", "cat a.txt | head -5", "git -C /repo log", "grep -rn x ."]
-    )
-    def test_allowlisted_classification(self, tmp_path, command):
-        assert _Host(tmp_path)._is_allowlisted_command(command) is True
-
-    @pytest.mark.parametrize(
-        "command",
-        ["git push origin main", "rm a.txt", "gh issue list", "ls && pwd", "ls > f"],
-    )
-    def test_not_allowlisted(self, tmp_path, command):
-        assert _Host(tmp_path)._is_allowlisted_command(command) is False
-
-    def test_a_burst_of_allowlisted_commands_is_not_throttled(self, tmp_path):
-        run = _run_tool(_Host(tmp_path))
-        for _ in range(6):
-            result = run(command="ls", working_directory=str(tmp_path))
-            assert result["status"] == "success", result
-
-    def test_non_allowlisted_commands_are_still_burst_limited(self, tmp_path):
-        host = _Host(tmp_path)
-        run = _run_tool(host)
-        now = time.time()
-        host.shell_command_times.extend([now, now, now])
-        result = run(command="rm a.txt", working_directory=str(tmp_path))
-        assert result["rate_limited"] is True
-        assert result["wait_time_seconds"] > 0
-        assert result["executed"] is False
-        assert "per 10 seconds" in result["error"]
-
-    def test_allowlisted_commands_still_hit_the_per_minute_cap(self, tmp_path):
-        host = _Host(tmp_path)
-        run = _run_tool(host)
-        now = time.time()
-        host.shell_command_times.extend([now] * host.max_commands_per_minute)
-        result = run(command="ls", working_directory=str(tmp_path))
-        assert result["rate_limited"] is True
-        assert result["wait_time_seconds"] > 0
-        assert "per minute" in result["error"]
-
-    def test_check_rate_limit_default_keeps_the_burst_limit(self, tmp_path):
-        host = _Host(tmp_path)
-        now = time.time()
-        host.shell_command_times.extend([now, now, now])
-        assert host._check_rate_limit()[0] is False
-        assert host._check_rate_limit(allowlisted=True)[0] is True

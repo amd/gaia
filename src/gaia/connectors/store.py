@@ -316,6 +316,7 @@ def save_connection(
     connected_at: Optional[float] = None,
     tenant: Optional[str] = None,
     account_type: Optional[str] = None,
+    forwarded: bool = False,
 ) -> None:
     """
     Atomically persist a connection record to the keyring.
@@ -350,6 +351,16 @@ def save_connection(
     key means "unknown", which readers must handle explicitly rather than
     assuming a kind. Callers that re-save an existing connection (e.g.
     refresh-token rotation) MUST pass both values through or they are lost.
+
+    ``forwarded`` (#2591 review): True marks a connection imported via
+    ``api.import_forwarded_connection`` — its refresh token was minted
+    under a host app's OAuth client, not GAIA's own. ``flow.revoke_provider_token``
+    reads this to refuse a remote revoke (it would revoke the host app's
+    grant, not just GAIA's copy of it). Omitted from the blob when ``False``,
+    mirroring ``tenant``/``account_type``; a legacy blob with no key is
+    correctly read back as not-forwarded. Callers that re-save an existing
+    connection (refresh-token rotation) MUST pass the stored value through
+    or a forwarded connection silently loses its protection.
     """
     verify_keyring_backend()
 
@@ -364,6 +375,8 @@ def save_connection(
         blob["tenant"] = tenant
     if account_type:
         blob["account_type"] = account_type
+    if forwarded:
+        blob["forwarded"] = True
     payload = json.dumps(blob, sort_keys=True)
     # v1 single-account per provider (per A10): the keyring KEY is always
     # built with DEFAULT_ACCOUNT; ``account_email`` lives in the metadata
@@ -504,6 +517,41 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
     _kr_delete(username)
+
+
+def _secret_username(name: str) -> str:
+    """Keyring slot for a standalone secret, namespaced away from connections."""
+    return f"secret:{name}"
+
+
+def save_secret(name: str, value: str) -> None:
+    """Persist a standalone secret in the OS credential store.
+
+    For credentials that are not OAuth connections — an API key, a gateway
+    token — where :func:`save_connection` (which wants a refresh token, scopes
+    and a client-id hash) and :func:`save_provider_credentials` (which requires
+    a client id) would both mean inventing fields to satisfy a schema.
+
+    Encrypted at rest by the OS: DPAPI on Windows, Keychain on macOS,
+    SecretService on Linux. ``verify_keyring_backend`` refuses plaintext
+    backends, so this cannot silently degrade to a readable file.
+    """
+    verify_keyring_backend()
+    if not value:
+        raise ConnectorsError(f"save_secret({name!r}): value is empty")
+    _kr_set(_secret_username(name), value)
+
+
+def peek_secret(name: str) -> Optional[str]:
+    """Read a secret saved by :func:`save_secret`, or None when absent."""
+    verify_keyring_backend()
+    return _kr_get(_secret_username(name))
+
+
+def delete_secret(name: str) -> None:
+    """Remove a secret saved by :func:`save_secret`. Absent is not an error."""
+    verify_keyring_backend()
+    _kr_delete(_secret_username(name))
 
 
 def save_provider_credentials(

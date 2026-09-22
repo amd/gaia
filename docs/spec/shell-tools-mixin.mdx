@@ -19,6 +19,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 
 **Key Features:**
 - Whitelist-based command security (only safe, read-only commands)
+- Compound lines — `&&`, `||`, `;` and `|` — so exploring and verifying is one call
 - Dual-tier rate limiting (burst + sustained)
 - Path traversal prevention with argument validation
 - Git read-only operations support
@@ -26,9 +27,67 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 
 **Security Model:**
 - WHITELIST approach (explicitly allow safe commands only)
+- Every command on a line validated before any of it runs
 - Path validation for all file-like arguments
 - Git subcommand filtering (read-only only)
 - Rate limits prevent DOS attacks
+
+### Command Composition
+
+One call may chain several commands, which is what keeps a read-then-verify
+step from costing several agent turns:
+
+| Form | Behaviour |
+|------|-----------|
+| `a && b` | `b` runs only if `a` exited 0 |
+| `a \|\| b` | `b` runs only if `a` failed |
+| `a; b` | both run, whatever `a` returned |
+| `a \| b` | `a`'s output is piped into `b` |
+| `cd <dir> && a` | `cd` moves the rest of **its own line**, and nothing else |
+| `a 2>&1` | `a`'s stderr joins its stdout, and flows on down the pipeline |
+| `a 2>/dev/null` | `a`'s stderr is discarded — its exit code is not |
+| `VAR=value a` | `VAR` is set for `a`'s process only |
+
+Every segment of every pipeline goes through the whole allowlist first: one
+refused command anywhere refuses the line before any of it runs, and one
+confirmation covers the line. The result carries the combined output, the exit
+code of the last command that ran, and a `steps` list giving each command and
+its own exit code.
+
+`2>&1` and `2>/dev/null` are the only redirections allowed, because they are
+the only two that name no file: they say where a command's stderr goes, and
+this process routes the stream it had already captured. Every other one is
+refused, `2>` to any other path included.
+
+One or more leading `VAR=value` tokens set that one command's environment —
+`PYTHONPATH=. pytest -q` is the case this exists for. The value never reaches a
+shell: it is handed to the subprocess as an environment entry, and the command
+after it is allowlist-checked exactly as it would be alone, so
+`PYTHONPATH=. rm -rf /` is refused the same way `rm -rf /` is. The variable
+reaches that one process: not a later segment, not a later step, and never this
+process's own environment. A value that looks like a path is held to the same
+allowed-paths rule as an argument, on every segment.
+
+Refused by name are the loader and hook variables — anything that changes
+*which* binary runs or what code one loads: `PATH`, `SHELL`, `ENV`, `IFS`,
+`PAGER`/`EDITOR`/`VISUAL`, and the `LD_*`, `DYLD_*`, `GIT_*`, `GH_*`,
+`PYTEST_*`, `BASH_*`, `NODE_*`, `PERL*`, `RUBY*`, `LESS*`, `JAVA*`, `PS*`
+families. Names match case-insensitively, because Windows matches environment
+names that way. An assignment with no command after it, and one in front of
+`cd`, are refused too — neither starts a process for it to apply to.
+
+Still refused anywhere on a line: redirection (`>`, `>>`, `<`, `2>FILE`),
+command substitution (backticks, `$()`), a background `&`, and newlines — each
+changes what a command *is*, rather than which commands run. Use `write_file` /
+`edit_file` to write a file.
+
+On POSIX no line ever reaches a shell: segments run as argv, pipelines as
+chained processes. On Windows each pipeline goes to `cmd.exe` on its own — a
+compound line is never handed over as one string — and the stderr redirection
+travels in it, spelled `2>nul`, because there the shell owns the pipeline. A
+step carrying an environment assignment is the exception: `cmd.exe` would apply
+it to the whole string, so that step runs as argv on Windows too, and gives up
+`cmd.exe`'s built-in resolution (`dir`, `type`) to keep the assignment scoped.
 
 ---
 
@@ -45,7 +104,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 
 2. **Rate Limiting**
    - Max 10 commands per minute (sustained)
-   - Max 3 commands per 10 seconds (burst); read-only allowlisted commands are exempt from the burst limit but still count toward the per-minute cap
+   - Max 3 commands per 10 seconds (burst)
    - Clear wait time messaging
    - Timestamp tracking with deque
 
@@ -56,7 +115,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
    - PathValidator integration
 
 4. **Output Management**
-   - Capture stdout and stderr separately
+   - Capture stdout and stderr separately, unless the command said `2>&1` or `2>/dev/null`
    - Truncate large outputs (max 10,000 chars)
    - Return execution duration
    - Return code reporting
@@ -119,12 +178,9 @@ class ShellToolsMixin:
         """Register shell command execution tools."""
         pass
 
-    def _check_rate_limit(self, allowlisted: bool = False) -> tuple:
+    def _check_rate_limit(self) -> tuple:
         """
         Check if rate limit allows another command.
-
-        Allowlisted commands skip the 10-second burst limit but still count
-        toward the per-minute cap.
 
         Returns:
             (allowed: bool, reason: str, wait_time: float)
@@ -142,47 +198,36 @@ class ShellToolsMixin:
         timeout: int = 30
     ) -> Dict[str, Any]:
         """
-        Run ONE read-only shell command and return its output.
-
-        Rules — a command that breaks one is blocked, not run:
-        - One command per call. No shell operators: &&, ||, ;, &, >, >>, <,
-          backticks, $(...), heredocs. Pipes (|) are allowed.
-        - To run somewhere else, pass working_directory — never "cd DIR && cmd".
-        - Only read-only commands run without approval: ls, cat, head, tail,
-          grep, find, wc, sort, uniq, diff, stat, du, ps, which, echo, and
-          read-only git (status, log, show, diff, branch, ls-files, rev-parse;
-          git -C DIR is fine). rm, mv, cp, python, pip, curl and git writes
-          are blocked.
-        - A loaded skill may grant extra commands (e.g. gh, pytest). If a
-          skill tells you to run one, run it — the grant covers it.
-        - To run a Python script use execute_python_file; to change files use
-          edit_file or write_file — when those tools are available.
+        Execute a shell command and return output.
 
         Security Layers:
-        1. Rate limit check (burst + sustained)
+        1. Rate limit check (burst + sustained) — one line costs one slot
         2. Working directory validation
-        3. Command parsing (shlex for safety)
-        4. Command whitelist check
+        3. Command parsing (connectors, pipes, shlex for safety)
+        4. Command whitelist check, for every segment of the line
         5. Git subcommand filtering
-        6. Argument path validation
+        6. Argument path validation, against each segment's own directory
 
         Args:
-            command: A single command, optionally piped with |. No &&, ;, >, < or $().
-            working_directory: Directory to run the command in. Use this instead of cd.
-            timeout: Maximum execution time in seconds
+            command: Shell command to execute (e.g., 'ls -la', 'cd src && ls')
+            working_directory: Optional directory to run in
+            timeout: Max execution time in seconds for the whole line
+                (default: 30)
 
         Returns:
             {
                 "status": "success" | "error",
                 "command": str,
-                "stdout": str,
+                "stdout": str,   # every command's output, in order
                 "stderr": str,
-                "return_code": int,
+                "return_code": int,   # the last command that ran
                 "has_errors": bool,
+                "steps": list,   # [{"command": str, "return_code": int}, ...]
                 "duration_seconds": float,
                 "timeout": int,
                 "cwd": str,
                 "output_truncated": bool,
+                "check_result": dict | None,  # CheckResult when a test/lint/build runner ran
                 "rate_limited": bool,  # If rate limited
                 "wait_time_seconds": float,  # Time to wait
                 "timed_out": bool  # If command timed out
@@ -198,7 +243,7 @@ class ShellToolsMixin:
 ### Rate Limiting
 
 ```python
-def _check_rate_limit(self, allowlisted: bool = False) -> tuple:
+def _check_rate_limit(self) -> tuple:
     current_time = time.time()
     minute_ago = current_time - 60
     ten_sec_ago = current_time - 10
@@ -206,9 +251,8 @@ def _check_rate_limit(self, allowlisted: bool = False) -> tuple:
     recent_minute = sum(1 for t in self.shell_command_times if t > minute_ago)
     recent_10_sec = sum(1 for t in self.shell_command_times if t > ten_sec_ago)
 
-    # Burst limit — skipped for allowlisted commands (orienting in a repo is a
-    # rapid run of ls/cat); the per-minute cap still applies to them.
-    if not allowlisted and recent_10_sec >= self.max_commands_per_10_seconds:
+    # Check burst limit first
+    if recent_10_sec >= self.max_commands_per_10_seconds:
         wait_time = 10 - (current_time - min(recent_times))
         return False, f"Rate limit: max 3 commands per 10 seconds", wait_time
 

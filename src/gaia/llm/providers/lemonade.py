@@ -529,6 +529,10 @@ class LemonadeProvider(LLMClient):
                 for key, value in (self._last_usage or {}).items()
                 if key != "tokens_per_second"
             }
+        # A non-streaming local call carries its own usage. /stats counts only
+        # the uncached part of whichever request the server served last.
+        if self._last_usage:
+            return dict(self._last_usage)
         return self._backend.get_stats() or {}
 
     def get_last_usage(self) -> Optional[dict]:
