@@ -394,7 +394,7 @@ too.
     "step_seconds": 41.2,          # this step's wall time
     "llm_seconds": 39.8,           # model requests, retries and continuations included
     "tool_seconds": 0.9,           # sum of this step's tool calls
-    "overhead_seconds": 0.5,       # the rest; the three add up to step_seconds, give or take rounding
+    "overhead_seconds": 0.5,       # the rest; the three add up to step_seconds exactly
     "ttft_seconds": 1.3,           # first request's time to first token; None if not streamed
     "finish_reason": "length",     # as the provider returned it; None if not reported
     "reasoning_tokens": 1830,      # None when the provider does not report them

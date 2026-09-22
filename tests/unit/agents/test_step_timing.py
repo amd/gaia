@@ -503,8 +503,10 @@ def test_process_query_trace_and_summary_carry_the_breakdown(_clean_registry):
         assert rec["ttft_seconds"] is None
         assert rec["reasoning_tokens"] is None
         assert rec["finish_reason"] == "stop"
+        # Overhead is the remainder of the rounded parts, so this is exact at
+        # the reported precision, not merely close.
         parts = rec["llm_seconds"] + rec["tool_seconds"] + rec["overhead_seconds"]
-        assert parts == pytest.approx(rec["step_seconds"], abs=1e-3)
+        assert round(parts, 4) == rec["step_seconds"]
     assert records[0]["tools"][0]["name"] == "slow_lookup"
     assert records[0]["tool_seconds"] >= TOOL_DELAY
     assert records[1]["tools"] == []
@@ -515,9 +517,15 @@ def test_process_query_trace_and_summary_carry_the_breakdown(_clean_registry):
     assert summary["llm_seconds"] == pytest.approx(
         sum(r["llm_seconds"] for r in records), abs=1e-3
     )
-    assert summary["llm_seconds"] + summary["tool_seconds"] + summary[
-        "overhead_seconds"
-    ] == pytest.approx(summary["wall_seconds"], abs=1e-3)
+    assert (
+        round(
+            summary["llm_seconds"]
+            + summary["tool_seconds"]
+            + summary["overhead_seconds"],
+            4,
+        )
+        == summary["wall_seconds"]
+    )
     slowest = summary["slowest_steps"]
     assert [s["step"] for s in slowest] == sorted(
         (1, 2), key=lambda n: -records[n - 1]["step_seconds"]

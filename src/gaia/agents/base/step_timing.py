@@ -3,10 +3,10 @@
 """Where an agent turn's wall time went, step by step.
 
 Each step's ``stats`` record gets a breakdown measured on this process's own
-clock: model time, tool time, and everything else (overhead). Overhead is
-derived as the remainder, so ``llm_seconds + tool_seconds + overhead_seconds``
-reconciles with ``step_seconds`` to within the rounding applied to each of the
-four values independently. Token counts come from each call's own
+clock: model time, tool time, and everything else (overhead). Overhead is the
+remainder of the already-rounded parts, so the reported ``llm_seconds +
+tool_seconds + overhead_seconds`` adds back to the reported ``step_seconds``
+exactly. Token counts come from each call's own
 response usage, never from Lemonade's ``/stats`` — that endpoint only measures
 local generation and says nothing true about a cloud model.
 
@@ -180,12 +180,16 @@ class StepTimer:
         tools = sum((raw for _entry, raw in step["tool_calls"]), 0.0)
         first = calls[0] if calls else None
         last = calls[-1] if calls else None
+        r_wall = round(wall, _ROUND)
+        r_llm = round(llm, _ROUND)
+        r_tools = round(tools, _ROUND)
         fields = {
-            "step_seconds": round(wall, _ROUND),
-            "llm_seconds": round(llm, _ROUND),
-            "tool_seconds": round(tools, _ROUND),
-            # The remainder, so the three parts always sum to the step.
-            "overhead_seconds": round(wall - llm - tools, _ROUND),
+            "step_seconds": r_wall,
+            "llm_seconds": r_llm,
+            "tool_seconds": r_tools,
+            # Remainder of the *rounded* parts, so the three reported values
+            # add back to the reported step exactly.
+            "overhead_seconds": round(r_wall - r_llm - r_tools, _ROUND),
             # First call only: a later call's ttft is not what the step waited.
             "ttft_seconds": (
                 round(first["ttft_seconds"], _ROUND)
@@ -226,15 +230,18 @@ class StepTimer:
             c["seconds"] for c in self._loose_llm_calls
         )
         tools = sum(s["_tools"] for s in self._steps) + self._loose_tool_seconds
+        r_wall = round(wall, _ROUND)
+        r_llm = round(llm, _ROUND)
+        r_tools = round(tools, _ROUND)
         all_calls = self._loose_llm_calls + [
             {"completion_tokens": s["completion_tokens"]} for s in self._steps
         ]
         slowest = sorted(self._steps, key=lambda s: s["_wall"], reverse=True)
         self._summary = {
-            "wall_seconds": round(wall, _ROUND),
-            "llm_seconds": round(llm, _ROUND),
-            "tool_seconds": round(tools, _ROUND),
-            "overhead_seconds": round(wall - llm - tools, _ROUND),
+            "wall_seconds": r_wall,
+            "llm_seconds": r_llm,
+            "tool_seconds": r_tools,
+            "overhead_seconds": round(r_wall - r_llm - r_tools, _ROUND),
             "llm_calls": len(self._loose_llm_calls)
             + sum(s["llm_calls"] for s in self._steps),
             "output_tokens": _sum_known([c["completion_tokens"] for c in all_calls]),
