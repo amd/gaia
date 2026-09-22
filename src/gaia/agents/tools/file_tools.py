@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     file_read_record,
@@ -27,6 +28,7 @@ from gaia.agents.tools.file_edit import (
 )
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
+    is_broad_root,
     root_depth,
     search_roots,
 )
@@ -122,7 +124,7 @@ class FileSearchToolsMixin:
             return None
         is_allowed, reason = validator.validate_read(path)
         if not is_allowed:
-            return {"status": "error", "error": reason}
+            return {**NOT_EXECUTED, "status": "error", "error": reason}
         return None
 
     def register_file_search_tools(self) -> None:
@@ -414,12 +416,15 @@ class FileSearchToolsMixin:
                     for location in common_locations:
                         if len(matching_files) >= 20:
                             break
-                        # Skip anything already covered by a searched root
+                        # Skip anything already covered by a searched root. A
+                        # broad root was only walked shallowly, so it covers
+                        # nothing.
                         try:
                             resolved = location.resolve()
                             if any(
-                                resolved == root or str(resolved).startswith(str(root))
+                                resolved.is_relative_to(root.resolve())
                                 for root in roots
+                                if not is_broad_root(root)
                             ):
                                 continue
                         except (OSError, ValueError):
@@ -1088,6 +1093,7 @@ class FileSearchToolsMixin:
                         )
                         logger.warning(f"Write denied: {reason}")
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "write_file",
@@ -1417,6 +1423,7 @@ class FileSearchToolsMixin:
                                 "edit", str(resolved_path), 0, "denied", reason
                             )
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": reason,
                                 "operation": "edit_file",
@@ -1426,6 +1433,7 @@ class FileSearchToolsMixin:
                             "edit", str(resolved_path), 0, "denied", reason
                         )
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "edit_file",
