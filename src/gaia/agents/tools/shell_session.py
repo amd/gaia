@@ -366,7 +366,16 @@ class ShellSession:
         directory, self._temp_directory = self._temp_directory, None
         self._temp_dir = None
         if directory is not None:
-            directory.cleanup()
+            # Runs from run()'s finally: a raise here would discard the
+            # ShellResult the command already produced.
+            try:
+                directory.cleanup()
+            except OSError as exc:
+                logger.warning(
+                    "Could not remove shell session temp directory %s: %s",
+                    directory.name,
+                    exc,
+                )
 
     @property
     def closed(self) -> bool:

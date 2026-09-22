@@ -267,6 +267,44 @@ class TestExecution:
         gc.collect()
         assert not os.path.exists(directory)
 
+    def test_undeletable_temp_dir_does_not_swallow_the_command_result(
+        self, tmp_path, caplog
+    ):
+        """A failed teardown must not cost the caller a finished command.
+
+        ``_discard_temp_dir`` runs from ``run()``'s ``finally`` when the session
+        was closed mid-command, so a raise there replaces the ShellResult the
+        command already produced. On Windows a file still held by a just-killed
+        child makes that a real path, not a hypothetical one.
+        """
+        shell = ShellSession(start_cwd=str(tmp_path))
+        directory = None
+        real_cleanup = None
+        try:
+            shell.run("echo hello")
+            directory = shell._temp_directory
+            assert directory is not None
+            real_cleanup = directory.cleanup
+
+            def _raise():
+                raise OSError(13, "file in use by another process")
+
+            directory.cleanup = _raise
+
+            # Must return normally; before the fix this raised out of run().
+            shell._discard_temp_dir()
+        finally:
+            if directory is not None and real_cleanup is not None:
+                directory.cleanup = real_cleanup
+                real_cleanup()
+            shell.close()
+
+        assert shell._temp_dir is None
+        assert any(
+            "Could not remove shell session temp directory" in record.message
+            for record in caplog.records
+        ), "the failure must still be reported, not silently ignored"
+
     def test_exit_code_is_reported(self, session):
         result = session.run("exit 3")
 
