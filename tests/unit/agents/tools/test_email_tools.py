@@ -167,6 +167,64 @@ def test_get_message_selects_body():
     assert out["body"] == "<p>Can you confirm?</p>"
 
 
+# A real-shaped Graph message id: standard base64, padded.
+REAL_GRAPH_ID = (
+    "AAMkADYyMTBjZGZjLTNmNGEtNDU4Yy04MTIxLTgwZDRkZGI4ZmY0NABGAAAAAAB"
+    "b1n5Ct_yWQ4XpZ0ueZLRLBwC0vORhuAAAAAAAEMAAC0vORhuAAACAQwAAA="
+)
+
+
+def test_get_message_accepts_a_real_shaped_graph_id():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = request.url
+        return json_response(GRAPH_MESSAGE)
+
+    make_backend(handler).get_message(REAL_GRAPH_ID)
+
+    assert seen["url"].path == f"/v1.0/me/messages/{REAL_GRAPH_ID}"
+
+
+def test_an_id_containing_a_separator_stays_one_path_segment():
+    """Graph issues standard base64 ids, so `/` and `+` are legitimate."""
+    seen = {}
+
+    def handler(request):
+        seen["url"] = request.url
+        return json_response(GRAPH_MESSAGE)
+
+    make_backend(handler).get_message("AAMk/oQ+Dw==")
+
+    # `.path` is the decoded view; `.raw_path` is what actually goes on the wire.
+    sent = seen["url"].raw_path.split(b"?")[0]
+    assert sent == b"/v1.0/me/messages/AAMk%2FoQ%2BDw%3D%3D"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../mailFolders/inbox",
+        "AAMk-1/../../mailFolders",
+        "AAMk-1?$select=body",
+        "AAMk-1#frag",
+        "AAMk 1",
+    ],
+)
+def test_a_message_id_outside_the_graph_alphabet_is_refused(bad):
+    """The id comes from a model and lands in the URL path."""
+    backend = make_backend(lambda request: json_response(GRAPH_MESSAGE))
+    with pytest.raises(ValueError, match="not a Microsoft Graph message id"):
+        backend.get_message(bad)
+
+
+@pytest.mark.parametrize("bad", ["", "   "])
+def test_an_empty_message_id_is_refused(bad):
+    backend = make_backend(lambda request: json_response(GRAPH_MESSAGE))
+    with pytest.raises(ValueError, match="non-empty message id"):
+        backend.get_message(bad)
+
+
 def test_top_is_clamped_to_graph_maximum():
     seen = {}
 

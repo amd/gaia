@@ -1011,6 +1011,79 @@ class TestSessionEndpoints:
         resp = client.post("/api/sessions", json={"mail_provider": "yahoo"})
         assert resp.status_code == 422  # pattern validation fails loudly
 
+    @pytest.fixture
+    def gaia_only_registry(self):
+        from gaia.agents.registry import AgentRegistration, AgentRegistry
+
+        registry = AgentRegistry()
+        registry._register(
+            AgentRegistration(
+                id="gaia",
+                name="GAIA",
+                description="flagship",
+                source="installed",
+                conversation_starters=[],
+                factory=MagicMock(),
+                agent_dir=None,
+                models=[],
+            )
+        )
+        with patch("gaia.ui._chat_helpers._agent_registry", registry):
+            yield registry
+
+    def test_create_session_unknown_agent_type_rejected(
+        self, client, gaia_only_registry
+    ):
+        # #3883: a session for a removed agent could never answer a turn.
+        resp = client.post("/api/sessions", json={"agent_type": "data"})
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "'data'" in detail
+        assert "chat, email, gaia" in detail
+        assert client.get("/api/sessions").json()["total"] == 0
+
+    def test_create_session_registered_agent_type_accepted(
+        self, client, gaia_only_registry
+    ):
+        resp = client.post("/api/sessions", json={"agent_type": "gaia"})
+        assert resp.status_code == 200
+        assert resp.json()["agent_type"] == "gaia"
+
+    def test_update_session_unknown_agent_type_rejected(
+        self, client, gaia_only_registry
+    ):
+        sid = client.post("/api/sessions", json={"agent_type": "gaia"}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"agent_type": "data"})
+        assert resp.status_code == 422
+        assert client.get(f"/api/sessions/{sid}").json()["agent_type"] == "gaia"
+
+    def test_rejection_names_why_an_installed_agent_failed_to_load(
+        self, client, gaia_only_registry
+    ):
+        """An agent that is installed but broke on import must not be told to
+        install itself; the recorded reason is what the user can act on."""
+        gaia_only_registry._record_load_error(
+            "my-bot", "ImportError: No module named 'pandas'"
+        )
+        resp = client.post("/api/sessions", json={"agent_type": "my-bot"})
+        assert resp.status_code == 422
+        assert "It failed to load: ImportError: No module named 'pandas'." in (
+            resp.json()["detail"]
+        )
+
+    def test_the_listed_ids_include_every_accepted_one(
+        self, client, gaia_only_registry
+    ):
+        """A sidecar id is accepted without a registry entry, so it is listed."""
+        assert (
+            client.post("/api/sessions", json={"agent_type": "email"}).status_code
+            == 200
+        )
+        detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
+            "detail"
+        ]
+        assert "Registered agent ids: chat, email, gaia." in detail
+
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
         resp = client.put(f"/api/sessions/{sid}", json={"mail_provider": "microsoft"})
