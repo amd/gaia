@@ -822,8 +822,9 @@ var connectScopes = map[string][]string{
 		"https://www.googleapis.com/auth/calendar.readonly",
 	},
 	"microsoft": {
-		// catalog/microsoft.py default_scopes
-		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+		// catalog/microsoft.py default_scopes — no `openid`: an Entra tenant can
+		// reject the whole authorization request over it (AADSTS65002, #4079).
+		"offline_access", "https://graph.microsoft.com/User.Read",
 		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES (OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES)
 		"https://graph.microsoft.com/Mail.ReadWrite",
 		"https://graph.microsoft.com/Mail.Send",
@@ -831,7 +832,7 @@ var connectScopes = map[string][]string{
 	},
 	"microsoft_work": {
 		// catalog/microsoft.py default_scopes (work tenant — same Graph app registration shape)
-		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+		"offline_access", "https://graph.microsoft.com/User.Read",
 		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES — identical to personal Outlook;
 		// only the connector id (token/grant/keyring slot) differs.
 		"https://graph.microsoft.com/Mail.ReadWrite",

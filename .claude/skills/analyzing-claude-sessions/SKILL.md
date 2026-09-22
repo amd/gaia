@@ -98,7 +98,9 @@ catch them.
 3. Write `$FACTORY/labels.txt` as `<8-char-session-prefix> <primary> <secondary,secondary>`.
    It carries session-id prefixes, so it belongs in the cache directory like everything
    else derived — not in a repo.
-4. Re-run `report --labels "$FACTORY/labels.txt"`.
+4. Re-run `report --labels "$FACTORY/labels.txt"`. It validates the prefixes against
+   the corpus: nothing matching is an error, and partial coverage is stated in every
+   use-case table so the labelled subset is never read as the whole corpus.
 
 Classify from the **first user message**, not the auto-generated title — the title is a
 summary of what happened, which leaks the outcome into the label.
@@ -136,6 +138,12 @@ These are not optional; the analysis is worthless without them.
   nobody should trust.
 
 ## Privacy
+
+`scan` covers **every Claude Code project on the machine**, not just the current repo:
+`~/.claude/projects/` holds one subdirectory per project, and there is no per-project
+filter — `--root` relocates the scan, it cannot narrow it. `tables.md` never breaks the
+count down by project, so check `top_projects` in `stats.json` to see the mix before
+sharing anything.
 
 Transcripts contain absolute paths, branch names, repository content, and any secret
 pasted into a prompt. The pipeline writes only to `~/.gaia/cache/factory/`. If a report is

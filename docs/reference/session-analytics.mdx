@@ -113,6 +113,11 @@ run Claude Code.
 | `context` | `--cache`, `--projects` (raw transcripts, if not under `~/.claude/projects`), `--labels` |
 | `savings` | `--cache`, `--projects` |
 
+`--root` relocates the scan, it does not narrow it. The path it takes is the
+directory *holding* your projects — sessions are read as `<root>/<project>/*.jsonl`
+— so pointing it at one project directory matches nothing and exits with the
+"no sessions found" error. There is no supported way to scan a single project.
+
 ## Output files
 
 | File | Contents |
@@ -145,6 +150,11 @@ follow the steps below), or do it yourself:
 Classify from the **first user message**, not the auto-generated session title — the
 title summarizes what happened, which leaks the outcome into the label.
 
+Prefixes are checked against the corpus. A file where nothing matches stops the
+run rather than rendering an empty table, and a partially-matched file prints how
+many sessions it covers — on stderr and inside each use-case table — so the
+labelled subset is never mistaken for the whole corpus.
+
 ## Things that will mislead you if you skip them
 
 - **Subagents are not sessions.** A delegated `Task`/`Agent` run gets its own
@@ -163,6 +173,12 @@ title summarizes what happened, which leaks the outcome into the label.
   itself being recorded. Timestamp the snapshot you're reporting on.
 
 ## Privacy
+
+By default, `scan` covers **every Claude Code project on your machine** — not just
+this repo — because `~/.claude/projects/` holds one subdirectory per project you've
+ever used Claude Code in, and there's no per-project filter. `tables.md` doesn't
+break the count down by project; check the `top_projects` field in `stats.json` if
+you want to see the mix before sharing anything.
 
 Transcripts contain absolute paths, branch names, repository content, and anything
 pasted into a prompt. The pipeline writes only to `~/.gaia/cache/factory/`. If a

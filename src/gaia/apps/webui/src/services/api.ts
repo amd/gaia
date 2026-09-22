@@ -713,16 +713,6 @@ export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
 
 // -- Tool Confirmation ---------------------------------------------------------
 
-/** Resolve a pending tool execution confirmation (Allow or Deny). */
-export async function confirmToolExecution(
-    sessionId: string,
-    confirmId: string,
-    action: 'allow' | 'deny',
-    remember: boolean,
-): Promise<void> {
-    return apiFetch('POST', '/chat/confirm', { session_id: sessionId, confirm_id: confirmId, action, remember });
-}
-
 /** Confirm or deny a tool execution (simplified API for permission_request events). */
 export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
     return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });

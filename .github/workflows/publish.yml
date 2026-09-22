@@ -353,13 +353,16 @@ jobs:
 
   approve-publish:
     name: Approve Publishing
+    # email-eval dropped from the gate: the email agent's capability is moving
+    # into the core flagship agent (#3329), so its eval suite no longer blocks
+    # a core release. (The job is also disabled at its source in
+    # test_email_agent_eval.yml — if: false — so this isn't the only guard.)
     needs: [build-pypi, build-npm, build-desktop-installers, email-eval]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
-      needs.build-desktop-installers.result == 'success' &&
-      needs.email-eval.result == 'success'
+      needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
     steps:
@@ -376,6 +379,20 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: approve-publish
+    # Explicit `if:` on purpose, not the default: GitHub's implicit success()
+    # check walks the FULL ancestor chain (including email-eval, disabled and
+    # reporting 'skipped'), not just this job's direct `needs:` — so without
+    # this, a clean approve-publish success still gets silently skipped
+    # downstream. approve-publish already carries its own explicit override;
+    # this one has to carry its own too, independently. `!cancelled()` is
+    # REQUIRED, not decorative: a bare `needs.approve-publish.result ==
+    # 'success'` with no `!cancelled()`/`always()` guard still gets
+    # auto-skipped by the engine's own ancestor-skip propagation before this
+    # expression is even evaluated (confirmed empirically on this exact tag —
+    # the bare form skipped anyway).
+    if: >-
+      !cancelled() &&
+      needs.approve-publish.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -401,6 +418,11 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: approve-publish
+    # See publish-pypi's comment: explicit if, same reason, and `!cancelled()`
+    # is likewise required (a bare comparison skipped anyway, confirmed).
+    if: >-
+      !cancelled() &&
+      needs.approve-publish.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: npm
@@ -446,7 +468,13 @@ jobs:
   post-publish-smoke:
     name: Post-Publish Smoke Test
     needs: [validate, publish-pypi]
-    if: needs.publish-pypi.result == 'success'
+    # Missing !cancelled() cascaded a skip through github-release and
+    # refresh-context7 too on the v0.24.0 retag, even though publish-pypi
+    # itself succeeded — same bug as #3915/#3916, on the one job the sweep
+    # for it missed. See publish-pypi's comment for the full explanation.
+    if: >-
+      !cancelled() &&
+      needs.publish-pypi.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -688,6 +716,14 @@ jobs:
   refresh-context7:
     runs-on: ubuntu-latest
     needs: [github-release]
+    # See publish-pypi's comment: explicit if, same reason — github-release
+    # succeeding doesn't stop the default ancestor check further down the
+    # chain from still seeing email-eval's 'skipped' and cascading it here.
+    # `!cancelled()` is likewise required (a bare comparison skipped anyway,
+    # confirmed on this exact tag).
+    if: >-
+      !cancelled() &&
+      needs.github-release.result == 'success'
     steps:
       - name: Refresh Context7
         run: |
