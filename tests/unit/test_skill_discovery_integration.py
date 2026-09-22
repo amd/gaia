@@ -114,6 +114,30 @@ def test_a_described_but_unnamed_request_really_loads_the_skill(agent):
     assert agent._skill_discovery_result.loaded == "github-triage"
 
 
+def test_memory_context_preamble_does_not_dilute_the_match(agent):
+    """``MemoryMixin.process_query`` prepends a ``[GAIA Memory Context]`` /
+    ``Current time: ...`` preamble to ``user_input`` before discovery ever
+    runs. That preamble is real content for the LLM but pure noise for the
+    lexical BM25 matcher, and it is long enough to dilute a genuine match
+    below the auto-load floor — a described-but-unnamed request that loads
+    fine on a clean turn 1 must still load when ``MemoryMixin`` is present,
+    using the clean text it saved as ``_original_user_input``.
+    """
+    augmented = (
+        "[GAIA Memory Context]\n"
+        "Current time: 2026-09-18T00:14:00-0700 (Friday)\n\n"
+        "what's been going on in my github inbox the past few days?"
+    )
+    agent._original_user_input = (
+        "what's been going on in my github inbox the past few days?"
+    )
+
+    agent._discover_skills_for_turn(augmented)
+
+    assert "github-triage" in agent.loaded_skills
+    assert agent._skill_discovery_result.loaded == "github-triage"
+
+
 def test_the_loaded_skills_instructions_reach_the_prompt(agent):
     """A load that does not change the prompt has not done anything."""
     agent._discover_skills_for_turn("triage my github inbox")

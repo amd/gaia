@@ -28,6 +28,11 @@ from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
 from gaia.agents.base.agent import Agent, default_max_steps
+from gaia.agents.base.checks import (
+    attach_check,
+    check_from_python_run,
+    snippet_target,
+)
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 
@@ -914,7 +919,7 @@ No documents are currently indexed.
 - Common folders: Desktop, Documents, Downloads (under {home_dir})
 - Shell: `systeminfo`, `tasklist`, `ipconfig`, `driverquery`
 - Network: prefer `ipconfig`. Primary adapter has real Default Gateway — ignore virtual adapters.
-- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, @{{N='Memory(MB)';E={{[math]::Round($_.WS/1MB,1)}}}}"`. Avoid `tasklist /V`.
+- Process monitoring: `powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, WS"` (WS is bytes; divide in your answer). Avoid `tasklist /V`.
 - CPU: `powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name"`
 - GPU: `powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM"`
 - Prefer `Get-CimInstance` over `wmic` (deprecated). Do NOT use Linux commands.
@@ -1498,14 +1503,24 @@ No documents are currently indexed.
                         timeout=timeout,
                         check=False,
                     )
-                    return {
-                        "status": "success",
-                        "stdout": r.stdout[:8000],
-                        "stderr": r.stderr[:2000],
-                        "return_code": r.returncode,
-                        "has_errors": r.returncode != 0,
-                        "duration_seconds": round(time.monotonic() - start, 2),
-                    }
+                    from gaia.agents.base.artifacts import retain_excerpt
+
+                    return attach_check(
+                        {
+                            "status": "success",
+                            "stdout": retain_excerpt(self, r.stdout, 8000),
+                            "stderr": retain_excerpt(self, r.stderr, 2000),
+                            "return_code": r.returncode,
+                            "has_errors": r.returncode != 0,
+                            "duration_seconds": round(time.monotonic() - start, 2),
+                        },
+                        check_from_python_run(
+                            " ".join([file_path, args]).strip(),
+                            r.returncode,
+                            r.stdout,
+                            r.stderr,
+                        ),
+                    )
                 except subprocess.TimeoutExpired:
                     return {
                         "status": "error",
@@ -1514,6 +1529,107 @@ No documents are currently indexed.
                     }
                 except Exception as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
+
+            @tool
+            def run_python(code: str, timeout: int = 60) -> dict:
+                """Run a Python snippet and return what it prints.
+
+                Use this to compute, transform data, or run a quick check
+                without creating a file. It runs from the project root, so
+                relative paths reach the user's files, and the snippet itself is
+                never saved in the workspace. Report numbers from its printed
+                output — do not work them out in your head.
+
+                Args:
+                    code: Python source to run; print() whatever you need back.
+                    timeout: Max seconds to wait (default 60)
+
+                Returns:
+                    Dictionary with stdout, stderr, return_code, and duration
+                """
+                import subprocess
+                import sys
+                import tempfile
+                import time
+
+                from gaia.agents.base.project_map import resolve_project_root
+
+                try:
+                    if hasattr(self, "_project_map_root"):
+                        project = self._project_map_root()
+                    else:
+                        project = resolve_project_root(
+                            getattr(self.config, "project_root", None)
+                        )
+                except ValueError as e:  # GAIA_PROJECT_ROOT names no directory
+                    return {"status": "error", "error": str(e), "has_errors": True}
+                run_dir = Path(project) if project else Path.cwd()
+                if not self.path_validator.is_path_allowed(str(run_dir)):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {run_dir} is not in allowed "
+                        "paths, so a snippet cannot run from it. Add it to the "
+                        "agent's allowed paths, or set GAIA_PROJECT_ROOT to an "
+                        "allowed project.",
+                        "has_errors": True,
+                    }
+                env = dict(os.environ)
+                if project:
+                    existing = env.get("PYTHONPATH")
+                    env["PYTHONPATH"] = (
+                        os.pathsep.join([project, existing]) if existing else project
+                    )
+
+                # The system temp dir keeps the snippet out of the workspace.
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    suffix=".py",
+                    prefix="gaia-run-",
+                    delete=False,
+                    encoding="utf-8",
+                ) as handle:
+                    handle.write(code)
+                    snippet = Path(handle.name)
+                start = time.monotonic()
+                try:
+                    r = subprocess.run(
+                        [sys.executable, str(snippet)],
+                        cwd=str(run_dir),
+                        env=env,
+                        capture_output=True,
+                        stdin=subprocess.DEVNULL,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=timeout,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    return {
+                        "status": "error",
+                        "error": f"Timed out after {timeout}s",
+                        "has_errors": True,
+                    }
+                except OSError as e:
+                    return {
+                        "status": "error",
+                        "error": f"Could not start {sys.executable}: {e}",
+                        "has_errors": True,
+                    }
+                finally:
+                    snippet.unlink(missing_ok=True)
+                return attach_check(
+                    {
+                        "status": "success",
+                        "stdout": r.stdout[:8000],
+                        "stderr": r.stderr[:2000],
+                        "return_code": r.returncode,
+                        "has_errors": r.returncode != 0,
+                        "duration_seconds": round(time.monotonic() - start, 2),
+                    },
+                    check_from_python_run(
+                        snippet_target(code), r.returncode, r.stdout, r.stderr
+                    ),
+                )
 
         # VLM tools — analyze_image, answer_question_about_image
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
@@ -2034,6 +2150,7 @@ No documents are currently indexed.
         # Snapshot: freeze this agent's tool set so mutations by other agents
         # in the same process do not leak in.  Exclusion replaces the old
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
+        self._register_output_reader()
         self._snapshot_tools()
         if spec.generic_file_ops:
             _chat_exclude = {

@@ -16,9 +16,9 @@ import mimetypes
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-from gaia.agents.tools.search_scope import search_roots
+from gaia.agents.tools.search_scope import root_depth, search_roots
 
 logger = logging.getLogger(__name__)
 
@@ -769,6 +769,7 @@ class FileSystemToolsMixin:
                 # Filesystem search
                 # Determine search roots based on scope
                 search_roots = _get_search_roots(scope)
+                resolved_roots = [Path(r).expanduser().resolve() for r in search_roots]
 
                 query_lower = query.lower()
                 is_glob = "*" in query or "?" in query
@@ -780,6 +781,15 @@ class FileSystemToolsMixin:
                     root = Path(root_path).expanduser().resolve()
                     if not root.exists() or not root.is_dir():
                         continue
+                    # A workspace scope takes its depth from the shared policy,
+                    # so this tool and ``search_file`` cannot disagree on how
+                    # deep the project is. An explicit scope was named by the
+                    # caller and keeps this tool's own defaults.
+                    scoped_depth = (
+                        root_depth(root, resolved_roots)
+                        if scope in ("cwd", "smart")
+                        else None
+                    )
 
                     if effective_type == "content":
                         # Content search (grep-like)
@@ -793,6 +803,12 @@ class FileSystemToolsMixin:
                             max_size,
                             min_date,
                             max_date,
+                            # Grep cost scales with file bytes, not directory
+                            # entries, so the project is not read to
+                            # DEEP_ROOT_DEPTH the way a name search walks it.
+                            max_depth=(
+                                min(8, scoped_depth) if scoped_depth is not None else 8
+                            ),
                         )
                     else:
                         # Name/metadata search
@@ -808,6 +824,9 @@ class FileSystemToolsMixin:
                             max_size,
                             min_date,
                             max_date,
+                            max_depth=(
+                                scoped_depth if scoped_depth is not None else 10
+                            ),
                         )
 
                 # Sort results
@@ -852,6 +871,8 @@ class FileSystemToolsMixin:
             lines: int = 100,
             encoding: str = "auto",
             mode: str = "full",
+            offset: int = 0,
+            limit: Optional[int] = None,
         ) -> str:
             """Read and display a file's contents with intelligent type-based analysis.
 
@@ -866,6 +887,8 @@ class FileSystemToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for paging.
+                limit: Text page size, 1..8000 characters.
                 lines: Number of lines to show, 0 for all (default: 100)
                 encoding: File encoding, 'auto' for auto-detect (default: auto)
                 mode: Reading mode - full, preview, or metadata (default: full)
@@ -886,6 +909,36 @@ class FileSystemToolsMixin:
                 if mode == "metadata":
                     return file_info(str(resolved))
 
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    page_encoding = encoding
+                    if page_encoding == "auto":
+                        page_encoding = "utf-8"
+                        try:
+                            from charset_normalizer import from_bytes
+                        except ImportError:
+                            logger.debug(
+                                "charset_normalizer unavailable; text paging requires UTF-8 or explicit encoding"
+                            )
+                        else:
+                            with resolved.open("rb") as sample_file:
+                                match = from_bytes(sample_file.read(65536)).best()
+                            if match is not None:
+                                page_encoding = match.encoding
+                    return json.dumps(
+                        {
+                            **read_text_page(
+                                resolved,
+                                offset,
+                                8000 if limit is None else limit,
+                                page_encoding,
+                            ),
+                            "encoding": page_encoding,
+                        },
+                        ensure_ascii=False,
+                    )
+
                 # Size guard: refuse to load files bigger than MAX_READ_BYTES
                 # (50 MB) entirely. ``mode="preview"`` / ``mode="metadata"`` use
                 # streaming / metadata-only paths so they remain available for
@@ -897,7 +950,7 @@ class FileSystemToolsMixin:
                         f"Error: File too large to read in full ({_format_size(file_size)}). "
                         f"Maximum is {_format_size(MAX_READ_BYTES)}.\n"
                         f"Use mode='preview' for the first 20 lines, "
-                        f"or mode='metadata' for file info without reading content."
+                        f"or read_file(offset=0, limit=8000) for bounded text pages."
                     )
 
                 # Handle specific file types
@@ -1024,7 +1077,9 @@ class FileSystemToolsMixin:
 
                 if truncated:
                     output_lines.append(
-                        f"\n  ... ({total_lines - len(display_lines)} more lines)"
+                        f"\n  ... (more lines/content available; call read_file with offset="
+                        f"{sum(len(line) for line in display_lines)}, limit=8000, "
+                        f"encoding='{detected_encoding}' to continue)"
                     )
 
                 return "\n".join(output_lines)
@@ -1244,6 +1299,7 @@ class FileSystemToolsMixin:
             max_size,
             min_date,
             max_date,
+            max_depth=10,
         ):
             """Search for files by name."""
             import fnmatch
@@ -1251,7 +1307,7 @@ class FileSystemToolsMixin:
             default_excludes = mixin._get_default_excludes()
 
             def _walk(current, depth):
-                if depth > 10 or len(results) >= max_results:
+                if depth > max_depth or len(results) >= max_results:
                     return
                 try:
                     for entry in os.scandir(str(current)):
@@ -1330,6 +1386,7 @@ class FileSystemToolsMixin:
             max_size,
             _min_date,
             _max_date,
+            max_depth=8,
         ):
             """Search inside file contents."""
             default_excludes = mixin._get_default_excludes()
@@ -1366,7 +1423,7 @@ class FileSystemToolsMixin:
             query_lower = query.lower()
 
             def _walk(current, depth):
-                if depth > 8 or len(results) >= max_results:
+                if depth > max_depth or len(results) >= max_results:
                     return
                 try:
                     for entry in os.scandir(str(current)):
