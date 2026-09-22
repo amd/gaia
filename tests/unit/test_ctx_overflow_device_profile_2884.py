@@ -242,6 +242,37 @@ def test_ui_helper_still_exposes_the_classifier() -> None:
     assert _classify_chat_exception is classify_lemonade_exception
 
 
+def test_agent_surfaces_the_typed_message_without_the_ui_package() -> None:
+    """The agent loop reached the classifier through ``gaia.ui`` and swallowed
+    the ImportError, so an install without the ui extras silently fell back to
+    generic "try again in a moment" copy instead of the real remediation."""
+    import sys
+    from unittest.mock import MagicMock
+
+    from gaia.agents.base.agent import Agent
+
+    agent = MagicMock(spec=Agent)
+    agent._extract_lemonade_user_message = Agent._extract_lemonade_user_message.__get__(
+        agent
+    )
+
+    blocked = {k: v for k, v in sys.modules.items() if k.startswith("gaia.ui")}
+    for name in blocked:
+        sys.modules[name] = None  # import from here raises ImportError
+    try:
+        msg = agent._extract_lemonade_user_message(
+            RuntimeError(
+                "request (67000 tokens) exceeds the available context size "
+                f"({NPU_CTX_SIZE} tokens)"
+            )
+        )
+    finally:
+        sys.modules.update(blocked)
+
+    assert msg is not None, "fell back to generic copy with gaia.ui unavailable"
+    assert "context window" in msg
+
+
 def _run_cli_chat_raising(exc: Exception, capsys) -> str:
     """Drive ``GaiaCliClient.chat`` to its error path and return what it printed."""
     import logging
