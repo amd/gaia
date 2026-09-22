@@ -16,11 +16,16 @@
 #      path and a workflow step POSTS it. Callers must not ask the model to run
 #      `gh pr comment` itself — a skipped final tool call is invisible (green job, no
 #      comment). With `require_comment: true` an absent file FAILS the job instead.
-#   4. artifact-based verification: the action only sets execution_file once Claude
-#      ran to completion, and is_error flags a mid-flight error. Either gap emits a
-#      loud ::warning:: (the step outcome is unreliable — continue-on-error masks it
-#      and an install crash exits before outcome is set).
-#      CAVEAT: the retry gate (attempt 2) and this verification both depend on the
+#   4. artifact-based classification: the execution_file, not the step outcome, is the
+#      truth (continue-on-error masks the outcome and an install crash exits before it
+#      is set). The run is sorted into ok / errored / not_started / no_output, and each
+#      outcome gets its OWN named step, because the step name is what a reader sees in
+#      the checks list. `not_started` — is_error with zero billable usage — means the
+#      request was refused before reaching a model, so it must never render like a
+#      review that ran and failed. It keys on those numbers, never on the rejection
+#      wording: that text quotes a moving reset date, embeds a U+00B7, and in the
+#      observed cases (#4080) was absent entirely.
+#      CAVEAT: the retry gate (attempt 2) and this classification both depend on the
 #      `execution_file` output, which is specific to the pinned action SHA (v1.0.184).
 #      A Dependabot bump of claude-code-action could rename or drop it and silently
 #      disable both — re-verify this output name when bumping the action.
@@ -363,6 +368,58 @@ jobs:
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ inputs.claude_args }}
 
+      # --- Tell "the bot never ran" apart from "the bot found problems" ---
+      # An outage used to render exactly like a failed review: no comment, a posting
+      # step that said "Claude produced no review", and a verification warning blaming
+      # an install crash. Telling the two apart by hand cost this fleet days (#4080).
+      # The verdict keys on the CLI's own numbers. A run that reached a model always
+      # bills tokens into modelUsage, so is_error with an empty usage map means the
+      # request was refused before any model work — budget or credential, not this PR.
+      - name: Classify the Claude run
+        id: harness
+        if: "!cancelled()"
+        env:
+          EXEC_FILE: ${{ steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+        run: |
+          set -uo pipefail
+          status=no_output
+          turns=0
+          cost=0
+          models=""
+          detail=""
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            # Only the CLI's own `result` record — a failed tool call carries is_error
+            # too, and reading one as the run's verdict would invent a cause. A log with
+            # no result record stays no_output. -s handles JSONL and JSON-array alike.
+            result=$(jq -s -c '
+              [.. | objects | select(.type == "result")] | last // empty' \
+              "$EXEC_FILE" 2>/dev/null || true)
+            if [ -n "$result" ]; then
+              status=$(printf '%s' "$result" | jq -r '
+                if .is_error != true then "ok"
+                elif (((.modelUsage // {}) | length) == 0) and ((.total_cost_usd // 0) == 0)
+                  then "not_started"
+                else "errored" end')
+              turns=$(printf '%s' "$result" | jq -r '.num_turns // 0')
+              cost=$(printf '%s' "$result" | jq -r '.total_cost_usd // 0')
+              models=$(printf '%s' "$result" | jq -r '(.modelUsage // {}) | keys | join(",")')
+              # Only the result record's own text. Scanning the whole log would match the
+              # review prompt and name the wrong owner — which is the bug #4080 was.
+              detail=$(printf '%s' "$result" \
+                | jq -r '[.result, .error] | map(select(type == "string")) | join(" ")' \
+                | tr -d '\r\n' | cut -c1-300)
+            fi
+          fi
+          {
+            echo "status=$status"
+            echo "turns=$turns"
+            echo "cost=$cost"
+            echo "models=$models"
+            echo "detail=$detail"
+          } >> "$GITHUB_OUTPUT"
+          echo "Claude run: status=$status turns=$turns cost=$cost models=[$models]"
+          if [ -n "$detail" ]; then echo "CLI reported: $detail"; fi
+
       # --- Post the comment Claude wrote ---
       # Posting must not be the model's own final `gh` call — when that call doesn't
       # happen the job still goes green with nothing published, which is undetectable.
@@ -372,12 +429,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_FILE: ${{ inputs.comment_file }}
           REQUIRE_COMMENT: ${{ inputs.require_comment }}
+          HARNESS_STATUS: ${{ steps.harness.outputs.status }}
           IS_PR: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment' }}
           NUMBER: ${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && github.event.pull_request.number || github.event.issue.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           if [ ! -s "$COMMENT_FILE" ]; then
+            # An outage owns its own named step below. Failing here too would report the
+            # same cause twice, in the wording that hid it in the first place.
+            case "$HARNESS_STATUS" in
+              not_started|no_output)
+                echo "Nothing at $COMMENT_FILE — the Claude run never completed ($HARNESS_STATUS). See the named step below for the cause."
+                exit 0
+                ;;
+            esac
             if [ "$REQUIRE_COMMENT" = "true" ]; then
               echo "::error title=Claude produced no review::Expected the review at $COMMENT_FILE; it is missing or empty. Claude ran but published nothing — this is a harness failure, NOT 'the PR was clean' (a clean PR still gets an Approve comment). Log: $RUN_URL"
               exit 1
@@ -392,26 +458,92 @@ jobs:
           fi
           echo "✅ Posted $(wc -c < "$COMMENT_FILE") bytes to #$NUMBER"
 
-      # --- Verify a result was actually produced ---
-      # Don't trust step outcome (continue-on-error masks it; an install crash exits
-      # before it's set). Check the real artifact from whichever attempt ran. !cancelled()
-      # so a superseded run doesn't warn spuriously.
-      - name: Verify Claude output was produced
-        if: "!cancelled()"
+      # --- Named outcomes ---
+      # One step per verdict, not one step with four branches: the step NAME is what a
+      # reader sees in the checks list, so the cause has to be in the name. !cancelled()
+      # so a superseded run doesn't report spuriously.
+      #
+      # Only `require_comment` callers FAIL here. That is deliberate and unchanged from
+      # before: pr-review must not silently pass without a review, while an outage on the
+      # optional lanes must not red-X a contributor's PR (see the attempt-1 comment).
+      - name: Claude run completed
+        if: "!cancelled() && steps.harness.outputs.status == 'ok'"
         env:
-          EXEC_FILE: ${{ steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+          TURNS: ${{ steps.harness.outputs.turns }}
+          COST: ${{ steps.harness.outputs.cost }}
+          MODELS: ${{ steps.harness.outputs.models }}
+          KIND: ${{ github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' && 're-review' || 'review') || 'reply' }}
+          TARGET: "${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && format('PR #{0}', github.event.pull_request.number) || format('#{0}', github.event.issue.number) }}"
+        run: |
+          echo "✅ Claude $KIND completed for $TARGET ($TURNS turns, \$$COST, models: $MODELS)"
+
+      - name: Claude errored after reaching the model — a real run went wrong
+        if: "!cancelled() && steps.harness.outputs.status == 'errored'"
+        env:
+          TURNS: ${{ steps.harness.outputs.turns }}
+          COST: ${{ steps.harness.outputs.cost }}
+          MODELS: ${{ steps.harness.outputs.models }}
+          DETAIL: ${{ steps.harness.outputs.detail }}
           KIND: ${{ github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' && 're-review' || 'review') || 'reply' }}
           TARGET: "${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && format('PR #{0}', github.event.pull_request.number) || format('#{0}', github.event.issue.number) }}"
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          ok=false
-          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
-            # last is_error across all Claude turns (recurse every object, take the final one)
-            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
-            [ "$is_err" = "false" ] && ok=true
+          set -uo pipefail
+          echo "::warning title=Claude $KIND errored mid-run::Claude REACHED the model for $TARGET and then errored after $TURNS turn(s), billing \$$COST via ${MODELS:-(none reported)}. Tokens were spent, so this is a real run that went wrong — read the log, not the budget. CLI reported: ${DETAIL:-(no text)}. Re-run: $RUN_URL"
+
+      - name: Claude never reached a model — budget or credential, not this PR
+        if: "!cancelled() && steps.harness.outputs.status == 'not_started'"
+        env:
+          REQUIRE_COMMENT: ${{ inputs.require_comment }}
+          TURNS: ${{ steps.harness.outputs.turns }}
+          COST: ${{ steps.harness.outputs.cost }}
+          DETAIL: ${{ steps.harness.outputs.detail }}
+          KIND: ${{ github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' && 're-review' || 'review') || 'reply' }}
+          TARGET: "${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && format('PR #{0}', github.event.pull_request.number) || format('#{0}', github.event.issue.number) }}"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          said="$DETAIL"
+          if [ -z "$said" ]; then
+            said="(no text — a refusal with an empty body is itself typical of the weekly cap)"
           fi
-          if [ "$ok" = "true" ]; then
-            echo "✅ Claude $KIND completed (log: $EXEC_FILE)"
-          else
-            echo "::warning title=Claude $KIND did not complete::Claude did not finish the $KIND for $TARGET after 2 attempts — the action crashed or errored before completing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+          # Wording only NARROWS an outage the numbers already established; it can never
+          # create or suppress one. ASCII substrings only — the real text carries U+00B7.
+          # The authoritative phrase list lives in util/classify_claude_probe.py.
+          cause="an exhausted Anthropic spend/rate limit (amd/gaia#4080) or a rejected credential"
+          todo="check the org budget at https://claude.ai/admin-settings/usage first, then CLAUDE_CODE_OAUTH_TOKEN"
+          if printf '%s' "$said" | grep -qiE 'spend limit|usage limit|weekly limit|rate limit|quota|credit balance|billing|upgrade your plan'; then
+            cause="the org's Anthropic BUDGET is exhausted (amd/gaia#4080) — the credential is fine, do not rotate it"
+            todo="raise the org spend limit at https://claude.ai/admin-settings/usage, or wait for the reset the CLI quoted"
           fi
+          msg="The $KIND for $TARGET NEVER RAN, so this red says nothing about $TARGET."
+          msg="$msg The CLI errored on turn $TURNS having billed \$$COST with an empty"
+          msg="$msg model-usage map — the request was refused before it reached a model."
+          msg="$msg CAUSE: $cause. CLI reported: $said."
+          msg="$msg WHAT TO DO: $todo. Re-running this job changes nothing until that does."
+          msg="$msg Log: $RUN_URL"
+          if [ "$REQUIRE_COMMENT" = "true" ]; then
+            echo "::error title=Claude $KIND never ran (harness outage)::$msg"
+            exit 1
+          fi
+          echo "::warning title=Claude $KIND never ran (harness outage)::$msg"
+
+      - name: Claude action crashed before starting — no execution log at all
+        if: "!cancelled() && steps.harness.outputs.status == 'no_output'"
+        env:
+          REQUIRE_COMMENT: ${{ inputs.require_comment }}
+          KIND: ${{ github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' && 're-review' || 'review') || 'reply' }}
+          TARGET: "${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && format('PR #{0}', github.event.pull_request.number) || format('#{0}', github.event.issue.number) }}"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          msg="The $KIND for $TARGET NEVER RAN, so this red says nothing about $TARGET."
+          msg="$msg No execution log survived either attempt, so the action died"
+          msg="$msg before Claude started — overwhelmingly the upstream install-phase"
+          msg="$msg ENOENT crash. WHAT TO DO: re-run this job. If it reproduces twice, the"
+          msg="$msg pinned claude-code-action SHA is the suspect, not the budget. Log: $RUN_URL"
+          if [ "$REQUIRE_COMMENT" = "true" ]; then
+            echo "::error title=Claude $KIND crashed before starting::$msg"
+            exit 1
+          fi
+          echo "::warning title=Claude $KIND crashed before starting::$msg"
