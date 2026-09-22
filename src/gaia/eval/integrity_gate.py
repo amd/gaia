@@ -27,7 +27,7 @@ otherwise go green having measured nothing.
 Usage::
 
     python -m gaia.eval.integrity_gate \\
-        --baseline-dir tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914 \\
+        --baseline-dir tests/fixtures/eval_baselines/gaia-flagship \\
         --results-dir eval-out \\
         --category tool_selection \\
         --not-measured rag_quality --not-measured context_retention \\
@@ -90,23 +90,29 @@ def check_category(baseline_path: Path, current_path: Path, category: str):
             [f"{category}: no scorecard produced ({current_path})"],
             f"{category}: no scorecard at {current_path}",
         )
-    if not baseline_path.exists():
-        return (
-            [f"{category}: baseline scorecard not found ({baseline_path})"],
-            f"{category}: no baseline at {baseline_path}",
-        )
 
     current = _load(current_path)
-    baseline = _load(baseline_path)
-
     got = _scenario_ids(current)
-    want = _scenario_ids(baseline)
-    absent = sorted(set(want) - set(got))
-    if absent:
+
+    # Without a baseline only the missing-scenario check goes dark; everything
+    # below still answers "did this produce a measurement". Reporting the absent
+    # baseline and moving on beats returning early, which would drop the one
+    # check that still works and read as a clean category.
+    if baseline_path.exists():
+        want = _scenario_ids(_load(baseline_path))
+        absent = sorted(set(want) - set(got))
+        if absent:
+            problems.append(
+                f"{category}: {len(absent)} baseline scenario(s) missing from the run: "
+                f"{', '.join(absent)}"
+            )
+        expected = f"{len(want)} in baseline"
+    else:
         problems.append(
-            f"{category}: {len(absent)} baseline scenario(s) missing from the run: "
-            f"{', '.join(absent)}"
+            f"{category}: no baseline at {baseline_path}, so a scenario that "
+            "silently stopped running cannot be detected"
         )
+        expected = "no baseline to compare the scenario set against"
 
     summary = current.get("summary") or {}
     unmeasured = [
@@ -119,8 +125,7 @@ def check_category(baseline_path: Path, current_path: Path, category: str):
 
     shown = ", ".join(unmeasured) if unmeasured else "none"
     status_line = (
-        f"{category}: {len(got)} scenario(s) run, {len(want)} in baseline, "
-        f"unmeasured={shown}"
+        f"{category}: {len(got)} scenario(s) run, {expected}, unmeasured={shown}"
     )
     return problems, status_line
 
