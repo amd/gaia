@@ -658,7 +658,17 @@ def check_tool_descriptions() -> CheckResult:
             print(f"[!] Could not import check_tool_descriptions.py: {exc}")
             return CheckResult("Tool Descriptions", False, False, 1, str(exc))
 
-    exit_code = run_check()
+    # run_check() imports gaia at call time; without the package that would
+    # escape main() and skip every remaining check.
+    try:
+        exit_code = run_check()
+    except ImportError as exc:
+        print(f"[!] Could not import GAIA to read the tool schemas: {exc}")
+        print(f"    Python: {sys.executable}")
+        print()
+        print("    To fix, run: uv pip install -e .")
+        print("    Or run lint via: uv run python util/lint.py --all")
+        return CheckResult("Tool Descriptions", False, False, 1, "GAIA not installed")
 
     if exit_code != 0:
         return CheckResult(

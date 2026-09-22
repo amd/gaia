@@ -50,9 +50,13 @@ from gaia.eval.tool_cost import (  # noqa: E402
 # --- Pinned baseline (#1448, doc profile, deterministic tool set) ----------
 EXPECTED_DOC_TOOL_COUNT = 37
 BASELINE_TEXT_CHARS = 4863
-BASELINE_NATIVE_CHARS = 21957
+# Re-pinned after the tool-description budget landed: dropping the duplicated
+# `Args:` block from `description` and trimming 21 docstrings took the native
+# schema from 23,678 chars / 5,982 tokens to the numbers below (measured in
+# this checkout, deterministic doc profile). The text path barely moved.
+BASELINE_NATIVE_CHARS = 19835
 BASELINE_TEXT_TOKENS = 1014
-BASELINE_NATIVE_TOKENS = 5128
+BASELINE_NATIVE_TOKENS = 4995
 # Band tolerates trivial wording edits; a real tool add/remove blows past it
 # and should bump the baseline deliberately.
 TOLERANCE = 0.10

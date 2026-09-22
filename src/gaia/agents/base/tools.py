@@ -155,19 +155,35 @@ def _schema_description(docstring: Optional[str]) -> str:
     leaving it here bills the same text twice on every model call. Leading
     indentation goes too — the raw ``__doc__`` carries the source indent of
     every continuation line.
+
+    The ``Args:`` block ends where :func:`_parse_arg_descriptions` stops reading
+    it: at the next section header, or at the first line that dedents out of the
+    block. Keep the two boundaries identical or text falls between them.
     """
     if not docstring:
         return ""
 
     kept: list[str] = []
     in_args = False
+    arg_indent: Optional[int] = None
+
     for line in inspect.cleandoc(docstring).splitlines():
         if in_args:
-            if not _NEXT_SECTION_RE.match(line):
+            if _NEXT_SECTION_RE.match(line):
+                in_args = False
+            elif not line.strip():
                 continue
-            in_args = False
+            else:
+                expanded = line.expandtabs()
+                indent = len(expanded) - len(expanded.lstrip())
+                if arg_indent is None:
+                    arg_indent = indent
+                if indent >= arg_indent:
+                    continue
+                in_args = False
         elif _ARGS_HEADER_RE.match(line):
             in_args = True
+            arg_indent = None
             continue
         kept.append(line)
 

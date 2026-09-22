@@ -2561,6 +2561,16 @@ Do NOT wrap conversational replies in JSON.
             # Get description
             if verbose:
                 description = tool_info["description"]
+                # Argument text lives per-parameter, not in the description.
+                arg_lines = [
+                    f"  {param_name}: {param_info['description']}"
+                    for param_name, param_info in tool_info["parameters"].items()
+                    if param_info.get("description")
+                ]
+                if arg_lines:
+                    description = "\n".join(
+                        filter(None, [description, "Args:", *arg_lines])
+                    )
             else:
                 description = (
                     tool_info["description"].split("\n")[0]

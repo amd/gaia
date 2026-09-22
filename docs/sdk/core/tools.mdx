@@ -116,6 +116,16 @@ use it instead of a neighbouring tool, what it refuses, what it returns.
 Rationale, history, and worked examples belong in a code comment, not the
 schema.
 
+<Warning>
+**What the check does not cover.** It measures the flagship agent's tool
+surface only: MCP tools are excluded, and a hub agent outside the flagship is
+unchecked — so a packaged agent can still ship a multi-thousand-character
+description without failing lint. The flagship skeleton also picks up whatever
+the host environment offers, so the tool count it sees can differ between a dev
+box and CI. Treat a green run as "the flagship is in budget", not "every tool
+in the repo is".
+</Warning>
+
 ---
 
 ## How LLMs Choose Tools

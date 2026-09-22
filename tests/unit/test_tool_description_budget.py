@@ -97,6 +97,33 @@ class TestSchemaDescription:
             == "Do the thing.\n\nReturns:\n    Status and path."
         )
 
+    def test_prose_after_the_args_block_survives(self):
+        """Dedenting out of ``Args:`` ends it, even with no ``Returns:`` header.
+
+        The argument parser already stops at that dedent, so anything the
+        schema dropped here would be text no consumer ever sees.
+        """
+        docstring = (
+            "Do the thing.\n\n"
+            "Args:\n    path: Where to do it.\n\n"
+            "Refuses to touch anything outside the workspace.\n"
+        )
+
+        assert _schema_description(docstring) == (
+            "Do the thing.\n\nRefuses to touch anything outside the workspace."
+        )
+
+    def test_argument_continuation_lines_are_still_dropped(self):
+        """Indented continuations belong to the argument, not the prose."""
+        docstring = (
+            "Do the thing.\n\n"
+            "Args:\n"
+            "    path: Where to do it.\n"
+            "        Must already exist.\n"
+        )
+
+        assert _schema_description(docstring) == "Do the thing."
+
     def test_leading_indentation_is_stripped(self):
         docstring = "Do the thing.\n\n            Second line of prose.\n"
 
