@@ -1344,6 +1344,12 @@ Do NOT wrap conversational replies in JSON.
         # the silent False fallback.
         self._single_tool_done: bool = False
 
+        # Per-call tool overrides (e.g. read_tool_output, extract_document_items),
+        # keyed by name. Declared here rather than lazily via hasattr so
+        # _register_tools and _register_output_reader below can both add to it
+        # unconditionally.
+        self._tool_overrides: Dict[str, Any] = {}
+
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
@@ -1352,6 +1358,12 @@ Do NOT wrap conversational replies in JSON.
         self._output_artifacts = ArtifactStore()
         if any(name != "read_tool_output" for name in self._tools_registry):
             self._register_output_reader()
+
+        # Built fresh per turn (process_query resets both) -- declared here so
+        # a caller that inspects them before the first turn sees None rather
+        # than an AttributeError.
+        self._extraction_ledger: Optional[ExtractionLedger] = None
+        self._completion_evidence: Optional[CompletionEvidence] = None
 
         # Declarative skills (#2466, #2467 scope D): compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's

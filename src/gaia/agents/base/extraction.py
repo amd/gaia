@@ -467,7 +467,7 @@ class ExtractionLedger:
     def render(self):
         parts = []
         for path, result in sorted(self.results.items()):
-            entries, pages, digest = result
+            entries, pages, _digest = result
             parts.append(
                 f"### Extracted inventory: {os.path.basename(path)}\n\n"
                 f"{len(entries)} source occurrences; {pages} pages processed. "
