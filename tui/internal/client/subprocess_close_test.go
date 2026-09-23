@@ -4,15 +4,21 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 	"time"
 )
 
 func TestSubprocessCloseHelper(t *testing.T) {
-	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "--close-helper" {
+	// Scanned, not indexed from the end: spawnArgs appends
+	// BypassPermissionsFlag in bypass mode, which shifts both sentinels and
+	// would silently turn this helper into a no-op the parent only sees as a
+	// turn timeout.
+	flag := slices.Index(os.Args, "--close-helper")
+	if flag < 0 || flag+1 >= len(os.Args) {
 		return
 	}
-	mode := os.Args[len(os.Args)-1]
+	mode := os.Args[flag+1]
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
 		os.Exit(1)

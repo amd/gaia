@@ -27,8 +27,10 @@ var (
 	_ CapabilityReporter      = (*SubprocessClient)(nil)
 )
 
-// closeGrace bounds how long Close() waits for an in-flight turn's reader to
-// finish before giving up on a clean reap.
+// closeGrace bounds each wait in Close(): the in-flight turn's reader, that
+// reader again after a kill, the child's own exit once stdin is closed, and
+// the reap after the kill that follows. A wedged child can therefore hold
+// quit for up to four of these before Close() gives up and reports why.
 const closeGrace = 2 * time.Second
 
 var subprocessLemonadePorts = []string{"13305", "8000"}
