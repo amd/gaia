@@ -17,7 +17,11 @@ import pytest
 
 pytest.importorskip("gaia_agent_chat")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent_chat.agent import (  # noqa: E402
+    ChatAgent,
+    ChatAgentConfig,
+    _imports_gaia_tools,
+)
 from gaia_agent_chat.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
@@ -220,6 +224,88 @@ def test_an_unusable_project_root_is_a_tool_error(
 
     assert result["status"] == "error"
     assert "not a directory" in result["error"]
+
+
+def test_importing_a_gaia_tool_is_refused_with_the_tool_call_path(
+    make_run_python, project, monkeypatch
+):
+    """The snippet is a separate process, so importing a tool can only fail.
+
+    Left to the subprocess this returns a bare ``ImportError``, which reads as
+    a typo worth retrying — the model reissued the same call until the step
+    budget was gone (#4084).
+    """
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(
+        code=(
+            "from gaia import transcribe_media\n"
+            "print(transcribe_media(file_path='x.mp4'))"
+        )
+    )
+
+    assert result["status"] == "error"
+    assert result["has_errors"] is True
+    assert "from gaia import transcribe_media" in result["error"]
+    assert "directly" in result["error"]
+    assert "ImportError" not in result["error"]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "from gaia import transcribe_media",
+        "from gaia.agents.base.tools import tool",
+        "import gaia",
+        "import gaia.agents",
+        "print(1)\nfrom gaia import write_file",
+        "    from gaia import write_file",
+    ],
+)
+def test_gaia_imports_are_detected(code):
+    assert _imports_gaia_tools(code) is not None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "print(1 + 1)",
+        "import json\nprint(json.dumps({'a': 1}))",
+        "from pathlib import Path\nprint(Path('.').resolve())",
+        # A different package whose name merely starts with the same letters.
+        "import gaiatools",
+        "from gaiatools import helper",
+        # Only a mention, not an import.
+        "print('run from gaia import x to see it fail')",
+    ],
+)
+def test_ordinary_snippets_are_not_flagged(code):
+    assert _imports_gaia_tools(code) is None
+
+
+def test_a_flagged_snippet_never_reaches_a_subprocess(
+    make_run_python, project, monkeypatch
+):
+    """Refusing before ``subprocess.run`` is what makes the guard free."""
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    with patch("subprocess.run") as spawn:
+        result = run_python(code="from gaia import transcribe_media")
+
+    assert result["status"] == "error"
+    spawn.assert_not_called()
+
+
+def test_the_docstring_warns_against_importing_tools(make_run_python, project):
+    """The model reasons from the description, so the rule has to live there."""
+    make_run_python(project)
+
+    doc = (_TOOL_REGISTRY["run_python"]["description"] or "").lower()
+
+    assert "from gaia import" in doc
+    assert "directly as a tool" in doc
 
 
 # ---------------------------------------------------------------------------

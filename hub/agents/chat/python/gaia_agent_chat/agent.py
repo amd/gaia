@@ -6,6 +6,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 
 import os
 import platform
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -86,6 +87,21 @@ NOTIFY_DESKTOP_PS_SCRIPT = (
     f"[string]$env:{NOTIFY_MESSAGE_ENV_VAR}, "
     f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
 )
+
+# ``run_python`` puts the project root on PYTHONPATH, so ``import gaia``
+# resolves far enough to fail on the symbol instead of the package — and the
+# raw ImportError reads as a typo worth retrying rather than the wrong path.
+_GAIA_TOOL_IMPORT_PATTERN = re.compile(
+    r"^[ \t]*(?:from[ \t]+gaia(?:\.[\w.]+)?[ \t]+import[ \t]+.*"
+    r"|import[ \t]+gaia(?:\.[\w.]+)?(?![\w.]).*)$",
+    re.MULTILINE,
+)
+
+
+def _imports_gaia_tools(code: str) -> Optional[str]:
+    """The offending line when a snippet tries to import GAIA itself."""
+    match = _GAIA_TOOL_IMPORT_PATTERN.search(code or "")
+    return match.group(0).strip() if match else None
 
 
 @dataclass
@@ -1531,6 +1547,10 @@ No documents are currently indexed.
                 never saved in the workspace. Report numbers from its printed
                 output — do not work them out in your head.
 
+                This runs a plain Python process with no access to your own
+                tools. `from gaia import <tool>` does not work — to use another
+                tool, call it directly as a tool instead of from here.
+
                 Args:
                     code: Python source to run; print() whatever you need back.
                     timeout: Max seconds to wait (default 60)
@@ -1544,6 +1564,21 @@ No documents are currently indexed.
                 import time
 
                 from gaia.agents.base.project_map import resolve_project_root
+
+                offending = _imports_gaia_tools(code)
+                if offending:
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"`{offending}` cannot work here: this snippet runs "
+                            "as a separate Python process with no access to "
+                            "your tools. Call the tool you need directly "
+                            "instead of running it through run_python. Use "
+                            "run_python only for plain Python — arithmetic, "
+                            "parsing, reshaping data you already have."
+                        ),
+                        "has_errors": True,
+                    }
 
                 try:
                     if hasattr(self, "_project_map_root"):
