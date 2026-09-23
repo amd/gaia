@@ -1296,3 +1296,143 @@ def test_limit_is_clamped_on_every_broadened_rung(harness_factory):
 
     assert len(tops) >= 3  # the ladder really did run several rungs
     assert set(tops) == {_MAX_LIMIT}
+
+
+# --------------------------------------------------------------------------
+# recollection search — a non-empty result is not evidence of a correct one
+# --------------------------------------------------------------------------
+
+
+def _graph_message(mid, *, thread=None, subject="Subject"):
+    msg = dict(GRAPH_MESSAGE)
+    msg["id"] = mid
+    msg["conversationId"] = thread or mid
+    msg["subject"] = subject
+    return msg
+
+
+FIELDSTONE = _graph_message(
+    "AAMk-fieldstone",
+    thread="conv-fieldstone",
+    subject="Re: Fieldstone MSA - counter-signature needed before Friday",
+)
+WRONG_ONE = _graph_message(
+    "AAMk-wrong1", thread="conv-wrong1", subject="Contract schedule v2"
+)
+WRONG_TWO = _graph_message(
+    "AAMk-wrong2", thread="conv-wrong2", subject="Schedule of contract exhibits"
+)
+
+
+def _mailbox_by_term(index):
+    """A Graph handler whose ``$search`` term maps to a fixed hit list.
+
+    Honours ``$top`` the way Graph does, so an over-fetch a real mailbox would
+    truncate is truncated here too.
+    """
+    seen = []
+
+    def handler(request):
+        term = (request.url.params.get("$search") or "").strip('"')
+        seen.append(term)
+        top = int(request.url.params.get("$top") or 25)
+        return json_response({"value": index.get(term.lower(), [])[:top]})
+
+    return handler, seen
+
+
+def test_a_non_empty_first_rung_is_not_the_end_of_the_search(harness_factory):
+    """The bug: 2-3 plausible-but-wrong hits look like success and end the search.
+
+    The user's own words match mail they did not mean, so the ladder never
+    runs and the model answers confidently from the wrong thread.
+    """
+    handler, _ = _mailbox_by_term(
+        {
+            "contract schedule": [WRONG_ONE, WRONG_TWO],
+            "contract": [WRONG_ONE, FIELDSTONE],
+            "schedule": [WRONG_TWO],
+        }
+    )
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="contract schedule"))
+
+    assert len(out["attempts"]) > 1
+    assert [m["subject"] for m in out["messages"]] == [
+        "Contract schedule v2",
+        "Schedule of contract exhibits",
+    ]
+    assert any("Fieldstone" in m["subject"] for m in out["alternatives"])
+
+
+def test_broadening_does_not_stop_at_the_first_non_empty_rung(harness_factory):
+    """A rung that returns *something* is not a rung that returns the message."""
+    handler, _ = _mailbox_by_term(
+        {
+            "contract schedule": [WRONG_ONE, WRONG_TWO],
+            "contract": [FIELDSTONE],
+        }
+    )
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="sign off on a contract schedule before the end of the week"
+        )
+    )
+
+    assert any("Fieldstone" in m["subject"] for m in out["messages"])
+    assert out["unverified"] is True
+
+
+def test_results_are_one_hit_per_thread(harness_factory):
+    """One conversation must not spend every result slot."""
+    one_thread = [
+        _graph_message(f"AAMk-t{i}", thread="conv-one", subject="Re: counter-signature")
+        for i in range(5)
+    ]
+    others = [
+        _graph_message(f"AAMk-o{i}", thread=f"conv-o{i}", subject=f"Other {i}")
+        for i in range(4)
+    ]
+    handler, _ = _mailbox_by_term({"counter-signature": one_thread + others})
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="counter-signature", limit=5))
+
+    threads = [m["thread_id"] for m in out["messages"]]
+    assert len(threads) == len(set(threads)) == 5
+    assert out["messages"][0]["thread_message_matches"] == 5
+
+
+def test_results_the_query_never_matched_are_marked_unverified(harness_factory):
+    """A set the tool cannot vouch for says so, and says what to do instead."""
+    handler, _ = _mailbox_by_term({"contract": [WRONG_ONE]})
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="sign off on a contract schedule before the end of the week"
+        )
+    )
+
+    assert out["unverified"] is True
+    assert out["exact_match"] is False
+    assert out["messages"][0]["matched_query"] == "contract"
+    note = out["note"].lower()
+    assert "ask the user" in note
+    # The lexical gap this bug lives in closes only if the model re-queries
+    # with the sender's vocabulary, so the note has to ask for exactly that.
+    assert "search again" in note
+
+
+def test_an_exact_hit_is_never_labelled_unverified(harness_factory):
+    handler, _ = _mailbox_by_term({"flock newsletter": [FIELDSTONE]})
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="flock newsletter"))
+
+    assert out["exact_match"] is True
+    assert out["broadened"] is False
+    assert "unverified" not in out
