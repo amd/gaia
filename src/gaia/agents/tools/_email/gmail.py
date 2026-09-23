@@ -70,6 +70,11 @@ _GMAIL_ENABLE_URL = "https://console.cloud.google.com/apis/library/gmail.googlea
 # The shape Gmail issues for a message id.
 _MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
+# The shape Gmail documents for `errors[].reason` (`accessNotConfigured`) and
+# for `error.status` (`PERMISSION_DENIED`). Anything else means the body isn't
+# the documented error shape and gets dropped.
+_ERROR_REASON_RE = re.compile(r"[A-Za-z0-9_.]{1,64}")
+
 
 def _error_detail(response: httpx.Response) -> tuple:
     """Gmail's structured error fields — a reason token and its remedy link.
@@ -78,12 +83,21 @@ def _error_detail(response: httpx.Response) -> tuple:
     and it ends up in front of a user.
     """
     try:
-        err = (response.json() or {}).get("error") or {}
+        parsed = response.json()
     except ValueError:
         return "", ""
-    errors = err.get("errors") or [{}]
-    first = errors[0] if isinstance(errors[0], dict) else {}
+    # The parsed body, its `error` field, and that field's `errors` list can
+    # each come back as any JSON type, not just the documented one.
+    err = parsed.get("error") if isinstance(parsed, dict) else None
+    if not isinstance(err, dict):
+        return "", ""
+    errors = err.get("errors")
+    first = errors[0] if isinstance(errors, list) and errors else None
+    if not isinstance(first, dict):
+        first = {}
     reason = str(first.get("reason") or err.get("status") or "")
+    if not _ERROR_REASON_RE.fullmatch(reason):
+        reason = ""
     help_url = str(first.get("extendedHelp") or "")
     if not help_url.startswith("https://"):
         help_url = ""
