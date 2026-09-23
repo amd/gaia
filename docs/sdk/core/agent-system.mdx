@@ -910,15 +910,48 @@ summary. Other unrecognized runners remain `unverified`.
 
 Before the answer goes out, the loop also checks it against the same record. An
 answer that reports a test outcome (`111 passed`, "all tests pass") when no test
-run passed after the last file edit gets one correction naming the gap; the
-second answer is emitted as written, with the footer beside it. A turn on its
-last step gets no correction.
+run passed after the last file edit gets one correction naming the gap. If the
+claim remains unsupported, or no correction step remains, the framework replaces
+it with an explicit incomplete result. Unsupported claims never become successful
+results merely because the correction budget ran out.
 
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix reads `verified`; one that passed
 and then failed after an edit reads `ran and did not pass`. Only a rerun of the
 same command replaces an earlier run: if `pytest tests/` failed and
 `pytest tests/test_cart.py` then passed, the line still reports the failure.
+
+### Saved output and cleanup evidence
+
+File completion is checked separately from the test/lint/build footer. A save
+claim must name an output backed by this turn's successful write to that path;
+a transcript or screenshot written elsewhere cannot satisfy it. Explicit save
+requests are checked even when the answer silently omits the save. Negated
+instructions and how-to questions do not create save obligations.
+
+Text deliverables must be read back after their latest mutation. A read before
+a rewrite, a file listing, a binary metadata summary, or only the last page is
+insufficient. `read_file` pages and archived `read_tool_output` continuations
+must cover the complete output. Source-code edits without a save instruction
+or claim retain the existing test-verification policy. Binary outputs require
+path-specific write evidence but are not forced through a text reader.
+
+For Python and shell executors, the loop compares file metadata before and after
+the call for requested and previously tracked targets, plus literal Python path
+candidates. These probes respect the read boundary and never read file contents.
+A successful executor call alone is not proof of a save; a failed call that
+changed an output invalidates earlier evidence. Paths computed dynamically and
+not already tracked require an explicit destination in the request or a file
+write tool that returns its destination. Cached transcripts are not new writes.
+Cleanup claims likewise need concrete paths observed disappearing during the
+turn; a general statement that everything was cleaned up is not proof.
+
+The loop offers one bounded correction for missing artifact evidence. If work or
+readback remains missing, the emitted answer names the gaps and `process_query`
+returns `status: "incomplete"` with `completion_gaps`. A blocked save cannot be
+reported as success on the last step or after a repeated unsupported answer.
+Readback establishes observed output; it does **not** measure semantic correctness
+or recall when extracting every item from a long document.
 
 The statement rides in the emitted answer, so it reaches every surface — the
 CLI console, the SSE `answer` event, and `process_query`'s return value — and

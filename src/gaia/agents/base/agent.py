@@ -39,6 +39,7 @@ from typing import (
     Union,
 )
 
+from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.project_map import resolve_project_root
@@ -768,27 +769,6 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
 # Fabricated-save guard (#4010): a final answer that asserts a file was
 # written when no write tool ran this turn.
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
-# File-writing tools the guard can name in its correction. Presence of one of
-# these in the registry is what makes the claim checkable at all.
-_FILE_WRITE_TOOLS: Tuple[str, ...] = (
-    "write_file",
-    "write_markdown_file",
-    "write_python_file",
-    "edit_file",
-)
-# Tools whose completed call makes a save claim believable. Two sources: the
-# confirmation set covers the write/execute tools (minus the one entry that
-# merely spawns a notifier), and the names below write a file as a side effect
-# of doing something else, so they are gated on cost rather than on danger and
-# never reach that set.
-_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
-    "notify_desktop"
-} | {
-    "take_screenshot",
-    "text_to_speech",
-    "transcribe_media",
-    "refine_transcript",
-}
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
 # Adverbs the model sprinkles around the verb. They carry no meaning for the
 # guard, but every slot they can occupy has to be spelled out or the claim
@@ -4185,19 +4165,6 @@ Do NOT wrap conversational replies in JSON.
             return bool(flag)
         return tool_name.startswith("mcp_")
 
-    def _tool_can_touch_disk(self, tool_name: str) -> bool:
-        """Whether a call that already ran could have put bytes on disk.
-
-        Deliberately not ``_tool_requires_confirmation``: that one exempts a
-        pre-authorized write and treats an unclassified ``mcp_`` tool as
-        consequential, and both of those readings are inverted here. A
-        third-party tool counts only when it declared the flag itself.
-        """
-        if tool_name in _DISK_TOUCHING_TOOLS:
-            return True
-        entry = self._tools_registry.get(tool_name) or {}
-        return bool(entry.get("requires_confirmation"))
-
     def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
         """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
         against this turn's running total. Called from the single success path
@@ -4225,13 +4192,24 @@ Do NOT wrap conversational replies in JSON.
         ``_execute_tool`` has — refusals, unknown names, declined confirmations
         — so a refused call's latency is never misfiled as agent overhead.
         """
+        evidence = getattr(self, "_completion_evidence", None)
+        before = (
+            evidence.snapshot(
+                tool_name,
+                tool_args,
+                getattr(self, "path_validator", None)
+                or getattr(self, "_path_validator", None),
+            )
+            if evidence is not None
+            else {}
+        )
         recorder = getattr(self, "_turn_recorder", None)
         # Only the outermost call is timed. A tool body may call another tool
         # (CodeAgent's orchestration does); timing both would count the inner
         # one's seconds twice and push tool_s past the turn's own total.
         if recorder is None or getattr(self, "_tool_timing_depth", 0):
             result = self._execute_tool(tool_name, tool_args)
-            self._note_verification_signal(tool_name, tool_args, result)
+            self._note_verification_signal(tool_name, tool_args, result, before=before)
             return result
 
         started = time.perf_counter()
@@ -4243,7 +4221,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
-            self._note_verification_signal(tool_name, tool_args, result)
+            self._note_verification_signal(tool_name, tool_args, result, before=before)
             return result
         finally:
             self._tool_timing_depth = 0
@@ -4847,6 +4825,12 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if self.debug:
                     print(f"[DEBUG] Tool result truncated from {len(result_str)} chars")
+
+        evidence = getattr(self, "_completion_evidence", None)
+        if evidence is not None and not self._is_error_result(tool_result):
+            evidence.delivered(
+                tool_name, tool_args or {}, tool_result, truncated_result
+            )
 
         # Add to conversation
         tool_entry: Dict[str, Any] = {
@@ -5486,7 +5470,12 @@ Do NOT wrap conversational replies in JSON.
         return answer
 
     def _note_verification_signal(
-        self, tool_name: str, tool_args: Dict[str, Any], result: Any
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        result: Any,
+        *,
+        before: Optional[dict] = None,
     ) -> None:
         """Record one dispatched tool call for this turn's verification scope.
 
@@ -5509,6 +5498,16 @@ Do NOT wrap conversational replies in JSON.
         record["args"] = tool_args if isinstance(tool_args, dict) else {}
         record["output"] = check_output(tool_name, result)
         log.append(record)
+        evidence = getattr(self, "_completion_evidence", None)
+        if evidence is not None:
+            evidence.record(
+                tool_name,
+                record["args"],
+                result,
+                successful=record["ran"] and not record["failed"],
+                before=before,
+                executed=record["ran"],
+            )
 
     def _verification_project_root(self) -> Optional[str]:
         """The project this turn works in, from the shared project-root resolver."""
@@ -5663,7 +5662,8 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         verify_after_change_reprompted = False
         test_claim_corrections = 0
-        file_write_claim_reprompts = 0
+        completion_corrections = 0
+        completion_gaps = []
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -5693,6 +5693,9 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        self._completion_evidence = CompletionEvidence(
+            user_input, self._verification_project_root()
+        )
         # Files edited this turn, so an empty response can name what it left
         # behind (#3733). Per-turn: an instance persists across queries.
         self._turn_file_edits: List[Dict[str, Any]] = []
@@ -7314,6 +7317,7 @@ Do NOT wrap conversational replies in JSON.
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
                 answer_candidate = parsed["answer"]
+                completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
                 # calling index_document but before issuing a query tool call.
@@ -7605,50 +7609,6 @@ Do NOT wrap conversational replies in JSON.
                     )
                     continue
 
-                # Fabricated-save guard: the answer says a file was written but
-                # no tool that can touch disk ran this turn, so nothing was.
-                if (
-                    file_write_claim_reprompts < _MAX_FILE_WRITE_CLAIM_REPROMPTS
-                    and steps_taken < steps_limit - 1
-                    and _claims_file_write(answer_candidate)
-                ):
-                    _registry = self._tools_registry
-                    _write_tool = next(
-                        (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
-                    )
-                    # Read the execution log, not tool_call_log: the latter is
-                    # appended before the call runs, so a refused, errored or
-                    # declined write would silence the guard on the exact harm
-                    # it exists to catch.
-                    _wrote_this_turn = any(
-                        _entry["ran"]
-                        and not _entry["failed"]
-                        and self._tool_can_touch_disk(_entry["tool"])
-                        for _entry in (self._turn_tool_executions or [])
-                    )
-                    if _write_tool and not _wrote_this_turn:
-                        file_write_claim_reprompts += 1
-                        logger.debug(
-                            "[WORKFLOW] Blocking unbacked file-write claim as final "
-                            "answer: %s",
-                            answer_candidate[:120],
-                        )
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "SYSTEM: Your answer says a file was saved, but no "
-                                    "file-writing tool ran in this turn — nothing was "
-                                    "written to disk. If the file is still needed, call "
-                                    f"`{_write_tool}` now with the full content and the "
-                                    "exact path. If you mean a file written earlier in "
-                                    "the conversation, say that explicitly instead of "
-                                    "claiming you just saved it."
-                                ),
-                            }
-                        )
-                        continue
-
                 # Capability-claim-without-attempt guard: catch responses that declare
                 # a tool's availability or unavailability (e.g. "I can generate images
                 # when the --sd flag is active") without having tried the tool first.
@@ -7811,7 +7771,7 @@ Do NOT wrap conversational replies in JSON.
                     )
                     if not can_correct_claim:
                         logger.warning(
-                            "[WORKFLOW] Emitting unsupported test claim %r (%s): "
+                            "[WORKFLOW] Rejecting unsupported test claim %r (%s): "
                             "%d/%d corrections used, step %d/%d",
                             claim,
                             why,
@@ -7820,6 +7780,8 @@ Do NOT wrap conversational replies in JSON.
                             steps_taken,
                             steps_limit,
                         )
+                        completion_gaps = [why + "."]
+                        answer_candidate = incomplete_answer(completion_gaps)
                     else:
                         test_claim_corrections += 1
                         logger.debug(
@@ -7839,11 +7801,52 @@ Do NOT wrap conversational replies in JSON.
                         )
                         continue
 
-                # Scope line goes on AFTER the subclass hook: a subclass that
-                # rewrites the answer must not be able to drop it (#3376).
-                final_answer = self._with_verification_scope(
-                    self.finalize_answer(answer_candidate, conversation)
+                answer_candidate = self.finalize_answer(answer_candidate, conversation)
+                artifact_gaps = self._completion_evidence.gaps(
+                    answer_candidate, _claims_file_write
                 )
+                if artifact_gaps:
+                    if (
+                        completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                        and steps_taken < steps_limit - 1
+                        and any(
+                            name in self._tools_registry
+                            for name in (
+                                "write_file",
+                                "write_python_file",
+                                "write_markdown_file",
+                                "edit_file",
+                                "read_file",
+                                "run_python",
+                                "load_tools",
+                            )
+                        )
+                    ):
+                        completion_corrections += 1
+                        correction = (
+                            "[check:completion] "
+                            + " ".join(artifact_gaps)
+                            + " Use `write_file` for a missing requested save, then "
+                            "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
+                            "continuation pages. Report only contents observed in "
+                            "tool results. An unrelated tool or file is not evidence."
+                        )
+                        messages.append({"role": "user", "content": correction})
+                        conversation.append({"role": "user", "content": correction})
+                        continue
+                    completion_gaps.extend(artifact_gaps)
+                # Validate after subclass rewriting, before console/SSE emission.
+                final_test_claim = unsupported_test_claim(
+                    answer_candidate, self._turn_tool_executions
+                )
+                if (
+                    final_test_claim
+                    and final_test_claim[1] + "." not in completion_gaps
+                ):
+                    completion_gaps.append(final_test_claim[1] + ".")
+                if completion_gaps:
+                    answer_candidate = incomplete_answer(completion_gaps)
+                final_answer = self._with_verification_scope(answer_candidate)
                 verification_scope_applied = True
                 self.execution_state = self.STATE_COMPLETION
                 # Compute the real token total BEFORE printing the answer so it
@@ -7943,6 +7946,18 @@ Do NOT wrap conversational replies in JSON.
             conversation, self._tool_reported_usage
         )
 
+        if not verification_scope_applied and not account_refused:
+            completion_gaps = self._completion_evidence.gaps(
+                final_answer or "", _claims_file_write
+            )
+            unsupported = unsupported_test_claim(
+                final_answer or "", self._turn_tool_executions
+            )
+            if unsupported:
+                completion_gaps.append(unsupported[1] + ".")
+            if completion_gaps:
+                final_answer = incomplete_answer(completion_gaps)
+
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
         # overflow, typed Lemonade error, parse give-up, loop-break summary —
@@ -7960,9 +7975,13 @@ Do NOT wrap conversational replies in JSON.
         )  # Check for non-empty answer
         result = {
             "status": (
-                "success"
-                if has_valid_answer and not has_errors
-                else ("failed" if has_errors else "incomplete")
+                "incomplete"
+                if completion_gaps
+                else (
+                    "success"
+                    if has_valid_answer and not has_errors
+                    else ("failed" if has_errors else "incomplete")
+                )
             ),
             "result": (
                 final_answer
@@ -7984,6 +8003,7 @@ Do NOT wrap conversational replies in JSON.
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
             "tool_schema": self._trace_tool_schema(),
+            "completion_gaps": completion_gaps,
         }
 
         # Catches the exits that never printed an answer (max steps). Sealed
