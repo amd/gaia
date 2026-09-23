@@ -2425,6 +2425,8 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 
 Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
 
+The running daemon reloads schedules every second, so adding, pausing, resuming, removing, or editing a schedule does not require a restart. Pausing or removing a schedule prevents future runs; it does not interrupt a run already in progress.
+
 ```bash
 gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 ```

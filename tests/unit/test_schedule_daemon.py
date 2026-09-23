@@ -99,6 +99,37 @@ class TestBuildScheduler:
         scheduler = daemon.build_scheduler(store)
         assert {job.id for job in scheduler.get_jobs()} == {"a", "b"}
 
+    def test_refresh_tracks_add_pause_resume_and_remove(self, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        scheduler = daemon.build_scheduler(store)
+        store.set_enabled("a", False)
+        store.add(_make_schedule("b"))
+        daemon.refresh_schedules(scheduler, store)
+        assert {job.id for job in scheduler.get_jobs()} == {"b"}
+
+        store.set_enabled("a", True)
+        store.remove("b")
+        daemon.refresh_schedules(scheduler, store)
+        assert {job.id for job in scheduler.get_jobs()} == {"a"}
+
+    def test_refresh_updates_cron_without_resetting_unchanged_jobs(self, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            original_fire = scheduler.get_job("a").next_run_time
+            daemon.refresh_schedules(scheduler, store)
+            assert scheduler.get_job("a").next_run_time == original_fire
+
+            schedules = store.load()
+            schedules["a"].cron = "0 17 * * *"
+            store.save(schedules)
+            daemon.refresh_schedules(scheduler, store)
+            assert scheduler.get_job("a").next_run_time.hour == 17
+            assert scheduler.get_job("a").args[0].cron == "0 17 * * *"
+        finally:
+            scheduler.shutdown()
+
 
 # ===========================================================================
 # 3. _job — success and failure paths
@@ -106,6 +137,44 @@ class TestBuildScheduler:
 
 
 class TestJob:
+
+    @pytest.mark.parametrize("change", ["pause", "remove"])
+    def test_does_not_fire_after_pause_or_remove(self, mocker, tmp_path, change):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        job = daemon.build_scheduler(store).get_job("a")
+        if change == "pause":
+            store.set_enabled("a", False)
+        else:
+            store.remove("a")
+        fire = mocker.patch.object(runner, "fire")
+
+        job.func(*job.args)
+
+        fire.assert_not_called()
+
+    def test_fires_current_prompt_after_store_edit(self, mocker, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        job = daemon.build_scheduler(store).get_job("a")
+        schedules = store.load()
+        schedules["a"].prompt = "updated prompt"
+        store.save(schedules)
+        fire = mocker.patch.object(runner, "fire")
+
+        job.func(*job.args)
+
+        assert fire.call_args.args[0].prompt == "updated prompt"
+
+    def test_does_not_fire_old_cron_before_refresh(self, mocker, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        job = daemon.build_scheduler(store).get_job("a")
+        schedules = store.load()
+        schedules["a"].cron = "0 17 * * *"
+        store.save(schedules)
+        fire = mocker.patch.object(runner, "fire")
+
+        job.func(*job.args)
+
+        fire.assert_not_called()
 
     def test_success_marks_run(self, mocker, tmp_path):
         store = _store_with(tmp_path, _make_schedule("a"))
