@@ -201,6 +201,20 @@ class FileEvidence:
         self.observed = self.end is not None and covered >= self.end
 
 
+def _normalize_key(path: str, base: str) -> str:
+    """Path identity used to correlate reads/writes across process-wide Windows
+    and POSIX roots -- shared so every ledger normalizes the same path the
+    same way rather than each constructing its own evidence object just to
+    call this."""
+    if ntpath.isabs(path) and ("\\" in path or ntpath.splitdrive(path)[0]):
+        return ntpath.normcase(ntpath.normpath(path))
+    if ntpath.splitdrive(base)[0]:
+        return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
+    return os.path.normcase(
+        os.path.abspath(os.path.join(base, os.path.expanduser(path)))
+    )
+
+
 class CompletionEvidence:
     """Evidence for this turn, with no reads outside the tool permission boundary."""
 
@@ -216,14 +230,7 @@ class CompletionEvidence:
         self.requested, self.save_requested = save_obligations(query)
 
     def key(self, path: str, root: str | None = None) -> str:
-        base = root or self.root
-        if ntpath.isabs(path) and ("\\" in path or ntpath.splitdrive(path)[0]):
-            return ntpath.normcase(ntpath.normpath(path))
-        if ntpath.splitdrive(base)[0]:
-            return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
-        return os.path.normcase(
-            os.path.abspath(os.path.join(base, os.path.expanduser(path)))
-        )
+        return _normalize_key(path, root or self.root)
 
     def _stamp(self, path: str) -> tuple | None | object:
         try:
@@ -393,9 +400,6 @@ class CompletionEvidence:
             return
         if data.get("truncated") or data.get("content") != content:
             return
-        start = raw.get("offset", 0)
-        end = start + len(content)
-        total = None if raw.get("next_offset") is not None else end
         item.page(start, end, total)
 
     def gaps(self, answer: str, claims_file_write: Callable[[str], bool]) -> list[str]:

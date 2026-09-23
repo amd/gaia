@@ -125,7 +125,7 @@ def main():
     ]
     incorrect_fields = []
     for i, name in enumerate(expected, 1):
-        for label, records in (
+        for result_type, records in (
             ("extracted", [e.text for e in items]),
             ("saved", [e.get("text", "") for e in saved if isinstance(e, dict)]),
         ):
@@ -135,7 +135,7 @@ def main():
                 or f"reps: {i+3};" not in matches[0]
                 or f"cue: keep marker violet-{i:02d} visible" not in matches[0]
             ):
-                incorrect_fields.append(f"{label}:{name}")
+                incorrect_fields.append(f"{result_type}:{name}")
     events = agent._memory_store.get_tool_history("extract_document_items")
     recall = agent._memory_store.search_conversations(
         "Zephyr", context="extraction-validation", limit=5

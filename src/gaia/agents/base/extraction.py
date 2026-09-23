@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 
 from gaia.agents.base.completion import (
-    CompletionEvidence,
+    _normalize_key,
     destination_paths,
     save_obligations,
 )
@@ -395,11 +395,39 @@ class ExtractionLedger:
             else ()
         )
         self.root = root or os.getcwd()
-        self.enabled = exhaustive_request(query) and bool(
-            re.search(
-                r"\b(?:document|file|transcript|workshop|meeting|log|attached|source)\b|\.[a-zA-Z]{1,5}\b",
-                query,
-                re.I,
+        saves, _ = save_obligations(query)
+        self.destinations = {self.key(p) for p in saves}
+        source_clause = re.split(r"\b(?:save|write|export|store)\b", query, flags=re.I)[
+            0
+        ]
+        candidate_paths = destination_paths(source_clause)
+        # A code-symbol query ("list all functions in app.py") has no
+        # destination preposition to anchor destination_paths on, so its
+        # no-anchor fallback scans the whole clause and picks up the source
+        # file itself as if it were named as an extraction destination --
+        # code-index/read-file tools handle that file, this ledger never
+        # will. If every candidate is source code and nothing was actually
+        # asked to be saved, this isn't a document-extraction turn at all
+        # (#4145 field report); leaving it enabled makes gaps() demand a
+        # source this ledger can never observe.
+        non_code_candidates = [
+            p
+            for p in candidate_paths
+            if os.path.splitext(p)[1].lower() not in _CODE_EXTENSIONS
+        ]
+        self.enabled = (
+            exhaustive_request(query)
+            and bool(
+                re.search(
+                    r"\b(?:document|file|transcript|workshop|meeting|log|attached|source)\b|\.[a-zA-Z]{1,5}\b",
+                    query,
+                    re.I,
+                )
+            )
+            and (
+                bool(non_code_candidates)
+                or bool(self.destinations)
+                or not candidate_paths
             )
         )
         self.sources = set()
@@ -407,28 +435,16 @@ class ExtractionLedger:
         self.errors = {}
         self.lock = threading.Lock()
         self.output_errors = {}
-        saves, _ = save_obligations(query)
-        self.destinations = {self.key(p) for p in saves}
-        source_clause = re.split(r"\b(?:save|write|export|store)\b", query, flags=re.I)[
-            0
-        ]
         self.requested = {
             self.key(p)
-            for p in destination_paths(source_clause)
+            for p in candidate_paths
             if self.key(p) not in self.destinations
             and (os.path.splitext(p)[1] or "/" in p or "\\" in p)
-            # A code-symbol query ("list all functions in app.py") has no
-            # destination preposition to anchor destination_paths on, so its
-            # no-anchor fallback scans the whole clause and picks up the
-            # source file itself as if it were named as an extraction
-            # destination -- code-index/read-file tools handle that file, this
-            # ledger never will, so demanding it never resolves (#4145 field
-            # report). A real destination is never source code.
             and os.path.splitext(p)[1].lower() not in _CODE_EXTENSIONS
         }
 
     def key(self, path):
-        return CompletionEvidence("", self.root).key(path)
+        return _normalize_key(path, self.root)
 
     def activate_skill(self, instructions):
         if exhaustive_request(instructions):

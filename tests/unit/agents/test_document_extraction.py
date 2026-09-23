@@ -495,6 +495,7 @@ def test_code_symbol_queries_do_not_demand_the_source_file_as_a_destination(
     assert state.key("app.py") not in state.requested
     assert state.key("models.py") not in state.requested
     assert state.key("code.py") not in state.requested
+    assert state.gaps() == []
 
 
 def test_combined_source_and_save_request_keeps_all_sources(tmp_path):
