@@ -33,25 +33,6 @@ export function isInstalling(status?: InstallStatus | null): boolean {
 }
 
 /**
- * Compatibility level for the indicator dot. Falls back to ``compatible`` when
- * the catalog didn't supply a verdict (local-only agents are always runnable).
- */
-export function compatLevel(
-    agent: AgentInfo,
-): 'compatible' | 'warning' | 'incompatible' {
-    return agent.compatibility?.level ?? 'compatible';
-}
-
-/** Human label for a compatibility level. */
-export function compatLabel(level: 'compatible' | 'warning' | 'incompatible'): string {
-    switch (level) {
-        case 'compatible': return 'Compatible with your system';
-        case 'warning': return 'May run with limitations';
-        case 'incompatible': return 'Not compatible with your system';
-    }
-}
-
-/**
  * Merge catalog entries into the locally-registered agent list so installed
  * cards can show versions and update badges. Matches by id; when the catalog
  * marks an agent ``update_available`` (or reports a newer ``latest_version``),
@@ -73,7 +54,6 @@ export function mergeCatalogStatus(
             // never as ``version`` — that key never appears on the wire.
             version: cat.installed_version ?? agent.version,
             latest_version: cat.latest_version,
-            compatibility: cat.compatibility ?? agent.compatibility,
             security_tier: cat.security_tier ?? agent.security_tier,
             deprecated: cat.deprecated ?? agent.deprecated,
             status: hasUpdate ? 'update_available' : 'installed',

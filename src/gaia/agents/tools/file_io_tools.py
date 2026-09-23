@@ -528,7 +528,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(file_path)):
-                    reason = f"Access denied: {file_path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {file_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(file_path))}"
+                    )
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
@@ -663,7 +666,8 @@ class FileIOToolsMixin:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Access denied: {directory} is not in allowed paths",
+                        "error": f"Access denied: {directory} is not in allowed paths."
+                        f"{path_validator.scratch_hint(directory)}",
                     }
 
                 results = []
@@ -1007,7 +1011,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(path)):
-                    reason = f"Access denied: {path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(path))}"
+                    )
                     path_validator.audit_write("edit", str(path), 0, "denied", reason)
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
@@ -1142,7 +1149,8 @@ class FileIOToolsMixin:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Access denied: {gaia_path} is not in allowed paths",
+                        "error": f"Access denied: {gaia_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(gaia_path)}",
                     }
 
                 # Start building content
@@ -1247,7 +1255,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(file_path)):
-                    reason = f"Access denied: {file_path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {file_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(file_path))}"
+                    )
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )

@@ -1871,10 +1871,15 @@ class ShellToolsMixin:
                         }
 
                     if not self._path_allowed(working_directory):
+                        hint = (
+                            self.path_validator.scratch_hint(working_directory)
+                            if hasattr(self, "path_validator")
+                            else ""
+                        )
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Access denied: {working_directory} is not in allowed paths",
+                            "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
                             "has_errors": True,
                         }
 
