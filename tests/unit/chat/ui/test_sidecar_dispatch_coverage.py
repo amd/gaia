@@ -15,7 +15,10 @@ Three sets have to agree, and nothing used to check that they did:
   chat dispatch admits it   -> gaia.ui._chat_helpers._SIDECAR_AGENT_TYPES
 """
 
+from unittest.mock import patch
+
 import pytest
+from fastapi import HTTPException
 
 from gaia.agents.registry import AgentRegistration
 from gaia.daemon.sidecars.spec import builtin_specs
@@ -31,12 +34,16 @@ class _Registry:
     def __init__(self, reg=None):
         self._reg = reg
         self.load_error = None
+        self.agents = []
 
     def get(self, agent_id):
         return self._reg
 
     def get_load_error(self, agent_id):
         return self.load_error
+
+    def list(self):
+        return self.agents
 
 
 def _registration(agent_id, *, is_sidecar):
@@ -72,6 +79,25 @@ def test_every_supervised_sidecar_is_admitted_by_chat_dispatch(agent_id):
     registry = _Registry(_registration(agent_id, is_sidecar=True))
     assert _agent_type_unknown(agent_id, registry) is False
     assert _should_relay_to_sidecar(agent_id, registry) is True
+
+
+def test_the_unknown_agent_message_does_not_contradict_itself():
+    """An uninstalled flagship is rejected as unknown, so it must not also be
+    listed among the ids that resolve."""
+    from gaia.ui.routers.sessions import _reject_unknown_agent_type
+
+    registry = _Registry(None)
+    registry.agents = []
+    with patch("gaia.ui.routers.sessions.get_agent_registry", return_value=registry):
+        with pytest.raises(HTTPException) as exc:
+            _reject_unknown_agent_type("gaia")
+
+    detail = exc.value.detail
+    assert "Unknown agent_type 'gaia'" in detail
+    listed = detail.split("Registered agent ids: ")[1].split(".")[0]
+    assert "gaia" not in listed, f"named as unknown and registered at once: {listed}"
+    # Email still belongs there — its relay needs no registration.
+    assert "email" in listed
 
 
 def test_uninstalled_flagship_says_so_rather_than_failing_at_the_daemon():
@@ -113,11 +139,15 @@ class TestRelayDecision:
         registry = _Registry(_registration("gaia", is_sidecar=False))
         assert _should_relay_to_sidecar("gaia", registry) is False
 
-    def test_flagship_with_no_registration_relays(self):
+    # The two below pin defence in depth, not a reachable path:
+    # _agent_type_unknown rejects an unresolvable flagship before dispatch
+    # (see test_uninstalled_flagship_says_so_rather_than_failing_at_the_daemon).
+    # They keep this function correct on its own terms if that order changes.
+    def test_flagship_with_no_registration_would_relay(self):
         # The daemon can fetch and start a sidecar the registry never saw.
         assert _should_relay_to_sidecar("gaia", _Registry(None)) is True
 
-    def test_a_wheel_that_failed_to_import_reports_that_instead(self):
+    def test_a_wheel_that_failed_to_import_would_report_that_instead(self):
         """The registry knows WHY it is missing. Relaying would swap that
         answer for whatever the daemon says about a sidecar nobody installed."""
         registry = _Registry(None)

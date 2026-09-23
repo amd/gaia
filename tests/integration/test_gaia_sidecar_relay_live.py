@@ -19,11 +19,11 @@ A wrong prefix, a 422 from an unexpected body field (both sidecar request
 models are ``extra="forbid"``), or a contract floor set above what ships all
 fail HERE rather than in front of a user.
 
-Skipped unless the flagship package and uvicorn are importable. The query leg needs a
-working model backend; it is deliberately NOT gated on ``/init`` saying ready,
-because that probe reports unreachable against an auth-protected Lemonade
-that answers ``/query`` normally — which is why the flagship treats readiness
-as advisory.
+Skipped unless the flagship package and uvicorn are importable. The query leg needs a working model backend, so it takes ``require_lemonade``
+and skips without one. It is deliberately NOT gated on ``/init`` saying ready:
+that probe reports unreachable against an auth-protected Lemonade that answers
+``/query`` normally, which is exactly why the flagship treats readiness as
+advisory.
 """
 
 import importlib.util
@@ -97,7 +97,7 @@ def test_init_answers_the_readiness_contract(live_gaia_proxy):
         assert body.get("hint"), "a not-ready answer must say what to do next"
 
 
-def test_query_relays_to_a_terminal_answer(live_gaia_proxy):
+def test_query_relays_to_a_terminal_answer(require_lemonade, live_gaia_proxy):
     """The whole path: the body the relay builds is accepted, the SSE frames
     parse, and the run ends with exactly one terminal UI event."""
     handler = _Handler()

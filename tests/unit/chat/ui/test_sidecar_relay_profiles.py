@@ -6,12 +6,21 @@ Two jobs:
 
 - pin the behaviour that differs per agent (contract floor, copy, session_id,
   the ``/v1/<agent>`` prefix the proxy builds),
-- keep the GAIA tool-label and mutating-tool sets honest: a name that no tool
-  actually registers is a label that will never render, so the map rots
-  silently. Guarded by scanning the real ``@tool`` declarations.
+- keep the GAIA tool-label and mutating-tool sets honest, with two guards that
+  check different things:
+
+  * a repo-wide ``@tool`` scan, which runs everywhere and catches a name that
+    exists nowhere at all (a typo, or a renamed tool);
+  * a comparison against the flagship's REAL registry, which is the one that
+    catches composition drift — a tool the agent registers but the maps never
+    heard of, and an entry naming a tool the agent does not compose. The repo
+    scan cannot see either, because both names exist somewhere in the tree.
+    It needs the agent package, so it skips without it and runs in the
+    wheel-installed CI lane (``test_gaia_agent.yml``).
 """
 
 import ast
+import importlib.util
 import threading
 from pathlib import Path
 
@@ -95,6 +104,7 @@ def _registered_tool_names() -> set:
     """
     names = set()
     roots = [
+        "src/gaia/agents/base",
         "src/gaia/agents/tools",
         "src/gaia/sd",
         "src/gaia/vlm",
@@ -123,7 +133,14 @@ def _registered_tool_names() -> set:
                     _is_tool_decorator(d) for d in node.decorator_list
                 ):
                     names.add(node.name)
-    return names
+    return names | _PROGRAMMATIC_TOOLS
+
+
+#: Registered by a plain closure rather than the ``@tool`` decorator, so no
+#: decorator scan can see them. Kept explicit and tiny: a growing list here
+#: means the scan is covering less and less of the real surface.
+#: ``read_tool_output`` — gaia.agents.base.agent._register_output_reader.
+_PROGRAMMATIC_TOOLS = frozenset({"read_tool_output"})
 
 
 #: Tools whose effects the user must be able to see scroll past — arbitrary
@@ -145,7 +162,10 @@ _MUST_BE_MUTATING = frozenset(
 
 class TestGaiaToolMapsAreReal:
     """A label keyed on a tool that does not exist never renders; a mutating
-    entry that does not exist silently stops warning about a real write."""
+    entry that does not exist silently stops warning about a real write.
+
+    Repo-wide scan: catches a name that is not a tool ANYWHERE. See
+    ``TestGaiaToolMapsMatchTheFlagship`` for the stronger check."""
 
     def test_repo_scan_finds_tools_at_all(self):
         # Guards the guard: a broken scan would make both tests below vacuous.
@@ -259,12 +279,19 @@ class TestGaiaDispatch:
         ]
         assert "email" not in handler.events[0]["content"].lower()
 
-    def test_not_ready_warns_but_still_runs_the_turn(self, monkeypatch):
-        """The flagship's /init is a probe, not a gate: it reports unreachable
-        against an auth-protected Lemonade that answers /query fine, and
-        halting on that would kill a working agent."""
-        handle = _FakeHandle(init_result=(503, {"hint": "Lemonade is not running"}))
-        _, calls = self._patch(monkeypatch, handle)
+    def _init_body(self, *, reachable, present=True, compatible=True, hint="why"):
+        return {
+            "ready": False,
+            "lemonade": {"reachable": reachable, "compatible": compatible},
+            "model": {"present": present},
+            "hint": hint,
+        }
+
+    def test_unreachable_lemonade_warns_but_still_runs_the_turn(self, monkeypatch):
+        """The one cause worth continuing past: the probe reports unreachable
+        against an auth-protected Lemonade that answers /query fine."""
+        body = self._init_body(reachable=False, hint="Lemonade is not reachable")
+        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
         handler = _FakeSSEHandler()
         request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
 
@@ -272,12 +299,60 @@ class TestGaiaDispatch:
 
         assert len(calls) == 1, "a not-ready probe must not cancel the turn"
         assert len(handler.events) == 1
-        message = handler.events[0]["message"]
         assert handler.events[0]["type"] == "status"
+        message = handler.events[0]["message"]
         # Framed as a probe result, not asserted as fact — it is wrong often
         # enough that this path exists at all.
         assert "Readiness check reported" in message
-        assert "Lemonade is not running" in message
+        assert "Lemonade is not reachable" in message
+
+    def test_a_missing_model_still_blocks(self, monkeypatch):
+        """Not a false negative: the server answered and said the model is not
+        there. Proceeding fails deeper with a worse message than the hint."""
+        body = self._init_body(
+            reachable=True, present=False, hint="The model is not downloaded"
+        )
+        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        assert calls == []
+        assert handler.events[0]["type"] == "agent_error"
+        assert "The model is not downloaded" in handler.events[0]["content"]
+
+    def test_an_incompatible_lemonade_still_blocks(self, monkeypatch):
+        body = self._init_body(
+            reachable=True, compatible=False, hint="Lemonade 10.1 is too old"
+        )
+        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        assert calls == []
+        assert handler.events[0]["type"] == "agent_error"
+
+    def test_a_stale_start_command_is_replaced_with_this_hosts_answer(
+        self, monkeypatch
+    ):
+        """An older agent package still says `lemonade-server serve`, a CLI
+        Lemonade 10.7 removed. Relaying it verbatim hands the user a command
+        that does not exist."""
+        body = self._init_body(
+            reachable=False,
+            hint="not reachable — start it with `lemonade-server serve`",
+        )
+        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        assert len(calls) == 1
+        assert "lemonade-server serve" not in handler.events[0]["message"]
 
     def test_email_not_ready_still_blocks(self, monkeypatch):
         """Email's /init IS a gate — provisioning is a step the user finishes
@@ -342,14 +417,19 @@ class TestSessionIdGating:
 
 class TestCopyIsAgentSpecific:
     def test_stream_ended_message_names_gaia(self):
-        msg = relay_module._stream_ended_message(GAIA_PROFILE)
-        assert msg.startswith("GAIA agent stream ended")
+        assert GAIA_PROFILE.stream_ended_message.startswith("GAIA agent stream ended")
 
     def test_email_keeps_its_pinned_string(self):
-        assert (
-            relay_module._stream_ended_message(EMAIL_PROFILE)
-            == relay_module.STREAM_ENDED_UNEXPECTEDLY
+        assert EMAIL_PROFILE.stream_ended_message == (
+            relay_module.STREAM_ENDED_UNEXPECTEDLY
         )
+
+    def test_the_lemonade_hint_names_the_right_agent(self):
+        """It is appended to terminal errors; the flagship's must not send the
+        reader to the email agent."""
+        assert "GAIA agent" in GAIA_PROFILE.lemonade_hint
+        assert "email agent" in EMAIL_PROFILE.lemonade_hint
+        assert "email" not in GAIA_PROFILE.lemonade_hint
 
     def test_mutating_status_line_names_the_right_kind_of_change(self):
         handler = _FakeSSEHandler()
@@ -372,6 +452,63 @@ class TestCopyIsAgentSpecific:
             handler, {"type": "tool_call", "tool": "some_new_tool"}, GAIA_PROFILE
         )
         assert handler.events[0]["detail"] == "some new tool"
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("gaia_agent") is None,
+    reason="flagship package required to read its real tool registry",
+)
+class TestGaiaToolMapsMatchTheFlagship:
+    """The maps against the agent's ACTUAL registry, both directions.
+
+    The repo-wide scan above passes an entry for any ``@tool`` in the tree,
+    including ones the flagship never composes — six FileIO/code entries sat
+    in the mutating set that way, while the agent's real memory writes
+    (``remember`` / ``forget`` / ``update_memory``) were in neither map and so
+    scrolled past with no visible marker.
+    """
+
+    @pytest.fixture(scope="class")
+    def flagship_tools(self):
+        # Mirrors hub/agents/gaia/python/tests/test_full_tool_bundles.py's
+        # fixture: memory off for construction (no embedder in CI), store
+        # faked so register_memory_tools still runs.
+        import os
+
+        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+
+        previous = os.environ.get("GAIA_MEMORY_DISABLED")
+        os.environ["GAIA_MEMORY_DISABLED"] = "1"
+        try:
+            agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+            agent._memory_store = object()
+            agent._register_tools()
+            return set(agent._tools_registry)
+        finally:
+            if previous is None:
+                os.environ.pop("GAIA_MEMORY_DISABLED", None)
+            else:
+                os.environ["GAIA_MEMORY_DISABLED"] = previous
+
+    def test_the_registry_was_actually_read(self, flagship_tools):
+        assert len(flagship_tools) > 50, "registry looks empty — fixture broke"
+
+    # No "every entry is registered" assertion here on purpose: what the
+    # flagship registers varies with optional dependencies (run_python comes
+    # and goes), so a superset entry is inert and an exact match would flake.
+    # The repo-wide scan above owns the deadness direction.
+
+    def test_every_registered_tool_has_a_label(self, flagship_tools):
+        """Humanizing is a fallback, not a plan — an unlabeled tool means
+        nobody decided how it should read."""
+        unlabeled = sorted(flagship_tools - set(GAIA_PROFILE.tool_labels))
+        assert not unlabeled, f"registered tools with no label: {unlabeled}"
+
+    def test_the_memory_writes_are_marked_mutating(self, flagship_tools):
+        """They change what the agent remembers about the user, permanently."""
+        for tool in ("remember", "forget", "update_memory"):
+            assert tool in flagship_tools, f"{tool} is no longer registered"
+            assert tool in GAIA_PROFILE.mutating_tools
 
 
 def test_profile_for_unknown_agent_is_none():

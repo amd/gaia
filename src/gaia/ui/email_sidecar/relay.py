@@ -67,22 +67,13 @@ logger = get_logger(__name__)
 STREAM_ENDED_UNEXPECTEDLY = EMAIL_PROFILE.stream_ended_message
 
 
-def _stream_ended_message(profile: "RelayProfile") -> str:
-    """The crash copy for *profile*'s agent — see ``RelayProfile``."""
-    return profile.stream_ended_message
-
-
 #: Surfaced both by the dispatch layer's pre-flight version gate (a pre-2.4
 #: Hub binary passes the manager's MAJOR-only handshake, see
-#: ``_chat_helpers._email_query_version_supported``) AND here, as the
+#: ``profiles.api_version_supported``) AND here, as the
 #: backstop when a 404 on ``/query`` itself proves the same thing (the
 #: manager's captured ``api_version`` was missing/stale at pre-flight time).
 #: Both call sites must use this exact string.
 EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = EMAIL_PROFILE.version_upgrade_message
-
-#: Canonical event types that end a ``/query`` run (mirrors
-#: ``gaia_agent_email.sse_translation.TERMINAL_TYPES``).
-_TERMINAL_TYPES = frozenset({"final", "error"})
 
 #: Appended — never replacing the original text — to a terminal ``error``
 #: detail that looks like a connection/timeout failure. The sidecar emits
@@ -297,6 +288,18 @@ def relay_query(
     every other agent branch. Relay-level signalling would push a second
     ``None`` sentinel per turn, violating the queue's exactly-once contract.
     """
+    # A proxy pointed at one agent driven with another's profile would send
+    # that agent's body shape to the wrong /v1/<agent> prefix and label its
+    # tools with the wrong names. ``profile`` still defaults to email for the
+    # existing callers, so check rather than trust it.
+    proxy_agent = getattr(proxy, "agent_id", None)
+    if proxy_agent is not None and proxy_agent != profile.agent_id:
+        raise ValueError(
+            f"relay_query got a '{proxy_agent}' proxy with the "
+            f"'{profile.agent_id}' profile; pass the profile that matches the "
+            "sidecar being relayed."
+        )
+
     rid = run_id or str(uuid.uuid4())
     # can_answer_questions=True (#2595): this relay DOES render needs_input
     # and POST the answer back via POST /api/chat/user-input ->
@@ -344,7 +347,7 @@ def relay_query(
 
     terminated = False
     crashed = False
-    crash_message = _stream_ended_message(profile)
+    crash_message = profile.stream_ended_message
     try:
         for event in proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response

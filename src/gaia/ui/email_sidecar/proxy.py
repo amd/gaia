@@ -78,13 +78,17 @@ def _timeout_env_var(agent_id: str) -> str:
 
 
 class SidecarProxy:
-    """HTTP transport onto one running sidecar's ``/v1/<agent_id>/`` contract."""
+    """HTTP transport onto one running sidecar's ``/v1/<agent_id>/`` contract.
+
+    ``agent_id`` is required, not defaulted: an implicitly-email transport is
+    the assumption that made a flagship turn unreachable in the first place.
+    """
 
     def __init__(
         self,
         base_url: str,
         *,
-        agent_id: str = "email",
+        agent_id: str,
         session=None,
         timeout: float | None = None,
         auth_token: str | None = None,

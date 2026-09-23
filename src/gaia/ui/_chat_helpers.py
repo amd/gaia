@@ -31,7 +31,7 @@ from gaia.daemon.broker_client import BrokerUnavailableError
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
 from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
     profile_for,
@@ -145,11 +145,12 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     Email is the exception and says so on its profile: its in-process loop was
     retired in #2109, so it relays even when the wheel is importable.
 
-    No registration at all also relays — the daemon can fetch and start a
-    sidecar the registry has never seen. The one exception is a registration
-    that is missing because its wheel FAILED TO IMPORT: the registry recorded
-    why, and that reason is the answer the user needs. Relaying would replace
-    it with whatever the daemon says about a sidecar that was never installed.
+    The "no registration" branches below are defence in depth, not a live
+    path: ``_agent_type_unknown`` already rejects a non-always-relay sidecar
+    that does not resolve, so chat never reaches them today. They keep this
+    function correct on its own terms — a missing registration relays, unless
+    the registry recorded an import failure, in which case that recorded
+    reason is the answer the user needs and relaying would bury it.
     """
     profile = profile_for(agent_type)
     if profile is None:
@@ -160,7 +161,10 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
         return True
     reg = registry.get(agent_type)
     if reg is not None:
-        return bool(getattr(reg, "is_sidecar", False))
+        # Read the field, never getattr-with-a-default: defaulting a
+        # registration that somehow lacks it to "in-process" would silently
+        # restore the very failure this routing exists to prevent.
+        return bool(reg.is_sidecar)
     return not registry.get_load_error(agent_type)
 
 
@@ -1056,20 +1060,11 @@ def _session_mail_provider(session: dict) -> str | None:
 
 
 # The per-agent /query contract floor and its upgrade copy live on the relay
-# profile (``gaia.ui.email_sidecar.profiles``). The daemon's own version gate
-# only pins MAJOR (the spec's expected_api_major), so a too-old Hub binary
-# passes that handshake and then 404s every /query call — the profile's finer
-# MAJOR.MINOR check catches it before the first POST.
-_EMAIL_QUERY_MIN_API_VERSION = EMAIL_PROFILE.min_api_version
-
-
-def _email_query_version_supported(api_version: str | None) -> bool:
-    """True when ``api_version`` meets the EMAIL relay's floor.
-
-    Kept as a named helper because tests and callers reference it; new code
-    should call ``profiles.api_version_supported(profile, api_version)``.
-    """
-    return api_version_supported(EMAIL_PROFILE, api_version)
+# profile (``gaia.ui.email_sidecar.profiles``); ``api_version_supported``
+# applies it. The daemon's own gate only pins MAJOR (the spec's
+# expected_api_major), so a too-old Hub binary passes that handshake and then
+# 404s every /query call — the profile's finer MAJOR.MINOR check catches it
+# before the first POST.
 
 
 def _query_context_from_history(history_pairs: list) -> list[dict]:
@@ -1091,6 +1086,38 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
         context.append({"role": "user", "content": u})
         context.append({"role": "assistant", "content": a})
     return context
+
+
+def _probe_is_only_unreachable(init_body: dict | None) -> bool:
+    """True when the sidecar's ``/init`` 503 is ONLY "cannot reach Lemonade".
+
+    That is the one cause worth continuing past: the probe reports it against
+    an auth-protected Lemonade whose ``/query`` answers normally. The other
+    two causes it reports — the model is not downloaded, the server is below
+    the required version — are not false negatives, and a turn that proceeds
+    past them fails deeper with a worse message than the hint already gives.
+    """
+    lemonade = (init_body or {}).get("lemonade") or {}
+    if lemonade.get("reachable") is not False:
+        return False
+    # Unreachable is the ONLY complaint: nothing can be known about the model
+    # or the version until the server answers, so those are not evidence.
+    return True
+
+
+def _host_corrected_hint(hint: str | None) -> str | None:
+    """Replace a sidecar hint that names a command this host does not have.
+
+    An agent package ships its own copy of the "start Lemonade" advice, and an
+    older one still names ``lemonade-server serve`` — a CLI that Lemonade
+    10.7 removed. The host knows what is actually installed, so it substitutes
+    its own answer rather than relaying one the user cannot act on.
+    """
+    if not hint or "lemonade-server serve" not in hint:
+        return hint
+    from gaia.llm.lemonade_launcher import describe_start_hint
+
+    return describe_start_hint().instruction
 
 
 def _dispatch_sidecar_query(
@@ -1154,8 +1181,8 @@ def _dispatch_sidecar_query(
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
     if status_code != 200:
-        hint = (init_body or {}).get("hint")
-        if profile.readiness_is_blocking:
+        hint = _host_corrected_hint((init_body or {}).get("hint"))
+        if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
             msg = (
                 f"The {profile.display_name} agent isn't ready yet"
                 + (f": {hint}." if hint else ".")
@@ -1184,6 +1211,9 @@ def _dispatch_sidecar_query(
         return
 
     context = _query_context_from_history(history_pairs)
+    # Known gap: session-attached documents do not cross this hop. The body
+    # carries the transcript, not rag_file_paths, so a relayed agent cannot
+    # see a file the user attached in this session (#4166).
     relay_query(
         sse_handler,
         proxy,
@@ -1613,12 +1643,12 @@ async def _get_chat_response(
             # today (the frontend hardcodes stream=true; ChatRequest.stream
             # defaults True). Fail loud rather than ship a speculative,
             # untested drained-response path.
+            named = (profile_for(agent_type) or _NO_PROFILE).display_name
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"The {agent_type} agent requires streaming "
-                    f"(stream=true); non-streaming {agent_type} chat is not "
-                    "supported."
+                    f"The {named} agent requires streaming (stream=true); "
+                    f"non-streaming {named} chat is not supported."
                 ),
             )
         else:

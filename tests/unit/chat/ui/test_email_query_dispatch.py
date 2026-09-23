@@ -4,7 +4,7 @@
 """Unit tests for the email streaming query dispatch helpers in
 ``gaia.ui._chat_helpers`` (#2109):
 
-- ``_email_query_version_supported``: the sidecar contract-version floor gate
+- ``api_version_supported``: the sidecar contract-version floor gate
 - ``_query_context_from_history``: history-pair -> /query context flattening
 - ``_dispatch_sidecar_query``: the streaming producer's self-contained email
   dispatch branch — every path either relays the sidecar's /query loop to
@@ -23,48 +23,45 @@ import pytest
 
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
-from gaia.ui._chat_helpers import (
-    _dispatch_sidecar_query,
-    _email_query_version_supported,
-    _query_context_from_history,
-)
+from gaia.ui._chat_helpers import _dispatch_sidecar_query, _query_context_from_history
 from gaia.ui.email_sidecar.errors import SidecarError
+from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, api_version_supported
 from gaia.ui.email_sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
 from gaia.ui.models import ChatRequest
 
-# ── _email_query_version_supported ──────────────────────────────────────────
+# ── api_version_supported (email floor) ──────────────────────────────────────────
 
 
 class TestEmailQueryVersionSupported:
     """Pins the MAJOR.MINOR floor (2.4) that gates the /query relay."""
 
     def test_none_is_unsupported(self):
-        assert _email_query_version_supported(None) is False
+        assert api_version_supported(EMAIL_PROFILE, None) is False
 
     def test_empty_string_is_unsupported(self):
-        assert _email_query_version_supported("") is False
+        assert api_version_supported(EMAIL_PROFILE, "") is False
 
     def test_exact_floor_is_supported(self):
-        assert _email_query_version_supported("2.4") is True
+        assert api_version_supported(EMAIL_PROFILE, "2.4") is True
 
     def test_above_floor_minor_is_supported(self):
-        assert _email_query_version_supported("2.5") is True
+        assert api_version_supported(EMAIL_PROFILE, "2.5") is True
 
     def test_above_floor_major_is_supported(self):
-        assert _email_query_version_supported("3.0") is True
+        assert api_version_supported(EMAIL_PROFILE, "3.0") is True
 
     def test_below_floor_minor_is_unsupported(self):
-        assert _email_query_version_supported("2.3") is False
+        assert api_version_supported(EMAIL_PROFILE, "2.3") is False
 
     def test_below_floor_major_is_unsupported(self):
-        assert _email_query_version_supported("1.9") is False
+        assert api_version_supported(EMAIL_PROFILE, "1.9") is False
 
     def test_major_only_no_minor_defaults_to_zero_and_is_unsupported(self):
         """ "2" parses as (2, 0), which is below the (2, 4) floor."""
-        assert _email_query_version_supported("2") is False
+        assert api_version_supported(EMAIL_PROFILE, "2") is False
 
     def test_malformed_string_is_unsupported_no_crash(self):
-        assert _email_query_version_supported("abc") is False
+        assert api_version_supported(EMAIL_PROFILE, "abc") is False
 
 
 # ── _query_context_from_history ─────────────────────────────────────────────

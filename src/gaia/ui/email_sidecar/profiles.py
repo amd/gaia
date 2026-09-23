@@ -77,6 +77,11 @@ class RelayProfile:
     #: Halting on that turns a working agent into a dead one, so the hint is
     #: shown and the turn proceeds; if the backend really is down, the query's
     #: own error says so with the remedy already appended.
+    #:
+    #: Narrow by design: only the UNREACHABLE cause is treated this way (see
+    #: ``_chat_helpers._probe_is_only_unreachable``). A 503 that says the
+    #: model is missing, or that Lemonade is below the required version, is
+    #: the server answering accurately and still blocks.
     readiness_is_blocking: bool = True
     #: Whether to send ``session_id`` on the ``/query`` body. Gated per agent
     #: because the request model is ``extra="forbid"`` on both sidecars: an
@@ -219,11 +224,10 @@ _GAIA_MUTATING_TOOLS = frozenset(
     {
         "run_shell_command",
         "write_file",
-        "write_markdown_file",
-        "write_python_file",
         "edit_file",
-        "edit_python_file",
-        "replace_function",
+        "remember",
+        "forget",
+        "update_memory",
         "execute_python_file",
         "run_python",
         "download_file",
@@ -231,7 +235,6 @@ _GAIA_MUTATING_TOOLS = frozenset(
         "remove_skill",
         "capture_skill",
         "remember_skill_lesson",
-        "update_gaia_md",
         "add_watch_directory",
         "create_table",
         "drop_table",
@@ -262,11 +265,7 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     # Files
     "read_file": "Reading file",
     "write_file": "Writing file",
-    "write_markdown_file": "Writing document",
-    "write_python_file": "Writing script",
     "edit_file": "Editing file",
-    "edit_python_file": "Editing script",
-    "replace_function": "Editing function",
     "execute_python_file": "Running script",
     "run_python": "Running Python",
     "run_shell_command": "Running a shell command",
@@ -275,7 +274,6 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "search_file": "Searching files",
     "search_file_content": "Searching file contents",
     "search_directory": "Searching folder",
-    "generate_diff": "Comparing files",
     "find_files": "Finding files",
     "list_files": "Listing files",
     "file_info": "Inspecting file",
@@ -292,7 +290,6 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "bookmark": "Saving bookmark",
     # Code
     "index_codebase": "Indexing codebase",
-    "search_code": "Searching code",
     "search_code_index": "Searching code index",
     "get_index_status": "Checking index status",
     "clear_code_index": "Clearing code index",
@@ -335,8 +332,15 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "read_email": "Reading message",
     "list_mail_folders": "Listing mail folders",
     "check_mailbox_access": "Checking mailbox access",
-    # Memory / config
-    "update_gaia_md": "Updating your GAIA.md",
+    # Memory — the agent's own long-term store
+    "remember": "Saving to memory",
+    "forget": "Deleting from memory",
+    "update_memory": "Updating memory",
+    "recall": "Recalling from memory",
+    "search_past_conversations": "Searching past conversations",
+    # Agent internals the user still sees scroll past
+    "read_tool_output": "Re-reading a tool result",
+    "set_loop_state": "Tracking progress",
 }
 
 GAIA_PROFILE = RelayProfile(
@@ -379,6 +383,17 @@ _PROFILES: Dict[str, RelayProfile] = {
 SIDECAR_AGENT_IDS = frozenset(_PROFILES)
 
 
+#: Stand-in for building an error message about an id with no profile, so a
+#: message-formatting path can never be the thing that raises.
+_NO_PROFILE = RelayProfile(
+    agent_id="",
+    display_name="agent",
+    min_api_version=(0, 0),
+    stream_ended_message="",
+    version_upgrade_message="",
+)
+
+
 def profile_for(agent_id: str) -> Optional[RelayProfile]:
     """The relay profile for *agent_id*, or ``None`` if it is not a sidecar."""
     return _PROFILES.get(agent_id)
@@ -404,6 +419,7 @@ def api_version_supported(profile: RelayProfile, api_version: Optional[str]) -> 
 
 __all__ = [
     "RelayProfile",
+    "_NO_PROFILE",
     "EMAIL_PROFILE",
     "GAIA_PROFILE",
     "SIDECAR_AGENT_IDS",
