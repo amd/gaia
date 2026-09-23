@@ -1792,6 +1792,20 @@ class TestHelperFunctions:
         assert result is not None
         assert "." not in result or "module" in result
 
+    def test_sanitize_fts5_query_drops_all_underscore_tokens(self):
+        """An all-underscore token quotes to an empty FTS5 phrase and would
+        zero out an AND query -- it must be dropped, not quoted (#4142)."""
+        from gaia.agents.base.memory_store import _sanitize_fts5_query
+
+        result = _sanitize_fts5_query("___ hello", use_and=True)
+        assert result == '"hello"'
+
+    def test_sanitize_fts5_query_all_underscore_tokens_returns_none(self):
+        from gaia.agents.base.memory_store import _sanitize_fts5_query
+
+        assert _sanitize_fts5_query("___", use_and=True) is None
+        assert _sanitize_fts5_query("___ ____", use_and=False) is None
+
 
 # ===========================================================================
 # 15. Prune
