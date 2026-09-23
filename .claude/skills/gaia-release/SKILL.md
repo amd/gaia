@@ -47,6 +47,12 @@ Resume table:
 
 Always announce the resume decision before continuing: *"Detected `v<version>` state: PR #831 merged, no tag yet. Resuming at Phase 3 (pre-tag verification)."*
 
+A `PR_OPEN` or `PR_MERGED` state may have been produced by the nightly automation
+rather than a person: [`.github/workflows/nightly-patch-release.yml`](../../../.github/workflows/nightly-patch-release.yml)
+drafts Phase 1-2 on its own when a patch release is due, and stops before merge and
+tag. Treat that PR exactly like a human-drafted one — review the notes, then resume
+at the phase the table gives.
+
 ## Hard rules (do not violate)
 
 These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill runs.
