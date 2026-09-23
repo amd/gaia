@@ -125,7 +125,14 @@ DOC_BUNDLES = [
     ),
     ToolBundle(
         name="shell",
-        members=frozenset({"run_shell_command", "get_system_info"}),
+        members=frozenset(
+            {
+                "run_shell_command",
+                "get_system_info",
+                "get_shell_state",
+                "reset_shell_session",
+            }
+        ),
         description="Run shell commands and query the system.",
     ),
     ToolBundle(
@@ -371,6 +378,8 @@ FULL_BUNDLES = [
                 "execute_python_file",
                 "run_python",
                 "get_system_info",
+                "get_shell_state",
+                "reset_shell_session",
             }
         ),
         description="Run shell commands, Python scripts and snippets, and query the system.",

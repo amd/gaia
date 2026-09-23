@@ -23,6 +23,11 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **A shell command's `cd` now survives to the next one.** Every
+  `run_shell_command` call used to start from scratch, so `cd build` in one
+  call was invisible to the next. `get_shell_state` reads the session's
+  current directory, and `reset_shell_session` returns it to where the task
+  started.
 - **`run_python`, always on.** A quick calculation or data transform is now one
   confirmation-gated call that runs from the project root and returns what it
   printed, instead of a throwaway script left in your repository. It joins the
@@ -65,7 +70,7 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 28 of its 80 tools on any one call — a
+  profile.** The model is sent at most 28 of its 82 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
   hatch the model calls mid-turn to pull in a bundle the selector missed.

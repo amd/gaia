@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **80 tools** — the 59 of the Chat agent's `full` profile, plus 7 skill-library tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. `search_documentation` registers only when `npx` is on your PATH, so without Node.js the count is 79. Grouped by what they're for:
+The default construction registers **82 tools** — the 61 of the Chat agent's `full` profile, plus 7 skill-library tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. `search_documentation` registers only when `npx` is on your PATH, so without Node.js the count is 81. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -102,14 +102,14 @@ The default construction registers **80 tools** — the 59 of the Chat agent's `
 | Email | `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, `list_mail_folders` |
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
 | Audio | `transcribe_media`, `refine_transcript` |
-| Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
+| Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command`, `get_shell_state`, `reset_shell_session` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
 | Run control | `request_user_input`, `set_loop_state`, `load_tools`, `read_tool_output` |
 
 That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
 
-`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused. Commands can be chained on one line (`cd src && ls | grep agent`) so looking something up and checking it is a single step — every command on the line is checked against the same allowlist before any of it runs, and one approval covers the line. A leading `VAR=value` (`PYTHONPATH=. pytest -q`) sets that one command's environment and nothing else's; the variables that decide which binary runs or what code it loads — `PATH`, `LD_PRELOAD`, `GIT_SSH_COMMAND` and their families — stay refused. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project.
+`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused. Commands can be chained on one line (`cd src && ls | grep agent`) so looking something up and checking it is a single step — every command on the line is checked against the same allowlist before any of it runs, and one approval covers the line. A leading `VAR=value` (`PYTHONPATH=. pytest -q`) sets that one command's environment and nothing else's; the variables that decide which binary runs or what code it loads — `PATH`, `LD_PRELOAD`, `GIT_SSH_COMMAND` and their families — stay refused. A `cd` on a chain's last line carries to the *next* separate call, so `cd build` in one turn is still in effect on the next — `get_shell_state` reads the session's current directory, and `reset_shell_session` returns it to where the task started. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project.
 
 **Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
 
