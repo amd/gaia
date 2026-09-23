@@ -496,6 +496,16 @@ def test_code_symbol_queries_do_not_demand_the_source_file_as_a_destination(
     assert state.key("models.py") not in state.requested
     assert state.key("code.py") not in state.requested
     assert state.gaps() == []
+    assert not state.enabled
+
+
+def test_document_queries_still_activate_alongside_a_code_destination(tmp_path):
+    """Only an all-code query is a code query; a real document still counts."""
+    state = ExtractionLedger(
+        "Extract every TODO from notes.md and save to out.py", str(tmp_path)
+    )
+    assert state.enabled
+    assert state.requested == {state.key("notes.md")}
 
 
 def test_combined_source_and_save_request_keeps_all_sources(tmp_path):
