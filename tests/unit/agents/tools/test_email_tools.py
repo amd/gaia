@@ -1416,6 +1416,18 @@ def test_results_are_one_hit_per_thread(harness_factory):
     assert out["messages"][0]["thread_message_matches"] == 5
 
 
+def test_a_message_found_by_two_rungs_is_counted_once(harness_factory):
+    """Rungs overlap; re-finding one message is not a second message."""
+    handler, _ = _mailbox_by_term({"acme invoice": [WRONG_ONE], "invoice": [WRONG_ONE]})
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="Acme invoice"))
+
+    assert out["count"] == 1
+    assert "thread_message_matches" not in out["messages"][0]
+    assert "alternatives" not in out
+
+
 def test_results_the_query_never_matched_are_marked_unverified(harness_factory):
     """A set the tool cannot vouch for says so, and says what to do instead."""
     handler, _ = _mailbox_by_term({"contract": [WRONG_ONE]})

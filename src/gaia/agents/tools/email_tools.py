@@ -481,12 +481,18 @@ class EmailToolsMixin:
                 exact: List[Dict] = []
                 alternatives: List[Dict] = []
                 threads: Dict[str, Dict] = {}
+                seen_ids: set = set()
 
                 for rung, candidate in enumerate(_broadening_ladder(query) or [query]):
                     found = mixin._email_call("search", candidate, limit=fetch)
                     attempts.append({"query": candidate, "count": len(found)})
                     bucket = exact if rung == 0 else alternatives
                     for message in found:
+                        # Rungs overlap, so the same message arrives repeatedly;
+                        # counting it twice would overstate the thread.
+                        if message.get("id") in seen_ids:
+                            continue
+                        seen_ids.add(message.get("id"))
                         kept = threads.get(_thread_key(message))
                         if kept is not None:
                             kept["thread_message_matches"] += 1
