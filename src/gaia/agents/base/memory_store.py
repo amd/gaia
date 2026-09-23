@@ -71,12 +71,13 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
     if not sanitized:
         return None
 
-    words = sanitized.split()
+    # Quote each token so words such as AND/OR/NOT stay literal FTS5 terms.
+    words = [f'"{word}"' for word in sanitized.split()]
     if len(words) > 1:
         operator = " AND " if use_and else " OR "
         return operator.join(words)
 
-    return sanitized
+    return words[0]
 
 
 # ============================================================================

@@ -246,6 +246,33 @@ class TestBasicCRUD:
 class TestFTS5Search:
     """FTS5 search with AND/OR semantics, BM25 ranking, sanitization."""
 
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT", "NEAR", "é"])
+    def test_search_treats_keywords_as_literal_words(self, store, keyword):
+        content = f"The {keyword} operator is documented"
+        kid = store.store(category="fact", content=content)
+        store.store_turn("literal-query", "user", content)
+
+        assert [row["id"] for row in store.search(keyword)] == [kid]
+        assert [row["id"] for row in store.search(f"{keyword} documented")] == [kid]
+        assert store.search_conversations(keyword)[0]["content"] == content
+        assert store.get_all_knowledge(search=keyword)["total"] == 1
+        assert store.get_all_knowledge(search=f"{keyword} documented")["total"] == 1
+
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT"])
+    def test_literal_keyword_search_preserves_or_fallback(self, store, keyword):
+        kid = store.store(category="fact", content=f"Use the {keyword} operator")
+
+        assert [row["id"] for row in store.search(f"{keyword} nonexistent")] == [kid]
+
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT"])
+    def test_literal_keywords_do_not_disable_deduplication(self, store, keyword):
+        content = f"The {keyword} operator is documented"
+        first = store.store(category="fact", content=content)
+        second = store.store(category="fact", content=content)
+
+        assert second == first
+        assert store.get_all_knowledge()["total"] == 1
+
     def test_search_finds_by_keyword(self, store):
         """search() finds entries by keyword in content."""
         store.store(category="fact", content="GAIA supports NPU acceleration")
