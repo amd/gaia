@@ -568,17 +568,7 @@ class LemonadeProvider(LLMClient):
         # ``usage`` object itself) so downstream aggregation gets equal-or-
         # better fidelity than the polled ``/stats`` endpoint, with no extra
         # HTTP round-trip and no last-request race.
-        usage = response.get("usage")
-        if isinstance(usage, dict):
-            timings = response.get("timings")
-            self._last_usage = {
-                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                "completion_tokens": int(usage.get("completion_tokens") or 0),
-                "total_tokens": int(usage.get("total_tokens") or 0),
-                "tokens_per_second": float(
-                    (timings or {}).get("predicted_per_second") or 0.0
-                ),
-            }
+        self._capture_usage(response)
 
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
@@ -639,6 +629,30 @@ class LemonadeProvider(LLMClient):
 
         vlm = VLMClient(base_url=self._backend.base_url)
         return vlm.extract_from_image(images[0], prompt=prompt)
+
+    def _capture_usage(self, response: dict) -> None:
+        """Record this call's own usage, cached prefix included.
+
+        The server prices a cached input token far below a fresh one, so a
+        total without the cached share can only ever be an upper bound.
+        """
+        usage = response.get("usage")
+        if not isinstance(usage, dict):
+            return
+        details = usage.get("prompt_tokens_details")
+        cached = usage.get("cached_tokens")
+        if isinstance(details, dict) and details.get("cached_tokens") is not None:
+            cached = details.get("cached_tokens")
+        timings = response.get("timings")
+        self._last_usage = {
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
+            "cached_tokens": int(cached or 0),
+            "tokens_per_second": float(
+                (timings or {}).get("predicted_per_second") or 0.0
+            ),
+        }
 
     def get_performance_stats(self) -> dict:
         if self._backend.cloud_model_provider(self._last_model or DEFAULT_MODEL_NAME):

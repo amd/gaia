@@ -490,6 +490,28 @@ def _safe_number(value: Any) -> int:
     return 0
 
 
+def _sum_cached_tokens(conversation: List[Dict[str, Any]]) -> int:
+    """Input tokens the backend served from its cache, across a turn's steps.
+
+    Reported per step beside the token counts; absent for a backend that does
+    not cache, which reads as zero rather than as unknown.
+    """
+    total = 0
+    for entry in conversation:
+        if entry.get("role") != "system" or not isinstance(entry.get("content"), dict):
+            continue
+        content = entry["content"]
+        if content.get("type") != "stats":
+            continue
+        stats = content.get("performance_stats")
+        if isinstance(stats, dict):
+            try:
+                total += int(stats.get("cached_tokens") or 0)
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
 def _sum_conversation_tokens(
     conversation: List[Dict[str, Any]],
     tool_usage_entries: Optional[List[Dict[str, Any]]] = None,

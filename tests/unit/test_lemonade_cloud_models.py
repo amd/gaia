@@ -360,7 +360,12 @@ def test_cloud_provider_preserves_native_tool_only_response(
     assert adapter.get_performance_stats() == (
         {}
         if stream
-        else {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19}
+        else {
+            "prompt_tokens": 12,
+            "completion_tokens": 7,
+            "total_tokens": 19,
+            "cached_tokens": 0,
+        }
     )
     global_stats.assert_not_called()
 
