@@ -1334,6 +1334,13 @@ WRONG_TWO = _graph_message(
 )
 
 
+LURE = _graph_message(
+    "AAMk-lure",
+    thread="conv-lure",
+    subject="Verify your account now - click the link to avoid suspension",
+)
+
+
 def _mailbox_by_term(index):
     """A Graph handler whose ``$search`` term maps to a fixed hit list.
 
@@ -1462,6 +1469,51 @@ def test_a_healthy_exact_result_costs_one_round_trip(harness_factory):
 
     assert out["count"] == 6
     assert seen == ["Acme invoice"]
+
+
+def test_a_lure_reached_only_by_broadening_is_still_screened(harness_factory):
+    """Broadened hits are returned to the model, so they are screened too.
+
+    Neither half of this behaviour covers it alone: the screen ran on the one
+    result list that used to exist, and broadening invented a second one.
+    """
+    handler, _ = _mailbox_by_term({"contract": [LURE]})
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="sign off on a contract schedule before the end of the week"
+        )
+    )
+
+    assert out["unverified"] is True
+    assert out["messages"][0]["suspicious"] is True
+    assert out["messages"][0]["suspicious_reasons"]
+    assert out["suspicious_count"] == 1
+    assert "suspicious_guidance" in out
+
+
+def test_a_flagged_hit_is_never_a_source_of_search_vocabulary(harness_factory):
+    """The re-query instruction must not point at attacker-written text.
+
+    A mixed set is the realistic shape: a guard that only fires when every hit
+    is flagged would pass a test built from lures alone and fail here.
+    """
+    handler, _ = _mailbox_by_term({"contract": [WRONG_ONE, LURE]})
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="sign off on a contract schedule before the end of the week"
+        )
+    )
+
+    assert out["suspicious_count"] == 1
+    assert "suspicious" not in out["messages"][0]
+    assert out["messages"][1]["suspicious"] is True
+    note = out["note"]
+    assert "search again with the words the sender would have written" in note
+    assert "only from hits NOT marked `suspicious`" in note
 
 
 def test_an_exact_hit_is_never_labelled_unverified(harness_factory):
