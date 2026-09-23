@@ -170,6 +170,29 @@ def _broadening_ladder(query: str) -> List[str]:
     return ladder
 
 
+# What a fallback candidate needs to be recognised, read, or dismissed. The
+# rest of a summary answers questions nobody asks about mail they did not ask
+# for, and alternatives ride along on every broadened search.
+_CANDIDATE_FIELDS = (
+    "id",
+    "thread_id",
+    "subject",
+    "from",
+    "received",
+    "preview",
+    "matched_query",
+    "unverified",
+    "thread_message_matches",
+    "suspicious",
+    "suspicious_reasons",
+)
+
+
+def _as_candidate(hit: Dict) -> Dict:
+    """One alternative, trimmed to what identifies and screens a thread."""
+    return {k: hit[k] for k in _CANDIDATE_FIELDS if k in hit}
+
+
 def _thread_key(message: Dict) -> str:
     """The conversation a hit belongs to. Both backends always set one."""
     return message.get("thread_id") or message.get("id") or ""
@@ -465,10 +488,15 @@ class EmailToolsMixin:
 
             One hit per conversation, so a chatty thread cannot spend every
             slot. `exact_match` says whether anything matched the query as you
-            sent it. When it is false the hits carry `unverified: true` and a
-            `matched_query` naming the broader query that found them — they are
-            candidates, not answers. When it is true, `alternatives` may carry
-            looser hits to fall back on if none of the exact ones fit.
+            sent it.
+
+            Any hit that did NOT match your query carries `unverified: true`
+            and a `matched_query` naming the broader query that found it — a
+            candidate, not an answer. Those hits are in `messages` when
+            nothing matched your query at all (the payload repeats the flag
+            and adds a `note`), and in `alternatives` alongside an exact hit,
+            where they are a fallback for when none of the exact hits is the
+            message the user meant.
 
             Args:
                 query: 2-3 distinctive keywords (e.g. 'Acme invoice')
@@ -503,6 +531,7 @@ class EmailToolsMixin:
                         hit["thread_message_matches"] = 1
                         if rung:
                             hit["matched_query"] = candidate
+                            hit["unverified"] = True
                         threads[_thread_key(message)] = hit
                         bucket.append(hit)
                     # A healthy exact set needs no alternatives; anything less
@@ -545,7 +574,7 @@ class EmailToolsMixin:
                     "messages": messages,
                 }
                 if exact and alternatives:
-                    payload["alternatives"] = alternatives
+                    payload["alternatives"] = [_as_candidate(h) for h in alternatives]
                 if flagged:
                     payload["suspicious_guidance"] = SUSPICIOUS_GUIDANCE
                 if not messages:

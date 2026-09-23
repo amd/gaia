@@ -1383,6 +1383,46 @@ def test_a_non_empty_first_rung_is_not_the_end_of_the_search(harness_factory):
     assert any("Fieldstone" in m["subject"] for m in out["alternatives"])
 
 
+def test_the_docstrings_unverified_promise_holds_on_every_broadened_hit(
+    harness_factory,
+):
+    """The model acts on the docstring, so the payload must match it.
+
+    `unverified` is promised on the hit, not only on the payload — and the
+    fallback path (an exact hit plus alternatives) is where it was missing.
+    """
+    handler, _ = _mailbox_by_term(
+        {"contract schedule": [WRONG_ONE], "contract": [FIELDSTONE]}
+    )
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="contract schedule"))
+
+    assert out["exact_match"] is True
+    assert "unverified" not in out["messages"][0]
+    for candidate in out["alternatives"]:
+        assert candidate["unverified"] is True
+        assert candidate["matched_query"]
+
+
+def test_an_alternative_is_trimmed_to_what_identifies_a_thread(harness_factory):
+    """Fallback candidates ride along on every broadened search; keep them cheap."""
+    handler, _ = _mailbox_by_term(
+        {"contract schedule": [WRONG_ONE], "contract": [FIELDSTONE]}
+    )
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="contract schedule"))
+
+    candidate = out["alternatives"][0]
+    assert candidate["subject"] and candidate["id"] and candidate["thread_id"]
+    assert candidate["preview"] == out["messages"][0]["preview"]
+    for dropped in ("to", "cc", "categories", "unread", "flagged"):
+        assert dropped not in candidate
+    # The primary result set keeps every field it always had.
+    assert "to" in out["messages"][0] and "unread" in out["messages"][0]
+
+
 def test_broadening_does_not_stop_at_the_first_non_empty_rung(harness_factory):
     """A rung that returns *something* is not a rung that returns the message."""
     handler, _ = _mailbox_by_term(
