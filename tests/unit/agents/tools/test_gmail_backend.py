@@ -10,6 +10,8 @@ was called. Gmail 400s on a label *name* where an ID is required and ignores
 double accepts both.
 """
 
+import json
+
 import httpx
 import pytest
 
@@ -17,7 +19,9 @@ from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
 from gaia.agents.tools._email.gmail import (
     GMAIL_API_BASE,
     GmailReadBackend,
+    _error_detail,
 )
+from gaia.agents.tools.email_tools import EmailToolsMixin
 
 
 def make_backend(handler, **kwargs):
@@ -662,3 +666,83 @@ def test_the_inbox_folder_is_findable_the_way_the_tool_looks_it_up():
     folders = make_backend(folders_handler()).list_folders()
     inbox = next((f for f in folders if (f["name"] or "").lower() == "inbox"), None)
     assert inbox is not None and inbox["unread"] == 4
+
+
+# --------------------------------------------------------------------------
+# malformed error bodies — the model must still get the actionable message
+# --------------------------------------------------------------------------
+
+# Valid JSON, none of it the documented `{"error": {...}}` envelope.
+MALFORMED_BODIES = [
+    "[1,2]",
+    '{"error": "denied"}',
+    '"just a string"',
+    '{"error": {"errors": "not-a-list"}}',
+    '{"error": {"errors": {"reason": "nested-wrong"}}}',
+]
+
+# Shapes `_error_detail` already handled before the type guards landed.
+EMPTY_BODIES = ["null", "{}", '{"error": null}']
+
+
+class _GmailHarness(EmailToolsMixin):
+    """Minimal host for the mixin — no Agent machinery needed."""
+
+    def __init__(self, backend):
+        self._email_backend = backend
+        self.tools = {}
+
+    def _tool(self, name):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        return _TOOL_REGISTRY[name]["function"]
+
+
+def gmail_harness(handler):
+    h = _GmailHarness(make_backend(handler))
+    h.register_email_tools()
+    return h
+
+
+@pytest.mark.parametrize("body", MALFORMED_BODIES + EMPTY_BODIES)
+def test_non_envelope_error_body_is_dropped_not_a_crash(body):
+    """A body that parses as JSON but isn't `{"error": {...}}` must not surface
+    as an AttributeError in place of the actionable 403."""
+    backend = make_backend(lambda r: httpx.Response(403, text=body))
+    with pytest.raises(MailboxAuthError) as err:
+        backend.list_inbox()
+    msg = str(err.value)
+    assert "gaia connectors" in msg
+    assert "object has no attribute" not in msg
+
+
+@pytest.mark.parametrize("body", MALFORMED_BODIES + EMPTY_BODIES)
+def test_non_envelope_error_body_yields_no_detail(body):
+    assert _error_detail(httpx.Response(403, text=body)) == ("", "")
+
+
+def test_well_formed_envelope_still_surfaces_its_reason():
+    """The working path must not regress: a documented envelope keeps both its
+    reason token and its remedy link."""
+    url = "https://console.cloud.google.com/apis/library/gmail.googleapis.com"
+    response = gmail_error(403, "accessNotConfigured", extended_help=url)
+    assert _error_detail(response) == ("accessNotConfigured", url)
+
+
+def test_an_upstream_reason_that_is_not_a_token_is_dropped():
+    """`reason` reaches the user inside the 403 text, so it is bounded to the
+    token shape Gmail documents — the guard Graph applies to `error.code`."""
+    response = httpx.Response(
+        403, json={"error": {"errors": [{"reason": "<html>go away</html>"}]}}
+    )
+    assert _error_detail(response) == ("", "")
+
+
+def test_malformed_error_body_reaches_the_model_as_an_actionable_error():
+    """The tool entry point the model actually calls — not `_error_detail` in
+    isolation — must hand back the typed message, not a Python traceback."""
+    h = gmail_harness(lambda r: httpx.Response(403, text="[1,2]"))
+    out = json.loads(h._tool("list_inbox")())
+    assert out["success"] is False
+    assert "gaia connectors" in out["error"]
+    assert "object has no attribute" not in out["error"]
