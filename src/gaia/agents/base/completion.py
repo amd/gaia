@@ -20,6 +20,7 @@ from typing import Any, Callable
 WRITE_TOOLS = frozenset(
     {
         "write_file",
+        "save_extracted_items",
         "write_markdown_file",
         "write_python_file",
         "edit_file",

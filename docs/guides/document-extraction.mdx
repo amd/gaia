@@ -1,0 +1,65 @@
+---
+title: "Complete document inventories"
+description: "Extract every requested item from a long text file while retaining fields and source evidence."
+---
+
+When you need every exercise, action item, or finding in a document, ask GAIA for
+an exhaustive inventory and name the fields to retain:
+
+```text
+Use document-extract to list every exercise in workshop.txt
+with fields: name, reps, cue. Save the complete inventory to exercises.json.
+```
+
+Attach the source file in the Agent UI or provide a path permitted in your
+session. The extractor accepts UTF-8 text files; convert other document formats
+to text first. For an ordinary summary, ask for a summary instead.
+
+## How it works
+
+The default skill routes the task to `document-extract`. GAIA reads small,
+overlapping sections sequentially and checks each section again for omissions.
+Each retained item includes the requested fields, an exact source quotation,
+and character positions. A missing field is marked `not stated`.
+
+The framework displays the retained inventory directly, preventing the final
+answer from condensing forty extracted items into fifteen. For a requested file,
+the exporter writes that same inventory as JSON, CSV, or readable text and checks
+the saved contents before reporting completion.
+
+Full page coverage does not guarantee that a model recognized every implicit
+item. Review ambiguous passages and compare against a known item count when one
+is available. Conflicting evidence, failed pages, denied access, changed sources,
+and exceeded limits are reported as incomplete.
+
+![Flagship Agent UI showing the complete two-item validation inventory with source references](/assets/document-extraction-validation.png)
+
+## Memory and follow-ups
+
+Outside private mode, existing memory records the extraction action, source
+fingerprint, coverage, count, and final answer. Long extraction answers are kept
+as one bounded conversation record so later items remain searchable. Ask GAIA
+to search past conversations for details from a previous inventory.
+
+A remembered inventory describes the earlier source. GAIA must revalidate the
+current file before using it as evidence that a new extraction task is complete.
+Private mode suppresses memory persistence.
+
+## Limits and validation
+
+Each source is limited to 256,000 characters, 512 occurrences, 100,000 characters
+of retained item text and quotations, and 30 minutes of extraction time. Saved
+conversation records are limited to 256,000 characters. Limits fail explicitly.
+The backend must support JSON-schema responses. Small local models can take
+several minutes to process long documents.
+
+Developers can run the repeatable live benchmark with either a local model or a
+configured Fireworks model:
+
+```bash
+python scripts/dev/validate_document_extraction.py MODEL /tmp/extraction-validation
+```
+
+The output directory must be new. This uses a synthetic transcript with forty
+known items and checks every name, repetition count, and cue, the saved file,
+and a later answer retrieved through the memory search tool.

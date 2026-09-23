@@ -42,6 +42,12 @@ from typing import (
 from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
+from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
+from gaia.agents.base.extraction import (
+    ExtractionLedger,
+    extraction_response_format,
+    read_snapshot,
+)
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
@@ -1688,6 +1694,9 @@ Do NOT wrap conversational replies in JSON.
                 artifact: Output handle returned by a truncated result.
                 offset: Zero-based character offset in the original output.
                 limit: Page size in characters, 1 to 8000.
+
+            Continue until next_offset is null. For exhaustive item lists from
+            long files, use extract_document_items instead of manual pagination.
             """
             return store_for(self).read(artifact, offset, limit)
 
@@ -1709,6 +1718,163 @@ Do NOT wrap conversational replies in JSON.
         self._tool_overrides["read_tool_output"] = self._output_reader_entry
         if self._instance_tools is not None:
             self._instance_tools["read_tool_output"] = self._output_reader_entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+
+    def _extraction_skill_instructions(self, query, just_loaded=False):
+        """A selected task skill may activate extraction; voice routing may not."""
+        active = set(getattr(self, "_active_skill_filter", None) or ())
+        skills = getattr(self, "_loaded_skills", None) or {}
+        selected = active | {name for name in skills if name in query}
+        if isinstance(just_loaded, str):
+            selected.add(just_loaded)
+        selected -= self._always_on_skill_names
+        return "\n".join(
+            effective_skill_body(self, skills[name])
+            for name in sorted(selected)
+            if name in skills
+        )
+
+    def _check_extraction_sources(self):
+        ledger = self._extraction_ledger
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            validator = getattr(self, "_path_validator", None)
+        ledger.validate_sources(lambda path: read_snapshot(path, validator))
+        ledger.validate_outputs(lambda path: read_snapshot(path, validator))
+
+    def _make_extraction_chat(self):
+        """Isolate SDK state from timed-out workers and subsequent turns."""
+        import copy
+
+        config = copy.deepcopy(self.chat.config)
+        config.temperature = 0
+        return AgentSDK(config)
+
+    def _register_extraction_tool(self):
+        def extract_document_items(
+            file_path: str, fields: Optional[List[str]] = None
+        ) -> dict:
+            """Extract EVERY requested item from a text document, page by page.
+
+            Use for list-all/enumerate-every tasks, including long transcripts.
+            Pages are read automatically; do not manually paginate or summarize.
+            Each item retains requested fields and exact source evidence. Call
+            once per source file. Errors mean incomplete, never an empty success.
+
+            Args:
+                file_path: Source text file permitted in this session.
+                fields: Requested field names; each entry must include every field.
+            """
+            from gaia.agents.base.tools import raise_if_cancelled
+
+            ledger = self._extraction_ledger
+            extraction_chat = self._make_extraction_chat()
+            usage_sink = self._tool_reported_usage
+
+            def check():
+                raise_if_cancelled()
+                event = getattr(self, "_cancel_event", None)
+                if (
+                    self._extraction_ledger is not ledger
+                    or (event is not None and event.is_set())
+                    or self._console_cancelled()
+                ):
+                    raise ValueError("Extraction cancelled or superseded")
+
+            def ask(system, prompt):
+                check()
+                response = extraction_chat.send_messages(
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=system,
+                    tools=[],
+                    response_format=extraction_response_format(ledger.fields),
+                )
+                check()
+                # These calls are outside the outer conversation's stats.
+                usage = getattr(response, "usage", None)
+                usage_sink.append(
+                    usage if isinstance(usage, dict) else (response.stats or {})
+                )
+                if getattr(response, "finish_reason", None) == "length":
+                    raise ValueError("Extraction reply hit its output-token limit")
+                return response.text
+
+            # Parallel tool batches share the ledger; serialize its updates.
+            while not ledger.lock.acquire(timeout=0.1):
+                check()
+            try:
+                check()
+                validator = getattr(self, "path_validator", None)
+                if validator is None:
+                    validator = getattr(self, "_path_validator", None)
+                return ledger.run(
+                    file_path,
+                    lambda path: read_snapshot(path, validator),
+                    ask,
+                    check,
+                    fields,
+                )
+            finally:
+                ledger.lock.release()
+
+        def save_extracted_items(file_path: str) -> dict:
+            """Save the entire extracted inventory without summarizing away items.
+
+            Use after extract_document_items on every source. Output is JSON for
+            .json, CSV for .csv, and text for .txt/.md or extensionless paths.
+            Read it back afterwards. Binary document formats are unsupported.
+
+            Args:
+                file_path: Requested destination for the complete inventory.
+            """
+            ledger = self._extraction_ledger
+            missing = (ledger.sources | ledger.requested) - ledger.results.keys()
+            if ledger.key(file_path) in ledger.sources | ledger.requested:
+                return {
+                    "status": "error",
+                    "error": "Use a destination different from the source documents",
+                }
+            if missing or not ledger.results:
+                return {
+                    "status": "error",
+                    "error": "Extract every source successfully before saving the inventory",
+                }
+            writer = self._tools_registry.get("write_file")
+            if writer is None:
+                return {
+                    "status": "error",
+                    "error": "write_file is unavailable for this agent",
+                }
+            return writer["function"](
+                file_path=file_path, content=ledger.export(file_path)
+            )
+
+        if not hasattr(self, "_tool_overrides"):
+            self._tool_overrides = {}
+        for name, function, gated in (
+            ("extract_document_items", extract_document_items, False),
+            ("save_extracted_items", save_extracted_items, True),
+        ):
+            entry = {
+                "name": name,
+                "description": function.__doc__,
+                "parameters": {"file_path": {"type": "string", "required": True}},
+                "function": function,
+                "atomic": True,
+                "display_label": None,
+                "timeout": EXTRACTION_MAX_SECONDS + 60 if not gated else None,
+                "requires_confirmation": gated,
+            }
+            if name == "extract_document_items":
+                entry["parameters"]["fields"] = {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "required": False,
+                }
+            self._tool_overrides[name] = entry
+            if self._instance_tools is not None:
+                self._instance_tools[name] = entry
         if hasattr(self, "_system_prompt_cache"):
             del self._system_prompt_cache
 
@@ -1886,6 +2052,13 @@ Do NOT wrap conversational replies in JSON.
         expansion is visible to the very next model step — both render paths
         (``system_prompt`` and ``_openai_tools``) read these live.
         """
+        extraction = getattr(self, "_extraction_ledger", None)
+        if extraction is not None and extraction.enabled and new_filter is not None:
+            new_filter = list(
+                dict.fromkeys(
+                    [*new_filter, "extract_document_items", "save_extracted_items"]
+                )
+            )
         self._active_tool_filter = new_filter
         self._system_prompt_cache = self._compose_system_prompt()
 
@@ -4743,6 +4916,25 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             The truncated result or original if within limits
         """
+        extraction = getattr(self, "_extraction_ledger", None)
+        if extraction is not None:
+            extraction.activate_skill(
+                self._extraction_skill_instructions(
+                    extraction.query,
+                    (
+                        (tool_args or {}).get("name")
+                        if tool_name == "load_skill"
+                        else False
+                    ),
+                )
+            )
+            extraction.observe(tool_name, tool_args or {}, tool_result)
+            if (
+                extraction.enabled
+                and "extract_document_items" not in self._tools_registry
+            ):
+                self._register_extraction_tool()
+                self._apply_tool_filter(self._active_tool_filter)
         truncated_result = tool_result
         if isinstance(tool_result, (dict, list, str)):
             # Use custom encoder to handle bytes and other non-serializable types.
@@ -5609,6 +5801,10 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_schemas = None
         self._last_tool_filter = None
 
+        self._extraction_ledger = ExtractionLedger(
+            user_input, self._verification_project_root()
+        )
+
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
@@ -5627,6 +5823,20 @@ Do NOT wrap conversational replies in JSON.
         # as the tool filter above, so a stale skill match never survives
         # into a turn that no longer needs it.
         self._refresh_active_skill_filter(user_input)
+        self._extraction_ledger.activate_skill(
+            self._extraction_skill_instructions(user_input)
+        )
+        had_extraction_tools = "extract_document_items" in self._tools_registry
+        if self._extraction_ledger.enabled:
+            self._register_extraction_tool()
+        else:
+            getattr(self, "_tool_overrides", {}).pop("extract_document_items", None)
+            getattr(self, "_tool_overrides", {}).pop("save_extracted_items", None)
+            if self._instance_tools is not None:
+                self._instance_tools.pop("extract_document_items", None)
+                self._instance_tools.pop("save_extracted_items", None)
+        if self._extraction_ledger.enabled or had_extraction_tools:
+            self._apply_tool_filter(self._active_tool_filter)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []
@@ -7805,6 +8015,9 @@ Do NOT wrap conversational replies in JSON.
                 artifact_gaps = self._completion_evidence.gaps(
                     answer_candidate, _claims_file_write
                 )
+                self._check_extraction_sources()
+                extraction_gaps = self._extraction_ledger.gaps()
+                artifact_gaps.extend(extraction_gaps)
                 if artifact_gaps:
                     if (
                         completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
@@ -7826,7 +8039,7 @@ Do NOT wrap conversational replies in JSON.
                         correction = (
                             "[check:completion] "
                             + " ".join(artifact_gaps)
-                            + " Use `write_file` for a missing requested save, then "
+                            + " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary. Use `write_file` for a missing requested save, then "
                             "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
                             "continuation pages. Report only contents observed in "
                             "tool results. An unrelated tool or file is not evidence."
@@ -7846,6 +8059,20 @@ Do NOT wrap conversational replies in JSON.
                     completion_gaps.append(final_test_claim[1] + ".")
                 if completion_gaps:
                     answer_candidate = incomplete_answer(completion_gaps)
+                inventory = self._extraction_ledger.render()
+                if inventory:
+                    # Do not ask another synthesis call to reproduce the set:
+                    # that was the lossy aggregation step in #4141.
+                    if completion_gaps:
+                        answer_candidate += "\n\n" + inventory
+                    else:
+                        answer_candidate = inventory
+                        saved = sorted(self._extraction_ledger.destinations)
+                        if saved:
+                            answer_candidate += (
+                                "\n\nSaved and read back the complete inventory: "
+                                + ", ".join(f"`{path}`" for path in saved)
+                            )
                 final_answer = self._with_verification_scope(answer_candidate)
                 verification_scope_applied = True
                 self.execution_state = self.STATE_COMPLETION
@@ -7950,6 +8177,8 @@ Do NOT wrap conversational replies in JSON.
             completion_gaps = self._completion_evidence.gaps(
                 final_answer or "", _claims_file_write
             )
+            self._check_extraction_sources()
+            completion_gaps.extend(self._extraction_ledger.gaps())
             unsupported = unsupported_test_claim(
                 final_answer or "", self._turn_tool_executions
             )
@@ -8004,6 +8233,7 @@ Do NOT wrap conversational replies in JSON.
             "error_history": self.error_history,  # Include the full error history
             "tool_schema": self._trace_tool_schema(),
             "completion_gaps": completion_gaps,
+            "extraction_sources": sorted(self._extraction_ledger.results),
         }
 
         # Catches the exits that never printed an answer (max steps). Sealed

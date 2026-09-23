@@ -2800,9 +2800,25 @@ class MemoryMixin(ProceduralMemoryMixin):
             session_id = self.memory_session_id
             ctx = self._memory_context
             self._memory_store.store_turn(session_id, "user", clean_input, context=ctx)
-            self._memory_store.store_turn(
-                session_id, "assistant", assistant_response, context=ctx
-            )
+            extraction = getattr(self, "_extraction_ledger", None)
+            if extraction is not None and extraction.results:
+                provenance = "\n".join(
+                    f"Source {path}: SHA256 {digest}"
+                    for path, (_, _, digest) in sorted(extraction.results.items())
+                )
+                self._memory_store.store_turn(
+                    session_id,
+                    "assistant",
+                    assistant_response
+                    + "\n\nHistorical extraction evidence; revalidate current sources.\n"
+                    + provenance,
+                    context=ctx,
+                    preserve_full=True,
+                )
+            else:
+                self._memory_store.store_turn(
+                    session_id, "assistant", assistant_response, context=ctx
+                )
         except Exception as e:
             logger.warning("[MemoryMixin] failed to store conversation: %s", e)
 

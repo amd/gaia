@@ -139,6 +139,7 @@ MAX_CONTENT_LENGTH: int = 2000
 
 #: Maximum conversation turn length (chars) stored / injected into prompts.
 MAX_TURN_LENGTH: int = 4000
+MAX_EXTRACTION_TURN_LENGTH: int = 256000
 
 #: Maximum FTS5 query length (chars).  Longer queries are pathological input.
 MAX_FTS_QUERY_LENGTH: int = 500
@@ -737,18 +738,26 @@ class MemoryStore:
         role: str,
         content: str,
         context: str = "global",
+        *,
+        preserve_full: bool = False,
     ) -> None:
         """Store one conversation turn.
 
         Truncates content to 4000 chars. Code-generation agents can produce
         very long responses; storing the full text would bloat the FTS index
         and slow down conversation queries without adding search value.
+        Extraction inventories can opt into preserve_full: retain one canonical
+        turn up to 256000 characters, or fail explicitly above that bound.
         Empty or whitespace-only turns are silently skipped — they add no
         signal to conversation history and pollute FTS5 with empty entries.
         """
         if not content or not content.strip():
             return  # Skip empty turns
-        if len(content) > MAX_TURN_LENGTH:
+        if preserve_full and len(content) > MAX_EXTRACTION_TURN_LENGTH:
+            raise ValueError(
+                "Extraction conversation exceeds the 256000-character memory limit"
+            )
+        if not preserve_full and len(content) > MAX_TURN_LENGTH:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._lock:
