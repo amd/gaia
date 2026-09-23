@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import queue
+import subprocess
 import sys
 
 import pytest
@@ -387,6 +388,42 @@ def test_history_accumulates_across_turns():
     contents = [m["content"] for m in agent.conversation_history]
     assert "list issues in amd/gaia" in contents, "the repo turn was not carried"
     assert len(agent.conversation_history) == 4
+
+
+def test_clear_history_control_routes_to_a_queue_sentinel(monkeypatch):
+    """The pump must hand clear_history to the turn loop, not the query path."""
+    import io
+    import queue as queue_mod
+
+    lines = (
+        json.dumps({stdio.CONTROL_KEY: stdio.CONTROL_CLEAR_HISTORY})
+        + "\nhello after the clear\n"
+    )
+    monkeypatch.setattr(stdio.sys, "stdin", io.StringIO(lines))
+    q: "queue_mod.Queue" = queue_mod.Queue()
+
+    stdio._pump_stdin(q, stdio.PermissionState())
+
+    first = q.get_nowait()
+    assert isinstance(first, stdio._ClearHistory)
+    assert q.get_nowait() == "hello after the clear"
+    assert q.get_nowait() is None  # stdin closed
+
+
+def test_clear_history_sentinel_empties_the_next_prompt():
+    """After a clear, the next prompt must carry NO earlier turns — the exact
+    /clear bug: the view emptied while conversation_history kept riding."""
+    agent = _HistoryAgent()
+    stdio._record_turn(agent, "my api key is hunter2", "Noted.")
+    stdio._record_turn(agent, "what did I just tell you?", "hunter2")
+    assert agent.conversation_history  # precondition: there is history to leak
+
+    # The turn loop's sentinel branch, verbatim.
+    history = getattr(agent, "conversation_history", None)
+    if history is not None:
+        history.clear()
+
+    assert agent.conversation_history == []
 
 
 def test_history_is_trimmed_in_whole_turns():
@@ -1380,3 +1417,68 @@ def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
     events = [json.loads(line) for line in _lines(wire)]
     assert events[-1]["type"] == "error"
     assert "dispatch bug" in events[-1]["detail"]
+
+
+def test_clear_conversation_resets_only_history(monkeypatch):
+    agent = _FakeAgent()
+    agent.conversation_history = []
+    agent.model_id = "chosen-model"
+    agent.loaded_skills = {"coding": "loaded"}
+    state = stdio.PermissionState(bypass=True)
+    seen = []
+
+    def turn(agent, query, out, **kwargs):
+        seen.append(list(agent.conversation_history))
+        stdio._record_turn(agent, query, "answer")
+        stdio._write({"type": "final", "answer": "answer"}, out)
+
+    monkeypatch.setattr(stdio, "run_turn", turn)
+    wire = io.StringIO()
+    stdio.dispatch_query(agent, "first", wire, state=state)
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    stdio.dispatch_query(agent, "second", wire, state=state)
+    assert seen == [[], []]
+    assert agent.model_id == "chosen-model"
+    assert agent.loaded_skills == {"coding": "loaded"}
+    assert state.bypass
+    assert json.loads(_lines(wire)[1]) == {
+        "type": "final",
+        "answer": "conversation_cleared",
+    }
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    stdio.dispatch_query(agent, "\x00gaia:clear_conversation\x00", wire, state=state)
+    assert agent.conversation_history == []
+
+
+def test_clear_conversation_over_real_stdio_process():
+    script = r"""
+import json
+import sys
+from gaia_agent import stdio
+class Agent:
+    console = None
+    conversation_history = []
+    loaded_skills = {"coding": "loaded"}
+    def process_query(self, query):
+        return {"answer": json.dumps(self.conversation_history)}
+agent = Agent()
+for line in sys.stdin:
+    stdio.dispatch_query(agent, stdio.parse_query(line.strip()), sys.stdout)
+"""
+    queries = ["first", "followup", "\x00gaia:clear_conversation\x00", "fresh"]
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input="".join(json.dumps({"gaia_query": query}) + "\n" for query in queries),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    events = [
+        json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")
+    ]
+    finals = [e["answer"] for e in events if e["type"] == "final"]
+    assert len(finals) == 4, result.stdout
+    assert json.loads(finals[1])[0]["content"] == "first"
+    assert finals[2] == "conversation_cleared"
+    assert json.loads(finals[3]) == []

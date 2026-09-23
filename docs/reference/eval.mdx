@@ -11,6 +11,7 @@ icon: "flask-vial"
   - [Scenario Authoring](/guides/eval-scenarios) — write custom YAML scenarios
   - [CI/CD Integration](/guides/eval-ci) — regression detection in GitHub Actions
   - [CLI Reference](/reference/cli#agent-eval) — full `gaia eval agent` command reference
+  - [Eval Scorecard](/reference/eval-scorecard) — the per-agent release scorecard; the **flagship gaia agent** is scored by `gaia eval agent --agent-type gaia` over the 13-category `eval/scenarios/gaia_*` corpus (aggregate = judged pass rate), published at `hub/agents/gaia/npm/SCORECARD.md` and gated at release
 </Warning>
 
 <Info>
@@ -602,6 +603,10 @@ gaia eval sessions --dataset-only --out eval/results/sessions
 | `--project` | Only sessions from one project directory under `~/.claude/projects` |
 | `--out` | Output directory (default: `eval/results/sessions-<timestamp>`) |
 | `--dataset-only` | Build the dataset and stop — no agent, no judge |
+
+<Warning>
+  The dataset and results contain your own prompts and the answers Claude Code gave you. `eval/results/sessions*/` is gitignored for that reason; don't commit it or upload it as a CI artifact.
+</Warning>
 
 Judging uses Claude and needs `ANTHROPIC_API_KEY`; the repo's `.env` is read
 automatically.
@@ -1433,6 +1438,82 @@ Use `gaia eval agent --compare BASELINE CURRENT --require-complete` for a local
 pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
 measurement, as well as for measured regressions. Without this opt-in, incomplete
 measurements remain visible as warnings and the comparison judges measured results.
+
+## Flagship Agent Tasks
+
+`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. It scores what the finished project **does**, not what the agent says it did. CI runs it on pull requests that touch the agent, and fails the build when passes, quality, honesty, tokens, steps or runtime fall outside the committed expectations.
+
+```bash
+gaia eval tasks run --suite core     # run each task, then judge quality
+gaia eval tasks gate eval/results/eval-tasks-<timestamp>
+```
+
+It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a running Lemonade Server, and the Claude Code CLI for the judge.
+
+### How a task is scored
+
+- Every task starts from a fresh copy of `eval/tasks/toybox`, a small Python project with deliberate defects. The agent may read and write that copy and nothing else.
+- A **coding task** passes when the project's own tests pass *and* a probe run inside the finished project confirms the behavior. For example, the bug fix must accept lowercase `z`, and the weekly report must match an independent recomputation row for row.
+- A **question task** is decided by the judge: it passes only if the answer establishes every one of the task's required points (`must_establish`), in any wording. Keyword matching was tried first and dropped: correct answers phrase the same finding in too many ways.
+- The **judge** (Claude, with no tools) reads the original project once, then each task's answer and a diff of its changes, and grades every task in a single call. It scores four things from 1 to 5: following the instructions, quality of the work, reasoning, and whether the answer claims anything the agent never did. It is never told whether a coding task passed.
+- If the model backend cannot be reached, the task is **not measured**. That is reported as an infrastructure failure, never as the agent getting worse.
+
+### Suites
+
+| Suite | Tasks | Where it runs |
+|---|---|---|
+| `core` | Explain a file · bug fix with a regression test · weekly CSV report · config from an environment variable | Every CI run |
+| `full` | `core` plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
+
+Tasks and suites live in `eval/tasks/tasks.json`. Every task is checked in both directions:
+
+- Each coding task has a reference solution in `tests/unit/eval/test_flagship_tasks.py`. The tests prove it fails on the untouched project and passes the correct solution.
+- Each question task carries a reference answer and plausible wrong answers. `GAIA_EVAL_LIVE_JUDGE=1 pytest tests/unit/eval/test_flagship_tasks.py -k live_judge` asks the judge about all of them in one call (about $0.15) and requires it to pass every reference and fail every wrong answer.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `gaia eval tasks run [--suite core] [--model M] [--out DIR] [--no-judge]` | Runs the flagship on each task and writes `scorecard.json`, plus each task's `transcript.json` and `workspace.diff`. Judges afterwards unless `--no-judge`. |
+| `gaia eval tasks judge DIR [--judge-model M] [--judge-attempts N]` | Grades a finished run. A task with no usable grade is recorded as unjudged, not scored. |
+| `gaia eval tasks gate DIR [--expect FILE] [--enforce] [--propose FILE]` | Compares the run with its expectations. Reports by default; `--enforce` exits 1 on a miss or on a task that was not measured. CI always enforces. |
+
+### The gate
+
+Expectations live in `eval/tasks/expectations/<model>.<suite>.json`. Each file holds two things:
+
+- **Main's measured results**, overall (`measured`) and per task (`tasks`), with the commit and runner they came from. The report puts them beside the current run, so every PR shows main and itself side by side.
+- **The limits** the gate enforces. They are tied to the model, the suite and the judge model, because a different judge grades on a different scale.
+
+An abridged, illustrative file:
+
+```json
+{
+  "suite": "core",
+  "model": "Gemma-4-E4B-it-GGUF",
+  "judge_model": "claude-opus-5",
+  "measured_on": {"commit": "<sha of main>", "runner": "<runner name>"},
+  "measured": {"passed": 4, "quality": 3.6, "misreported": 1,
+               "total_tokens": 250000, "steps": 30, "wall_seconds": 600},
+  "tasks": [{"id": "02-bugfix", "result": "PASS", "steps": 8,
+             "total_tokens": 70000, "wall_seconds": 140, "quality": 3.5}],
+  "min_passed": 3,
+  "min_quality": 3.1,
+  "max_misreported": 2,
+  "max_total_tokens": 337500,
+  "max_steps": 40,
+  "max_wall_seconds": 900
+}
+```
+
+- A task the judge could not grade fails the quality checks instead of being skipped.
+- A model and suite with no committed expectations are **not gated yet**: the report is printed and the job stays green, even when enforcing. Naming a missing file with `--expect` is an error.
+- `--propose FILE` writes this file from a run, with headroom for one noisy run: one task may flip, quality may drop 0.5, tokens and steps may grow 35%, and runtime may grow 50%. Runtime includes the model load, so it swings more than tokens do.
+- CI uploads a proposal with every scorecard. To set or move the bar, commit a proposal from a run of `main` on the CI runner. The limits change only through a reviewed commit, never automatically.
+
+<Warning>
+  The run step never holds the judge's credentials: `run` removes `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from its own environment before the agent starts, because the agent runs shell commands. In CI they exist only in the judge step. The CI artifact holds scores only; reproduce a failure locally to get its transcripts.
+</Warning>
 
 
 ---

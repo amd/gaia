@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.12"`                  |
+| Contract version   | `API_VERSION = "2.13"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -265,6 +265,7 @@ the header.
 | `GET`  | `/version`                       | Contract probe. `{ "apiVersion", "agentVersion" }` |
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
+| `GET`  | `/v1/gaia/memory`                | The `/memory` snapshot (contract ≥ 2.13)       |
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
@@ -272,7 +273,19 @@ the header.
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
 
+`GET /v1/gaia/memory` returns the read-only snapshot behind the TUI's
+`/memory` view: `{ "available", "reason", "stats", "contexts", "shown",
+"total", "items" }`. `available: false` means the session has no live memory
+store (Lemonade down, embedding model not pulled, disabled via env) — `reason`
+names why, so an outage never renders as "you have no memories". This is the
+daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
+paths call the same `build_memory_dump()` and return the identical shape.
+
 ### 5.2 `session_id` and agent retention
+
+Internal explicit deletion follows the same idle-only rule as eviction: it returns
+`False` for an absent or busy session and preserves a running agent. Successful
+deletion claims the turn lock before removal and closes outside the registry lock.
 
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
 **Pass it on every call in a conversation, and reuse the same value for the
@@ -280,6 +293,13 @@ whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
 agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
 threads them together.
+
+A skill **captured** in-conversation (the `capture_skill` tool — itself
+confirmation-gated and therefore unreachable over `/query`) loads
+**instruction-only** until a human runs `gaia skill promote <name>` in a
+terminal: `load_skill` injects its body but defers registering any tools it
+declares, and reports the deferral in its result. Integrators must not expect
+a captured skill's `<skill>/<tool>` names to exist before that promote.
 
 A retained skill stays *loaded* but its body is not necessarily in the prompt
 every turn: the agent selects per turn which loaded bodies match the query and

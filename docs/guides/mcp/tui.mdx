@@ -53,8 +53,11 @@ back is the exact frame the renderer just drew.
 
 ### What `view` can be
 
-`gaia-tui` boots straight into one agent, so there is nothing to browse and no
-agent to pick. `tui_status` reports `view` as one of:
+`gaia-tui` boots straight into the flagship. Chat now has an in-session `/agents`
+command that lists installed agents and switches to one, but there is no
+dedicated control-API tool for it -- drive it the same way a human would, with
+`tui_send_text("/agents")` and `tui_send_keys`. `tui_status` reports `view` as
+one of:
 
 | `view` | What it is |
 |--------|------------|
@@ -73,7 +76,8 @@ agent to pick. `tui_status` reports `view` as one of:
 <Warning>
   There is no `tui_launch_agent`, `tui_install_agent` or `tui_uninstall_agent`.
   They drove the hub browser, which no longer exists. Launching **is** running
-  `gaia tui`; a different agent is `gaia tui chat --agent <id>`; and installing
+  `gaia tui`; switching agents inside a live session is chat's `/agents`, driven
+  through `tui_send_text`/`tui_send_keys` like any other command; and installing
   a hub agent is `gaia hub install <id>` in the Python CLI.
 </Warning>
 

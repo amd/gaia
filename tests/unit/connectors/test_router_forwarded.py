@@ -159,6 +159,24 @@ class TestForwardDelete:
         # Now gone.
         assert ui_api_client.get("/v1/connections/google").status_code == 404
 
+    @respx.mock
+    def test_revoke_never_calls_the_providers_revoke_endpoint(self, ui_api_client):
+        """#2591 review, critical: the stored token was minted under the HOST
+        APP's OAuth client, and Google's revoke endpoint takes no client auth —
+        it kills the grant for whoever owns the token. Calling it here would
+        sign the host app out of the user's Google account, recoverable only by
+        re-consenting through that app. Disconnect must stay local."""
+        route = respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(200)
+        )
+        ui_api_client.post(
+            "/v1/connections/google", json=_forward_body(), headers=UI_HEADER
+        )
+        resp = ui_api_client.delete("/v1/connections/google", headers=UI_HEADER)
+        assert resp.status_code == 204
+        assert not route.called, "the host app's OAuth grant was revoked"
+        assert ui_api_client.get("/v1/connections/google").status_code == 404
+
     def test_delete_requires_csrf(self, ui_api_client):
         ui_api_client.post(
             "/v1/connections/google", json=_forward_body(), headers=UI_HEADER

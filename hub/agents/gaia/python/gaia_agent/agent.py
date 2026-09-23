@@ -43,10 +43,12 @@ unchanged.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
+from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.project_map import ProjectMapMixin
@@ -61,8 +63,10 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -78,7 +82,16 @@ _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 #: holds just a ``.gitkeep``, so without this the agent discovers NO skills and
 #: "load the github-triage skill" fails on a tree that visibly contains it.
 #: hub/agents/gaia/python/gaia_agent/agent.py -> parents[4] is hub/.
-_HUB_SKILLS_DIR = Path(__file__).resolve().parents[4] / "skills"
+#:
+#: Frozen builds skip this: PyInstaller's extraction dir has no fixed depth
+#: (Linux's is shallow enough that parents[4] raises IndexError at import
+#: time -- verified on the v0.2.0 linux-x64 freeze), and _SKILLS_DIR alone is
+#: correct there since the freeze already bundles the pack as --add-data.
+_HUB_SKILLS_DIR = (
+    _SKILLS_DIR
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parents[4] / "skills"
+)
 
 
 def _bundled_skill_roots() -> List[str]:
@@ -169,14 +182,14 @@ class GaiaAgentConfig(ChatAgentConfig):
     # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
     dynamic_tools: bool = True
 
-    # 12 CORE (FULL_CORE_TOOLS) + 14 dynamic slots. The inherited 14 was sized
+    # 15 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
-    # of loading it. Swept offline against nine representative queries: 22 cut
-    # the web bundle in half on a research question, 26 lands every matched
-    # bundle whole, and 30 buys nothing further. Costs ~4.2K tiktoken tokens of
-    # tools= against 10.5K for the whole registry.
-    dynamic_tools_max: int = 26
+    # of loading it. Swept offline against nine representative queries with 13
+    # CORE: 13 dynamic slots lands every matched bundle whole, 9 cut the web
+    # bundle in half on a research question, and 17 buys nothing further. Grows
+    # with CORE so the dynamic share stays 13.
+    dynamic_tools_max: int = 28
 
     # Proactive skill discovery: match each turn against skills that are
     # INSTALLED BUT NOT LOADED and activate the winner, so the user never has
@@ -231,18 +244,27 @@ class GaiaAgent(
     SkillLibraryToolsMixin,
     SkillLearningToolsMixin,
     CodeIndexToolsMixin,
+    EmailToolsMixin,
 ):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
 
-    # Installing a skill writes third-party code under ~/.gaia/skills and
-    # removing one deletes it, so both are gated the way file mutation is.
+    # Declared, not acquired: the user consents once via `gaia connectors`, and
+    # nothing here reaches a mailbox until an email tool is actually called.
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = list(
+        MAILBOX_REQUIREMENTS
+    )
+
+    # Installing/capturing a skill writes third-party content under
+    # ~/.gaia/skills and removing one deletes it, so all three are gated the way
+    # file mutation is. capture_skill additionally feeds pasted/fetched text
+    # into the system prompt — never without the human seeing the request.
     # remember_skill_lesson deliberately is not: it writes only to this agent's
     # own memory, applies at once, announces itself, and undoes in one command.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
-        {"install_skill", "remove_skill"}
+        {"install_skill", "capture_skill", "remove_skill"}
     )
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
@@ -271,8 +293,8 @@ class GaiaAgent(
 
         Skill-library tools go first: ChatAgent's registration ends with
         ``_snapshot_tools()``, and anything registered after that snapshot is
-        absent from this instance's registry. Code-index tools join them for the
-        same reason.
+        absent from this instance's registry. Code-index and email tools join
+        them for the same reason.
 
         Semantic code search is what makes this agent usable ON a codebase
         rather than merely in one: grep finds a string, this finds the function
@@ -307,6 +329,7 @@ class GaiaAgent(
         # inside a repo to that repo (#3544).
         self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
         self.register_code_index_tools()
+        self.register_email_tools()
         super()._register_tools()
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────

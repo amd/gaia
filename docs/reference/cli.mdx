@@ -375,7 +375,7 @@ gaia uninstall [OPTIONS]
 
 <CodeGroup>
 ```bash Preview
-gaia uninstall --dry-run
+gaia uninstall --purge --dry-run
 ```
 
 ```bash Remove Python Environment Only
@@ -397,7 +397,7 @@ gaia uninstall --purge --purge-lemonade --yes
 
 <Warning>
 `--purge` permanently deletes your chat history, uploaded documents, configuration,
-and embedded Lemonade downloads. Use `--dry-run` first to preview what will be removed.
+and embedded Lemonade downloads. Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
 </Warning>
 
 <Note>
@@ -615,12 +615,11 @@ automatically:
 
 ```bash From PyPI (pip)
 pip install gaia-agent-email          # one agent
-pip install "amd-gaia[agents]"            # every AMD production agent
 ```
 
 <Note>
 PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
-[#2240](https://github.com/amd/gaia/issues/2240)), so the commands above don't
+[#2240](https://github.com/amd/gaia/issues/2240)), so the command above doesn't
 resolve yet. Until publishing lands, install an agent straight from this repo:
 
 ```bash From source (works today)
@@ -1359,7 +1358,7 @@ gaia connectors <subcommand> [OPTIONS]
 | `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys, OAuth client creds) |
 | `test <id>` | Run a health check for a configured connector |
-| `disconnect <id>` | Remove credentials and reset a connector's state |
+| `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
 | `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
 
@@ -1420,7 +1419,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt` |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 
@@ -1431,6 +1430,11 @@ For `gaia chat`, `gaia llm`, and `gaia prompt`, the model is resolved highest-wi
 1. An explicit `--model <id>` flag
 2. `default_model` from `~/.gaia/config.json`
 3. The command's built-in default (`DEFAULT_MODEL_NAME`)
+
+The Agent UI resolves a new session's model the same way: an explicit pick
+in the UI wins, then `default_model`, then the built-in floor. So
+`gaia config set default_model <id>` also changes what a brand-new "New
+Chat" lands on, not just the CLI.
 
 So `gaia config set default_model <id>` lets you skip `--model` entirely, while
 `--model` still overrides it for a single run. For `gaia chat`, passing an
@@ -1743,6 +1747,7 @@ gaia eval agent [OPTIONS]
 | `--scenario-dir` | string | -- | Additional scenario directory to scan (repeatable) |
 | `--corpus-dir` | string | -- | Additional corpus directory to scan (repeatable) |
 | `--tag` | string | -- | Run only scenarios with this tag (repeatable, OR logic) |
+| `--exclude-tag` | string | -- | Skip scenarios carrying this tag (repeatable; applied *after* `--tag`/`--category`) |
 | `--output-format` | choice | -- | Output format: `json`, `markdown`, or `junit` |
 
 **Examples:**
@@ -1806,6 +1811,21 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 </Note>
 
 [→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
+
+---
+
+### Flagship Agent Tasks
+
+Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, quality, honesty, tokens, steps and runtime, against main's committed results.
+
+```bash
+gaia eval tasks run --suite core                   # Run the core tasks, then judge them
+gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
+gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
+gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
+```
+
+[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks)
 
 ---
 
@@ -1968,7 +1988,7 @@ Author and manage agent skills. A skill is a directory whose only required file 
 gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
 gaia skill deltas <name> [OPTIONS]                                # what an agent LEARNED
 gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
-gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
+gaia skill {search,install,remove,promote,publish,keygen,trust} [OPTIONS] # marketplace + trust
 ```
 
 Skills are discovered from three roots, highest precedence first:
@@ -1992,6 +2012,7 @@ Skills are discovered from three roots, highest precedence first:
 | `search [query]` | Search the Agent Hub's skills lane |
 | `install <name[@range]>` | Install a published skill into `~/.gaia/skills/` |
 | `remove <name>` | Delete an installed skill and drop its lock entry |
+| `promote <name>` | Trust a **captured** skill's code after a clean audit — until then its `tools.py` stays inert |
 | `publish <dir>` | Validate, audit, sign, and publish a skill to the hub |
 | `keygen` | Generate an Ed25519 publisher key for signing |
 | `trust {list,add,remove}` | Manage the public keys whose signatures this machine trusts |
@@ -2182,6 +2203,30 @@ Skills are discovered from three roots, highest precedence first:
     bundle's `SIGNATURE.json` over every file, then installs at
     `min(claimed tier, tier the signature earned)`. Nothing is written until every
     gate passes.
+  </Tab>
+
+  <Tab title="promote">
+    ```bash
+    gaia skill promote <name>
+    ```
+
+    The trust step for skills the agent **captured** in-conversation (the
+    flagship's `capture_skill` tool: pasted `SKILL.md` text, a URL, or a local
+    folder/zip). A captured skill's instructions load immediately, but any
+    `tools.py`/scripts it carries stay **inert** — `load_skill` injects the body
+    and defers tool registration. `promote` re-runs the full security audit on
+    the installed directory and, **only on an `ALLOW` verdict**, marks the code
+    trusted so the next load registers its tools. Trust is bound to the audited
+    bytes: edit the skill afterwards and its code defers again until
+    re-promoted.
+
+    `REVIEW`/`BLOCK` print the findings and refuse (exit `5`/`6`), revoking any
+    earlier trust. This is deliberately a terminal command — the agent cannot
+    call it, so a chat approval can never enable captured code.
+
+    Not to be confused with `gaia skill trust`, which manages the **signing
+    keys** this machine accepts for hub installs. `promote` trusts one local
+    captured skill's code, audit-gated — nothing else.
   </Tab>
 
   <Tab title="publish">
