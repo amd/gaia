@@ -55,6 +55,22 @@ def json_response(payload, status=200):
     return httpx.Response(status, json=payload)
 
 
+def unfenced(message):
+    """The body a read returns, with the untrusted-content fence stripped.
+
+    ``read_email`` wraps every body in the fence (#4150); these tests are about
+    what is inside it — truncation, and the per-turn budget it is charged to.
+    """
+    from gaia.agents.tools._email.phishing import (
+        UNTRUSTED_BODY_CLOSE,
+        UNTRUSTED_BODY_OPEN,
+    )
+
+    body = message["body"]
+    assert body.startswith(UNTRUSTED_BODY_OPEN) and body.endswith(UNTRUSTED_BODY_CLOSE)
+    return body[len(UNTRUSTED_BODY_OPEN) : -len(UNTRUSTED_BODY_CLOSE)].strip("\n")
+
+
 def graph_error(status, code=None, body=None):
     """A Graph error response: either a structured `{error: {code}}` body, or
     a raw text body (HTML, plain text) to simulate what Graph and proxies
@@ -776,7 +792,7 @@ def test_read_email_body_is_bounded_and_truncation_is_visible(harness_factory):
     h = harness_factory(lambda r: json_response(message))
 
     out = json.loads(h._tool("read_email")(message_id="AAMk-1"))["message"]
-    assert len(out["body"]) == _MAX_BODY_CHARS
+    assert len(unfenced(out)) == _MAX_BODY_CHARS
     assert out["body_truncated"] is True
     assert out["body_original_chars"] == len(huge)
 
@@ -785,7 +801,7 @@ def test_a_short_body_is_not_marked_truncated(harness_factory):
     h = harness_factory(lambda r: json_response(GRAPH_MESSAGE))
     out = json.loads(h._tool("read_email")(message_id="AAMk-1"))["message"]
     assert "body_truncated" not in out
-    assert out["body"] == "<p>Can you confirm?</p>"
+    assert unfenced(out) == "<p>Can you confirm?</p>"
 
 
 def test_backend_is_not_built_until_a_tool_runs():
@@ -899,7 +915,7 @@ def test_turn_budget_refuses_once_the_turn_is_full(harness_factory):
     assert "message" not in refusal
 
     budget = h._email_turn_budget_chars()
-    total_charged = sum(len(r["message"]["body"]) for r in successes)
+    total_charged = sum(len(unfenced(r["message"])) for r in successes)
     assert total_charged == h._email_turn_body_chars
     assert total_charged <= budget + _MAX_BODY_CHARS
 
