@@ -60,6 +60,100 @@ _MAX_LIMIT = 100
 # triage turn can read several messages. Caps one body, not a whole turn.
 _MAX_BODY_CHARS = 12_000
 
+# How many terms the narrowest broadened rung keeps, and how many single-term
+# rungs follow it. One distinctive noun is what actually matches a message the
+# user is describing from memory; the cap bounds a miss to six fast searches.
+_BROADEN_KEEP = 2
+_BROADEN_SINGLES = 3
+
+_BOOLEAN_OPERATORS = frozenset({"AND", "OR", "NOT"})
+
+# Words that carry no discriminating power in a mailbox, so they are the first
+# thing dropped when a query has to get shorter.
+_SEARCH_STOPWORDS = frozenset("""
+    a about all an and any are as at be been before but by can did do does for
+    from get got had has have he her him his i if in into is it its just me
+    my need needs of on or our out over please she should so some that the
+    their them then there these they this those to us was we were what when
+    where which who will with would you your
+    """.split())
+
+
+def _search_terms(query: str) -> List[str]:
+    """Split a search query into terms, keeping "quoted phrases" whole."""
+    terms: List[str] = []
+    buf: List[str] = []
+    quoted = False
+    for char in query:
+        if char == '"':
+            quoted = not quoted
+            buf.append(char)
+        elif char.isspace() and not quoted:
+            if buf:
+                terms.append("".join(buf))
+                buf = []
+        else:
+            buf.append(char)
+    if buf:
+        terms.append("".join(buf))
+    return terms
+
+
+def _is_search_operator(term: str) -> bool:
+    """True for a term that filters a mailbox without naming any content.
+
+    Both providers take ``field:value`` operators (``is:unread``, ``from:dana``,
+    ``newer_than:7d``) and ``-negations``. They narrow a slice; they never say
+    what the message is about.
+    """
+    if term.startswith("-"):
+        return True
+    field, separator, _ = term.partition(":")
+    return bool(separator) and field.isidentifier()
+
+
+def _broadening_ladder(query: str) -> List[str]:
+    """Progressively broader forms of one query, most specific first.
+
+    Both providers AND every term, so a paraphrase expanded into eight
+    keywords matches nothing. The rungs are deterministic — drop boolean
+    operators and stopwords, keep the two longest remaining terms, then try
+    the longest terms one at a time — so a result can always say which query
+    actually produced it. Longest is a proxy for distinctive; the single-term
+    rungs are what recover a message whose own wording the user never used.
+
+    Every broadened rung is built from content terms only. A rung of bare
+    operators (``is:unread``) would return a slice of the mailbox — non-empty,
+    so the ladder would stop there and hand the model unrelated mail labelled
+    as a match. An operator-only query is run once, as asked, and never
+    broadened.
+    """
+    terms = _search_terms(query)
+    ladder: List[str] = []
+
+    def _add(candidate_terms: List[str]) -> None:
+        candidate = " ".join(candidate_terms)
+        if candidate and candidate not in ladder:
+            ladder.append(candidate)
+
+    _add(terms)
+    content = [
+        t
+        for t in terms
+        if t.upper() not in _BOOLEAN_OPERATORS
+        and not _is_search_operator(t)
+        and t.strip('"').lower() not in _SEARCH_STOPWORDS
+    ]
+    if content:
+        _add(content)
+    ranked = sorted(range(len(content)), key=lambda i: (-len(content[i].strip('"')), i))
+    if len(content) > _BROADEN_KEEP:
+        _add([content[i] for i in sorted(ranked[:_BROADEN_KEEP])])
+    if len(content) > 1:
+        for i in ranked[:_BROADEN_SINGLES]:
+            _add([content[i]])
+    return ladder
+
 
 def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
     """``(resolved_scope, explanation)`` for one provider.
@@ -331,21 +425,55 @@ class EmailToolsMixin:
             relevance order, NOT newest-first — do not describe them as "the
             most recent" unless you check the received timestamps yourself.
 
+            EVERY term is ANDed, so a longer query is a NARROWER one. Send 2-3
+            distinctive keywords, never a sentence: pass 'cameras police', not
+            'the argument over cameras police departments use'. Words the user
+            chose when describing the mail from memory are usually NOT the
+            words in it — search the rare nouns, not the paraphrase.
+
             Args:
-                query: Keywords to search for (e.g. 'invoice from Acme')
+                query: 2-3 distinctive keywords (e.g. 'Acme invoice')
                 limit: How many messages to return (1-100, default 25)
             """
             try:
-                messages = mixin._email_call("search", query, limit=_clamp(limit))
-                return json.dumps(
-                    {
-                        "success": True,
-                        "count": len(messages),
-                        "order": "relevance",
-                        "messages": messages,
-                    },
-                    indent=2,
-                )
+                messages: list = []
+                attempts = []
+                for candidate in _broadening_ladder(query) or [query]:
+                    messages = mixin._email_call(
+                        "search", candidate, limit=_clamp(limit)
+                    )
+                    attempts.append({"query": candidate, "count": len(messages)})
+                    if messages:
+                        break
+                used = attempts[-1]["query"]
+                payload = {
+                    "success": True,
+                    "count": len(messages),
+                    "order": "relevance",
+                    "query_requested": query,
+                    "query_used": used,
+                    # Terms, not the raw string — a trailing space is not a
+                    # broadening, and claiming one tells the model to hedge
+                    # about an exact hit.
+                    "broadened": used.split() != query.split(),
+                    "attempts": attempts,
+                    "messages": messages,
+                }
+                if not messages:
+                    payload["note"] = (
+                        "No message matched, including the broadest query "
+                        f"tried ('{used}'). Do not search again on your own — "
+                        "tell the user nothing matched, and ask them for one "
+                        "detail that would appear in the message itself, such "
+                        "as the sender, a company name, or an amount."
+                    )
+                elif payload["broadened"]:
+                    payload["note"] = (
+                        f"'{query}' matched nothing; these results come from "
+                        f"'{used}'. Say the match is approximate, and check "
+                        "each hit is the message the user meant."
+                    )
+                return json.dumps(payload, indent=2)
             except Exception as exc:
                 return _fail(exc, "search_email")
 
