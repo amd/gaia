@@ -14,6 +14,7 @@ mock: the pydantic model behind ``GET /api/agents`` and an actual
 here instead of silently at runtime.
 """
 
+import inspect
 import re
 from pathlib import Path
 
@@ -44,7 +45,13 @@ CLIENT_DERIVED_FIELDS = {
 }
 
 _COMMENT_LINE = re.compile(r"^\s*(//|/\*|\*)")
-_FIELD_DECL = re.compile(r"^\s{4}(\w+)\??\s*:")
+_TRAILING_COMMENT = re.compile(r"//.*$")
+# Any indentation: the depth == 1 guard, not the column, is what restricts this
+# to top-level members.
+_FIELD_DECL = re.compile(r"^\s+(\w+)\??\s*:")
+# ``merge_with_registry`` emits optional keys with this idiom; see
+# _catalog_payload_keys.
+_CONDITIONAL_EMIT = re.compile(r'if "(\w+)" in entry:')
 
 
 def _declared_agent_info_fields() -> set:
@@ -72,11 +79,13 @@ def _declared_agent_info_fields() -> set:
     for line in lines[start + 1 :]:
         if _COMMENT_LINE.match(line):
             continue
+        # A brace inside a trailing comment would offset the depth counter.
+        code = _TRAILING_COMMENT.sub("", line)
         if depth == 1:
-            match = _FIELD_DECL.match(line)
+            match = _FIELD_DECL.match(code)
             if match:
                 fields.add(match.group(1))
-        depth += line.count("{") - line.count("}")
+        depth += code.count("{") - code.count("}")
         if depth <= 0:
             break
     else:
@@ -96,9 +105,11 @@ class _FakeReg:
 def _catalog_payload_keys() -> set:
     """Keys a real ``GET /api/agents/catalog`` agent entry carries.
 
-    Built by running the actual merge over a catalog index entry that declares
-    every optional key, so conditionally-emitted fields (the eval scorecard
-    pair) are present.
+    Built by running the actual merge over a catalog index entry. The
+    unconditional keys are hand-declared below; the conditionally-emitted ones
+    are read out of ``merge_with_registry``'s own source, so adding an emit
+    there cannot leave this fixture stale and fail the contract on a field that
+    is genuinely on the wire.
     """
     entry = {
         "id": "demo",
@@ -118,6 +129,16 @@ def _catalog_payload_keys() -> set:
         "eval_score": 91,
         "eval_scorecard_url": "https://hub.test/demo/scorecard.md",
     }
+    conditional = set(_CONDITIONAL_EMIT.findall(inspect.getsource(merge_with_registry)))
+    assert conditional, (
+        "found no 'if \"<key>\" in entry:' emits in gaia.hub.catalog."
+        "merge_with_registry — the idiom changed, so this test's introspection no "
+        "longer sees conditionally-emitted fields and will fail on fields that are "
+        "really on the wire. Update _CONDITIONAL_EMIT to match the new idiom."
+    )
+    for key in conditional:
+        entry.setdefault(key, "present")
+
     merged = merge_with_registry([entry], _FakeReg(), {"demo": "1.1.0"})
     assert len(merged) == 1, merged
     return set(merged[0])
