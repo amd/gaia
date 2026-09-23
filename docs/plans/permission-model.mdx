@@ -15,7 +15,7 @@ icon: "lock"
 
 **Would replace:** the per-spelling shell fixes #4037, #4041, #4042, #4044
 
-**Related:** the typed tool outcome (`ToolOutcome`, P1 of the architecture review), #3907 (agent scratch directory), #4023 (rate limit)
+**Related:** the typed tool outcome (`ToolOutcome`, P1 of the architecture review), #4071 (a refused path is still writable through `run_python`), #3907 (agent scratch directory), #4023 (rate limit)
 </Info>
 
 ## Summary
@@ -70,6 +70,12 @@ Two of the nine show the model itself is wrong, not just incomplete:
 - **A refusal with no way forward turns careful work into a false claim.** In case 9 the
   agent couldn't copy the project, so it ran the tests on the unpatched code and reported
   "still green".
+
+And the boundary binds one set of tools rather than the agent. In #4071, `write_file`
+correctly refused a path outside the allowed folders, and the model then wrote the same
+file from a `run_python` snippet. In a second run of the same task it accepted the
+refusal. Whether a refusal holds is currently up to the model. §3.11 says how far this
+design fixes that, and where it can't.
 
 The campaign's shell corpus shows how much of this comes down to spelling. It holds the
 1,371 distinct commands the models actually ran, and 675 of them were refused:
@@ -517,6 +523,36 @@ The reasons to keep it:
 The floor only covers what GAIA can see. It doesn't stop code that opens `~/.ssh` from
 inside `python`, and the user docs say so.
 
+### 3.11 One boundary for every tool (#4071)
+
+A path refused for one tool has to stay refused for the next one. Three of the four ways
+to write a file are decided from facts, so they agree by construction:
+
+- `write_file` and the other file tools report `writes`
+- a shell redirect, `cp`, `mv` or `tee` reports `writes`
+- a shell command's operands report the paths they name
+
+The fourth is code. `run_python` and `execute_python_file` report `code: python` and no
+paths, because nothing can read a snippet and say what it will open. Three things follow,
+and the last one is a real limit:
+
+1. **Below full access, code asks**, and the prompt says plainly that the snippet can read
+   and write anywhere the user can. Today, `run_python` under a blanket approval never
+   raises the path question at all.
+2. **GAIA's own Python execution gets an audit hook** (PEP 578) that applies the same
+   roots to `open` for writing, `os.mkdir`, `os.rename` and `os.remove`. It turns the
+   #4071 sequence into a refusal instead of a race between two tools. It is not a sandbox:
+   code that sets out to escape it, through `ctypes` or a subprocess, can. The refusal
+   message and the docs say that.
+3. **What it wrote still gets reported.** Inside a git work tree, comparing `git status`
+   around the step reports writes nobody predicted, so an answer can't claim a clean run
+   that didn't happen.
+
+Allowing code with a rule (`code(python)`, or the benchmark's `tool(run_python)`) allows
+what that code does, paths included. The rule text says so. That is the honest reading of
+running code without a sandbox, and it is why the preset that runs code unasked is full
+access.
+
 ## 4. The nine cases under this model
 
 | # | Command | Result | What the user does |
@@ -599,6 +635,9 @@ The execution tests in stage 3 check the disk, not the status:
 - The same command in `ask`, unattended, leaves no file.
 - `false && rm keep.txt` leaves `keep.txt` in place.
 - An approved `rm` removes exactly what the prompt named.
+- A path refused for `write_file` stays refused through a shell redirect, and through a
+  `run_python` snippet that calls `os.makedirs` and `open` (#4071). The file is absent
+  afterwards, whichever tool asked.
 
 #4043's nine side-effect tests keep passing.
 
@@ -666,7 +705,8 @@ Each stage is one PR with tests. Nothing changes for users before stage 3.
    removes `DANGEROUS_SHELL_OPERATORS` and the per-program text checks. It needs a
    `gaia eval agent` run, because the tool description changes.
 4. **Agent loop and file tools:** one decision for the shell, the file tools and
-   `run_python`. Full access drops the path boundary, and "always" saves scoped rules.
+   `run_python`, with the audit hook from §3.11, which closes #4071. Full access drops the
+   path boundary, and "always" saves scoped rules.
 5. **TUI:** the TUI row in §7.
 6. **Agent UI:** the Agent UI row in §7.
 7. **CLI:** the CLI row in §7.
