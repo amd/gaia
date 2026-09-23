@@ -5,12 +5,7 @@ import { Cpu, Wrench, Shield, CheckCircle2, AlertTriangle, Download, Trash2, Arr
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo, InstallStatus } from '../types';
 import { useChatStore } from '../stores/chatStore';
-import {
-    compatLevel,
-    compatLabel,
-    formatBytes,
-    isInstalling,
-} from '../utils/agentHub';
+import { formatBytes, isInstalling } from '../utils/agentHub';
 
 function sourceBadge(source: string) {
     if (source === 'builtin') return <span className="agent-badge agent-badge-builtin">Built-in</span>;
@@ -91,8 +86,6 @@ export function AgentHubCard({
     const installing = isInstalling(installStatus);
     const installFailed = installStatus?.state === 'failed';
     const hasUpdate = agent.status === 'update_available';
-    const level = compatLevel(agent);
-    const incompatible = level === 'incompatible';
 
     // Device selection (installed agents only)
     const activeDevice = useChatStore((s) => s.activeDevice);
@@ -130,10 +123,7 @@ export function AgentHubCard({
     ) : (
         <button
             className="btn-install"
-            disabled={incompatible}
-            title={incompatible
-                ? [compatLabel(level), ...(agent.compatibility?.reasons ?? [])].join(' ')
-                : `${hasUpdate ? 'Update' : 'Install'} ${agent.name}`}
+            title={`${hasUpdate ? 'Update' : 'Install'} ${agent.name}`}
             onClick={(e) => { e.stopPropagation(); onInstall?.(agent.id); }}
         >
             {installFailed
@@ -183,14 +173,6 @@ export function AgentHubCard({
                         )}
                     </div>
                 </div>
-                {/* Compatibility indicator (catalog cards) */}
-                {agent.compatibility && (
-                    <span
-                        className={`agent-compat-dot agent-compat-${level}`}
-                        title={[compatLabel(level), ...(agent.compatibility.reasons ?? [])].join('\n')}
-                        aria-label={compatLabel(level)}
-                    />
-                )}
             </div>
 
             {/* Description */}

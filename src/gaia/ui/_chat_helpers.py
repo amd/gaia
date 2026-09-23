@@ -17,6 +17,7 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import re as _re
 import threading
 import time as _time
@@ -27,6 +28,7 @@ from fastapi import HTTPException
 
 from gaia.agents.install_hints import agent_not_installed_message
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
@@ -163,134 +165,14 @@ _mcp_status_lock = threading.Lock()
 model_load_lock = threading.Lock()
 
 
-# ── Lemonade error classification (chat-side helper) ───────────────────────
+# ── Lemonade error classification ──────────────────────────────────────────
 #
-# AgentSDK + the agent loop wrap LLM errors in their own exception types,
-# so a raw ``LemonadeError`` raised by the provider often arrives at the
-# chat layer as ``ValueError("...")`` or ``RuntimeError("...")`` with the
-# original message preserved as text.  We walk the exception chain and
-# also pattern-match the message string so retry decisions don't depend
-# on the exception type bubbling through unchanged.
+# The classifier itself lives with the error classes it returns, in
+# ``gaia.llm.providers.lemonade``, so the CLI can reach it without fastapi.
 
-
-def _classify_chat_exception(exc: BaseException):
-    """Return a typed ``LemonadeError`` instance if *exc* (or anything in
-    its ``__cause__`` chain) corresponds to a known Lemonade failure mode.
-
-    Returns ``None`` when the exception is unrelated.  Used by the chat
-    streaming/non-streaming paths to decide whether to auto-retry and
-    what user-facing message to surface.
-    """
-    from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
-        LemonadeCloudAccountError,
-        LemonadeContextOverflowError,
-        LemonadeError,
-        LemonadeModelNotFoundError,
-        LemonadeModelNotLoadedError,
-        LemonadeNetworkError,
-        LemonadeUpstreamTimeoutError,
-    )
-
-    # 1. Direct typed match anywhere in the cause chain.
-    # Walk both ``__cause__`` (explicit ``raise ... from e``) and ``__context__``
-    # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
-    # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
-    # for handlers that re-raise without ``from``.
-    #
-    # Cycle protection: tracking visited ids defends against pathological
-    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
-    # Without it the walker would loop forever and freeze the chat handler.
-    cur: Optional[BaseException] = exc
-    _seen: set = set()
-    while cur is not None and id(cur) not in _seen:
-        _seen.add(id(cur))
-        if isinstance(cur, LemonadeError):
-            return cur
-        cur = cur.__cause__ or cur.__context__
-
-    # 2. Substring match on the stringified exception — covers the case
-    # where AgentSDK re-raises with ``str(original)`` as the message,
-    # losing the typed-class info.
-    raw = str(exc)
-    text = raw.lower()
-    # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412. The
-    # message itself is kept: it names the provider and where to add funds.
-    refused = _re.search(
-        r"[^\n:]*refused the request \(http 4(?:02|12)\):[^\n]*", raw, _re.IGNORECASE
-    )
-    if refused:
-        return LemonadeCloudAccountError(user_message=refused.group(0).strip())
-    if "no model loaded" in text or "model_not_loaded" in text:
-        return LemonadeModelNotLoadedError()
-    # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
-    # model was never pulled, so this is NOT retryable and NOT the same as
-    # "not loaded". Naming the missing model is actionable (#2243).
-    # "was not found" is anchored to a nearby "model" token so an unrelated
-    # 404 ("file X was not found") isn't mislabelled as a missing model.
-    if (
-        "model_not_found" in text
-        or _re.search(r"\bmodel\b[^\n]{0,80}?\bwas not found\b", text)
-        or ("model not found" in text and "not loaded" not in text)
-    ):
-        m = _re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
-        return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
-    if "exceed_context_size" in text or "exceeds the available context size" in text:
-        err = LemonadeContextOverflowError()
-        # If the textual error mentions a small n_ctx, the model was
-        # loaded with the wrong context size — reload via pre-flight
-        # will fix it, so make the error retryable.
-        m = _re.search(r"context size \((\d+) tokens?\)", text)
-        if not m:
-            m = _re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
-        if m:
-            try:
-                n_ctx = int(m.group(1))
-                # Threshold tracks the chat / rag profile default
-                # (65536) — see lemonade.py:_classify_lemonade_response.
-                if 0 < n_ctx < 65536:
-                    err.retryable = True
-            except ValueError:
-                pass
-        return err
-    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
-    # hung) from real connectivity failures (#1030). The user-facing remediation
-    # is very different.
-    is_timeout = (
-        "timeout was reached" in text
-        or "timed out" in text
-        or "operation_timeout" in text
-    )
-    is_unreachable = (
-        "connection refused" in text
-        or "could not resolve host" in text
-        or "no route to host" in text
-        or "couldn't connect" in text
-    )
-    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between
-    # models or hit an internal recovery state. ``LemonadeClient._send_request``
-    # raises ``LemonadeClientError("Request failed with status 503: ...")`` /
-    # 500/502/504 for these. Pre-iter2 these fell through to the generic
-    # "trouble connecting" UI fallback and the chat layer never retried —
-    # so a transient model-swap stall surfaced as a hard FAIL. Treat them
-    # as the network-flavour transient: retryable=True kicks the chat
-    # layer's auto-reload + one-retry path, which usually recovers.
-    is_backend_5xx = bool(
-        _re.search(r"failed with status 5\d\d", text)
-        or "internal server error" in text
-        or "service unavailable" in text
-        or "bad gateway" in text
-        or "gateway timeout" in text
-    )
-    if is_timeout and not is_unreachable:
-        return LemonadeUpstreamTimeoutError()
-    if (
-        "network_error" in text
-        or "curl error" in text
-        or is_unreachable
-        or is_backend_5xx
-    ):
-        return LemonadeNetworkError()
-    return None
+#: Kept as a module attribute so the many call sites below (and their tests)
+#: keep importing it from here.
+_classify_chat_exception = classify_lemonade_exception
 
 
 # ── Auto-titling ────────────────────────────────────────────────────────────
@@ -478,6 +360,47 @@ async def _maybe_update_session_title(
         logger.debug("Auto-title DB update failed: %s", exc)
 
 
+# Eval-only provider opt-in (plan §5c): lets `gaia eval agent` drive a
+# Claude-backed agent on machines that must never start Lemonade. Explicit by
+# design — no value means exactly the current Lemonade behaviour, and a bad
+# value is a construction-time error, never a silent fallback.
+_EVAL_PROVIDER_ENV = "GAIA_EVAL_AGENT_PROVIDER"
+_EVAL_CLAUDE_MODEL_ENV = "GAIA_EVAL_CLAUDE_MODEL"
+_VALID_EVAL_PROVIDERS = ("claude",)
+
+
+def _eval_provider_kwargs() -> dict:
+    """Provider kwargs for registry.create_agent from the eval opt-in env vars.
+
+    Returns ``{}`` when ``GAIA_EVAL_AGENT_PROVIDER`` is unset/empty (the normal
+    UI path). ``claude`` requires ``GAIA_EVAL_CLAUDE_MODEL`` and yields
+    ``use_claude=True`` + ``claude_model=<value>``; the base ``Agent.__init__``
+    then skips Lemonade entirely. Any other value raises.
+
+    Raises:
+        ValueError: unknown provider value, or provider=claude with no model —
+            both actionable, neither falls back to Lemonade.
+    """
+    provider = os.environ.get(_EVAL_PROVIDER_ENV, "").strip().lower()
+    if not provider:
+        return {}
+    if provider not in _VALID_EVAL_PROVIDERS:
+        raise ValueError(
+            f"{_EVAL_PROVIDER_ENV}={provider!r} is not a supported eval agent "
+            f"provider. Valid values: {', '.join(_VALID_EVAL_PROVIDERS)} (or unset "
+            "the variable for the default Lemonade backend). Refusing to guess a "
+            "backend."
+        )
+    claude_model = os.environ.get(_EVAL_CLAUDE_MODEL_ENV, "").strip()
+    if not claude_model:
+        raise ValueError(
+            f"{_EVAL_PROVIDER_ENV}=claude requires {_EVAL_CLAUDE_MODEL_ENV} to name "
+            "the Claude model (e.g. claude-haiku-4-5). Set both variables, or unset "
+            f"{_EVAL_PROVIDER_ENV} for the default Lemonade backend."
+        )
+    return {"use_claude": True, "claude_model": claude_model}
+
+
 def _build_create_kwargs(
     *,
     custom_model: str | None,
@@ -504,9 +427,22 @@ def _build_create_kwargs(
     requested device is validated at runtime. Agent factories filter unknown
     kwargs via ``dataclasses.fields``, so this is safe for agents whose config
     doesn't declare them.
+
+    ``GAIA_EVAL_AGENT_PROVIDER=claude`` (eval-only opt-in, see
+    :func:`_eval_provider_kwargs`) additionally passes ``use_claude=True`` and
+    ``claude_model`` so the eval harness can run agents off-Lemonade.
     """
     suffix = " (streaming)" if streaming else ""
     kwargs: dict = {"silent_mode": not streaming, "debug": False}
+    provider_kwargs = _eval_provider_kwargs()
+    if provider_kwargs:
+        kwargs.update(provider_kwargs)
+        logger.info(
+            "create_agent: %s=claude -> use_claude=True, claude_model=%s%s",
+            _EVAL_PROVIDER_ENV,
+            provider_kwargs["claude_model"],
+            suffix,
+        )
     if streaming:
         kwargs["streaming"] = True
     if device is not None:
@@ -1295,6 +1231,15 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     the one-shot retry in the streaming worker (see ``_run_agent``).
     """
     if not model_id:
+        return
+    # Provider override is authoritative: with GAIA_EVAL_AGENT_PROVIDER=claude
+    # the agent runs on Claude, and this Lemonade preflight would contact — and
+    # possibly load a model into — a backend the eval must never touch.
+    if _eval_provider_kwargs():
+        logger.info(
+            "Pre-flight skipped: %s=claude — Lemonade is not in use",
+            _EVAL_PROVIDER_ENV,
+        )
         return
     try:
         import httpx
