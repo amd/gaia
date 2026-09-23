@@ -250,3 +250,138 @@ def test_the_readiness_probe_takes_no_request_parameters():
     schema = build_app().openapi()
     operation = schema["paths"]["/v1/gaia/init"]["get"]
     assert operation.get("parameters", []) == []
+
+
+# ---------------------------------------------------------------------------
+# Mailbox consent contract
+# ---------------------------------------------------------------------------
+
+
+def _requirement(connector_id):
+    return next(
+        (cr for cr in GaiaAgent.REQUIRED_CONNECTORS if cr.connector_id == connector_id),
+        None,
+    )
+
+
+def test_required_connectors_declare_google_read_only():
+    """The consent screen renders this. A first Gmail user sees read, only read."""
+    from gaia.agents.tools._email.scopes import (
+        SCOPE_GMAIL_MODIFY,
+        SCOPE_GMAIL_READONLY,
+    )
+
+    google = _requirement("google")
+    assert google is not None, "the flagship declares no Google mailbox requirement"
+    assert list(google.scopes) == [SCOPE_GMAIL_READONLY]
+    assert SCOPE_GMAIL_MODIFY not in google.scopes
+    assert "https://mail.google.com/" not in google.scopes
+
+
+def test_both_mailbox_requirements_say_which_mailbox_they_are_for():
+    """`reason` is the sentence shown in the OAuth consent dialog."""
+    for connector_id, mailbox in (("google", "gmail"), ("microsoft", "outlook")):
+        requirement = _requirement(connector_id)
+        assert requirement is not None
+        assert mailbox in requirement.reason.lower()
+
+
+def test_every_declared_scope_has_a_consent_description():
+    """A scope with no description renders as a raw URL to the user."""
+    from gaia.connectors.providers.google import (
+        SCOPE_DESCRIPTIONS as GOOGLE_DESCRIPTIONS,
+    )
+    from gaia.connectors.providers.microsoft import (
+        SCOPE_DESCRIPTIONS as MICROSOFT_DESCRIPTIONS,
+    )
+
+    descriptions = {
+        "google": GOOGLE_DESCRIPTIONS,
+        "microsoft": MICROSOFT_DESCRIPTIONS,
+    }
+    for requirement in GaiaAgent.REQUIRED_CONNECTORS:
+        known = descriptions.get(requirement.connector_id)
+        if known is None:
+            continue
+        missing = [s for s in requirement.scopes if s not in known]
+        assert not missing, (
+            f"{requirement.connector_id} declares {missing} with no entry in that "
+            "provider's SCOPE_DESCRIPTIONS, so the consent dialog would show the "
+            "raw scope URL"
+        )
+
+
+def _triples(requirements):
+    return sorted((cr.connector_id, tuple(cr.scopes), cr.reason) for cr in requirements)
+
+
+def test_the_published_registration_declares_both_mailbox_requirements():
+    """The registration is what the connectors CLI and the UI read. Publishing
+    an empty list made `--grant-agent installed:gaia` refuse to run."""
+    published = {cr.connector_id: cr for cr in build_gaia().required_connections}
+
+    from gaia.agents.tools._email.scopes import DECLARED_SCOPES
+
+    assert set(published) == {"google", "microsoft"}
+    assert tuple(published["google"].scopes) == DECLARED_SCOPES["google"]
+    assert tuple(published["microsoft"].scopes) == DECLARED_SCOPES["microsoft"]
+
+
+def test_the_registration_and_the_class_cannot_drift():
+    """Two hand-maintained copies is how the agent came to ask for one thing and
+    publish another; this fails the moment they disagree."""
+    assert _triples(build_gaia().required_connections) == _triples(
+        GaiaAgent.REQUIRED_CONNECTORS
+    )
+
+
+def test_the_callable_entry_point_publishes_the_requirements_to_the_registry():
+    """Through real entry-point discovery, because a stub registry is exactly
+    what hid this: the callable form never consulted the agent class."""
+    import importlib.metadata
+
+    pytest.importorskip("gaia_agent")
+    installed = {ep.name for ep in importlib.metadata.entry_points(group="gaia.agent")}
+    if "gaia" not in installed:
+        pytest.fail(
+            "the 'gaia' entry point is not installed, so this test cannot "
+            f"exercise real discovery (group 'gaia.agent' has: {sorted(installed)}). "
+            "Install the hub package: pip install -e hub/agents/gaia/python"
+        )
+
+    from gaia.agents.registry import AgentRegistry
+    from gaia.connectors.api import resolve_declared_scopes
+
+    registry = AgentRegistry()
+    registry.discover_installed_agents()
+
+    assert resolve_declared_scopes(registry, "google", ["installed:gaia"]) == {
+        "installed:gaia": ["https://www.googleapis.com/auth/gmail.readonly"]
+    }
+    assert resolve_declared_scopes(registry, "microsoft", ["installed:gaia"]) == {
+        "installed:gaia": ["https://graph.microsoft.com/Mail.ReadWrite"]
+    }
+
+
+def test_building_the_registration_does_not_import_the_heavy_agent_module():
+    """Discovery runs on every CLI invocation that lists agents, so reading the
+    requirements off the agent class would put its whole import cost there."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+    probe = (
+        "import sys\n"
+        "from gaia_agent import build_gaia\n"
+        "build_gaia()\n"
+        "print('gaia_agent.agent' in sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    assert result.stdout.strip() == "False", result.stderr

@@ -938,6 +938,9 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Class-level so a subclass that never runs ``__init__`` still increments.
+    _turn_seq: int = 0
+
     # Dynamic tool loader (#1449): the sorted subset of tool names to surface
     # this turn, or ``None`` to render the full registry (legacy, byte-identical).
     # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
@@ -2240,7 +2243,24 @@ Do NOT wrap conversational replies in JSON.
         # A skill whose CLI is missing must not load and then improvise.
         policies = resolve_binary_policies(permissions, skill_name=skill.name)
 
-        registered = register_skill_tools(skill)
+        # Captured code is inert until `gaia skill promote` — instructions
+        # inject, tools.py is never imported (gaia.skills.capture).
+        from gaia.skills.capture import code_is_deferred
+
+        code_deferred = code_is_deferred(skill)
+        if code_deferred:
+            registered = {}
+            logger.warning(
+                "Skill '%s' is captured and its code is not yet trusted: %d "
+                "tool(s) (%s) deferred — instructions loaded. Run "
+                "'gaia skill promote %s' in a terminal to enable them.",
+                skill.name,
+                len(skill.gaia.tools),
+                ", ".join(skill.tool_names),
+                skill.name,
+            )
+        else:
+            registered = register_skill_tools(skill)
         try:
             if registered and self._instance_tools is not None:
                 self._instance_tools.update(registered)
@@ -2254,8 +2274,22 @@ Do NOT wrap conversational replies in JSON.
                         existing.append(requirement)
                 self.REQUIRED_CONNECTORS = existing
 
-            for policy in policies:
-                self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+            # A binary grant IS executable reach, so untrusted captured code
+            # must not get one either. An ALLOW-tier subcommand runs with no
+            # prompt because "loading the skill is the consent" — and a pasted
+            # or fetched skill is exactly the case where loading is not consent.
+            # `gaia skill promote` re-audits and reloads, which grants then.
+            if not code_deferred:
+                for policy in policies:
+                    self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+            elif policies:
+                logger.warning(
+                    "Skill '%s' is captured and untrusted: binary grant(s) %s "
+                    "withheld until 'gaia skill promote %s'.",
+                    skill.name,
+                    ", ".join(p.binary for p in policies),
+                    skill.name,
+                )
 
             self.loaded_skills[name] = skill
             self._note_skill_active(name)
@@ -4898,11 +4932,10 @@ Do NOT wrap conversational replies in JSON.
         Returns ``None`` for unrelated exceptions so the caller falls
         through to its normal generic copy.
         """
-        try:
-            from gaia.llm.providers.lemonade import LemonadeError
-            from gaia.ui._chat_helpers import _classify_chat_exception
-        except Exception:  # pylint: disable=broad-except
-            return None
+        from gaia.llm.providers.lemonade import (
+            LemonadeError,
+            classify_lemonade_exception,
+        )
 
         # 1. Direct match anywhere in the cause chain.
         cur: Optional[BaseException] = exc
@@ -4917,9 +4950,9 @@ Do NOT wrap conversational replies in JSON.
 
         # 2. String-based reclassification — covers the case where the typed
         # exception was stringified into a generic ``Exception`` by AgentSDK.
-        # ``_classify_chat_exception`` already does the timeout-vs-network
+        # ``classify_lemonade_exception`` already does the timeout-vs-network
         # split we need for #1030.
-        classified = _classify_chat_exception(exc)
+        classified = classify_lemonade_exception(exc)
         if classified is not None:
             msg = getattr(classified, "user_message", None)
             if msg:
@@ -4932,10 +4965,12 @@ Do NOT wrap conversational replies in JSON.
         Out of funds or suspended: no retry can succeed, so the turn ends as an
         error instead of an answer.
         """
-        from gaia.llm.providers.lemonade import LemonadeCloudAccountError
-        from gaia.ui._chat_helpers import _classify_chat_exception
+        from gaia.llm.providers.lemonade import (
+            LemonadeCloudAccountError,
+            classify_lemonade_exception,
+        )
 
-        classified = _classify_chat_exception(exc)
+        classified = classify_lemonade_exception(exc)
         if isinstance(classified, LemonadeCloudAccountError):
             return classified.user_message
         return None
@@ -5554,6 +5589,7 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+        self._turn_seq += 1
         self._begin_turn_provenance()
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
