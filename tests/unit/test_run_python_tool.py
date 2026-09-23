@@ -17,10 +17,15 @@ import pytest
 
 pytest.importorskip("gaia_agent_chat")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent_chat.agent import (  # noqa: E402
+    ChatAgent,
+    ChatAgentConfig,
+    _imports_gaia_tools,
+)
 from gaia_agent_chat.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
+from gaia.agents.base.checks import CHECK_RESULT_KEY, CheckResult  # noqa: E402
 from gaia.agents.base.project_map import PROJECT_ROOT_ENV  # noqa: E402
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 
@@ -122,9 +127,10 @@ def test_the_snippet_never_lands_in_the_workspace(
 
     assert result["status"] == "success", result
     assert _tree(project) == before
-    # It ran from the temp dir, and is not left behind there either.
+    # It ran from the temp dir, and is not left behind there either. The
+    # session's scratch dir may live there too; the snippet may not.
     assert result["stdout"].strip().startswith(str(temp_dir))
-    assert list(temp_dir.iterdir()) == []
+    assert not list(temp_dir.rglob("gaia-run-*"))
 
 
 def test_the_snippet_is_removed_even_when_it_times_out(
@@ -139,7 +145,7 @@ def test_the_snippet_is_removed_even_when_it_times_out(
     result = run_python(code="import time\ntime.sleep(30)", timeout=1)
 
     assert result["status"] == "error"
-    assert list(temp_dir.iterdir()) == []
+    assert not list(temp_dir.rglob("gaia-run-*"))
 
 
 def test_files_the_snippet_writes_do_land_in_the_workspace(
@@ -219,3 +225,141 @@ def test_an_unusable_project_root_is_a_tool_error(
 
     assert result["status"] == "error"
     assert "not a directory" in result["error"]
+
+
+def test_importing_a_gaia_tool_is_refused_with_the_tool_call_path(
+    make_run_python, project, monkeypatch
+):
+    """The snippet is a separate process, so importing a tool can only fail.
+
+    Left to the subprocess this returns a bare ``ImportError``, which reads as
+    a typo worth retrying — the model reissued the same call until the step
+    budget was gone (#4084).
+    """
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(
+        code=(
+            "from gaia import transcribe_media\n"
+            "print(transcribe_media(file_path='x.mp4'))"
+        )
+    )
+
+    assert result["status"] == "error"
+    assert result["has_errors"] is True
+    assert "from gaia import transcribe_media" in result["error"]
+    assert "directly" in result["error"]
+    assert "ImportError" not in result["error"]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "from gaia import transcribe_media",
+        "from gaia.agents.base.tools import tool",
+        "import gaia",
+        "import gaia.agents",
+        "print(1)\nfrom gaia import write_file",
+        "    from gaia import write_file",
+    ],
+)
+def test_gaia_imports_are_detected(code):
+    assert _imports_gaia_tools(code) is not None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "print(1 + 1)",
+        "import json\nprint(json.dumps({'a': 1}))",
+        "from pathlib import Path\nprint(Path('.').resolve())",
+        # A different package whose name merely starts with the same letters.
+        "import gaiatools",
+        "from gaiatools import helper",
+        # Only a mention, not an import.
+        "print('run from gaia import x to see it fail')",
+    ],
+)
+def test_ordinary_snippets_are_not_flagged(code):
+    assert _imports_gaia_tools(code) is None
+
+
+def test_a_flagged_snippet_never_reaches_a_subprocess(
+    make_run_python, project, monkeypatch
+):
+    """Refusing before ``subprocess.run`` is what makes the guard free."""
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    with patch("subprocess.run") as spawn:
+        result = run_python(code="from gaia import transcribe_media")
+
+    assert result["status"] == "error"
+    spawn.assert_not_called()
+
+
+def test_the_docstring_warns_against_importing_tools(make_run_python, project):
+    """The model reasons from the description, so the rule has to live there."""
+    make_run_python(project)
+
+    doc = (_TOOL_REGISTRY["run_python"]["description"] or "").lower()
+
+    assert "from gaia import" in doc
+    assert "directly as a tool" in doc
+
+
+# ---------------------------------------------------------------------------
+# A snippet that runs the tests reports the outcome as a fact
+# ---------------------------------------------------------------------------
+
+_RUN_PYTEST = (
+    "import sys, pytest\n"
+    "sys.exit(pytest.main(['-q', '-p', 'no:cacheprovider', 'test_toy.py']))\n"
+)
+
+
+@pytest.mark.parametrize(
+    "test_body,passed,summary_word",
+    [
+        ("def test_ok():\n    assert 1 + 1 == 2\n", True, "1 passed"),
+        ("def test_bad():\n    assert 1 + 1 == 3\n", False, "1 failed"),
+        (
+            "def test_many(subtests):\n"
+            "    for i in range(3):\n"
+            "        with subtests.test(i=i):\n"
+            "            assert i >= 0\n",
+            True,
+            "3 subtests passed",
+        ),
+    ],
+    ids=["pass", "fail", "subtests"],
+)
+def test_a_pytest_run_attaches_its_check(
+    make_run_python, project, monkeypatch, test_body, passed, summary_word
+):
+    if "subtests" in test_body and not hasattr(pytest, "Subtests"):
+        pytest.importorskip("pytest_subtests")
+    (project / "test_toy.py").write_text(test_body, encoding="utf-8")
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code=_RUN_PYTEST)
+
+    check = CheckResult.from_result(result)
+    assert check is not None, result
+    assert check.label == "pytest"
+    assert check.kind == "test"
+    assert check.passed is passed
+    assert summary_word in check.summary
+
+
+def test_a_snippet_that_is_not_a_test_run_declares_no_check(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code="print('5 passed')")
+
+    assert result[CHECK_RESULT_KEY] is None

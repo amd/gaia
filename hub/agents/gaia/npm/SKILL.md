@@ -324,15 +324,19 @@ Rules a client must respect:
 
 ## 8. Over `/v1/gaia/query`, a gated tool asks — when you can answer
 
-Eight of the agent's tools mutate the machine and need explicit approval
+Nine of the agent's tools mutate the machine and need explicit approval
 before they run. Six sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
-**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which spawns a PowerShell
-child on Windows to draw the notification — and the flagship adds two of its
-own, **`install_skill`** and **`remove_skill`**, because installing a skill
-writes third-party code under `~/.gaia/skills` and removing one deletes it.
-Everything else — reading, indexing, querying, web fetching, memory — runs
-without asking.
+**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which
+spawns a PowerShell child on Windows to draw the notification — and the
+flagship adds three of its own (`CONFIRMATION_REQUIRED_TOOLS`):
+**`install_skill`**, **`capture_skill`**, and **`remove_skill`**, because
+installing or capturing a skill writes third-party content under
+`~/.gaia/skills` and removing one deletes it. A capture that does land is
+additionally **code-inert**: its instructions load, but any `tools.py`/scripts
+stay unregistered until a human runs `gaia skill promote <name>` in a
+terminal. Everything else — reading, indexing, querying, web fetching,
+memory — runs without asking.
 
 **Contract ≥ 2.14 can answer one.** Send a `session_id` and leave
 `can_answer_questions` unset (or `true`). The stream emits `needs_confirmation`
@@ -376,7 +380,7 @@ data: {"type":"final","answer":"I stopped before running 'write_file' because it
 
 That is deny-by-default, not an oversight: parking a batch run on a prompt
 nobody will ever see reads as a hang. So a one-shot integration cannot run those
-eight tools — pass a `session_id` and answer, or perform the mutation from your
+nine tools — pass a `session_id` and answer, or perform the mutation from your
 own code and let the agent do the reading and reasoning.
 
 ## 9. File-access scope
@@ -396,6 +400,11 @@ systemd user units, `LaunchAgents`, and a repo's `.git/` (hooks and config). Bot
 come back as a structured error naming the file and the reason, so do not plan an
 integration around reading a credential file or editing a shell rc — perform
 those from your own code.
+
+The agent also gets its own scratch directory for throwaway scripts and
+intermediate files, so they stay out of the user's project. It is created per
+agent under the system temp dir, deleted when the agent closes, and is the only
+part of the temp dir the agent may use.
 
 **In 0.1.1 narrowing it is a construction-time setting only.** The packaged
 sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
@@ -513,7 +522,7 @@ There is no silent null.
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  The eight gated tools are unreachable **over `/query`** — the agent itself can
+  The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a
