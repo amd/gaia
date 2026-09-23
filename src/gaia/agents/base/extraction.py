@@ -216,6 +216,35 @@ def parse_page(reply, page, base, fields=()):
     return entries
 
 
+_SENTENCE_END_RE = re.compile(r"[.!?]\s")
+
+
+def _snap_forward(source: str, left: int, core: int) -> int:
+    """The first line or sentence boundary at or after *left*, before *core*.
+
+    A newline is preferred when present; ``transcribe_media``'s own output is
+    a single unbroken line, so prose sentence-ending punctuation (". ", "! ",
+    "? ") is the fallback that keeps a page from opening mid-word on a source
+    with no newlines at all (#4145 field report).
+    """
+    boundary = source.find("\n", left, core)
+    if boundary >= 0:
+        return boundary + 1
+    match = _SENTENCE_END_RE.search(source, left, core)
+    return match.end() if match else left
+
+
+def _snap_backward(source: str, start: int, right: int) -> int:
+    """The last line or sentence boundary at or before *right*, after *start*."""
+    boundary = source.rfind("\n", start, right)
+    if boundary >= 0:
+        return boundary + 1
+    last = None
+    for last in _SENTENCE_END_RE.finditer(source, start, right):
+        pass
+    return last.end() if last else right
+
+
 def extract_pages(source, request, ask, check_cancelled, fields=()):
     started = time.monotonic()
     entries = {}
@@ -229,14 +258,15 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
         # Snap inside the overlap to whole lines where possible. Every core
         # character remains covered, without presenting a clipped occurrence
         # as a new item missing its name or fields on the neighboring page.
+        # transcribe_media's own output is a single unbroken line, so a
+        # newline-only snap never fires on it -- every transcribed source
+        # would open pages mid-word. Sentence-ending punctuation is the
+        # fallback: prose has ". "/"! "/"? " even with no "\n" (#4145 field
+        # report).
         if left:
-            boundary = source.find("\n", left, core)
-            if boundary >= 0:
-                left = boundary + 1
+            left = _snap_forward(source, left, core)
         if right < len(source):
-            boundary = source.rfind("\n", core + PAGE_CHARS, right)
-            if boundary >= 0:
-                right = boundary + 1
+            right = _snap_backward(source, core + PAGE_CHARS, right)
         page = source[left:right]
         # A second independent pass focuses on omissions, with only this small
         # page and its candidates, never a growing document-sized context.
@@ -323,6 +353,38 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
     return sorted(entries.values(), key=lambda e: (e.start, e.end)), pages
 
 
+#: A code file is a source read/searched with code-index or read-file tools,
+#: never an extraction destination -- excluded from ExtractionLedger.requested
+#: so a code query ("list all functions in app.py") cannot mistake its own
+#: subject file for a save target this ledger will never see written (#4145
+#: field report).
+_CODE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".go",
+        ".java",
+        ".c",
+        ".cc",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".rs",
+        ".rb",
+        ".php",
+        ".cs",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".sh",
+        ".ps1",
+    }
+)
+
+
 class ExtractionLedger:
     def __init__(self, query, root):
         self.query = query
@@ -355,6 +417,14 @@ class ExtractionLedger:
             for p in destination_paths(source_clause)
             if self.key(p) not in self.destinations
             and (os.path.splitext(p)[1] or "/" in p or "\\" in p)
+            # A code-symbol query ("list all functions in app.py") has no
+            # destination preposition to anchor destination_paths on, so its
+            # no-anchor fallback scans the whole clause and picks up the
+            # source file itself as if it were named as an extraction
+            # destination -- code-index/read-file tools handle that file, this
+            # ledger never will, so demanding it never resolves (#4145 field
+            # report). A real destination is never source code.
+            and os.path.splitext(p)[1].lower() not in _CODE_EXTENSIONS
         }
 
     def key(self, path):
@@ -439,12 +509,18 @@ class ExtractionLedger:
         return self.render()
 
     def validate_sources(self, read):
+        # ValueError is read_snapshot's own signal (bad path, permission
+        # denied, not a regular file) plus the "changed after extraction"
+        # raise below; OSError covers the underlying file operations it does
+        # not pre-validate (deleted mid-read, disk I/O failure). Anything else
+        # is unexpected and should propagate rather than be recorded as a
+        # source-gone-stale error it is not.
         for path, (_, _, digest) in list(self.results.items()):
             try:
                 current = hashlib.sha256(read(path).encode()).hexdigest()
                 if current != digest:
                     raise ValueError("source changed after extraction")
-            except Exception as error:
+            except (ValueError, OSError) as error:
                 self.results.pop(path, None)
                 self.errors[path] = str(error)
 
@@ -461,7 +537,7 @@ class ExtractionLedger:
                     raise ValueError(
                         "does not preserve the complete extracted inventory and provenance; use save_extracted_items then read_file"
                     )
-            except Exception as error:
+            except (ValueError, OSError) as error:
                 self.output_errors[path] = f"Saved output `{path}` {error}."
 
     def render(self):

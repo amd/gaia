@@ -438,7 +438,11 @@ def test_uninspectable_literal_does_not_stop_executor(agent, code):
 def test_non_directory_parent_does_not_crash_snapshot(ledger, tmp_path):
     (tmp_path / "notadir").write_text("file")
     ledger.requested = ["notadir/out.md"]
-    assert ledger.snapshot("run_python", {}) == {str(tmp_path / "notadir/out.md"): None}
+    # key(), not str(tmp_path / ...): Windows paths are case-normalized
+    # (ntpath.normcase) for the ledger's own bookkeeping, so the raw
+    # mixed-case tmp_path string never matches the snapshot's keys there.
+    expected_key = ledger.key("notadir/out.md")
+    assert ledger.snapshot("run_python", {}) == {expected_key: None}
 
 
 def test_snapshot_without_validator_does_not_follow_external_symlink(ledger, tmp_path):
@@ -446,6 +450,14 @@ def test_snapshot_without_validator_does_not_follow_external_symlink(ledger, tmp
     outside.write_text("private")
     try:
         (tmp_path / "summary.md").symlink_to(outside)
+    except OSError as error:
+        # Windows requires SeCreateSymbolicLinkPrivilege (admin, or Developer
+        # Mode) to create a symlink at all -- WinError 1314 means this
+        # runner/user has neither, not that the guard under test is broken.
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation requires elevated privilege on this host")
+        raise
+    try:
         assert ledger.snapshot("run_python", {}) == {}
     finally:
         outside.unlink()

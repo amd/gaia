@@ -68,6 +68,29 @@ def test_overlap_aligns_whole_lines_without_gaps():
     assert len(covered) == len(source)
 
 
+def test_overlap_falls_back_to_sentence_boundaries_on_a_single_unbroken_line():
+    """transcribe_media's own output has zero newlines -- every real transcript
+    hits the no-newline case the fixture in test_overlap_aligns_whole_lines_...
+    cannot reach. A page must still open and close on a sentence boundary
+    instead of splitting mid-word (#4145 field report)."""
+    sentence = "This is one sentence about the workshop. "
+    source = sentence * (PAGE_CHARS // len(sentence) + 20)
+    assert "\n" not in source
+    pages = []
+
+    def ask(system, payload):
+        pages.append(json.loads(payload)["source_page"])
+        return reply()
+
+    extract_pages(source, "List every item", ask, lambda: None)
+    for page in pages[1:-1]:
+        # Neither edge may land mid-word: every page after the first starts
+        # right after ". ", and every page before the last ends right after it.
+        start = source.index(page)
+        assert source[start - 2 : start] == ". " or start == 0
+        assert page.endswith(". ") or source.index(page) + len(page) == len(source)
+
+
 def test_repeated_names_remain_separate_source_occurrences():
     with pytest.raises(ValueError, match="Ambiguous"):
         parse_page(reply("Lift"), "Lift then Lift", 30)
@@ -454,12 +477,35 @@ def test_advice_negation_and_directory_requests_are_not_extraction(query, tmp_pa
     assert not ExtractionLedger(query, str(tmp_path)).enabled
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "List all functions in app.py",
+        "Find every class in models.py",
+        "Enumerate every function in code.py",
+    ],
+)
+def test_code_symbol_queries_do_not_demand_the_source_file_as_a_destination(
+    query, tmp_path
+):
+    """A code file the query names is a read/search target, never something
+    this ledger will see written -- demanding it as a destination made every
+    such query report status: incomplete (#4145 field report)."""
+    state = ExtractionLedger(query, str(tmp_path))
+    assert state.key("app.py") not in state.requested
+    assert state.key("models.py") not in state.requested
+    assert state.key("code.py") not in state.requested
+
+
 def test_combined_source_and_save_request_keeps_all_sources(tmp_path):
     state = ExtractionLedger(
         "List every exercise in one.txt and two.txt and save to report.txt",
         str(tmp_path),
     )
-    assert state.requested == {str(tmp_path / "one.txt"), str(tmp_path / "two.txt")}
+    # key(), not str(tmp_path / ...): self.requested holds normalized keys
+    # (Windows lowercases the drive/path via ntpath.normcase), which a raw
+    # mixed-case tmp_path string never matches there.
+    assert state.requested == {state.key("one.txt"), state.key("two.txt")}
 
 
 def test_item_found_only_from_neighboring_page_is_retained():
