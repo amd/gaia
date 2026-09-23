@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **80 tools** — the 59 of the Chat agent's `full` profile, plus 7 skill-library tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. `search_documentation` registers only when `npx` is on your PATH, so without Node.js the count is 79. Grouped by what they're for:
+The default construction registers **81 tools** — the 59 of the Chat agent's `full` profile, plus 8 skill-library tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. `search_documentation` registers only when `npx` is on your PATH, so without Node.js the count is 80. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -103,7 +103,7 @@ The default construction registers **80 tools** — the 59 of the Chat agent's `
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
 | Audio | `transcribe_media`, `refine_transcript` |
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
-| Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
+| Skills | `list_skills`, `search_skill_hub`, `install_skill`, `capture_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
 | Run control | `request_user_input`, `set_loop_state`, `load_tools`, `read_tool_output` |
 
@@ -115,7 +115,7 @@ That count is what the agent *can* do, not what it sees at once: per-turn tool s
 
 ### Tools that need your approval
 
-Eight tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`run_python`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+Nine tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`run_python`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing or capturing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`**, **`capture_skill`**, and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
 
 <Warning>
   **Over the sidecar's `/query` stream, all eight are refused rather than prompted.** That

@@ -7,6 +7,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 import os
 import platform
 import re
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,7 +65,7 @@ from gaia.llm.lemonade_client import (
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
-from gaia.security import PathValidator
+from gaia.security import PathValidator, stable_scratch_dir
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -73,6 +74,11 @@ from gaia.vlm.mixin import VLMToolsMixin
 # (which legitimately caches ``None``) is never mistaken for "not attempted
 # yet" and rebuilt on every access.
 _UNSET = object()
+
+# Tools that create files; an agent with none of them gets no scratch directory.
+_FILE_CREATING_TOOLS = frozenset(
+    {"write_file", "write_python_file", "write_markdown_file"}
+)
 
 # ``notify_desktop``'s Windows fallback: the title and body reach PowerShell
 # through the child's environment, never as text inside ``-Command``. A "'" in
@@ -275,6 +281,8 @@ class ChatAgent(
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
             on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
         )
+        # Created after tool registration, once we know the agent can write files.
+        self.scratch_dir: Optional[Path] = None
 
         # Store config for access in other methods
         self.config = config
@@ -472,6 +480,20 @@ class ChatAgent(
                 else 32768
             ),
         )
+
+        # Without this, throwaway scripts land in the user's project. One path
+        # per project, so the prompt line naming it is stable across sessions.
+        if any(name in self._tools_registry for name in _FILE_CREATING_TOOLS):
+            self.path_validator.set_scratch_dir(
+                str(
+                    stable_scratch_dir(
+                        getattr(config, "project_root", None) or os.getcwd()
+                    )
+                )
+            )
+            self.scratch_dir = self.path_validator.scratch_dir
+            # A prompt cached during init predates the scratch line.
+            self.__dict__.pop("_system_prompt_cache", None)
 
         # Index initial documents (only if RAG is available)
         if self.rag_documents and self.rag:
@@ -1132,7 +1154,15 @@ No documents are currently indexed.
             "data_file_rules": data_file_rules,
             "load_tools_menu": load_tools_menu,
         }
-        return base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+        prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+        scratch_dir = getattr(self, "scratch_dir", None)
+        if scratch_dir is not None:
+            prompt += (
+                f"\nScratch directory for temporary files: {scratch_dir} — put "
+                "throwaway scripts and intermediate files here, never in the "
+                "user's project.\n"
+            )
+        return prompt
 
     def _create_console(self):
         """Create console for chat agent."""
@@ -1482,7 +1512,8 @@ No documents are currently indexed.
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",
-                        "error": f"Access denied: {file_path}",
+                        "error": f"Access denied: {file_path}."
+                        f"{self.path_validator.scratch_hint(file_path)}",
                     }
 
                 p = Path(file_path)
@@ -2596,3 +2627,16 @@ No documents are currently indexed.
                 self._scratchpad.close_db()
         except Exception as e:
             logger.error(f"Error closing scratchpad during cleanup: {e}")
+        scratch_dir = getattr(self, "scratch_dir", None)
+        if scratch_dir is not None:
+            try:
+                shutil.rmtree(scratch_dir)
+                self.scratch_dir = None
+            except FileNotFoundError:
+                self.scratch_dir = None
+            except Exception as e:
+                logger.error(
+                    "Could not remove scratch directory %s during cleanup: %s",
+                    scratch_dir,
+                    e,
+                )
