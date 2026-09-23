@@ -7,12 +7,15 @@ blocked path enforcement, write guardrails, and audit logging.
 """
 
 import datetime
+import hashlib
 import json
 import logging
 import os
 import platform
 import shutil
+import stat
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, List, Optional, Set, Tuple
@@ -339,6 +342,42 @@ def _normalize_macos_symlinks(path_str: str) -> str:
     return path_str
 
 
+def stable_scratch_dir(anchor: str) -> Path:
+    """The agent's scratch directory for *anchor* (a project), the same every session.
+
+    A random name per process put a different path into every session's system
+    prompt, so a backend's cached prompt prefix never matched across sessions.
+    The name is derived from the user and the project instead. A predictable name
+    under a shared temp dir must not be an invitation: the directory is created
+    private, and one that already exists but is not a directory this user owns is
+    refused, loudly, in favour of a fresh private one.
+    """
+    owner = (
+        str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "")
+    )
+    digest = hashlib.sha1(
+        f"{owner}:{Path(anchor).resolve()}".encode("utf-8"), usedforsecurity=False
+    ).hexdigest()[:12]
+    path = Path(tempfile.gettempdir()) / f"gaia-scratch-{digest}"
+    try:
+        path.mkdir(mode=0o700, exist_ok=True)
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise OSError("not a directory")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise OSError("owned by another user")
+    except OSError as exc:
+        fallback = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
+        logger.warning(
+            "Scratch directory %s is unusable (%s); using %s for this session",
+            path,
+            exc,
+            fallback,
+        )
+        return fallback
+    return path
+
+
 class PathValidator:
     """
     Validates file paths against an allowed list, with user prompting for exceptions.
@@ -381,6 +420,7 @@ class PathValidator:
                 collected (e.g. to resume a progress spinner).
         """
         self.allowed_paths: Set[Path] = set()
+        self.scratch_dir: Optional[Path] = None
 
         # A host-supplied scope must not union with the machine-global grants the
         # CLI's "[a]lways" writes — that turned one user's one-off approval into
@@ -530,6 +570,50 @@ class PathValidator:
         """
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
+
+    def set_scratch_dir(self, path: str) -> None:
+        """Grant the agent's own scratch directory, and only that directory.
+
+        The system temp dir stays out of scope; denials for paths inside it
+        name this directory instead (see :meth:`scratch_hint`).
+
+        Args:
+            path: An existing directory the agent owns for throwaway files.
+
+        Raises:
+            NotADirectoryError: If *path* is not an existing directory.
+        """
+        resolved = Path(path).resolve()
+        if not resolved.is_dir():
+            raise NotADirectoryError(
+                f"Scratch directory '{resolved}' does not exist. Create it "
+                f"(e.g. tempfile.mkdtemp()) before handing it to PathValidator."
+            )
+        self.scratch_dir = resolved
+        self.allowed_paths.add(resolved)
+        logger.debug("Scratch directory granted: %s", resolved)
+
+    def scratch_hint(self, path: str) -> str:
+        """Suffix for a denial of *path* that points at the scratch directory.
+
+        Args:
+            path: The path that was refused.
+
+        Returns:
+            A sentence naming the scratch directory when *path* is inside a
+            system temp directory and a scratch directory is set, else "".
+        """
+        if self.scratch_dir is None:
+            return ""
+        real_path = Path(os.path.realpath(path))
+        temp_roots = {tempfile.gettempdir(), "/tmp", "/var/tmp"}
+        for root in temp_roots:
+            if _path_is_within(real_path, Path(os.path.realpath(root))):
+                return (
+                    f" The system temp directory is off-limits; put temporary "
+                    f"files in your scratch directory instead: {self.scratch_dir}"
+                )
+        return ""
 
     def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """
@@ -711,7 +795,7 @@ class PathValidator:
                 False,
                 f"Access denied: '{path}' is not in allowed paths. Attach the "
                 f"file to this session, or start the agent with an "
-                f"allowed_paths list that covers it.",
+                f"allowed_paths list that covers it.{self.scratch_hint(path)}",
             )
 
         is_blocked, reason = self.is_read_blocked(path)
@@ -829,7 +913,11 @@ class PathValidator:
         """
         # 1. Check allowlist
         if not self.is_path_allowed(path, prompt_user=prompt_user):
-            return (False, f"Access denied: '{path}' is not in allowed paths")
+            return (
+                False,
+                f"Access denied: '{path}' is not in allowed paths."
+                f"{self.scratch_hint(path)}",
+            )
 
         # 2. Check blocked directories and sensitive files
         is_blocked, reason = self.is_write_blocked(path)

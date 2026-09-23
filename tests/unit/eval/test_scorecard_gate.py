@@ -210,13 +210,15 @@ class TestBaselineFileMissing:
 class TestInvalidCandidate:
     def test_corrupt_candidate_returns_1(self, tmp_path):
         corrupt_path = tmp_path / "SCORECARD.md"
-        corrupt_path.write_text("this is not valid yaml front matter at all\ngarbage\n")
+        corrupt_path.write_text(
+            "this is not valid yaml front matter at all\ngarbage\n", encoding="utf-8"
+        )
         result = main(["--scorecard", str(corrupt_path)])
         assert result == 1
 
     def test_empty_candidate_returns_1(self, tmp_path):
         empty_path = tmp_path / "SCORECARD.md"
-        empty_path.write_text("")
+        empty_path.write_text("", encoding="utf-8")
         result = main(["--scorecard", str(empty_path)])
         assert result == 1
 
@@ -231,7 +233,9 @@ class TestInvalidPrior:
         baseline_dir = tmp_path / "baseline"
         baseline_dir.mkdir()
         corrupt = baseline_dir / "SCORECARD.md"
-        corrupt.write_text("this is not valid yaml front matter at all\ngarbage\n")
+        corrupt.write_text(
+            "this is not valid yaml front matter at all\ngarbage\n", encoding="utf-8"
+        )
 
         candidate_dir = tmp_path / "candidate"
         candidate_dir.mkdir()
@@ -244,7 +248,7 @@ class TestInvalidPrior:
         baseline_dir = tmp_path / "baseline"
         baseline_dir.mkdir()
         empty = baseline_dir / "SCORECARD.md"
-        empty.write_text("")
+        empty.write_text("", encoding="utf-8")
 
         candidate_dir = tmp_path / "candidate"
         candidate_dir.mkdir()
