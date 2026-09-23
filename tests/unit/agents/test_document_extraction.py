@@ -245,11 +245,21 @@ def test_safe_snapshot_respects_scope_and_size(tmp_path, monkeypatch):
         read_snapshot(str(p), PathValidator(allowed_paths=[str(p)]))
 
 
-def test_safe_snapshot_rejects_fifo_without_waiting(tmp_path):
+def test_safe_snapshot_rejects_nonregular_file_without_waiting(tmp_path, monkeypatch):
     import os
+    import stat
+    from types import SimpleNamespace
 
     path = tmp_path / "pipe"
-    os.mkfifo(path)
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(path)
+    else:
+        # Windows has no mkfifo; exercise the same descriptor rejection
+        # without requiring an OS-specific named-pipe service or a skipped test.
+        path.write_text("placeholder")
+        monkeypatch.setattr(
+            os, "fstat", lambda fd: SimpleNamespace(st_mode=stat.S_IFIFO)
+        )
     with pytest.raises(ValueError, match="regular text file"):
         read_snapshot(str(path), PathValidator(allowed_paths=[str(tmp_path)]))
 
