@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: MIT
 """The flagship's own phishing safeguard (#4150).
 
-These tests run on the flagship path — ``EmailToolsMixin`` and the
-``inbox-triage`` skill — with no ``importorskip`` on the retired hub email
-agent. The safeguard the retired agent carried (body fencing, a suspicion
-verdict with a stated reason, and a do-not-restate rule) was lost when triage
-moved here, and both guard tests that would have caught it were gated behind
-an import that no longer resolves on this path.
+These tests run on the flagship path — ``EmailToolsMixin`` — with no
+``importorskip`` on the retired hub email agent. The safeguard the retired
+agent carried (body fencing, a suspicion verdict with a stated reason, and a
+do-not-restate rule) was lost when triage moved here, and both guard tests
+that would have caught it were gated behind an import that no longer resolves
+on this path.
+
+The guard has to live in the tool result, because the turn that produced the
+defect never loaded a skill. The ``inbox-triage`` check at the bottom covers
+the second layer, not the first.
 """
 
 import json
@@ -144,9 +148,69 @@ def test_every_channel_states_a_reason(subject, sender, body):
     assert reasons and all(r.strip() for r in reasons)
 
 
+@pytest.mark.parametrize(
+    "sender",
+    [
+        "Security <secur1ty@paypa1-support.com>",
+        "PayPal Service <service@paypa1-secure.com>",
+        "Microsoft <admin@micros0ft-verify.com>",
+    ],
+)
+def test_homoglyph_senders_are_caught_by_the_domain(sender):
+    """Digit-for-letter brands were the lures the agent left unmentioned."""
+    suspicious, reasons = assess_message(
+        subject="Action needed", sender=sender, body=""
+    )
+    assert suspicious is True
+    assert reasons
+
+
+@pytest.mark.parametrize(
+    "subject,sender,body",
+    [
+        (
+            "Security alert",
+            "Google <no-reply@accounts.google.com>",
+            "A new sign-in on Windows. Check activity or secure your account.",
+        ),
+        (
+            "Security alert",
+            "no-reply@accounts.google.com",
+            "If this was not you, change your password. Review your activity.",
+        ),
+        ("Your receipt", "billing@stripe.com", "Your invoice is attached."),
+    ],
+)
+def test_a_real_security_alert_is_not_flagged(subject, sender, body):
+    """Google's own alert reads exactly like a lure and must survive the guard.
+
+    A rule that catches the homoglyphs by matching "security alert" would fail
+    here, and a false positive on a genuine alert is the worse error.
+    """
+    suspicious, _ = assess_message(subject=subject, sender=sender, body=body)
+    assert suspicious is False
+
+
 # --------------------------------------------------------------------------
-# the tool surface — what the model actually reads
+# the tool surface — what the model reads with NO skill loaded
+#
+# The turn that produced #4150 never called `load_skill`: the model read
+# `list_inbox` output and promoted the lure straight from it. So the guard has
+# to hold here, in the tool result itself. `_Harness` is the mixin alone — no
+# agent, no skill loader, no SKILL.md — which is exactly that path.
 # --------------------------------------------------------------------------
+
+
+def test_the_guard_holds_with_no_skill_loaded(harness):
+    """The whole defect, reproduced at the layer it actually happened on."""
+    h = harness([LURE, GENUINE])
+    assert not hasattr(h, "load_skill")
+
+    out = json.loads(h._tool("list_inbox")())
+    lure = next(m for m in out["messages"] if m["id"] == "lure-1")
+    assert lure["suspicious"] is True
+    assert lure["suspicious_reasons"]
+    assert out["suspicious_guidance"]
 
 
 def test_listing_flags_the_lure_and_leaves_genuine_mail_alone(harness):
