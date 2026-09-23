@@ -35,7 +35,6 @@ const CATALOG: AgentCatalogResponse = {
             type: 'app',
             status: 'available',
             security_tier: 'verified',
-            compatibility: { level: 'compatible' },
         }),
         agent({
             id: 'rag-kit',
@@ -43,7 +42,6 @@ const CATALOG: AgentCatalogResponse = {
             type: 'component',
             status: 'available',
             security_tier: 'community',
-            compatibility: { level: 'compatible' },
         }),
         agent({
             id: 'weather',
@@ -51,7 +49,6 @@ const CATALOG: AgentCatalogResponse = {
             type: 'agent',
             status: 'available',
             security_tier: 'verified',
-            compatibility: { level: 'compatible' },
         }),
     ],
 };

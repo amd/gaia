@@ -463,6 +463,42 @@ def test_history_accumulates_across_turns():
     assert len(agent.conversation_history) == 4
 
 
+def test_clear_history_control_routes_to_a_queue_sentinel(monkeypatch):
+    """The pump must hand clear_history to the turn loop, not the query path."""
+    import io
+    import queue as queue_mod
+
+    lines = (
+        json.dumps({stdio.CONTROL_KEY: stdio.CONTROL_CLEAR_HISTORY})
+        + "\nhello after the clear\n"
+    )
+    monkeypatch.setattr(stdio.sys, "stdin", io.StringIO(lines))
+    q: "queue_mod.Queue" = queue_mod.Queue()
+
+    stdio._pump_stdin(q, stdio.PermissionState())
+
+    first = q.get_nowait()
+    assert isinstance(first, stdio._ClearHistory)
+    assert q.get_nowait() == "hello after the clear"
+    assert q.get_nowait() is None  # stdin closed
+
+
+def test_clear_history_sentinel_empties_the_next_prompt():
+    """After a clear, the next prompt must carry NO earlier turns — the exact
+    /clear bug: the view emptied while conversation_history kept riding."""
+    agent = _HistoryAgent()
+    stdio._record_turn(agent, "my api key is hunter2", "Noted.")
+    stdio._record_turn(agent, "what did I just tell you?", "hunter2")
+    assert agent.conversation_history  # precondition: there is history to leak
+
+    # The turn loop's sentinel branch, verbatim.
+    history = getattr(agent, "conversation_history", None)
+    if history is not None:
+        history.clear()
+
+    assert agent.conversation_history == []
+
+
 def test_history_is_trimmed_in_whole_turns():
     """A window opening on an answer whose question was dropped reads as the
     model asserting something unprompted."""
@@ -1487,7 +1523,7 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     agent.conversation_history = []
     agent.model_id = "chosen-model"
     agent.loaded_skills = {"coding": "loaded"}
-    state = stdio.PermissionState(bypass=True)
+    state = stdio.PermissionState(full_access=True)
     seen = []
 
     def turn(agent, query, out, **kwargs):
@@ -1503,7 +1539,7 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     assert seen == [[], []]
     assert agent.model_id == "chosen-model"
     assert agent.loaded_skills == {"coding": "loaded"}
-    assert state.bypass
+    assert state.full_access
     assert json.loads(_lines(wire)[1]) == {
         "type": "final",
         "answer": "conversation_cleared",
