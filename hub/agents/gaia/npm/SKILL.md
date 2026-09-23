@@ -327,15 +327,19 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Eight of the agent's tools mutate the machine and need explicit approval
+Nine of the agent's tools mutate the machine and need explicit approval
 before they run. Six sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
-**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which spawns a PowerShell
-child on Windows to draw the notification — and the flagship adds two of its
-own, **`install_skill`** and **`remove_skill`**, because installing a skill
-writes third-party code under `~/.gaia/skills` and removing one deletes it.
-Everything else — reading, indexing, querying, web fetching, memory — runs
-without asking.
+**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which
+spawns a PowerShell child on Windows to draw the notification — and the
+flagship adds three of its own (`CONFIRMATION_REQUIRED_TOOLS`):
+**`install_skill`**, **`capture_skill`**, and **`remove_skill`**, because
+installing or capturing a skill writes third-party content under
+`~/.gaia/skills` and removing one deletes it. A capture that does land is
+additionally **code-inert**: its instructions load, but any `tools.py`/scripts
+stay unregistered until a human runs `gaia skill promote <name>` in a
+terminal. Everything else — reading, indexing, querying, web fetching,
+memory — runs without asking.
 
 Over `/v1/gaia/query` there is **no way to collect an approval**, so the stream
 does not prompt. When the agent reaches one of those tools it emits a
@@ -352,7 +356,7 @@ data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary
 data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
-So: **`/query` cannot run any of those eight tools.** If your integration needs
+So: **`/query` cannot run any of those nine tools.** If your integration needs
 that, drive the agent from a surface that can prompt — its stdio transport is the
 one that can, because its control channel carries an approval back to a turn
 already in flight (SPEC §5.5) — or perform the mutation yourself from your own
@@ -499,7 +503,7 @@ There is no silent null.
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  The eight gated tools are unreachable **over `/query`** — the agent itself can
+  The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a
