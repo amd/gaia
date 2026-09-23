@@ -6,11 +6,11 @@
 
 - ``_email_query_version_supported``: the sidecar contract-version floor gate
 - ``_query_context_from_history``: history-pair -> /query context flattening
-- ``_dispatch_email_query``: the streaming producer's self-contained email
+- ``_dispatch_sidecar_query``: the streaming producer's self-contained email
   dispatch branch — every path either relays the sidecar's /query loop to
   completion or emits a terminal SSE error and returns.
 
-After the daemon-client cutover (#2142 T3), ``_dispatch_email_query`` no
+After the daemon-client cutover (#2142 T3), ``_dispatch_sidecar_query`` no
 longer owns a spawning ``EmailSidecarManager`` — it acquires a
 ``SidecarHandle`` from the daemon via
 ``gaia.ui.email_sidecar.daemon_client.acquire_handle()`` and forwards through
@@ -24,7 +24,7 @@ import pytest
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
 from gaia.ui._chat_helpers import (
-    _dispatch_email_query,
+    _dispatch_sidecar_query,
     _email_query_version_supported,
     _query_context_from_history,
 )
@@ -118,12 +118,12 @@ class TestQueryContextFromHistory:
         assert not user_entry["content"].endswith("... (truncated)")
 
 
-# ── _dispatch_email_query ────────────────────────────────────────────────────
+# ── _dispatch_sidecar_query (email) ────────────────────────────────────────────────────
 
 
 class _FakeSSEHandler:
     """Minimal stand-in for ``SSEOutputHandler`` — only the attributes
-    ``_dispatch_email_query`` touches."""
+    ``_dispatch_sidecar_query`` touches."""
 
     def __init__(self):
         self.events = []
@@ -167,7 +167,7 @@ def _make_request(message="hi"):
 
 
 class TestDispatchEmailQuery:
-    """Every path in ``_dispatch_email_query`` either relays to completion
+    """Every path in ``_dispatch_sidecar_query`` either relays to completion
     or emits exactly one terminal ``agent_error`` and returns — never lets
     an exception escape, and never calls ``relay_query`` once a pre-flight
     check has already failed."""
@@ -185,7 +185,7 @@ class TestDispatchEmailQuery:
         )
 
         handler = _FakeSSEHandler()
-        _dispatch_email_query(handler, _make_request(), [], "some-model")
+        _dispatch_sidecar_query(handler, _make_request(), [], "some-model", "email")
 
         assert len(handler.events) == 1
         assert handler.events[0] == {"type": "agent_error", "content": "boom"}
@@ -204,7 +204,7 @@ class TestDispatchEmailQuery:
         )
 
         handler = _FakeSSEHandler()
-        _dispatch_email_query(handler, _make_request(), [], "model")
+        _dispatch_sidecar_query(handler, _make_request(), [], "model", "email")
 
         assert fake_handle.proxy_called is False, (
             "Version gate must short-circuit BEFORE any HTTP call via " "handle.proxy()"
@@ -227,7 +227,7 @@ class TestDispatchEmailQuery:
         )
 
         handler = _FakeSSEHandler()
-        _dispatch_email_query(handler, _make_request(), [], "model")
+        _dispatch_sidecar_query(handler, _make_request(), [], "model", "email")
 
         assert fake_handle.proxy_called is True
         assert len(handler.events) == 1
@@ -251,7 +251,7 @@ class TestDispatchEmailQuery:
         )
 
         handler = _FakeSSEHandler()
-        _dispatch_email_query(handler, _make_request(), [], "model")
+        _dispatch_sidecar_query(handler, _make_request(), [], "model", "email")
 
         assert len(handler.events) == 1
         content = handler.events[0]["content"].lower()
@@ -273,7 +273,7 @@ class TestDispatchEmailQuery:
 
         handler = _FakeSSEHandler()
         handler.cancelled.set()
-        _dispatch_email_query(handler, _make_request(), [], "model")
+        _dispatch_sidecar_query(handler, _make_request(), [], "model", "email")
 
         assert relay_calls == []
         # No terminal error either — a cooperative cancel is not a failure.
@@ -303,7 +303,7 @@ class TestDispatchEmailQuery:
         handler = _FakeSSEHandler()
         history_pairs = [("hello", "hi there")]
         request = _make_request(message="what's up")
-        _dispatch_email_query(handler, request, history_pairs, "model-x")
+        _dispatch_sidecar_query(handler, request, history_pairs, "model-x", "email")
 
         assert len(calls) == 1
         call = calls[0]
