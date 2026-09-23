@@ -879,27 +879,40 @@ func (s *SubprocessClient) Close() error {
 		return nil
 	}
 
-	// If a turn's reader is still in flight it owns the reap (os/exec forbids
-	// Wait before reads complete), so wait for it rather than racing it.
+	// Wait must not close stdout underneath the turn's reader.
+	var killErr error
 	if turnDone != nil {
 		select {
 		case <-turnDone:
 		case <-time.After(closeGrace):
 			// The agent ignored EOF. Kill it and let the reader finish.
-			killErr := proc.kill()
+			killErr = proc.kill()
 			select {
 			case <-turnDone:
 			case <-time.After(closeGrace):
-				// The reader is wedged; leave the child to the OS rather than
-				// calling Wait underneath an active read.
+				return errors.Join(killErr, fmt.Errorf("agent output reader did not stop after the process was terminated"))
 			}
-			return killErr
 		}
-		return nil
 	}
 
-	proc.reap()
-	return nil
+	// A terminal event ends the reader, not the persistent child process.
+	reaped := make(chan struct{})
+	go func() {
+		proc.reap()
+		close(reaped)
+	}()
+	select {
+	case <-reaped:
+		return killErr
+	case <-time.After(closeGrace):
+		killErr = errors.Join(killErr, proc.kill())
+	}
+	select {
+	case <-reaped:
+		return killErr
+	case <-time.After(closeGrace):
+		return errors.Join(killErr, fmt.Errorf("agent process did not exit after termination"))
+	}
 }
 
 func truncateLine(s string) string {
