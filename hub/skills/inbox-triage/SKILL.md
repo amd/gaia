@@ -96,6 +96,14 @@ asks next — do not reach for them during the pass itself.
 It searches the whole mailbox, not just the inbox, so it finds messages that
 were already filed and never appeared in your triage.
 
+When the user is describing mail from memory, their words are usually not the
+words in it. A result with `unverified: true` matched a broader query, never
+what you asked for — check each hit against what the user described, and if
+none fits, search once more with the sender's vocabulary (the formal or
+industry term for the paraphrase: "sign off on a contract" is written
+"signature", "countersign", "execute") before telling the user it is not
+there. Never name an unverified hit as the message they meant.
+
 `list_mail_folders` explains a surprisingly empty inbox. If `list_inbox`
 returned little and the user expected more, folder unread counts show where the
 mail is actually landing. Report the counts and stop — do not start reading

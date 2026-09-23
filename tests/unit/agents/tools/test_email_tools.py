@@ -1103,7 +1103,7 @@ def test_zero_result_query_is_broadened_until_it_hits(harness_factory):
     assert out["broadened"] is True
     assert out["query_used"] == "argument cameras"
     assert seen[0] == "the argument over cameras police use"  # full query tried first
-    assert seen[-1] == "argument cameras"
+    assert "argument cameras" in seen
 
 
 def test_broadened_result_names_the_query_that_produced_it(harness_factory):
@@ -1120,9 +1120,12 @@ def test_broadened_result_names_the_query_that_produced_it(harness_factory):
         "please sign off on the contract counter-signature schedule"
     )
     assert out["query_used"] == "contract counter-signature"
-    assert [a["count"] for a in out["attempts"]] == [0, 0, 1]
+    assert [a["count"] for a in out["attempts"]][:3] == [0, 0, 1]
+    # A hit on rung three is not a reason to stop looking for better ones.
+    assert len(out["attempts"]) > 3
     # The model must not present a looser match as an exact one.
-    assert "approximate" in out["note"]
+    assert out["exact_match"] is False
+    assert out["unverified"] is True
 
 
 def test_absent_message_still_reports_zero_after_broadening(harness_factory):
@@ -1141,7 +1144,12 @@ def test_absent_message_still_reports_zero_after_broadening(harness_factory):
     assert "No message matched" in out["note"]
 
 
-def test_short_query_that_hits_is_not_broadened(harness_factory):
+def test_a_query_that_hits_as_sent_keeps_its_own_results(harness_factory):
+    """Broader rungs may still run, but they never displace an exact hit.
+
+    The sweep buys candidates for the case the exact hit is the wrong mail;
+    it must not cost precision when the exact hit is the right mail.
+    """
     handler, seen = _mailbox_matching("flock newsletter")
     h = harness_factory(handler)
 
@@ -1149,8 +1157,10 @@ def test_short_query_that_hits_is_not_broadened(harness_factory):
 
     assert out["count"] == 1
     assert out["broadened"] is False
+    assert out["exact_match"] is True
     assert out["query_used"] == "flock newsletter"
-    assert seen == ["flock newsletter"]  # one round trip, no wasted retry
+    assert seen[0] == "flock newsletter"
+    assert "alternatives" not in out  # no looser rung matched anything
 
 
 def test_empty_query_still_fails_loudly(harness_factory):
@@ -1256,7 +1266,7 @@ def test_surrounding_whitespace_is_not_a_broadening(harness_factory):
     assert out["count"] == 1
     assert out["broadened"] is False
     assert "note" not in out  # nothing to hedge about
-    assert seen == ["Acme invoice"]
+    assert seen[0] == "Acme invoice"  # the query as sent is tried first
 
 
 def test_mid_ladder_backend_failure_is_reported_not_swallowed(harness_factory):
