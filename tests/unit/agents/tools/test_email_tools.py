@@ -1437,6 +1437,21 @@ def test_results_the_query_never_matched_are_marked_unverified(harness_factory):
     assert "search again" in note
 
 
+def test_a_healthy_exact_result_costs_one_round_trip(harness_factory):
+    """The sweep is for thin results; a full first rung must not pay for it."""
+    plenty = [
+        _graph_message(f"AAMk-p{i}", thread=f"conv-p{i}", subject=f"Invoice {i}")
+        for i in range(6)
+    ]
+    handler, seen = _mailbox_by_term({"acme invoice": plenty})
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="Acme invoice"))
+
+    assert out["count"] == 6
+    assert seen == ["Acme invoice"]
+
+
 def test_an_exact_hit_is_never_labelled_unverified(harness_factory):
     handler, _ = _mailbox_by_term({"flock newsletter": [FIELDSTONE]})
     h = harness_factory(handler)
