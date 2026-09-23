@@ -140,6 +140,12 @@ class TomlScheduleStore:
             ) as f:
                 pending = Path(f.name)
                 tomli_w.dump(doc, f)
+                # os.replace is atomic against concurrent readers, but only
+                # once the data itself is actually on disk -- without this a
+                # crash between the write and the rename can still surface a
+                # zero-length store.
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(pending, self.path)
         finally:
             if pending is not None:

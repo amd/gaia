@@ -130,6 +130,50 @@ class TestBuildScheduler:
         finally:
             scheduler.shutdown()
 
+    def test_reload_tick_survives_an_unparseable_store(self, tmp_path, caplog):
+        """An unparseable cron on disk must not take the daemon down (#4143)."""
+        store = _store_with(tmp_path, _make_schedule("a"))
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            original_fire = scheduler.get_job("a").next_run_time
+
+            schedules = store.load()
+            schedules["a"].cron = "every day"  # not a valid crontab
+            store.save(schedules)
+
+            import logging
+
+            with caplog.at_level(logging.ERROR):
+                daemon._reload_or_keep_armed(scheduler, store)
+
+            assert scheduler.get_job("a") is not None
+            assert scheduler.get_job("a").next_run_time == original_fire
+            assert "could not reload" in caplog.text
+        finally:
+            scheduler.shutdown()
+
+    def test_reload_tick_survives_a_truncated_store_file(self, tmp_path, caplog):
+        """A hand-edit caught mid-save must not take the daemon down (#4143)."""
+        store = _store_with(tmp_path, _make_schedule("a"))
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            original_fire = scheduler.get_job("a").next_run_time
+
+            store.path.write_text("[schedules.a\n")  # torn write
+
+            import logging
+
+            with caplog.at_level(logging.ERROR):
+                daemon._reload_or_keep_armed(scheduler, store)
+
+            assert scheduler.get_job("a") is not None
+            assert scheduler.get_job("a").next_run_time == original_fire
+            assert "could not reload" in caplog.text
+        finally:
+            scheduler.shutdown()
+
 
 # ===========================================================================
 # 3. _job — success and failure paths

@@ -88,6 +88,25 @@ def refresh_schedules(scheduler: BackgroundScheduler, store: ScheduleStore) -> N
         )
 
 
+def _reload_or_keep_armed(scheduler: BackgroundScheduler, store: ScheduleStore) -> None:
+    """One reload tick: reconcile timers, or stay on the last good read.
+
+    A bad cron (``gaia schedule add`` rejects one now, but an existing store
+    can still predate that check) or a store read mid-hand-edit must not take
+    the whole daemon down with it -- keep the previously armed timers running
+    and try again next tick, the same loud-but-alive contract ``_job`` already
+    honours (#4143).
+    """
+    try:
+        refresh_schedules(scheduler, store)
+    except Exception:
+        log.exception(
+            "could not reload %s; keeping the schedules armed from the "
+            "last good read",
+            store.path,
+        )
+
+
 def run_daemon(store_path: Path = DEFAULT_STORE_PATH) -> None:
     """Start the scheduler and block until SIGINT/SIGTERM."""
     store = TomlScheduleStore(store_path)
@@ -101,7 +120,7 @@ def run_daemon(store_path: Path = DEFAULT_STORE_PATH) -> None:
     log.info("schedule daemon running (store=%s); press Ctrl-C to stop", store.path)
     try:
         while not stop.wait(STORE_REFRESH_SECONDS):
-            refresh_schedules(scheduler, store)
+            _reload_or_keep_armed(scheduler, store)
     finally:
         scheduler.shutdown(wait=False)
         log.info("schedule daemon stopped")
