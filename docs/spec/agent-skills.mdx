@@ -31,7 +31,9 @@ ceilings, `skill-lock.json`, and the local resolver that turns a declared
 `skills:` / `skill_sets:` block into loaded skills at construction
 ([#2467](https://github.com/amd/gaia/issues/2467)); plus `gaia skill audit`, the
 engine that produces the verdict the hub gate checks
-([#2468](https://github.com/amd/gaia/issues/2468)).
+([#2468](https://github.com/amd/gaia/issues/2468)); and in-conversation
+**capture** (`capture_skill` from pasted text / URL / folder, code inert until
+`gaia skill promote` — see [Capture](#capture-code-inert-until-promoted)).
 
 **Still proposed:** the local-capability permission **sandbox**
 ([#1019](https://github.com/amd/gaia/issues/1019)), plus the `/api/skills` router
@@ -311,7 +313,9 @@ order:
    no tools and no prompt fragment behind (see [Permission &
    security model](#permission--security-model)).
 4. Registers the skill's `@tool` functions from `tools.py` under
-   `<skill-name>/<tool>`, so two skills may both provide `search_web`.
+   `<skill-name>/<tool>`, so two skills may both provide `search_web` — unless
+   the skill is a **capture** whose code is not yet trusted, in which case tool
+   registration is deferred (see [Capture](#capture-code-inert-until-promoted)).
 5. Merges any resolved `ConnectorRequirement`s into `REQUIRED_CONNECTORS` —
    **per instance**, never mutating the ClassVar, so one agent's skill never leaks
    requirements into a sibling.
@@ -338,6 +342,35 @@ the **load-time** ceiling and the run-time sandbox behind it
 root by hand — `gaia skill create`, `gaia skill import`, or a plain `cp` — never
 passed through install, so `load_skill` gates on *domain* (below), not on tier.
 </Note>
+
+### Capture: code inert until promoted
+
+The flagship agent's `capture_skill` tool (backed by
+`gaia.skills.capture.capture_skill`) brings a skill in **from the
+conversation**: pasted `SKILL.md` text, an http(s) URL (a raw `SKILL.md` or a
+`.zip` bundle), or a local folder/`.zip`, classified in that precedence. It is
+confirmation-gated (over REST/non-TTY it is denied, not prompted), the fetch
+rides the SSRF-guarded `WebClient` (loopback only via
+`GAIA_WEB_ALLOWED_HOSTS`), and every capture runs the static security audit
+first — a `BLOCK` verdict refuses the capture and writes nothing. What lands
+lands at the `experimental` tier with its provenance recorded in
+`skill-lock.json` (`source: "captured"`, `origin`, `captured: true`).
+
+The capture lifecycle separates **instructions** from **code**:
+
+| Stage | Instructions (`SKILL.md` body) | Code (`tools.py` / `scripts/`) |
+|-------|-------------------------------|-------------------------------|
+| `capture_skill` | audited, copied in | audited, copied in — `code_trusted: false` |
+| `load_skill` | injected into the system prompt | **deferred** — never imported, tools never register |
+| `gaia skill promote <name>` (terminal) | unchanged | re-audited; on `ALLOW`, `code_trusted: true` bound to a content digest |
+| next `load_skill` | injected | registered under `<skill>/<tool>` |
+
+The deferral exists because a pasted body only reaches the *prompt*, while
+`tools.py` is imported into the agent's own **process** — so code-trust is a
+terminal, human step (`promote`), never a chat approval. Trust binds to the
+audited bytes: editing a promoted skill re-defers its code, and a failed
+re-promote revokes the earlier trust. An instruction-only capture has nothing
+to defer and simply loads.
 
 ### Invocation
 

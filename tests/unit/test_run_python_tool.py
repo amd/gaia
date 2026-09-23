@@ -127,9 +127,10 @@ def test_the_snippet_never_lands_in_the_workspace(
 
     assert result["status"] == "success", result
     assert _tree(project) == before
-    # It ran from the temp dir, and is not left behind there either.
+    # It ran from the temp dir, and is not left behind there either. The
+    # session's scratch dir may live there too; the snippet may not.
     assert result["stdout"].strip().startswith(str(temp_dir))
-    assert list(temp_dir.iterdir()) == []
+    assert not list(temp_dir.rglob("gaia-run-*"))
 
 
 def test_the_snippet_is_removed_even_when_it_times_out(
@@ -144,7 +145,7 @@ def test_the_snippet_is_removed_even_when_it_times_out(
     result = run_python(code="import time\ntime.sleep(30)", timeout=1)
 
     assert result["status"] == "error"
-    assert list(temp_dir.iterdir()) == []
+    assert not list(temp_dir.rglob("gaia-run-*"))
 
 
 def test_files_the_snippet_writes_do_land_in_the_workspace(
