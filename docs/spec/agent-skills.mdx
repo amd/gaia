@@ -357,12 +357,16 @@ and acts on the result:
 
 | Outcome | Condition | What happens |
 |---|---|---|
-| **Load** | one skill clears the confidence bar and beats the runner-up by a margin | it is loaded and the reply opens by saying so |
+| **Load** | one skill clears the confidence bar, and either beats the runner-up by a margin or is the one the request actually named | it is loaded and the reply opens by saying so |
 | **Shortlist** | several plausible, none dominant | the names are offered to the model, which calls `load_skill` if one fits |
 | **Nothing** | no real match | the turn proceeds with no skill |
 
 A tie is reported as a tie — the agent never picks between close matches on the
-user's behalf.
+user's behalf. Identity is the one exception: when equal-scoring candidates
+differ in how much of the request is the skill's **own name**, the named one
+wins. *"Triage my inbox"* scores identically for `inbox-triage` and
+`github-triage` (whose description mentions a notification *inbox*), but only one
+of them is called that.
 
 <Note>
 **Write the `description` for this.** It is the retrieval index, not a label. Name
@@ -370,6 +374,11 @@ the nouns a user would actually say — the objects, formats, and services the
 skill works on — not just the verbs. `github-triage` gained "unread notification
 inbox" and that one phrase is what makes *"what's been going on in my github
 inbox?"* resolve automatically instead of landing in a shortlist.
+
+Use the user's plainest word, not the precise one. `inbox-triage` said "mailbox"
+and "email", so *"anything urgent in my mail?"* matched it at zero — "mail" is
+not "mailbox" to a lexical index, and the only skill claiming "urgent" was the
+GitHub one.
 </Note>
 
 Matching runs **outside** the prompt: the index is built in Python from
