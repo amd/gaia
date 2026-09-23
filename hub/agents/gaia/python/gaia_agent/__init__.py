@@ -48,6 +48,8 @@ def _factory(**kwargs):
 
 def build_gaia():
     """Return the :class:`AgentRegistration` for the flagship ``gaia`` agent."""
+    from gaia_agent.connectors import MAILBOX_REQUIREMENTS
+
     from gaia.agents.registry import AgentRegistration, build_model_tiers
 
     tiers = build_model_tiers("Full")
@@ -68,7 +70,7 @@ def build_gaia():
         factory=_factory,
         agent_dir=None,
         models=[],
-        required_connections=[],
+        required_connections=list(MAILBOX_REQUIREMENTS),
         category="general",
         tags=["general", "chat", "rag", "memory", "skills"],
         icon="sparkles",

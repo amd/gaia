@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
+from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.project_map import ProjectMapMixin
@@ -62,7 +63,7 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
-from gaia.agents.tools.email_tools import GMAIL_SCOPES, MAIL_SCOPES, EmailToolsMixin
+from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -252,18 +253,9 @@ class GaiaAgent(
 
     # Declared, not acquired: the user consents once via `gaia connectors`, and
     # nothing here reaches a mailbox until an email tool is actually called.
-    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
-        ConnectorRequirement(
-            connector_id="google",
-            scopes=list(GMAIL_SCOPES),
-            reason="Read and search your Gmail so the agent can triage your inbox.",
-        ),
-        ConnectorRequirement(
-            connector_id="microsoft",
-            scopes=list(MAIL_SCOPES),
-            reason="Read and search your Outlook mail so the agent can triage your inbox.",
-        ),
-    ]
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = list(
+        MAILBOX_REQUIREMENTS
+    )
 
     # Installing a skill writes third-party code under ~/.gaia/skills and
     # removing one deletes it, so both are gated the way file mutation is.
