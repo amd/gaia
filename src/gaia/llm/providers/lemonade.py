@@ -4,10 +4,16 @@
 
 import json
 import logging
+import re
 from typing import Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
-from ..lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient, is_tool_calling_model
+from ..lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    LemonadeClient,
+    active_profile_ctx_size,
+    is_tool_calling_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,18 +95,35 @@ class LemonadeContextOverflowError(LemonadeError):
     """Raised when the prompt + history exceeds the loaded model's ctx.
 
     ``retryable`` is dynamic — set in ``_classify_lemonade_response`` based
-    on the reported ``n_ctx``. When n_ctx is smaller than GAIA's expected
-    65536 (64K), the model was loaded with the wrong ctx_size; reloading
-    via the pre-flight helper will fix it, so we mark retryable so the
-    chat layer auto-recovers. When n_ctx is already at full size, this is
-    a genuine "conversation too big" situation and retry won't help.
+    on the reported ``n_ctx``. When n_ctx is smaller than the active device
+    profile's window (``active_profile_ctx_size``), the model was loaded with
+    the wrong ctx_size; reloading via the pre-flight helper will fix it, so we
+    mark retryable so the chat layer auto-recovers. When n_ctx is already at
+    the profile's full size, this is a genuine "conversation too big"
+    situation and retry won't help.
     """
 
-    retryable = False  # default; set True dynamically when n_ctx < 65536
+    retryable = False  # set True dynamically below the profile's window
     user_message = (
         "This conversation got too long for the model's context window. "
         "Start a fresh task to keep going."
     )
+
+
+def _loaded_below_profile(n_ctx: int) -> bool:
+    """Was the model loaded below the active profile's window?
+
+    Classifiers run inside ``except`` handlers, so an unreadable config must
+    not raise here and replace the error the user actually hit; log it and
+    leave the overflow non-retryable rather than promise a reload.
+    """
+    from gaia.config import GaiaConfigError
+
+    try:
+        return 0 < n_ctx < active_profile_ctx_size()
+    except GaiaConfigError as exc:
+        logger.error("Cannot size the expected context window: %s", exc)
+        return False
 
 
 class LemonadeNetworkError(LemonadeError):
@@ -241,10 +264,10 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         # small ctx (typical: 4096 from a pre-restart leftover, or 32K
         # from a Lemonade `lemonade load Gemma-4-E4B-it-GGUF` without
         # ``--ctx-size``). The chat layer's auto-reload at the expected
-        # ctx will fix it, so let it try. GAIA's default expected ctx
-        # is 65536 for chat / rag profiles — threshold is a deliberate
-        # constant here rather than imported to avoid a circular dep
-        # with lemonade_client. NOTE (#1892): a client running under an
+        # ctx will fix it, so let it try. The threshold is the ACTIVE
+        # profile's window, not a flat 64K: on NPU a correct load is 32K,
+        # so a flat GPU threshold makes every real overflow look
+        # retryable (#2884). NOTE (#1892): a client running under an
         # exact ctx pin (LemonadeClient.ctx_size_override, e.g. the email
         # eval's 16K envelope — see gaia_agent_email.context_budget)
         # legitimately sits below this threshold; the retryable hint is
@@ -255,7 +278,7 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         if not n_ctx_reported and isinstance(err, dict):
             n_ctx_reported = err.get("n_ctx") or 0
         err_instance = LemonadeContextOverflowError(payload=response)
-        if 0 < n_ctx_reported < 65536:
+        if _loaded_below_profile(n_ctx_reported):
             err_instance.retryable = True
         return err_instance, True
     # Distinguish "upstream model call timed out" (reachable Lemonade,
@@ -292,6 +315,102 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         ),
         True,
     )
+
+
+def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
+    """Return a typed ``LemonadeError`` for *exc*, or ``None`` if unrelated.
+
+    Lives here rather than in the chat layer so every surface can reach it —
+    ``gaia.ui`` needs fastapi, which the plain CLI does not have (#2884).
+
+    AgentSDK and the agent loop wrap LLM errors in their own exception types,
+    so a provider-raised ``LemonadeError`` often arrives as a plain
+    ``ValueError``/``RuntimeError`` carrying only the original text. Walk the
+    cause chain first, then pattern-match the message, so a retry decision
+    never depends on the exception type bubbling through unchanged.
+    """
+    # Walk both ``__cause__`` (explicit ``raise ... from e``) and ``__context__``
+    # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
+    # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
+    # for handlers that re-raise without ``from``.
+    #
+    # Cycle protection: tracking visited ids defends against pathological
+    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, LemonadeError):
+            return cur
+        cur = cur.__cause__ or cur.__context__
+
+    raw = str(exc)
+    text = raw.lower()
+    # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412. The
+    # message itself is kept: it names the provider and where to add funds.
+    refused = re.search(
+        r"[^\n:]*refused the request \(http 4(?:02|12)\):[^\n]*", raw, re.IGNORECASE
+    )
+    if refused:
+        return LemonadeCloudAccountError(user_message=refused.group(0).strip())
+    if "no model loaded" in text or "model_not_loaded" in text:
+        return LemonadeModelNotLoadedError()
+    # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
+    # model was never pulled, so this is NOT retryable and NOT the same as
+    # "not loaded". Naming the missing model is actionable (#2243).
+    # "was not found" is anchored to a nearby "model" token so an unrelated
+    # 404 ("file X was not found") isn't mislabelled as a missing model.
+    if (
+        "model_not_found" in text
+        or re.search(r"\bmodel\b[^\n]{0,80}?\bwas not found\b", text)
+        or ("model not found" in text and "not loaded" not in text)
+    ):
+        m = re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
+        return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
+    if "exceed_context_size" in text or "exceeds the available context size" in text:
+        err = LemonadeContextOverflowError()
+        m = re.search(r"context size \((\d+) tokens?\)", text)
+        if not m:
+            m = re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
+        # Same threshold as ``_classify_lemonade_response``: below the active
+        # profile's window the model was loaded wrong and a reload fixes it.
+        if m and _loaded_below_profile(int(m.group(1))):
+            err.retryable = True
+        return err
+    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
+    # hung) from real connectivity failures (#1030). The user-facing remediation
+    # is very different.
+    is_timeout = (
+        "timeout was reached" in text
+        or "timed out" in text
+        or "operation_timeout" in text
+    )
+    is_unreachable = (
+        "connection refused" in text
+        or "could not resolve host" in text
+        or "no route to host" in text
+        or "couldn't connect" in text
+    )
+    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between models
+    # or hit an internal recovery state. Treat them as the network-flavour
+    # transient so the chat layer's reload-and-retry path gets a chance.
+    is_backend_5xx = bool(
+        re.search(r"failed with status 5\d\d", text)
+        or "internal server error" in text
+        or "service unavailable" in text
+        or "bad gateway" in text
+        or "gateway timeout" in text
+    )
+    if is_timeout and not is_unreachable:
+        return LemonadeUpstreamTimeoutError()
+    if (
+        "network_error" in text
+        or "curl error" in text
+        or is_unreachable
+        or is_backend_5xx
+    ):
+        return LemonadeNetworkError()
+    return None
 
 
 class LemonadeProvider(LLMClient):
@@ -439,15 +558,7 @@ class LemonadeProvider(LLMClient):
         # HTTP round-trip and no last-request race.
         usage = response.get("usage")
         if isinstance(usage, dict):
-            timings = response.get("timings")
-            self._last_usage = {
-                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                "completion_tokens": int(usage.get("completion_tokens") or 0),
-                "total_tokens": int(usage.get("total_tokens") or 0),
-                "tokens_per_second": float(
-                    (timings or {}).get("predicted_per_second") or 0.0
-                ),
-            }
+            self._capture_usage(usage, response.get("timings"))
 
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
@@ -523,6 +634,35 @@ class LemonadeProvider(LLMClient):
             return dict(self._last_usage)
         return self._backend.get_stats() or {}
 
+    def _capture_usage(self, usage: dict, timings: Optional[dict]) -> None:
+        """Record one response's token accounting.
+
+        Shared by the streamed and non-streamed paths so the two cannot report
+        different shapes for the same turn.
+
+        cached/reasoning ride the nested ``*_details`` objects and appear only
+        when the backend actually sent them. A reported 0 is a measurement —
+        the prompt was not served from a cache — so it is kept; a backend that
+        said nothing leaves the key out rather than having a 0 invented for it.
+        """
+        if not isinstance(usage, dict):
+            return
+        captured = {
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
+        }
+        for key, container in (
+            ("cached_tokens", usage.get("prompt_tokens_details")),
+            ("reasoning_tokens", usage.get("completion_tokens_details")),
+        ):
+            if isinstance(container, dict) and container.get(key) is not None:
+                captured[key] = int(container[key])
+        captured["tokens_per_second"] = float(
+            (timings or {}).get("predicted_per_second") or 0.0
+        )
+        self._last_usage = captured
+
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent non-streaming ``chat()``
         call (#1891), or ``None`` when unavailable (a streaming call, or the
@@ -560,6 +700,11 @@ class LemonadeProvider(LLMClient):
             return out
 
         for chunk in response:
+            # The usage chunk arrives last and carries no choices. It is the
+            # only token accounting a streamed turn gets — see the
+            # stream_options request in lemonade_client.
+            if chunk.get("usage"):
+                self._capture_usage(chunk["usage"], timings=None)
             if "choices" in chunk and chunk["choices"]:
                 choice = chunk["choices"][0]
                 finish_reason = choice.get("finish_reason") or finish_reason

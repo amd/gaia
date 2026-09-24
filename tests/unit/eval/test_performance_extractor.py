@@ -3,6 +3,7 @@
 """Unit tests for gaia.eval.performance (perf extractor — no Lemonade)."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -89,6 +90,89 @@ class TestExtractStepStats:
         )
         assert steps == []
         assert reasoning == 0
+
+
+def _conversation_with(stats: dict) -> list:
+    """One agent step whose stats message carries ``stats`` verbatim."""
+    return [
+        {"role": "assistant", "content": "working"},
+        {
+            "role": "system",
+            "content": {"type": "stats", "step": 1, "performance_stats": stats},
+        },
+    ]
+
+
+def _claude_step_stats() -> dict:
+    """What ClaudeProvider really emits, produced by its own _capture_usage."""
+    from gaia.llm.providers.claude import ClaudeProvider
+
+    provider = ClaudeProvider.__new__(ClaudeProvider)  # no API key needed
+    provider._last_usage = None
+    provider._capture_usage(
+        SimpleNamespace(
+            input_tokens=2_000,
+            cache_read_input_tokens=7_700,
+            cache_creation_input_tokens=300,
+            output_tokens=500,
+        ),
+        elapsed=1.0,
+    )
+    return provider.get_performance_stats()
+
+
+# LemonadeProvider._capture_usage in amd/gaia#3739, for a Fireworks-routed call.
+_LEMONADE_CLOUD_STATS = {
+    "prompt_tokens": 10_000,
+    "completion_tokens": 500,
+    "total_tokens": 10_500,
+    "cached_tokens": 7_700,
+}
+
+# The OpenAI-shape ``usage`` object Fireworks returns on /chat/completions.
+_FIREWORKS_RAW_USAGE = {
+    "prompt_tokens": 10_000,
+    "completion_tokens": 500,
+    "total_tokens": 10_500,
+    "prompt_tokens_details": {"cached_tokens": 7_700},
+}
+
+
+class TestCachedTokensFromRealProviderShapes:
+    @pytest.mark.parametrize(
+        "stats",
+        [_claude_step_stats(), _LEMONADE_CLOUD_STATS, _FIREWORKS_RAW_USAGE],
+        ids=["claude", "lemonade-cloud", "fireworks-raw-usage"],
+    )
+    def test_each_provider_shape_reaches_the_scorecard(self, stats):
+        run = extract_from_agent_result(
+            {"conversation": _conversation_with(stats)},
+            run_id="r",
+            timestamp="t",
+            model_id="fireworks.glm-5p3",
+        )
+        summary = to_performance_summary(run)
+        assert summary["total_input_tokens"] == 10_000
+        assert summary["total_output_tokens"] == 500
+        assert summary["total_cached_tokens"] == 7_700
+
+    def test_local_stats_without_a_cache_count_stay_unmeasured(self):
+        steps, _ = extract_step_stats(_agent_result()["conversation"])
+        run = extract_from_agent_result(
+            _agent_result(), run_id="r", timestamp="t", model_id="m"
+        )
+        assert [s.cached_tokens for s in steps] == [None, None]
+        assert to_performance_summary(run)["total_cached_tokens"] is None
+
+    def test_a_reported_zero_is_kept_as_a_measurement(self):
+        stats = dict(_FIREWORKS_RAW_USAGE, prompt_tokens_details={"cached_tokens": 0})
+        run = extract_from_agent_result(
+            {"conversation": _conversation_with(stats)},
+            run_id="r",
+            timestamp="t",
+            model_id="m",
+        )
+        assert run.total_cached_tokens == 0
 
 
 class TestExtractFromAgentResult:
