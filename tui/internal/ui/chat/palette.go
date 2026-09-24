@@ -38,6 +38,7 @@ var paletteCommands = []paletteCommand{
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
+	{"/cost", "What this session has spent; /cost help for rates"},
 	{"/agents", "List installed agents and switch this session to one"},
 }
 
