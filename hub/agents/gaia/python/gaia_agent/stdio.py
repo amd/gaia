@@ -80,10 +80,19 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     cloud_model_provider,
 )
+from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
 logger = get_logger(__name__)
+
+
+def lemonade_start_instruction() -> str:
+    """How to start Lemonade on this host, as one complete sentence."""
+    instruction = describe_start_hint().instruction.rstrip()
+    # Some hints end in a bare command; punctuate so appended prose stays readable.
+    return instruction if instruction.endswith((".", "!", "?")) else f"{instruction}."
+
 
 #: Level the permission audit trail is pinned at, independent of --dev.
 AUDIT_LEVEL = logging.INFO
@@ -437,7 +446,7 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
     except LemonadeClientError as exc:
         raise RuntimeError(
             f"Lemonade Server is not reachable at {client.base_url} ({exc}). "
-            "Start it with `lemonade-server serve`, then retry."
+            f"{lemonade_start_instruction()}"
         ) from exc
     return sorted(
         {
@@ -970,8 +979,9 @@ def _terminal_error(exc: BaseException) -> Dict[str, Any]:
         return {
             "type": "error",
             "detail": (
-                "Local Lemonade Server is not reachable. Start it, then retry — "
-                f"run `lemonade-server serve`. (underlying error: {text})"
+                "Local Lemonade Server is not reachable. "
+                f"{lemonade_start_instruction()} "
+                f"(underlying error: {text})"
             ),
         }
     return {"type": "error", "detail": text}

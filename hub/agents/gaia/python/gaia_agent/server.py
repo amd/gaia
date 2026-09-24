@@ -43,6 +43,7 @@ from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
 from gaia_agent.session_registry import SessionCapacityError, close_agent
 from gaia_agent.session_registry import registry as session_registry
+from gaia_agent.stdio import lemonade_start_instruction
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
@@ -354,8 +355,8 @@ def _terminal_error_detail(exc: BaseException) -> str:
         )
     ):
         return (
-            "Local Lemonade Server is not reachable. Start it, then retry — "
-            f"run `lemonade-server serve`, or see {_DOCS_URL}. "
+            "Local Lemonade Server is not reachable. "
+            f"{lemonade_start_instruction()} See {_DOCS_URL}. "
             f"(underlying error: {text})"
         )
     return text
@@ -531,9 +532,11 @@ async def init() -> Dict[str, Any]:
 
     hint: Optional[str] = None
     if not probe["reachable"]:
+        start = await asyncio.to_thread(lemonade_start_instruction)
         hint = (
-            f"Local Lemonade Server is not reachable at {probe['base_url']} — start it "
-            f"with `lemonade-server serve`, or set LEMONADE_BASE_URL to a running server."
+            f"Local Lemonade Server is not reachable at {probe['base_url']}. "
+            f"{start} Or set LEMONADE_BASE_URL to a running server. "
+            f"See {_DOCS_URL}."
         )
     elif compatible is False:
         hint = (

@@ -14,6 +14,10 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- "Lemonade is not reachable" errors no longer tell users to run
+  `lemonade-server serve`, a command current Lemonade installs don't have. The
+  `GET /v1/gaia/init` hint, run errors, and `/model` now say how to start
+  Lemonade on the user's own install (tray app, macOS app, service, or CLI).
 - The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.
