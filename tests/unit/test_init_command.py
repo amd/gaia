@@ -2997,7 +2997,6 @@ class TestHardwareChatModel(unittest.TestCase):
 
     def test_a_user_default_the_server_cannot_load_is_refused(self):
         from gaia.config import GaiaConfig
-        from gaia.installer.init_command import check_setup_status
         from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
         from gaia.llm.model_fit import ModelFitError
 
