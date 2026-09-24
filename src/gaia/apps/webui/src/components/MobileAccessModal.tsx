@@ -73,19 +73,26 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                 }
             }
 
-            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            // toCanvas() paints a raster, so it needs literals, not var().
+            // getComputedStyle resolves them for the theme in force — copying
+            // the hexes here is how the two surfaces drift apart.
+            const css = getComputedStyle(document.documentElement);
+            const ink = css.getPropertyValue('--text-primary').trim();
+            const paper = css.getPropertyValue('--bg-primary').trim();
+            if (!ink || !paper) {
+                log.system.error(
+                    'QR code skipped: --text-primary/--bg-primary did not resolve. ' +
+                        'styles/index.css must be loaded before this modal renders.',
+                );
+                return;
+            }
 
             try {
                 await QRCodeLib.toCanvas(canvasRef.current, mobileUrl, {
                     width: 200,
                     margin: 2,
-                    color: {
-                        // A QR scanner needs a hard two-tone raster, so these
-                        // are the canvas/text roles resolved to literals rather
-                        // than var() — toCanvas() cannot resolve a custom prop.
-                        dark: isDark ? '#F0EDE7' : '#242129',
-                        light: isDark ? '#17161C' : '#F5F2EC',
-                    },
+                    // A QR scanner needs a hard two-tone raster: ink on paper.
+                    color: { dark: ink, light: paper },
                 });
             } catch (err) {
                 log.system.error('QR code generation failed', err);

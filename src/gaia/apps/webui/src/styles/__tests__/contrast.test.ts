@@ -253,19 +253,23 @@ describe('component stylesheets route colour through tokens', () => {
     const QUOTED_COLOUR =
         /['"`]\s*(#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?|rgba?\([^'"`]*\d+\s*,)/;
 
-    // Two places legitimately hold a hex: neither can read a CSS custom
-    // property at the point it needs the value.
+    // One place legitimately holds a hex: DevTools has no cascade to read a
+    // custom property from. Anything rendered into the page does, including a
+    // canvas -- `getComputedStyle` resolves custom properties even where
+    // `var()` is not accepted, which is how the QR modal dropped its pair.
     const LITERAL_ALLOWED: Record<string, string> = {
         '/src/utils/logger.ts':
             'DevTools `%c` category palette -- never painted in the app',
-        '/src/components/MobileAccessModal.tsx':
-            'QR raster needs a resolved two-tone pair; toCanvas cannot take var()',
     };
+
+    // Nothing under `__tests__` is painted, and a test that pins what a token
+    // resolves to has to name the value it expects.
+    const IS_TEST = /\/__tests__\//;
 
     it('has no quoted colour literal in components outside the allowlist', () => {
         const offenders: string[] = [];
         for (const [path, source] of Object.entries(TS_SOURCES)) {
-            if (path in LITERAL_ALLOWED) continue;
+            if (path in LITERAL_ALLOWED || IS_TEST.test(path)) continue;
             source.split(/\r?\n/).forEach((line: string, i: number) => {
                 if (QUOTED_COLOUR.test(line)) offenders.push(`${path}:${i + 1}  ${line.trim()}`);
             });
