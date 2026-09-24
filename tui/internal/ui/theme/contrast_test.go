@@ -152,14 +152,16 @@ var fillForegrounds = map[string]bool{"OnFill": true, "OnSurface": true}
 
 // hueFamily is the semantic colour family a token belongs to. Luminance-only
 // floors cannot see a value that clears its contrast target but rounds into a
-// DIFFERENT family once a 256-colour terminal degrades it — e.g. Accent's
-// green landing on the teal between green and Info's blue. hueFamily and
-// TestDegradationPreservesHue below exist to catch exactly that.
+// DIFFERENT family once a 256-colour terminal degrades it — a Success green
+// landing on the teal between green and Info's blue, a copper landing on
+// Warning's amber. hueFamily and TestDegradationPreservesHue below exist to
+// catch exactly that.
 type hueFamily int
 
 const (
-	hueNeutral hueFamily = iota // greys: hue is meaningless, only saturation matters
+	hueNeutral hueFamily = iota // greys: hue is meaningless, only chroma matters
 	hueRed
+	hueCopper
 	hueAmber
 	hueGreen
 	hueCyan
@@ -168,25 +170,47 @@ const (
 )
 
 func (f hueFamily) String() string {
-	return [...]string{"neutral", "red", "amber", "green", "cyan", "blue", "magenta"}[f]
+	return [...]string{"neutral", "red", "copper", "amber", "green", "cyan", "blue", "magenta"}[f]
 }
 
 // hueArcs are [min,max] in degrees, sized from the actual hue of every value
 // in the palette (both truecolor and ANSI-256-degraded) plus margin on both
 // sides so a legitimate shade never sits at the edge. hueRed wraps past 360.
+//
+// Copper is the crowded one: it is the brand accent AND it sits between two
+// colours that already carry meaning. Measured, the three families are
+//
+//	red     every value lands on exactly 0.0 (#AF0000, #FFAFAF)
+//	copper  14.0 … 24.6 (#8A4530, #9A4930; degraded #FFAF87, #D7875F at 20.0)
+//	amber   30.0 … 45.0 (degraded #FFAF5F, #875F00, #FFD75F)
+//
+// so the arcs below leave copper 2° clear of red's ceiling and 3.4° clear of
+// amber's floor, and no two arcs overlap. Red's arc was ±12 around a family
+// whose every member measures 0.0; trimming it to ±10 is what makes room under
+// copper, and still leaves red five times the margin copper gets.
 var hueArcs = map[hueFamily][2]float64{
-	hueRed:     {348, 372},
-	hueAmber:   {20, 55},
+	hueRed:     {350, 370},
+	hueCopper:  {12, 26},
+	hueAmber:   {28, 55},
 	hueGreen:   {65, 168},
 	hueCyan:    {173, 197},
 	hueBlue:    {197, 232},
 	hueMagenta: {290, 335},
 }
 
-// neutralSatMax is the saturation below which a colour reads as achromatic:
-// hue is undefined there, so both true neutrals and a family member that has
-// legitimately faded toward grey (ArtDetail.Light, once degraded) are fine.
-const neutralSatMax = 0.20
+// neutralChromaMax is the chroma (max channel − min channel) below which a
+// colour reads as achromatic: hue is undefined there, so both true neutrals and
+// a family member that has legitimately faded toward grey (Accent.Light's
+// #875F5F, once degraded) are fine.
+//
+// Chroma, not HSL saturation: saturation is lightness-dependent, so the SAME
+// 40/255 of colour scores 0.17 on #875F5F and 1.00 on #FFFFD7 (Text.Dark's
+// degraded value) purely because one is mid-grey and the other is near-white.
+// Chroma scores both at 0.157, which is what "how much colour is actually
+// left" means. The ceiling is set just above that, and every value in this
+// palette that genuinely carries a hue degrades to chroma ≥ 0.314 — twice the
+// ceiling — so nothing saturated can slip through.
+const neutralChromaMax = 0.16
 
 // family declares the intended hue family for every token All() returns, next
 // to the palette table above so the intent is readable in one place.
@@ -194,31 +218,28 @@ const neutralSatMax = 0.20
 // discipline TestEveryTokenHasAFloor already applies to contrast.
 var family = map[string]hueFamily{
 	"Text": hueNeutral, "Dim": hueNeutral, "Faint": hueNeutral,
-	"Accent": hueGreen, "AccentBright": hueGreen, "Success": hueGreen,
+	"Accent": hueCopper, "AccentBright": hueCopper, "Success": hueGreen,
 	"Warning": hueAmber, "Danger": hueRed, "Info": hueBlue, "Highlight": hueMagenta,
 	"Selected":  hueAmber,
 	"Divider":   hueNeutral,
-	"ArtBright": hueGreen, "ArtBody": hueGreen, "ArtMid": hueGreen, "ArtDetail": hueGreen,
+	"ArtBright": hueCopper, "ArtBody": hueCopper, "ArtMid": hueCopper, "ArtDetail": hueCopper,
 	"ArtShadow": hueNeutral, "ArtEye": hueCyan,
-	"AccentFillBG": hueGreen, "WarnFillBG": hueAmber, "DangerFillBG": hueRed, "InfoFillBG": hueBlue,
+	"AccentFillBG": hueCopper, "WarnFillBG": hueAmber, "DangerFillBG": hueRed, "InfoFillBG": hueBlue,
 	"SurfaceBG": hueNeutral, "OnSurface": hueNeutral, "OnFill": hueNeutral,
 }
 
-// hueSat returns hex's hue in [0,360) and saturation in [0,1] (standard HSL).
-func hueSat(hex string) (hue, sat float64) {
+// hueChroma returns hex's hue in [0,360) and its chroma in [0,1] — the plain
+// max-minus-min distance between channels, which unlike HSL saturation does
+// not change with lightness.
+func hueChroma(hex string) (hue, chroma float64) {
 	r, g, b := parseHex(hex)
 	max := math.Max(r, math.Max(g, b))
 	min := math.Min(r, math.Min(g, b))
-	l := (max + min) / 2
 	if max == min {
-		return 0, 0 // achromatic: hue is undefined, sat is correctly 0
+		return 0, 0 // achromatic: hue is undefined, chroma is correctly 0
 	}
 	d := max - min
-	if l > 0.5 {
-		sat = d / (2 - max - min)
-	} else {
-		sat = d / (max + min)
-	}
+	chroma = d
 	switch max {
 	case r:
 		hue = math.Mod((g-b)/d, 6)
@@ -231,28 +252,28 @@ func hueSat(hex string) (hue, sat float64) {
 	if hue < 0 {
 		hue += 360
 	}
-	return hue, sat
+	return hue, chroma
 }
 
 // inFamily reports whether hex's hue lands in f's arc. A neutral family
-// requires low saturation; a colour family accepts either its arc OR a
-// saturation so low the hue carries no real information (faded-to-grey is
-// not the "wrong colour" defect this test targets — a wrong SATURATED hue,
-// like teal for green, is).
-func inFamily(hex string, f hueFamily) (ok bool, hue, sat float64) {
-	hue, sat = hueSat(hex)
+// requires low chroma; a colour family accepts either its arc OR a chroma so
+// low the hue carries no real information (faded-to-grey is not the "wrong
+// colour" defect this test targets — a wrong SATURATED hue, like teal for
+// green, is).
+func inFamily(hex string, f hueFamily) (ok bool, hue, chroma float64) {
+	hue, chroma = hueChroma(hex)
 	if f == hueNeutral {
-		return sat <= neutralSatMax, hue, sat
+		return chroma <= neutralChromaMax, hue, chroma
 	}
-	if sat <= neutralSatMax {
-		return true, hue, sat
+	if chroma <= neutralChromaMax {
+		return true, hue, chroma
 	}
 	arc := hueArcs[f]
 	h := hue
 	if arc[1] > 360 && h < arc[1]-360 {
 		h += 360 // let the wraparound (red) arc compare on one axis
 	}
-	return h >= arc[0] && h <= arc[1], hue, sat
+	return h >= arc[0] && h <= arc[1], hue, chroma
 }
 
 func TestEveryTokenHasAHueFamily(t *testing.T) {
@@ -280,9 +301,9 @@ func TestDegradationPreservesHue(t *testing.T) {
 			hex  string
 		}{{"light", c.Light}, {"dark", c.Dark}} {
 			deg := degradeTo256(side.hex)
-			if ok, hue, sat := inFamily(deg, f); !ok {
-				t.Errorf("%s.%s: %s degrades to %s, hue %.1f (sat %.2f) is outside the %s family",
-					name, side.mode, side.hex, deg, hue, sat, f)
+			if ok, hue, chroma := inFamily(deg, f); !ok {
+				t.Errorf("%s.%s: %s degrades to %s, hue %.1f (chroma %.3f) is outside the %s family",
+					name, side.mode, side.hex, deg, hue, chroma, f)
 			}
 		}
 	}

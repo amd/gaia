@@ -85,8 +85,7 @@
 }
 
 .fb-search-input:focus {
-    border-color: rgba(226, 163, 62, 0.4);
-    box-shadow: 0 0 12px rgba(226, 163, 62, 0.08);
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .fb-search-clear {
@@ -115,9 +114,9 @@
 .fb-search-btn {
     padding: 8px 14px;
     border-radius: var(--radius-md);
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: #1a1a1a;
+    border: 1px solid var(--accent-fill);
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
     font-size: 12px;
     font-weight: 600;
     font-family: var(--font-mono);
@@ -127,8 +126,7 @@
 }
 
 .fb-search-btn:hover {
-    background: var(--accent-dark);
-    box-shadow: 0 0 12px rgba(226, 163, 62, 0.2);
+    background: var(--accent-fill-hover);
 }
 
 .fb-search-btn:disabled {
@@ -279,11 +277,13 @@
 
 .fb-entry.selected {
     background: var(--accent-dim2);
-    border-color: rgba(226, 163, 62, 0.12);
+    border-color: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+/* Not amber: amber is the warning role, and every folder would read as
+ * flagged. The folder icon and its bolder name already carry the distinction. */
 .fb-entry.folder .fb-entry-icon {
-    color: var(--accent-gold);
+    color: var(--text-secondary);
 }
 
 .fb-entry .fb-entry-icon {
@@ -402,19 +402,19 @@
     padding: 10px 12px;
     font-size: 11px;
     font-family: var(--font-mono);
-    color: var(--text-secondary);
+    color: var(--text-code);
     white-space: pre-wrap;
     word-break: break-all;
     line-height: 1.5;
     margin: 0;
     background: var(--bg-code);
     scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
+    scrollbar-color: var(--border-code) transparent;
 }
 .fb-preview-content::-webkit-scrollbar { width: 5px; height: 5px; }
 .fb-preview-content::-webkit-scrollbar-track { background: transparent; }
-.fb-preview-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
-.fb-preview-content::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.fb-preview-content::-webkit-scrollbar-thumb { background: var(--border-code); border-radius: var(--radius-full); }
+.fb-preview-content::-webkit-scrollbar-thumb:hover { background: var(--text-code-dim); }
 
 .fb-preview-loading, .fb-preview-binary {
     padding: 20px;
@@ -474,14 +474,13 @@
 }
 
 .fb-action-btn.primary {
-    border: 1px solid var(--accent);
-    background: var(--accent);
-    color: #1a1a1a;
+    border: 1px solid var(--accent-fill);
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
 }
 
 .fb-action-btn.primary:hover {
-    background: var(--accent-dark);
-    box-shadow: 0 0 12px rgba(226, 163, 62, 0.2);
+    background: var(--accent-fill-hover);
 }
 
 .fb-action-btn:disabled {

@@ -48,8 +48,8 @@
     margin-left: 6px;
     padding: 1px 8px;
     border-radius: var(--radius-full);
-    background: rgba(245, 158, 11, 0.1);
-    border: 1px solid rgba(245, 158, 11, 0.2);
+    background: color-mix(in srgb, var(--accent-yellow) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-yellow) 20%, transparent);
     color: var(--accent-yellow);
     font-size: 10px;
     font-weight: 600;
@@ -129,7 +129,7 @@
 .perm-search-input:focus {
     border-color: var(--accent);
     outline: none;
-    box-shadow: 0 0 0 2px rgba(226, 60, 64, 0.1);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 .perm-search-input::placeholder {
@@ -212,11 +212,11 @@
 }
 
 .perm-row.has-override {
-    background: rgba(245, 158, 11, 0.02);
+    background: color-mix(in srgb, var(--accent-yellow) 2%, transparent);
 }
 
 [data-theme="dark"] .perm-row.has-override {
-    background: rgba(245, 158, 11, 0.03);
+    background: color-mix(in srgb, var(--accent-yellow) 3%, transparent);
 }
 
 .perm-table td {
@@ -405,8 +405,8 @@
     align-items: flex-start;
     gap: 8px;
     padding: 10px 14px;
-    background: rgba(245, 158, 11, 0.04);
-    border: 1px solid rgba(245, 158, 11, 0.15);
+    background: color-mix(in srgb, var(--accent-yellow) 4%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-yellow) 15%, transparent);
     border-radius: var(--radius-sm);
     font-size: 11px;
     color: var(--text-secondary);
@@ -420,8 +420,8 @@
 }
 
 [data-theme="dark"] .perm-info-banner {
-    background: rgba(245, 158, 11, 0.06);
-    border-color: rgba(245, 158, 11, 0.2);
+    background: color-mix(in srgb, var(--accent-yellow) 6%, transparent);
+    border-color: color-mix(in srgb, var(--accent-yellow) 20%, transparent);
 }
 
 /* slideUp keyframe is defined in index.css (global) */

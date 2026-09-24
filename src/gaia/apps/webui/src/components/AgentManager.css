@@ -126,8 +126,8 @@
   gap: 8px;
   padding: 10px 16px;
   margin: 12px 24px 0;
-  background: rgba(226, 60, 64, 0.08);
-  border: 1px solid rgba(226, 60, 64, 0.2);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
   border-radius: var(--radius-sm);
   color: var(--danger);
   font-size: 13px;
@@ -228,7 +228,7 @@
 
 .agent-card.agent-card-selected {
   border-color: var(--accent-light);
-  box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.1);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 .agent-card.agent-card-running {
@@ -253,7 +253,6 @@
 
 .agent-status-dot.dot-running {
   background: var(--accent-green);
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
 }
 
 .agent-status-dot.dot-stopped {
@@ -268,7 +267,6 @@
 
 .agent-status-dot.dot-error {
   background: var(--danger);
-  box-shadow: 0 0 6px rgba(226, 60, 64, 0.4);
 }
 
 /* Card content */
@@ -383,8 +381,9 @@
   transition: all var(--duration) var(--ease);
 }
 
+/* No fill on hover: --bg-active is the darkest light surface, and the accent
+ * (and the start button's green below) drop under 4.5:1 on it. */
 .btn-card-action:hover {
-  background: var(--bg-active);
   border-color: var(--accent-light);
   color: var(--accent);
 }
@@ -408,9 +407,9 @@
 }
 
 .btn-card-action.btn-card-install:hover {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #1a1a1a;
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-fill-text);
 }
 
 /* Install progress bar */

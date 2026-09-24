@@ -47,7 +47,7 @@
 }
 
 .onboarding-progress .dot.done {
-    background: var(--accent-dark, var(--accent));
+    background: var(--accent-fill-hover);
 }
 
 .onboarding-body {
@@ -101,12 +101,12 @@
 }
 
 .onboarding-btn.primary {
-    background: var(--accent);
-    color: #fff;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
 }
 
 .onboarding-btn.primary:hover:not(:disabled) {
-    background: var(--accent-dark, var(--accent));
+    background: var(--accent-fill-hover);
 }
 
 .onboarding-btn.secondary {
@@ -191,9 +191,9 @@
     display: inline-flex;
 }
 
-.preflight-row .pf-icon.ok { color: var(--terminal-green, #4ade80); }
-.preflight-row .pf-icon.warn { color: var(--accent-yellow, #eab308); }
-.preflight-row .pf-icon.bad { color: var(--danger, #ef4444); }
+.preflight-row .pf-icon.ok { color: var(--accent-green); }
+.preflight-row .pf-icon.warn { color: var(--accent-yellow); }
+.preflight-row .pf-icon.bad { color: var(--danger); }
 
 .preflight-row .pf-label {
     flex: 1;
@@ -224,8 +224,8 @@
 }
 
 .onboarding-banner.warn {
-    background: color-mix(in srgb, var(--accent-yellow, #eab308) 12%, transparent);
-    border: 1px solid var(--accent-yellow, #eab308);
+    background: color-mix(in srgb, var(--accent-yellow) 12%, transparent);
+    border: 1px solid var(--accent-yellow);
     color: var(--text-primary);
 }
 
@@ -298,7 +298,7 @@
 .connector-choice .cc-body { flex: 1; }
 .connector-choice .cc-title { color: var(--text-primary); font-weight: 600; }
 .connector-choice .cc-desc { color: var(--text-muted); font-size: 0.82rem; }
-.connector-choice .cc-connected { color: var(--terminal-green, #4ade80); font-size: 0.85rem; font-weight: 600; }
+.connector-choice .cc-connected { color: var(--accent-green); font-size: 0.85rem; font-weight: 600; }
 
 .onboarding-spin {
     animation: onboarding-spin 1s linear infinite;

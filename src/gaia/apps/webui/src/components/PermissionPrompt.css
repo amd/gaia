@@ -9,7 +9,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-modal-overlay, rgba(0, 0, 0, 0.5));
+  background: var(--bg-modal-overlay);
   animation: permFadeIn 150ms var(--ease);
 }
 
@@ -47,12 +47,12 @@
   align-items: center;
   gap: 12px;
   padding: 16px 20px;
-  background: rgba(226, 60, 64, 0.06);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
   border-bottom: 1px solid var(--border-light);
 }
 
 [data-theme="dark"] .permission-header {
-  background: rgba(226, 60, 64, 0.08);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 .permission-header-icon {
@@ -62,8 +62,8 @@
   width: 40px;
   height: 40px;
   border-radius: var(--radius-md);
-  background: var(--accent);
-  color: #1a1a1a;
+  background: var(--accent-fill);
+  color: var(--accent-fill-text);
   flex-shrink: 0;
 }
 
@@ -91,8 +91,8 @@
   gap: 4px;
   padding: 4px 10px;
   border-radius: var(--radius-full);
-  background: var(--accent-danger-dim);
-  color: var(--accent-danger);
+  background: var(--danger-dim);
+  color: var(--danger);
   font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -183,9 +183,9 @@
   padding: 8px 12px;
   margin-top: 12px;
   border-radius: var(--radius-sm);
-  background: var(--accent-danger-dim);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  color: var(--accent-danger);
+  background: var(--danger-dim);
+  border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
+  color: var(--danger);
   font-size: 12px;
   font-weight: 600;
 }
@@ -253,12 +253,12 @@
 
 .permission-btn-allow {
   background: var(--accent-green);
-  color: white;
+  color: var(--text-inverse);
   border: 1px solid var(--accent-green);
 }
 .permission-btn-allow:hover:not(:disabled) {
   filter: brightness(1.1);
-  box-shadow: 0 2px 8px rgba(34, 197, 94, 0.3);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-green) 30%, transparent);
 }
 
 .permission-btn-deny {
@@ -267,9 +267,9 @@
   border: 1px solid var(--border);
 }
 .permission-btn-deny:hover:not(:disabled) {
-  color: var(--accent-danger);
-  border-color: var(--accent-danger);
-  background: rgba(239, 68, 68, 0.06);
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 
 /* ── Keyboard Hints ──────────────────────────────────────────────────── */

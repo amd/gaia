@@ -80,8 +80,11 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     width: 200,
                     margin: 2,
                     color: {
-                        dark: isDark ? '#e6edf3' : '#111827',
-                        light: isDark ? '#0d0d0d' : '#ffffff',
+                        // A QR scanner needs a hard two-tone raster, so these
+                        // are the canvas/text roles resolved to literals rather
+                        // than var() — toCanvas() cannot resolve a custom prop.
+                        dark: isDark ? '#F0EDE7' : '#242129',
+                        light: isDark ? '#17161C' : '#F5F2EC',
                     },
                 });
             } catch (err) {

@@ -14,7 +14,7 @@
   gap: 8px;
 }
 .perm-session-grants-icon {
-  color: #f59e0b;
+  color: var(--accent-yellow);
   flex-shrink: 0;
 }
 .perm-session-grants-title {
@@ -57,13 +57,13 @@
   padding: 3px 10px;
   font-size: 12px;
   border-radius: var(--radius-xs, 4px);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  background: var(--danger-dim2);
+  color: var(--danger);
   cursor: pointer;
 }
 .perm-session-grant-revoke:hover {
-  background: rgba(239, 68, 68, 0.16);
+  background: var(--danger-dim);
 }
 
 .perm-session-grants .perm-tool-name {

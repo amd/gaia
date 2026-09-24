@@ -6,12 +6,18 @@
 // number, which is what stops a palette tuned on one background from becoming
 // unreadable on the other.
 //
-// Hues follow the One Half Light / One Half Dark pair — a theme that ships with
-// Windows Terminal, GNOME Terminal and macOS Terminal, so the TUI looks native
-// rather than invented. The light values are darkened from stock One Half Light
-// because that theme, like nearly every terminal theme, sits below WCAG AA for
-// body text on a white background. contrast_test.go holds every token to a
-// measured floor against ten real terminal backgrounds.
+// The brand hues — accent, mascot, neutrals — come from the GAIA design
+// language (docs/spec/gaia-design-language.mdx): graphite and ivory neutrals
+// with a copper accent, the same literals the website and the Agent UI use, so
+// the three surfaces read as one product. Status hues do NOT follow the brand:
+// Success stays green, Warning amber, Danger red, Info blue, because a terminal
+// that paints a failed check in copper is a worse terminal.
+//
+// Status hues keep the One Half Light / One Half Dark shape — a theme that
+// ships with Windows Terminal, GNOME Terminal and macOS Terminal — darkened on
+// the light side because that theme, like nearly every terminal theme, sits
+// below WCAG AA for body text on a white background. contrast_test.go holds
+// every token to a measured floor against ten real terminal backgrounds.
 //
 // The guarantee covers truecolor and 256-colour terminals — the latter matters
 // because macOS Terminal is 256-colour only, so lipgloss down-converts, and the
@@ -62,21 +68,27 @@ func IsDark() bool { return lipgloss.HasDarkBackground() }
 // Text-carrying roles. Everything here holds at least 4.5:1 against every
 // background in contrast_test.go, so it is safe for body copy.
 var (
-	// Text is primary copy: labels, answers, values.
-	Text = lipgloss.AdaptiveColor{Light: "#1F2328", Dark: "#D4D4D4"}
+	// Text is primary copy: labels, answers, values. Graphite and ivory, the
+	// design language's neutrals — both carry a faint violet-to-warm cast that
+	// the greys below share, so nothing in the palette reads as a flat grey.
+	Text = lipgloss.AdaptiveColor{Light: "#242129", Dark: "#F0EDE7"}
 	// Dim is secondary copy: hints, descriptions, key names, detail lines.
-	Dim = lipgloss.AdaptiveColor{Light: "#57606A", Dark: "#A0A0A0"}
-	// Accent is the GAIA green: borders, brand marks, commands to run. Light's
-	// B channel is kept low (0x2D) so a 256-colour terminal rounds it to the
-	// cube's one true green, #005F00 — a higher B rounds to the teal at
-	// #005F5F instead, which reads as a different colour, not just a duller
-	// green. AccentBright also lands on #005F00; that collapse is fine, the
-	// two never sit adjacent and never distinguish one state from another.
-	Accent = lipgloss.AdaptiveColor{Light: "#1A722D", Dark: "#87D787"}
-	// AccentBright is the emphasised green: titles, the selected row.
-	AccentBright = lipgloss.AdaptiveColor{Light: "#116329", Dark: "#B5E08D"}
+	Dim = lipgloss.AdaptiveColor{Light: "#645D6A", Dark: "#AAA5B0"}
+	// Accent is the GAIA copper: borders, brand marks, commands to run. Light
+	// is NOT a darkened #EBA474: among 256-colour entries dark enough for body
+	// text on white, the only saturated warm one is #875F00 — already Warning
+	// and Selected. #9A4930 is the most saturated light copper that rounds to
+	// #875F5F, a warm near-neutral, instead of onto that shared cell.
+	Accent = lipgloss.AdaptiveColor{Light: "#9A4930", Dark: "#EBA474"}
+	// AccentBright is the emphasised copper: titles, the selected row. Both
+	// values collapse onto Accent's degraded cell on a 256-colour terminal;
+	// that is fine, the two never sit adjacent and never distinguish one state
+	// from another.
+	AccentBright = lipgloss.AdaptiveColor{Light: "#8A4530", Dark: "#F7B189"}
 	// Success means a check passed, a connection is live. Light's B channel is
-	// kept low for the same ANSI-256 reason as Accent.
+	// kept low (0x2D) so a 256-colour terminal rounds it to the cube's one true
+	// green, #005F00 — a higher B rounds to the teal at #005F5F, which reads as
+	// a different colour, not just a duller green.
 	Success = lipgloss.AdaptiveColor{Light: "#0B6E2D", Dark: "#3FD98A"}
 	// Warning means unknown, idle, or "read this before continuing".
 	Warning = lipgloss.AdaptiveColor{Light: "#8A5300", Dark: "#FFAF3F"}
@@ -97,7 +109,9 @@ var (
 // (delegate.go's versionStyle, its only consumer). Held to 3:1, not 4.5:1: it
 // is deliberately recessive and never carries information that is not also in
 // the row it sits on.
-var Faint = lipgloss.AdaptiveColor{Light: "#838C97", Dark: "#8A8A8A"}
+// Both carry Text's violet cast rather than a blue-grey, so the recessive tier
+// reads as the same family of neutral.
+var Faint = lipgloss.AdaptiveColor{Light: "#8A8492", Dark: "#8F8A95"}
 
 // Divider draws rules and the empty half of a progress bar. Non-text, so it is
 // only held to a visible-but-quiet floor. Light sits exactly on the ANSI-256
@@ -111,7 +125,8 @@ var Divider = lipgloss.AdaptiveColor{Light: "#AFAFAF", Dark: "#5A5A5A"}
 // these do not vary by mode. Solid, saturated, white text: the one combination
 // that reads the same on every terminal.
 var (
-	AccentFillBG = lipgloss.AdaptiveColor{Light: "#1F7A3F", Dark: "#1F7A3F"}
+	// Burnished copper, the same literal the website and Agent UI fill with.
+	AccentFillBG = lipgloss.AdaptiveColor{Light: "#9A4930", Dark: "#9A4930"}
 	WarnFillBG   = lipgloss.AdaptiveColor{Light: "#8A5300", Dark: "#8A5300"}
 	DangerFillBG = lipgloss.AdaptiveColor{Light: "#B32020", Dark: "#B32020"}
 	InfoFillBG   = lipgloss.AdaptiveColor{Light: "#0A5FA8", Dark: "#0A5FA8"}
@@ -119,9 +134,11 @@ var (
 )
 
 // Selected is the gold marking the row you are ON in a list — a palette, a menu,
-// a set of answers. Deliberately NOT the brand green: green already means
+// a set of answers. Deliberately NOT the brand accent: the accent already means
 // "a command you can run" everywhere else in this UI, so using it for "the one
-// under your cursor" made the two indistinguishable.
+// under your cursor" made the two indistinguishable. Gold and copper are near
+// neighbours, which is why contrast_test.go's hue arcs keep them provably
+// apart on a 256-colour terminal as well as a truecolor one.
 var Selected = lipgloss.AdaptiveColor{Light: "#8A5300", Dark: "#FFC65C"}
 
 // SurfaceBG is the quiet band — the status bar, an unselected button. Unlike a
@@ -140,25 +157,41 @@ var Selected = lipgloss.AdaptiveColor{Light: "#8A5300", Dark: "#FFC65C"}
 // SurfaceBG can't clear this the bar itself vanishes), ≥3:1 for the dots
 // painted on it, and ≥4.5:1 for OnSurface. Dark could not hold all three at
 // its old #4A4A4A (1.41:1 on Nord, below the 1.5 floor) without the dot moving
-// too — see Danger's comment above. Both values are exact ANSI-256 cube greys
-// (#B8B8B8 degrades to the same cube corner as the plain #AFAFAF it replaced;
-// #5F5F5F already sits on one) so degradation cannot drift them off-neutral.
+// too — see Danger's comment above.
+//
+// That is also why SurfaceBG is NOT the design language's raised surface
+// (#EAE5DC / #222128). Those are cards on a KNOWN canvas; this band sits on
+// whatever background the user chose, and both fail the first floor outright —
+// #EAE5DC is 1.22:1 on a white terminal, #222128 is 1.31:1 on a black one, so
+// the bar would simply disappear. What carries over instead is the cast: warm
+// stone on light, violet graphite on dark. Both still degrade to an exact
+// ANSI-256 cube grey (#AFAFAF, #5F5F5F), so the tint is a truecolor bonus and
+// the floors are measured on a neutral either way.
 var (
-	SurfaceBG = lipgloss.AdaptiveColor{Light: "#B8B8B8", Dark: "#5F5F5F"}
-	// OnSurface.Dark is pure white rather than off-white: #E8E8E8 degrades to
-	// #D7D7D7, which on top of SurfaceBG.Dark's #5F5F5F only holds 4.44:1;
-	// #FFFFFF (degrades unchanged) holds 6.39:1 on the same pairing.
-	OnSurface = lipgloss.AdaptiveColor{Light: "#1F2328", Dark: "#FFFFFF"}
+	SurfaceBG = lipgloss.AdaptiveColor{Light: "#C2B8A8", Dark: "#615D69"}
+	// OnSurface mirrors Text. The ivory clears the dark pairing where a plain
+	// off-white would not: #E8E8E8 degrades to #D7D7D7 and holds only 4.44:1 on
+	// SurfaceBG.Dark's degraded grey, while #F0EDE7 degrades to #FFFFD7 and
+	// holds 6.25:1.
+	OnSurface = lipgloss.AdaptiveColor{Light: "#242129", Dark: "#F0EDE7"}
 )
 
 // Mascot shading, brightest to darkest as drawn on a dark terminal. On a light
 // terminal the ladder inverts so the same rung keeps the same emphasis. Art is
-// decorative — held only to "visible", not to a text floor.
+// decorative — held only to "visible", not to a text floor. The mascot is a
+// brand mark, so it follows the accent into copper; only the shadow and the eye
+// sit outside that family, and neither ever read as green.
+//
+// The rungs are picked for where they LAND, not just where they start: on a
+// 256-colour terminal the warm cube entries usable here are #FFAF87 and
+// #D7875F (both hue 20), and below those every warm entry is either #875F5F —
+// a near-neutral, which is fine — or a saturated red/amber, which is not. That
+// is why the darker rungs are tuned to fade toward neutral rather than deepen.
 var (
-	ArtBright = lipgloss.AdaptiveColor{Light: "#0E5223", Dark: "#B5E08D"}
-	ArtBody   = lipgloss.AdaptiveColor{Light: "#1A722D", Dark: "#87D787"} // mirrors Accent
-	ArtMid    = lipgloss.AdaptiveColor{Light: "#4A7C22", Dark: "#87AF5F"}
-	ArtDetail = lipgloss.AdaptiveColor{Light: "#7C8F73", Dark: "#5F875F"}
+	ArtBright = lipgloss.AdaptiveColor{Light: "#6B4632", Dark: "#F8BC99"}
+	ArtBody   = lipgloss.AdaptiveColor{Light: "#9A4930", Dark: "#EBA474"} // mirrors Accent
+	ArtMid    = lipgloss.AdaptiveColor{Light: "#C4815C", Dark: "#C9814F"}
+	ArtDetail = lipgloss.AdaptiveColor{Light: "#B5A79E", Dark: "#96674C"}
 	ArtShadow = lipgloss.AdaptiveColor{Light: "#AFAFAF", Dark: "#555555"} // degradation-safe grey, see Divider
 	ArtEye    = lipgloss.AdaptiveColor{Light: "#007D8A", Dark: "#4DE8E8"}
 )

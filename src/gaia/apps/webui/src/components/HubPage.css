@@ -81,12 +81,12 @@
 }
 
 .trust-gate-icon-verified {
-    color: var(--accent, #22c55e);
+    color: var(--accent);
 }
 
 .trust-gate-icon-community,
 .trust-gate-icon-experimental {
-    color: var(--accent-gold, #f59e0b);
+    color: var(--accent-yellow);
 }
 
 .trust-gate-subtitle {
@@ -108,22 +108,22 @@
 }
 
 .trust-gate-tier-verified {
-    color: var(--accent, #22c55e);
-    background: var(--accent-dim, rgba(34, 197, 94, 0.12));
+    color: var(--accent);
+    background: var(--accent-dim, color-mix(in srgb, var(--accent-green) 12%, transparent));
 }
 
 .trust-gate-tier-community,
 .trust-gate-tier-experimental {
-    color: var(--accent-gold, #f59e0b);
-    background: rgba(245, 158, 11, 0.12);
+    color: var(--accent-yellow);
+    background: color-mix(in srgb, var(--accent-yellow) 12%, transparent);
 }
 
 .trust-gate-reasons {
     list-style: none;
     margin: 0 0 1rem;
     padding: 0.6rem 0.75rem;
-    background: rgba(245, 158, 11, 0.08);
-    border: 1px solid rgba(245, 158, 11, 0.25);
+    background: color-mix(in srgb, var(--accent-yellow) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-yellow) 25%, transparent);
     border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
@@ -141,7 +141,7 @@
 .trust-gate-reason-icon {
     flex-shrink: 0;
     margin-top: 0.1rem;
-    color: var(--accent-gold, #f59e0b);
+    color: var(--accent-yellow);
 }
 
 .trust-gate-section {

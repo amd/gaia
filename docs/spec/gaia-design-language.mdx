@@ -1,0 +1,135 @@
+---
+title: GAIA design language
+description: The graphite, ivory, and copper palette shared by the GAIA website, Agent UI, and TUI, with the contrast floors each surface must hold
+---
+
+GAIA looks like one product in a browser, a desktop window, and a terminal. This
+page pins the colour roles all three surfaces implement, the values behind them,
+and the contrast each surface is tested against. It is the source of truth for
+[`website/src/design/tokens.css`](https://github.com/amd/gaia/blob/main/website/src/design/tokens.css),
+the Agent UI's CSS custom properties, and
+[`tui/internal/ui/theme/theme.go`](https://github.com/amd/gaia/blob/main/tui/internal/ui/theme/theme.go).
+
+Implements milestone 0 of the UI redesign plan proposed in
+[amd/gaia#3803](https://github.com/amd/gaia/pull/3803).
+
+## Roles, not numbers
+
+A surface asks for a **role** — canvas, primary text, accent — and never for a
+hex literal. That is what keeps a value tuned against one background from going
+unreadable on another, and it is why every surface routes colour through tokens
+rather than inline hexes.
+
+| Role | Dark | Light | Used for |
+|---|---|---|---|
+| Canvas | Graphite `#17161C` | Porcelain `#F5F2EC` | The page or terminal behind everything |
+| Raised surface | Warm slate `#222128` | Pale stone `#EAE5DC` | Cards, the composer, the quiet status band |
+| Primary text | Ivory `#F0EDE7` | Graphite `#242129` | Answers, labels, values |
+| Secondary text | Ash `#AAA5B0` | Slate `#645D6A` | Hints, descriptions, key names |
+| Accent / focus | Copper `#EBA474` | Burnished copper `#9A4930` | The `>` prompt, focus ring, selection, the one primary action |
+| Accent fill | Burnished copper `#9A4930` | Burnished copper `#9A4930` | A filled primary button; carries white text |
+
+Most of the screen is neutral. Colour marks the prompt, focus, selection, and the
+single primary action — nothing else. Ordinary answers stay uncoloured.
+
+### Why copper is two different values, and one of them is not the obvious one
+
+The dark copper `#EBA474` is the identity colour. The light value is **not** a
+simple darkening of it, because the light accent has to survive a constraint the
+dark one does not.
+
+macOS Terminal is 256-colour only, so every value is rounded to the nearest of
+256 fixed indices before it reaches the screen. Among the colours dark enough to
+hold 4.5:1 on a white terminal, that cube offers exactly one saturated warm
+entry: `#875F00` — and `#875F00` is already where Warning and Selected land. A
+light copper that rounds there stops being a distinct colour and silently becomes
+the warning colour.
+
+`#9A4930` is the most saturated light copper that rounds to `#875F5F` instead: a
+warm near-neutral. On a 256-colour light terminal GAIA's accent therefore reads
+as a dark warm grey rather than copper. That is the documented, intended
+degradation — the palette's rule is that a colour may fade toward neutral, but
+may never land on a *different* saturated meaning. Truecolor terminals and both
+web surfaces render `#9A4930` as copper.
+
+Using the same `#9A4930` on the web as in the terminal is deliberate: the
+surfaces previously carried three near-but-unequal golds, and one shared literal
+is what makes "the same assistant" true rather than approximate.
+
+## Semantic colours keep their conventional hues
+
+The brand motif moves off green; **status does not**. Success stays green,
+warning amber, danger red, information blue. A terminal that paints a failed
+check in copper to stay on-brand is a worse terminal. The plan's "no green motif"
+governs the accent, mascot, and brand marks — not whether a passing check looks
+like a passing check.
+
+Status must never depend on colour alone. Every state carries a word or an icon
+as well, so the palette degrading to neutral on a limited terminal costs polish,
+never meaning.
+
+The reservation runs the other way too: **a hue that carries a status meaning is
+not available for decoration.** Green, amber, red, and blue are spoken for, which
+leaves no palette to give each tool or file type its own colour — so those stay
+neutral and are told apart by their icon. The alternative is a green badge beside
+a red failure icon in the same row.
+
+## Contrast floors
+
+Each surface enforces these in its own test suite; the floors are the same
+everywhere so a role cannot be legible in the browser and marginal in the terminal.
+
+| Kind of colour | Floor | Rationale |
+|---|---|---|
+| Text | 4.5:1 | WCAG 2.1 AA body text |
+| Recessive text | 3.0:1 | WCAG AA large text; always duplicates something on the same row |
+| Chrome (rules, bar tracks, mascot) | 1.5:1 | Carries no information; only has to stay visible |
+| Text on a filled button | 4.5:1 | The pair covers the background, so it is judged against itself |
+
+Measured minimums for the roles above, against their own canvas and raised
+surface: **6.62:1 dark, 4.97:1 light**. Accent-as-fill carries white at 6.23:1.
+
+The TUI additionally re-checks every floor against ten real terminal
+backgrounds and against the ANSI-256 value that actually lands, because a
+colour that clears its floor in truecolor can drop below it once rounded. See
+`tui/internal/ui/theme/contrast_test.go`.
+
+## Surface mappings
+
+| Surface | Token home | Theme switch | Test command |
+|---|---|---|---|
+| Website | `website/src/design/tokens.css` (`--g-*`, RGB triplets for Tailwind alpha) | `html[data-theme]`, `localStorage` key `gaia-theme` | `npm test` and `npm run build` in `website/` |
+| Agent UI / Electron | `src/gaia/apps/webui/src/styles/index.css` | `html[data-theme]`, `localStorage` key `gaia-chat-theme` | `npm test` in `src/gaia/apps/webui/` |
+| TUI | `tui/internal/ui/theme/theme.go` (`lipgloss.AdaptiveColor`) | terminal background query, `GAIA_TUI_THEME` override | `go test ./internal/ui/theme/...` in `tui/` |
+
+Both web surfaces keep their own `localStorage` key on purpose — the website and
+the app are independently themeable, and sharing a key would make changing one
+silently change the other.
+
+## Rules for adding a colour
+
+1. **Add a role, not a literal.** A new hex in a component file is a colour
+   nothing can police, and every surface has a test that catches it.
+2. **Declare what it owes the reader.** The TUI will not compile past its tests
+   without a contrast floor and a hue family for the new token.
+3. **Check the degraded value, not just the one you typed.** Truecolor contrast
+   is not evidence; the TUI test measures what a 256-colour terminal shows.
+4. **Never let two roles share a hue family.** That is how "selected" and
+   "warning" become the same thing on a user's machine but not on yours.
+
+## Typography and spacing
+
+Shared starting points, not pixel-matched measurements:
+
+- Body text 15–16px, readable proportional type for prose on the website.
+- System monospace for composer input, the `>` prompt, labels, and activity lines.
+  The terminal follows the user's own font — never force size, truecolor, or
+  background.
+- Roughly 760px readable content width; a 240–260px collapsible sidebar.
+- Restrained rounding, subtle borders, generous spacing. No glow, no simulated
+  typing, no decorative blinking, no gradient-filled panels.
+- Support light, dark, and system appearance, reduced motion, and visible
+  keyboard focus at every interactive element.
+
+The [mobile design system](https://github.com/amd/gaia/blob/main/docs/spec/mobile-design-system.md)
+remains the responsive baseline, including its 768px boundary and 44px touch targets.

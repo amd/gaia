@@ -177,18 +177,13 @@
     padding: 6px 8px;
     font-size: 11px;
     font-family: var(--font-mono);
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--text-muted);
     line-height: 1.6;
     word-break: break-word;
     white-space: pre-wrap;
     border-radius: var(--radius-xs);
-    background: rgba(0, 0, 0, 0.25);
-    border: none;
-}
-
-[data-theme="light"] .flow-thought-hacker {
-    color: rgba(0, 0, 0, 0.45);
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--bg-recessed);
+    border: 1px solid var(--border-recessed);
 }
 
 .flow-thought-hacker::-webkit-scrollbar {
@@ -198,7 +193,7 @@
     background: transparent;
 }
 .flow-thought-hacker::-webkit-scrollbar-thumb {
-    background: rgba(226, 163, 62, 0.2);
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
     border-radius: 0;
 }
 
@@ -237,11 +232,11 @@
 .flow-tool:nth-child(5) { animation-delay: 320ms; }
 
 .flow-tool.active {
-    border-color: rgba(226, 60, 64, 0.25);
+    border-color: color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 .flow-tool.error {
-    border-color: rgba(239, 68, 68, 0.25);
+    border-color: color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 .flow-tool-header {
@@ -291,6 +286,12 @@
 .flow-tool-spinner {
     animation: spin 1s linear infinite;
     flex-shrink: 0;
+    color: var(--accent);
+}
+
+.flow-tool-icon {
+    flex-shrink: 0;
+    color: var(--text-muted);
 }
 
 .flow-tool-label {
@@ -304,26 +305,20 @@
 }
 
 /* Tool badge -- monospace, sharp */
+/* Neutral on purpose: in this row colour means status, so a per-tool hue
+ * would put a green badge beside a red failure icon. */
 .flow-tool-badge {
     font-family: var(--font-mono);
     font-size: 9px;
     padding: 1px 6px;
     border-radius: 2px;
-    background: color-mix(in srgb, var(--badge-color, #3b82f6) 8%, transparent);
-    color: var(--badge-color, #3b82f6);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
     white-space: nowrap;
-    border: 1px solid color-mix(in srgb, var(--badge-color, #3b82f6) 15%, transparent);
+    border: 1px solid var(--border-light);
     font-weight: 600;
     letter-spacing: 0.3px;
     text-transform: uppercase;
-}
-
-@supports not (background: color-mix(in srgb, red 50%, blue)) {
-    .flow-tool-badge {
-        background: var(--bg-tertiary);
-        color: var(--text-muted);
-        border-color: var(--border-light);
-    }
 }
 
 /* Activity filter bar */
@@ -347,7 +342,7 @@
 }
 
 .activity-filter-input:focus {
-    border-color: var(--accent-color, #3b82f6);
+    border-color: var(--accent);
 }
 
 .activity-filter-select {
@@ -368,8 +363,8 @@
     font-size: 9px;
     padding: 1px 5px;
     border-radius: 2px;
-    background: color-mix(in srgb, #7c3aed 10%, transparent);
-    color: #7c3aed;
+    background: color-mix(in srgb, var(--accent-purple) 10%, transparent);
+    color: var(--accent-purple);
     white-space: nowrap;
     font-weight: 500;
 }
@@ -414,14 +409,14 @@
 .flow-plan {
     padding: 6px 8px;
     border-radius: var(--radius-xs);
-    background: rgba(245, 158, 11, 0.04);
-    border: 1px solid rgba(245, 158, 11, 0.12);
+    background: color-mix(in srgb, var(--accent-yellow) 4%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-yellow) 12%, transparent);
     animation: fadeIn 100ms var(--ease);
 }
 
 [data-theme="dark"] .flow-plan {
-    background: rgba(245, 158, 11, 0.06);
-    border-color: rgba(245, 158, 11, 0.15);
+    background: color-mix(in srgb, var(--accent-yellow) 6%, transparent);
+    border-color: color-mix(in srgb, var(--accent-yellow) 15%, transparent);
 }
 
 .flow-plan-header {
@@ -476,8 +471,8 @@
     gap: 6px;
     padding: 6px 8px;
     border-radius: var(--radius-xs);
-    background: rgba(239, 68, 68, 0.04);
-    border: 1px solid rgba(239, 68, 68, 0.15);
+    background: color-mix(in srgb, var(--danger) 4%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 15%, transparent);
     font-size: 11px;
     font-family: var(--font-mono);
     color: var(--danger);
@@ -490,22 +485,22 @@
 }
 
 [data-theme="dark"] .flow-error {
-    background: rgba(239, 68, 68, 0.06);
+    background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 
 /* ── Flow: Policy Alert ─────────────────────────────────────────── */
 .flow-policy-alert {
     padding: 8px 10px;
     border-radius: var(--radius-xs);
-    background: rgba(245, 158, 11, 0.06);
-    border: 1px solid rgba(245, 158, 11, 0.22);
+    background: color-mix(in srgb, var(--accent-yellow) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-yellow) 22%, transparent);
     font-family: var(--font-mono);
     animation: errorSlideIn 300ms var(--ease);
 }
 
 [data-theme="dark"] .flow-policy-alert {
-    background: rgba(245, 158, 11, 0.08);
-    border-color: rgba(245, 158, 11, 0.28);
+    background: color-mix(in srgb, var(--accent-yellow) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-yellow) 28%, transparent);
 }
 
 .flow-policy-alert-header {
@@ -527,7 +522,7 @@
     margin-left: auto;
     padding: 1px 6px;
     border-radius: var(--radius-xs);
-    background: rgba(245, 158, 11, 0.14);
+    background: color-mix(in srgb, var(--accent-yellow) 14%, transparent);
     color: var(--accent-yellow);
 }
 
@@ -640,23 +635,23 @@
 }
 
 .step-detail-result.result-success {
-    background: rgba(0, 255, 159, 0.03);
-    border: 1px solid rgba(0, 255, 159, 0.1);
+    background: color-mix(in srgb, var(--accent-green) 3%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-green) 10%, transparent);
 }
 
 .step-detail-result.result-error {
-    background: rgba(239, 68, 68, 0.04);
-    border: 1px solid rgba(239, 68, 68, 0.12);
+    background: color-mix(in srgb, var(--danger) 4%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 [data-theme="dark"] .step-detail-result.result-success {
-    background: rgba(0, 255, 159, 0.04);
-    border-color: rgba(0, 255, 159, 0.12);
+    background: color-mix(in srgb, var(--accent-green) 4%, transparent);
+    border-color: color-mix(in srgb, var(--accent-green) 12%, transparent);
 }
 
 [data-theme="dark"] .step-detail-result.result-error {
-    background: rgba(239, 68, 68, 0.06);
-    border-color: rgba(239, 68, 68, 0.15);
+    background: color-mix(in srgb, var(--danger) 6%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
 .detail-result-content {
@@ -672,7 +667,7 @@
     display: inline-flex;
     align-items: center;
     gap: 3px;
-    color: var(--terminal-green-dim);
+    color: var(--accent);
     cursor: pointer;
     border-radius: 0;
     padding: 0 2px;
@@ -681,8 +676,8 @@
     text-decoration-style: dashed;
 }
 .tool-result-path:hover {
-    background: rgba(0, 255, 159, 0.06);
-    color: var(--terminal-green);
+    background: color-mix(in srgb, var(--accent-green) 6%, transparent);
+    color: var(--accent);
     text-decoration-style: solid;
 }
 
@@ -706,7 +701,7 @@
 }
 
 .chunk-card.expanded {
-    border-color: rgba(6, 182, 212, 0.25);
+    border-color: color-mix(in srgb, var(--accent-cyan) 25%, transparent);
 }
 
 .chunk-header {
@@ -759,8 +754,8 @@
     color: var(--accent-cyan);
     padding: 0 4px;
     border-radius: 2px;
-    background: rgba(6, 182, 212, 0.08);
-    border: 1px solid rgba(6, 182, 212, 0.15);
+    background: color-mix(in srgb, var(--accent-cyan) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-cyan) 15%, transparent);
     white-space: nowrap;
 }
 
@@ -809,12 +804,12 @@
     color: var(--text-primary);
     white-space: pre-wrap;
     word-break: break-word;
-    background: rgba(6, 182, 212, 0.03);
-    border-top: 1px solid rgba(6, 182, 212, 0.1);
+    background: color-mix(in srgb, var(--accent-cyan) 3%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--accent-cyan) 10%, transparent);
 }
 
 [data-theme="dark"] .chunk-content {
-    background: rgba(6, 182, 212, 0.05);
+    background: color-mix(in srgb, var(--accent-cyan) 5%, transparent);
 }
 
 .chunk-body.show::-webkit-scrollbar {
@@ -832,8 +827,8 @@
 .cmd-output {
     border-radius: var(--radius-xs);
     overflow: hidden;
-    border: 1px solid var(--border);
-    background: var(--bg-code, #1e1e1e);
+    border: 1px solid var(--border-code);
+    background: var(--bg-code);
     font-family: var(--font-mono);
     font-size: 11px;
     line-height: 1.55;
@@ -841,7 +836,7 @@
 }
 
 .cmd-output.cmd-error {
-    border-color: rgba(239, 68, 68, 0.3);
+    border-color: color-mix(in srgb, var(--code-danger) 30%, var(--bg-code));
 }
 
 .cmd-header {
@@ -849,8 +844,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 5px 10px;
-    background: rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--bg-code-raised);
+    border-bottom: 1px solid var(--border-code);
 }
 
 .cmd-header-left {
@@ -860,20 +855,20 @@
 }
 
 .cmd-header-icon {
-    color: var(--text-muted);
+    color: var(--text-code-dim);
 }
 
 .cmd-header-title {
     font-size: 10px;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--text-code);
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
 
 .cmd-cwd {
     font-size: 9px;
-    color: var(--text-muted);
+    color: var(--text-code-dim);
     max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -888,16 +883,16 @@
 
 .cmd-duration {
     font-size: 9px;
-    color: var(--text-muted);
+    color: var(--text-code-dim);
 }
 
 .cmd-exit-code {
     font-size: 9px;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--code-danger);
     padding: 0 4px;
     border-radius: 2px;
-    background: rgba(239, 68, 68, 0.1);
+    background: color-mix(in srgb, var(--code-danger) 12%, var(--bg-code));
 }
 
 .cmd-copy {
@@ -905,16 +900,16 @@
     align-items: center;
     padding: 2px 4px;
     border-radius: 2px;
-    color: var(--text-muted);
+    color: var(--text-code-dim);
     transition: all var(--duration-fast) var(--ease);
     cursor: pointer;
 }
 .cmd-copy:hover {
-    background: var(--tint-hover);
-    color: var(--text-secondary);
+    background: var(--bg-code-raised);
+    color: var(--text-code);
 }
 .cmd-copy.copied {
-    color: var(--accent-green);
+    color: var(--code-success);
 }
 
 .cmd-line {
@@ -922,25 +917,25 @@
     align-items: flex-start;
     gap: 6px;
     padding: 8px 10px 4px;
-    color: var(--text-primary);
+    color: var(--text-code);
 }
 
 .cmd-prompt {
-    color: var(--accent-green);
+    color: var(--code-accent);
     font-weight: 700;
     flex-shrink: 0;
     user-select: none;
 }
 
 .cmd-text {
-    color: var(--text-primary);
+    color: var(--text-code);
     word-break: break-all;
 }
 
 .cmd-stdout {
     padding: 4px 10px 8px 22px;
     margin: 0;
-    color: var(--text-secondary);
+    color: var(--text-code);
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 300px;
@@ -954,37 +949,37 @@
     background: transparent;
 }
 .cmd-stdout::-webkit-scrollbar-thumb {
-    background: var(--tint-hover);
+    background: var(--border-code);
     border-radius: 0;
 }
 .cmd-stdout::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
+    background: var(--text-code-dim);
 }
 
 .cmd-stderr {
     padding: 4px 10px 8px 22px;
     margin: 0;
-    color: var(--accent);
+    color: var(--code-danger);
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 200px;
     overflow-y: auto;
-    background: rgba(239, 68, 68, 0.04);
-    border-top: 1px solid rgba(239, 68, 68, 0.1);
+    background: color-mix(in srgb, var(--code-danger) 6%, var(--bg-code));
+    border-top: 1px solid color-mix(in srgb, var(--code-danger) 14%, var(--bg-code));
 }
 
 .cmd-truncated {
     padding: 4px 10px;
     font-size: 10px;
-    color: var(--accent-yellow);
+    color: var(--code-warning);
     text-align: center;
-    background: rgba(245, 158, 11, 0.05);
-    border-top: 1px solid rgba(245, 158, 11, 0.1);
+    background: color-mix(in srgb, var(--code-warning) 7%, var(--bg-code));
+    border-top: 1px solid color-mix(in srgb, var(--code-warning) 14%, var(--bg-code));
 }
 
 .cmd-empty {
     padding: 6px 10px 8px 22px;
-    color: var(--text-muted);
+    color: var(--text-code-dim);
     font-style: italic;
 }
 

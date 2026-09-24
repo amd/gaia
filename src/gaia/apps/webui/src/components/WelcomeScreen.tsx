@@ -130,7 +130,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
             <div className={`welcome-inner ${showContent ? 'content-revealed' : ''}`}>
                 <h1 className={`welcome-title${typingComplete ? ' typing-done' : ''}`}>
                     {displayedText.length >= 4 ? (
-                        <><span className="gaia-glow">{displayedText.slice(0, 4)}</span><span>{displayedText.slice(4)}</span></>
+                        <><span>{displayedText.slice(0, 4)}</span><span>{displayedText.slice(4)}</span></>
                     ) : displayedText}
                     {phase === 'title' && (
                         <span className={`terminal-cursor${typingComplete ? ' blink' : ''}`} />

@@ -64,27 +64,27 @@ function getTierMeta(tier: PermissionTier): TierMeta {
       return {
         label: 'Auto',
         description: 'Runs without prompting',
-        color: '#22c55e',
-        bgColor: 'rgba(34, 197, 94, 0.08)',
-        borderColor: 'rgba(34, 197, 94, 0.2)',
+        color: 'var(--accent-green)',
+        bgColor: 'color-mix(in srgb, var(--accent-green) 8%, transparent)',
+        borderColor: 'color-mix(in srgb, var(--accent-green) 20%, transparent)',
         icon: <Zap size={12} />,
       };
     case 'confirm':
       return {
         label: 'Confirm',
         description: 'Requires user approval',
-        color: '#f59e0b',
-        bgColor: 'rgba(245, 158, 11, 0.08)',
-        borderColor: 'rgba(245, 158, 11, 0.2)',
+        color: 'var(--accent-yellow)',
+        bgColor: 'color-mix(in srgb, var(--accent-yellow) 8%, transparent)',
+        borderColor: 'color-mix(in srgb, var(--accent-yellow) 20%, transparent)',
         icon: <Eye size={12} />,
       };
     case 'escalate':
       return {
         label: 'Escalate',
         description: 'Blocked — admin review required',
-        color: '#ef4444',
-        bgColor: 'rgba(239, 68, 68, 0.08)',
-        borderColor: 'rgba(239, 68, 68, 0.2)',
+        color: 'var(--danger)',
+        bgColor: 'color-mix(in srgb, var(--danger) 8%, transparent)',
+        borderColor: 'color-mix(in srgb, var(--danger) 20%, transparent)',
         icon: <ShieldAlert size={12} />,
       };
   }

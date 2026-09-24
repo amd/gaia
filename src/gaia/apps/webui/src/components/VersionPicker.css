@@ -6,7 +6,7 @@
 .version-picker-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: var(--bg-modal-overlay);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -14,8 +14,8 @@
 }
 
 .version-picker-dialog {
-    background: var(--bg-primary, #1a1a1a);
-    border: 1px solid var(--border-color, #333);
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
     border-radius: 10px;
     width: min(520px, 94vw);
     max-height: 80vh;
@@ -29,7 +29,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color, #333);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
@@ -37,14 +37,14 @@
     margin: 0;
     font-size: 15px;
     font-weight: 600;
-    color: var(--text-primary, #e8e8e8);
+    color: var(--text-primary);
 }
 
 .version-picker-close {
     background: none;
     border: none;
     cursor: pointer;
-    color: var(--text-secondary, #888);
+    color: var(--text-secondary);
     font-size: 20px;
     padding: 2px 6px;
     border-radius: 4px;
@@ -53,8 +53,8 @@
 }
 
 .version-picker-close:hover {
-    color: var(--text-primary, #e8e8e8);
-    background: var(--bg-hover, #2a2a2a);
+    color: var(--text-primary);
+    background: var(--bg-hover);
 }
 
 .version-picker-body {
@@ -71,15 +71,15 @@
     justify-content: center;
     gap: 10px;
     padding: 32px 20px;
-    color: var(--text-secondary, #888);
+    color: var(--text-secondary);
     font-size: 14px;
 }
 
 .version-picker-spinner {
     width: 18px;
     height: 18px;
-    border: 2px solid var(--border-color, #444);
-    border-top-color: var(--accent, #e05a00);
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: vp-spin 0.7s linear infinite;
     flex-shrink: 0;
@@ -93,13 +93,13 @@
 
 .version-picker-error {
     padding: 20px;
-    color: var(--text-secondary, #aaa);
+    color: var(--text-secondary);
     font-size: 13px;
     line-height: 1.5;
 }
 
 .version-picker-error a {
-    color: var(--accent, #e05a00);
+    color: var(--accent);
     text-decoration: underline;
 }
 
@@ -121,9 +121,9 @@
     background: none;
     width: 100%;
     text-align: left;
-    color: var(--text-primary, #e8e8e8);
+    color: var(--text-primary);
     transition: background 0.12s;
-    border-bottom: 1px solid var(--border-color, #2a2a2a);
+    border-bottom: 1px solid var(--border);
 }
 
 .version-picker-row:last-child {
@@ -131,7 +131,7 @@
 }
 
 .version-picker-row:hover:not([aria-disabled="true"]) {
-    background: var(--bg-hover, #242424);
+    background: var(--bg-hover);
 }
 
 .version-picker-row[aria-disabled="true"] {
@@ -148,7 +148,7 @@
 
 .vp-date {
     font-size: 12px;
-    color: var(--text-secondary, #888);
+    color: var(--text-secondary);
     flex: 1;
 }
 
@@ -161,19 +161,19 @@
 }
 
 .vp-badge-current {
-    background: var(--success-bg, rgba(80, 200, 100, 0.15));
-    color: var(--success, #50c864);
-    border: 1px solid var(--success, #50c864);
+    background: var(--accent-green-dim, color-mix(in srgb, var(--accent-green) 15%, transparent));
+    color: var(--accent-green);
+    border: 1px solid var(--accent-green);
 }
 
 .vp-badge-pinned {
-    background: var(--accent-bg, rgba(224, 90, 0, 0.12));
-    color: var(--accent, #e05a00);
-    border: 1px solid var(--accent, #e05a00);
+    background: var(--accent-dim, color-mix(in srgb, var(--accent) 12%, transparent));
+    color: var(--accent);
+    border: 1px solid var(--accent);
 }
 
 .vp-arrow {
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary);
     font-size: 14px;
 }
 
@@ -183,12 +183,12 @@
     margin: 0;
     padding: 10px 20px 14px;
     font-size: 12px;
-    color: var(--text-secondary, #888);
-    border-top: 1px solid var(--border-color, #2a2a2a);
+    color: var(--text-secondary);
+    border-top: 1px solid var(--border);
 }
 
 .version-picker-more a {
-    color: var(--accent, #e05a00);
+    color: var(--accent);
     text-decoration: underline;
 }
 
@@ -204,17 +204,17 @@
 .version-picker-confirm p {
     margin: 0;
     font-size: 14px;
-    color: var(--text-primary, #e8e8e8);
+    color: var(--text-primary);
     line-height: 1.5;
 }
 
 .version-picker-confirm p strong {
-    color: var(--accent, #e05a00);
+    color: var(--accent);
 }
 
 .vp-confirm-note {
     font-size: 12px;
-    color: var(--text-secondary, #888) !important;
+    color: var(--text-secondary) !important;
 }
 
 .vp-confirm-actions {
@@ -225,8 +225,8 @@
 
 .vp-btn-cancel {
     background: none;
-    border: 1px solid var(--border-color, #444);
-    color: var(--text-secondary, #aaa);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
     padding: 7px 16px;
     border-radius: 6px;
     cursor: pointer;
@@ -235,14 +235,14 @@
 }
 
 .vp-btn-cancel:hover {
-    border-color: var(--text-secondary, #888);
-    color: var(--text-primary, #e8e8e8);
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
 }
 
 .vp-btn-confirm {
-    background: var(--accent, #e05a00);
+    background: var(--accent-fill);
     border: none;
-    color: #fff;
+    color: var(--accent-fill-text);
     padding: 7px 18px;
     border-radius: 6px;
     cursor: pointer;

@@ -1,9 +1,15 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
 /* GAIA Agent UI - Global Styles
- * Design: refined dark interface with AMD brand accents.
- * Inspired by premium report aesthetics — deep backgrounds,
- * subtle grain, glassmorphism, and sophisticated typography.
+ * Implements the shared graphite / ivory / copper design language.
+ * Spec: docs/spec/gaia-design-language.mdx — that page is the contract;
+ * the role tokens below are its Agent UI implementation and are held to
+ * its contrast floors by src/styles/__tests__/contrast.test.ts.
+ *
+ * Light is the :root default; dark overrides under [data-theme="dark"].
+ * EVERY colour role must be declared in BOTH blocks — a value that only
+ * exists in :root silently serves dark mode too, which is how the old
+ * palette shipped one accent for two very different backgrounds.
  */
 
 /* ── Self-hosted Fonts (privacy-first, no external CDN) ──────────── */
@@ -36,66 +42,89 @@
 }
 
 :root {
-    /* GAIA design accents — gold (shared with website tokens) + neutral danger */
-    --accent: #E2A33E;
-    --accent-dark: #A87B2D;
-    --accent-light: #EFC480;
-    --accent-soft: #EFC480;
-    --accent-dim: rgba(226, 163, 62, 0.12);
-    --accent-dim2: rgba(226, 163, 62, 0.06);
-    --danger: #E5484D;
-    --danger-dark: #D93D42;
-    --danger-light: #F2787C;
-    --danger-soft: #F2787C;
-    --danger-dim: rgba(229, 72, 77, 0.12);
-    --danger-dim2: rgba(229, 72, 77, 0.06);
-    /* Terminal green accent for active/success states */
-    --terminal-green: #4ec932;
-    --terminal-green-dim: #3da826;
-    --terminal-glow: 0 0 6px rgba(78, 201, 50, 0.15);
+    /* ── Light theme (the default) ──────────────────────────────────
+     * Canvas Porcelain #F5F2EC, raised surface Pale stone #EAE5DC.
+     * Everything else is derived to sit between, above, or on those two. */
 
-    /* Accent colors for status indicators */
-    --accent-green: #4ec932;
-    --accent-green-dim: rgba(78, 201, 50, 0.12);
-    --accent-yellow: #e8a830;
-    --accent-blue: #3b9eff;
-    --accent-cyan: #06b6d4;
-    --accent-gold: #e8a830;
-    --accent-gold-dim: rgba(232, 168, 48, 0.12);
-    --accent-danger: #ef4444;
-    --accent-danger-dim: rgba(239, 68, 68, 0.10);
+    /* Accent — Burnished copper. Marks the prompt, focus, selection, and the
+     * single primary action. Nothing else on the screen is copper. */
+    --accent: #9A4930;
+    --accent-light: #B25E3C;         /* chrome only: borders, hover emphasis */
+    --accent-dim: rgba(154, 73, 48, 0.12);
+    --accent-dim2: rgba(154, 73, 48, 0.06);
+    --accent-selection: rgba(154, 73, 48, 0.20);
 
-    /* Code text color (used in terminal/code contexts that stay dark in both themes) */
-    --text-code: #d4d4d4;
+    /* Accent as a filled button. One literal in both themes, carrying white
+     * at 6.23:1 — the pair covers its own background, so it is judged
+     * against itself rather than against the canvas behind it. */
+    --accent-fill: #9A4930;
+    --accent-fill-text: #ffffff;
+    --accent-fill-hover: #7C3A26;    /* pressed/hover; shared like the fill */
 
-    --bg-primary: #ffffff;
-    --bg-secondary: #f8f9fa;
-    --bg-tertiary: #f0f1f3;
-    --bg-sidebar: #f0f1f3;
-    --bg-input: #ffffff;
-    --bg-hover: #f0f0f0;
-    --bg-active: #e5e7eb;
-    --bg-code: #1e1e1e;
-    --bg-user-msg: rgba(0, 0, 0, 0.02);
-    --bg-assistant-msg: rgba(0, 0, 0, 0.015);
-    --bg-modal-overlay: rgba(0, 0, 0, 0.5);
-    --bg-card: #f8f9fa;
+    /* Semantic status. The brand motif moved off green; status did not.
+     * Success stays green, warning amber, danger red, information blue —
+     * a failed check painted copper to stay on-brand is a worse UI. */
+    --accent-green: #2B7234;
+    --accent-green-dim: rgba(43, 114, 52, 0.12);
+    --accent-yellow: #8A5A00;
+    --accent-yellow-dim: rgba(138, 90, 0, 0.12);
+    --accent-blue: #1B62C4;
+    --accent-blue-dim: rgba(27, 98, 196, 0.12);
+    --accent-cyan: #0E6E86;
+    --accent-purple: #6B3FBF;
 
-    /* Background image (set via App.tsx or inline style) */
-    --bg-image: none;
-    --bg-image-opacity: 0;
+    --danger: #B4292E;
+    --danger-dark: #8E1F23;
+    --danger-dim: rgba(180, 41, 46, 0.12);
+    --danger-dim2: rgba(180, 41, 46, 0.06);
+
+    /* Code surfaces stay dark in both themes — a code block is its own
+     * canvas, so its text is judged against it, not against the page. */
+    --bg-code: #131218;
+    --bg-code-raised: #1E1C24;       /* a panel nested inside a code surface */
+    --border-code: #3E3B47;
+    --text-code: #D6D2CC;
+    --text-code-dim: #9A96A0;        /* timestamps, cwd, "no output" */
+    /* Status ON a code surface. Not --accent-yellow/--danger: those flip to
+     * their light-theme variants, which are unreadable on a pane that stays
+     * dark in both themes. */
+    --code-accent: #EBA474;          /* the `$` prompt, focus */
+    --code-success: #5CC96E;
+    --code-warning: #E5B567;
+    --code-danger: #F2787C;
+    --code-info: #6FB4FF;
+
+    --bg-primary: #F5F2EC;           /* canvas */
+    --bg-secondary: #EFEBE3;         /* header / composer band */
+    --bg-tertiary: #E2DCD1;          /* badges, tool panels */
+    --bg-sidebar: #EAE5DC;           /* raised */
+    --bg-input: #EAE5DC;             /* raised */
+    --bg-card: #EAE5DC;              /* raised */
+    --bg-hover: #E2DCD1;
+    --bg-active: #D9D2C5;
+    --bg-user-msg: rgba(36, 33, 41, 0.025);
+    --bg-assistant-msg: rgba(36, 33, 41, 0.015);
+    --bg-modal-overlay: rgba(23, 22, 28, 0.55);
+    --bg-recessed: #E4DED3;          /* sunk below the canvas: log + detail panes */
+    --switch-knob: #ffffff;          /* rides both the off (--border) and on track */
 
     /* Theme-aware overlay tints (visible on light backgrounds) */
-    --tint-subtle: rgba(0, 0, 0, 0.03);
-    --tint-hover: rgba(0, 0, 0, 0.05);
+    --tint-subtle: rgba(36, 33, 41, 0.03);
+    --tint-hover: rgba(36, 33, 41, 0.05);
 
-    --text-primary: #111827;
-    --text-secondary: #6b7280;
-    --text-muted: #9ca3af;
-    --text-inverse: #ffffff;
+    --text-primary: #242129;
+    --text-secondary: #645D6A;
+    --text-muted: #6F6776;
+    --text-inverse: #F5F2EC;
 
-    --border: #e5e7eb;
-    --border-light: #f3f4f6;
+    /* Rules, one per surface they are drawn on: --border against the
+     * canvas, --border-light against a raised surface, --border-recessed
+     * against a sunk one. Each clears the 1.5:1 chrome floor on its own
+     * background -- a sunk pane cannot reach it on fill alone, because
+     * even pure black is 1.17:1 against the dark canvas. */
+    --border: #CCC4B4;
+    --border-light: #C2B9A6;
+    --border-recessed: #BEB5A3;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
@@ -114,44 +143,76 @@
 
     --sidebar-w: 300px;
     --ease: cubic-bezier(0.22, 1, 0.36, 1);
-    --ease-spring: cubic-bezier(0.16, 0, 0.84, 1);
     --duration: 200ms;
     --duration-fast: 120ms;
 }
 
 [data-theme="dark"] {
-    /* Refined dark palette — deep backgrounds with subtle blue-purple undertones.
-     * Inspired by premium dark UIs with sophisticated color depth. */
-    --bg-primary: #0e0e16;       /* Main content — deep dark with blue undertone */
-    --bg-secondary: #0a0a12;     /* Header, input area — near-black */
-    --bg-tertiary: #1a1a28;      /* Cards, badges, tool panels — lifted with purple tint */
-    --bg-sidebar: #08080d;       /* Sidebar — deepest black */
-    --bg-input: #12121c;         /* Input field — card-level dark */
-    --bg-hover: #1e1e2e;         /* Hover states — visible lift with tint */
-    --bg-active: #262638;        /* Active/selected — obvious highlight */
-    --bg-code: #0a0a12;          /* Code blocks — near-black */
-    --bg-card: #12121c;          /* Cards — slightly lifted */
-    --bg-user-msg: rgba(255, 255, 255, 0.015);
-    --bg-assistant-msg: rgba(255, 255, 255, 0.02);
-    --bg-modal-overlay: rgba(0, 0, 0, 0.88);
+    /* ── Dark theme ─────────────────────────────────────────────────
+     * Canvas Graphite #17161C, raised surface Warm slate #222128.
+     * The neutrals are warm on purpose: a cool near-black next to a warm
+     * canvas reads as two different products. */
 
-    --text-primary: #e8e8f0;     /* Bright white with warmth */
-    --text-secondary: #9898b0;   /* Clear secondary with purple tint */
-    --text-muted: #8585a0;       /* Muted — WCAG AA compliant (5.1:1 against bg-primary) */
+    /* Accent — Copper, the identity colour. Deliberately NOT the light
+     * value: the light accent is constrained by 256-colour terminals
+     * (see the spec), so the two themes carry different coppers. */
+    --accent: #EBA474;
+    --accent-light: #F4C39F;
+    --accent-dim: rgba(235, 164, 116, 0.12);
+    --accent-dim2: rgba(235, 164, 116, 0.06);
+    --accent-selection: rgba(235, 164, 116, 0.24);
 
-    --border: #222236;           /* Borders — blue-purple tinted */
-    --border-light: #1a1a2a;     /* Subtle dividers */
+    /* Accent fill is the one value shared with light — see :root. */
+    --accent-fill: #9A4930;
+    --accent-fill-text: #ffffff;
+    --accent-fill-hover: #7C3A26;
+
+    --accent-green: #5CC96E;
+    --accent-green-dim: rgba(92, 201, 110, 0.14);
+    --accent-yellow: #E5B567;
+    --accent-yellow-dim: rgba(229, 181, 103, 0.14);
+    --accent-blue: #6FB4FF;
+    --accent-blue-dim: rgba(111, 180, 255, 0.14);
+    --accent-cyan: #45C8DE;
+    --accent-purple: #B39AF0;
+
+    --danger: #F2787C;
+    --danger-dark: #C0342E;
+    --danger-dim: rgba(242, 120, 124, 0.14);
+    --danger-dim2: rgba(242, 120, 124, 0.07);
+
+    --bg-primary: #17161C;       /* canvas */
+    --bg-secondary: #1C1B22;     /* header / composer band */
+    --bg-tertiary: #2A2831;      /* badges, tool panels */
+    --bg-sidebar: #222128;       /* raised */
+    --bg-input: #222128;         /* raised */
+    --bg-card: #222128;          /* raised */
+    --bg-hover: #2A2831;
+    --bg-active: #33313B;
+    --bg-user-msg: rgba(240, 237, 231, 0.02);
+    --bg-assistant-msg: rgba(240, 237, 231, 0.03);
+    --bg-modal-overlay: rgba(12, 11, 15, 0.86);
+    --bg-recessed: #121117;      /* sunk below the canvas */
+    --switch-knob: #F0EDE7;
+
+    --text-primary: #F0EDE7;
+    --text-secondary: #AAA5B0;
+    --text-muted: #8C8794;
+    /* Sits on a surface of the opposite polarity, so it flips with the theme:
+     * pairing it with a semantic token (--danger, --accent-yellow) stays
+     * legible in both, because those tokens flip too. */
+    --text-inverse: #17161C;
+
+    --border: #3A3842;           /* against the canvas */
+    --border-light: #403E49;     /* against a raised surface */
+    --border-recessed: #403E49;  /* against a sunk one */
 
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.6);
     --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.7);
     --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.8);
 
-    --tint-subtle: rgba(255, 255, 255, 0.02);
-    --tint-hover: rgba(255, 255, 255, 0.04);
-
-    /* Dark mode background image -- slightly higher opacity for atmosphere */
-    --bg-image: none;
-    --bg-image-opacity: 0;
+    --tint-subtle: rgba(240, 237, 231, 0.03);
+    --tint-hover: rgba(240, 237, 231, 0.06);
 }
 
 /* Reset */
@@ -170,25 +231,8 @@ html, body, #root {
     line-height: 1.72;
 }
 
-/* Background image overlay -- uses CSS custom property set via theme.
- * Place background images in src/assets/bg/ and import in App.tsx,
- * or use absolute URLs. The image is applied to #root::before so it
- * sits behind all content. Opacity is kept very low so text stays legible.
- */
-#root::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: -1;
-    background-image: var(--bg-image, none);
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    opacity: var(--bg-image-opacity, 0);
-}
-
-/* Subtle grain texture overlay — dark mode only for premium feel.
+/* Subtle grain texture overlay — dark mode only.
+ * Neutral luminance noise, so it does not shift any colour role.
  * z-index: 1 keeps it above backgrounds but below interactive elements. */
 [data-theme="dark"] #root::after {
     content: '';
@@ -205,14 +249,13 @@ input, textarea { font: inherit; color: var(--text-primary); background: var(--b
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* Text selection — neutral cool-blue, not the accent: accent-tinted
- * selection makes every interaction read as a highlight state. */
+/* Text selection — the accent carries selection, per the design language. */
 ::selection {
-    background: rgba(56, 132, 255, 0.22);
+    background: var(--accent-selection);
     color: inherit;
 }
 ::-moz-selection {
-    background: rgba(56, 132, 255, 0.22);
+    background: var(--accent-selection);
     color: inherit;
 }
 
@@ -257,7 +300,7 @@ a:hover { text-decoration: underline; }
 .notification-center-trigger[aria-expanded="true"],
 .notification-center-trigger.has-unread {
     color: var(--text-primary);
-    border-color: rgba(245, 158, 11, 0.45);
+    border-color: var(--accent);
     background: var(--bg-hover);
 }
 
@@ -269,8 +312,8 @@ a:hover { text-decoration: underline; }
     height: 17px;
     padding: 0 4px;
     border-radius: var(--radius-full);
-    background: var(--accent-yellow);
-    color: white;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
     font-size: 9px;
     font-weight: 700;
     line-height: 17px;
@@ -284,30 +327,16 @@ a:hover { text-decoration: underline; }
     z-index: 120;
 }
 
-/* Ambient background glow — subtle radial gradients for depth (dark mode only).
- * Creates the atmosphere from the reference report design. */
-[data-theme="dark"] .main-content::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 0;
-    background:
-        radial-gradient(ellipse 600px 500px at 85% 10%, rgba(226, 163, 62, 0.06) 0%, transparent 70%),
-        radial-gradient(ellipse 500px 400px at 10% 90%, rgba(78, 201, 50, 0.03) 0%, transparent 70%),
-        radial-gradient(ellipse 400px 350px at 50% 50%, rgba(59, 158, 255, 0.025) 0%, transparent 70%);
-}
-
-/* Focus indicators for keyboard accessibility -- terminal green */
+/* Focus indicators for keyboard accessibility — the accent marks focus. */
 :focus-visible {
-    outline: 2px solid var(--terminal-green);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
 }
 
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-    outline: 2px solid var(--terminal-green);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
 }
 
@@ -322,7 +351,7 @@ textarea:focus-visible {
 .btn-primary {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 11px 28px;
-    background: var(--accent); color: #1a1a1a;
+    background: var(--accent-fill); color: var(--accent-fill-text);
     border-radius: var(--radius-md);
     font-weight: 600; font-size: 14px;
     font-family: var(--font-mono);
@@ -333,8 +362,7 @@ textarea:focus-visible {
     overflow: hidden;
 }
 .btn-primary:hover {
-    background: var(--accent-dark);
-    box-shadow: 0 0 20px rgba(226, 163, 62, 0.3);
+    background: var(--accent-fill-hover);
     transform: translateY(-1px);
 }
 .btn-primary:active {
@@ -366,7 +394,7 @@ textarea:focus-visible {
     font-family: var(--font-mono);
     transition: all var(--duration) var(--ease);
 }
-.btn-danger:hover { background: var(--danger); color: white; }
+.btn-danger:hover { background: var(--danger); color: var(--text-inverse); }
 .btn-danger:active { transform: scale(0.98); }
 
 .btn-icon {
@@ -398,9 +426,9 @@ textarea:focus-visible {
     letter-spacing: 1.5px;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
-    background: var(--accent-gold-dim);
-    color: var(--accent-gold);
-    border: 1px solid rgba(232, 168, 48, 0.2);
+    background: var(--accent-yellow-dim);
+    color: var(--accent-yellow);
+    border: 1px solid var(--accent-yellow-dim);
     vertical-align: middle;
     line-height: 1.3;
 }
@@ -475,7 +503,7 @@ textarea:focus-visible {
     position: fixed;
     inset: 0;
     z-index: 50;
-    background: rgba(0, 0, 0, 0.7);
+    background: var(--bg-modal-overlay);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     animation: fadeIn var(--duration-fast) var(--ease);
@@ -572,30 +600,25 @@ textarea:focus-visible {
     50% { transform: translateY(-3px); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes glow {
-    0%, 100% { box-shadow: 0 0 4px rgba(0, 255, 159, 0.1); }
-    50% { box-shadow: 0 0 10px rgba(0, 255, 159, 0.2); }
-}
 /* Terminal cursor blink -- block style */
 @keyframes cursorBlink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
 }
-/* Red dot glow -- traveling wave for "Thinking..." dots (used globally) */
+/* Traveling wave for the "Thinking..." dots (used globally). */
 .thinking-dots span {
     animation: loadingDotGlow 2.4s ease-in-out infinite;
     opacity: 0.15;
     color: var(--accent);
-    text-shadow: 0 0 2px rgba(226, 163, 62, 0.2);
 }
 .thinking-dots span:nth-child(1) { animation-delay: 0s; }
 .thinking-dots span:nth-child(2) { animation-delay: 0.5s; }
 .thinking-dots span:nth-child(3) { animation-delay: 1.0s; }
 
 @keyframes loadingDotGlow {
-    0%, 15% { opacity: 0.15; text-shadow: 0 0 2px rgba(226, 163, 62, 0.2); }
-    25% { opacity: 1; text-shadow: 0 0 8px rgba(226, 163, 62, 0.8), 0 0 3px rgba(226, 163, 62, 1); }
-    40%, 100% { opacity: 0.15; text-shadow: 0 0 2px rgba(226, 163, 62, 0.2); }
+    0%, 15% { opacity: 0.15; }
+    25%     { opacity: 1; }
+    40%, 100% { opacity: 0.15; }
 }
 /* Scroll reveal animation */
 @keyframes revealUp {

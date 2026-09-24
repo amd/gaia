@@ -46,21 +46,21 @@
 
 .install-step.current .install-step-dot {
     border-color: var(--accent);
-    background: rgba(226, 60, 64, 0.08);
+    background: var(--accent-dim);
     color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(226, 60, 64, 0.1);
+    box-shadow: 0 0 0 3px var(--accent-dim);
 }
 
 .install-step.complete .install-step-dot {
     border-color: var(--accent-green);
     background: var(--accent-green);
-    color: white;
+    color: var(--text-inverse);
 }
 
 .install-step.failed .install-step-dot {
-    border-color: var(--accent-danger);
-    background: var(--accent-danger);
-    color: white;
+    border-color: var(--danger);
+    background: var(--danger);
+    color: var(--text-inverse);
 }
 
 .install-step-spinner {
@@ -116,7 +116,7 @@
     background: linear-gradient(
         90deg,
         transparent 0%,
-        rgba(255, 255, 255, 0.2) 50%,
+        color-mix(in srgb, var(--text-primary) 20%, transparent) 50%,
         transparent 100%
     );
     animation: shimmer 1.5s infinite;
@@ -131,7 +131,7 @@
 }
 
 .install-progress-fill.failed {
-    background: var(--accent-danger);
+    background: var(--danger);
 }
 
 .install-progress-fill.failed::after {
@@ -195,7 +195,7 @@
 }
 
 .install-step-icon.failed {
-    color: var(--accent-danger);
+    color: var(--danger);
 }
 
 .install-step-icon.preparing {
@@ -256,15 +256,15 @@
     align-items: flex-start;
     gap: 10px;
     padding: 12px 14px;
-    background: rgba(239, 68, 68, 0.05);
-    border: 1px solid rgba(239, 68, 68, 0.2);
+    background: color-mix(in srgb, var(--danger) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
     border-radius: var(--radius-sm);
-    color: var(--accent-danger);
+    color: var(--danger);
 }
 
 [data-theme="dark"] .install-error {
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.25);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 .install-error-content {
@@ -290,8 +290,8 @@
     align-items: center;
     gap: 10px;
     padding: 12px 14px;
-    background: rgba(34, 197, 94, 0.05);
-    border: 1px solid rgba(34, 197, 94, 0.2);
+    background: color-mix(in srgb, var(--accent-green) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-green) 20%, transparent);
     border-radius: var(--radius-sm);
     color: var(--accent-green);
     font-size: 13px;
@@ -299,8 +299,8 @@
 }
 
 [data-theme="dark"] .install-success {
-    background: rgba(34, 197, 94, 0.08);
-    border-color: rgba(34, 197, 94, 0.25);
+    background: color-mix(in srgb, var(--accent-green) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-green) 25%, transparent);
 }
 
 /* ── Footer Actions ─────────────────────────────────────────── */

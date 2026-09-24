@@ -16,7 +16,7 @@
 }
 
 [data-theme="dark"] .notification-center {
-  background: rgba(14, 14, 22, 0.92);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
   backdrop-filter: blur(20px) saturate(1.2);
   -webkit-backdrop-filter: blur(20px) saturate(1.2);
 }
@@ -62,8 +62,8 @@
   height: 20px;
   padding: 0 6px;
   border-radius: var(--radius-full);
-  background: var(--accent);
-  color: #1a1a1a;
+  background: var(--accent-fill);
+  color: var(--accent-fill-text);
   font-size: 11px;
   font-weight: 700;
 }
@@ -200,7 +200,7 @@
   border-left-color: var(--accent-blue);
 }
 .notification-item.notif-type-error {
-  border-left-color: var(--accent-danger);
+  border-left-color: var(--danger);
 }
 
 /* ── Type-based icon colors ──────────────────────────────────────────── */
@@ -220,7 +220,7 @@
   color: var(--accent-blue);
 }
 .notif-type-error .notification-icon {
-  color: var(--accent-danger);
+  color: var(--danger);
 }
 
 /* ── Icon ─────────────────────────────────────────────────────────────── */
@@ -299,7 +299,7 @@
 .notification-policy-reason {
   display: block;
   padding-left: 8px;
-  border-left: 2px solid rgba(245, 158, 11, 0.45);
+  border-left: 2px solid color-mix(in srgb, var(--accent-yellow) 45%, transparent);
   color: var(--text-secondary);
   line-height: 1.45;
 }
@@ -330,21 +330,21 @@
 }
 
 .notification-action-allow {
-  background: rgba(34, 197, 94, 0.12);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
   color: var(--accent-green);
-  border: 1px solid rgba(34, 197, 94, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 30%, transparent);
 }
 .notification-action-allow:hover {
-  background: rgba(34, 197, 94, 0.2);
+  background: color-mix(in srgb, var(--accent-green) 20%, transparent);
 }
 
 .notification-action-deny {
-  background: var(--accent-danger-dim);
-  color: var(--accent-danger);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: var(--danger-dim);
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
 }
 .notification-action-deny:hover {
-  background: rgba(239, 68, 68, 0.2);
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
 }
 
 /* ── Response Badge ──────────────────────────────────────────────────── */
@@ -359,12 +359,12 @@
   width: fit-content;
 }
 .notification-response-badge.response-allow {
-  background: rgba(34, 197, 94, 0.12);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
   color: var(--accent-green);
 }
 .notification-response-badge.response-deny {
-  background: var(--accent-danger-dim);
-  color: var(--accent-danger);
+  background: var(--danger-dim);
+  color: var(--danger);
 }
 
 /* ── Dismiss Button ──────────────────────────────────────────────────── */
@@ -417,7 +417,7 @@
   color: var(--text-secondary);
 }
 .notification-footer-clear:hover {
-  color: var(--accent-danger);
+  color: var(--danger);
 }
 
 /* Always show dismiss button on touch-only devices (no hover capability) */

@@ -148,7 +148,7 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
             {row.binary && (
               <span data-dl-one-arch>
                 {' '}Or take the{' '}
-                <a href={row.binary.url} class="text-g-gold-text underline-offset-2 hover:underline">
+                <a href={row.binary.url} class="text-g-accent-text underline-offset-2 hover:underline">
                   standalone binary
                 </a>{' '}— one file, no PATH entry and no agent alongside it.
               </span>
@@ -204,9 +204,9 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
               <li>
                 <a
                   href={o.href}
-                  class="group inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-gold-text"
+                  class="group inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-accent-text"
                 >
-                  <span class="text-g-gold-text" aria-hidden="true">↓</span>
+                  <span class="text-g-accent-text" aria-hidden="true">↓</span>
                   <span>{o.label}</span>
                 </a>
               </li>

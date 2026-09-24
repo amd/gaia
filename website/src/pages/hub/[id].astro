@@ -132,7 +132,7 @@ const requirementRows = [
   <main id="main-content" class="g-shell pb-24 pt-[110px]">
 
     <nav class="mono mb-[30px] flex items-center gap-2.5 text-[12px] text-g-faint" aria-label="Breadcrumb">
-      <a href="/hub" class="text-g-muted transition-colors hover:text-g-gold-text">Agent Hub</a>
+      <a href="/hub" class="text-g-muted transition-colors hover:text-g-accent-text">Agent Hub</a>
       <span aria-hidden="true">/</span>
       <span class="text-g-text">{agent.id}</span>
     </nav>
@@ -175,11 +175,11 @@ const requirementRows = [
         <div class="g-card w-full border-g-border2 p-[22px] sm:w-auto sm:min-w-[280px]">
           <h2 class="g-label">Eval score</h2>
           <div class="mt-2.5 flex items-baseline gap-[7px]">
-            <span class="mono text-[44px] font-medium leading-none tracking-[-0.03em] text-g-gold-text">{scoreDisplay}</span>
+            <span class="mono text-[44px] font-medium leading-none tracking-[-0.03em] text-g-accent-text">{scoreDisplay}</span>
             <span class="mono text-[14px] text-g-faint">/ 100</span>
           </div>
           <div class="mt-3.5 h-[5px] overflow-hidden rounded-[3px] bg-g-surface2">
-            <div class="h-full rounded-[3px] bg-gradient-to-r from-g-gold to-g-gold2" style={`width:${scorePct}%`}></div>
+            <div class="h-full rounded-[3px] bg-g-accent" style={`width:${scorePct}%`}></div>
           </div>
           <p class="mt-3.5 max-w-[280px] text-[12.5px] leading-[1.55] text-g-faint">
             Aggregate benchmark score for the latest published version — the methodology and every sub-metric are in the scorecard.
@@ -260,8 +260,8 @@ const requirementRows = [
                     {packageFiles.length} files across {topLevelFolders} {topLevelFolders === 1 ? 'folder' : 'folders'}{previewBase ? ' — click a text file to preview it.' : '.'}
                   </p>
                   <div class="flex flex-none gap-1.5 text-[11px]" data-file-tree-controls>
-                    <button type="button" data-files-expand class="rounded-g-badge border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-gold-dim hover:text-g-text">Expand all</button>
-                    <button type="button" data-files-collapse class="rounded-g-badge border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-gold-dim hover:text-g-text">Collapse all</button>
+                    <button type="button" data-files-expand class="rounded-g-badge border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-accent-dim hover:text-g-text">Expand all</button>
+                    <button type="button" data-files-collapse class="rounded-g-badge border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-accent-dim hover:text-g-text">Collapse all</button>
                   </div>
                 </div>
                 <div class="file-tree rounded-g-panel border border-g-border p-3 font-mono text-[12.5px]" data-file-tree>
@@ -282,7 +282,7 @@ const requirementRows = [
             <ul class="flex flex-col gap-2.5">
               {agent.permissions.map((p) => (
                 <li class="grid grid-cols-[auto_1fr] items-baseline gap-2.5">
-                  <span class="text-[11px] text-g-gold-text" aria-hidden="true">◆</span>
+                  <span class="text-[11px] text-g-accent-text" aria-hidden="true">◆</span>
                   <span class="mono text-[12px] leading-[1.5] text-g-muted">{p}</span>
                 </li>
               ))}
@@ -329,11 +329,11 @@ const requirementRows = [
                 type="button"
                 data-pg-copy={`npx ${agent.npm_package} playground`}
                 aria-label={`Copy command: npx ${agent.npm_package} playground`}
-                class="g-cmd pg-copy group mt-2.5 w-full border-g-border text-left transition-colors hover:border-g-gold-dim"
+                class="g-cmd pg-copy group mt-2.5 w-full border-g-code-text/15 text-left transition-colors hover:border-g-code-accent/45"
               >
-                <span class="select-none text-g-gold" aria-hidden="true">$</span>
+                <span class="select-none text-g-code-accent" aria-hidden="true">$</span>
                 <span data-pg-cmd class="min-w-0 flex-1 truncate">npx {agent.npm_package} playground</span>
-                <span class="pg-copy-label flex-none select-none text-[11px] text-g-code-text/70 group-hover:text-g-gold">copy</span>
+                <span class="pg-copy-label flex-none select-none text-[11px] text-g-code-text/70 group-hover:text-g-code-accent">copy</span>
               </button>
               <p data-pg-copy-status class="sr-only" role="status"></p>
               <a
@@ -386,7 +386,7 @@ const requirementRows = [
       <div class="flex flex-none items-center justify-between gap-3 border-b border-g-border bg-g-surface px-4 py-2.5">
         <span id="file-preview-name" class="truncate font-mono text-[13px] text-g-text"></span>
         <div class="flex flex-none items-center gap-3">
-          <a id="file-preview-raw" href="#" target="_blank" rel="noopener" class="text-[11px] text-g-muted hover:text-g-gold-text">Raw ↗</a>
+          <a id="file-preview-raw" href="#" target="_blank" rel="noopener" class="text-[11px] text-g-muted hover:text-g-accent-text">Raw ↗</a>
           <button type="button" id="file-preview-close" aria-label="Close preview" class="text-g-muted hover:text-g-text">✕</button>
         </div>
       </div>
@@ -562,8 +562,8 @@ const requirementRows = [
     const setRunning = (up: boolean, quiet = false) => {
       if (open) {
         open.setAttribute('aria-disabled', up ? 'false' : 'true');
-        open.classList.toggle('border-g-gold-dim', up);
-        open.classList.toggle('text-g-gold-text', up);
+        open.classList.toggle('border-g-accent-dim', up);
+        open.classList.toggle('text-g-accent-text', up);
         open.classList.toggle('text-g-faint', !up);
         open.classList.toggle('border-g-border', !up);
       }
@@ -698,7 +698,7 @@ const requirementRows = [
   .doc p { @apply my-4 leading-[1.75] text-g-text/90; }
   .doc strong { @apply font-semibold text-g-text; }
   .doc em { @apply italic; }
-  .doc a { @apply font-medium text-g-gold-text underline decoration-g-gold/40 underline-offset-2 transition-colors hover:decoration-g-gold; }
+  .doc a { @apply font-medium text-g-accent-text underline decoration-g-accent/40 underline-offset-2 transition-colors hover:decoration-g-accent; }
 
   .doc ul { @apply my-4 list-disc space-y-2 pl-6 marker:text-g-faint; }
   .doc ol { @apply my-4 list-decimal space-y-2 pl-6 marker:text-g-faint; }
@@ -714,7 +714,7 @@ const requirementRows = [
   .doc td { @apply border-b border-g-border px-3 py-2 align-top text-g-text/85; }
   .doc tbody tr:last-child td { @apply border-0; }
 
-  .doc blockquote { @apply my-5 border-l-2 border-g-gold-dim bg-g-surface2 px-4 py-2 italic text-g-muted; }
+  .doc blockquote { @apply my-5 border-l-2 border-g-accent-dim bg-g-surface2 px-4 py-2 italic text-g-muted; }
   /* Default image: natural size, capped to the column. Keeps inline badges
      (e.g. a shields.io version pill, which sits in a paragraph with other text)
      from being blown up to full width. */
@@ -722,7 +722,7 @@ const requirementRows = [
   /* A standalone image — the only child of its paragraph — is a diagram or
      screenshot: fill the column (they read small at natural size) and zoom to
      fullscreen on click (see the lightbox script above). */
-  .doc p > img:only-child { @apply w-full cursor-zoom-in transition-colors hover:border-g-gold-dim; }
+  .doc p > img:only-child { @apply w-full cursor-zoom-in transition-colors hover:border-g-accent-dim; }
   .doc hr { @apply my-8 border-0 border-t border-g-border; }
 
   /* File tree (Files tab): native <details> collapse, custom chevron, no marker. */
@@ -732,28 +732,31 @@ const requirementRows = [
   .file-tree-chevron { transition: transform 0.15s ease; }
   .file-tree details[open] > summary .file-tree-chevron { transform: rotate(90deg); }
 
-  /* Prism syntax-highlight tokens, tuned for the dark code card (.doc pre). */
+  /* Prism syntax-highlight tokens. These sit only on .doc pre, which is
+     --g-code-bg in both themes, so they draw from the pinned code palette —
+     the same roles the hand-authored panels in global.css use, so one code
+     colour cannot mean two things on two pages. */
   .doc pre .token.comment,
   .doc pre .token.prolog,
   .doc pre .token.doctype,
   .doc pre .token.cdata { color: rgb(var(--g-code-faint)); font-style: italic; }
-  .doc pre .token.punctuation { color: #9aa0aa; }
+  .doc pre .token.punctuation { color: rgb(var(--g-code-faint)); }
   .doc pre .token.keyword,
   .doc pre .token.boolean,
-  .doc pre .token.atrule { color: #c792ea; }
+  .doc pre .token.atrule { color: rgb(var(--g-code-purple)); }
   .doc pre .token.string,
   .doc pre .token.char,
   .doc pre .token.inserted,
-  .doc pre .token.attr-value { color: #c3e88d; }
+  .doc pre .token.attr-value { color: rgb(var(--g-code-green)); }
   .doc pre .token.function,
-  .doc pre .token.class-name { color: #82aaff; }
+  .doc pre .token.class-name { color: rgb(var(--g-code-blue)); }
   .doc pre .token.number,
   .doc pre .token.constant,
-  .doc pre .token.symbol { color: #f78c6c; }
+  .doc pre .token.symbol { color: rgb(var(--g-code-accent)); }
   .doc pre .token.property,
   .doc pre .token.tag,
-  .doc pre .token.attr-name { color: #ffcb6b; }
+  .doc pre .token.attr-name { color: rgb(var(--g-code-amber)); }
   .doc pre .token.operator,
   .doc pre .token.entity,
-  .doc pre .token.url { color: #89ddff; }
+  .doc pre .token.url { color: rgb(var(--g-code-cyan)); }
 </style>

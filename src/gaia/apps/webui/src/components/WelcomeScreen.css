@@ -11,28 +11,6 @@
     position: relative;
 }
 
-/* Extra radial gradient accents on welcome screen (layers on top of global ambient bg) */
-[data-theme="dark"] .welcome::before {
-    content: '';
-    position: absolute;
-    top: -80px;
-    right: -120px;
-    width: 600px;
-    height: 600px;
-    background: radial-gradient(circle, rgba(226, 163, 62, 0.10) 0%, transparent 70%);
-    pointer-events: none;
-}
-[data-theme="dark"] .welcome::after {
-    content: '';
-    position: absolute;
-    bottom: -80px;
-    left: -80px;
-    width: 450px;
-    height: 450px;
-    background: radial-gradient(circle, rgba(78, 201, 50, 0.05) 0%, transparent 70%);
-    pointer-events: none;
-}
-
 .welcome-inner {
     max-width: 1200px;
     width: 100%;
@@ -42,17 +20,6 @@
 }
 
 /* ── Animation Keyframes ────────────────────────────────────── */
-@keyframes titleGlow {
-    0%, 100% {
-        filter: drop-shadow(0 0 20px rgba(226, 163, 62, 0.35))
-                drop-shadow(0 0 80px rgba(226, 163, 62, 0.12));
-    }
-    50% {
-        filter: drop-shadow(0 0 28px rgba(226, 163, 62, 0.45))
-                drop-shadow(0 0 100px rgba(226, 163, 62, 0.18));
-    }
-}
-
 @keyframes terminalBlink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
@@ -79,54 +46,18 @@
     font-weight: 700;
     font-family: 'JetBrains Mono', 'Space Mono', monospace;
     letter-spacing: -1px;
-    background: linear-gradient(135deg, var(--accent), #ff6b35);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--accent);
     margin-bottom: 10px;
     line-height: 1.1;
     display: inline-flex;
     align-items: center;
-    filter: none;
 }
 
-/* Glow applied only after typing completes */
-.welcome-title.typing-done {
-    filter: drop-shadow(0 0 18px rgba(226, 163, 62, 0.25))
-            drop-shadow(0 0 60px rgba(226, 163, 62, 0.10));
-}
-
-/* Pulse the glow subtly on dark backgrounds -- only after typing completes */
-[data-theme="dark"] .welcome-title.typing-done {
-    filter: drop-shadow(0 0 20px rgba(226, 163, 62, 0.35))
-            drop-shadow(0 0 80px rgba(226, 163, 62, 0.12));
-    animation: titleGlow 4s ease-in-out infinite;
-}
-
-/* All child spans need their own gradient (background-clip:text
-   doesn't inherit through child elements) */
 .welcome-title > span {
-    background: linear-gradient(135deg, var(--accent), #ff6b35);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
     /* Preserve whitespace inside spans */
     white-space: pre;
 }
-/* "GAIA" text gets extra pulsating glow */
-.gaia-glow {
-    filter: drop-shadow(0 0 6px rgba(226, 163, 62, 0.3));
-    transition: filter 0.5s ease;
-}
-.welcome-title.typing-done .gaia-glow {
-    animation: gaiaGlow 3s ease-in-out infinite;
-}
-@keyframes gaiaGlow {
-    0%, 100% { filter: drop-shadow(0 0 8px rgba(226, 163, 62, 0.35)); }
-    50% { filter: drop-shadow(0 0 16px rgba(226, 163, 62, 0.55)) drop-shadow(0 0 40px rgba(226, 163, 62, 0.15)); }
-}
-
-/* Terminal cursor: pixelated red block that blinks after typing finishes */
+/* Terminal cursor: a solid accent block that blinks after typing finishes */
 .terminal-cursor {
     display: inline-block;
     width: 8px;
@@ -137,7 +68,6 @@
     /* Pixelated aesthetic - sharp edges, no rounding */
     border-radius: 0;
     image-rendering: pixelated;
-    box-shadow: 0 0 8px rgba(226, 163, 62, 0.5), 0 0 2px rgba(226, 163, 62, 0.8);
 }
 
 .terminal-cursor.blink {
@@ -240,7 +170,7 @@
     left: 0;
     right: 0;
     height: 2px;
-    background: linear-gradient(90deg, var(--accent), #ff6b35);
+    background: var(--accent);
     opacity: 0;
     transition: opacity 0.3s var(--ease);
 }
@@ -253,9 +183,6 @@
     opacity: 1;
 }
 
-[data-theme="dark"] .feature-card {
-    background: linear-gradient(168deg, rgba(20, 8, 8, 0.4) 0%, var(--bg-card) 40%);
-}
 
 /* Hide icon, title, desc when hovered — terminal takes over */
 .feature-icon,
@@ -350,10 +277,10 @@
     gap: 8px;
     margin-bottom: 20px;
     padding: 10px 14px;
-    border: 1px solid #fed7aa;
+    border: 1px solid color-mix(in srgb, var(--accent-yellow) 28%, var(--bg-primary));
     border-radius: var(--radius-md);
-    background: #fffbeb;
-    color: #92400e;
+    background: color-mix(in srgb, var(--accent-yellow) 8%, var(--bg-primary));
+    color: var(--accent-yellow);
     font-size: 12px;
     text-align: left;
     line-height: 1.5;
@@ -370,17 +297,7 @@
     font-size: 11px;
     padding: 1px 5px;
     border-radius: 2px;
-    background: rgba(0, 0, 0, 0.07);
-}
-
-[data-theme="dark"] .welcome-setup-hint {
-    background: #120e05;
-    border-color: #2a1e08;
-    color: #fcd34d;
-}
-
-[data-theme="dark"] .welcome-setup-hint code {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--tint-hover);
 }
 
 /* ── Action buttons: flex row so both buttons share the same height ── */

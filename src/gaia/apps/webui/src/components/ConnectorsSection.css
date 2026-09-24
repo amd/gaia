@@ -52,10 +52,10 @@
     color: var(--text-primary);
 }
 .connector-tile-header:hover {
-    background: var(--bg-hover, rgba(0,0,0,0.03));
+    background: var(--bg-hover);
 }
 [data-theme="dark"] .connector-tile-header:hover {
-    background: rgba(255,255,255,0.04);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
 .connector-tile-name {
@@ -129,9 +129,9 @@
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: var(--accent-red, #e55);
-    background: rgba(239,68,68,0.08);
-    border: 1px solid rgba(239,68,68,0.2);
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
     border-radius: var(--radius-sm);
     padding: 6px 10px;
     margin-bottom: 10px;
@@ -407,14 +407,14 @@
     height: 13px;
     left: 2px;
     top: 2px;
-    background: #fff;
+    background: var(--switch-knob);
     border-radius: 50%;
     transition: transform var(--duration) var(--ease);
     box-shadow: 0 1px 2px rgba(0,0,0,0.2);
 }
 
 .toggle-switch input:checked + .toggle-track {
-    background: var(--accent-blue, #4e9de0);
+    background: var(--accent-blue);
 }
 
 .toggle-switch input:checked + .toggle-track::before {
@@ -422,7 +422,7 @@
 }
 
 .toggle-switch input:focus-visible + .toggle-track {
-    outline: 2px solid var(--accent-blue, #4e9de0);
+    outline: 2px solid var(--accent-blue);
     outline-offset: 2px;
 }
 
@@ -440,7 +440,7 @@
     font-family: var(--font-sans);
     color: var(--text-muted);
 }
-.grant-scope-warning--error { color: var(--accent-red, #e55); }
+.grant-scope-warning--error { color: var(--danger); }
 
 /* .spin / @keyframes spin are defined globally in src/styles/index.css */
 
@@ -450,11 +450,11 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    background: rgba(239,68,68,0.08);
-    color: var(--accent-red, #e55);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    color: var(--danger);
     padding: 8px 12px;
     border-radius: var(--radius-md);
-    border: 1px solid rgba(239,68,68,0.2);
+    border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
     margin-bottom: 10px;
     font-size: 12px;
     font-family: var(--font-sans);
@@ -545,7 +545,7 @@
     z-index: 1000;
     min-width: 160px;
     background: var(--bg-primary);
-    border: 1px solid var(--border-color, var(--border-light));
+    border: 1px solid var(--border, var(--border-light));
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
     padding: 4px;
@@ -576,7 +576,7 @@
 }
 
 .connector-tile-menu-item--danger {
-    color: var(--text-danger, #d04a3a);
+    color: var(--danger);
 }
 
 .connector-tile-menu-divider {
@@ -632,10 +632,10 @@
     color: var(--text-primary);
 }
 .agent-mcp-tile-header:hover {
-    background: var(--bg-hover, rgba(0,0,0,0.03));
+    background: var(--bg-hover);
 }
 [data-theme="dark"] .agent-mcp-tile-header:hover {
-    background: rgba(255,255,255,0.04);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
 
 .agent-mcp-server-name {
@@ -716,7 +716,7 @@
 
 .connector-tile-menu-error {
     padding: 6px 10px;
-    color: var(--text-danger, #d04a3a);
+    color: var(--danger);
     font-size: 11px;
     border-top: 1px solid var(--border-light);
     margin-top: 4px;
@@ -761,9 +761,9 @@
 .device-code-block {
     margin-top: 10px;
     padding: 12px;
-    border: 1px solid var(--border-color, #333);
+    border: 1px solid var(--border);
     border-radius: 8px;
-    background: var(--surface-2, rgba(255, 255, 255, 0.03));
+    background: var(--bg-secondary, color-mix(in srgb, var(--text-primary) 3%, transparent));
 }
 
 .device-code-instructions {
@@ -786,7 +786,7 @@
     font-weight: 600;
     padding: 4px 10px;
     border-radius: 6px;
-    background: var(--surface-3, rgba(255, 255, 255, 0.06));
+    background: var(--bg-tertiary, color-mix(in srgb, var(--text-primary) 6%, transparent));
     color: var(--text-primary);
     user-select: all;
 }

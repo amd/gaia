@@ -52,7 +52,7 @@
     /* Subtle elevation — slightly lighter than the assistant card so
        the assistant's reply visually anchors the conversation. */
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent),
         0 1px 1px rgba(0, 0, 0, 0.04),
         0 4px 10px -2px rgba(0, 0, 0, 0.10),
         0 8px 20px -8px rgba(0, 0, 0, 0.08);
@@ -62,21 +62,21 @@
 .msg-user .msg-inner:hover {
     transform: translateY(-1px);
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent),
         0 2px 2px rgba(0, 0, 0, 0.05),
         0 6px 14px -2px rgba(0, 0, 0, 0.12),
         0 12px 28px -10px rgba(0, 0, 0, 0.10);
 }
 [data-theme="dark"] .msg-user .msg-inner {
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent),
         0 1px 2px rgba(0, 0, 0, 0.30),
         0 6px 16px -2px rgba(0, 0, 0, 0.45),
         0 12px 28px -10px rgba(0, 0, 0, 0.30);
 }
 [data-theme="dark"] .msg-user .msg-inner:hover {
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent),
         0 2px 3px rgba(0, 0, 0, 0.35),
         0 8px 22px -2px rgba(0, 0, 0, 0.55),
         0 16px 36px -12px rgba(0, 0, 0, 0.40);
@@ -130,7 +130,7 @@
        press bounce. The hover state lifts marginally for affordance
        without becoming a CTA. */
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent),
         0 1px 1px rgba(0, 0, 0, 0.04),
         0 4px 10px -2px rgba(0, 0, 0, 0.10),
         0 8px 20px -8px rgba(0, 0, 0, 0.08);
@@ -148,7 +148,7 @@
 .msg-assistant:hover {
     transform: translateY(-1px);
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent),
         0 2px 2px rgba(0, 0, 0, 0.05),
         0 6px 14px -2px rgba(0, 0, 0, 0.12),
         0 12px 28px -10px rgba(0, 0, 0, 0.10);
@@ -159,14 +159,14 @@
        near-black surface a 0.10 alpha shadow effectively disappears.
        Keep the inset highlight tinted brighter to mimic top-light. */
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent),
         0 1px 2px rgba(0, 0, 0, 0.30),
         0 6px 16px -2px rgba(0, 0, 0, 0.45),
         0 12px 28px -10px rgba(0, 0, 0, 0.30);
 }
 [data-theme="dark"] .msg-assistant:hover {
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent),
         0 2px 3px rgba(0, 0, 0, 0.35),
         0 8px 22px -2px rgba(0, 0, 0, 0.55),
         0 16px 36px -12px rgba(0, 0, 0, 0.40);
@@ -207,8 +207,8 @@
     letter-spacing: 0;
 }
 .msg-avatar-user {
-    background: var(--accent);
-    color: #1a1a1a;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
 }
 .msg-avatar-assistant {
     background: var(--bg-tertiary);
@@ -222,7 +222,7 @@
        about. Brand red is reserved for the small "GAIA" name text; the
        avatar itself reads as a calm UI element. */
     border-color: var(--border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 2%, transparent);
 }
 .msg-avatar-assistant img {
     width: 100%;
@@ -337,12 +337,12 @@
 
 /* ── Error message styling ────────────────────────────────────── */
 .msg-error {
-    background: rgba(239, 68, 68, 0.04);
+    background: color-mix(in srgb, var(--danger) 4%, transparent);
     border-left: 2px solid var(--danger);
 }
 
 [data-theme="dark"] .msg-error {
-    background: rgba(239, 68, 68, 0.05);
+    background: color-mix(in srgb, var(--danger) 5%, transparent);
 }
 
 .error-banner {
@@ -352,7 +352,7 @@
     padding: 6px 12px;
     margin-bottom: 8px;
     border-radius: var(--radius-sm);
-    background: rgba(239, 68, 68, 0.08);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
     color: var(--danger);
     font-size: 11px;
     font-weight: 600;
@@ -476,9 +476,9 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    color: var(--terminal-green-dim);
+    color: var(--accent);
     cursor: pointer;
-    border-bottom: 1px dashed var(--terminal-green-dim);
+    border-bottom: 1px dashed var(--accent);
     transition: color var(--duration-fast) var(--ease), background var(--duration-fast) var(--ease);
     border-radius: 0;
     padding: 0 3px;
@@ -486,9 +486,9 @@
     font-size: 12px;
 }
 .file-path-link:hover {
-    color: var(--terminal-green);
-    border-bottom-color: var(--terminal-green);
-    background: rgba(78, 201, 50, 0.05);
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background: color-mix(in srgb, var(--accent-green) 5%, transparent);
 }
 .file-path-icon {
     flex-shrink: 0;
@@ -507,7 +507,7 @@
     display: block;
     max-width: 100%;
     max-height: 400px;
-    border-radius: var(--radius);
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     object-fit: contain;
     background: var(--bg-secondary);
@@ -625,7 +625,7 @@
     padding: 4px 14px;
 }
 .md-content details[open] {
-    border-color: rgba(226, 163, 62, 0.2);
+    border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* ── Strikethrough (GFM) ─────────────────────────────────────── */
@@ -649,7 +649,7 @@
     border-radius: var(--radius-lg);
     overflow: hidden;
     background: var(--bg-code);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-code);
 }
 
 .code-header {
@@ -657,14 +657,14 @@
     align-items: center;
     justify-content: space-between;
     padding: 6px 14px;
-    background: rgba(255, 255, 255, 0.05);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-code-raised);
+    border-bottom: 1px solid var(--border-code);
 }
 
 .code-lang {
     font-size: 10px;
     font-family: var(--font-mono);
-    color: var(--text-muted);
+    color: var(--text-code-dim);
     text-transform: lowercase;
     letter-spacing: 0.5px;
 }
@@ -677,15 +677,15 @@
     border-radius: var(--radius-sm);
     font-size: 10px;
     font-family: var(--font-mono);
-    color: var(--text-muted);
+    color: var(--text-code-dim);
     transition: all var(--duration) var(--ease);
 }
-.code-copy:hover { background: rgba(255, 255, 255, 0.08); color: #d4d4d4; }
+.code-copy:hover { background: var(--bg-code-raised); color: var(--text-code); }
 
 /* Copy feedback */
 .code-copy.copied {
-    color: var(--accent-green);
-    background: rgba(78, 201, 50, 0.08);
+    color: var(--code-success);
+    background: color-mix(in srgb, var(--code-success) 10%, var(--bg-code));
 }
 
 .code-block pre {
@@ -709,7 +709,7 @@
     overflow-wrap: normal;
 }
 
-/* ── Terminal cursor — solid red write head ───────────────────── */
+/* ── Terminal cursor — a solid accent write head ──────────────── */
 /* Sits inline after the last text element so it follows the content. */
 .md-content > .cursor { display: inline-block; }
 .md-content:has(> .cursor) > :last-of-type:not(.cursor) {
@@ -735,7 +735,6 @@
     /* Pixelated terminal aesthetic - sharp edges */
     border-radius: 0;
     image-rendering: pixelated;
-    box-shadow: 0 0 8px rgba(226, 163, 62, 0.5), 0 0 2px rgba(226, 163, 62, 0.8);
     animation: cursorBlink 600ms steps(2, start) infinite;
 }
 
@@ -775,7 +774,7 @@
     gap: 10px;
     margin-top: 6px;
     padding-top: 5px;
-    border-top: 1px solid var(--border-subtle, rgba(128,128,128,0.12));
+    border-top: 1px solid var(--border, color-mix(in srgb, var(--text-muted) 12%, transparent));
     font-size: 10.5px;
     color: var(--text-muted);
     font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);

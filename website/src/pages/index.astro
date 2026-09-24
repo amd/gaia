@@ -121,7 +121,7 @@ const ARCHITECTURE = [
          rather than left on the page pretending to be one. -->
     <section id="install" class="g-shell flex flex-col items-center pb-24 pt-[136px] text-center sm:pb-32 sm:pt-[184px]">
       <h1 class="g-h-hero animate-g-rise max-w-[14ch]">
-        The agent for<br /><span class="whitespace-nowrap text-g-gold-text">AI PCs.</span>
+        The agent for<br /><span class="whitespace-nowrap text-g-accent-text">AI PCs.</span>
       </h1>
 
       <p class="g-lede animate-g-rise mt-6 text-center" style="animation-delay:0.08s">
@@ -147,14 +147,14 @@ const ARCHITECTURE = [
             >
               <h2 class="g-h-card flex items-baseline gap-2">
                 {p.title}
-                <span class="text-[15px] text-g-faint transition-colors group-hover:text-g-gold-text" aria-hidden="true">→</span>
+                <span class="text-[15px] text-g-faint transition-colors group-hover:text-g-accent-text" aria-hidden="true">→</span>
               </h2>
               <p class="g-body mb-6 mt-2.5">{p.body}</p>
 
               {/* Focusable: the command overflows at narrow widths, and a scroll
                   region no keyboard user can reach hides the tail of it. */}
               <div tabindex="0" class="g-cmd-plain mt-auto overflow-x-auto text-[12px]">
-                <span class="text-g-gold" aria-hidden="true">$</span>
+                <span class="text-g-code-accent" aria-hidden="true">$</span>
                 <span class="whitespace-nowrap">{p.code}</span>
               </div>
             </a>

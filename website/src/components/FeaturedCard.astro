@@ -36,11 +36,11 @@ if (agent.min_gaia_version) meta.push({ key: 'Min GAIA', value: agent.min_gaia_v
 
 <a
   href={`/hub/${agent.id}`}
-  class="featured block rounded-[16px] border border-g-border2 p-6 transition-all duration-[400ms] ease-g-out hover:-translate-y-[5px] hover:border-g-gold-dim hover:shadow-g-card sm:p-8"
+  class="block rounded-[16px] border border-g-border2 bg-g-surface2 p-6 transition-all duration-[400ms] ease-g-out hover:-translate-y-[5px] hover:border-g-accent-dim hover:shadow-g-card sm:p-8"
 >
   <div class="flex flex-wrap items-start justify-between gap-7">
     <div class="min-w-0 flex-1 basis-[380px]">
-      <div class="mono mb-4 text-[11px] uppercase tracking-[0.14em] text-g-gold-text">{eyebrow}</div>
+      <div class="mono mb-4 text-[11px] uppercase tracking-[0.14em] text-g-accent-text">{eyebrow}</div>
 
       <div class="flex flex-wrap items-center gap-x-3.5 gap-y-2">
         <span class="g-chip h-11 w-11 rounded-[11px] border-g-border2">
@@ -59,7 +59,7 @@ if (agent.min_gaia_version) meta.push({ key: 'Min GAIA', value: agent.min_gaia_v
         <!-- Static chip, not a copy button — the whole card is a link and nested
              interactive elements are invalid HTML. -->
         <span class="g-cmd max-w-full break-all">
-          <span class="text-g-gold" aria-hidden="true">$</span>{installCmd}
+          <span class="text-g-code-accent" aria-hidden="true">$</span>{installCmd}
         </span>
         <span class="g-cta-link font-semibold">View agent →</span>
       </div>
@@ -75,16 +75,3 @@ if (agent.min_gaia_version) meta.push({ key: 'Min GAIA', value: agent.min_gaia_v
     </div>
   </div>
 </a>
-
-<style>
-  /* Diagonal gold wash. Written here rather than as an arbitrary Tailwind value
-     so it can reference the theme's own gold token in both themes. */
-  .featured {
-    background-image: linear-gradient(
-      135deg,
-      rgb(var(--g-gold) / 0.06),
-      var(--g-surface) 45%,
-      transparent
-    );
-  }
-</style>

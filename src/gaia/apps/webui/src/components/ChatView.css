@@ -34,7 +34,7 @@
 }
 
 [data-theme="dark"] .task-header {
-    background: rgba(10, 10, 18, 0.88);
+    background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
     backdrop-filter: blur(20px) saturate(1.2);
     -webkit-backdrop-filter: blur(20px) saturate(1.2);
 }
@@ -57,7 +57,7 @@
 
 .active-agent-icon {
     flex-shrink: 0;
-    color: var(--amd-red);
+    color: var(--accent);
 }
 
 .active-agent-copy {
@@ -110,7 +110,7 @@
 }
 
 .title-edit:focus {
-    box-shadow: 0 0 0 3px rgba(226, 163, 62, 0.12);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 
@@ -128,8 +128,8 @@
     letter-spacing: 0.3px;
 }
 .model-badge.no-model {
-    color: var(--accent-gold);
-    border-color: rgba(234, 179, 8, 0.25);
+    color: var(--accent-yellow);
+    border-color: color-mix(in srgb, var(--accent-yellow) 25%, transparent);
 }
 
 /* Context window size suffix on the model badge ("32K", "8K", etc.).
@@ -305,7 +305,7 @@
 }
 
 .empty-task-icon.agent-aware {
-    color: var(--amd-red);
+    color: var(--accent);
     opacity: 0.8;
 }
 
@@ -377,7 +377,7 @@
     color: var(--accent);
     background: var(--accent-dim2);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(226, 163, 62, 0.1);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 /* ── Skeleton loading state ──────────────────────────────────────── */
@@ -544,7 +544,6 @@
     height: 14px;
     border-radius: 0;
     background: var(--accent);
-    box-shadow: 0 0 8px rgba(226, 163, 62, 0.45);
     image-rendering: pixelated;
     animation: typingBounce 1.4s infinite;
 }
@@ -567,7 +566,7 @@
 }
 
 [data-theme="dark"] .input-area {
-    background: rgba(14, 14, 22, 0.9);
+    background: color-mix(in srgb, var(--bg-primary) 90%, transparent);
 }
 
 .input-box {
@@ -590,15 +589,7 @@
 }
 
 .input-box:focus-within {
-    border-color: rgba(226, 163, 62, 0.4);
-    box-shadow: 0 0 20px rgba(226, 163, 62, 0.1);
-    animation: inputFocusPulse 400ms var(--ease);
-}
-
-@keyframes inputFocusPulse {
-    0% { box-shadow: 0 0 0 rgba(226, 163, 62, 0); }
-    50% { box-shadow: 0 0 24px rgba(226, 163, 62, 0.14); }
-    100% { box-shadow: 0 0 20px rgba(226, 163, 62, 0.1); }
+    border-color: var(--accent);
 }
 
 .msg-input {
@@ -646,13 +637,12 @@
     width: 34px;
     height: 34px;
     border-radius: var(--radius-md);
-    background: var(--accent);
-    color: #1a1a1a;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
     transition: all var(--duration) var(--ease);
 }
 .send-btn:hover {
-    background: var(--accent-dark);
-    box-shadow: 0 0 16px rgba(226, 163, 62, 0.35);
+    background: var(--accent-fill-hover);
     transform: translateY(-1px);
 }
 .send-btn:active {
@@ -677,7 +667,7 @@
     width: 34px;
     height: 34px;
     border-radius: var(--radius-md);
-    border: 1.5px solid rgba(229, 72, 77, 0.5);
+    border: 1.5px solid color-mix(in srgb, var(--danger) 50%, transparent);
     color: var(--danger);
     background: var(--danger-dim2);
     transition: all var(--duration) var(--ease);
@@ -685,9 +675,8 @@
 }
 .stop-btn:hover {
     border-color: var(--danger);
-    color: var(--danger-light);
+    color: var(--danger);
     background: var(--danger-dim);
-    box-shadow: 0 0 12px rgba(229, 72, 77, 0.2);
     animation: none;
 }
 
@@ -724,7 +713,7 @@
     color: var(--text-primary);
     border-color: var(--accent);
     transform: translateX(-50%) translateY(-3px);
-    box-shadow: 0 4px 16px rgba(226, 163, 62, 0.15);
+    box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .input-footer {
@@ -850,7 +839,7 @@
 }
 
 .agent-picker-option.active {
-    color: #E2A33E;
+    color: var(--accent);
     font-weight: 600;
 }
 
@@ -1014,7 +1003,7 @@
 
 .attachment-remove:hover {
     background: var(--danger);
-    color: white;
+    color: var(--text-inverse);
 }
 
 /* ── Policy alert toast ─────────────────────────────────────────── */
@@ -1022,7 +1011,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    border-color: rgba(245, 158, 11, 0.35);
+    border-color: color-mix(in srgb, var(--accent-yellow) 35%, transparent);
     pointer-events: all;
     animation: toastIn 200ms var(--ease), toastOut 200ms var(--ease) 5s forwards;
 }

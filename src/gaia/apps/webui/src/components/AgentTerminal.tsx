@@ -34,15 +34,17 @@ const TAB_CONFIG: { id: TerminalTab; label: string; description: string }[] = [
   { id: 'raw', label: 'Raw', description: 'Raw JSON-RPC stdout' },
 ];
 
+// The log pane keeps its dark canvas in both themes, so these are the
+// code-surface roles -- the page-theme ones flip to near-black on it.
 const LINE_TYPE_COLORS: Record<TerminalLineType, string> = {
-  info: 'var(--text-secondary)',
-  warn: 'var(--accent-yellow)',
-  error: 'var(--danger)',
-  tool: 'var(--accent-blue)',
-  permission: 'var(--accent-yellow)',
-  rpc: 'var(--text-muted)',
-  stdout: 'var(--text-secondary)',
-  stderr: 'var(--text-muted)',
+  info: 'var(--text-code-dim)',
+  warn: 'var(--code-warning)',
+  error: 'var(--code-danger)',
+  tool: 'var(--code-info)',
+  permission: 'var(--code-warning)',
+  rpc: 'var(--text-code-dim)',
+  stdout: 'var(--text-code)',
+  stderr: 'var(--text-code-dim)',
 };
 
 const LINE_TYPE_ICONS: Record<TerminalLineType, typeof Info> = {
@@ -66,7 +68,7 @@ interface TerminalLineRowProps {
 
 const TerminalLineRow = memo(function TerminalLineRow({ line, expanded, onToggle }: TerminalLineRowProps) {
   const IconComponent = LINE_TYPE_ICONS[line.type] || Terminal;
-  const color = LINE_TYPE_COLORS[line.type] || 'var(--text-secondary)';
+  const color = LINE_TYPE_COLORS[line.type] || 'var(--text-code-dim)';
 
   return (
     <div

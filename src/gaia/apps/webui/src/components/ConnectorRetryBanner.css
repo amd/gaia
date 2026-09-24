@@ -9,15 +9,15 @@
     margin: 0 16px 8px;
     padding: 8px 12px;
     border-radius: var(--radius-lg);
-    background: rgba(78, 201, 50, 0.08);
-    border: 1px solid rgba(78, 201, 50, 0.3);
+    background: color-mix(in srgb, var(--accent-green) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-green) 30%, transparent);
     font-size: 12px;
     color: var(--text-primary, var(--text-secondary));
 }
 
 .connector-retry-banner__icon {
     flex-shrink: 0;
-    color: var(--accent-green, #4ec932);
+    color: var(--accent-green);
 }
 
 .connector-retry-banner__text {
@@ -32,9 +32,9 @@
     flex-shrink: 0;
     padding: 4px 10px;
     border-radius: var(--radius-md, 6px);
-    border: 1px solid var(--accent-green, #4ec932);
-    background: var(--accent-green, #4ec932);
-    color: #fff;
+    border: 1px solid var(--accent-green);
+    background: var(--accent-green);
+    color: var(--text-inverse);
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
