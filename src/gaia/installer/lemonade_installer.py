@@ -51,6 +51,54 @@ DEB_ARCH_BY_MACHINE = {
     "arm64": "arm64",
 }
 
+# Lemonade's only supported Linux channel (lemonade-sdk was removed from PyPI).
+LEMONADE_PPA = "ppa:lemonade-team/stable"
+
+# The archive host add-apt-repository points apt at for LEMONADE_PPA.
+_PPA_INDEX_HOST = "ppa.launchpadcontent.net/lemonade-team"
+
+# Raised by Launchpad's REST API when it cannot serve a PPA's signing key.
+_LAUNCHPAD_KEY_ERROR = "GPGKeyTemporarilyNotFoundError"
+
+_PPA_FETCH_FAILURE = re.compile(
+    r"Failed to fetch \S*" + re.escape(_PPA_INDEX_HOST) + r"\S*[ \t]*(?P<reason>[^\n]*)"
+)
+
+
+def _launchpad_outage_message(what_failed: str) -> str:
+    return (
+        f"{what_failed}\n"
+        "This is an outage on Launchpad's side — nothing is wrong with this machine "
+        "or with your apt state. Wait a few minutes and re-run: gaia init\n"
+        "Launchpad status: https://status.canonical.com/ — if it persists, see "
+        "https://amd-gaia.ai/docs/reference/troubleshooting"
+    )
+
+
+def diagnose_launchpad_outage(output: str) -> Optional[str]:
+    """Return an actionable message when Launchpad, not this machine, is at fault.
+
+    ``add-apt-repository -y`` exits 0 even when the PPA index 503s, and
+    ``apt-get update`` exits 0 when only some indexes fail. Without this the
+    install runs on and dies at ``apt-get install`` with "Unable to locate
+    package lemonade-server", which reads as a wrong package name.
+    """
+    if _LAUNCHPAD_KEY_ERROR in output:
+        return _launchpad_outage_message(
+            f"Launchpad could not return the signing key for {LEMONADE_PPA} "
+            f"({_LAUNCHPAD_KEY_ERROR}), so the repository was not added."
+        )
+
+    match = _PPA_FETCH_FAILURE.search(output)
+    if match:
+        raw = match.group("reason").split("[IP:")[0]
+        reason = " ".join(raw.split()) or "no reason given"
+        return _launchpad_outage_message(
+            f"apt could not fetch the {LEMONADE_PPA} package index from Launchpad "
+            f"({reason}), so lemonade-server is not visible to apt."
+        )
+    return None
+
 
 class LemonadeAssetError(RuntimeError):
     """A release asset could not be verified.
@@ -953,10 +1001,13 @@ class LemonadeInstaller:
 
             result = _run(
                 "Add PPA",
-                sudo_prefix + ["add-apt-repository", "-y", "ppa:lemonade-team/stable"],
+                sudo_prefix + ["add-apt-repository", "-y", LEMONADE_PPA],
                 timeout=120,
             )
             if result.returncode != 0:
+                outage = diagnose_launchpad_outage(result.stdout + result.stderr)
+                if outage:
+                    return InstallResult(success=False, error=outage)
                 return InstallResult(
                     success=False,
                     error=(
@@ -966,11 +1017,19 @@ class LemonadeInstaller:
                     ),
                 )
 
-            # apt-get update failure is warn-only — stale cache is better than blocking.
             update_result = _run(
                 "Update apt cache", sudo_prefix + ["apt-get", "update"], timeout=300
             )
+            # apt-get update exits 0 when only *some* indexes fail, so a Launchpad
+            # outage is silent here and resurfaces as "Unable to locate package".
+            outage = diagnose_launchpad_outage(
+                update_result.stdout + update_result.stderr
+            )
+            if outage:
+                return InstallResult(success=False, error=outage)
             if update_result.returncode != 0:
+                # An unrelated third-party repo failing is not ours to block on;
+                # the Lemonade index specifically resolved or we returned above.
                 log.warning(
                     "apt-get update failed (rc=%s); continuing with possibly stale cache: %s",
                     update_result.returncode,

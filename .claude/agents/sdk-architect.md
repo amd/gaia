@@ -36,7 +36,7 @@ src/gaia/
 ├── agents/registry.py # AgentRegistry + KNOWN_TOOLS + the gaia.agent entry-point groups
 ├── chat/              # AgentSDK (class `AgentSDK`, formerly `ChatSDK`)
 ├── rag/               # RAGSDK / RAGConfig
-├── llm/               # LemonadeClient + providers/{claude,openai_provider,lemonade}.py
+├── llm/               # LemonadeClient + providers/{claude,lemonade}.py
 ├── vlm/               # Vision LLM mixin
 ├── sd/                # Stable Diffusion mixin
 ├── audio/             # Whisper ASR + Kokoro TTS

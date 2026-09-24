@@ -60,7 +60,9 @@ class TestParseLLMResponseRaisesOnMalformed:
         with pytest.raises(ValueError, match="Malformed native tool_calls"):
             agent._parse_llm_response(bad)
 
-    def test_empty_response_lists_files_modified_before_failure(self, agent, tmp_path):
+    def test_empty_response_lists_files_modified_before_failure(
+        self, agent, tmp_path, mock_home
+    ):
         """Empty-turn recovery reports files tracked from a successful edit."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
         from gaia.agents.tools.file_tools import FileSearchToolsMixin

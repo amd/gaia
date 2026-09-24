@@ -102,15 +102,14 @@ def test_custom_prompt_no_history_omits_previous_turns(sdk):
     assert chat.get_history() == ["user: earlier", "assistant: previous answer"]
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "claude"])
+@pytest.mark.parametrize("provider_name", ["lemonade", "claude"])
 def test_cloud_provider_receives_native_system_prompt(provider_name):
-    from types import SimpleNamespace
     from unittest.mock import Mock
 
     from gaia.llm.providers.claude import ClaudeProvider
-    from gaia.llm.providers.openai_provider import OpenAIProvider
+    from gaia.llm.providers.lemonade import LemonadeProvider
 
-    provider_type = ClaudeProvider if provider_name == "claude" else OpenAIProvider
+    provider_type = ClaudeProvider if provider_name == "claude" else LemonadeProvider
     provider = provider_type.__new__(provider_type)
     provider._model = "claude-test" if provider_name == "claude" else "gpt-test"
     provider._system_prompt = None
@@ -120,10 +119,14 @@ def test_cloud_provider_receives_native_system_prompt(provider_name):
         provider._parse_response = Mock(return_value="answer")
         create = provider._client.messages.create
     else:
-        create = provider._client.chat.completions.create
-        create.return_value = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))]
-        )
+        # LemonadeProvider talks to LemonadeClient, not a raw OpenAI SDK client —
+        # its wire shape (system prompt folded into messages[0]) is still the
+        # one every non-Claude cloud model goes through (#3899 retired the
+        # direct OpenAI/LiteLLM adapters).
+        provider._backend = Mock()
+        provider._backend.cloud_model_provider.return_value = None
+        create = provider._backend.chat_completions
+        create.return_value = {"choices": [{"message": {"content": "answer"}}]}
     with patch("gaia.chat.sdk.create_client", return_value=provider):
         chat = AgentSDK(AgentConfig(system_prompt="SYS-ORIGINAL", show_stats=False))
     chat.send("hello")

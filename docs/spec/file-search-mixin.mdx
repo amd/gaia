@@ -24,6 +24,10 @@ FileSearchToolsMixin provides agent-agnostic file search and management operatio
 - Directory search with depth control
 - Generic file writing with directory creation
 
+`write_file` and `edit_file` share the [file-state guard](/spec/file-io-tools-mixin#concurrent-file-changes):
+after a prior read, external content changes return a stale error before writing
+or creating a backup. Successful writes become the baseline for later edits.
+
 **Search Strategy:**
 - A named `directory` is the WHOLE scope: searched to unlimited depth, and never
   widened — not by Phase 1, not by `deep_search` (#3576)
@@ -271,7 +275,9 @@ class FileSearchToolsMixin:
                 "old_size": int,   # chars before edit
                 "new_size": int,   # chars after edit
                 "diff": str,       # unified diff
-                "backup_path": str # only when a backup was created
+                "backup_path": str # only when a backup was created; under
+                                   # ~/.gaia/cache/backups/, never beside the file
+                                   # (owner-only; newest five per file kept)
             }
 
             On rejection:

@@ -85,6 +85,26 @@ icon: "bug"
     **Workaround:** To skip the Agent UI frontend build entirely (the CLI still works),
     pass `--skip-webui-build` or set `GAIA_SKIP_WEBUI_BUILD=1`.
   </Accordion>
+
+  <Accordion title="gaia init reports a Launchpad outage (Linux)" icon="cloud-slash">
+    **Cause:** Lemonade is distributed on Linux only through `ppa:lemonade-team/stable`,
+    hosted on Canonical's Launchpad. When Launchpad cannot serve the PPA's signing key or
+    its package index, nothing about your machine is wrong — the package source is
+    temporarily unreachable.
+
+    **Solution:** Wait a few minutes and re-run `gaia init`. Check
+    [status.canonical.com](https://status.canonical.com/) if it persists.
+
+    **Example errors:**
+    ```
+    W: Failed to fetch https://ppa.launchpadcontent.net/lemonade-team/stable/ubuntu/dists/noble/InRelease  503  Service Unavailable
+    ERROR: b'GPGKeyTemporarilyNotFoundError'
+    ```
+
+    Do not run `sudo dpkg --configure -a` for this — your apt state is fine. If you see
+    `E: Unable to locate package lemonade-server` on an older GAIA, this outage is the
+    likely cause rather than a missing or renamed package.
+  </Accordion>
 </AccordionGroup>
 
 ---
