@@ -97,16 +97,22 @@ def test_a_malformed_authorization_header_is_rejected(monkeypatch):
 def test_the_correct_token_gets_past_auth(monkeypatch):
     """The positive case — proves the gate is not simply refusing everything.
 
-    The run then fails on its own terms (no Lemonade in a unit env); all that is
-    asserted here is that it was NOT turned away at the door.
+    Agent construction is stopped after authentication; no inference is needed.
     """
+    from gaia_agent import server
+
+    def stop_after_auth(**kwargs):
+        raise RuntimeError("authenticated construction seam")
+
+    monkeypatch.setattr(server, "build_query_agent", stop_after_auth)
     client = _client(monkeypatch, token=_TOKEN)
     r = client.post(
         "/v1/gaia/query",
         json=_QUERY_BODY,
         headers={"Authorization": f"Bearer {_TOKEN}"},
     )
-    assert r.status_code != 401, r.text
+    assert r.status_code == 500, r.text
+    assert "authenticated construction seam" in r.text
 
 
 def test_cancel_and_respond_are_also_gated(monkeypatch):
@@ -189,7 +195,10 @@ def test_without_a_configured_token_requests_pass_but_browsers_still_cannot(
     """
     client = _client(monkeypatch, token=None)
     assert client.get("/health").status_code == 200
-    assert client.post("/v1/gaia/query", json=_QUERY_BODY).status_code != 401
+    assert (
+        client.post("/v1/gaia/query", json={**_QUERY_BODY, "query": ""}).status_code
+        == 422
+    )
     assert (
         client.get("/health", headers={"Origin": "https://evil.com"}).status_code == 403
     )

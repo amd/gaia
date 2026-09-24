@@ -226,7 +226,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.13**; the stream is
+package — call it with plain `fetch`. Contract version **2.14**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -322,7 +322,7 @@ Rules a client must respect:
   **200**, not a 404, because a cancel racing a normal completion is expected.
   Dropping the HTTP connection also cancels the run.
 
-## 8. Over `/v1/gaia/query`, confirmation-gated tools are **refused, not prompted**
+## 8. By default, HTTP confirmation-gated tools are refused
 
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
@@ -341,28 +341,14 @@ stay unregistered until a human runs `gaia skill promote <name>` in a
 terminal. Everything else — reading, indexing, querying, web fetching,
 memory — runs without asking.
 
-Over `/v1/gaia/query` there is **no way to collect an approval**, so the stream
-does not prompt. When the agent reaches one of those tools it emits a
-`needs_confirmation` event, and the server **immediately follows it with a
-terminal `final`** whose `answer` says it stopped before running that action,
-then cancels the run. There is no `confirm_url`, no resume, and no
-`/query/{run_id}/confirm` endpoint — it is a deliberate deny-by-default stub, not
-an oversight.
+By default, HTTP callers do not opt into tool approval. For those callers a
+`needs_confirmation` event is followed by a terminal refusal and cancellation.
 
-Concretely, your client sees:
-
-```
-data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary":"Run 'write_file'?"}
-data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
-```
-
-So: **`/query` cannot run any of those nine tools.** If your integration needs
-that, drive the agent from a surface that can prompt — its stdio transport is the
-one that can, because its control channel carries an approval back to a turn
-already in flight (SPEC §5.5) — or perform the mutation yourself from your own
-code and let the agent do the reading and reasoning. Treat `needs_confirmation`
-as an early warning that the run is about to end, not as a question you can
-answer.
+Contract 2.14 adds an explicit opt-in: send `can_confirm_tools: true`, display the
+complete `action` and `arguments`, and POST the matching `confirm_id` with a strict
+boolean `approved` to `/v1/gaia/query/{run_id}/confirm`. This decides only the
+current call; no persistent grant is offered. The stream stays open while the
+caller decides. See “Opt-in HTTP tool approval” below. Never approve automatically.
 
 ## 9. File-access scope
 
@@ -502,7 +488,7 @@ There is no silent null.
 - **A terminal `error` whose `detail` starts "Local Lemonade Server is not
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
-- **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
+- **Without `can_confirm_tools`, `needs_confirmation` is followed by a refusal and the run ends.** See §8.
   The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
@@ -556,7 +542,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.13","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.14","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -604,3 +590,46 @@ downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B I
 when available. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.
+
+
+## Container service (Python distribution)
+
+The Python package also ships `gaia-agent --service` (or source-installed `gaia-agent-service`), an opt-in, single-tenant HTTP
+worker with required authentication, explicit workspace/Host configuration,
+readiness checks and managed embedded Lemonade. This entrypoint is separate from
+the npm sidecar lifecycle. See [Container service](../../../../docs/deployment/container-service.mdx)
+for image configuration and operational limits. The canonical query contract
+remains unchanged; HTTP confirmation-gated tools refuse unless the caller opts into per-call approval.
+
+The frozen binary also supports `gaia-agent --client` for deployed-worker
+status, streaming queries, mid-run responses and cancellation. Source installs
+expose `gaia-agent-client`; see the container service guide for credentials and examples.
+Interactive sensitive answers require hidden terminal input; failed answer delivery
+requests cancellation. Socket timeouts must be finite and positive.
+
+
+### Opt-in HTTP tool approval (contract 2.14)
+
+Send `can_confirm_tools: true` on `/v1/gaia/query` only when the client can show the
+complete pending action and `arguments` and collect an explicit decision. A
+`needs_confirmation` event then keeps the stream open and includes `confirm_id`.
+POST `/v1/gaia/query/{run_id}/confirm` with `{"confirm_id":"…","approved":true}`
+to approve that call once, or `false` to deny. Missing, stale, duplicate and
+cancelled requests are rejected; there is no always/session grant. Cancellation
+or disconnection never approves. The default remains refusal for older callers.
+The remote CLI opts in with `--interactive` and defaults its approval prompt to no.
+
+### Container service limits
+
+`--service` bounds HTTP bodies (1 MiB; 413), concurrent agent runs (1; 503 with
+`Retry-After: 1`), agent steps (20; 422 above the ceiling), and elapsed time
+(300 seconds; terminal SSE error 504). Configure the positive-integer
+`GAIA_SERVICE_MAX_REQUEST_BYTES`, `GAIA_SERVICE_MAX_CONCURRENT_RUNS`,
+`GAIA_SERVICE_MAX_STEPS`, and `GAIA_SERVICE_RUN_TIMEOUT_SECONDS` variables.
+Cancellation is cooperative: capacity stays occupied until the worker thread
+stops. Desktop `--serve` behavior is unchanged. See
+`docs/deployment/container-service.mdx` for deployment and regression commands.
+
+The remote CLI omits `max_steps` unless `--max-steps` is supplied, so ordinary
+queries use the service's configured default even when its ceiling is below ten.
+Explicit values must be positive and within the server ceiling.

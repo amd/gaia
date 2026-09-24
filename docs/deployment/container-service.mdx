@@ -1,0 +1,330 @@
+---
+title: Container service
+description: Run a single-tenant GAIA HTTP worker with embedded or external Lemonade
+---
+
+# Container service
+
+`gaia-agent --service` runs the opt-in foreground HTTP service from the frozen
+GAIA binary. Source installs also expose `gaia-agent-service`. It reuses the flagship
+agent's query, cancellation, input-response and memory routes. It requires a
+caller token, an explicit Host allowlist, a model and a writable workspace. The
+desktop sidecar's defaults are unchanged.
+
+## Build
+
+From the repository root:
+
+```bash
+docker build --platform linux/amd64 -f deploy/service/Dockerfile -t gaia-service:local .
+```
+
+The build targets Linux x86-64 and ARM64 using Python 3.12 and PyInstaller. Use
+`--platform linux/arm64` for Apple Silicon Docker or an ARM Linux host. It installs pinned API/RAG
+dependencies, CPU PyTorch, and the core/chat/flagship packages from the same source
+checkout in the build stage, then reuses the flagship `packaging/freeze.py`
+recipe to produce a directory bundle. The runtime image contains the frozen
+`gaia-agent` executable and bundled libraries, with no GAIA virtual environment
+or pip. A separate minimal system Python is included only for user-script tools,
+selected explicitly through `GAIA_PYTHON_EXECUTABLE=/usr/bin/python3`. PyInstaller bundles the Python runtime; it does not
+translate GAIA into native machine code. Embedded Lemonade is downloaded and checksum-verified during the build.
+The image runs as UID/GID 10001, under `tini`, with one Uvicorn worker.
+It supplies Lemonade's Linux shared libraries and a private `XDG_RUNTIME_DIR`.
+
+Both Linux architectures resolve to the same pinned requirements. The Python requirements are pinned; the Ubuntu tag and OS package updates are not
+digest-locked. Pin the built image digest when promoting an image between hosts.
+Regenerate the Python lock deliberately with:
+
+```bash
+uv pip compile setup.py --extra api --extra rag --extra diarize --python-version 3.12 \
+  --python-platform x86_64-unknown-linux-gnu --torch-backend cpu --no-annotate \
+  --output-file deploy/service/requirements.txt
+```
+
+The freeze toolchain is pinned in `deploy/service/freeze-requirements.txt`.
+Regenerate it with `uv pip compile deploy/service/freeze-requirements.in` using
+the same target platform and Python version and the runtime requirements as a
+constraint. The existing freeze recipe excludes local ML frameworks because
+inference runs through Lemonade; it bundles FAISS and speech dependencies.
+
+PyInstaller outputs are OS/architecture-specific. Build Linux artifacts for
+containers and a separate macOS artifact for native Mac hosts. The container
+uses directory mode to avoid extraction on each startup; standalone distribution
+can use the existing `packaging/freeze.py --onefile` option.
+
+## Configuration
+
+| Variable | Behavior |
+|---|---|
+| `GAIA_GAIA_SIDECAR_TOKEN_FILE` | Preferred caller credential: readable file containing a nonempty token |
+| `GAIA_GAIA_SIDECAR_TOKEN` | Alternative caller credential, injected as a runtime secret |
+| `GAIA_SERVICE_ALLOWED_HOSTS` | Required comma-separated exact hostnames/IPs, without ports or wildcards; include the Host sent by probes |
+| `GAIA_PYTHON_EXECUTABLE` | Absolute path to a separate Python interpreter for script tools; required by those tools in frozen builds |
+| `GAIA_SERVICE_MODEL` | Required Lemonade model ID |
+| `GAIA_SERVICE_WORKSPACE` | Required existing, writable absolute directory; image default `/workspace` |
+| `HOME` | Required writable absolute directory for state; image default `/data` |
+| `GAIA_HOME` | Embedded Lemonade state override; image sets `/data/.gaia` |
+| `PORT` | HTTP port, default `8080` |
+| `GAIA_SERVICE_MAX_REQUEST_BYTES` | Maximum actual HTTP body bytes, including chunked uploads; default `1048576` (1 MiB), overflow returns 413 |
+| `GAIA_SERVICE_MAX_CONCURRENT_RUNS` | Active agent threads per worker, default `1`; busy queries return 503 with `Retry-After: 1` |
+| `GAIA_SERVICE_MAX_STEPS` | Default and maximum requested agent-loop steps, default `20`; larger requests return 422 |
+| `GAIA_SERVICE_RUN_TIMEOUT_SECONDS` | Cooperative wall-clock run deadline, default `300`; stream ends with error status 504 |
+| `GAIA_SERVICE_HOST` | Bind address, default `0.0.0.0` |
+| `LEMONADE_BASE_URL` | When set, use this external Lemonade endpoint instead of starting embedded Lemonade |
+| `LEMONADE_API_KEY` | Optional external Lemonade credential; must be unset in embedded mode |
+| `GAIA_SERVICE_LEMONADE_BUNDLE` | Preinstalled embedded distribution root; supplied by the image |
+| `GAIA_SERVICE_CLOUD_PROVIDER` | Optional cloud provider identifier for embedded Lemonade; requires cloud URL |
+| `GAIA_SERVICE_CLOUD_URL` | HTTPS OpenAI-compatible provider/gateway base URL; requires provider identifier |
+| `LEMONADE_<PROVIDER>_API_KEY` | Required credential for cloud bootstrap, e.g. `LEMONADE_FIREWORKS_API_KEY` |
+
+All four limits require positive integers. HTTP body reads have a separate
+30-second deadline (408). The byte limit is not a model context limit.
+Run admission occurs before agent construction; health and cancellation remain
+available while the agent thread runs. Synchronous agent construction can briefly
+occupy the HTTP event loop. An independent timer requests cancellation even if
+the client stops reading the stream. A cancellation, disconnect or run deadline
+does **not** release capacity until the agent thread and cleanup finish. Blocking
+provider/tool calls may outlast the deadline: it requests cancellation, not a hard
+process kill. Use container resource limits and an orchestrator kill deadline for
+hard isolation. The limits apply only to `--service`, preserving desktop behavior.
+
+The Host allowlist is independent of the bind address. Browser Origin headers are
+rejected in service mode; this surface is for server-to-server clients. Forwarded
+proxy headers are not trusted. Terminate TLS at the hosting ingress and protect
+private networking through the host's network configuration.
+
+Provide a secret env file using these names, then run:
+
+```bash
+docker run --rm --name gaia-service --env-file /absolute/path/service.env \
+  -p 127.0.0.1:8080:8080 \
+  --mount type=volume,src=gaia-state,dst=/data \
+  --mount type=volume,src=gaia-workspace,dst=/workspace \
+  gaia-service:local
+```
+
+Ensure mounted directories are writable by UID 10001. Use distinct state and
+workspace volumes for distinct trust boundaries. HOME persists memory, indexes
+and other agent state; `GAIA_HOME` alone does not relocate every subsystem.
+
+## Local deployment and CLI testing
+
+Copy `deploy/service/service.env.example` to a private file outside the repository,
+set a random caller token (for example, from `openssl rand -hex 32`), and choose an
+exact model ID. Configure either external Lemonade or the bundled daemon's cloud
+provider. The template values are placeholders, not working credentials.
+
+From the repository root:
+
+```bash
+chmod 600 /absolute/path/service.env
+docker compose --env-file /absolute/path/service.env -f deploy/service/compose.yaml up --build -d
+docker compose --env-file /absolute/path/service.env -f deploy/service/compose.yaml logs -f gaia
+```
+
+Compose binds only loopback, persists state and workspace in named volumes, drops
+Linux capabilities, sets CPU/memory/process limits and grants 50 seconds to stop.
+`down` preserves volumes; `down -v` deletes them. This is a single-worker deployment.
+The example passes Fireworks credentials directly for operator testing; it does
+not implement a spending cap. Real queries use the configured provider and can
+incur charges. The deterministic smoke tests below require no provider account.
+
+Use the frozen client already present inside the container; it reads the existing
+caller token from the container environment:
+
+```bash
+docker compose --env-file /absolute/path/service.env -f deploy/service/compose.yaml exec gaia gaia-agent --client status
+docker compose --env-file /absolute/path/service.env -f deploy/service/compose.yaml exec gaia gaia-agent --client query "Describe what you can do" --max-steps 5
+docker compose --env-file /absolute/path/service.env -f deploy/service/compose.yaml exec gaia gaia-agent --client query "Summarize this task" --json
+```
+
+A native frozen binary supports the same client with an explicit remote URL:
+
+```bash
+gaia-agent --client --url https://worker.example.com --token-file /absolute/path/token status
+gaia-agent --client --url https://worker.example.com --token-file /absolute/path/token query "Hello"
+```
+
+For a source checkout, no client dependencies are needed beyond Python 3.10+:
+
+```bash
+PYTHONPATH=hub/agents/gaia/python python3 -m gaia_agent.service_client --token-file /absolute/path/token status
+```
+
+Source package installs also expose `gaia-agent-client`. `GAIA_SERVICE_URL`
+defaults to `http://127.0.0.1:8080`; credentials come from `--token-file`,
+`GAIA_GAIA_SIDECAR_TOKEN_FILE` or `GAIA_GAIA_SIDECAR_TOKEN`, never a token argument.
+The client disables environment proxies and refuses redirects to avoid forwarding
+a worker credential elsewhere. Use HTTPS outside a trusted local network.
+
+`status` checks health, version, authenticated model diagnostics and readiness;
+unready models or rejected credentials return a nonzero exit status. `query`
+prints its run UUID to stderr before sending the request. Ctrl-C requests
+cancellation; another terminal can run `cancel RUN_UUID`. An accepted cancellation
+ends the stream with an `error` event carrying status `499`. Already-running
+model/tool calls stop cooperatively; cancellation cannot undo completed effects. `--interactive` permits
+mid-run questions and reads answers from the terminal. Sensitive questions use
+hidden input and fail if terminal echo cannot be disabled; an unacknowledged
+answer requests cancellation instead of waiting indefinitely. `respond RUN_UUID
+REQUEST_ID "answer"` can answer from a second client while the original stream
+stays open. Interactive mode also shows full tool arguments and asks for explicit per-call
+approval, defaulting to deny. No session-wide grants are supported.
+
+For multiple turns, reuse `--session-id NAME` for retained runtime state and pass
+`--context-file transcript.json` with a JSON array of `{role, content}` messages.
+A session ID alone does not supply conversation history or survive worker restart.
+`--json` emits canonical JSONL on stdout for traces; diagnostics stay on stderr.
+The default socket idle timeout is 120 seconds (`--timeout`, finite and positive). A dropped stream
+without a terminal event fails, requests cancellation and never replays the task.
+
+## Embedded Lemonade lifecycle
+
+With no `LEMONADE_BASE_URL`, startup links the baked distribution into the private
+state directory, starts embedded Lemonade, and uses its generated endpoint/key.
+It refuses to adopt an existing process and does not download a missing runtime
+at startup. Shutdown stops the owned Lemonade process and its backends. Grant at
+least 45 seconds for shutdown: HTTP draining and Lemonade cleanup have separate
+timeouts. Model warmup is disabled, so readiness does not generate billable chat.
+
+Cloud bootstrap registers the specified provider after Lemonade starts, using
+its authenticated `/install` API. Credentials are read by Lemonade from the
+provider environment variable. Registration failure aborts startup and stops the
+owned daemon. Set the model to an ID that the configured server actually advertises;
+registration does not guarantee a particular upstream model is available.
+
+For local models, provision inference backends and model files separately in the
+state volume. The image includes the Lemonade daemon, not model weights or every
+hardware backend. RAG/memory tools may need an embedding model even when chat
+uses a cloud provider. Validate the selected tool surface with its real models.
+
+## HTTP contract and checks
+
+- `GET /health`: process liveness, no credential required, Host checked.
+- `GET /ready`: model availability/configuration probe, 200 or 503, no credential
+  required, Host checked. It does not execute an inference or guarantee capacity.
+- `GET /v1/gaia/init`: authenticated detailed probe for the configured model and
+  endpoint, including credentials when querying Lemonade.
+- `POST /v1/gaia/query`: authenticated canonical SSE; supply `query`, UUID `run_id`
+  and a `context` list, optionally a `session_id` and model override.
+- Opt-in `can_confirm_tools: true` keeps `needs_confirmation` open for a strict
+  boolean decision at `POST /v1/gaia/query/{run_id}/confirm` using its `confirm_id`.
+  Stale/duplicate decisions are rejected; older callers retain refusal.
+- Query cancellation, mid-run input response and memory retain the existing
+  flagship HTTP contract. See the bundled flagship SPEC.
+
+The container health check uses `/health` so a temporarily unavailable model does
+not trigger restart loops. Use `/ready` for traffic admission. Both are read-only.
+
+## Operational boundaries
+
+This is a single-tenant worker, not a multi-user scheduler. Session agents and run
+handles are process-local; run one Uvicorn worker. A disconnected query stream
+cancels the run. A supervising client must retain the stream if its own callers
+disconnect. Restart preserves files but does not resume an in-flight tool call.
+
+Confirmation-gated tools still receive the existing terminal refusal on HTTP.
+Do not enable permission bypass to work around it. Workspace paths restrict the
+file tools; shell execution still requires container isolation and host-enforced
+network/resource controls. The service does not supply an inference spending
+limit, public authentication system, durable event database or tenant scheduler.
+
+Validate the image without downloading models:
+
+```bash
+docker tag gaia-service:local gaia-service:test
+python3 deploy/service/smoke_test.py
+python3 deploy/service/query_smoke_test.py
+python3 deploy/service/compose_smoke_test.py
+```
+
+The smoke test starts embedded Lemonade, checks liveness/authentication, verifies
+that an absent model is not ready, checks the non-root user and stops the container.
+The image build also executes both registered Python script tools from a separate
+frozen test executable with network access disabled and model/RAG setup stubbed.
+That test executable is mounted only for the build check and is not shipped.
+The frozen agent does not install Python packages at runtime; tool scripts only
+have access to packages installed in the separate tool interpreter.
+The query smoke test runs the frozen client and real agent against a deterministic
+HTTP inference fixture on an isolated Docker network, without downloaded models
+or provider credits. It checks an actual agent answer, cancellation during delayed
+inference, and retained state/workspace files across a worker restart. Both are configured in `test_container_service.yml`. A real-model query and
+relevant agent evals are separate release checks; this smoke test does not replace them.
+
+
+## Home Linux and macOS
+
+The image has no dependency on a particular cloud host. Run it under Docker on
+Linux or Docker Desktop on an Apple Silicon Mac. Keep state/workspace volumes on
+the host and configure resource limits there. Docker's Linux VM does not provide
+native Metal acceleration; native macOS Lemonade is the option for local Apple
+GPU inference.
+
+For native operation, create a Python virtual environment, install the local
+core with `[api,rag]` plus the chat/flagship packages, and prepare an isolated
+service HOME/workspace. Set the environment variables above before provisioning:
+
+```bash
+gaia lemonade embedded install
+gaia-agent-service
+```
+
+Install does not start Lemonade; the service owns start/stop. Native dependency
+installation must resolve for the host OS rather than use the Linux requirements
+file. Run the foreground command under the host's process supervisor (systemd or
+launchd) for restart-on-failure. A standalone native process is suitable for a
+trusted personal runtime, not isolation between untrusted users. Remote clients
+need a secure network path; this worker does not open a router port, pair phones
+or create tunnels.
+
+On native Linux, the supervisor must provide a writable private runtime directory
+through `XDG_RUNTIME_DIR` or `RUNTIME_DIRECTORY` (for example, systemd's
+`RuntimeDirectory=gaia` with `RuntimeDirectoryMode=0700`).
+
+## Continuous integration coverage
+
+`.github/workflows/test_container_service.yml` runs on relevant pull requests,
+main pushes, merge queues, manual dispatch and reusable-workflow calls. Changes
+to shared GAIA source, either agent package, tests, packaging metadata or service
+deployment files trigger it. The two native architecture jobs do not cancel each
+other when one fails.
+
+| Gate | What it verifies |
+|---|---|
+| Python regression job | Configuration validation, cloud bootstrap, auth/Host boundaries, readiness, query/session lifecycle, client SSE/errors/redirects/duplicate-run safety, cancellation, and frozen Python interpreter selection; rejects skipped tests |
+| Linux x86-64 and ARM64 builds | Complete Docker build, dependency consistency, PyInstaller freeze, Lemonade checksum/linkage, and both Python tools executed from a frozen test binary |
+| Runtime lifecycle smoke | Missing credentials refuse startup; embedded Lemonade starts; absent models are unready; authentication and hostile Host/Origin requests are rejected; worker is non-root; SIGTERM cleans up Lemonade |
+| Query smoke | Frozen client talks to real GAIA using deterministic inference, streams an answer, cancels a live delayed run, and retains state/workspace across restart |
+| Compose smoke | Actual image health check, loopback publication, resource limits and capability restrictions; named volumes survive container destruction and recreation |
+
+JUnit reports and container build/runtime logs are retained for seven days even
+when a check fails. All checks use test credentials and require no provider credits.
+The fixture is not evidence of Fireworks model quality, embedding/RAG behavior,
+cloud-host deployment or sustained throughput: those remain separate live-provider
+and deployment acceptance checks. ARM64 checks have been run locally; the x86-64
+lane must pass on GitHub before merge. Branch-protection configuration is managed
+separately from this workflow.
+
+## Load and failure regression
+
+`python3 deploy/service/limits_smoke_test.py` tests the built `gaia-service:test`
+image with deterministic inference: oversized fixed/chunked requests, step caps,
+an eight-request burst, cooperative deadlines, disconnects, capacity recovery
+and inference outage/restart.
+It creates and removes its own containers/network; it makes no provider calls.
+Both native Linux architecture CI jobs run this alongside lifecycle/query/Compose
+checks. This is bounded overload testing, not a sustained-load benchmark.
+
+### Embedded cloud model names
+
+Use the exact ID advertised by Lemonade, not necessarily the provider's full
+request-path ID. In the September 22, 2026 live test, embedded Lemonade advertised
+`fireworks.kimi-k2p6`, while the direct Fireworks gateway used
+`accounts/fireworks/models/kimi-k2p6`. Setting the latter with a `fireworks.` prefix
+correctly kept `/ready` at 503 because no such catalog entry existed.
+A live frozen query through the bundled daemon succeeded with the advertised ID.
+Catalogs change: verify the chosen ID via Lemonade's authenticated `/api/v1/models`
+API and check `gaia-agent --client status` before sending queries.
+
+The remote CLI omits `max_steps` unless `--max-steps` is supplied, so ordinary
+queries use the service's configured default even when its ceiling is below ten.
+Explicit values must be positive and within the server ceiling.

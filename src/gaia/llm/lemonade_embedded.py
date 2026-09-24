@@ -42,6 +42,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
@@ -464,6 +465,11 @@ class EmbeddedLemonade:
     # -- install ----------------------------------------------------------
 
     def install(self, force: bool = False) -> Path:
+        """Install without racing other lifecycle operations."""
+        with self._lifecycle_lock():
+            return self._install(force)
+
+    def _install(self, force: bool = False) -> Path:
         """Download, verify and unpack the embeddable artifact.
 
         Args:
@@ -481,7 +487,7 @@ class EmbeddedLemonade:
             return self.dist_dir
 
         if force and self.is_installed():
-            running = self.status()
+            running = self._status()
             if running.running or running.unresponsive_pid:
                 raise EmbeddedLemonadeError(
                     f"Refusing to reinstall embedded Lemonade while it is "
@@ -738,6 +744,11 @@ class EmbeddedLemonade:
             return False
 
     def status(self) -> EmbeddedStatus:
+        """Inspect and clean stale state under the lifecycle lock."""
+        with self._lifecycle_lock():
+            return self._status()
+
+    def _status(self) -> EmbeddedStatus:
         """Report whether the embedded instance is installed and running.
 
         The state file is only discarded once the recorded process is gone.
@@ -870,7 +881,60 @@ class EmbeddedLemonade:
         """
         return f"http://localhost:{port}/api/v1"
 
+    @contextmanager
+    def _lifecycle_lock(self):
+        """Serialize start/stop across processes sharing a state directory.
+
+        Same OS advisory-lock approach as gaia.daemon.lock.StartLock. Keep the
+        lock outside the runtime tree so uninstall cannot replace its inode.
+        Contention fails explicitly instead of spawning a second daemon.
+        """
+        self.root.parent.mkdir(parents=True, exist_ok=True)
+        path = self.root.parent / ".lemonade-lifecycle.lock"
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise EmbeddedLemonadeError(
+                    "Another embedded Lemonade lifecycle operation is in progress; retry after it finishes."
+                ) from exc
+            try:
+                yield
+            finally:
+                if os.name == "nt":
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
     def start(
+        self,
+        port: Optional[int] = None,
+        timeout: float = _START_TIMEOUT,
+        install_if_missing: bool = True,
+        *,
+        reuse_existing: bool = True,
+    ) -> EmbeddedStatus:
+        """Start under an interprocess lock; services can refuse daemon reuse."""
+        with self._lifecycle_lock():
+            if not reuse_existing:
+                existing = self._status()
+                if existing.running or existing.unresponsive_pid:
+                    raise EmbeddedLemonadeError(
+                        "Service requires exclusive ownership of embedded Lemonade; stop the existing instance first."
+                    )
+            return self._start(port, timeout, install_if_missing)
+
+    def _start(
         self,
         port: Optional[int] = None,
         timeout: float = _START_TIMEOUT,
@@ -890,7 +954,7 @@ class EmbeddedLemonade:
             EmbeddedLemonadeError: Not installed, the daemon exited, or it
                 never became healthy.
         """
-        existing = self.status()
+        existing = self._status()
         if existing.running:
             if existing.version != self.version:
                 raise EmbeddedLemonadeError(
@@ -918,7 +982,7 @@ class EmbeddedLemonade:
                     f"{self.dist_dir}. Run `gaia lemonade embedded start` "
                     f"without --no-install to download it."
                 )
-            self.install()
+            self._install()
 
         self.write_config()
         port = port or _free_port()
@@ -959,17 +1023,17 @@ class EmbeddedLemonade:
 
         # Record the instance before waiting: an interrupt during the wait must
         # still leave `stop` able to find and kill what we just spawned.
-        self._write_state(
-            {
-                "pid": process.pid,
-                "port": port,
-                "api_key": api_key,
-                "version": self.version,
-            }
-        )
-
         healthy = False
         try:
+            self._write_state(
+                {
+                    "pid": process.pid,
+                    "port": port,
+                    "api_key": api_key,
+                    "version": self.version,
+                }
+            )
+
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if process.poll() is not None:
@@ -990,20 +1054,12 @@ class EmbeddedLemonade:
                     f"{port} within {timeout:.0f}s. Read {self.log_path} for what "
                     f"it was doing, then retry."
                 )
+            self._write_env_file(port, api_key)
         except BaseException:
             self._terminate(process)
             self._clear_state()
             raise
 
-        self._write_state(
-            {
-                "pid": process.pid,
-                "port": port,
-                "api_key": api_key,
-                "version": self.version,
-            }
-        )
-        self._write_env_file(port, api_key)
         log.info("Embedded Lemonade %s ready on port %s", self.version, port)
         return EmbeddedStatus(
             installed=True,
@@ -1015,7 +1071,21 @@ class EmbeddedLemonade:
             dist_dir=self.dist_dir,
         )
 
-    def stop(self, timeout: float = _STOP_TIMEOUT) -> bool:
+    def stop(
+        self, timeout: float = _STOP_TIMEOUT, *, expected_pid: Optional[int] = None
+    ) -> bool:
+        """Stop under the lifecycle lock, optionally only the caller's daemon."""
+        with self._lifecycle_lock():
+            if expected_pid is not None:
+                state = self._read_state()
+                if state is None or state.get("pid") != expected_pid:
+                    log.info(
+                        "Embedded Lemonade ownership changed; not stopping another instance"
+                    )
+                    return False
+            return self._stop(timeout)
+
+    def _stop(self, timeout: float = _STOP_TIMEOUT) -> bool:
         """Stop the recorded instance and its inference backends.
 
         Reaches a daemon that has stopped answering as well as a healthy one,
@@ -1032,7 +1102,7 @@ class EmbeddedLemonade:
         Raises:
             EmbeddedLemonadeError: The process would not terminate.
         """
-        current = self.status()
+        current = self._status()
         state = self._read_state()
         if state is None or not (current.running or current.unresponsive_pid):
             self._clear_state()
@@ -1060,6 +1130,11 @@ class EmbeddedLemonade:
         )
 
     def uninstall(self) -> bool:
+        """Remove a stopped runtime without racing a concurrent start/stop."""
+        with self._lifecycle_lock():
+            return self._uninstall()
+
+    def _uninstall(self) -> bool:
         """Remove the embedded Lemonade runtime and its private state.
 
         The runtime owns the whole ``<GAIA_HOME>/lemonade`` tree, including
@@ -1074,7 +1149,7 @@ class EmbeddedLemonade:
             EmbeddedLemonadeError: The daemon is still running or the runtime
                 could not be removed.
         """
-        status = self.status()
+        status = self._status()
         if status.running or status.unresponsive_pid:
             raise EmbeddedLemonadeError(
                 "Cannot uninstall embedded Lemonade while it is running. "

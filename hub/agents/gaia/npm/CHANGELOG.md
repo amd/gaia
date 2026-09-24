@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Let the remote CLI honor the server step default unless explicitly overridden, fixing queries against workers configured below ten steps.
+
+- Bound container HTTP bodies, concurrent runs, loop steps and elapsed time with configurable service limits; preserve capacity until cancelled work actually stops, including stalled SSE clients.
+
+- Contract 2.14 adds opt-in per-call HTTP tool approval; the remote interactive CLI can approve or deny without granting future calls.
+- Accepted HTTP cancellation now terminates the stream explicitly instead of forwarding a late model answer.
+- Add `gaia-agent --client` / `gaia-agent-client` for authenticated worker status, streaming queries, questions and cancellation; include a Compose deployment and deterministic container query test.
+- Respect hidden-input questions in the remote CLI, fail on unacknowledged answers, and reject nonfinite timeouts.
+
+- Add `gaia-agent --service` to the frozen binary: authenticated single-tenant HTTP, managed embedded Lemonade, explicit workspace configuration and readiness probes. Container images run the PyInstaller bundle without a GAIA virtual environment; Python script tools use an explicitly configured separate interpreter.
+
 All notable changes to `@amd-gaia/gaia` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

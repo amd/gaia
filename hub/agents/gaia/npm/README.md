@@ -228,3 +228,46 @@ at it directly; the fetcher will not be talked into it.
 - Issues: <https://github.com/amd/gaia/issues>
 
 MIT licensed. © 2024-2026 Advanced Micro Devices, Inc.
+
+
+## Container service (Python distribution)
+
+The Python package also ships `gaia-agent --service` (or source-installed `gaia-agent-service`), an opt-in, single-tenant HTTP
+worker with required authentication, explicit workspace/Host configuration,
+readiness checks and managed embedded Lemonade. This entrypoint is separate from
+the npm sidecar lifecycle. See [Container service](../../../../docs/deployment/container-service.mdx)
+for image configuration and operational limits. The canonical query contract
+remains unchanged; HTTP confirmation-gated tools refuse unless the caller opts into per-call approval.
+
+The frozen binary also supports `gaia-agent --client` for deployed-worker
+status, streaming queries, mid-run responses and cancellation. Source installs
+expose `gaia-agent-client`; see the container service guide for credentials and examples.
+Interactive sensitive answers require hidden terminal input; failed answer delivery
+requests cancellation. Socket timeouts must be finite and positive.
+
+
+### Opt-in HTTP tool approval (contract 2.14)
+
+Send `can_confirm_tools: true` on `/v1/gaia/query` only when the client can show the
+complete pending action and `arguments` and collect an explicit decision. A
+`needs_confirmation` event then keeps the stream open and includes `confirm_id`.
+POST `/v1/gaia/query/{run_id}/confirm` with `{"confirm_id":"…","approved":true}`
+to approve that call once, or `false` to deny. Missing, stale, duplicate and
+cancelled requests are rejected; there is no always/session grant. Cancellation
+or disconnection never approves. The default remains refusal for older callers.
+The remote CLI opts in with `--interactive` and defaults its approval prompt to no.
+
+### Container service limits
+
+`--service` bounds HTTP bodies (1 MiB; 413), concurrent agent runs (1; 503 with
+`Retry-After: 1`), agent steps (20; 422 above the ceiling), and elapsed time
+(300 seconds; terminal SSE error 504). Configure the positive-integer
+`GAIA_SERVICE_MAX_REQUEST_BYTES`, `GAIA_SERVICE_MAX_CONCURRENT_RUNS`,
+`GAIA_SERVICE_MAX_STEPS`, and `GAIA_SERVICE_RUN_TIMEOUT_SECONDS` variables.
+Cancellation is cooperative: capacity stays occupied until the worker thread
+stops. Desktop `--serve` behavior is unchanged. See
+`docs/deployment/container-service.mdx` for deployment and regression commands.
+
+The remote CLI omits `max_steps` unless `--max-steps` is supplied, so ordinary
+queries use the service's configured default even when its ceiling is below ten.
+Explicit values must be positive and within the server ceiling.

@@ -12,13 +12,10 @@ The event translation itself is NOT reimplemented here — it lives in
 ``gaia.ui.sse_translation.CanonicalTranslator``, shared with the email sidecar,
 so the two agents cannot drift into private dialects of the same contract.
 
-Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
-``/query/{run_id}/cancel`` and ``/query/{run_id}/respond``. ``needs_input`` is
-answered over ``/respond`` on the run's existing stream. ``needs_confirmation``
-is the one gate still unimplemented: it ends the run with a refusal (the
-stateless D1 stub, same as email) rather than pretending to support server-side
-resume. That is additive when a tool needs it; claiming support we haven't built
-would be worse than the honest gap.
+Questions use ``/respond`` on the existing stream. Callers opting into
+``can_confirm_tools`` (contract 2.14) can approve or deny one pending tool with
+``/confirm``. Other callers retain the default refusal, matching the email
+sidecar's stateless behavior.
 
 :func:`main` also owns the binary's TRANSPORT DISPATCH: ``--serve`` runs this
 HTTP surface, anything else delegates to :mod:`gaia_agent.stdio`. One
@@ -57,7 +54,8 @@ AGENT_ID = "gaia"
 #: optional request fields on this, so it must reflect real capability.
 #: 2.13 (#3978) added ``GET /memory`` — the daemon-transport counterpart of
 #: the stdio ``MEMORY_DUMP_QUERY`` sentinel.
-API_VERSION = "2.13"
+#: 2.14 adds opt-in, per-call HTTP tool confirmation.
+API_VERSION = "2.14"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -110,6 +108,7 @@ class QueryRequest(_Strict):
             "document agent forgets what it just indexed."
         ),
     )
+    can_confirm_tools: bool = Field(default=False, strict=True)
     can_answer_questions: Optional[bool] = Field(
         default=None,
         description=(
@@ -153,6 +152,11 @@ class QueryRespondResponse(_Strict):
     delivered: bool
 
 
+class QueryConfirmRequest(_Strict):
+    confirm_id: str = Field(min_length=1, max_length=128)
+    approved: bool = Field(strict=True)
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -161,6 +165,8 @@ class _QueryRun:
         self.agent = agent
         self.handler = handler
         self.cancel_event = threading.Event()
+        self.can_confirm_tools = False
+        self.confirmed_ids = set()
         self.result: Optional[Dict[str, Any]] = None
 
 
@@ -366,21 +372,29 @@ def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
     return got >= want
 
 
-def _probe_lemonade() -> Dict[str, Any]:
+def _probe_lemonade(
+    model_id: Optional[str] = None, base_url: Optional[str] = None
+) -> Dict[str, Any]:
     """Read-only probe of the local model server. Never pulls or loads."""
     import os
 
     import requests
-    from gaia_agent.agent import GaiaAgentConfig
 
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_NAME,
+        cloud_model_provider,
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
 
     # Already ends in /api/v1 — the requests below must not append it again.
     base = resolve_lemonade_base_url(
-        os.environ.get("LEMONADE_BASE_URL")
-        or getattr(GaiaAgentConfig(), "base_url", None)
+        base_url or os.environ.get("LEMONADE_BASE_URL")
     ).rstrip("/")
-    model_id = DEFAULT_MODEL_NAME
+    explicit_model = model_id is not None
+    model_id = model_id or DEFAULT_MODEL_NAME
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base))
 
     out: Dict[str, Any] = {
         "base_url": base,
@@ -391,13 +405,16 @@ def _probe_lemonade() -> Dict[str, Any]:
         "model_id": model_id,
     }
     try:
-        r = requests.get(f"{base}/models", timeout=5)
+        models_url = f"{base}/models"
+        if cloud_model_provider(model_id):
+            models_url += "?show_all=true"
+        r = requests.get(models_url, timeout=5, headers=headers)
         r.raise_for_status()
         out["reachable"] = True
         data = r.json().get("data") or []
         for entry in data:
-            if entry.get("id") == model_id or model_id in str(
-                entry.get("checkpoint", "")
+            if entry.get("id") == model_id or (
+                not explicit_model and model_id in str(entry.get("checkpoint", ""))
             ):
                 out["present"] = True
                 ctx = entry.get("ctx_size") or entry.get("context_length")
@@ -408,7 +425,7 @@ def _probe_lemonade() -> Dict[str, Any]:
         return out
 
     try:
-        rv = requests.get(f"{base}/health", timeout=5)
+        rv = requests.get(f"{base}/health", timeout=5, headers=headers)
         if rv.ok:
             payload = rv.json()
             out["version"] = payload.get("version") or payload.get("server_version")
@@ -446,7 +463,7 @@ router = APIRouter(
 
 
 @router.get("/init")
-async def init() -> Dict[str, Any]:
+async def init(raw_request: Request) -> Dict[str, Any]:
     """Readiness preflight — the row data the TUI's preflight screen renders.
 
     Unlike ``/health`` (liveness only, never touches the model server) this
@@ -456,7 +473,9 @@ async def init() -> Dict[str, Any]:
     """
     from starlette.responses import JSONResponse
 
-    probe = await asyncio.to_thread(_probe_lemonade)
+    config = getattr(raw_request.app.state, "agent_config", {})
+    probe_args = {k: config[k] for k in ("model_id", "base_url") if k in config}
+    probe = await asyncio.to_thread(_probe_lemonade, **probe_args)
     compatible = (
         _version_meets_min(probe["version"], MIN_LEMONADE_VERSION)
         if probe["reachable"]
@@ -466,8 +485,9 @@ async def init() -> Dict[str, Any]:
     hint: Optional[str] = None
     if not probe["reachable"]:
         hint = (
-            f"Local Lemonade Server is not reachable at {probe['base_url']} — start it "
-            f"with `lemonade-server serve`, or set LEMONADE_BASE_URL to a running server."
+            f"Lemonade Server is not reachable at {probe['base_url']}. "
+            "Check LEMONADE_BASE_URL and LEMONADE_API_KEY, or run `gaia init` "
+            "to provision a local server."
         )
     elif compatible is False:
         hint = (
@@ -504,7 +524,7 @@ async def init() -> Dict[str, Any]:
 
 
 @router.get("/memory")
-async def memory() -> Dict[str, Any]:
+async def memory(raw_request: Request) -> Dict[str, Any]:
     """The ``/memory`` view's snapshot, for the daemon transport.
 
     Same payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel
@@ -519,7 +539,9 @@ async def memory() -> Dict[str, Any]:
     try:
         # Off the event loop: constructing the agent registers every tool and
         # loads its skills, which would stall concurrent runs' SSE heartbeats.
-        agent = await asyncio.to_thread(build_query_agent)
+        agent = await asyncio.to_thread(
+            build_query_agent, **getattr(raw_request.app.state, "agent_config", {})
+        )
         return await asyncio.to_thread(build_memory_dump, agent)
     except Exception as exc:
         raise HTTPException(
@@ -531,7 +553,7 @@ async def memory() -> Dict[str, Any]:
 
 
 @router.post("/query")
-async def query(request: QueryRequest):
+async def query(request: QueryRequest, raw_request: Request):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
     from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -545,6 +567,31 @@ async def query(request: QueryRequest):
         )
 
     handler = SSEOutputHandler()
+    step_limit = getattr(raw_request.app.state, "query_max_steps", None)
+    effective_steps = request.max_steps
+    if step_limit is not None:
+        if effective_steps is not None and effective_steps > step_limit:
+            raise HTTPException(
+                status_code=422, detail=f"max_steps exceeds service limit {step_limit}."
+            )
+        effective_steps = effective_steps or step_limit
+    slots = getattr(raw_request.app.state, "query_slots", None)
+    if slots is not None and not slots.acquire(blocking=False):
+        raise HTTPException(
+            status_code=503,
+            detail="Service run capacity is occupied. Retry after the active run stops.",
+            headers={"Retry-After": "1"},
+        )
+    slot_owned = slots is not None
+    timeout = getattr(raw_request.app.state, "query_timeout_seconds", None)
+    deadline = time.monotonic() + timeout if timeout is not None else None
+
+    def _release_slot() -> None:
+        nonlocal slot_owned
+        if slot_owned:
+            slot_owned = False
+            slots.release()
+
     session = None
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
@@ -556,6 +603,7 @@ async def query(request: QueryRequest):
 
     def _unwind_setup() -> None:
         """Undo the setup done so far, on a path that never reaches the loop."""
+        _release_slot()
         if registered:
             _registry.remove(request.run_id)
         if session is not None:
@@ -564,7 +612,9 @@ async def query(request: QueryRequest):
             close_agent(one_shot_agent)
 
     try:
-        kwargs: Dict[str, Any] = {}
+        kwargs: Dict[str, Any] = dict(
+            getattr(raw_request.app.state, "agent_config", {})
+        )
         if request.model:
             kwargs["model_id"] = request.model
         if request.session_id:
@@ -643,6 +693,7 @@ async def query(request: QueryRequest):
                 mark()
 
         run = _QueryRun(request.run_id, agent, handler)
+        run.can_confirm_tools = request.can_confirm_tools
         precancelled = _registry.add(run)
         registered = True
         agent._cancel_event = run.cancel_event
@@ -671,11 +722,19 @@ async def query(request: QueryRequest):
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
 
+    deadline_expired = threading.Event()
+    deadline_timer: Optional[threading.Timer] = None
+
+    def _expire_run() -> None:
+        deadline_expired.set()
+        run.cancel_event.set()
+        handler.cancelled.set()
+
     def _run_agent() -> None:
         try:
-            if request.max_steps is not None:
+            if effective_steps is not None:
                 run.result = agent.process_query(
-                    request.query, max_steps=request.max_steps
+                    request.query, max_steps=effective_steps
                 )
             else:
                 run.result = agent.process_query(request.query)
@@ -683,6 +742,8 @@ async def query(request: QueryRequest):
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
             handler.print_error(_terminal_error_detail(exc))
         finally:
+            if deadline_timer is not None:
+                deadline_timer.cancel()
             handler.signal_done()
             # Release only after the agent is done touching the instance, so the
             # next turn on this session cannot start mid-run.
@@ -694,13 +755,28 @@ async def query(request: QueryRequest):
             # leaked agent per request for the life of the process. Covers the
             # client-disconnect path too: the stream sets the cancel flag, which
             # ends the loop, which lands here.
-            if one_shot_agent is not None:
-                close_agent(one_shot_agent)
+            try:
+                if one_shot_agent is not None:
+                    close_agent(one_shot_agent)
+            finally:
+                # A closed/cancelled stream is not proof that blocking tool or
+                # provider work stopped. Only the worker releases admission.
+                _release_slot()
 
     thread = threading.Thread(target=_run_agent, daemon=True)
     try:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _expire_run()
+            else:
+                deadline_timer = threading.Timer(remaining, _expire_run)
+                deadline_timer.daemon = True
+                deadline_timer.start()
         thread.start()
     except Exception as exc:
+        if deadline_timer is not None:
+            deadline_timer.cancel()
         # _run_agent never got to run, so its own finally: never fires —
         # release the run_lock here or a thread-exhaustion failure leaves
         # this session_id permanently 409ing for the life of the process.
@@ -715,6 +791,22 @@ async def query(request: QueryRequest):
         last_write = time.monotonic()
         try:
             while True:
+                if deadline_expired.is_set():
+                    yield _sse(
+                        {
+                            "type": "error",
+                            "detail": "Service run deadline exceeded.",
+                            "status": 504,
+                        }
+                    )
+                    terminated = True
+                    return
+                if run.cancel_event.is_set():
+                    yield _sse(
+                        {"type": "error", "detail": "Run cancelled.", "status": 499}
+                    )
+                    terminated = True
+                    return
                 try:
                     event = handler.event_queue.get_nowait()
                 except queue.Empty:
@@ -733,6 +825,9 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
+                    if ctype == "needs_confirmation" and request.can_confirm_tools:
+                        canonical["arguments"] = event.get("args", {})
+                        canonical.pop("always_scope", None)
                     yield _sse(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
@@ -740,6 +835,8 @@ async def query(request: QueryRequest):
                         # the worker thread blocks waiting for /respond.
                         continue
                     if ctype == "needs_confirmation":
+                        if request.can_confirm_tools:
+                            continue
                         yield _sse(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
@@ -789,6 +886,25 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8141  # 8131 is the email sidecar; never 4001.
+
+
+@router.post("/query/{run_id}/confirm")
+async def confirm_query(run_id: str, body: QueryConfirmRequest) -> Dict[str, bool]:
+    """Apply one explicit decision to the current tool call, never a session grant."""
+    run = _registry.get(run_id)
+    if run is None:
+        raise HTTPException(404, "Run is no longer active")
+    if (
+        not run.can_confirm_tools
+        or run.cancel_event.is_set()
+        or body.confirm_id in run.confirmed_ids
+        or not run.handler.resolve_tool_confirmation(
+            approved=body.approved, always=False, confirm_id=body.confirm_id
+        )
+    ):
+        raise HTTPException(409, "Tool approval is no longer pending")
+    run.confirmed_ids.add(body.confirm_id)
+    return {"delivered": True}
 
 
 @router.post("/query/{run_id}/respond", response_model=QueryRespondResponse)
@@ -855,7 +971,12 @@ def _log_caller_auth_state(auth_config: Any) -> None:
     )
 
 
-def build_app() -> FastAPI:
+def build_app(
+    *,
+    auth_config=None,
+    agent_config: Optional[Dict[str, Any]] = None,
+    warmup: bool = True,
+) -> FastAPI:
     """The sidecar ASGI app.
 
     Three surfaces, each with a different consumer:
@@ -872,7 +993,7 @@ def build_app() -> FastAPI:
     # Loopback is not access control: without this, any page the user visits can
     # drive an agent that has shell and file tools. Wired ONLY here, on the
     # sidecar app the frozen binary serves.
-    auth_config = caller_auth.config_from_environment()
+    auth_config = auth_config or caller_auth.config_from_environment()
     caller_auth.configure(auth_config)
 
     @contextlib.asynccontextmanager
@@ -885,15 +1006,19 @@ def build_app() -> FastAPI:
         delayed, and never fatal — a cold first turn is slow, not broken.
         """
         _log_caller_auth_state(auth_config)
-        task = asyncio.create_task(asyncio.to_thread(_warmup_blocking))
+        task = (
+            asyncio.create_task(asyncio.to_thread(_warmup_blocking)) if warmup else None
+        )
         # Held so it is not garbage-collected while in flight.
         _app.state.warmup_task = task
         try:
             yield
         finally:
-            task.cancel()
+            if task is not None:
+                task.cancel()
 
     app = FastAPI(title="GAIA Agent", version=__version__, lifespan=_lifespan)
+    app.state.agent_config = dict(agent_config or {})
     app.add_middleware(caller_auth.HostOriginMiddleware)
 
     @app.get("/health", include_in_schema=True)
@@ -975,6 +1100,13 @@ _HTTP_SELECTORS = ("--serve", "--host", "--port")
 _TRANSPORT_HELP = """\
 gaia-agent serves two transports from one binary, chosen by argv:
 
+  gaia-agent --service
+      The authenticated, environment-configured HTTP service with owned
+      embedded Lemonade lifecycle. See docs/deployment/container-service.mdx.
+
+  gaia-agent --client [--url URL] status|query|cancel|respond ...
+      Test a deployed HTTP worker without starting a local agent or model.
+
   gaia-agent --serve [--host HOST] [--port PORT]
       The HTTP sidecar: the /v1/gaia/* contract the daemon and the Agent UI
       speak. Bound to 127.0.0.1:8141 unless told otherwise.
@@ -1020,7 +1152,8 @@ def _serve_http(argv: List[str]) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     """Dispatch this process onto one of the agent's two transports.
 
-    ``--serve`` (or a bind flag) runs the HTTP sidecar. Everything else,
+    ``--service`` runs the strict environment-configured HTTP service.
+    ``--serve`` (or a bind flag) runs the desktop HTTP sidecar. Everything else,
     including no arguments at all, is the stdio JSONL transport the TUI spawns
     as a child — its parser owns ``--model`` / ``--use-claude`` /
     ``--claude-model`` / ``--json-events`` / ``--dev``, so argv is forwarded
@@ -1028,6 +1161,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     quiet switch to the other one.
     """
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "--client":
+        from gaia_agent.service_client import main as client_main
+
+        return client_main(args[1:])
+    if "--service" in args:
+        import argparse
+
+        from gaia_agent.service import main as service_main
+
+        parser = argparse.ArgumentParser(
+            prog="gaia-agent --service",
+            description="Environment-configured GAIA HTTP service",
+        )
+        parser.add_argument("--service", action="store_true")
+        parser.parse_args(args)
+        service_main()
+        return 0
     if _selects_http(args):
         return _serve_http(args)
 

@@ -117,6 +117,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "query": _NO_EVAL_SENTINEL,
     "query/{run_id}/cancel": _NO_EVAL_SENTINEL,
     "query/{run_id}/respond": _NO_EVAL_SENTINEL,
+    "query/{run_id}/confirm": _NO_EVAL_SENTINEL,
     "memory": _NO_EVAL_SENTINEL,
 }
 
