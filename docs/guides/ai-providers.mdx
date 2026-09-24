@@ -60,9 +60,10 @@ where it fits (a 128 GB Strix Halo), **Gemma 4 E4B** on every other PC. It recor
 a Qwen pick as `default_model` in `~/.gaia/config.json`, so the TUI's agent starts
 on it. Set `gaia config set default_model <id>` to choose your own; `gaia init`
 never overwrites it. To stay on Gemma on a large machine and skip the 82 GB
-download, run `gaia config set default_model Gemma-4-E4B-it-GGUF` before setup,
-or press **p** at the setup screen and pick Gemma: a local model you pick there
-replaces the default, and setup then downloads only the embedding models.
+download, run `gaia config set default_model Gemma-4-E4B-it-GGUF` before setup.
+Pressing **p** at the setup screen and picking Gemma does the same for that
+session only: setup then downloads just the embedding models, but the next
+launch asks for the default again unless `default_model` is set.
 
 ## Keys and settings
 
