@@ -859,3 +859,26 @@ def test_shell_files_count_only_from_a_successful_run_of_the_named_path(
 def test_adverbs_do_not_hide_a_first_person_claim(tmp_path, answer):
     ledger = CompletionEvidence("Summarize GAIA's key features", str(tmp_path))
     assert gaps(ledger, answer)
+
+
+def test_an_impersonal_claim_gets_one_correction_then_stands(agent):
+    info = {"answer": "Downloads are saved to ~/Downloads by default."}
+    sent = script(agent, info, info)
+    result = agent.process_query("Where do downloads go?", max_steps=5)
+    assert result["status"] == "success"
+    assert "[check:completion]" in sent[1][-1]["content"]
+    assert "~/Downloads" in result["result"]
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("Create a summary of GAIA in notes.md", (["notes.md"], True)),
+        ("Create a summary of the errors in app.log", ([], False)),
+        ("Create report.md summarizing the project", (["report.md"], True)),
+        ("Create a Next.js landing page", ([], False)),
+    ],
+)
+def test_create_in_a_new_file_names_an_output(tmp_path, query, expected):
+    (tmp_path / "app.log").write_text("ERROR x")
+    assert save_obligations(query, str(tmp_path)) == expected

@@ -509,7 +509,7 @@ class ExtractionLedger:
         self.root = root or os.getcwd()
         # Without a read permission boundary the tool cannot run at all.
         self.available = available
-        saves, _ = save_obligations(query)
+        saves, _ = save_obligations(query, self.root)
         self.destinations = {self.key(p) for p in saves}
         source_clause = re.split(
             r"\b(?:save|write|export|store)\b|\b(?:into|to)\s", query, flags=re.I

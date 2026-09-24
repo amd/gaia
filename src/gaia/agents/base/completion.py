@@ -149,7 +149,9 @@ _TOPIC_OBJECT = re.compile(
 _MODIFIER = re.compile(
     r"\s+(?!(?:and|or|then|to|into|in|on|at|as|with|for|from|now|please|too|so|"
     r"because|if|when|but|instead|not|which|that|using|via|during|about|by|"
-    r"where|while|here|below|above|file|document)\b)[a-z][a-z-]*\b"
+    r"where|while|here|below|above|file|document)\b|[a-z]+(?:ing|ed)\s+"
+    r"(?:the|a|an|all|every|each|on|of|in|to|with|from|my|your|our|this|these)\b)"
+    r"[a-z][a-z-]*\b"
 )
 _NEGATED_TARGET = re.compile(r"\b(?:not|instead of|rather than)\s*$", re.I)
 _NOT_REQUEST = re.compile(
@@ -267,7 +269,7 @@ def _instructions(query: str):
                 yield action.group(1).lower(), sentence[action.end() :]
 
 
-def save_obligations(query: str) -> tuple[list[str], bool]:
+def save_obligations(query: str, root: str | None = None) -> tuple[list[str], bool]:
     """Explicit save instructions; advisory/negated instructions aren't tasks.
 
     A request counts only when it names a file, folder or disk: "save me some
@@ -282,9 +284,17 @@ def save_obligations(query: str) -> tuple[list[str], bool]:
         elif verb == "write" and _NAMED_FILE.match(tail):
             found = _scan_paths(tail[_NAMED_FILE.match(tail).end() :], immediate=True)
         elif verb in _CREATE_VERBS:
-            # "Create notes.md", "make a file called x.md", "generate it in x.md".
+            # "Create notes.md" or "make a file called x.md".
             named = _NAMED_FILE.match(tail)
             found = _scan_paths(tail[named.end() :] if named else tail, True, True)
+            if not found and root:
+                # "Create a summary in notes.md" writes notes.md; an existing
+                # file there ("errors in app.log") is the source, not the output.
+                found = [
+                    path
+                    for path in destination_paths(tail, _PUT_PREPOSITION)
+                    if not os.path.lexists(_normalize_key(path, root))
+                ]
         else:
             found = destination_paths(
                 tail, _PUT_PREPOSITION if verb == "put" else _OUTPUT_PREPOSITION
@@ -359,7 +369,7 @@ class CompletionEvidence:
         self.sequence = 0
         self.removed: set[str] = set()
         self.uninspectable: dict[str, str] = {}
-        self.requested, self.save_requested = save_obligations(query)
+        self.requested, self.save_requested = save_obligations(query, self.root)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
         self.exec_windows: list[tuple[int, int, bool]] = []
@@ -563,22 +573,41 @@ class CompletionEvidence:
             return
         item.page(start, end, total)
 
-    def gaps(self, answer: str, claims_file_write: Callable[[str], bool]) -> list[str]:
+    def gaps(
+        self,
+        answer: str,
+        claims_file_write: Callable[[str], bool],
+        soft: list[str] | None = None,
+    ) -> list[str]:
+        """Missing work that makes the turn incomplete.
+
+        With no save asked for, nothing written and no "I/we saved", a save
+        claim may be information ("downloads are saved to ~/Downloads"); its
+        gap goes to *soft*, worth one correction but never an incomplete turn.
+        """
         required = {self.key(path) for path in self.requested}
         claim_without_path = False
-        # With no save asked for and nothing written, "files are saved to
-        # ~/Downloads" is information, not a report of this turn's work.
         checkable = self.instructed or self.disk_tool_ran
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
             if _EARLIER.search(sentence):
                 continue
             sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
-            if not checkable and not _FIRST_PERSON.search(sentence):
+            if not claims_file_write(sentence):
                 continue
-            if claims_file_write(sentence):
-                paths = destination_paths(sentence)
-                required.update(self.key(path) for path in paths)
-                claim_without_path |= not paths
+            paths = destination_paths(sentence)
+            if not checkable and not _FIRST_PERSON.search(sentence):
+                if soft is not None:
+                    soft.extend(
+                        f"The answer says `{path}` was saved, but no tool wrote it this turn."
+                        for path in paths
+                    )
+                    if not paths:
+                        soft.append(
+                            "The answer says a file was saved, but no tool wrote one this turn."
+                        )
+                continue
+            required.update(self.key(path) for path in paths)
+            claim_without_path |= not paths
         gaps = self.cleanup_gaps(answer)
 
         def inside(path: str, folder: str) -> bool:

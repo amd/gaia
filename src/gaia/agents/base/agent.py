@@ -8020,13 +8020,14 @@ Do NOT wrap conversational replies in JSON.
                         continue
 
                 answer_candidate = self.finalize_answer(answer_candidate, conversation)
+                soft_gaps: List[str] = []
                 artifact_gaps = self._completion_evidence.gaps(
-                    answer_candidate, _claims_file_write
+                    answer_candidate, _claims_file_write, soft=soft_gaps
                 )
                 self._check_extraction_sources()
                 extraction_gaps = self._extraction_ledger.gaps()
                 artifact_gaps.extend(extraction_gaps)
-                if artifact_gaps:
+                if artifact_gaps or soft_gaps:
                     if (
                         completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
                         and steps_taken < steps_limit - 1
@@ -8045,12 +8046,22 @@ Do NOT wrap conversational replies in JSON.
                     ):
                         completion_corrections += 1
                         correction = (
-                            "[check:completion] "
-                            + " ".join(artifact_gaps)
-                            + " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary. Use `write_file` for a missing requested save, then "
-                            "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
-                            "continuation pages. Report only contents observed in "
-                            "tool results. An unrelated tool or file is not evidence."
+                            (
+                                "[check:completion] "
+                                + " ".join(artifact_gaps)
+                                + " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary. Use `write_file` for a missing requested save, then "
+                                "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
+                                "continuation pages. Report only contents observed in "
+                                "tool results. An unrelated tool or file is not evidence."
+                            )
+                            if artifact_gaps
+                            else (
+                                "[check:completion] "
+                                + " ".join(soft_gaps)
+                                + " If the file is needed, write it with `write_file` and read it back. "
+                                "If you were describing where something is usually saved, or a file "
+                                "from an earlier turn, say so without claiming you saved it now."
+                            )
                         )
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
