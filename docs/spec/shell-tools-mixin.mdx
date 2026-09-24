@@ -43,7 +43,7 @@ step from costing several agent turns:
 | `a \|\| b` | `b` runs only if `a` failed |
 | `a; b` | both run, whatever `a` returned |
 | `a \| b` | `a`'s output is piped into `b` |
-| `cd <dir> && a` | `cd` moves the rest of **its own line**, and nothing else |
+| `cd <dir> && a` | `cd` moves the rest of its line, and — if it actually ran — the **next separate call** too |
 | `a 2>&1` | `a`'s stderr joins its stdout, and flows on down the pipeline |
 | `a 2>/dev/null` | `a`'s stderr is discarded — its exit code is not |
 | `VAR=value a` | `VAR` is set for `a`'s process only |
@@ -58,6 +58,27 @@ its own exit code.
 the only two that name no file: they say where a command's stderr goes, and
 this process routes the stream it had already captured. Every other one is
 refused, `2>` to any other path included.
+
+### Persistent session
+
+Commands share one session per agent, so a `cd` is still in effect on the next
+separate call — `cd build` in one turn, then `make` in the next, without
+repeating the directory. Only the working directory persists; nothing is handed
+to a real shell, so `export` and `source` have nothing to persist *from*.
+
+A `cd` moves the session only when it actually ran: one that `&&`/`||` skipped,
+or that a timeout cut the line before reaching, leaves the session where it was.
+A `cd` into a directory the path policy refuses is not absorbed either —
+otherwise persistence would be a way to reach a forbidden directory and then
+read files there by bare name, which the per-argument check never sees.
+
+An explicit `working_directory` argument is a **one-shot override**: the command
+runs there, and the session's own directory is untouched.
+
+| Tool | Behaviour |
+|------|-----------|
+| `get_shell_state` | Reports the session's current working directory |
+| `reset_shell_session` | Returns the session to the directory the task started in |
 
 One or more leading `VAR=value` tokens set that one command's environment —
 `PYTHONPATH=. pytest -q` is the case this exists for. The value never reaches a
@@ -165,6 +186,8 @@ class ShellToolsMixin:
 
     Tools provided:
     - run_shell_command: Execute safe shell commands with security checks
+    - get_shell_state: Report the session's current working directory
+    - reset_shell_session: Return the session to its starting directory
     """
 
     def __init__(self, *args, **kwargs):

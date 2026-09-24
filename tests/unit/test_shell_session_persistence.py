@@ -104,3 +104,42 @@ class TestCwdPersistsAcrossCalls:
         run(f'cd "{off_limits}"')
 
         assert state()["cwd"] == before
+
+
+class TestOnlyACdThatRanMovesTheSession:
+    """The pre-flight walk resolves every `cd` on the line; the session must
+    follow only the ones the connectors actually let run."""
+
+    def test_a_short_circuited_cd_does_not_move_the_session(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        missing = tmp_path / "nope"
+        run, state, _reset = _tools(_Host())
+        before = state()["cwd"]
+
+        # `ls` fails, so `&&` skips the `cd` entirely.
+        result = run(f'ls "{missing}" && cd "{sub}"')
+
+        assert [s["command"] for s in result["steps"]] == [f'ls "{missing}"']
+        assert state()["cwd"] == before
+
+    def test_a_cd_reached_through_or_does_move_the_session(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        missing = tmp_path / "nope"
+        run, state, _reset = _tools(_Host())
+
+        run(f'ls "{missing}" || cd "{sub}"')
+
+        assert os.path.realpath(state()["cwd"]) == os.path.realpath(str(sub))
+
+    def test_a_cd_before_a_failing_command_still_moves_the_session(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        missing = tmp_path / "nope"
+        run, state, _reset = _tools(_Host())
+
+        run(f'cd "{sub}" && ls "{missing}"')
+
+        # The cd ran; the command after it failing does not undo it.
+        assert os.path.realpath(state()["cwd"]) == os.path.realpath(str(sub))

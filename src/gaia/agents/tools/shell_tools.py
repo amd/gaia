@@ -2110,10 +2110,9 @@ class ShellToolsMixin:
                     cwd = str(Path(working_directory).resolve())
                     session_scoped = False
                 else:
-                    # An explicit working_directory is a one-shot override --
-                    # the session's own directory is untouched by it, matching
-                    # the one-shot working_directory override on ShellSession.run
-                    # in the earlier design this reconciles.
+                    # An explicit working_directory is a one-shot override that
+                    # never touches the session; with none, resume where the
+                    # last call's cd left off.
                     cwd = self.shell_session.cwd
                     session_scoped = True
 
@@ -2161,8 +2160,9 @@ class ShellToolsMixin:
                 last_code = 0
                 unhandled_failure = False
                 spawned = False
+                ran_cwd = cwd
 
-                for step, step_cwd in zip(steps, step_cwds):
+                for index, (step, step_cwd) in enumerate(zip(steps, step_cwds)):
                     if not _connector_runs(step.connector, last_code):
                         continue
                     # `||` is the line saying it expects the failure before it;
@@ -2175,6 +2175,12 @@ class ShellToolsMixin:
                         # already applied to the steps that follow it.
                         last_code = 0
                         ran.append({"command": step.text, "return_code": 0})
+                        # Only a cd that actually ran moves the session.
+                        ran_cwd = (
+                            step_cwds[index + 1]
+                            if index + 1 < len(step_cwds)
+                            else walk_cwd
+                        )
                         continue
                     try:
                         result = _run_step(
@@ -2230,17 +2236,14 @@ class ShellToolsMixin:
 
                 duration = time.monotonic() - start_time
 
-                # Checkpoint the session's cwd so the NEXT separate call sees
-                # where this chain's cd's left off. Only on a clean finish: the
-                # pre-flight walk above resolves every cd on the line before
-                # anything runs, so on a timeout mid-chain walk_cwd can already
-                # reflect a cd that comes AFTER the step that never finished --
-                # checkpointing it then would apply a directory change that
-                # never actually happened. A one-shot working_directory never
-                # touches the session either way (matches ShellSession.run's
-                # own one-shot override in the earlier design this reconciles).
+                # Checkpoint where the cd's that actually ran left off, so the
+                # NEXT separate call starts there. The pre-flight walk applies
+                # every cd on the line unconditionally, so it is not the answer
+                # here: a cd that `&&`/`||` skipped, or that a timeout cut the
+                # line before, never happened and must not move the session.
+                # A one-shot working_directory never touches it either way.
                 if session_scoped:
-                    self.shell_session.set_cwd(walk_cwd)
+                    self.shell_session.set_cwd(ran_cwd)
 
                 # One line is one model step, so it costs one slot however many
                 # commands it chains.
