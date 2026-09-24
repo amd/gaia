@@ -7,6 +7,7 @@ The file is intentionally human-readable and hand-editable.
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,8 +133,23 @@ class TomlScheduleStore:
     def save(self, schedules: Dict[str, Schedule]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         doc = {"schedules": {s.name: s.to_toml_dict() for s in schedules.values()}}
-        with open(self.path, "wb") as f:
-            tomli_w.dump(doc, f)
+        pending = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=self.path.parent, delete=False
+            ) as f:
+                pending = Path(f.name)
+                tomli_w.dump(doc, f)
+                # os.replace is atomic against concurrent readers, but only
+                # once the data itself is actually on disk -- without this a
+                # crash between the write and the rename can still surface a
+                # zero-length store.
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(pending, self.path)
+        finally:
+            if pending is not None:
+                pending.unlink(missing_ok=True)
 
     def add(self, schedule: Schedule) -> None:
         schedules = self.load()

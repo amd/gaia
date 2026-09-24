@@ -3359,6 +3359,19 @@ def _handle_schedule(args):
                 file=sys.stderr,
             )
             sys.exit(1)
+        # Reject a bad cron here, at the prompt -- not a second later in the
+        # daemon's reload loop, which only finds out once this is already on
+        # disk (#4143).
+        from apscheduler.triggers.cron import CronTrigger
+
+        try:
+            CronTrigger.from_crontab(args.cron)
+        except ValueError as exc:
+            print(
+                f"❌ '{args.cron}' is not a valid cron expression: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         sink_args = {}
         if getattr(args, "to", None):
             sink_args["to"] = args.to
