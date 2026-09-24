@@ -6,11 +6,12 @@ Lemonade v2026.39.1 changed the version format from ``X.Y.Z`` to ``YYYY.WW.N``
 (dev builds: ``YYYY.WW.0~<count>.<hash>``) and called out in its release notes
 that anything parsing or comparing version strings has to be updated.
 
-GAIA compares Lemonade versions in five independent places — the base agent
-readiness probe, the Lemonade client's compatibility gate, both installers, and
-the frozen email sidecar (which keeps its own copy because it cannot import
-``gaia.installer``). Each turns a version into an int tuple. Two failure modes
-matter and neither raises:
+GAIA compares Lemonade versions in seven independent places — the base agent
+readiness probe, the Lemonade client's compatibility gate, both installers,
+``LemonadeInfo.version_tuple``, the flagship GAIA agent's readiness server, and
+the frozen email sidecar (the last two keep their own copies because neither can
+import ``gaia.installer``). Each turns a version into an int tuple. Two failure
+modes matter and neither raises:
 
 * a release CalVer that parses wrong would compare wrong, and
 * a dev CalVer that fails to parse makes the gate return "can't tell", so it
@@ -18,14 +19,16 @@ matter and neither raises:
 
 These tests pin the real strings the server reports (verified against a live
 v2026.39.1 ``/api/v1/health``), so a future parser "simplification" that drops
-CalVer support fails here instead of in the field.
+CalVer support fails here instead of in the field. Every copy is parametrized in
+so that fixing only some of them fails here — the flagship agent's copy was
+missed on the first pass of exactly this change.
 """
 
 import pytest
 
 from gaia.agents.base.readiness import parse_version, version_meets_min
 from gaia.installer.init_command import InitCommand
-from gaia.installer.lemonade_installer import LemonadeInstaller
+from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
 from gaia.llm.lemonade_launcher import _VERSION_RE
 from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
 
@@ -42,11 +45,22 @@ def _installer_parse(version):
     return LemonadeInstaller._parse_version(None, version)
 
 
+def _info_parse(version):
+    """``LemonadeInfo.version_tuple`` — the copy that parses the INSTALLED version.
+
+    Shielded in the normal flow (``check_installation`` fills ``version`` from
+    ``get_installed_version``, which already strips the suffix), but callers
+    construct ``LemonadeInfo`` directly, so it must not depend on that.
+    """
+    return LemonadeInfo(installed=True, version=version).version_tuple
+
+
 # Every independent parser, so a fix applied to only some of them fails here.
 PARSERS = [
     pytest.param(parse_version, id="readiness"),
     pytest.param(InitCommand._parse_version, id="init_command"),
     pytest.param(_installer_parse, id="lemonade_installer"),
+    pytest.param(_info_parse, id="lemonade_info_version_tuple"),
 ]
 
 
@@ -55,6 +69,19 @@ def _email_parse(version):
     from gaia_agent_email.api_routes import _parse_version
 
     return _parse_version(version)
+
+
+# The flagship agent's copy compares rather than exposing a tuple, so it is
+# covered by its own tests below instead of the ``PARSERS`` list.
+def _gaia_server_meets_min(version, minimum):
+    """The flagship GAIA agent's readiness gate.
+
+    It reads ``/api/v1/health``'s ``version`` VERBATIM — nothing normalizes the
+    CalVer dev suffix away first — so it must tolerate it itself.
+    """
+    from gaia_agent.server import _version_meets_min
+
+    return _version_meets_min(version, minimum)
 
 
 @pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
@@ -113,3 +140,29 @@ def test_cli_version_regex_extracts_calver(cli_output, expected):
     match = _VERSION_RE.search(cli_output)
     assert match is not None, f"no version parsed from {cli_output!r}"
     assert match.group(1) == expected
+
+
+# -- the flagship agent's readiness gate ------------------------------------
+# It compares instead of returning a tuple, so it gets its own cases. This is
+# the copy most users actually hit, and the one missed on the first pass.
+
+
+def test_flagship_agent_accepts_release_calver():
+    assert _gaia_server_meets_min(RELEASE_CALVER, LEMONADE_MIN_VERSION) is True
+
+
+def test_flagship_agent_accepts_dev_calver():
+    """Regression: this returned None, silently disabling the readiness check."""
+    assert _gaia_server_meets_min(DEV_CALVER, LEMONADE_MIN_VERSION) is True
+
+
+def test_flagship_agent_still_rejects_old_versions():
+    assert _gaia_server_meets_min("9.1.4", LEMONADE_MIN_VERSION) is False
+
+
+def test_flagship_agent_reports_garbage_as_indeterminate():
+    assert _gaia_server_meets_min("not-a-version", LEMONADE_MIN_VERSION) is None
+
+
+def test_flagship_agent_accepts_the_pinned_version():
+    assert _gaia_server_meets_min(LEMONADE_VERSION, LEMONADE_MIN_VERSION) is True

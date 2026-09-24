@@ -32,6 +32,7 @@ import contextlib
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -359,7 +360,12 @@ def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
     if not version:
         return None
     try:
-        got = tuple(int(p) for p in str(version).strip().lstrip("v").split(".")[:3])
+        # Leading digits per part: Lemonade's CalVer dev builds look like
+        # "2026.39.0~12.abc1234", and this reads /health verbatim.
+        got = tuple(
+            int(re.match(r"\d+", p).group(0))
+            for p in str(version).strip().lstrip("v").split(".")[:3]
+        )
         want = tuple(int(p) for p in minimum.split(".")[:3])
     except (ValueError, AttributeError):
         return None
