@@ -14,15 +14,23 @@
 import { describe, expect, it } from 'vitest';
 
 /**
- * Stylesheets are read as text through Vite's glob rather than `node:fs`, so
- * the suite type-checks under the site's own tsconfig — the same `astro check`
+ * Sources are read as text through Vite's glob rather than `node:fs`, so the
+ * suite type-checks under the site's own tsconfig — the same `astro check`
  * run that gates the build.
+ *
+ * `.ts` is in the sweep because a client script can set a colour that no
+ * stylesheet ever mentions. Tests are not: a test that pins what a token
+ * resolves to has to name the value it expects.
  */
-const SOURCES = import.meta.glob('/src/**/*.{css,astro}', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>;
+const SOURCES = Object.fromEntries(
+  Object.entries(
+    import.meta.glob('/src/**/*.{css,astro,ts}', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>,
+  ).filter(([path]) => !path.endsWith('.test.ts')),
+);
 
 /** The one file allowed to hold literals: it is where the roles are defined. */
 const TOKENS_PATH = '/src/design/tokens.css';
@@ -149,6 +157,9 @@ describe('the glob that everything below depends on', () => {
     expect(SOURCES[TOKENS_PATH], `${TOKENS_PATH} was not read`).toBeTruthy();
     // A silent glob failure would make every assertion below vacuously pass.
     expect(Object.keys(SOURCES).filter((p) => p.endsWith('.astro')).length).toBeGreaterThan(5);
+    // Scripts are swept too, and dropping them back out would pass silently.
+    expect(Object.keys(SOURCES).filter((p) => p.endsWith('.ts')).length).toBeGreaterThan(0);
+    expect(Object.keys(SOURCES).filter((p) => p.endsWith('.test.ts'))).toEqual([]);
     // Probe global.css for structure, not for any one rule: a rule can be
     // deleted legitimately, and this failing for that reason would send the
     // reader hunting a glob bug that isn't there.
