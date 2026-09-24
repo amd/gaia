@@ -728,6 +728,7 @@ class TestLemonadeProviderRepetitionDefaults:
         """chat() should inject repeat_penalty and repeat_last_n defaults."""
         provider = LemonadeProvider.__new__(LemonadeProvider)
         provider._backend = MagicMock(spec=LemonadeClient)
+        provider._backend.cloud_model_provider.return_value = None
         provider._model = "Gemma-4-E4B-it-GGUF"
         provider._system_prompt = None
 
@@ -756,6 +757,9 @@ class TestLemonadeProviderRepetitionDefaults:
         """Caller-specified repeat_penalty overrides the default."""
         provider = LemonadeProvider.__new__(LemonadeProvider)
         provider._backend = MagicMock(spec=LemonadeClient)
+        # Without this the mock is truthy and the local-defaults block is skipped,
+        # so the override would be asserted against no default at all.
+        provider._backend.cloud_model_provider.return_value = None
         provider._model = "Gemma-4-E4B-it-GGUF"
         provider._system_prompt = None
 
@@ -776,6 +780,9 @@ class TestLemonadeProviderRepetitionDefaults:
 
         call_kwargs = provider._backend.chat_completions.call_args[1]
         assert call_kwargs["repeat_penalty"] == 1.5
+        # Pins that the defaults block ran at all, so the override above is
+        # asserted against a default rather than against an empty branch.
+        assert call_kwargs["repeat_last_n"] == 256
 
 
 # ── LemonadeProvider: error classification integration ────────────────
