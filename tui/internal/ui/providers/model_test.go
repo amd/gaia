@@ -3,16 +3,29 @@
 package providers
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/charmbracelet/bubbles/cursor"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
 func key(m Model, k tea.KeyType) Model { next, _ := m.Update(tea.KeyMsg{Type: k}); return next.(Model) }
+
+// plain wraps models as listed, selectable picker rows with no recommendations.
+func plain(models ...lemonade.Model) []lemonade.Entry {
+	out := make([]lemonade.Entry, len(models))
+	for i, model := range models {
+		out[i] = lemonade.Entry{Model: model, Listed: true, Fits: true}
+	}
+	return out
+}
 func TestMaskedPasteNeverReachesViewAndClearsOnCancel(t *testing.T) {
 	m := New("", 100, 30)
 	m.selected = 1
@@ -42,9 +55,10 @@ func TestSuggestedGemmaIsFirstAndSelectionIsExplicit(t *testing.T) {
 	m := New("", 100, 30)
 	m.selected = 1
 	m = m.setup()
-	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.z"}, {ID: lemonade.FireworksModel}}})
+	entries := lemonade.BuildEntries("fireworks", []lemonade.Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: lemonade.FireworksModel, Recipe: "cloud"}}, lemonade.Capacity{}, nil)
+	next, _ := m.Update(modelsMsg{entries: entries})
 	m = next.(Model)
-	if m.ctx.Err() != nil || m.models[0].ID != lemonade.FireworksModel || m.stage != "models" {
+	if m.ctx.Err() != nil || m.entries[0].Model.ID != lemonade.FireworksModel || m.stage != "models" {
 		t.Fatal("model silently selected or suggestion missing")
 	}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -86,14 +100,14 @@ func TestRefreshFailureOrEmptyCatalogCannotCrashSelection(t *testing.T) {
 		m.selected = 1
 		m = m.setup()
 		m.stage = "models"
-		m.models = []lemonade.Model{{ID: lemonade.FireworksModel}}
+		m.entries = plain(lemonade.Model{ID: lemonade.FireworksModel})
 		result := modelsMsg{}
 		if failure {
 			result.err = errors.New("connection failed")
 		}
 		next, _ := m.Update(result)
 		m = next.(Model)
-		if failure && len(m.models) != 1 {
+		if failure && len(m.entries) != 1 {
 			t.Fatal("failed refresh erased existing models")
 		}
 		if !failure && m.stage != "setup" {
@@ -106,11 +120,11 @@ func TestRefreshFailureOrEmptyCatalogCannotCrashSelection(t *testing.T) {
 func TestModelSearchAndMetadata(t *testing.T) {
 	m := New("", 80, 24)
 	m.selected = 1
-	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: lemonade.FireworksModel, ContextLength: 262144, Labels: []string{"tool-calling", "vision"}}, {ID: "fireworks.qwen"}}})
+	next, _ := m.Update(modelsMsg{entries: plain(lemonade.Model{ID: lemonade.FireworksModel, ContextLength: 262144, Labels: []string{"tool-calling", "vision"}}, lemonade.Model{ID: "fireworks.qwen"})})
 	m = next.(Model)
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gemma")})
 	m = next.(Model)
-	if len(m.filteredModels()) != 1 || !strings.Contains(m.View(), "262,144 tokens") || !strings.Contains(m.View(), "tool calling") {
+	if len(m.filteredEntries()) != 1 || !strings.Contains(m.View(), "262,144 tokens") || !strings.Contains(m.View(), "tool calling") {
 		t.Fatal("search or metadata missing", m.View())
 	}
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("no-match")})
@@ -137,7 +151,7 @@ func TestConnectingCanBeCancelledWithoutWaiting(t *testing.T) {
 func TestOldPanelResultsCannotAffectNewPanel(t *testing.T) {
 	old := New("", 80, 24)
 	m := New("", 80, 24)
-	next, _ := m.Update(modelsMsg{source: old.client, models: []lemonade.Model{{ID: lemonade.FireworksModel}}})
+	next, _ := m.Update(modelsMsg{source: old.client, entries: plain(lemonade.Model{ID: lemonade.FireworksModel})})
 	m = next.(Model)
 	if m.stage != "providers" {
 		t.Fatal("late result reopened an old model selection")
@@ -261,5 +275,110 @@ func TestCompactGatewayKeepsProviderAndFieldsVisible(t *testing.T) {
 		if !strings.Contains(m.View(), label) {
 			t.Fatalf("compact gateway with an existing key lost %s: %s", label, m.View())
 		}
+	}
+}
+
+// localPicker opens the local model list against a stub Lemonade at url.
+func localPicker(url string, capacity lemonade.Capacity, models ...lemonade.Model) Model {
+	m := New(url, 100, 40)
+	next, _ := m.Update(modelsMsg{source: m.client, entries: lemonade.BuildEntries("local", models, capacity, nil), capacity: "This PC: 12 GB for models (Apple GPU)"})
+	return next.(Model)
+}
+
+var smallMac = lemonade.Capacity{MemoryGB: 12, MemorySource: "Apple GPU", DiskFreeGB: 20}
+
+func TestTooBigModelIsShownButCannotBeDownloaded(t *testing.T) {
+	m := localPicker("", smallMac, lemonade.Model{ID: "Gemma-4-E4B-it-GGUF", Downloaded: true, Size: 5.97, Labels: []string{"chat"}})
+	view := m.View()
+	for _, want := range []string{"Recommended", "★ Qwen3.8 Flash Next", "won't fit", "This PC: 12 GB"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view lacks %q:\n%s", want, view)
+		}
+	}
+	if m.entries[0].Model.ID != "Qwen3.8-Flash-Next-GGUF" {
+		t.Fatalf("first row %s", m.entries[0].Model.ID)
+	}
+	if m.entries[m.focus].Model.ID != "Gemma-4-E4B-it-GGUF" {
+		t.Fatalf("cursor should start on the first usable row, got %s", m.entries[m.focus].Model.ID)
+	}
+	m.focus = 0
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil || m.stage != "models" || !strings.Contains(m.note, "memory") {
+		t.Fatalf("a model that does not fit started something: stage=%s note=%q", m.stage, m.note)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	if next.(Model).note != "" {
+		t.Fatal("a refusal note outlived the search that replaced it")
+	}
+}
+
+func TestFittingModelDownloadsThenIsSelected(t *testing.T) {
+	var pulled string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		pulled, _ = body["model_name"].(string)
+		fmt.Fprint(w, "event: progress\ndata: {\"percent\":50}\n\nevent: complete\ndata: {}\n\n")
+	}))
+	defer s.Close()
+	m := localPicker(s.URL, smallMac, lemonade.Model{ID: "Tiny-GGUF", Size: 1, Labels: []string{"chat"}})
+	for i, e := range m.filteredEntries() {
+		if e.Model.ID == "Tiny-GGUF" {
+			m.focus = i
+		}
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.stage != "download" || cmd == nil {
+		t.Fatalf("stage=%s", m.stage)
+	}
+	// Feed each command's message back in, as Bubble Tea would, until the
+	// panel selects (the spinner tick in the first batch is skipped).
+	var selected string
+	msg := waitPull(m.pullCh)()
+	for i := 0; i < 20 && msg != nil && selected == ""; i++ {
+		if sel, ok := msg.(SelectedMsg); ok {
+			selected = sel.ID
+			break
+		}
+		next, cmd = m.Update(msg)
+		m = next.(Model)
+		if cmd == nil {
+			break
+		}
+		msg = cmd()
+	}
+	if selected != "Tiny-GGUF" || pulled != "Tiny-GGUF" {
+		t.Fatalf("selected=%q pulled=%q note=%q", selected, pulled, m.note)
+	}
+}
+
+func TestEscStopsADownloadAndReturnsToTheList(t *testing.T) {
+	block := make(chan struct{})
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	}))
+	defer s.Close()
+	defer close(block)
+	m := localPicker(s.URL, smallMac, lemonade.Model{ID: "Tiny-GGUF", Size: 1, Labels: []string{"chat"}})
+	for i, e := range m.filteredEntries() {
+		if e.Model.ID == "Tiny-GGUF" {
+			m.focus = i
+		}
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = key(next.(Model), tea.KeyEsc)
+	if m.stage != "models" || m.ctx.Err() != nil || !strings.Contains(m.note, "stopped") {
+		t.Fatalf("stage=%s note=%q panelCtx=%v", m.stage, m.note, m.ctx.Err())
+	}
+	// The late completion must not select anything.
+	next, cmd := m.Update(pullDoneMsg{source: m.client, id: "Tiny-GGUF"})
+	if cmd != nil || next.(Model).stage != "models" {
+		t.Fatal("a stopped download still selected its model")
 	}
 }

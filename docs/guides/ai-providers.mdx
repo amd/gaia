@@ -15,9 +15,15 @@ on your Lemonade server.
 2. Select **Fireworks AI**. Paste your API key into the masked field and press
    **Enter**. Keys go directly to your local Lemonade server, never through the
    conversation or the agent.
-3. Pick a discovered model. **Gemma 4 31B IT**
-   (`fireworks.gemma-4-31b-it`) appears first when your account exposes it.
-   Type to filter the list; use **↑/↓** and **Enter** to select.
+3. Pick a discovered model. The **Recommended** group comes first: Gemma 4 31B IT
+   (`fireworks.gemma-4-31b-it`) and the DeepSeek V4 Flash models GAIA has been
+   benchmarked on, then every other model your account exposes. Type to filter
+   the list; use **↑/↓** and **Enter** to select.
+
+**Qwen3.8 Flash Next** is listed under Recommended but is not serverless on
+Fireworks: it needs an on-demand deployment on your Fireworks account. Until one
+exists the row explains that and cannot be selected; once Lemonade discovers the
+deployment (`fireworks.qwen3p8-flash-next-…`) it becomes selectable.
 
 The model list comes from Lemonade's provider discovery. A listed model may still
 require deployment or additional account access to serve requests. GAIA does not create a paid
@@ -30,9 +36,33 @@ URL. The default authentication header is `Authorization`, with the prefix
 enter the required header name and leave the prefix empty. Use **Tab** to move
 between fields, then paste the key and press **Enter**.
 
-For **Local**, select a downloaded chat model. If none are installed, close the
-panel and run setup. Selecting a cloud provider before setup downloads only the
-local embedding models, not an unused local chat model.
+For **Local**, the list shows every chat model Lemonade offers, downloaded or not.
+**Recommended** models come first — Qwen3.8 Flash Next, Gemma 4 E4B, and the
+Qwen3 Coder models — marked with ★. The panel names how much memory this PC has
+for models and how much disk is free, both read from Lemonade:
+
+- **downloaded** — selecting it switches to it straight away.
+- **download N GB** — it fits; selecting it downloads it in the panel with
+  progress, then switches to it. **Esc** stops the download.
+- **won't fit** — shown so you know it exists, but it cannot be downloaded. The
+  details line says what it needs against what this PC has.
+
+A model fits when its size plus 10% and 2 GB of working room fits the memory
+llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared
+memory — and its download fits the free disk. If Lemonade cannot report this PC's
+memory, every download is disabled rather than guessed.
+
+Selecting a cloud provider before setup downloads only the local embedding
+models, not an unused local chat model.
+
+### The default local model
+
+`gaia init` picks the local chat model from the same rule: **Qwen3.8 Flash Next**
+where it fits (a 128 GB Strix Halo), **Gemma 4 E4B** on every other PC. It records
+a Qwen pick as `default_model` in `~/.gaia/config.json`, so the TUI's agent starts
+on it. Set `gaia config set default_model <id>` to choose your own; `gaia init`
+never overwrites it. To stay on Gemma on a large machine and skip the 82 GB
+download, run `gaia config set default_model Gemma-4-E4B-it-GGUF` before setup.
 
 ## Keys and settings
 

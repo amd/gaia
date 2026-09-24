@@ -35,6 +35,8 @@ type Model struct {
 	Provider      string   `json:"cloud_provider"`
 	Downloaded    bool     `json:"downloaded"`
 	Labels        []string `json:"labels"`
+	// Size is the download size in GB as Lemonade's catalog reports it.
+	Size float64 `json:"size"`
 }
 
 func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || IsCloudID(m.ID) }

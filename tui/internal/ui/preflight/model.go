@@ -31,7 +31,7 @@ const (
 	checkTimeout     = 90 * time.Second
 	startTimeout     = 60 * time.Second
 	ensureTimeout    = 15 * time.Minute
-	provisionTimeout = 60 * time.Minute
+	provisionTimeout = 5 * time.Hour // the 82 GB Strix Halo default at ~5 MB/s; esc cancels
 	// defaultReadyHold is how long an all-green screen is held so the user sees
 	// what was verified before chat replaces it.
 	defaultReadyHold = 800 * time.Millisecond

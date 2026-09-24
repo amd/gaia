@@ -7,7 +7,6 @@ package providers
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
@@ -27,8 +26,18 @@ type loadedMsg struct {
 	err       error
 }
 type modelsMsg struct {
+	source   *lemonade.Client
+	entries  []lemonade.Entry
+	capacity string
+	err      error
+}
+type pullProgressMsg struct {
 	source *lemonade.Client
-	models []lemonade.Model
+	p      lemonade.PullProgress
+}
+type pullDoneMsg struct {
+	source *lemonade.Client
+	id     string
 	err    error
 }
 type clearedMsg struct {
@@ -47,7 +56,12 @@ type Model struct {
 	stage         string
 	fields        []textinput.Model
 	focus         int
-	models        []lemonade.Model
+	entries       []lemonade.Entry
+	capacity      string
+	pulling       *lemonade.Entry
+	pullCh        chan tea.Msg
+	pullCancel    context.CancelFunc
+	pullLine      string
 	busy          bool
 	activity      string
 	note          string
@@ -82,8 +96,89 @@ func (m Model) keyStatus() (env, runtime bool) {
 	return false, false
 }
 func (m Model) fetchModels() tea.Cmd {
-	c, p := m.client, m.chosen()
-	return func() tea.Msg { models, e := c.Models(m.ctx, p); return modelsMsg{source: c, models: models, err: e} }
+	c, p, ctx := m.client, m.chosen(), m.ctx
+	return func() tea.Msg { return loadCatalog(ctx, c, p) }
+}
+
+// loadCatalog lists provider's models. For local ones it first reads what this
+// PC can hold; when that fails every download is refused rather than guessed.
+func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) modelsMsg {
+	var capacity lemonade.Capacity
+	var capErr error
+	line := ""
+	if provider == "local" {
+		capacity, capErr = c.Capacity(ctx)
+		if capErr != nil {
+			line = "Downloads disabled: could not read this PC's memory from Lemonade (" + capErr.Error() + ")"
+		} else {
+			line = fmt.Sprintf("This PC: %.0f GB for models (%s)", capacity.MemoryGB, capacity.MemorySource)
+			if capacity.DiskFreeGB >= 0 {
+				line += fmt.Sprintf(" · %.0f GB disk free", capacity.DiskFreeGB)
+			}
+		}
+	}
+	entries, err := c.Catalog(ctx, provider, capacity, capErr)
+	return modelsMsg{source: c, entries: entries, capacity: line, err: err}
+}
+
+func waitPull(ch chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+// startPull downloads e in the background and reports progress on m.pullCh.
+func (m Model) startPull(e lemonade.Entry) (Model, tea.Cmd) {
+	ctx, cancel := context.WithCancel(m.ctx)
+	ch := make(chan tea.Msg, 16)
+	c := m.client
+	go func() {
+		err := c.Pull(ctx, e, func(p lemonade.PullProgress) {
+			// Drop progress rather than stall the download, and keep the last
+			// slot free so the final message below never blocks once the
+			// panel stops reading (the user pressed esc).
+			if len(ch) < cap(ch)-1 {
+				ch <- pullProgressMsg{source: c, p: p}
+			}
+		})
+		ch <- pullDoneMsg{source: c, id: e.Model.ID, err: err}
+		close(ch)
+	}()
+	m.stage = "download"
+	m.pulling = &e
+	m.pullCh = ch
+	m.pullCancel = cancel
+	m.pullLine = "Starting download"
+	m.note = ""
+	return m, tea.Batch(m.spin.Tick, waitPull(ch))
+}
+
+func entryName(e lemonade.Entry, provider string) string {
+	if e.Recommended != nil && e.Recommended.Label != "" {
+		return e.Recommended.Label
+	}
+	return strings.TrimPrefix(e.Model.ID, provider+".")
+}
+
+func entryStatus(e lemonade.Entry) string {
+	switch {
+	case e.Unavailable():
+		return "unavailable"
+	case e.Model.Cloud():
+		return ""
+	case e.Model.Downloaded:
+		return "downloaded"
+	case e.Fits:
+		return fmt.Sprintf("download %.1f GB", e.SizeGB())
+	case e.SizeGB() > 0:
+		return fmt.Sprintf("won't fit · %.0f GB", e.SizeGB())
+	default:
+		return "won't fit"
+	}
 }
 func (m Model) setup() Model {
 	p := lemonade.Provider{Name: m.chosen(), Header: "Authorization", Prefix: "Bearer "}
@@ -135,7 +230,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch v := msg.(type) {
 	case spinner.TickMsg:
-		if m.busy {
+		if m.busy || m.stage == "download" {
 			var cmd tea.Cmd
 			m.spin, cmd = m.spin.Update(msg)
 			return m, cmd
@@ -163,8 +258,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.note = v.err.Error()
 			return m, nil
 		}
-		if len(v.models) == 0 {
-			m.models = nil
+		m.capacity = v.capacity
+		if len(v.entries) == 0 {
+			m.entries = nil
 			if m.stage == "models" {
 				if m.chosen() == "local" {
 					m.stage = "providers"
@@ -174,25 +270,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.note = "No chat models discovered. Check the key, model access, and gateway URL; then retry."
 			if m.chosen() == "local" {
-				m.note = "No local chat models downloaded. Close this panel and run setup to download one."
+				m.note = "Lemonade lists no local chat models. Update Lemonade, then retry."
 			}
 			return m, nil
 		}
-		m.models = v.models
-		sort.Slice(m.models, func(i, j int) bool {
-			if m.models[i].ID == lemonade.FireworksModel {
-				return true
-			}
-			if m.models[j].ID == lemonade.FireworksModel {
-				return false
-			}
-			return m.models[i].ID < m.models[j].ID
-		})
+		m.entries = v.entries
 		m.stage = "models"
 		m.search = ""
 		m.focus = 0
+		for i, e := range m.entries {
+			if e.Selectable() {
+				m.focus = i
+				break
+			}
+		}
 		m.note = ""
 		return m, m.Init()
+	case pullProgressMsg:
+		if v.source != m.client || m.stage != "download" {
+			return m, nil
+		}
+		m.pullLine = pullLine(v.p)
+		return m, waitPull(m.pullCh)
+	case pullDoneMsg:
+		if v.source != m.client || m.stage != "download" {
+			return m, nil
+		}
+		m.pullCancel = nil
+		m.pulling = nil
+		if v.err != nil {
+			m.stage = "models"
+			m.note = v.err.Error()
+			return m, nil
+		}
+		id := v.id
+		m.cancel()
+		return m, func() tea.Msg { return SelectedMsg{ID: id} }
 	case clearedMsg:
 		if v.source != nil && v.source != m.client {
 			return m, nil
@@ -219,6 +332,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stage = "closing"
 			m.cancel()
 			return m, tea.Quit
+		}
+		if m.stage == "download" {
+			if v.String() == "esc" && m.pullCancel != nil {
+				m.pullCancel()
+				m.pullCancel = nil
+				m.pulling = nil
+				m.stage = "models"
+				m.note = "Download stopped."
+			}
+			return m, nil
 		}
 		if m.busy {
 			if v.String() == "esc" {
@@ -258,17 +381,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.Init()
 			}
 		case "models":
-			models := m.filteredModels()
+			entries := m.filteredEntries()
 			switch v.String() {
 			case "up":
 				m.focus = max(0, m.focus-1)
 			case "down", "tab":
-				m.focus = max(0, min(len(models)-1, m.focus+1))
+				m.focus = max(0, min(len(entries)-1, m.focus+1))
 			case "enter":
-				if m.focus < 0 || m.focus >= len(models) {
+				if m.focus < 0 || m.focus >= len(entries) {
 					return m, nil
 				}
-				id := models[m.focus].ID
+				e := entries[m.focus]
+				if !e.Selectable() {
+					reason := e.Reason
+					if reason == "" && e.Recommended != nil {
+						reason = e.Recommended.Note
+					}
+					m.note = entryName(e, m.chosen()) + " can't be used here: " + reason
+					return m, nil
+				}
+				if e.NeedsDownload() {
+					return m.startPull(e)
+				}
+				id := e.Model.ID
 				m.cancel()
 				return m, func() tea.Msg { return SelectedMsg{ID: id} }
 			case "ctrl+r":
@@ -281,11 +416,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(r) > 0 {
 					m.search = string(r[:len(r)-1])
 					m.focus = 0
+					m.note = ""
 				}
 			default:
 				if v.Type == tea.KeyRunes {
 					m.search += string(v.Runes)
 					m.focus = 0
+					m.note = ""
 				}
 			}
 		case "setup":
@@ -319,8 +456,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err := c.Configure(m.ctx, p, key); err != nil {
 						return modelsMsg{source: c, err: err}
 					}
-					models, err := c.Models(m.ctx, p.Name)
-					return modelsMsg{source: c, models: models, err: err}
+					return loadCatalog(m.ctx, c, p.Name)
 				})
 			}
 			var cmd tea.Cmd
@@ -335,14 +471,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
-func (m Model) filteredModels() []lemonade.Model {
-	var out []lemonade.Model
-	for _, model := range m.models {
-		if strings.Contains(strings.ToLower(model.ID), strings.ToLower(m.search)) {
-			out = append(out, model)
+func (m Model) filteredEntries() []lemonade.Entry {
+	var out []lemonade.Entry
+	needle := strings.ToLower(m.search)
+	for _, e := range m.entries {
+		if strings.Contains(strings.ToLower(e.Model.ID), needle) || strings.Contains(strings.ToLower(entryName(e, m.chosen())), needle) {
+			out = append(out, e)
 		}
 	}
 	return out
+}
+
+func pullLine(p lemonade.PullProgress) string {
+	parts := []string{}
+	if p.TotalFiles > 1 {
+		parts = append(parts, fmt.Sprintf("file %d of %d", p.FileIndex, p.TotalFiles))
+	}
+	if p.Total > 0 {
+		parts = append(parts, fmt.Sprintf("%.1f of %.1f GB", float64(p.Downloaded)/1e9, float64(p.Total)/1e9))
+	}
+	parts = append(parts, fmt.Sprintf("%.0f%%", p.Percent))
+	return strings.Join(parts, " · ")
 }
 
 func (m Model) View() string {
@@ -353,7 +502,7 @@ func (m Model) View() string {
 	case "providers":
 		lines = append(lines, "Choose where GAIA runs chat inference.", "")
 		for i, name := range names {
-			desc := "On this machine · downloaded models"
+			desc := "On this machine · models that fit this PC"
 			if name != "local" {
 				desc = "Via Lemonade · key needed"
 				for _, p := range m.providers {
@@ -414,36 +563,64 @@ func (m Model) View() string {
 			}
 			lines = append(lines, marker+labels[i], "  "+f.View())
 		}
+	case "download":
+		e := m.pulling
+		name := ""
+		if e != nil {
+			name = entryName(*e, m.chosen())
+		}
+		lines = append(lines, title.Render("Downloading "+name), "Lemonade is downloading the model to this PC. It is selected when the download finishes.", "", m.spin.View()+" "+m.pullLine)
 	case "models":
-		models := m.filteredModels()
-		lines = append(lines, title.Render(lemonade.Label(m.chosen())+" models"), "Enter selects a model. Existing conversation is preserved.", "Search: "+m.search, "")
-		count := max(1, m.height-14)
+		entries := m.filteredEntries()
+		dim := lipgloss.NewStyle().Foreground(theme.Dim)
+		lines = append(lines, title.Render(lemonade.Label(m.chosen())+" models"), "Enter selects a model. Existing conversation is preserved.")
+		if m.capacity != "" {
+			lines = append(lines, dim.Render(m.capacity))
+		}
+		lines = append(lines, "Search: "+m.search, "")
+		count := max(1, m.height-16)
 		start := max(0, m.focus-count+1)
-		for i := start; i < min(len(models), start+count); i++ {
+		for i := start; i < min(len(entries), start+count); i++ {
+			e := entries[i]
+			if e.Recommended != nil && (i == start || entries[i-1].Recommended == nil) {
+				lines = append(lines, title.Render("Recommended"))
+			}
+			if e.Recommended == nil && (i == start || entries[i-1].Recommended != nil) {
+				lines = append(lines, title.Render("All models"))
+			}
 			marker := "  "
 			if i == m.focus {
 				marker = "› "
 			}
-			label := strings.TrimPrefix(models[i].ID, m.chosen()+".")
-			if models[i].ID == lemonade.FireworksModel {
-				label += " · suggested"
+			label := marker + entryName(e, m.chosen())
+			if e.Recommended != nil {
+				label = marker + "★ " + entryName(e, m.chosen())
 			}
-			if i == m.focus {
-				lines = append(lines, title.Render(marker+label))
-			} else {
-				lines = append(lines, marker+label)
+			if status := entryStatus(e); status != "" {
+				label += " · " + status
+			}
+			switch {
+			case i == m.focus:
+				lines = append(lines, title.Render(label))
+			case !e.Selectable():
+				lines = append(lines, dim.Render(label))
+			default:
+				lines = append(lines, label)
 			}
 		}
-		if len(models) == 0 {
+		if len(entries) == 0 {
 			lines = append(lines, "No matching models. Backspace to change the search.")
 		} else {
-			lines = append(lines, fmt.Sprintf("%d of %d", m.focus+1, len(models)))
-			selected := models[m.focus]
+			lines = append(lines, fmt.Sprintf("%d of %d", m.focus+1, len(entries)))
+			selected := entries[m.focus]
 			details := []string{}
-			if selected.ContextLength > 0 {
-				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(selected.ContextLength)))
+			if name := entryName(selected, m.chosen()); name != selected.Model.ID {
+				details = append(details, selected.Model.ID)
 			}
-			for _, label := range selected.Labels {
+			if selected.Model.ContextLength > 0 {
+				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(selected.Model.ContextLength)))
+			}
+			for _, label := range selected.Model.Labels {
 				switch label {
 				case "tool-calling":
 					details = append(details, "tool calling")
@@ -455,6 +632,12 @@ func (m Model) View() string {
 			}
 			if len(details) > 0 {
 				lines = append(lines, strings.Join(details, " · "))
+			}
+			if selected.Recommended != nil && selected.Recommended.Note != "" && selected.Selectable() {
+				lines = append(lines, dim.Render(selected.Recommended.Note))
+			}
+			if !selected.Selectable() && selected.Reason != "" {
+				lines = append(lines, dim.Render("Can't use: "+selected.Reason))
 			}
 		}
 	}
@@ -468,19 +651,27 @@ func (m Model) View() string {
 	if m.stage == "setup" {
 		hint = "tab field · enter connect · ctrl+d forget key · esc back"
 	}
+	if m.stage == "download" {
+		hint = "esc stop download"
+	}
 	if w < 65 {
 		switch m.stage {
 		case "models":
 			hint = "type to search · ↑/↓ · enter · esc back"
 		case "setup":
 			hint = "tab field · enter connect · esc back"
+		case "download":
+			hint = "esc stop download"
 		default:
 			hint = "↑/↓ choose · enter · esc close"
 		}
 		if w < 40 {
 			hint = "↑/↓ · enter · esc"
-			if m.stage == "setup" {
+			switch m.stage {
+			case "setup":
 				hint = "tab · enter · esc"
+			case "download":
+				hint = "esc stop"
 			}
 		}
 	}
