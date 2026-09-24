@@ -165,7 +165,7 @@ The mechanism, storage location, and how to disable it are covered in the [Memor
 
 [Agent Skills](/guides/composing-skills) are short playbooks an agent loads into its own prompt, grouped into named **skill sets** — exactly one set is active per launch. GAIA is built to host them: its own bundled skill directory is the highest-precedence discovery root, so a skill shipped with the agent wins over a same-named user copy.
 
-**One skill ships enabled: `gaia-voice`.** It is declared in the manifest's always-on `skills:` list, so it is in the prompt on every call — 676 tokens of it, and it registers no tools. It isn't a task recipe but the agent's honesty floor: don't claim work you didn't do, don't present empty output as a result, don't substitute a near-miss and report success. Those failures spoil an answer whatever the task is, which is why it can't sit in a bundle you have to opt into.
+**One skill ships enabled: `gaia-voice`.** It is declared in the manifest's always-on `skills:` list, so it is in the prompt on every call — 702 tokens of it, and it registers no tools. It isn't a task recipe but the agent's honesty floor: don't claim work you didn't do, don't present empty output as a result, don't substitute a near-miss and report success. Those failures spoil an answer whatever the task is, which is why it can't sit in a bundle you have to opt into.
 
 **No skill *set* loads by default, and v0.1.1 declares none.** Loading several skill bodies into every prompt costs tokens and shrinks the room left for an answer, and no eval has measured that trade for this agent yet. The manifest's skill-set declarations ship commented out; enabling them is uncommenting two blocks, with no code change.
 

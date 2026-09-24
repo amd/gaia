@@ -49,7 +49,9 @@ Private mode suppresses memory persistence.
 
 Each source is limited to 256,000 characters, 512 occurrences, 100,000 characters
 of retained item text and quotations, and 30 minutes of extraction time. Saved
-conversation records are limited to 256,000 characters. Limits fail explicitly.
+conversation records are limited to 256,000 characters; a longer answer is not
+saved to memory, and GAIA logs an error. Other limits end the extraction as
+incomplete.
 The backend must support JSON-schema responses. Small local models can take
 around 17 minutes for a 40-item, 79K-character document. Two passes per page
 require at least 40 calls at that size; retries and slower models can exceed

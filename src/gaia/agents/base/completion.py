@@ -90,7 +90,20 @@ _CODE_SUFFIXES = frozenset(
     }
 )
 _FENCES = re.compile(r"```.*?```", re.DOTALL)
-_SAVE_REQUEST = re.compile(r"\b(?:save|write|export|store)\b", re.I)
+# The verb must be an instruction, never a noun ("the store") or a question topic.
+_SAVE_REQUEST = re.compile(
+    r"(?:^|\band\b|\bthen\b|[,;:]|\b(?:can|could|would|will)\s+you\b|\byou\s+to\b|"
+    r"\bplease\b)\s*(?:(?:please|also|now|just|then|and|kindly)\s+)*"
+    r"\b(save|write|export|store)\b",
+    re.I,
+)
+# 'write a poem' requests an answer; writing needs a file object or target.
+_FILE_OBJECT = re.compile(
+    r"^\s*(?:(?:a|an|the|new|this|that|it|them)\s+)*(?:[\w-]+\s+)?(?:file|disk)\b|"
+    r"\b(?:to|into|onto|on)\s+(?:(?:a|an|the|new|this|that)\s+)*(?:[\w-]+\s+)?"
+    r"(?:file|disk)\b",
+    re.I,
+)
 _NOT_REQUEST = re.compile(
     r"\b(?:do not|don't|never|without|how (?:do|can|would)|explain how|"
     r"show me how|if|could you explain)\b",
@@ -119,6 +132,8 @@ def _path_token(match: re.Match) -> str | None:
         return None
     quoted = any(match.group(i) is not None for i in (1, 2, 3))
     suffix = value.rsplit(".", 1)[-1].lower()
+    # Dotted initials (U.S, e.g) are abbreviations, not file names.
+    abbreviation = all(len(part) == 1 for part in value.split("."))
     if (
         quoted
         or "/" in value
@@ -126,6 +141,7 @@ def _path_token(match: re.Match) -> str | None:
         or (
             "." in value
             and suffix.isalpha()
+            and not abbreviation
             and suffix not in {"com", "org", "net", "io", "ai", "dev", "app"}
         )
     ):
@@ -160,21 +176,18 @@ def save_obligations(query: str) -> tuple[list[str], bool]:
     paths = []
     requested = False
     for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", query)):
+        sentence = sentence.strip()
         action = _SAVE_REQUEST.search(sentence)
         if not action or _NOT_REQUEST.search(sentence[: action.end()]):
             continue
+        verb = action.group(1).lower()
         tail = sentence[action.end() :]
         found = destination_paths(tail)
-        if action.group().lower() == "write" and not _DESTINATION.search(tail):
+        if verb == "write" and not _DESTINATION.search(tail):
             first = _TARGET.search(tail)
             if not first or _path_token(first) is None:
                 found = []
-        # 'write a poem' requests an answer, not a disk side effect.
-        if (
-            found
-            or re.search(r"\b(?:save|export|store)\b", action.group(), re.I)
-            or re.search(r"\b(?:file|disk)\b", tail, re.I)
-        ):
+        if found or verb != "write" or _FILE_OBJECT.search(tail):
             requested = True
             paths.extend(found)
     return list(dict.fromkeys(paths)), requested
@@ -202,16 +215,14 @@ class FileEvidence:
 
 
 def _normalize_key(path: str, base: str) -> str:
-    """Path identity used to correlate reads/writes across process-wide Windows
-    and POSIX roots -- shared so every ledger normalizes the same path the
-    same way rather than each constructing its own evidence object just to
-    call this."""
+    """One identity per file for Windows and POSIX paths, shared by every ledger."""
     if ntpath.isabs(path) and ("\\" in path or ntpath.splitdrive(path)[0]):
         return ntpath.normcase(ntpath.normpath(path))
     if ntpath.splitdrive(base)[0]:
         return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
+    # Write tools report resolved paths; macOS /tmp and /var are symlinks.
     return os.path.normcase(
-        os.path.abspath(os.path.join(base, os.path.expanduser(path)))
+        os.path.realpath(os.path.join(base, os.path.expanduser(path)))
     )
 
 
@@ -277,7 +288,10 @@ class CompletionEvidence:
                                 )
                             )
                         ):
-                            paths.add(self.key(value))
+                            try:
+                                paths.add(self.key(value))
+                            except ValueError:  # embedded NUL: never a path
+                                continue
         snapshots = {}
         for path in paths:
             if validator is not None:
@@ -412,7 +426,13 @@ class CompletionEvidence:
                 claim_without_path |= not paths
         gaps = self.cleanup_gaps(answer)
         for path in sorted(required):
-            if path not in self.files or not self.files[path].written:
+            # A named folder is fulfilled by a write inside it.
+            inside = any(
+                item.written and key.startswith(path.rstrip("/\\") + sep)
+                for key, item in self.files.items()
+                for sep in ("/", "\\")
+            )
+            if not inside and (path not in self.files or not self.files[path].written):
                 reason = self.uninspectable.get(path)
                 gaps.append(
                     f"Could not inspect `{path}`: {reason}"
@@ -457,11 +477,26 @@ class CompletionEvidence:
                 re.I,
             ):
                 continue
-            match = re.search(r"\b(?:removed|deleted|cleaned up)\s+", sentence, re.I)
+            # A report of this turn's action, not "deleted files go to the bin".
+            claim = re.search(
+                r"\b(?:I|I've|I have|we|we've|we have|successfully|also)\s+"
+                r"(?:\w+\s+)?(?:removed|deleted|cleaned up)\s+",
+                sentence,
+                re.I,
+            )
+            terse = (
+                None
+                if claim
+                else re.match(r"\s*(?:removed|deleted|cleaned up)\s+", sentence, re.I)
+            )
+            match = claim or terse
             if not match:
                 continue
             tail = sentence[match.end() :]
             first = _TARGET.search(tail)
+            # A terse "Deleted x" report must name a path, not a category.
+            if terse and (not first or first.start() or _path_token(first) is None):
+                continue
             is_file = re.match(
                 r"(?:the |all |my |temporary |scratch |temp )*(?:files?|artifacts?)\b",
                 tail,

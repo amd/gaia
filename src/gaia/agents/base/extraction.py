@@ -89,7 +89,7 @@ def exhaustive_request(text):
         ):
             continue
         if re.search(
-            r"\b(?:list|find|enumerate)\s+(?:all|every)\s+(?:files|directories|folders)\b",
+            r"\b(?:list|find|enumerate)\s+(?:all|every)\s+(?:the\s+)?(?:files?|director(?:y|ies)|folders?)\b",
             sentence,
             re.I,
         ):
@@ -144,34 +144,18 @@ def _stated(value):
 
 
 def _same_value(a, b):
-    # A model may include/exclude the final sentence period in a field copied
-    # from the same evidence. Compare this one delimiter without altering the
-    # retained value (e.g. U.S. or a fully-qualified domain).
+    # Only a final period may differ; the retained value is never rewritten.
     shorter, longer = sorted((a, b), key=len)
     return a == b or (bool(shorter) and longer == shorter + ".")
 
 
-def _anchor(entry, value):
-    """Source offset of *value* inside the entry's quote, or None if absent or repeated."""
-    at = entry.quote.find(value)
-    if at < 0 or entry.quote.find(value, at + 1) >= 0:
-        return None
-    return entry.start + at
-
-
-def same_occurrence_fields(first, second):
-    if first.text == second.text:
-        return True
-    if (first.start, first.end) != (second.start, second.end):
-        return False
-    if not first.fields or not second.fields:
-        return False
-    if len(first.fields) != len(second.fields):
-        return False
-    return all(
-        name == other and _same_value(a, b)
-        for (name, a), (other, b) in zip(first.fields, second.fields)
-    )
+def _anchors(entry, value):
+    """Source offsets where *value* occurs inside the entry's quote."""
+    found, at = set(), entry.quote.find(value)
+    while at >= 0:
+        found.add(entry.start + at)
+        at = entry.quote.find(value, at + 1)
+    return found
 
 
 def reconcile_occurrence(first, second):
@@ -179,8 +163,8 @@ def reconcile_occurrence(first, second):
 
     Free text can only be matched by containment. Field values are verbatim in
     their quotes, so partially overlapping quotes also match when every value
-    both sides state sits once, at the same source offset, in each quote. A
-    shared name at different offsets is a repeated item, never merged.
+    both sides state occurs at a shared source offset in both quotes. A shared
+    name at different offsets is a repeated item, never merged.
     """
     if max(first.start, second.start) >= min(first.end, second.end):
         return None
@@ -199,8 +183,7 @@ def reconcile_occurrence(first, second):
         if contained:
             continue
         value = min(old[name], new[name], key=len)
-        at = _anchor(first, value)
-        if at is None or at != _anchor(second, value):
+        if not _anchors(first, value) & _anchors(second, value):
             return None
     identity = [name for name in old if name.lower() in {"name", "id", "title"}]
     if not any(name in shared for name in (identity or list(old))):
@@ -296,9 +279,46 @@ def _snap_backward(source: str, start: int, right: int) -> int:
     return last.end() if last else right
 
 
+def _overlaps(first, second):
+    return max(first[0], second[0]) < min(first[1], second[1])
+
+
+def merge_occurrences(entries, spans, candidates):
+    """Merge candidates into copies of the ledger, raising on ambiguous evidence.
+
+    *spans* maps each entry to every quote span merged into it. Quotes that do
+    not overlap are distinct occurrences, so one entry never absorbs both.
+    """
+    entries, spans = dict(entries), dict(spans)
+    for entry in candidates:
+        span = (entry.start, entry.end)
+        overlaps = [key for key in entries if _overlaps(key, span)]
+        if len(overlaps) > 1:
+            raise ValueError(
+                "One extraction overlaps multiple occurrences; use distinct source quotes"
+            )
+        merged = [span]
+        if overlaps:
+            key = overlaps[0]
+            retained = reconcile_occurrence(entries[key], entry)
+            if retained is None or not all(_overlaps(s, span) for s in spans[key]):
+                raise ValueError(
+                    "Conflicting fields for an overlapping occurrence. "
+                    "Recheck both source spans; do not discard stated values: "
+                    + entries[key].text
+                )
+            del entries[key]
+            merged += spans.pop(key)
+            entry = retained
+        entries[(entry.start, entry.end)] = entry
+        spans[(entry.start, entry.end)] = merged
+    return entries, spans
+
+
 def extract_pages(source, request, ask, check_cancelled, fields=()):
     started = time.monotonic()
     entries = {}
+    spans = {}
     pages = 0
     for core in range(0, max(1, len(source)), PAGE_CHARS):
         check_cancelled()
@@ -351,18 +371,8 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
                     if time.monotonic() - started > MAX_SECONDS:
                         raise ValueError("Extraction time budget exhausted")
                     parsed = parse_page(reply, page, left, fields)
-                    for candidate in parsed:
-                        for prior in [*entries.values(), *found]:
-                            if (
-                                max(prior.start, candidate.start)
-                                < min(prior.end, candidate.end)
-                                and reconcile_occurrence(prior, candidate) is None
-                            ):
-                                raise ValueError(
-                                    "Conflicting fields for an overlapping occurrence. "
-                                    "Recheck both source spans; do not discard stated values: "
-                                    + prior.text
-                                )
+                    # Validate inside the retry, so an ambiguous reply is re-asked.
+                    merge_occurrences(entries, spans, [*found, *parsed])
                     found.extend(parsed)
                     break
                 except (ValueError, TypeError) as error:
@@ -375,26 +385,7 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
                         str(error)[:300]
                         + ". Retry with valid JSON, every required field, and a distinctive verbatim quote per item."
                     )
-        for entry in found:
-            overlaps = [
-                (key, prior)
-                for key, prior in entries.items()
-                if max(prior.start, entry.start) < min(prior.end, entry.end)
-            ]
-            if len(overlaps) > 1:
-                raise ValueError(
-                    "One extraction overlaps multiple occurrences; use distinct source quotes"
-                )
-            if overlaps:
-                key, prior = overlaps[0]
-                retained = reconcile_occurrence(prior, entry)
-                if retained is None:
-                    raise ValueError(
-                        "Conflicting overlapping extractions; distinct items need distinct source quotes"
-                    )
-                del entries[key]
-                entry = retained
-            entries[(entry.start, entry.end)] = entry
+        entries, spans = merge_occurrences(entries, spans, found)
         if len(entries) > MAX_ITEMS:
             raise ValueError(f"Extraction exceeds the {MAX_ITEMS}-item limit")
         if sum(len(e.text) + len(e.quote) for e in entries.values()) > 100000:
@@ -451,7 +442,7 @@ class ExtractionLedger:
         # Code-index tools can enumerate symbols without document extraction.
         # Mixed sources and content requests (e.g. TODOs in code) still require
         # every named file, even when that file has a code extension.
-        code_symbols_only = (
+        self.code_symbols_only = (
             bool(candidate_paths)
             and all(
                 os.path.splitext(p)[1].lower() in _CODE_EXTENSIONS
@@ -475,7 +466,7 @@ class ExtractionLedger:
                     re.I,
                 )
             )
-            and not code_symbols_only
+            and not self.code_symbols_only
         )
         self.sources = set()
         self.results = {}
@@ -493,7 +484,7 @@ class ExtractionLedger:
         return _normalize_key(path, self.root)
 
     def activate_skill(self, instructions):
-        if exhaustive_request(instructions):
+        if not self.code_symbols_only and exhaustive_request(instructions):
             self.enabled = True
             if instructions not in self.query:
                 self.query += "\nActive extraction instructions:\n" + instructions
@@ -525,11 +516,8 @@ class ExtractionLedger:
     def gaps(self):
         if not self.enabled:
             return []
+        # Nothing named or read: the answer comes from the query or knowledge.
         sources = self.sources | self.requested
-        if not sources:
-            return [
-                "Exhaustive extraction has no verified source. Use extract_document_items for each source file."
-            ]
         gaps = [
             f"Incomplete extraction of `{path}`: {self.errors.get(path, 'use extract_document_items; reading all pages alone does not establish an inventory')}."
             for path in sorted(sources)
@@ -571,12 +559,7 @@ class ExtractionLedger:
         return self.render()
 
     def validate_sources(self, read):
-        # ValueError is read_snapshot's own signal (bad path, permission
-        # denied, not a regular file) plus the "changed after extraction"
-        # raise below; OSError covers the underlying file operations it does
-        # not pre-validate (deleted mid-read, disk I/O failure). Anything else
-        # is unexpected and should propagate rather than be recorded as a
-        # source-gone-stale error it is not.
+        # read_snapshot signals refusals with ValueError; I/O fails with OSError.
         for path, (_, _, digest) in list(self.results.items()):
             try:
                 current = hashlib.sha256(read(path).encode()).hexdigest()

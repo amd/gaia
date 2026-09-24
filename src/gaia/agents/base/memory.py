@@ -53,6 +53,7 @@ from gaia.agents.base.memory_store import (
     CONSOLIDATION_MIN_TURNS,
     EXTRACTABLE_CATEGORIES,
     MAX_CONTENT_LENGTH,
+    MAX_EXTRACTION_TURN_LENGTH,
     VALID_CATEGORIES,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
@@ -2799,25 +2800,37 @@ class MemoryMixin(ProceduralMemoryMixin):
         try:
             session_id = self.memory_session_id
             ctx = self._memory_context
-            self._memory_store.store_turn(session_id, "user", clean_input, context=ctx)
+            response, preserve_full = assistant_response, False
             extraction = getattr(self, "_extraction_ledger", None)
             if extraction is not None and extraction.results:
                 provenance = "\n".join(
                     f"Source {path}: SHA256 {digest}"
                     for path, (_, _, digest) in sorted(extraction.results.items())
                 )
-                self._memory_store.store_turn(
-                    session_id,
-                    "assistant",
-                    assistant_response
-                    + "\n\nHistorical extraction evidence; revalidate current sources.\n"
-                    + provenance,
-                    context=ctx,
-                    preserve_full=True,
+                response += (
+                    "\n\nHistorical extraction evidence; revalidate current sources.\n"
+                    + provenance
+                )
+                preserve_full = True
+            # Check before storing either turn, so a question is never kept unanswered.
+            if preserve_full and len(response) > MAX_EXTRACTION_TURN_LENGTH:
+                logger.error(
+                    "[MemoryMixin] extraction answer of %d characters exceeds the "
+                    "%d-character memory limit; this turn was not stored. Extract "
+                    "fewer sources per turn so follow-ups can recall the inventory.",
+                    len(response),
+                    MAX_EXTRACTION_TURN_LENGTH,
                 )
             else:
                 self._memory_store.store_turn(
-                    session_id, "assistant", assistant_response, context=ctx
+                    session_id, "user", clean_input, context=ctx
+                )
+                self._memory_store.store_turn(
+                    session_id,
+                    "assistant",
+                    response,
+                    context=ctx,
+                    preserve_full=preserve_full,
                 )
         except Exception as e:
             logger.warning("[MemoryMixin] failed to store conversation: %s", e)

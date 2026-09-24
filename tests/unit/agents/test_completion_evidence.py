@@ -550,3 +550,95 @@ def test_subclass_cannot_reintroduce_an_unsupported_test_claim(agent):
     assert result["status"] == "incomplete"
     assert "All tests pass." not in result["result"]
     assert agent.console.print_final_answer.call_args.args[0] == result["result"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What time does the store close?",
+        "Can you explain the save button in Word?",
+        "Is it safe to store passwords in a browser?",
+        "Tell me about the Save the Children charity.",
+        "Write a summary of this file: alpha, beta.",
+    ],
+)
+def test_questions_that_mention_saving_answer_normally(agent, query):
+    script(agent, {"answer": "Here is the answer."})
+    result = agent.process_query(query, max_steps=5)
+    assert result["status"] == "success"
+    assert not result["completion_gaps"]
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("Can you save it to `a.md`?", (["a.md"], True)),
+        ("Summarize this, then store the result.", ([], True)),
+        ("Please write it to a file.", ([], True)),
+        ("List every U.S. state and save to `states.md`.", (["states.md"], True)),
+    ],
+)
+def test_save_instructions_in_requests_are_still_obligations(query, expected):
+    assert save_obligations(query) == expected
+
+
+def test_symlinked_directory_is_the_same_output(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    ledger = CompletionEvidence(
+        f"Save the summary to `{tmp_path / 'link' / 'out.md'}`", str(tmp_path)
+    )
+    write(ledger, str(real / "out.md"))
+    read(ledger, str(real / "out.md"))
+    assert not gaps(ledger)
+
+
+def test_a_write_inside_a_named_folder_fulfills_it(tmp_path):
+    ledger = CompletionEvidence("Save it into the `reports/` folder", str(tmp_path))
+    write(ledger, "reports/summary.md")
+    assert gaps(ledger)
+    read(ledger, "reports/summary.md")
+    assert not gaps(ledger)
+
+
+def test_relative_save_resolves_like_the_file_tools(agent, tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    monkeypatch.chdir(docs)
+    # The real file tools report the resolved path they wrote.
+    target = str(docs / "notes.txt")
+    script(
+        agent,
+        call("write_file", file_path=target, content="hi"),
+        call("read_file", file_path=target),
+        {"answer": "Saved to `notes.txt`."},
+    )
+    result = agent.process_query("Save a greeting to `notes.txt`", max_steps=10)
+    assert result["status"] == "success", result["completion_gaps"]
+    assert (docs / "notes.txt").read_text() == "hi"
+
+
+def test_connection_error_is_not_replaced_by_the_completion_report(agent):
+    agent.chat = MagicMock()
+    agent.chat.send_messages.side_effect = ConnectionError("server down")
+    result = agent.process_query("Save the report to `out.md`", max_steps=3)
+    assert result["status"] == "failed"
+    assert "No successful write" in result["result"]
+    assert result["result"].index("No successful write") > 0
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Deleted files on Windows go to the Recycle Bin.",
+        "Removed items stay in the archive for 30 days.",
+    ],
+)
+def test_explaining_deletion_is_not_a_cleanup_claim(ledger, answer):
+    assert ledger.cleanup_gaps(answer) == []
+
+
+def test_terse_cleanup_report_naming_a_path_is_still_checked(ledger):
+    assert ledger.cleanup_gaps("Deleted `scratch.py`.")

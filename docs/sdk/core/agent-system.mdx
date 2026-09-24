@@ -1120,11 +1120,13 @@ reads captured output rather than re-executing a potentially state-changing tool
 ### Exhaustive document extraction
 
 For explicit requests to list every item in a text document, the agent offers
-`extract_document_items(file_path)`. It reads a permission-checked snapshot and
-processes overlapping 4,000-character chunks sequentially, with an additional
-omission check per chunk. Each call has isolated context and no tools. Requested
-fields written as `fields: name, reps, cue` must appear on every extracted entry;
-missing source facts are marked as not stated.
+`extract_document_items(file_path, fields=None)`. It reads a permission-checked
+snapshot and processes 4,000-character pages sequentially, each widened by up to
+600 characters of overlap on either side, with an additional omission check per
+page. Each call has isolated context and no tools. Requested fields, written in
+the request as `fields: name, reps, cue` or passed as the `fields` list, must
+appear on every extracted entry; missing source facts are marked as not stated.
+A `fields` list that differs from the request's is rejected rather than merged.
 
 The framework retains entries with exact source quotations and character spans,
 checks the source fingerprint again before completion, and renders the accumulated
@@ -1138,7 +1140,7 @@ back and contain all retained entries before completion. Every requested source
 must finish; a failed page, cancellation, source change, or exceeded budget yields
 an incomplete result. Limits are 256,000 source characters, 512 entries, 24,000
 characters per extraction prompt, and 100,000 characters of retained item text and
-quotes, with a 30-minute extraction deadline (plus the enclosing tool timeout).
+quotes, with a 30-minute extraction deadline (the enclosing tool timeout adds 60 seconds).
 These bounds fail visibly rather than silently dropping data.
 
 This verifies source coverage and preserves the extracted set; it does not prove
@@ -1149,8 +1151,8 @@ requests do not activate this path. Active extraction skills can activate it.
 Existing memory hooks record extraction actions and compact provenance (source
 fingerprint, page coverage and item count), while conversation history retains the
 rendered inventory as one bounded record, bypassing the ordinary 4,000-character
-turn cap only for extraction answers (maximum 256,000 characters, explicit error
-above that bound). Follow-ups can retrieve those observations through existing
+turn cap only for extraction answers (maximum 256,000 characters; a longer answer
+is not stored, and an error is logged). Follow-ups can retrieve those observations through existing
 conversation search. Private mode suppresses persistence. A remembered summary
 never substitutes for reading and validating the current source; no separate
 memory database or cloud sync is introduced.
@@ -1160,9 +1162,12 @@ The default `gaia-voice` skill supplies a short routing rule; the detailed
 schema-constrained page responses and an omission check per page. Overlap keeps
 source text visible, aligns to whole lines or sentences, and preserves verbatim
 field values. Two pages that quote one occurrence with different boundaries merge
-when every value both state sits at the same source offset; a fuller extraction
-may fill fields the other left `not stated`, and a final sentence period is the
-only tolerated value difference. Conflicting evidence fails visibly.
+when an identity field (`name`, `id` or `title`, else any field) is stated by
+both and every value both state occurs at a shared source offset. The retained
+extraction may fill fields the other left `not stated`, but not the reverse at
+the same time, and a final sentence period is the only tolerated value
+difference. Two quotes that do not overlap are never merged into one entry.
+Conflicting evidence is retried once per page, then fails visibly.
 
 Run the explicit live regression with either backend:
 

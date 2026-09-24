@@ -17,7 +17,6 @@ from gaia.agents.base.extraction import (
     parse_page,
     read_snapshot,
     reconcile_occurrence,
-    same_occurrence_fields,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
@@ -70,10 +69,7 @@ def test_overlap_aligns_whole_lines_without_gaps():
 
 
 def test_overlap_falls_back_to_sentence_boundaries_on_a_single_unbroken_line():
-    """transcribe_media's own output has zero newlines -- every real transcript
-    hits the no-newline case the fixture in test_overlap_aligns_whole_lines_...
-    cannot reach. A page must still open and close on a sentence boundary
-    instead of splitting mid-word (#4145 field report)."""
+    """Transcripts have no newlines; pages must still open on a sentence."""
     sentence = "This is one sentence about the workshop. "
     source = sentence * (PAGE_CHARS // len(sentence) + 20)
     assert "\n" not in source
@@ -123,9 +119,9 @@ def test_same_span_sentence_period_variants_keep_original_values():
         )[0]
 
     first, second = entry("look up."), entry("look up")
-    assert same_occurrence_fields(first, second)
+    assert reconcile_occurrence(first, second) == first
     assert first.text == "cue: look up."
-    assert not same_occurrence_fields(first, entry("up."))
+    assert reconcile_occurrence(first, entry("up.")) is None
 
 
 def test_broad_quote_does_not_hide_missed_neighbor_on_later_page():
@@ -292,8 +288,31 @@ def test_active_skill_enables_extraction_but_general_knowledge_does_not(tmp_path
     state = ExtractionLedger("List all planets", str(tmp_path))
     assert not state.enabled and not state.gaps()
     state.activate_skill("Extract **every** exercise from the workshop transcript.")
-    assert state.enabled and state.gaps()
+    # Nothing was read, so the answer did not come from a document.
+    assert state.enabled and not state.gaps()
+    state.observe("read_file", {"file_path": "workshop.txt"}, {"status": "success"})
+    assert state.gaps()
     assert exhaustive_request("Enumerate every function in code.py")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Find every file larger than 1GB in my Downloads folder.",
+        "List all the log levels in Python's logging module.",
+        "List every U.S. state capital.",
+        "List every action item in this meeting: ship it, test it.",
+    ],
+)
+def test_questions_without_a_read_document_leave_no_extraction_gap(query, tmp_path):
+    state = ExtractionLedger(query, str(tmp_path))
+    assert not state.requested and not state.gaps()
+
+
+def test_loading_the_skill_keeps_code_symbol_queries_off(tmp_path):
+    state = ExtractionLedger("List every function in utils.py", str(tmp_path))
+    state.activate_skill("Extract every item from the source document.")
+    assert not state.enabled
 
 
 class FileAgent(Agent, FileIOToolsMixin):
@@ -489,9 +508,7 @@ def test_advice_negation_and_directory_requests_are_not_extraction(query, tmp_pa
 def test_code_symbol_queries_do_not_demand_the_source_file_as_a_destination(
     query, tmp_path
 ):
-    """A code file the query names is a read/search target, never something
-    this ledger will see written -- demanding it as a destination made every
-    such query report status: incomplete (#4145 field report)."""
+    """A code file the query names is a search target, not a destination."""
     state = ExtractionLedger(query, str(tmp_path))
     assert state.gaps() == []
     assert not state.enabled
@@ -663,6 +680,10 @@ def test_existing_memory_hook_records_source_summary_and_recall(agent, tmp_path)
     agent._execute_tool("extract_document_items", {"file_path": "source.txt"})
     agent._after_process_query(agent._original_user_input, "private inventory")
     assert len(agent._memory_store.get_tool_history("extract_document_items")) == 1
+    assert len(agent._memory_store.get_history(session_id="extraction-test")) == 4
+    # An inventory over the memory limit stores neither turn, never a lone question.
+    agent._incognito = False
+    agent._after_process_query(agent._original_user_input, "x" * 256001)
     assert len(agent._memory_store.get_history(session_id="extraction-test")) == 4
 
 
@@ -867,11 +888,73 @@ def test_partial_overlap_of_repeated_names_stays_two_occurrences():
     first = field_entry(page, "Squat reps10. pause.", values)
     second = field_entry(page, "pause. Squat reps10.", values)
     assert reconcile_occurrence(first, second) is None
-    # A quote naming the item twice cannot say which occurrence it means.
-    both = field_entry(
-        page, "Squat reps10. pause. Squat", {"name": "Squat", "reps": "not stated"}
-    )
-    assert reconcile_occurrence(both, second) is None
+
+
+@pytest.mark.parametrize(
+    "page, values, early, late",
+    [
+        # The name also occurs earlier in one quote.
+        (SENTENCE, {"name": "march"}, SENTENCE[:120], SENTENCE[40:]),
+        # "3" also occurs inside "30".
+        (
+            "Next: Squat 3 sets, rest 30 seconds between them.",
+            {"name": "Squat", "sets": "3"},
+            "Next: Squat 3 sets, rest 30",
+            "Squat 3 sets, rest 30 seconds between",
+        ),
+    ],
+)
+def test_values_repeated_inside_one_quote_still_match_their_occurrence(
+    page, values, early, late
+):
+    first, second = field_entry(page, early, values), field_entry(page, late, values)
+    assert reconcile_occurrence(first, second) == first
+
+
+@pytest.mark.parametrize("fields", [(), ("name", "reps")])
+@pytest.mark.parametrize("broad_first", [True, False])
+def test_broad_quote_never_absorbs_two_repeated_items(fields, broad_first):
+    page = "Squat reps10. a. b. Squat reps10."
+
+    def item(quote):
+        if fields:
+            return {"quote": quote, "fields": {"name": "Squat", "reps": "reps10"}}
+        return {"text": "Squat reps10", "quote": quote}
+
+    broad = [item(page)]
+    pair = [item("Squat reps10. a."), item("b. Squat reps10.")]
+    replies = [broad, pair] if broad_first else [pair, broad]
+    calls = []
+
+    def ask(system, payload):
+        calls.append(payload)
+        # A retry repeats the model's last answer.
+        return json.dumps({"complete": True, "items": replies[min(len(calls), 2) - 1]})
+
+    with pytest.raises(ValueError, match="Conflicting|multiple occurrences"):
+        extract_pages(page, "List every exercise", ask, lambda: None, fields)
+
+
+def test_ambiguous_reply_is_retried_with_the_validation_error():
+    page = "Today Bob and Carol, engineers, joined."
+    bad = [
+        {"quote": "Bob and Carol", "fields": {"name": "Bob"}},
+        {"quote": "Carol, engineers", "fields": {"name": "Carol"}},
+    ]
+    good = [
+        {"quote": "Bob and", "fields": {"name": "Bob"}},
+        {"quote": "Carol, engineers", "fields": {"name": "Carol"}},
+    ]
+    payloads = []
+
+    def ask(system, payload):
+        payloads.append(json.loads(payload))
+        items = bad if len(payloads) == 1 else good if len(payloads) == 2 else []
+        return json.dumps({"complete": True, "items": items})
+
+    entries, _ = extract_pages(page, "List every person", ask, lambda: None, ("name",))
+    assert "validation_error" in payloads[1]
+    assert [dict(e.fields)["name"] for e in entries] == ["Bob", "Carol"]
 
 
 def test_transcript_sentence_quoted_differently_across_pages_extracts_once():

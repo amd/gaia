@@ -1,6 +1,6 @@
 ---
 name: document-extract
-description: Enumerate every requested item in long text documents or transcripts, with fields and source evidence. Use for exhaustive inventories such as every exercise, action item, finding, or function; not ordinary summaries or general knowledge lists.
+description: Enumerate every requested item in long text documents or transcripts, with fields and source evidence. Use for exhaustive inventories such as every exercise, action item, or finding; not ordinary summaries, general knowledge lists, or code symbols.
 version: 0.1.0
 license: MIT
 metadata:
@@ -27,8 +27,8 @@ metadata:
    exact destination, then `read_file` to verify it. The exporter preserves all
    entries and provenance as JSON, CSV, or readable text; don't regenerate the
    file by retyping a condensed list. Follow every readback continuation.
-5. Let the framework render the retained inventory. Briefly state limitations
-   or requested analysis, without re-summarizing the list into fewer items.
+5. Let the framework render the retained inventory: on success it replaces
+   your final answer, so do not re-summarize the list into fewer items.
 
 The existing memory system records the action, source fingerprint, coverage,
 count and final inventory unless the session is private. Use conversation

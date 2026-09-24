@@ -1344,10 +1344,7 @@ Do NOT wrap conversational replies in JSON.
         # the silent False fallback.
         self._single_tool_done: bool = False
 
-        # Per-call tool overrides (e.g. read_tool_output, extract_document_items),
-        # keyed by name. Declared here rather than lazily via hasattr so
-        # _register_tools and _register_output_reader below can both add to it
-        # unconditionally.
+        # Per-agent tool overrides by name (read_tool_output, extraction tools).
         self._tool_overrides: Dict[str, Any] = {}
 
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
@@ -1359,9 +1356,7 @@ Do NOT wrap conversational replies in JSON.
         if any(name != "read_tool_output" for name in self._tools_registry):
             self._register_output_reader()
 
-        # Built fresh per turn (process_query resets both) -- declared here so
-        # a caller that inspects them before the first turn sees None rather
-        # than an AttributeError.
+        # Rebuilt by every process_query; None before the first turn.
         self._extraction_ledger: Optional[ExtractionLedger] = None
         self._completion_evidence: Optional[CompletionEvidence] = None
 
@@ -1862,8 +1857,6 @@ Do NOT wrap conversational replies in JSON.
                 file_path=file_path, content=ledger.export(file_path)
             )
 
-        if not hasattr(self, "_tool_overrides"):
-            self._tool_overrides = {}
         for name, function, gated in (
             ("extract_document_items", extract_document_items, False),
             ("save_extracted_items", save_extracted_items, True),
@@ -5813,9 +5806,8 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_schemas = None
         self._last_tool_filter = None
 
-        self._extraction_ledger = ExtractionLedger(
-            user_input, self._verification_project_root()
-        )
+        # Relative paths resolve against the working directory, as the file tools do.
+        self._extraction_ledger = ExtractionLedger(user_input, os.getcwd())
 
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
@@ -5915,9 +5907,7 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
-        self._completion_evidence = CompletionEvidence(
-            user_input, self._verification_project_root()
-        )
+        self._completion_evidence = CompletionEvidence(user_input, os.getcwd())
         # Files edited this turn, so an empty response can name what it left
         # behind (#3733). Per-turn: an instance persists across queries.
         self._turn_file_edits: List[Dict[str, Any]] = []
@@ -8196,7 +8186,13 @@ Do NOT wrap conversational replies in JSON.
             if unsupported:
                 completion_gaps.append(unsupported[1] + ".")
             if completion_gaps:
-                final_answer = incomplete_answer(completion_gaps)
+                report = incomplete_answer(completion_gaps)
+                # Keep the error that ended the turn; add what stays unverified.
+                final_answer = (
+                    f"{final_answer}\n\n{report}"
+                    if final_answer and self.error_history
+                    else report
+                )
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
@@ -8215,12 +8211,12 @@ Do NOT wrap conversational replies in JSON.
         )  # Check for non-empty answer
         result = {
             "status": (
-                "incomplete"
-                if completion_gaps
+                "failed"
+                if has_errors
                 else (
                     "success"
-                    if has_valid_answer and not has_errors
-                    else ("failed" if has_errors else "incomplete")
+                    if has_valid_answer and not completion_gaps
+                    else "incomplete"
                 )
             ),
             "result": (

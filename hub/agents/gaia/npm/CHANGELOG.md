@@ -27,6 +27,13 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Complete inventories from long documents.** Asking for every exercise,
+  action item or finding in a transcript now returns all of them, each with its
+  source quote, instead of a condensed list. The opt-in `document-extract` skill
+  drives new `extract_document_items` and `save_extracted_items` tools; a save is
+  reported only after the exact file is written and read back, and anything
+  unfinished is reported as incomplete. `gaia-voice` gains one routing line
+  (702 tokens).
 - **Approve a gated tool over HTTP.** `write_file`, `run_shell_command` and the
   seven other confirmation-gated tools can now run through `/v1/gaia/query`:
   the stream stays open on `needs_confirmation` and
@@ -114,7 +121,7 @@ the terminal UI meant building it from source.
   `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
   moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
 - **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`
-  entry, so it is always on and rendered in full on every LLM call — 676 tokens
+  entry, so it is always on and rendered in full on every LLM call — 702 tokens
   of every prompt, and it declares no tools. It is the agent's honesty floor
   (don't claim work you didn't do, don't present empty output as a result,
   don't substitute a near-miss and report success), which is why it is not in an

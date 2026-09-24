@@ -439,7 +439,12 @@ turn — budget for it. It is not a task recipe but the agent's honesty floor: d
 not claim work you did not do, do not present empty output as a result, do not
 substitute a near-miss and report success. Those failures corrupt an answer
 whatever the task is, which is why it cannot live in an opt-in bundle. It
-declares no tools, and its body measures 676 tokens (tiktoken `cl100k`).
+declares no tools, and its body measures 702 tokens (tiktoken `cl100k`).
+
+**`document-extract` ships bundled but not enabled.** `gaia-voice` routes a
+request for every item in a document to it, and it drives
+`extract_document_items` and `save_extracted_items` so a long transcript yields
+a complete, source-quoted inventory rather than a summary.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
 `default_skill_set:` blocks **commented out** — following the email agent's
@@ -465,7 +470,7 @@ Two consequences an integrator needs to plan for:
 
 - **Up to 600 prompt tokens, every turn.** That is the enforced ceiling
   (1.8% of the NPU profile's 32K window), not a typical value — budget it
-  alongside `gaia-voice`'s 676.
+  alongside `gaia-voice`'s 702.
 - **A background embedding pass on first contact with a new repository.** If
   the repo has no [code index](https://amd-gaia.ai/docs/guides/code-index), the
   map starts one in a background thread so semantic search is ready when it is
