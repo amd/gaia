@@ -1839,6 +1839,8 @@ Do NOT wrap conversational replies in JSON.
                 file_path: Requested destination for the complete inventory.
             """
             ledger = self._extraction_ledger
+            if not isinstance(file_path, str) or "\x00" in file_path:
+                return {"status": "error", "error": "file_path must be a file path"}
             missing = (ledger.sources | ledger.requested) - ledger.results.keys()
             if ledger.key(file_path) in ledger.sources | ledger.requested:
                 return {

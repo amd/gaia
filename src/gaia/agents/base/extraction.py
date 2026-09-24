@@ -144,7 +144,15 @@ def _stated(value):
     return value.lower() != "not stated"
 
 
-_IDENTITY = re.compile(r"\b(?:name|id|title)\b", re.I)
+def _identity_fields(fields):
+    """Fields that name the item; the first requested field when none does."""
+    named = [
+        name
+        for name in fields
+        if re.search(r"(?:^|[^a-z])(?:name|id|title)(?:$|[^a-z])", name, re.I)
+        or re.search(r"[a-z](?:Name|Id|ID|Title)(?:$|[^a-z])", name)
+    ]
+    return named or list(fields[:1])
 
 
 def _anchors(entry, value):
@@ -178,10 +186,10 @@ def reconcile_occurrence(first, second):
     """Merge two overlapping extractions of one occurrence, or return None.
 
     Field values are verbatim in their quotes. Two extractions are one
-    occurrence when an identity field (name, id or title; any field if none)
-    states the same value at a shared source offset and every other value both
-    state sits at one location, one inside the other (a page boundary may cut
-    a description short, never a name). The merged entry spans both quotes and
+    occurrence when an identity field (one named for a name, id or title, else
+    the first requested field) states the same value at a shared source offset
+    and every other value both state sits at one location, one inside the other
+    (a page boundary may cut a description short, never a name). The merged entry spans both quotes and
     keeps the fuller value of each field. A shared name at different offsets is
     a repeated item, never merged. Free text cannot be located, so it needs
     equal text and a quote that contains the other, locates the text at a
@@ -203,7 +211,7 @@ def reconcile_occurrence(first, second):
     old, new = dict(first.fields), dict(second.fields)
     if old.keys() != new.keys():
         return None
-    identity = [name for name in old if _IDENTITY.search(name)]
+    identity = _identity_fields([name for name, _ in first.fields])
     both = [name for name in old if _stated(old[name]) and _stated(new[name])]
     values = {}
     for name, value in first.fields:
@@ -217,10 +225,7 @@ def reconcile_occurrence(first, second):
         if not _nested(first, value, second, other):
             return None
         values[name] = max(value, other, key=len)
-    if not any(
-        name in both and old[name].rstrip(".") == new[name].rstrip(".")
-        for name in (identity or list(old))
-    ):
+    if not any(name in both for name in identity):
         return None
     start, end, quote = _union_quote(first, second)
     return Entry(
@@ -473,6 +478,9 @@ _CODE_EXTENSIONS = frozenset(
 )
 
 
+_DATA_EXTENSIONS = frozenset(
+    {".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".log", ".xml", ".yaml", ".yml"}
+)
 _SOURCE = re.compile(r"\b(?:in|from|of|within|across|at)\s+", re.I)
 
 
@@ -500,13 +508,16 @@ class ExtractionLedger:
         self.available = available
         saves, _ = save_obligations(query)
         self.destinations = {self.key(p) for p in saves}
-        source_clause = re.split(r"\b(?:save|write|export|store)\b", query, flags=re.I)[
-            0
-        ]
+        source_clause = re.split(
+            r"\b(?:save|write|export|store)\b|\b(?:into|to)\s", query, flags=re.I
+        )[0]
+        # A source is a file on disk: "Node.js" in a question is a topic.
+        # Data formats and binaries belong to code tools and converters.
         candidate_paths = [
             p
             for p in source_paths(source_clause)
-            if os.path.splitext(p)[1].lower() not in _BINARY_SUFFIXES
+            if os.path.splitext(p)[1].lower() not in _BINARY_SUFFIXES | _DATA_EXTENSIONS
+            and os.path.lexists(self.key(p))
         ]
         # Code tools answer symbol and analysis questions ("find all bugs in
         # x.py"); listing content such as TODOs still extracts from code.
@@ -584,13 +595,14 @@ class ExtractionLedger:
             "save_extracted_items",
         }:
             path = args.get("file_path")
-            if path:
+            if isinstance(path, str) and "\x00" not in path:
                 self.results.pop(self.key(path), None)
                 self.output_errors.pop(self.key(path), None)
         if tool in {"read_file", "read_python_file", "read_markdown_file"}:
             path = args.get("file_path") or result.get("file_path")
             if (
-                path
+                isinstance(path, str)
+                and "\x00" not in path
                 and self.key(path) not in self.destinations
                 and (not self.requested or self.key(path) in self.requested)
             ):

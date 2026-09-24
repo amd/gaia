@@ -930,7 +930,9 @@ that names a file, folder or disk is checked even when the answer silently omits
 the save; a pathless "save it" is checked through the answer's own save claim.
 Negated instructions, how-to questions, idioms ("save me some time") and topics
 ("write a guide to Node.js") do not create save obligations, and a reference to
-a save from an earlier session is not a claim about this turn.
+a save from an earlier session is not a claim about this turn. An answer's save
+claims are checked only when the user asked for a save or a file-writing tool
+ran, so "downloads are saved to ~/Downloads" stays an answer.
 
 Requested and claimed text outputs must be read back after their latest
 mutation; an ordinary edit the user did not ask to save does not need readback. A read before
@@ -1156,8 +1158,10 @@ semantic recall of every implicit item. Recall must be measured against known
 source items. General summaries, advice about extraction, negated enumeration
 requests, analysis of code files ("find all bugs in `main.py`"), binary documents
 such as PDFs, and agents without a file permission validator do not activate this
-path. Active extraction skills can activate it. Sources are the files a request
-reads from; a path after "to" or "into" is an output, not a source.
+path. Active extraction skills can activate it. Sources are existing files a
+request reads from; a path after "to" or "into" is an output, and a name that is
+not a file ("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are
+left to code tools.
 
 Existing memory hooks record extraction actions and compact provenance (source
 fingerprint, page coverage and item count), while conversation history retains the
@@ -1173,8 +1177,9 @@ The default `gaia-voice` skill supplies a short routing rule; the detailed
 schema-constrained page responses and an omission check per page. Overlap keeps
 source text visible, aligns to whole lines or sentences, and preserves verbatim
 field values. Two pages that quote one occurrence with different boundaries merge
-when an identity field (a field named with `name`, `id` or `title`, else any
-field) states the same value at a shared source offset, and every other value
+when an identity field (one named for a `name`, `id` or `title`, such as
+`exercise_name`; else the first requested field) states the same value at a
+shared source offset, and every other value
 both state sits at one location, one inside the other (a page boundary may cut
 a description short, never a name). The merged entry's quote spans both quotes
 and keeps the fuller value of each field. Two items from one reply, or quotes

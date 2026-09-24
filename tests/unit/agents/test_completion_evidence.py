@@ -700,8 +700,21 @@ def test_describing_code_or_conditions_is_not_a_save_claim(tmp_path, answer):
     ],
 )
 def test_claims_with_a_relative_clause_are_still_checked(tmp_path, answer):
-    ledger = CompletionEvidence("Summarize what we discussed", str(tmp_path))
+    ledger = CompletionEvidence(
+        "Summarize what we discussed and save it", str(tmp_path)
+    )
     assert gaps(ledger, answer)
+
+
+@pytest.mark.parametrize(
+    "query, answer",
+    [
+        ("Where are my Chrome downloads?", "Downloads are saved to ~/Downloads."),
+        ("Who made Python?", "Guido van Rossum; programs are saved as .py files."),
+    ],
+)
+def test_information_about_saving_is_not_a_claim(tmp_path, query, answer):
+    assert gaps(CompletionEvidence(query, str(tmp_path)), answer) == []
 
 
 def test_a_save_from_an_earlier_session_is_not_this_turns_claim(tmp_path):
@@ -724,3 +737,27 @@ def test_removing_a_file_from_an_index_is_not_a_deletion(ledger, tmp_path):
     (tmp_path / "report.pdf").write_text("still here")
     assert ledger.cleanup_gaps("I removed report.pdf from the index.") == []
     assert ledger.cleanup_gaps("I removed `report.pdf`.")
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("Write a Node.js server that returns hello", ([], False)),
+        ("Write a summary of the meeting to summary.md", (["summary.md"], True)),
+        ("Put them in actions.json", (["actions.json"], True)),
+        ("Save the summary to summary.md, not to notes.md", (["summary.md"], True)),
+        ("Save the list to the reports folder", ([], True)),
+    ],
+)
+def test_write_put_and_negated_targets(query, expected):
+    assert save_obligations(query) == expected
+
+
+def test_malformed_paths_never_crash_the_turn(agent):
+    script(
+        agent,
+        call("write_file", file_path="a\u0000b.md", content="x"),
+        {"answer": "I saved it to `a\u0000b.md`."},
+    )
+    result = agent.process_query("Save it to a file", max_steps=5)
+    assert result["status"] in {"incomplete", "failed"}

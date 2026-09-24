@@ -94,14 +94,22 @@ _FENCES = re.compile(r"```.*?```", re.DOTALL)
 _SAVE_REQUEST = re.compile(
     r"(?:^|\band\b|\bthen\b|[,;:]|\b(?:can|could|would|will)\s+you\b|\byou\s+to\b|"
     r"\bplease\b)\s*(?:(?:please|also|now|just|then|and|kindly|ok(?:ay)?|so),?\s+)*"
-    r"\b(save|write|export|store)\b",
+    r"\b(save|write|export|store|put|copy|extract)\b",
+    re.I,
+)
+# These verbs store by themselves; the others name a target only via "to/into".
+_STORAGE_VERBS = frozenset({"save", "export", "store"})
+_OUTPUT_PREPOSITION = re.compile(r"\b(?:to|into)\s+", re.I)
+_PUT_PREPOSITION = re.compile(r"\b(?:in|into)\s+", re.I)
+_NAMED_FILE = re.compile(
+    r"^\s*(?:(?:a|an|the|new)\s+)?(?:[\w-]+\s+)?file\s+(?:called\s+|named\s+)?",
     re.I,
 )
 # An explicit file or disk object, before any relative clause describing code.
 _FILE_OBJECT = re.compile(
     r"^\s*(?:(?:a|an|the|new|this|that|it|them)\s+)*(?:[\w-]+\s+)?(?:file|disk)\b|"
-    r"\b(?:to|into|onto|on|in)\s+(?:(?:a|an|the|new|this|that)\s+)*(?:[\w-]+\s+)?"
-    r"(?:file|disk)\b",
+    r"\b(?:to|into|onto|on|in)\s+(?:(?:a|an|the|new|this|that|my|your)\s+)*"
+    r"(?:[\w-]+\s+)?(?:file|disk|folder|directory)\b",
     re.I,
 )
 _RELATIVE_CLAUSE = re.compile(r"\b(?:that|which|who|so that)\b", re.I)
@@ -121,12 +129,19 @@ _EARLIER = re.compile(
     r"\b(?:earlier|yesterday)\b",
     re.I,
 )
-# "Write a guide to X" is a topic; writing *it* or *the summary* to X is a save.
-_WRITE_OBJECT = re.compile(
-    r"^\s*(?:(?:it|this|that|them|these|those|everything|all of (?:it|this|them)|"
-    r"the\s+[\w-]+(?:\s+[\w-]+)?)\s+)?$",
+# "Write a guide to X" is a topic; writing *the summary* to X is a save.
+_TOPIC_OBJECT = re.compile(
+    r"\b(?:guide|intro(?:duction)?|tutorial|primer|letter|e-?mail|message|reply|"
+    r"response|answer|ode|poem|apology|note|essay|story|song)s?\s*$",
     re.I,
 )
+# A bare file name followed by a plain word is modifying it, not naming a file.
+_MODIFIER = re.compile(
+    r"\s+(?!(?:and|or|then|to|into|in|on|at|as|with|for|from|now|please|too|so|"
+    r"because|if|when|but|instead|not|which|that|using|via|during|about|by|"
+    r"where|while|here|below|above)\b)[a-z][a-z-]*\b"
+)
+_NEGATED_TARGET = re.compile(r"\b(?:not|instead of|rather than)\s*$", re.I)
 _NOT_REQUEST = re.compile(
     r"\b(?:do not|don't|never|without|how (?:do|can|would)|explain how|"
     r"show me how|if|could you explain)\b",
@@ -158,7 +173,7 @@ def _payload(value: Any) -> dict:
 def _path_token(match: re.Match) -> str | None:
     value = next(g for g in match.groups() if g is not None).strip()
     value = value.lstrip("([").rstrip(".,;:)]?!")
-    if not value or "://" in value or "@" in value:
+    if not value or "://" in value or "@" in value or "\x00" in value:
         return None
     quoted = any(match.group(i) is not None for i in (1, 2, 3))
     suffix = value.rsplit(".", 1)[-1].lower()
@@ -186,6 +201,8 @@ def _scan_paths(text: str, immediate: bool) -> list[str]:
     paths = []
     for match in _TARGET.finditer(text):
         path = _path_token(match)
+        if path is not None and match.group(4) and _MODIFIER.match(text[match.end() :]):
+            path = None  # "a Three.js scene": the name describes another noun
         if path is not None:
             paths.append(path)
         elif immediate and not paths:
@@ -195,18 +212,24 @@ def _scan_paths(text: str, immediate: bool) -> list[str]:
     return paths
 
 
-def destination_paths(text: str) -> list[str]:
+def destination_paths(text: str, prepositions: re.Pattern = _DESTINATION) -> list[str]:
     """Read a destination noun phrase, stopping at the next action."""
     # A later 'email it to me' must not replace the save's destination.
     clause = re.split(
         r"\s+(?:and|then)\s+(?=(?:compare|read|email|send|check|show|summarize|"
-        r"use|return|tell|report)\b)",
+        r"use|return|tell|report)\b)|\s[—–-]\s|;",
         text,
         maxsplit=1,
         flags=re.I,
     )[0]
-    destinations = list(_DESTINATION.finditer(clause))
+    destinations = [
+        match
+        for match in prepositions.finditer(clause)
+        if not _NEGATED_TARGET.search(clause[: match.start()])
+    ]
     if not destinations:
+        if prepositions is not _DESTINATION:
+            return []
         return list(dict.fromkeys(_scan_paths(clause, immediate=False)))
     # The last preposition that names a path: "to clean logs/app.log" names none.
     for destination in reversed(destinations):
@@ -216,32 +239,54 @@ def destination_paths(text: str) -> list[str]:
     return []
 
 
-def save_obligations(query: str) -> tuple[list[str], bool]:
-    """Explicit save instructions; advisory/negated instructions aren't tasks.
-
-    A request counts only when it names a file or disk: "save me some time" and
-    "store this in memory" are not saves, and a pathless "save it" is checked
-    through the answer's own save claim instead.
-    """
-    paths = []
-    requested = False
+def _instructions(query: str):
+    """(verb, text after it) for each non-negated storage instruction."""
     for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", query)):
         sentence = sentence.strip()
         for action in _SAVE_REQUEST.finditer(sentence):
-            if _NOT_REQUEST.search(sentence[: action.end()]):
-                continue
-            tail = sentence[action.end() :]
-            destination = _DESTINATION.search(tail)
+            if not _NOT_REQUEST.search(sentence[: action.end()]):
+                yield action.group(1).lower(), sentence[action.end() :]
+
+
+def save_obligations(query: str) -> tuple[list[str], bool]:
+    """Explicit save instructions; advisory/negated instructions aren't tasks.
+
+    A request counts only when it names a file, folder or disk: "save me some
+    time" and "store this in memory" are not saves, and a pathless "save it" is
+    checked through the answer's own save claim instead.
+    """
+    paths = []
+    requested = False
+    for verb, tail in _instructions(query):
+        if verb in _STORAGE_VERBS:
             found = destination_paths(tail)
-            if action.group(1).lower() == "write":
-                if destination and not _WRITE_OBJECT.match(tail[: destination.start()]):
-                    found = []
-                elif not destination:
-                    found = _scan_paths(tail, immediate=True)
-            if found or _FILE_OBJECT.search(_RELATIVE_CLAUSE.split(tail)[0]):
-                requested = True
-                paths.extend(found)
+        elif verb == "write" and _NAMED_FILE.match(tail):
+            found = _scan_paths(tail[_NAMED_FILE.match(tail).end() :], immediate=True)
+        else:
+            found = destination_paths(
+                tail, _PUT_PREPOSITION if verb == "put" else _OUTPUT_PREPOSITION
+            )
+            target = _OUTPUT_PREPOSITION.search(tail)
+            if (
+                verb == "write"
+                and target
+                and _TOPIC_OBJECT.search(tail[: target.start()])
+            ):
+                found = []
+        file_object = verb in _STORAGE_VERBS | {"write"} and _FILE_OBJECT.search(
+            _RELATIVE_CLAUSE.split(tail)[0]
+        )
+        if found or file_object:
+            requested = True
+            paths.extend(found)
     return list(dict.fromkeys(paths)), requested
+
+
+def save_instructed(query: str) -> bool:
+    """Whether the user asked for any save, even without naming where."""
+    return any(verb in _STORAGE_VERBS for verb, _ in _instructions(query)) or bool(
+        save_obligations(query)[1]
+    )
 
 
 @dataclass
@@ -290,9 +335,13 @@ class CompletionEvidence:
         self.removed: set[str] = set()
         self.uninspectable: dict[str, str] = {}
         self.requested, self.save_requested = save_obligations(query)
+        self.instructed = save_instructed(query)
+        self.disk_tool_ran = False
 
     def key(self, path: str, root: str | None = None) -> str:
-        return _normalize_key(path, root or self.root)
+        return _normalize_key(
+            path, root if isinstance(root, str) and root else self.root
+        )
 
     def _stamp(self, path: str) -> tuple | None | object:
         try:
@@ -369,6 +418,8 @@ class CompletionEvidence:
         self.sequence += 1
         if not executed:
             return
+        if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
+            self.disk_tool_ran = True
         for path, old in (before or {}).items():
             current = self._stamp(path)
             if current is _UNOBSERVABLE or old is _UNOBSERVABLE:
@@ -414,6 +465,8 @@ class CompletionEvidence:
                 if isinstance(data.get(k), str)
             )
         for path in paths:
+            if "\x00" in path:
+                continue
             key = self.key(path, args.get("project_dir"))
             self.removed.discard(key)
             self.files[key] = FileEvidence(
@@ -441,7 +494,7 @@ class CompletionEvidence:
             return
         raw = _payload(original)
         path = raw.get("file_path") or args.get("file_path") or args.get("path")
-        if not isinstance(path, str):
+        if not isinstance(path, str) or "\x00" in path:
             return
         key = self.key(path, args.get("project_dir"))
         item = self.files.get(key)
@@ -470,8 +523,11 @@ class CompletionEvidence:
     def gaps(self, answer: str, claims_file_write: Callable[[str], bool]) -> list[str]:
         required = {self.key(path) for path in self.requested}
         claim_without_path = False
+        # With no save asked for and nothing written, "files are saved to
+        # ~/Downloads" is information, not a report of this turn's work.
+        checkable = self.instructed or self.disk_tool_ran
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
-            if _EARLIER.search(sentence):
+            if not checkable or _EARLIER.search(sentence):
                 continue
             sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
             if claims_file_write(sentence):

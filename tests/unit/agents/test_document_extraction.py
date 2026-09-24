@@ -24,6 +24,12 @@ from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 from gaia.security import PathValidator
 
 
+def touch(root, *names):
+    """Sources are files on disk; create the ones a query names."""
+    for name in names:
+        (root / name).write_text("source")
+
+
 def reply(*items):
     return json.dumps(
         {"complete": True, "items": [{"text": x, "quote": x} for x in items]}
@@ -250,6 +256,7 @@ def test_cancellation_does_not_publish(tmp_path):
 
 
 def test_multisource_inventory_does_not_satisfy_unread_source(tmp_path):
+    touch(tmp_path, "one.txt", "two.txt")
     state = ExtractionLedger(
         "List every exercise in one.txt and two.txt", str(tmp_path)
     )
@@ -313,6 +320,7 @@ def test_questions_without_a_read_document_leave_no_extraction_gap(query, tmp_pa
 
 
 def test_loading_the_skill_keeps_code_symbol_queries_off(tmp_path):
+    touch(tmp_path, "utils.py")
     state = ExtractionLedger("List every function in utils.py", str(tmp_path))
     state.activate_skill("Extract every item from the source document.")
     assert not state.enabled
@@ -519,6 +527,7 @@ def test_code_symbol_queries_do_not_demand_the_source_file_as_a_destination(
 
 def test_document_queries_still_activate_alongside_a_code_destination(tmp_path):
     """Only an all-code query is a code query; a real document still counts."""
+    touch(tmp_path, "notes.md")
     state = ExtractionLedger(
         "Extract every TODO from notes.md and save to out.py", str(tmp_path)
     )
@@ -527,6 +536,7 @@ def test_document_queries_still_activate_alongside_a_code_destination(tmp_path):
 
 
 def test_combined_source_and_save_request_keeps_all_sources(tmp_path):
+    touch(tmp_path, "one.txt", "two.txt")
     state = ExtractionLedger(
         "List every exercise in one.txt and two.txt and save to report.txt",
         str(tmp_path),
@@ -734,6 +744,7 @@ def test_export_refuses_to_overwrite_its_source(agent, tmp_path):
     ],
 )
 def test_content_extraction_keeps_code_sources_required(query, sources, tmp_path):
+    touch(tmp_path, *sources)
     state = ExtractionLedger(query, str(tmp_path))
     assert state.enabled
     assert state.requested == {state.key(p) for p in sources}
@@ -1058,8 +1069,24 @@ def test_a_name_inside_another_name_is_a_different_item(page, first, second):
 def test_sources_are_what_the_request_reads_not_where_it_writes(
     query, sources, tmp_path
 ):
+    touch(tmp_path, *sources)
     state = ExtractionLedger(query, str(tmp_path))
     assert state.requested == {state.key(p) for p in sources}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "List all the features of Node.js",
+        "List every lifecycle method in Next.js",
+        "Enumerate all methods on Array.prototype",
+        "Find every ERROR line in app.log",
+    ],
+)
+def test_topics_and_data_files_are_not_document_sources(query, tmp_path):
+    touch(tmp_path, "app.log")
+    state = ExtractionLedger(query, str(tmp_path))
+    assert not state.requested and not state.gaps()
 
 
 @pytest.mark.parametrize(
@@ -1081,3 +1108,25 @@ def test_agents_without_a_read_boundary_never_extract(tmp_path):
     )
     state.activate_skill("Extract every item from the source document.")
     assert not state.enabled and not state.gaps()
+
+
+@pytest.mark.parametrize("field", ["exercise", "exercise_name", "ExerciseName"])
+def test_the_identifying_field_must_match_exactly_whatever_its_name(field):
+    page = "Warm-up: march, then march in place, 1 minute each."
+    a = field_entry(
+        page, "Warm-up: march, then", {field: "march", "duration": "not stated"}
+    )
+    b = field_entry(
+        page,
+        "march in place, 1 minute",
+        {field: "march in place", "duration": "1 minute"},
+    )
+    assert reconcile_occurrence(a, b) is None
+
+
+def test_extracting_into_a_file_makes_it_an_output(tmp_path):
+    touch(tmp_path, "meeting.txt")
+    state = ExtractionLedger(
+        "Extract all action items from meeting.txt into actions.json", str(tmp_path)
+    )
+    assert state.destinations == {state.key("actions.json")}
