@@ -1,0 +1,115 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Lemonade's CalVer switch must not silently disable GAIA's version gates.
+
+Lemonade v2026.39.1 changed the version format from ``X.Y.Z`` to ``YYYY.WW.N``
+(dev builds: ``YYYY.WW.0~<count>.<hash>``) and called out in its release notes
+that anything parsing or comparing version strings has to be updated.
+
+GAIA compares Lemonade versions in five independent places — the base agent
+readiness probe, the Lemonade client's compatibility gate, both installers, and
+the frozen email sidecar (which keeps its own copy because it cannot import
+``gaia.installer``). Each turns a version into an int tuple. Two failure modes
+matter and neither raises:
+
+* a release CalVer that parses wrong would compare wrong, and
+* a dev CalVer that fails to parse makes the gate return "can't tell", so it
+  stops running at all — a green test suite with the check switched off.
+
+These tests pin the real strings the server reports (verified against a live
+v2026.39.1 ``/api/v1/health``), so a future parser "simplification" that drops
+CalVer support fails here instead of in the field.
+"""
+
+import pytest
+
+from gaia.agents.base.readiness import parse_version, version_meets_min
+from gaia.installer.init_command import InitCommand
+from gaia.installer.lemonade_installer import LemonadeInstaller
+from gaia.llm.lemonade_launcher import _VERSION_RE
+from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
+
+# What a live Lemonade v2026.39.1 reports in /api/v1/health.
+RELEASE_CALVER = "2026.39.1"
+# The dev/candidate shape documented in the v2026.39.1 release notes.
+DEV_CALVER = "2026.39.0~12.abc1234"
+# The last semver release, for the transition comparison.
+LAST_SEMVER = "11.9.0"
+
+
+def _installer_parse(version):
+    """The bound installer method, which takes no state beyond ``self``."""
+    return LemonadeInstaller._parse_version(None, version)
+
+
+# Every independent parser, so a fix applied to only some of them fails here.
+PARSERS = [
+    pytest.param(parse_version, id="readiness"),
+    pytest.param(InitCommand._parse_version, id="init_command"),
+    pytest.param(_installer_parse, id="lemonade_installer"),
+]
+
+
+def _email_parse(version):
+    """The frozen email sidecar keeps its own copy — cover it too."""
+    from gaia_agent_email.api_routes import _parse_version
+
+    return _parse_version(version)
+
+
+@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+def test_release_calver_parses_to_its_real_components(parser):
+    """``2026.39.1`` must compare as (2026, 39, 1), not fail or truncate."""
+    assert parser(RELEASE_CALVER) == (2026, 39, 1)
+
+
+@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+def test_dev_calver_parses_instead_of_going_indeterminate(parser):
+    """A ``0~12.abc1234`` build must still yield a comparable tuple.
+
+    Without this the int() raises, the parser returns None, and every caller
+    treats the version as unknown — which they deliberately do NOT block on.
+    The gate would be off for all candidate builds.
+    """
+    assert parser(DEV_CALVER) == (2026, 39, 0)
+
+
+@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+def test_calver_outranks_the_last_semver_release(parser):
+    """The 11.9.0 -> 2026.39.1 switch must read as an upgrade, not a downgrade."""
+    assert parser(RELEASE_CALVER) > parser(LAST_SEMVER)
+
+
+@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+def test_garbage_is_still_unparseable(parser):
+    """Tolerating CalVer must not turn every string into a fake version."""
+    assert parser("not-a-version") is None
+
+
+def test_pinned_version_is_accepted_by_the_readiness_gate():
+    """Whatever LEMONADE_VERSION is pinned to must clear the supported floor."""
+    assert version_meets_min(LEMONADE_VERSION, LEMONADE_MIN_VERSION) is True
+
+
+def test_dev_build_of_the_pin_still_clears_the_floor():
+    assert version_meets_min(DEV_CALVER, LEMONADE_MIN_VERSION) is True
+
+
+def test_genuinely_old_version_is_still_rejected():
+    """The gate must still bite — CalVer tolerance is not a blanket pass."""
+    assert version_meets_min("9.1.4", LEMONADE_MIN_VERSION) is False
+
+
+@pytest.mark.parametrize(
+    "cli_output, expected",
+    [
+        ("lemonade version 2026.39.1", "2026.39.1"),
+        ("lemonade version 2026.39.0~12.abc1234", "2026.39.0"),
+        ("lemonade-server 11.9.0", "11.9.0"),
+    ],
+)
+def test_cli_version_regex_extracts_calver(cli_output, expected):
+    """``lemonade --version`` output is the other CalVer entry point."""
+    match = _VERSION_RE.search(cli_output)
+    assert match is not None, f"no version parsed from {cli_output!r}"
+    assert match.group(1) == expected

@@ -383,7 +383,10 @@ def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
 
     Mirrors ``gaia.installer.init_command.InitCommand._parse_version`` (same
     semantics: strip a leading ``v``, take the first three dotted parts as
-    ints). Kept LOCAL rather than imported because the frozen sidecar does not
+    ints, keeping each part's leading digits so Lemonade's CalVer dev builds
+    like ``2026.39.0~12.abc1234`` still compare). Keep the two in step — see
+    ``tests/unit/test_lemonade_calver.py``, which exercises both.
+    Kept LOCAL rather than imported because the frozen sidecar does not
     bundle ``gaia.installer`` — importing it at runtime would ``ModuleNotFound``
     in the binary this endpoint exists to serve. Returns ``None`` when the
     string is missing or unparseable.
@@ -391,7 +394,8 @@ def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     if not version:
         return None
     try:
-        return tuple(int(p) for p in version.lstrip("v").split(".")[:3])
+        parts = version.lstrip("v").split(".")[:3]
+        return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
     except (ValueError, IndexError, AttributeError):
         return None
 

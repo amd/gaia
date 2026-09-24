@@ -15,6 +15,7 @@ Main entry point for `gaia init` command that:
 import importlib.util
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1026,12 +1027,14 @@ class InitCommand:
 
     @staticmethod
     def _parse_version(version: str) -> Optional[tuple]:
-        """Parse version string into tuple."""
+        """Parse version string into tuple.
+
+        Tolerates Lemonade's CalVer dev suffix (``2026.39.0~12.abc1234``).
+        """
         try:
-            ver = version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
+            parts = version.lstrip("v").split(".")[:3]
+            return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
+        except (ValueError, IndexError, AttributeError):
             return None
 
     def _check_version_compatibility(self, info: LemonadeInfo) -> bool:
