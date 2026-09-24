@@ -3795,6 +3795,7 @@ Let me know your answer!
                         print(f"✅ {port_result['message']}")
                     else:
                         print(f"❌ {port_result['message']}")
+                        sys.exit(1)
             except FileNotFoundError:
                 # lemonade-server not in PATH, fallback to port kill
                 log.warning("lemonade-server not found, falling back to port kill")
@@ -3803,6 +3804,7 @@ Let me know your answer!
                     print(f"✅ {port_result['message']}")
                 else:
                     print(f"❌ {port_result['message']}")
+                    sys.exit(1)
         elif args.port:
             port = args.port
             log.info(f"Attempting to kill process on port {port}")
@@ -3811,6 +3813,7 @@ Let me know your answer!
                 print(f"✅ {result['message']}")
             else:
                 print(f"❌ {result['message']}")
+                sys.exit(1)
         else:
             # A refusal must not report success — `gaia kill && next-step`
             # would otherwise run next-step having killed nothing.
@@ -4764,7 +4767,7 @@ def kill_process_by_port(port):
         return {"success": False, "message": f"Could not inspect port {port}: {e}"}
 
     if not listeners:
-        return {"success": False, "message": f"No process is listening on port {port}"}
+        return {"success": True, "message": f"No process is listening on port {port}"}
 
     killed = []
     refused = []
@@ -4776,28 +4779,27 @@ def kill_process_by_port(port):
         try:
             terminate_pid(pid)
             killed.append(str(pid))
-        except (subprocess.CalledProcessError, OSError) as e:
+        except (subprocess.SubprocessError, OSError) as e:
             failed.append(f"{pid}: {e}")
 
+    messages = []
     if killed:
-        return {
-            "success": True,
-            "message": f"Killed process(es) {', '.join(killed)} listening on port {port}",
-        }
-
+        messages.append(
+            f"Killed process(es) {', '.join(killed)} listening on port {port}."
+        )
     if refused:
-        return {
-            "success": False,
-            "message": (
-                f"Refusing to kill {', '.join(refused)} on port {port}: not a "
-                f"GAIA or Lemonade process. Stop it with its own tooling, or "
-                f"kill it by PID if that is really what you want."
-            ),
-        }
-
+        messages.append(
+            f"Refusing to kill {', '.join(refused)} on port {port}: not a "
+            "GAIA or Lemonade process. Stop it with its own tooling, or "
+            "kill it by PID if that is really what you want."
+        )
+    if failed:
+        messages.append(
+            f"Failed to kill process(es) on port {port} ({'; '.join(failed)})."
+        )
     return {
-        "success": False,
-        "message": f"Failed to kill the process on port {port} ({'; '.join(failed)})",
+        "success": bool(killed) and not refused and not failed,
+        "message": " ".join(messages),
     }
 
 
