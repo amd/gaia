@@ -324,6 +324,8 @@ class FileEvidence:
     end: int | None = None
     # Found by modification time, not reported by a tool: it proves only its path.
     inferred: bool = False
+    # Read in full and matched exactly by the framework; a rewrite clears it.
+    verified: bool = False
 
     def page(self, start: int, end: int, total: int | None) -> None:
         self.ranges.append((start, end))
@@ -509,6 +511,12 @@ class CompletionEvidence:
                 tool in WRITE_TOOLS or tool in _EXEC_TOOLS,
             )
 
+    def read_by_framework(self, key: str) -> None:
+        """The framework read this output in full after its latest write."""
+        item = self.files.get(key)
+        if item is not None and item.written:
+            item.verified = True
+
     def _written_by_executor(self, key: str) -> FileEvidence | None:
         """A file last modified during a successful shell or Python run."""
         stamp = self._stamp(key)
@@ -653,6 +661,7 @@ class CompletionEvidence:
                 needs_text_readback
                 and (data_output or requested(item.path))
                 and not item.observed
+                and not item.verified
             ):
                 gaps.append(
                     f"`{item.path}` has not been read back completely after its latest write."

@@ -44,6 +44,7 @@ from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
 from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
+from gaia.agents.base.extraction import REASONING as EXTRACTION_REASONING
 from gaia.agents.base.extraction import (
     ExtractionLedger,
     extraction_response_format,
@@ -1778,6 +1779,9 @@ Do NOT wrap conversational replies in JSON.
         ledger.validate_outputs(
             lambda path, limit: read_snapshot(path, validator, limit)
         )
+        # The framework just read each export in full and matched it exactly.
+        for path in ledger.verified:
+            self._completion_evidence.read_by_framework(path)
 
     def _make_extraction_chat(self):
         """Isolate SDK state from timed-out workers and subsequent turns."""
@@ -1824,7 +1828,7 @@ Do NOT wrap conversational replies in JSON.
             # one dense page; copying quotes out of it needs little reasoning.
             # Local anti-repetition penalties fight verbatim quote copying.
             sampling = (
-                {"reasoning_effort": "low"}
+                {"reasoning_effort": EXTRACTION_REASONING}
                 if cloud_model_provider(getattr(self, "model_id", None))
                 else {
                     "frequency_penalty": 0.0,
@@ -1859,7 +1863,7 @@ Do NOT wrap conversational replies in JSON.
 
             def ask(system, prompt):
                 response, exhausted = send(system, prompt, sampling)
-                if exhausted and sampling.get("reasoning_effort") == "low":
+                if exhausted and sampling.get("reasoning_effort") not in (None, "none"):
                     # Copying quotes needs no reasoning; retry this page without it.
                     logger.warning(
                         "Extraction page used its %d-token budget reasoning; "
@@ -1897,7 +1901,8 @@ Do NOT wrap conversational replies in JSON.
 
             Use after extract_document_items on every source. Output is JSON for
             .json, CSV for .csv, and text for .txt/.md or extensionless paths.
-            Read it back afterwards. Binary document formats are unsupported.
+            The framework reads it back and checks it; do not edit it by hand.
+            Binary document formats are unsupported.
 
             Args:
                 file_path: Requested destination for the complete inventory.
@@ -8121,10 +8126,10 @@ Do NOT wrap conversational replies in JSON.
 
                 answer_candidate = self.finalize_answer(answer_candidate, conversation)
                 soft_gaps: List[str] = []
+                self._check_extraction_sources()
                 artifact_gaps = self._completion_evidence.gaps(
                     answer_candidate, _claims_file_write, soft=soft_gaps
                 )
-                self._check_extraction_sources()
                 extraction_gaps = self._extraction_ledger.gaps()
                 artifact_gaps.extend(extraction_gaps)
                 if artifact_gaps or soft_gaps:
@@ -8290,10 +8295,10 @@ Do NOT wrap conversational replies in JSON.
         )
 
         if not verification_scope_applied and not account_refused:
+            self._check_extraction_sources()
             completion_gaps = self._completion_evidence.gaps(
                 final_answer or "", _claims_file_write
             )
-            self._check_extraction_sources()
             completion_gaps.extend(self._extraction_ledger.gaps())
             unsupported = unsupported_test_claim(
                 final_answer or "", self._turn_tool_executions

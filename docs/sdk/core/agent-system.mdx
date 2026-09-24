@@ -1154,8 +1154,9 @@ dropping one. Reading every page without extracting an inventory is insufficient
 readable text, using the existing write permission gate. JSON records carry each
 requested field under `fields`, and CSV gives each field its own column (prefixed
 `field:` if it collides with a built-in column; cells that would open as formulas
-are escaped). Saved results must be read back and contain all retained entries
-before completion, and hand edits to a file it wrote this turn are refused. Every requested source
+are escaped). Before completion the framework reads each saved inventory back in
+full and requires an exact match with the retained entries, so the model need
+not page through it; hand edits to a file it wrote this turn are refused. Every requested source
 must finish; a failed page, cancellation, source change, or exceeded budget yields
 an incomplete result. Limits are 256,000 source characters, 512 entries, 40,000
 characters per extraction prompt, and 100,000 characters of retained item text and
@@ -1194,8 +1195,8 @@ as `exercise_name`), else the first requested field. When that value is copied
 from the quote, its source span locates the item; when the model composes a label
 instead ("Big circles (arms)"), the quote locates the item, and a label sharing no
 words with its quote is kept but marked "(label not in quote)". Descriptions may
-paraphrase; the verbatim quote is their evidence. An item with no stated field is
-rejected.
+paraphrase; the verbatim quote is their evidence. An entry that states no field
+carries nothing and is ignored.
 
 Merging never fails a run and never drops an item. Two extractions are one item
 when they sit at the same place (the same name span, or quotes sharing at least

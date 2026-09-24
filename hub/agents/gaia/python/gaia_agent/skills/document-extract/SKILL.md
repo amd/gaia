@@ -24,9 +24,9 @@ metadata:
 3. If an extraction fails, report it as incomplete. Do not silently switch to
    a shorter list, a guessed count, or a script that has not been run.
 4. If the user requested a saved inventory, use `save_extracted_items` for the
-   exact destination, then `read_file` to verify it. The exporter preserves all
-   entries and provenance as JSON, CSV, or readable text; don't regenerate the
-   file by retyping a condensed list. Follow every readback continuation.
+   exact destination. The exporter preserves all entries and provenance as
+   JSON, CSV, or readable text, and the framework reads the file back and
+   checks it; don't edit or regenerate it by hand.
 5. The framework appends the full retained inventory to your final answer.
    Briefly state limitations or requested analysis; do not repeat or
    re-summarize the list.

@@ -1325,15 +1325,17 @@ def test_malformed_replies_are_retryable_errors(reply):
         parse_page(reply, "page", 0)
 
 
-def test_an_item_with_nothing_stated_is_rejected():
+def test_an_entry_that_states_nothing_is_ignored():
     raw = json.dumps(
         {
             "complete": True,
-            "items": [{"quote": "page", "fields": {"name": "not stated"}}],
+            "items": [
+                {"quote": "page", "fields": {"name": "not stated"}},
+                {"quote": "page", "fields": {"name": "page"}},
+            ],
         }
     )
-    with pytest.raises(ValueError, match="not an item"):
-        parse_page(raw, "page", 0, ("name",))
+    assert [e.text for e in parse_page(raw, "page", 0, ("name",))] == ["name: page"]
 
 
 def test_csv_keeps_colliding_fields_and_never_writes_formulas(tmp_path):
@@ -1403,3 +1405,22 @@ def test_a_composed_name_must_come_from_its_quote(name, quote, grounded):
     assert entry.anchor == ()
     # An untraceable label is kept with its quote, but marked.
     assert entry.note == ("" if grounded else "label not in quote")
+
+
+def test_a_verified_export_needs_no_model_readback(agent, tmp_path):
+    (tmp_path / "source.txt").write_text("Exercise ALPHA\nExercise BETA")
+    script(
+        agent,
+        {"tool": "extract_document_items", "tool_args": {"file_path": "source.txt"}},
+        {"tool": "save_extracted_items", "tool_args": {"file_path": "out.json"}},
+        {"answer": "Saved every exercise to out.json."},
+    )
+    agent._tool_requires_confirmation = lambda *a, **kw: False
+    result = agent.process_query(
+        "List every exercise in source.txt. Save to out.json.", max_steps=6
+    )
+    assert result["status"] == "success", result["completion_gaps"]
+    # A hand-written file is still checked: tampering makes the turn incomplete.
+    (tmp_path / "out.json").write_text("[]")
+    agent._check_extraction_sources()
+    assert agent._extraction_ledger.output_errors
