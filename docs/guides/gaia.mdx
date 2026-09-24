@@ -74,8 +74,8 @@ reviewing a code change.
 The full registry includes the following tool groups. Dynamic selection sends a
 subset to the model on each call; `load_tools` can bring in additional groups
 mid-turn. The registered count is not the per-call prompt size. The default
-construction registers 80 tools; `search_documentation` registers only when `npx`
-is on your PATH, so without Node.js the count is 79.
+construction registers 81 tools; `search_documentation` registers only when `npx`
+is on your PATH, so without Node.js the count is 80.
 
 | Area | Main tools |
 | --- | --- |
@@ -86,10 +86,10 @@ is on your PATH, so without Node.js the count is 79.
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
 | Email | `check_mailbox_access`, `list_inbox`, `search_email`, `read_email`, `list_mail_folders` |
 | Images | `analyze_image`, `answer_question_about_image`, `generate_image`, `list_sd_models`, `get_generation_history` |
-| Audio/video | `transcribe_media`, `refine_transcript` |
-| Desktop/system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
-| Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
-| Code | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
+| Audio | `transcribe_media`, `refine_transcript` |
+| Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
+| Skills | `list_skills`, `search_skill_hub`, `install_skill`, `capture_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
+| Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
 | Run control | `request_user_input`, `set_loop_state`, `load_tools`, `read_tool_output` |
 
 Document Q&A supports PDF, Word, PowerPoint, and text. Data tools query CSV/Excel
@@ -104,12 +104,16 @@ skill can be granted one named CLI under its own command policy, where covered
 read-only calls run without another prompt and confirmable writes still require
 approval. Everything outside that CLI's policy stays refused.
 
+**Mail is treated as data, never as instructions.** Every message body the email tools return arrives fenced between `<<<UNTRUSTED_EMAIL_BODY_START>>>` and `<<<UNTRUSTED_EMAIL_BODY_END>>>`, and a message showing phishing signals comes back flagged with the reason it was flagged. A flagged message is never reported as something that needs action, however urgent it sounds, and the agent will not repeat its call to action as advice — it says what the message claims, that it looks like a lure, and to leave it alone.
+
+**Image *generation* costs you a model reload.** Drawing a picture pulls Stable Diffusion into Lemonade and evicts the resident chat model, so the first reply after an image waits for the chat model to load again. The trade is worth it on the flagship, which is general-purpose; the Chat agent's doc and file profiles leave the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) off for exactly that reason.
+
 ## Permissions and file scope
 
-The built-in tools subject to confirmation policy include `write_file`, `edit_file`,
-`run_shell_command`, `execute_python_file`, `run_python`, `notify_desktop`,
-`install_skill`, and `remove_skill`. The stdio terminal displays confirmations and
-returns your decision; bypass mode disables those prompts. See [Terminal permissions](/guides/terminal-hub).
+Nine tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, **`run_python`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), and — because installing or capturing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`**, **`capture_skill`**, and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+
+The stdio terminal displays confirmations and returns your decision; bypass
+mode disables those prompts. See [Terminal permissions](/guides/terminal-hub).
 
 The native terminal normally starts a persistent **stdio subprocess**, which
 can ask for approval. A flagship installed as a Hub binary uses a

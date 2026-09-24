@@ -58,6 +58,9 @@ local embedding models, not an unused local chat model.
 - Provider URLs and authentication-header settings are saved by Lemonade and
   shared with its other clients. Runtime keys are also available to other clients
   of that same Lemonade server.
+- If a credential is already active for a provider, the setup screen says so
+  before you type anything — you don't have to guess whether a blank field is
+  safe to submit.
 - Leave the key field blank to use a credential already configured in Lemonade.
   `LEMONADE_FIREWORKS_API_KEY` and `LEMONADE_AMD_API_KEY`, set in the **Lemonade
   server process**, take precedence over pasted keys. A conflict is reported
