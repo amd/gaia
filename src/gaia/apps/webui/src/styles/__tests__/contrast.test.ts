@@ -394,6 +394,74 @@ describe('component rules that set their own background', () => {
     });
 });
 
+/**
+ * "A hue that carries a status meaning is not available for decoration"
+ * (docs/spec/gaia-design-language.mdx). The pairs above ask whether a colour is
+ * legible; this asks whether it is *lying*. Four controls shipped in the status
+ * red for no reason other than that the retired brand accent happened to be red
+ * too -- a tool that was merely running was outlined identically to one that had
+ * failed, which is the whole failure mode the status roles exist to prevent.
+ */
+describe('status hues stay on status', () => {
+    const STATUS_ROLES = /var\(\s*(--(?:danger|warning))\s*\)/g;
+
+    /** A selector naming any of these is claiming a status, so it may paint one. */
+    const STATUS_WORDS = [
+        'error', 'danger', 'fail', 'warn', 'deny', 'revoke', 'cancel', 'uninstall',
+        'delete', 'remove', 'clear', 'confirm', 'stop', 'invalid', 'overdue',
+        'urgent', 'critical', 'missing', 'deprecated', 'unsupported', 'bad',
+    ];
+
+    /** Status by meaning, not by name. Each entry says which status. */
+    const ALSO_STATUS: Record<string, string> = {
+        '.btn-retry:hover': 'the retry inside an error banner',
+        '.install-confirm-icon': 'the destructive-install confirmation',
+        '.mem-cat-badge.reminder': 'a reminder is the attention category',
+        '.mem-priority-high': 'highest priority, ranked against the other tints',
+        '.mem-success-rate.low': 'a failing success rate',
+        '.permission-countdown': 'a grant about to expire',
+        '.permission-header': 'the caution surface over a permission prompt',
+    };
+
+    // A `[data-theme]` override is the same control in the other theme, so it
+    // inherits the entry rather than needing a duplicate one.
+    const normalise = (s: string) =>
+        s.replace(/\s+/g, ' ').trim().replace(/^\[data-theme="[a-z]+"\]\s+/, '');
+    const claimsStatus = (s: string) =>
+        STATUS_WORDS.some((w) => s.toLowerCase().includes(w)) || normalise(s) in ALSO_STATUS;
+
+    it('paints no control that is not reporting one', () => {
+        const offenders: string[] = [];
+        for (const { path, selector, body } of RULES) {
+            if (claimsStatus(selector)) continue;
+            for (const m of body.matchAll(STATUS_ROLES))
+                offenders.push(`${path}  ${normalise(selector)} -> ${m[1]}`);
+        }
+        expect(
+            [...new Set(offenders)],
+            'use --accent / --accent-fill: this hue means the thing has failed',
+        ).toEqual([]);
+    });
+
+    it('keeps the by-meaning list honest -- every entry still matches a rule', () => {
+        const stale = Object.keys(ALSO_STATUS).filter(
+            (s) => !RULES.some((r) => normalise(r.selector) === s),
+        );
+        expect(stale, 'no such rule -- drop the entry').toEqual([]);
+    });
+
+    it('keeps the word list honest -- every word still excuses a rule', () => {
+        // A fresh, non-global copy -- `test()` on the shared one would carry
+        // `lastIndex` from the previous rule and skip matches.
+        const uses = new RegExp(STATUS_ROLES.source);
+        const painted = RULES.filter((r) => uses.test(r.body));
+        const stale = STATUS_WORDS.filter(
+            (w) => !painted.some((r) => r.selector.toLowerCase().includes(w)),
+        );
+        expect(stale, 'no rule needs this excuse -- drop the word').toEqual([]);
+    });
+});
+
 describe('the design language forbids these outright', () => {
     // Hard-coded white survives a theme flip; the fill under it does not.
     // --danger is a deep red on the light canvas but #F2787C on the dark one,

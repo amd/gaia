@@ -400,7 +400,7 @@
 }
 .agent-chat-send:hover:not(:disabled) {
   filter: brightness(1.1);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--danger) 30%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-fill) 30%, transparent);
 }
 .agent-chat-send:disabled {
   opacity: 0.4;

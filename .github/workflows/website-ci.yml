@@ -13,20 +13,25 @@
 
 name: Website CI
 
-# The agent manifests are in the filter because the snapshot gate below is the
-# only thing that catches them drifting — and the change it exists to catch
-# (adding an agent under hub/agents/) touches nothing in website/.
+# Two paths outside website/ are in the filter because the gates that catch
+# them drifting live here and nowhere else: the agent manifests (the snapshot
+# gate below, and adding an agent under hub/agents/ touches nothing in
+# website/), and the Agent UI stylesheet (cross-surface.test.ts reads it to
+# assert the code-panel hues match — retuning one surface alone is exactly how
+# the two ambers drifted apart).
 on:
   pull_request:
     paths:
       - 'website/**'
       - 'hub/agents/**/gaia-agent.yaml'
+      - 'src/gaia/apps/webui/src/styles/index.css'
       - '.github/workflows/website-ci.yml'
   push:
     branches: [main]
     paths:
       - 'website/**'
       - 'hub/agents/**/gaia-agent.yaml'
+      - 'src/gaia/apps/webui/src/styles/index.css'
       - '.github/workflows/website-ci.yml'
 
 permissions:

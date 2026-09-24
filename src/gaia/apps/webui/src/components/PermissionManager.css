@@ -129,7 +129,7 @@
 .perm-search-input:focus {
     border-color: var(--accent);
     outline: none;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 10%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .perm-search-input::placeholder {

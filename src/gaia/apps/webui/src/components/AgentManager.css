@@ -228,7 +228,7 @@
 
 .agent-card.agent-card-selected {
   border-color: var(--accent-light);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 10%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .agent-card.agent-card-running {

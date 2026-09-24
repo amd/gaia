@@ -23,6 +23,13 @@ const AGENT_UI_TOKENS = fileURLToPath(
 
 const WEBSITE_TOKENS = fileURLToPath(new URL('./tokens.css', import.meta.url));
 
+/** Repo-relative, forward slashes — the spelling a workflow path filter uses. */
+const AGENT_UI_TOKENS_REL = 'src/gaia/apps/webui/src/styles/index.css';
+
+const WEBSITE_CI = fileURLToPath(
+  new URL('../../../.github/workflows/website-ci.yml', import.meta.url),
+);
+
 /**
  * Website role → the Agent UI role it must equal.
  *
@@ -67,5 +74,25 @@ describe('status hues are one set of literals across both surfaces', () => {
     expect(siteValue, `${siteToken} is not declared as an RGB triplet`).not.toBeNull();
     expect(appValue, `${appToken} is not declared as a hex literal`).not.toBeNull();
     expect(siteValue).toBe(appValue);
+  });
+});
+
+// A drift guard that CI never runs is not a guard. This suite only executes in
+// Website CI, which is path-filtered — so retuning a hue in the Agent UI alone,
+// the exact change the pairs above exist to catch, skipped this file entirely.
+describe('the drift guard runs on the tree it reads', () => {
+  const workflow = readFileSync(WEBSITE_CI, 'utf8');
+
+  it('reads the file the path filter names', () => {
+    // Both sides of the same path: a rename that misses one is the defect.
+    expect(AGENT_UI_TOKENS.replace(/\\/g, '/')).toContain(AGENT_UI_TOKENS_REL);
+  });
+
+  it('triggers on both pull_request and push', () => {
+    const triggers = workflow.split(/^\s*(?:pull_request|push):\s*$/m).slice(1);
+    expect(triggers, 'website-ci.yml no longer has two trigger blocks').toHaveLength(2);
+    for (const block of triggers)
+      expect(block, `add '${AGENT_UI_TOKENS_REL}' to this trigger's paths`)
+        .toContain(AGENT_UI_TOKENS_REL);
   });
 });

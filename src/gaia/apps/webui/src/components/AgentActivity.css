@@ -232,7 +232,7 @@
 .flow-tool:nth-child(5) { animation-delay: 320ms; }
 
 .flow-tool.active {
-    border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .flow-tool.error {
@@ -676,7 +676,7 @@
     text-decoration-style: dashed;
 }
 .tool-result-path:hover {
-    background: color-mix(in srgb, var(--accent-green) 6%, transparent);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
     color: var(--accent);
     text-decoration-style: solid;
 }

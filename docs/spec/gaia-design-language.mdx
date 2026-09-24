@@ -126,10 +126,27 @@ Shared starting points, not pixel-matched measurements:
   The terminal follows the user's own font — never force size, truecolor, or
   background.
 - Roughly 760px readable content width; a 240–260px collapsible sidebar.
-- Restrained rounding, subtle borders, generous spacing. No glow, no simulated
-  typing, no decorative blinking, no gradient-filled panels.
-- Support light, dark, and system appearance, reduced motion, and visible
-  keyboard focus at every interactive element.
+- Restrained rounding, subtle borders, generous spacing. No glow, no
+  gradient-filled panels.
+- No simulated typing. A blinking cursor means output is still streaming — it is
+  a status indicator, never decoration, and never runs when nothing is being
+  written.
+- Light, dark, and system appearance; motion that honours `prefers-reduced-motion`;
+  visible keyboard focus at every interactive element.
+
+Three gaps stand between those rules and what ships today. Only "no glow" is
+enforced by a test (`styles/__tests__/contrast.test.ts`); the rest are held by
+review. Where each gap is scheduled in the
+[redesign plan](/plans/gaia-ui-redesign):
+
+- The welcome screen types its headline on a randomised per-character delay and
+  leaves the cursor blinking afterwards — simulated typing, with nothing
+  streaming. Milestone 2 replaces that screen.
+- Neither web surface follows the OS appearance. An unset preference stays dark
+  by design, and the stored theme has no `system` value to hold. Milestone 4.
+- `outline: none` appears in most component stylesheets. Most sit on a `:focus`
+  rule that draws a border or ring in its place, but the pairing is unverified
+  and nothing fails when it is missing. Milestone 3 covers keyboard behaviour.
 
 The [mobile design system](https://github.com/amd/gaia/blob/main/docs/spec/mobile-design-system.md)
 remains the responsive baseline, including its 768px boundary and 44px touch targets.

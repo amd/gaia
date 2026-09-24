@@ -180,9 +180,9 @@
     transition: all var(--duration) var(--ease);
 }
 .btn-model-save:hover:not(:disabled) {
-    background: var(--accent);
-    color: var(--text-inverse);
-    border-color: var(--accent);
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+    border-color: var(--accent-fill);
 }
 .btn-model-save:disabled {
     opacity: 0.4;
@@ -552,9 +552,9 @@
     flex-shrink: 0;
 }
 .btn-ctx-save:hover:not(:disabled) {
-    background: var(--accent);
-    color: var(--text-inverse);
-    border-color: var(--accent);
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+    border-color: var(--accent-fill);
 }
 .btn-ctx-save:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-ctx-save.saved { color: var(--accent-green); border-color: var(--accent-green); }
