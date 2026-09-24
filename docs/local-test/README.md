@@ -114,7 +114,7 @@ gaia connectors disconnect google
   start a session with `dbus-run-session`. macOS/Windows are fine
   out of the box.
 - **"unverified app" warning in browser**: expected for personal
-  Cloud projects. Click "Advanced → Continue to <app>" once.
+  Cloud projects. Click `Advanced → Continue to <app>` once.
 - **403 from Gmail**: scope mismatch. Disconnect, reconnect passing
   `--scopes` followed by `https://www.googleapis.com/auth/gmail.readonly`
   (the test agent's required scope).

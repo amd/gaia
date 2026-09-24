@@ -62,7 +62,6 @@ class MyAgent(MemoryMixin, Agent):
         super().__init__(**kwargs)
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_memory_tools()    # Exposes 5 tools to the LLM
 ```
 
@@ -78,7 +77,8 @@ Initialize the memory subsystem. Call this **before** `super().__init__()`.
 def init_memory(
     self,
     db_path: Optional[Path] = None,
-    context: str = "global"
+    context: str = "global",
+    embedding_model: Optional[str] = None,
 ) -> None:
 ```
 
@@ -86,6 +86,7 @@ def init_memory(
 |-----------|------|---------|-------------|
 | `db_path` | `Path` | `GAIA_MEMORY_DB`, then `$GAIA_HOME/memory.db`, then `~/.gaia/memory.db` | Path to the SQLite database file. A blank override, or one naming a directory, raises instead of falling back to the real store |
 | `context` | `str` | `"global"` | Active context scope (e.g., `"work"`, `"personal"`, `"global"`) |
+| `embedding_model` | `Optional[str]` | Default memory embedder | Override the embedding model; its live response determines the vector dimension. |
 
 **v2 startup sequence:**
 
@@ -868,53 +869,57 @@ Each method returns dicts like:
 
 ### Minimal Agent with Memory
 
+These examples need the local embedding backend initialized by `gaia init`.
+`init_memory()` can leave `memory_store` as `None` when memory is unavailable;
+check it before relying on persistence. `Agent` accepts neither `name` nor
+`system_prompt` constructor keywords: use class metadata and `_get_system_prompt()`.
+Do not call its abstract `_register_tools()` via `super()`.
+
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.memory import MemoryMixin
 
 
 class RememberBot(MemoryMixin, Agent):
-    """A simple agent that remembers everything."""
+    """An agent with persistent memory tools."""
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.init_memory(context="global")
-        super().__init__(
-            name="RememberBot",
-            system_prompt="You are a helpful assistant with persistent memory.",
-        )
+        super().__init__(**kwargs)
+
+    def _get_system_prompt(self):
+        return "Use memory tools to remember and recall useful preferences."
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_memory_tools()
 
 
 # Usage
 agent = RememberBot()
 result = agent.process_query("My name is Alex and I prefer concise answers")
-# Memory auto-extracts: fact("My name is Alex"), preference("prefer concise answers")
-# Next session, system prompt includes these automatically
+# The agent can save this with remember when memory is available.
+# Verify with recall; this short prompt does not trigger automatic extraction.
 ```
 
 ### Switching Contexts
 
 ```python
 class WorkPersonalAgent(MemoryMixin, Agent):
-    def __init__(self, context="work"):
+    def __init__(self, context="work", **kwargs):
         self.init_memory(context=context)
-        super().__init__(name="DualContext")
+        super().__init__(**kwargs)
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_memory_tools()
 
 
 agent = WorkPersonalAgent(context="work")
 agent.process_query("Remember: deploy with kubectl apply -f prod.yaml")
-# Stored in 'work' context
+# A remember tool call uses the active work context; verify its result.
 
 agent.set_memory_context("personal")
 agent.process_query("Remember: dentist appointment Thursday at 2pm")
-# Stored in 'personal' context
+# A remember tool call now uses the personal context; verify its result.
 
 agent.set_memory_context("work")
 # System prompt now shows work items only (plus global)
@@ -960,15 +965,14 @@ store.close()
 from pathlib import Path
 
 class TestAgent(MemoryMixin, Agent):
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.init_memory(
             db_path=Path("./test_memory.db"),
             context="testing",
         )
-        super().__init__(name="TestAgent")
+        super().__init__(**kwargs)
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_memory_tools()
 ```
 

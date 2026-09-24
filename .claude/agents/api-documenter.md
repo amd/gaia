@@ -24,7 +24,7 @@ underneath, say each point once. Shortest version that fully answers.
 ## When NOT to use
 
 - Pure code changes without doc impact → use the relevant code agent (`python-developer`, `cli-developer`, etc.)
-- Plan documents (`docs/plans/*.mdx`) — these are freeform, not API docs
+- Proposed work — track it in GitHub issues and milestones
 - README or CLAUDE.md edits — those aren't Mintlify
 
 ## Doc layout
@@ -37,7 +37,7 @@ underneath, say each point once. Shortest version that fully answers.
 | `docs/sdk/infrastructure/` | MCP, API server |
 | `docs/spec/` | Technical specifications |
 | `docs/reference/` | CLI, dev, FAQ |
-| `docs/plans/` | Roadmap & plan docs (not covered here) |
+| GitHub issues and milestones | Proposed work (not current reference docs) |
 
 Authoritative navigation: `docs/docs.json`.
 

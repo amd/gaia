@@ -1,83 +1,67 @@
 ---
-title: "Troubleshooting"
+title: "Troubleshooting Python agents"
+description: "Diagnose imports, tool registration, backend readiness, and agent results."
 icon: "circle-question"
 ---
 
-# Troubleshooting
+## Imports fail
 
-<Badge text="development" color="orange" />
-
-## Common Issues
-
-### Issue: "Agent not found" after install
+Run the example in the environment where you installed GAIA:
 
 ```bash
-# Verify entry point registration
-pip show my-gaia-agent
-# Check entry_points.txt in package
-
-# Reinstall
-pip uninstall my-gaia-agent -y
-uv pip install -e .
+uv pip show amd-gaia
+python -c "from gaia import Agent, tool; print(Agent.__module__)"
 ```
 
----
+Both `from gaia import Agent` and
+`from gaia.agents.base.agent import Agent` are supported. Packaged agents such as
+ChatAgent and GaiaAgent require their separate packages; see the
+[custom-agent guide](/sdk/core/custom-agents) and [development setup](/reference/dev).
 
-### Issue: "Module not found" errors
+If you changed source in a checkout, install that checkout into the active
+environment with `uv pip install -e "."`. For GAIA installs on Linux, append
+`--extra-index-url https://download.pytorch.org/whl/cpu`.
 
-```python
-# Check imports use installed package paths
-from gaia.agents.base.agent import Agent  # ✅ Correct
-from gaia import Agent  # ❌ Won't work unless exported in __init__.py
-```
+## Tools are missing or call the wrong agent
 
----
+Define instance-bound tools inside `_register_tools()` and call each mixin's
+registration method there. Do not call `super()._register_tools()` when it
+resolves to the abstract base `Agent` method.
 
-### Issue: Tools not registering
+The decorator registers a function when its definition executes, including at
+module scope. Module-level registration is therefore possible, but does not
+bind the function to your agent's instance state. Tool names share a global
+registry unless the host uses an instance snapshot; another instance can replace
+a same-named tool. See [tool registration and isolation](/sdk/core/tools).
 
-```python
-# Ensure @tool is inside _register_tools()
-def _register_tools(self):
-    @tool  # ✅ Correct
-    def my_tool():
-        pass
+A registered tool is not automatically available as `agent.tool_name()`.
+Exercise it through the harness dispatch path. The
+[testing guide](/sdk/testing) shows how to verify dispatch with mocked model
+responses, separately from testing a plain Python helper.
 
-# Not at class level
-@tool  # ❌ Wrong - won't be registered
-def my_tool():
-    pass
-```
+## The model does not respond
 
----
-
-### Issue: LLM not responding
+Prepare the local backend and configured model:
 
 ```bash
-# Check Lemonade server is running
-curl http://localhost:13305/api/v1/models
-# Should return available models
-
-# Or start it
-lemonade-server serve
+gaia init
 ```
 
----
+`gaia init` can install/download prerequisites and start the backend. Normal
+readiness checks do not guarantee that a stopped server will be started. For a
+custom `LEMONADE_BASE_URL`, check the configured server and its authentication;
+initializing a local installation does not administer a remote server.
 
-## Related Topics
+For Fireworks AI or AMD LLM Gateway, follow [provider setup](/guides/ai-providers).
+Check discovery, model access, and account errors before retrying a turn.
 
-- [Core Agent System](./core/agent-system) - Agent architecture
-- [Configuration](./configuration) - Environment setup
-- [Testing](./testing) - Debug with tests
-- [FAQ](/reference/faq) - Frequently asked questions
+## A query returns an error or incomplete result
 
----
+Inspect `status`, `error_history`, and `result`; `error` may also be present. Tool errors, refused actions,
+cancellation, and a step limit can end a query without the requested outcome.
+See [query results](/sdk/core/agent-system) for the result contract and the
+[verification footer](/guides/gaia#understand-the-verification-footer) for what
+executed checks establish.
 
-<small style="color: #666;">
-
-**License**
-
-Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
-
-SPDX-License-Identifier: MIT
-
-</small>
+For a failing mixin, confirm its host attributes exist before registration.
+The [mixin reference](/sdk/mixins/tool-mixins) links each component's requirements.

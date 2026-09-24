@@ -1,133 +1,106 @@
 ---
 title: "Output Handlers"
+description: "Connect agent progress, streaming output, confirmation decisions, and cancellation to a host."
 icon: "terminal"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/base/console.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/console.py)
+  **Source Code:** [`console.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/console.py) · [`UI SSE handler`](https://github.com/amd/gaia/blob/main/src/gaia/ui/sse_handler.py) · [`API SSE handler`](https://github.com/amd/gaia/blob/main/src/gaia/api/sse_handler.py)
 </Info>
 
 <Note>
-**Import:** `from gaia.agents.base.console import AgentConsole, SilentConsole`
+**Component:** Agent output interface · **Module:** `gaia.agents.base.console` · **Import:** `from gaia.agents.base.console import OutputHandler, AgentConsole, SilentConsole`
 </Note>
----
 
-<Badge text="development" color="orange" />
+An output handler receives progress, tool activity, errors, and final answers from
+the [agent harness](/sdk/core/agent-system). It also owns the interface for asking
+the user to approve a gated tool. Rendering and authorization are separate:
+suppressing narration does not approve actions.
 
-**Detailed Spec:** [spec/console](/spec/console)
+## Choose a handler
 
-**Purpose:** Control agent output display.
+| Handler | Role | Important behavior |
+|---|---|---|
+| `AgentConsole` | Python CLI renderer with Rich formatting, progress, and previews | Prompts for confirmation when both stdin and stdout are terminals. It is not the TUI application. |
+| `SilentConsole` | Suppress routine narration | By default still prints final answers and explicitly requested statistics. Terminal confirmation remains active. |
+| `gaia.ui.sse_handler.SSEOutputHandler` | Agent UI/host event queue | Emits typed events, supports user decisions and cancellation. |
+| `gaia.api.sse_handler.SSEOutputHandler` | Separate API server event adapter | Queues agent events; has no interactive approval round trip and denies gated tools by default. |
 
----
+These two classes share a name but have different event queues and decision
+capabilities. Neither handler alone is an HTTP server or an OpenAI streaming
+response. Its host consumes and serializes the events.
 
-## AgentConsole (Rich CLI Output)
+## Inject a console
 
-```python
-from gaia.agents.base.console import AgentConsole
-
-class MyAgent(Agent):
-    def _create_console(self):
-        # Rich console with syntax highlighting
-        return AgentConsole()
-
-# Displays:
-# - Colored step headers
-# - Syntax-highlighted tool calls
-# - Progress indicators
-# - Formatted results
-```
-
----
-
-## SilentConsole (No Output)
+The following uses the source checkout's complete NotesAgent example:
 
 ```python
+from examples.notes_agent import NotesAgent
 from gaia.agents.base.console import SilentConsole
 
-class MyAgent(Agent):
-    def _create_console(self):
-        # No console output (for API/testing)
-        return SilentConsole()
-
-# Use for:
-# - API servers
-# - Background processing
-# - Unit tests
-# - JSON-only responses
+handler = SilentConsole(silence_final_answer=True)
+agent = NotesAgent(output_handler=handler)
+result = agent.process_query("List my notes")
+print(result["result"])
 ```
 
----
+`output_handler` takes precedence over the default console selected by
+`silent_mode`. When overriding `_create_console()` in an agent subclass, preserve
+silent behavior yourself or delegate to the base implementation.
 
-## SSEOutputHandler (Streaming API)
+`SilentConsole(silence_final_answer=True)` suppresses final-answer rendering as well
+as narration. It does not disable logging, explicitly requested statistics, or
+interactive consent. Do not interpret `SilentConsole()` as a promise of zero bytes
+on every output channel.
 
-```python
-from gaia.api.sse_handler import SSEOutputHandler
+## Confirmation behavior
 
-# For API endpoints
-handler = SSEOutputHandler()
-agent = MyAgent(output_handler=handler)
+The harness decides **whether** a call requires approval; the handler obtains the
+decision. Native name sets, runtime MCP metadata, and scoped skill grants are
+described in [Tools](/sdk/core/tools#confirmation-and-policy).
 
-# Output is formatted as Server-Sent Events
-# Compatible with OpenAI streaming API
-```
+| Host situation | Decision behavior |
+|---|---|
+| Terminal console with interactive stdin and stdout | Shows the tool and literal arguments; accepts yes, otherwise defaults to no. Ctrl-C and EOF deny. |
+| Terminal call with a safely representable session scope | Can offer an “always” grant for that invocation scope, not blanket permission for an arbitrary tool. |
+| Piped stdin, redirected stdout, or broken terminal | Denies with an explanation because a visible, answerable prompt is unavailable. |
+| UI SSE handler | Emits `permission_request`, waits for `resolve_tool_confirmation()`, and denies on cancellation or timeout. The wait bound is configurable by the host. |
+| Handler using the base decision implementation | Denies unless explicit unattended approval applies. |
 
----
+Session grants are owned by the handler. `reset_tool_approvals()` clears them.
+Confirmation waits are tracked separately from tool execution time.
 
-## When to Use Each Handler
+For an intentionally unattended trusted run, a library host can construct
+`AgentConsole(auto_approve_gated_tools=True)` or
+`SilentConsole(auto_approve_gated_tools=True)`. Operators can set
+`GAIA_AUTO_APPROVE_TOOLS=1` in the launching environment. The environment opt-in is
+read from the process environment captured before project `.env` loading; a
+project-local `.env` cannot silently enable it. Approvals through this bypass are
+logged. It bypasses confirmation gates, not every independent policy check.
 
-| Handler | Use Case | Output | Best For |
-|---------|----------|--------|----------|
-| `AgentConsole` | Interactive CLI | Rich, colored text | Development, debugging |
-| `SilentConsole` | Headless operation | None | APIs, tests, background |
-| `SSEOutputHandler` | Streaming API | Server-Sent Events | Web applications |
+## Implementing a host adapter
 
----
+`OutputHandler` is an abstract interface. Its required methods cover processing and
+step starts, state/thought/plan display, tool progress, errors, final answers,
+completion, JSON, and progress indicators. Additional methods support prompts,
+streaming, and statistics. Inspect its abstract
+methods in the linked source when implementing a new adapter rather than copying a
+partial interface into a host.
 
-## Confirming Dangerous Tools
+For a narrow customization, subclass `AgentConsole` or `SilentConsole` and override
+the relevant rendering methods. A full GUI adapter must also handle:
 
-Tools listed in the agent's `confirmation_required_tools()` set — the generic
-shell / file-mutation names plus whatever the agent declares in
-`CONFIRMATION_REQUIRED_TOOLS` (email send, permanent delete, calendar RSVP) —
-never execute until `confirm_tool_execution()` returns `True`. The gate is
-name-based and applies to `Agent._execute_tool`, so a tool that isn't in that set
-(or code that bypasses the agent loop) is not covered. What a confirmation means
-depends on the handler:
+- Queuing events safely while synchronous `process_query()` runs in a worker.
+- Showing the exact pending call and routing a decision back to `confirm_tool_execution()`.
+- Distinguishing a human denial from timeout, cancellation, or unavailable input.
+- Ending waits when the consumer disconnects and exposing a cooperative cancellation signal.
+- Preserving recoverable-error information instead of presenting every tool failure as a fatal run failure.
 
-| Handler | Behaviour |
-|---------|-----------|
-| `AgentConsole` / `SilentConsole`, stdin **and** stdout are a terminal | Prints the tool and its literal arguments, then asks `[y]es / [N]o / [a]lways for this tool`. Defaults to **no**; Ctrl-C and EOF also mean no. `a` remembers that one tool for the life of the console (never offered for `run_shell_command` / `run_cli_command`, where the name says nothing about the next call). Silent mode suppresses narration, not consent. |
-| Either console with piped stdin, redirected stdout, CI, or a subprocess host | **Denies** — there is nobody to ask, or nowhere the question would be visible. The tool result explains why and how to proceed. |
-| Any handler that doesn't override the default (e.g. the OpenAI-compatible API server's SSE handler) | **Denies**, same reasoning. |
-| Agent UI's `SSEOutputHandler` | Emits a `permission_request` event, blocks up to 60 s for the modal's answer, denies on timeout. |
+The UI SSE handler exposes a `threading.Event` named `cancelled`; the agent checks
+it during streamed generation. Its confirmation wait also observes that event.
+Cancellation does not forcibly stop Python tool bodies; the separate per-tool
+timeout and cooperative cancellation contract is documented under
+[Tools](/sdk/core/tools#timeouts-and-cancellation).
 
-The agent loop turns a denial into a `{"status": "denied", "error": ...}` tool
-result, so the model can explain itself or pick a different action instead of the
-run crashing.
-
-<Warning>
-  For a genuinely unattended run (CI, a batch job, a host that already asked the
-  user), set `GAIA_AUTO_APPROVE_TOOLS=1` in the launching environment, or
-  construct the console with `AgentConsole(auto_approve_gated_tools=True)`. Every
-  approval taken this way is logged with the tool name. The variable is read from
-  the environment as it was at startup, so a project-local `.env` cannot enable
-  it. Do not leave it set on a machine with a live mailbox connected — it lets the
-  model send, forward, and permanently delete without asking.
-</Warning>
-
----
-
-## Related Topics
-
-- **[Agent System](./agent-system)** - Learn about the agent foundation
-- **[API Server](/reference/api)** - Using agents in web applications
-- **[Testing](../testing)** - Testing agents with SilentConsole
-
----
-
-<small style="color: #666;">
-
-Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
-
-SPDX-License-Identifier: MIT
-
-</small>
+For operating the terminal application and its host protocol, see
+[the TUI guide](/guides/terminal-hub).

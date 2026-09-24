@@ -20,7 +20,7 @@ response that fully answers.
 - Design-system decisions (colour, spacing, components) for GAIA apps
 - Accessibility reviews and fixes (WCAG AA minimum)
 - Voice UX — turn-taking, barge-in, error recovery for `gaia talk`
-- Reviewing UI-heavy roadmap plans (`docs/plans/agent-ui.mdx`, `setup-wizard.mdx`, etc.)
+- Reviewing UI proposals tracked in GitHub issues and pull requests
 
 ## When NOT to use
 
@@ -33,7 +33,7 @@ response that fully answers.
 | Surface | Where | User |
 |---------|-------|------|
 | Agent UI (primary) | `src/gaia/apps/webui/` | End user, browser / desktop chat |
-| Setup Wizard | Planned — see `docs/plans/setup-wizard.mdx` | First-run onboarding |
+| Terminal readiness | `tui/internal/ui/preflight/` | First-run setup |
 | Configuration dashboard | Agent UI panel (planned) | Power user |
 | Observability dashboard | Agent UI panel (planned) | Developer/operator |
 | Voice (`gaia talk`) | CLI + optional UI | Hands-free user |
@@ -56,7 +56,7 @@ response that fully answers.
 - Usability test scripts + success metrics
 - Rationale: why this choice over alternatives
 
-Drop written outputs under `docs/plans/` or attach to issues/PRs. Images under `docs/assets/img/`.
+Attach proposed designs to issues/PRs. Document implemented behavior under `docs/guides/`. Images under `docs/assets/img/`.
 
 ## Accessibility checklist
 

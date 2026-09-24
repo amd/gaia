@@ -75,7 +75,7 @@ Development setup, lint commands, and the test layout live in [`docs/reference/d
 
 ## Documentation contributions
 
-If you're adding or updating documentation, see the [Documentation Contribution Guide](docs/reference/contributing-docs.mdx) for which `docs/` directory to use (guides, playbooks, SDK reference, specifications, or reference). Documentation contributions still follow the issue-then-PR rule, except for the typo/small-edit exceptions noted above.
+If you're adding or updating documentation, see the [Documentation Contribution Guide](docs/reference/contributing-docs.mdx) for which `docs/` directory to use (guides, SDK reference, specifications, or reference). Documentation contributions still follow the issue-then-PR rule, except for the typo/small-edit exceptions noted above.
 
 ---
 

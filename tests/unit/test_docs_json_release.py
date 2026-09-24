@@ -79,3 +79,80 @@ def test_release_notes_file_exists_for_current_version():
         f"{notes.relative_to(REPO_ROOT)} does not exist, but docs.json links it "
         f"and publish.yml validates it."
     )
+
+
+def _navigation_pages(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "pages":
+                for page in value:
+                    if isinstance(page, str):
+                        yield page
+                    else:
+                        yield from _navigation_pages(page)
+            else:
+                yield from _navigation_pages(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _navigation_pages(value)
+
+
+def test_navigation_has_no_duplicate_pages(docs_config):
+    from collections import Counter
+
+    counts = Counter(_navigation_pages(docs_config["navigation"]))
+    assert not {page: count for page, count in counts.items() if count > 1}
+
+
+def test_navigation_pages_exist(docs_config):
+    missing = [
+        page
+        for page in _navigation_pages(docs_config["navigation"])
+        if not (REPO_ROOT / "docs" / f"{page}.mdx").is_file()
+    ]
+    assert not missing, f"Navigation references missing pages: {missing}"
+
+
+def test_redirects_have_unique_sources_and_existing_destinations(docs_config):
+    redirects = docs_config["redirects"]
+    assert len({r["source"] for r in redirects}) == len(redirects)
+    for redirect in redirects:
+        destination = redirect["destination"].lstrip("/")
+        assert (REPO_ROOT / "docs" / f"{destination}.mdx").is_file(), redirect
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/roadmap",
+        "/plans/agent-ui",
+        "/plans/skill-format",
+        "/playbooks/index",
+        "/playbooks/custom-installer",
+        "/playbooks/custom-installer/index",
+        "/playbooks/chat-agent/part-1-getting-started",
+        "/spec/component-status",
+    ],
+)
+def test_retired_entry_points_redirect_to_maintained_docs(docs_config, route):
+    assert route in {redirect["source"] for redirect in docs_config["redirects"]}
+
+
+def test_current_docs_do_not_recommend_removed_lemonade_cli():
+    stale = []
+    for page in (REPO_ROOT / "docs").rglob("*.mdx"):
+        if "releases" in page.relative_to(REPO_ROOT / "docs").parts:
+            continue
+        for line_number, line in enumerate(
+            page.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            if any(
+                command in line
+                for command in (
+                    "lemonade-server serve",
+                    "lemonade-server pull",
+                    "lemonade-server list",
+                )
+            ):
+                stale.append(f"{page.relative_to(REPO_ROOT)}:{line_number}")
+    assert not stale, f"Removed CLI recommended in current docs: {stale}"

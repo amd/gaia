@@ -1,140 +1,40 @@
 ---
-title: "Welcome"
-description: "Build local AI agents in Python and C++ for AMD hardware."
+title: "GAIA"
+description: "Use GAIA in your terminal or extend its agent harness."
 icon: "hand-wave"
 ---
 
-<div style={{textAlign: 'center', padding: '48px 0 24px 0'}}>
-  <h1 style={{fontSize: '3.2rem', fontWeight: 900, marginBottom: '24px', lineHeight: 1.1}}>
-    Build AI Agents That Run <span style={{color: '#E2A33E'}}>Locally</span>
-  </h1>
-  <p style={{fontSize: '1.3rem', maxWidth: '780px', margin: '0 auto', lineHeight: 1.8}}>
-    GAIA is an open-source framework for building AI agents in Python and C++ that run on local hardware. Agents reason, call tools, search documents, and take action — the core runtime needs no cloud, so sensitive data stays on-device. Individual agents can still opt into external services (weather APIs, Jira, MCP servers) when a use case requires them.
-  </p>
-</div>
+GAIA is AMD's open-source agent framework. The flagship agent combines conversation,
+document retrieval, file and shell tools, data analysis, memory, and skills. The
+terminal UI provides interactive chat, tool approval, cancellation, and diagnostics.
 
-<CardGroup cols={4}>
-  <Card title="Local Inference" icon="lock">
-    All processing stays on-device
-  </Card>
-  <Card title="Cloud-Optional" icon="server">
-    Core runtime needs no cloud or API keys — agents can opt in when a use case requires it
-  </Card>
-  <Card title="Python & C++" icon="code">
-    Full SDK in both languages
-  </Card>
-  <Card title="AMD Optimized" icon="bolt">
-    NPU and GPU acceleration on Ryzen AI
-  </Card>
-</CardGroup>
+Local inference runs through Lemonade. Optional cloud providers send conversation
+history to the selected service; web tools and connectors also contact external
+services. See [AI providers](/guides/ai-providers).
 
-<Tabs>
-  <Tab title="Python">
-    ```python
-    from gaia.agents.base.agent import Agent
-
-    agent = Agent()
-    response = agent.process_query("Summarize my meeting notes")
-    ```
-  </Tab>
-  <Tab title="C++">
-    ```cpp
-    #include <gaia/agent.h>
-
-    gaia::Agent agent;
-    auto result = agent.processQuery("Summarize my meeting notes");
-    ```
-  </Tab>
-</Tabs>
-
-## Get Started
-
-<CardGroup cols={3}>
-  <Card title="Agent UI" icon="desktop" href="/quickstart#agent-ui-npm">
-    Install via npm and run AI agents locally — two commands to get started.
-  </Card>
-  <Card title="Python Quick Start" icon="python" href="/quickstart#cli-install">
-    Install GAIA, start Lemonade Server, and run your first agent.
-  </Card>
-  <Card title="C++ Quickstart" icon="code" href="/cpp/quickstart">
-    Build a native C++17 agent binary -- no Python runtime required.
-  </Card>
-</CardGroup>
-
-## Capabilities
-
-<Tabs>
-  <Tab title="Python">
-    <CardGroup cols={2}>
-      <Card title="Agent UI" icon="desktop" href="/guides/agent-ui">
-        Privacy-first desktop chat with drag-and-drop document Q&A. Install via npm or `gaia --ui`.
-      </Card>
-      <Card title="Document Q&A (RAG)" icon="file-lines" href="/guides/chat">
-        Retrieve, index, and answer questions over local PDFs, code, and text files.
-      </Card>
-      <Card title="Speech-to-Speech" icon="microphone" href="/guides/talk">
-        Whisper ASR and Kokoro TTS — offline voice interaction pipeline.
-      </Card>
-      <Card title="Flagship GAIA Agent" icon="sparkles" href="/guides/gaia">
-        Conversation, documents, data, web, memory, and skills in one agent.
-      </Card>
-      <Card title="Code Index" icon="magnifying-glass-code" href="/guides/code-index">
-        Semantic search over your codebase using local AMD-accelerated embeddings.
-      </Card>
-      <Card title="MCP Integration" icon="plug" href="/sdk/sdks/mcp">
-        Connect agents to external tools via Model Context Protocol.
-      </Card>
-      <Card title="Composing Skills" icon="puzzle-piece" href="/guides/composing-skills">
-        Extend the flagship agent's capabilities with a `SKILL.md`.
-      </Card>
-    </CardGroup>
-  </Tab>
-  <Tab title="C++">
-    <CardGroup cols={2}>
-      <Card title="System Health Agent" icon="heart-pulse" href="/cpp/health-agent">
-        MCP-powered diagnostics — CPU, memory, disk, network, and GPU monitoring.
-      </Card>
-      <Card title="Wi-Fi Troubleshooter" icon="wifi" href="/cpp/wifi-agent">
-        Diagnose and resolve wireless connectivity issues with registered tools.
-      </Card>
-      <Card title="Custom Agents" icon="robot" href="/cpp/custom-agent">
-        Build your own C++17 agent with tool registration and state management.
-      </Card>
-      <Card title="MCP Integration" icon="plug" href="/cpp/overview">
-        Connect to MCP servers for extensible tool access.
-      </Card>
-    </CardGroup>
-  </Tab>
-</Tabs>
-
-## Resources
+## Start here
 
 <CardGroup cols={2}>
-  <Card title="SDK Reference" icon="book" href="/sdk">
-    Complete API documentation
+  <Card title="Terminal UI" icon="terminal" href="/guides/terminal-hub">
+    Install, launch, choose a provider, and use the chat controls.
   </Card>
-  <Card title="GitHub" icon="github" href="https://github.com/amd/gaia">
-    View source code
+  <Card title="Flagship agent" icon="sparkles" href="/guides/gaia">
+    Work with documents, files, memory, and skills.
   </Card>
-  <Card title="Component Specs" icon="file-code" href="/spec/agent-base">
-    Technical specifications
+  <Card title="Agent harness" icon="code" href="/sdk/core/agent-system">
+    Understand the Python agent lifecycle and extend it with tools.
   </Card>
-  <Card title="Glossary" icon="book-open" href="/glossary">
-    Technical terms explained
-  </Card>
-  <Card title="Discord" icon="discord" href="https://discord.com/channels/1392562559122407535/1402013282495102997">
-    Join community
+  <Card title="Developer quickstart" icon="rocket" href="/quickstart">
+    Run a small agent with a real, deterministic tool.
   </Card>
 </CardGroup>
 
----
+## Extend and troubleshoot
 
-<small style="color: #666;">
-
-**License**
-
-Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
-
-SPDX-License-Identifier: MIT
-
-</small>
+- [Tools](/sdk/core/tools) and [tool mixins](/sdk/mixins/tool-mixins): add capabilities.
+- [Skills](/guides/composing-skills): extend the flagship's instructions.
+- [MCP](/sdk/sdks/mcp) and [connectors](/connectors/index): connect services.
+- [TUI architecture](/reference/tui): understand transports, session state, and debugging.
+- [CLI reference](/reference/cli): Python CLI and terminal binary commands.
+- [C++ framework](/cpp/overview): native agent development.
+- [Releases](/releases/index): version-specific changes and historical behavior.

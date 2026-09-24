@@ -23,7 +23,7 @@ This guide takes you from an empty folder to a published agent, and then shows h
 to ship updates. No prior packaging experience assumed.
 
 <Tip>
-  **New to building agents?** Start with [Custom Agents](/guides/custom-agent) to
+  **New to building agents?** Start with [Custom Agents](/sdk/core/agent-system) to
   write the agent itself, then come back here to publish it. **Using Claude Code in
   the GAIA repo?** The **`gaia-build-agent`** skill builds and the
   **`agent-hub-release`** skill cuts a frozen-binary + npm sidecar release (like the
@@ -390,7 +390,7 @@ goes one step further and ships a **frozen native binary** plus an npm package
 The [flagship `gaia` agent](https://github.com/amd/gaia/tree/main/hub/agents/gaia/python)
 follows the same pattern as its second instance (`@amd-gaia/gaia`), additionally
 consuming the Go terminal UI as a separately-published hub component rather than
-bundling a copy of its own — see [`plans/flagship-installer`](/plans/flagship-installer)
+bundling a copy of its own — see [TUI architecture](/reference/tui)
 for that packaging in detail. That packaging is currently hand-built per agent;
 reusable tooling to make any agent an npm sidecar is on the roadmap.
 
@@ -449,7 +449,7 @@ understand, but not something a contributor executes. If what you have is a
 
 | | Agent package | Skill |
 |---|---|---|
-| Manifest | `gaia-agent.yaml` | the YAML front matter of `SKILL.md` ([Skill Format](/plans/skill-format)) |
+| Manifest | `gaia-agent.yaml` | the YAML front matter of `SKILL.md` ([Skill Format](/spec/agent-skills)) |
 | Publish route | `POST /publish` | `POST /publish/skill` |
 | Installs with | `gaia agent install <id>` | `gaia skill install <name>` (into `~/.gaia/skills/`) |
 | Storage | `agents/<id>/…` | `skills/<name>/…` |
@@ -529,6 +529,6 @@ Use `gaia agent version patch|minor|major` to bump it. Two rules the Hub enforce
 
 ## See also
 
-- [Build a custom agent](/guides/custom-agent) — focuses on the agent class itself.
+- [Build a custom agent](/sdk/core/agent-system) — focuses on the agent class itself.
 - [Agent System](/sdk/core/agent-system) and [Tools](/sdk/core/tools) — the building blocks.
-- [Agent Hub plan](/plans/agent-hub) and [spec](/spec/agent-hub-restructure) — how the Hub works under the hood.
+- [Plugin registry](/spec/plugin-registry) — how installed agents are discovered.

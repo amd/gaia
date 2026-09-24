@@ -27,10 +27,10 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
   <Tab title="Windows">
     1. Follow the [Quickstart](/quickstart) to install GAIA
     2. Open PowerShell and run `gaia` to launch the Agent UI, or `gaia --cli` for terminal chat
-    3. GAIA automatically starts Lemonade Server when needed, or start manually:
+    3. Prepare the backend and model with GAIA setup:
 
     ```bash
-    lemonade-server serve
+    gaia init
     ```
   </Tab>
 
@@ -40,7 +40,7 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
     3. Start the server:
 
     ```bash
-    lemonade-server serve
+    gaia init
     ```
 
     4. Verify installation:
@@ -1039,9 +1039,9 @@ gaia telegram stop
 
 ### Quick Start
 
-1. Start Lemonade with extended context:
+1. Prepare Lemonade and the configured model:
 ```bash
-lemonade-server serve --ctx-size 32768
+gaia init
 ```
 
 2. Start GAIA API server:
@@ -1239,7 +1239,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `test` | Test MCP bridge functionality (optionally against a specific `--tool`) |
 | `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
 | `serve` | Start the Agent UI MCP server (wraps the Agent UI backend) |
-| `tui` | Start the TUI control MCP server (drives a running `gaia tui --control`) |
+| `tui` | Start the TUI control MCP server (drives a running `gaia-tui --control`) |
 
 #### `gaia mcp start` options
 
@@ -1323,7 +1323,7 @@ Pass a natural-language `request` and, optionally, a `--domain` (e.g. `atlassian
 
 Wraps the [TUI control API](#tui-control-api) as MCP tools, so an assistant can
 navigate and type in the TUI session you are watching. The TUI must already be
-running with `gaia tui --control`; the server finds it through
+running with `gaia-tui --control`; the server finds it through
 `~/.gaia/tui/control.json` rather than a fixed port.
 
 | Option | Default | Description |
@@ -1547,11 +1547,11 @@ gaia download --agent code
 To download individual models, use the Lemonade Server CLI directly:
 
 ```bash
-lemonade-server pull MODEL_NAME [OPTIONS]
+lemonade pull MODEL_NAME [OPTIONS]
 ```
 
 <Tip>
-Use `lemonade-server list` to see all available models and their download status.
+Use `lemonade list` to see all available models and their download status.
 </Tip>
 
 ---
@@ -2443,7 +2443,7 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 `search` / `install` / `remove` / `publish` shipped with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)); `gaia skill migrate` (OpenClaw / Hermes import) shipped with [#692](https://github.com/amd/gaia/issues/692); `skill_sets:` is [#2466](https://github.com/amd/gaia/issues/2466).
 </Note>
 
-[→ Agent Skills Spec](/spec/agent-skills) · [→ Skill Format Reference](/plans/skill-format)
+[→ Agent Skills Spec](/spec/agent-skills)
 
 ---
 
@@ -2782,32 +2782,32 @@ under [Agent Command](#agent-command).
 
 ---
 
-### Terminal UI (`gaia tui`)
+### Terminal UI (`gaia-tui`)
 
-`gaia tui` is the Go/Bubble Tea terminal client: it boots straight into the
+`gaia-tui` is the Go/Bubble Tea terminal client: it boots straight into the
 flagship `gaia` agent's chat, behind a readiness gate. Building from source the
 binary is `tui/bin/gaia-tui` (`cd tui && make build`).
 
 <Note>
-  The binary accepts a leading `tui` word and drops it, so `gaia tui status`
-  and `gaia status` are the same command. Running the source build directly,
-  both `./tui/bin/gaia-tui tui status` and `./tui/bin/gaia-tui status` work.
+  `gaia-tui` is the Go binary; `gaia` is the Python CLI. The Go binary also accepts
+  `gaia-tui tui status` as an alias for `gaia-tui status`. This does not add a
+  `tui` or `status` command to the Python CLI.
 </Note>
 
 ```bash
-gaia tui                                       # splash -> readiness gate -> chat
-gaia tui run email                             # chat with another agent by id
-gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3
-gaia tui status                                # background service + what is installed
+gaia-tui                                       # splash -> readiness gate -> chat
+gaia-tui run email                             # chat with another agent by id
+gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3
+gaia-tui status                                # background service + what is installed
 ```
 
 | Command | Description |
 |---------|-------------|
-| `gaia tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
-| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
-| `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
-| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
-| `gaia tui version` | Print the build version. |
+| `gaia-tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
+| `gaia-tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
+| `gaia-tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia-tui run --query` is, `--timeout` included. |
+| `gaia-tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
+| `gaia-tui version` | Print the build version. |
 
 There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
 not browse or manage the Agent Hub catalog. Installing or removing a hub
@@ -2844,11 +2844,11 @@ If you trust the publisher, re-run:
 
 `--query` does not open the alt screen. The answer goes to stdout, progress to
 stderr, and the exit code is `0` on a terminal answer, `1` on an error, and `3`
-when a confirmation gate held back a destructive action — so `gaia tui run
+when a confirmation gate held back a destructive action — so `gaia-tui run
 email --query "…" > answer.txt` captures exactly the answer:
 
 ```bash
-gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
+gaia-tui run email --query "how many unread?" > answer.txt 2> progress.log
 echo $?   # 0
 ```
 
@@ -2859,24 +2859,18 @@ service, sidecar, local model server, model, and for email the mailbox — and i
 one of them is not ready it prints that row and its remedy to stderr and exits
 non-zero. Against an unreachable dependency that is about a second; the ceiling
 is the time it takes to start the sidecar. Nothing is sent to the agent, and the
-gate screen is never rendered: a script has nobody to press a key. The flagship
-runs as a local subprocess and is checked the same way, just with its own
-three-row gate (agent binary, Lemonade, models) instead of the daemon's five.
+gate screen is never rendered: a script has nobody to press a key. The flagship normally uses a subprocess gate; a Hub binary install selects the daemon transport instead. See [transport selection](/reference/tui#transport-selection).
 
-```bash
-$ gaia tui run email --query "triage my inbox"   # with the model server down
-❌ Email is not ready — Local AI: not running at http://localhost:8000/api/v1
-   GAIA needs a local model server. It runs on your machine; no message text ever leaves it.
-…
-        run: lemonade-server serve
-$ echo $?   # 1, after about a second
-```
+When a dependency is unavailable, stderr identifies the failed readiness check
+and prints a remedy. Backend startup guidance depends on the installed Lemonade
+application. Run `gaia init` to prepare the local backend before retrying; inspect
+the reported endpoint if you configured a remote server.
 
 The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeout
 2h` to change it — so an agent that accepts the query and then stops answering is
 reported with what to read next instead of hanging a CI job until the job's own
 timeout kills it. There is no "wait forever": `--timeout 0` is refused. Interactive
-`gaia tui run <id>` is unaffected — a person can read what arrives and press
+`gaia-tui run <id>` is unaffected — a person can read what arrives and press
 ctrl+c.
 
 #### Readiness gate keys
@@ -2914,7 +2908,7 @@ inside tmux, or in a CI log where the terminal never answers that query, force
 a mode instead of guessing:
 
 ```bash
-GAIA_TUI_THEME=light gaia tui    # or: dark
+GAIA_TUI_THEME=light gaia-tui    # or: dark
 ```
 
 <Note>
@@ -2926,7 +2920,7 @@ GAIA_TUI_THEME=light gaia tui    # or: dark
 
 ### TUI Control API
 
-The terminal UI (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback
+The terminal UI (`gaia-tui`, the Go/Bubble Tea binary) can expose a loopback
 HTTP API that drives **the session you are looking at** — not a headless copy.
 An assistant navigates, types, and drives the readiness gate while the frames
 render in your terminal in real time. It is how the TUI gets tested without a
@@ -2936,9 +2930,9 @@ Off by default. Bound to `127.0.0.1` only, and every request needs a bearer
 token.
 
 ```bash
-gaia tui --control                 # auto-assign a port
-gaia tui --control-port 8770       # explicit port (implies --control)
-gaia tui --control --dev           # input counts, state changes, and waits; no input contents
+gaia-tui --control                 # auto-assign a port
+gaia-tui --control-port 8770       # explicit port (implies --control)
+gaia-tui --control --dev           # input counts, state changes, and waits; no input contents
 ```
 
 <Note>
@@ -3014,9 +3008,9 @@ tool calls carrying **their arguments** and tool results carrying **their
 payloads**.
 
 ```bash
-gaia tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
-gaia tui --trace=run.jsonl             # a path you choose
-gaia tui --trace --dev                 # record to a file AND show it on screen
+gaia-tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
+gaia-tui --trace=run.jsonl             # a path you choose
+gaia-tui --trace --dev                 # record to a file AND show it on screen
 ```
 
 The path is printed on startup (`trace → …`). An unwritable path is a startup
@@ -3255,7 +3249,7 @@ All commands support these global options:
     If you get connection errors, ensure Lemonade server is running:
 
     ```bash
-    lemonade-server serve
+    gaia init
     ```
   </Accordion>
 
