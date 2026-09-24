@@ -8073,8 +8073,7 @@ Do NOT wrap conversational replies in JSON.
                     answer_candidate = incomplete_answer(completion_gaps)
                 inventory = self._extraction_ledger.render()
                 if inventory:
-                    # Do not ask another synthesis call to reproduce the set:
-                    # that was the lossy aggregation step in #4141.
+                    # Never ask another synthesis call to reproduce the set; it condenses.
                     if completion_gaps:
                         answer_candidate += "\n\n" + inventory
                     else:

@@ -822,3 +822,89 @@ def test_repeated_items_with_shared_context_are_not_silently_deduplicated():
             lambda *_: json.dumps({"complete": True, "items": items}),
             lambda: None,
         )
+
+
+FIELDS = ("name", "target area", "cue")
+SENTENCE = (
+    "As long as the march is feeling good, I want you to slow down your march "
+    "and start picking your feet up higher, which is going to be a little bit "
+    "of a balance exercise."
+)
+VALUES = {
+    "name": "slow down your march",
+    "target area": "not stated",
+    "cue": "start picking your feet up higher",
+}
+
+
+def field_entry(page, quote, values, base=0):
+    return parse_page(
+        json.dumps({"complete": True, "items": [{"quote": quote, "fields": values}]}),
+        page,
+        base,
+        tuple(values),
+    )[0]
+
+
+def test_differently_bounded_quotes_of_one_sentence_are_one_occurrence():
+    early = field_entry(SENTENCE, SENTENCE[:120], VALUES)
+    late = field_entry(SENTENCE, SENTENCE[40:], VALUES)
+    assert early.start < late.start < early.end < late.end
+    assert reconcile_occurrence(early, late) == early
+    assert reconcile_occurrence(late, early) == late
+
+
+def test_partial_overlap_keeps_the_occurrence_that_states_more_fields():
+    early = field_entry(SENTENCE, SENTENCE[:110], {**VALUES, "cue": "not stated"})
+    late = field_entry(SENTENCE, SENTENCE[40:], VALUES)
+    assert reconcile_occurrence(early, late) == late
+    assert reconcile_occurrence(late, early) == late
+
+
+def test_partial_overlap_of_repeated_names_stays_two_occurrences():
+    page = "Squat reps10. pause. Squat reps10."
+    values = {"name": "Squat", "reps": "reps10"}
+    first = field_entry(page, "Squat reps10. pause.", values)
+    second = field_entry(page, "pause. Squat reps10.", values)
+    assert reconcile_occurrence(first, second) is None
+    # A quote naming the item twice cannot say which occurrence it means.
+    both = field_entry(
+        page, "Squat reps10. pause. Squat", {"name": "Squat", "reps": "not stated"}
+    )
+    assert reconcile_occurrence(both, second) is None
+
+
+def test_transcript_sentence_quoted_differently_across_pages_extracts_once():
+    filler = "The coach talks about the room and the chairs. "
+    source = filler * 80 + SENTENCE + " " + filler * 150
+    sentence_at = source.index(SENTENCE)
+    assert PAGE_CHARS - 600 < sentence_at < PAGE_CHARS
+    seen_pages = 0
+
+    def ask(system, payload):
+        nonlocal seen_pages
+        data = json.loads(payload)
+        page = data["source_page"]
+        if SENTENCE not in page or "already_found" in data:
+            return json.dumps({"complete": True, "items": []})
+        seen_pages += 1
+        # Each page chooses its own plausible start and end for the quote.
+        quote = SENTENCE[:120] if seen_pages == 1 else SENTENCE[40:]
+        return json.dumps(
+            {"complete": True, "items": [{"quote": quote, "fields": VALUES}]}
+        )
+
+    entries, pages = extract_pages(
+        source, "List every exercise", ask, lambda: None, FIELDS
+    )
+    assert seen_pages == 2 and pages > 2
+    assert len(entries) == 1
+    assert entries[0].start == sentence_at
+
+
+def test_contained_quote_may_repeat_the_name_it_identifies():
+    page = "The march. Keep the march slow and lift your knees."
+    values = {"name": "march", "cue": "not stated"}
+    short = field_entry(page, "Keep the march slow", values)
+    full = field_entry(page, page, {"name": "march", "cue": "lift your knees"})
+    assert reconcile_occurrence(short, full) == full

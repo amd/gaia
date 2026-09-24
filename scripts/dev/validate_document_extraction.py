@@ -175,10 +175,7 @@ def main():
     }
     followup = agent.process_query(
         "Use search_past_conversations to find our previous workshop extraction. What was the cue for Zephyr-40? Do not read the source file.",
-        # Same budget as the main extraction (line 99): a slower local model
-        # can spend several steps just searching before it answers, and a
-        # tighter budget here reports the harness's own limit as a product
-        # failure (field report, PR #4145).
+        # Match the extraction budget; slow local models search for several steps.
         max_steps=10,
     )
     record["memory_followup_status"] = followup["status"]

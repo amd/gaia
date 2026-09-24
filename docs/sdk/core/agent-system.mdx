@@ -1158,9 +1158,11 @@ memory database or cloud sync is introduced.
 The default `gaia-voice` skill supplies a short routing rule; the detailed
 `document-extract` procedure is loaded for the task. The implementation uses
 schema-constrained page responses and an omission check per page. Overlap keeps
-source text visible, aligns to whole lines where possible, and preserves verbatim
-field values; only a final sentence-period difference on an identical source
-span is tolerated during comparison. Conflicting evidence fails visibly.
+source text visible, aligns to whole lines or sentences, and preserves verbatim
+field values. Two pages that quote one occurrence with different boundaries merge
+when every value both state sits at the same source offset; a fuller extraction
+may fill fields the other left `not stated`, and a final sentence period is the
+only tolerated value difference. Conflicting evidence fails visibly.
 
 Run the explicit live regression with either backend:
 

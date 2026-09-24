@@ -139,6 +139,26 @@ class Entry:
     fields: tuple = ()
 
 
+def _stated(value):
+    return value.lower() != "not stated"
+
+
+def _same_value(a, b):
+    # A model may include/exclude the final sentence period in a field copied
+    # from the same evidence. Compare this one delimiter without altering the
+    # retained value (e.g. U.S. or a fully-qualified domain).
+    shorter, longer = sorted((a, b), key=len)
+    return a == b or (bool(shorter) and longer == shorter + ".")
+
+
+def _anchor(entry, value):
+    """Source offset of *value* inside the entry's quote, or None if absent or repeated."""
+    at = entry.quote.find(value)
+    if at < 0 or entry.quote.find(value, at + 1) >= 0:
+        return None
+    return entry.start + at
+
+
 def same_occurrence_fields(first, second):
     if first.text == second.text:
         return True
@@ -146,55 +166,51 @@ def same_occurrence_fields(first, second):
         return False
     if not first.fields or not second.fields:
         return False
-    # A model may include/exclude the final sentence period in a field copied
-    # from exactly the same evidence span. Compare this one delimiter without
-    # altering the retained value (e.g. U.S. or a fully-qualified domain).
     if len(first.fields) != len(second.fields):
         return False
-    for (name, a), (other, b) in zip(first.fields, second.fields):
-        if name != other:
-            return False
-        if a == b:
-            continue
-        shorter, longer = sorted((a, b), key=len)
-        if not shorter or longer != shorter + ".":
-            return False
-    return True
+    return all(
+        name == other and _same_value(a, b)
+        for (name, a), (other, b) in zip(first.fields, second.fields)
+    )
 
 
 def reconcile_occurrence(first, second):
-    """Keep stronger evidence when an overlap supplies previously absent fields."""
+    """Merge two overlapping extractions of one occurrence, keeping stronger evidence.
+
+    Free text can only be matched by containment. Field values are verbatim in
+    their quotes, so partially overlapping quotes also match when every value
+    both sides state sits once, at the same source offset, in each quote. A
+    shared name at different offsets is a repeated item, never merged.
+    """
+    if max(first.start, second.start) >= min(first.end, second.end):
+        return None
     contained = (first.start <= second.start and first.end >= second.end) or (
         second.start <= first.start and second.end >= first.end
     )
-    if not contained:
+    if not first.fields or not second.fields:
+        return first if contained and first.text == second.text else None
+    old, new = dict(first.fields), dict(second.fields)
+    if old.keys() != new.keys():
         return None
-    if same_occurrence_fields(first, second):
-        return first
-    for shorter, richer in ((first, second), (second, first)):
-        if not (richer.start <= shorter.start and richer.end >= shorter.end):
+    shared = [name for name in old if _stated(old[name]) and _stated(new[name])]
+    for name in shared:
+        if not _same_value(old[name], new[name]):
+            return None
+        if contained:
             continue
-        if not shorter.fields or not richer.fields:
-            continue
-        old, new = dict(shorter.fields), dict(richer.fields)
-        if old.keys() != new.keys():
-            continue
-        identity = [name for name in old if name.lower() in {"name", "id", "title"}]
-        shared = any(
-            old[name].lower() != "not stated" and old[name] == new[name]
-            for name in (identity or list(old))
-        )
-        compatible = all(
-            value.lower() == "not stated" or value == new[name]
-            for name, value in old.items()
-        )
-        improved = any(
-            value.lower() == "not stated" and new[name].lower() != "not stated"
-            for name, value in old.items()
-        )
-        if shared and compatible and improved:
-            return richer
-    return None
+        value = min(old[name], new[name], key=len)
+        at = _anchor(first, value)
+        if at is None or at != _anchor(second, value):
+            return None
+    identity = [name for name in old if name.lower() in {"name", "id", "title"}]
+    if not any(name in shared for name in (identity or list(old))):
+        return None
+    first_only = any(_stated(old[n]) and not _stated(new[n]) for n in old)
+    second_only = any(_stated(new[n]) and not _stated(old[n]) for n in old)
+    if first_only and second_only:
+        # Neither quote grounds every stated value; keeping one drops the other.
+        return None
+    return second if second_only else first
 
 
 def parse_page(reply, page, base, fields=()):
@@ -259,10 +275,8 @@ _SENTENCE_END_RE = re.compile(r"[.!?]\s")
 def _snap_forward(source: str, left: int, core: int) -> int:
     """The first line or sentence boundary at or after *left*, before *core*.
 
-    A newline is preferred when present; ``transcribe_media``'s own output is
-    a single unbroken line, so prose sentence-ending punctuation (". ", "! ",
-    "? ") is the fallback that keeps a page from opening mid-word on a source
-    with no newlines at all (#4145 field report).
+    Sentence punctuation is the fallback for unbroken sources such as
+    ``transcribe_media`` output, which has no newlines at all.
     """
     boundary = source.find("\n", left, core)
     if boundary >= 0:
@@ -292,14 +306,9 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
             raise ValueError("Extraction time budget exhausted")
         left = max(0, core - OVERLAP)
         right = min(len(source), core + PAGE_CHARS + OVERLAP)
-        # Snap inside the overlap to whole lines where possible. Every core
-        # character remains covered, without presenting a clipped occurrence
-        # as a new item missing its name or fields on the neighboring page.
-        # transcribe_media's own output is a single unbroken line, so a
-        # newline-only snap never fires on it -- every transcribed source
-        # would open pages mid-word. Sentence-ending punctuation is the
-        # fallback: prose has ". "/"! "/"? " even with no "\n" (#4145 field
-        # report).
+        # Snap inside the overlap to whole lines or sentences. Every core
+        # character stays covered, and a neighboring page never opens on a
+        # clipped occurrence that looks like a new item missing its fields.
         if left:
             left = _snap_forward(source, left, core)
         if right < len(source):
