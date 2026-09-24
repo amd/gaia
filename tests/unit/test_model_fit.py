@@ -136,7 +136,7 @@ class TestDefaultPick:
     )
     def test_recommend_reads_lemonade(self, info, expected):
         class FakeClient:
-            def get_system_info(self):
+            def get_system_info(self, timeout=None):
                 return info
 
         model_id, _, _ = lc.recommend_default_chat_model(FakeClient())
@@ -223,3 +223,49 @@ class TestAgentUiFollowsTheMachineDefault:
         assert _norm_model_id(lc.LARGE_DEFAULT_MODEL_NAME) == _norm_model_id(
             "Qwen3.8-Flash-Next-GGUF"
         )
+
+
+HARDWARE = REPO_ROOT / "tests" / "fixtures" / "hardware"
+
+
+def _fixture(name):
+    return json.loads((HARDWARE / name).read_text(encoding="utf-8"))
+
+
+class TestRealLemonadeReports:
+    """Captured Lemonade 11 /system-info bodies, including ones without VRAM."""
+
+    def test_linux_strix_halo_pool_is_carve_out_plus_gtt(self):
+        cap = capacity_from_system_info(_fixture("lemonade11_amd_igpu_linux.json"))
+        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(63.0))
+        # The default Linux GTT limit (half of RAM) is too small for Qwen3.8 Flash.
+        assert not check_fit(QWEN.size_gb, cap).fits
+
+    def test_macos_metal(self):
+        cap = capacity_from_system_info(_fixture("lemonade11_metal_macos.json"))
+        assert (cap.memory_source, cap.memory_gb) == ("Apple GPU", pytest.approx(51.84))
+
+    def test_a_gpu_without_reported_memory_is_not_judged_on_system_ram(self):
+        info = _fixture("lemonade11_amd_dgpu_windows.json")
+        info["Physical Memory"] = "128 GB"  # would wrongly fit Qwen if used
+        with pytest.raises(ModelFitError, match="not its memory"):
+            capacity_from_system_info(info)
+
+    def test_legacy_amd_igpu_key_is_read(self):
+        info = {
+            "devices": {
+                "amd_igpu": {"available": True, "vram_gb": 96, "virtual_mem_gb": 16}
+            }
+        }
+        assert capacity_from_system_info(info).memory_gb == pytest.approx(112)
+
+    def test_unknown_capacity_keeps_the_floor_model_and_says_why(self):
+        info = _fixture("lemonade11_amd_dgpu_windows.json")
+
+        class FakeClient:
+            def get_system_info(self, timeout=None):
+                return info
+
+        model_id, skipped, capacity = lc.recommend_default_chat_model(FakeClient())
+        assert model_id == lc.DEFAULT_MODEL_NAME and capacity is None
+        assert "not its memory" in skipped[0][1]

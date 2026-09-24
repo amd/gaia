@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // Capacity is what this machine can hold, read from Lemonade's /system-info so
@@ -22,11 +23,16 @@ type Capacity struct {
 }
 
 type gpuInfo struct {
-	Available  bool    `json:"available"`
+	// Available is a pointer because an entry with no flag counts as available,
+	// the way gaia.llm.lemonade_manager reads it.
+	Available  *bool   `json:"available"`
 	Integrated bool    `json:"integrated"`
+	Name       string  `json:"name"`
 	VRAMGB     float64 `json:"vram_gb"`
 	VirtualGB  float64 `json:"virtual_mem_gb"`
 }
+
+func (g gpuInfo) available() bool { return g.Available == nil || *g.Available }
 
 // gpuList accepts both an array and a single object, as Lemonade versions differ.
 type gpuList []gpuInfo
@@ -48,9 +54,11 @@ func (g *gpuList) UnmarshalJSON(b []byte) error {
 type systemInfo struct {
 	PhysicalMemory string `json:"Physical Memory"`
 	Devices        struct {
-		AMD    gpuList `json:"amd_gpu"`
-		NVIDIA gpuList `json:"nvidia_gpu"`
-		Metal  gpuInfo `json:"metal"`
+		AMD     gpuList `json:"amd_gpu"`
+		AMDIGPU gpuList `json:"amd_igpu"`
+		AMDDGPU gpuList `json:"amd_dgpu"`
+		NVIDIA  gpuList `json:"nvidia_gpu"`
+		Metal   gpuList `json:"metal"`
 	} `json:"devices"`
 	Storage *struct {
 		FreeBytes *float64 `json:"free_bytes"`
@@ -59,32 +67,54 @@ type systemInfo struct {
 
 var physicalGB = regexp.MustCompile(`([\d.]+)\s*GB`)
 
+type gpuEntry struct {
+	vendor     string
+	integrated bool
+	gpuInfo
+}
+
+// capacityFrom mirrors gaia.llm.model_fit.capacity_from_system_info, including
+// its refusal to judge a PC whose GPU is reported without its memory.
 func capacityFrom(info systemInfo) (Capacity, error) {
 	c := Capacity{DiskFreeGB: -1}
 	if info.Storage != nil && info.Storage.FreeBytes != nil {
 		c.DiskFreeGB = *info.Storage.FreeBytes / 1e9
 	}
-	for _, g := range info.Devices.AMD {
-		if g.Available && g.Integrated && g.VRAMGB > 0 {
+	d := info.Devices
+	var gpus []gpuEntry
+	for _, src := range []struct {
+		vendor     string
+		integrated bool
+		list       gpuList
+	}{{"AMD", false, d.AMD}, {"AMD", true, d.AMDIGPU}, {"AMD", false, d.AMDDGPU}, {"NVIDIA", false, d.NVIDIA}, {"Apple", false, d.Metal}} {
+		for _, g := range src.list {
+			if g.available() {
+				gpus = append(gpus, gpuEntry{src.vendor, src.integrated || g.Integrated, g})
+			}
+		}
+	}
+	for _, g := range gpus {
+		if g.vendor == "AMD" && g.integrated && g.VRAMGB > 0 {
 			c.MemoryGB, c.MemorySource = g.VRAMGB+g.VirtualGB, "AMD iGPU"
 			return c, nil
 		}
 	}
-	for _, g := range info.Devices.AMD {
-		if g.Available && g.VRAMGB > 0 {
-			c.MemoryGB, c.MemorySource = g.VRAMGB, "AMD GPU"
+	for _, g := range gpus {
+		if g.VRAMGB > 0 {
+			c.MemoryGB, c.MemorySource = g.VRAMGB, g.vendor+" GPU"
 			return c, nil
 		}
 	}
-	for _, g := range info.Devices.NVIDIA {
-		if g.Available && g.VRAMGB > 0 {
-			c.MemoryGB, c.MemorySource = g.VRAMGB, "NVIDIA GPU"
-			return c, nil
+	if len(gpus) > 0 {
+		var names []string
+		for _, g := range gpus {
+			if g.Name != "" {
+				names = append(names, g.Name)
+			} else {
+				names = append(names, g.vendor)
+			}
 		}
-	}
-	if info.Devices.Metal.Available && info.Devices.Metal.VRAMGB > 0 {
-		c.MemoryGB, c.MemorySource = info.Devices.Metal.VRAMGB, "Apple GPU"
-		return c, nil
+		return c, fmt.Errorf("Lemonade reports a GPU (%s) but not its memory, so GAIA cannot tell which models fit. Update Lemonade and retry", strings.Join(names, ", "))
 	}
 	if m := physicalGB.FindStringSubmatch(info.PhysicalMemory); m != nil {
 		if gb, err := strconv.ParseFloat(m[1], 64); err == nil && gb > 0 {

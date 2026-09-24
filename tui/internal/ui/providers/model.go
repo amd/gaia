@@ -172,6 +172,8 @@ func entryStatus(e lemonade.Entry) string {
 		return ""
 	case e.Model.Downloaded:
 		return "downloaded"
+	case e.FitUnknown:
+		return "fit unknown"
 	case e.Fits:
 		return fmt.Sprintf("download %.1f GB", e.SizeGB())
 	case e.SizeGB() > 0:
@@ -581,7 +583,7 @@ func (m Model) View() string {
 			lines = append(lines, dim.Render(m.capacity))
 		}
 		lines = append(lines, "Search: "+m.search, "")
-		count := max(1, m.height-16)
+		count := max(1, m.height-18) // two rows go to the group headers
 		start := max(0, m.focus-count+1)
 		for i := start; i < min(len(entries), start+count); i++ {
 			e := entries[i]

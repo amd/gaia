@@ -2844,8 +2844,9 @@ class TestHardwareChatModel(unittest.TestCase):
             status = check_setup_status(profile="gaia")
         self.assertFalse(status.ready)
         self.assertTrue(any(LARGE_DEFAULT_MODEL_NAME in r for r in status.reasons))
+        # Gemma stays required: the vision paths still load it by name.
         probed = {c.args[0] for c in client.check_model_available.call_args_list}
-        self.assertNotIn(DEFAULT_MODEL_NAME, probed)
+        self.assertIn(DEFAULT_MODEL_NAME, probed)
 
     def test_check_keeps_gemma_on_a_small_machine(self):
         from gaia.installer.init_command import check_setup_status
@@ -2885,7 +2886,7 @@ class TestHardwareChatModel(unittest.TestCase):
         calls = {
             c.args[0]: c.kwargs for c in client.ensure_model_downloaded.call_args_list
         }
-        self.assertNotIn(DEFAULT_MODEL_NAME, calls)
+        self.assertIn(DEFAULT_MODEL_NAME, calls)
         qwen = calls[LARGE_DEFAULT_MODEL_NAME]
         self.assertTrue(
             qwen["checkpoint"].startswith("unsloth/Qwen3.8-Flash-Next-GGUF:")

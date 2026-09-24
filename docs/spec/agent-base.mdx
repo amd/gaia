@@ -127,7 +127,7 @@ def __init__(
         use_chatgpt: Removed; True raises migration guidance
         claude_model: Model to use when use_claude=True
         base_url: Local LLM server URL (default: from LEMONADE_BASE_URL or http://localhost:13305/api/v1)
-        model_id: Model ID for local LLM (default: None — resolves to DEFAULT_MODEL_NAME, currently Gemma-4-E4B-it-GGUF)
+        model_id: Model ID for local LLM (default: None — resolve_default_chat_model(): config default_model, which gaia init sets from the hardware, else DEFAULT_MODEL_NAME, Gemma-4-E4B-it-GGUF)
         max_steps: Maximum reasoning iterations (default: None — resolves to the
             global default via default_max_steps(), i.e. GAIA_AGENT_MAX_STEPS or DEFAULT_MAX_STEPS)
         debug_prompts: Include prompts in conversation history (default: False)

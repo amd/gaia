@@ -262,11 +262,12 @@ def resolve_init_chat_model(client, *, reset_corrupt: bool) -> ChatModelChoice:
 
 
 def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
-    """Raise when a user-chosen model is known not to fit this machine.
+    """Raise when a user-chosen model would be downloaded but cannot fit.
 
-    Setup must never download a model the PC cannot run. A model whose size
-    neither GAIA nor Lemonade knows cannot be judged here; Lemonade still
-    refuses a download that would not fit the disk.
+    Setup must never download a model the PC cannot run. A model already on
+    disk is not a download. A model whose size neither GAIA nor Lemonade knows
+    cannot be judged here; Lemonade still refuses one that would not fit the
+    disk.
     """
     from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
     from gaia.llm.model_fit import (
@@ -275,20 +276,19 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         check_fit,
     )
 
+    size = None
+    for entry in client.list_models(show_all=True).get("data", []):
+        if _model_ids_match(entry.get("id"), model_id):
+            if entry.get("downloaded"):
+                return
+            size = entry.get("size")
+            break
     mr = find_model_requirement(model_id)
-    size = mr.size_gb if mr else None
-    if not size:
-        for entry in client.list_models(show_all=True).get("data", []):
-            if _model_ids_match(entry.get("id"), model_id):
-                if entry.get("downloaded"):
-                    return
-                size = entry.get("size")
-                break
+    size = size or (mr.size_gb if mr else None)
     if not size:
         return
-    verdict = check_fit(
-        float(size), capacity_from_system_info(client.get_system_info())
-    )
+    capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+    verdict = check_fit(float(size), capacity)
     if not verdict.fits:
         raise ModelFitError(
             f"default_model {model_id} will not fit this PC: {verdict.reason}. "
@@ -305,19 +305,16 @@ HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
 def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     """``model_ids`` plus the chat model ``profile`` needs on this machine.
 
-    ``resolve_chat`` is only called for hardware-chosen profiles, so profiles
-    that never use the large model never probe Lemonade for it.
+    The chat model is added, never swapped in for Gemma: the vision and
+    document-image paths still load Gemma by name. ``resolve_chat`` is only
+    called for hardware-chosen profiles, so the others never probe Lemonade.
     """
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
     ids = list(model_ids)
     if profile in ("sd", "npu"):
         return ids
-    chat = DEFAULT_MODEL_NAME
-    if profile in HARDWARE_CHAT_PROFILES:
-        chat = resolve_chat()
-        if profile != "all":
-            ids = [chat if m == DEFAULT_MODEL_NAME else m for m in ids]
+    chat = resolve_chat() if profile in HARDWARE_CHAT_PROFILES else DEFAULT_MODEL_NAME
     if chat not in ids:
         ids.append(chat)
     return ids
@@ -1809,8 +1806,10 @@ class InitCommand:
             self._chat_choice = choice
             if choice.user_set:
                 self._print(
-                    f"   Chat model: {choice.model_id} (your default_model setting)"
+                    f"   Chat model: {choice.model_id} (default_model in ~/.gaia/config.json)"
                 )
+            elif choice.capacity is None:
+                self._print(f"   Chat model: {choice.model_id}")
             else:
                 cap = choice.capacity
                 self._print(

@@ -127,7 +127,9 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running (`lemonade-server serve`).
+1. Lemonade **10.2.0 or newer**, running — `gaia init` installs and starts it.
+   Qwen3.8 Flash Next needs **v2026.39.1 or newer**, the version `gaia init`
+   installs; older servers cannot load it.
 2. The machine's default chat model downloaded — run `gaia init`. It picks
    `user.Qwen3.8-Flash-Next-GGUF` where it fits (a 128 GB Strix Halo) and
    `Gemma-4-E4B-it-GGUF` everywhere else, and records the pick as `default_model`

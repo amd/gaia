@@ -755,11 +755,22 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
 
     Returns ``(model_id, skipped, capacity)``: ``skipped`` lists
     ``(model_id, reason)`` for each larger model passed over, so the caller can
-    say why a big machine did not get the big model.
+    say why a big machine did not get the big model. When Lemonade's report
+    does not say how much memory this PC has, the floor model is picked —
+    the model every PC ran before this choice existed — with that as the
+    reason, and ``capacity`` is None.
     """
-    from gaia.llm.model_fit import capacity_from_system_info, pick_default_model
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        pick_default_model,
+    )
 
-    capacity = capacity_from_system_info(client.get_system_info())
+    try:
+        capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+    except ModelFitError as e:
+        floor = DEFAULT_MODEL_LADDER[-1]
+        return floor, [(m, str(e)) for m in DEFAULT_MODEL_LADDER[:-1]], None
     candidates = []
     for model_id in DEFAULT_MODEL_LADDER:
         mr = find_model_requirement(model_id)
@@ -4451,7 +4462,9 @@ class LemonadeClient:
             stats["model_load_seconds"] = self._last_model_load_seconds
         return stats
 
-    def get_system_info(self, verbose: bool = False) -> Dict[str, Any]:
+    def get_system_info(
+        self, verbose: bool = False, timeout: int = DEFAULT_REQUEST_TIMEOUT
+    ) -> Dict[str, Any]:
         """
         Get system hardware information and device enumeration.
 
@@ -4489,7 +4502,7 @@ class LemonadeClient:
         url = f"{self.base_url}/system-info"
         if verbose:
             url += "?verbose=true"
-        return self._send_request("get", url)
+        return self._send_request("get", url, timeout=timeout)
 
     def ready(self) -> bool:
         """

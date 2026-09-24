@@ -68,28 +68,57 @@ def _physical_memory_gb(info: Dict[str, Any]) -> float:
     return float(match.group(1)) if match else 0.0
 
 
-def _gpu_pool(devices: Dict[str, Any]) -> Optional[tuple]:
-    amd = devices.get("amd_gpu") or []
-    if isinstance(amd, dict):
-        amd = [amd]
-    for gpu in amd:
-        if gpu.get("available") and gpu.get("integrated") and _num(gpu.get("vram_gb")):
+#: GPU keys Lemonade has used in ``devices``, with a label and whether an entry
+#: under the key is an integrated (unified-memory) GPU by definition.
+_GPU_KEYS = (
+    ("amd_gpu", "AMD", False),
+    ("amd_igpu", "AMD", True),
+    ("amd_dgpu", "AMD", False),
+    ("nvidia_gpu", "NVIDIA", False),
+    ("metal", "Apple", False),
+)
+
+
+def _gpu_entries(devices: Dict[str, Any]) -> List[Tuple[str, bool, Dict[str, Any]]]:
+    """Available GPU entries as ``(vendor, integrated, entry)``.
+
+    Lemonade reports some keys as lists and others as one object; an entry with
+    no ``available`` flag counts as available, as ``lemonade_manager`` treats it.
+    """
+    out = []
+    for key, vendor, integrated_key in _GPU_KEYS:
+        value = devices.get(key)
+        for entry in value if isinstance(value, list) else [value]:
+            if isinstance(entry, dict) and entry.get("available", True):
+                out.append(
+                    (vendor, integrated_key or bool(entry.get("integrated")), entry)
+                )
+    return out
+
+
+def _gpu_pool(devices: Dict[str, Any]) -> Optional[Tuple[float, str]]:
+    """The memory llama.cpp loads into, or ``None`` when no GPU is reported.
+
+    Raises :class:`ModelFitError` when a GPU is reported without its memory:
+    judging such a PC on system RAM would call an 82 GB model a fit for a
+    24 GB graphics card.
+    """
+    entries = _gpu_entries(devices)
+    for vendor, integrated, gpu in entries:
+        if vendor == "AMD" and integrated and _num(gpu.get("vram_gb")):
             return (
                 _num(gpu.get("vram_gb")) + _num(gpu.get("virtual_mem_gb")),
                 "AMD iGPU",
             )
-    for gpu in amd:
-        if gpu.get("available") and _num(gpu.get("vram_gb")):
-            return _num(gpu.get("vram_gb")), "AMD GPU"
-    nvidia = devices.get("nvidia_gpu") or []
-    if isinstance(nvidia, dict):
-        nvidia = [nvidia]
-    for gpu in nvidia:
-        if gpu.get("available") and _num(gpu.get("vram_gb")):
-            return _num(gpu.get("vram_gb")), "NVIDIA GPU"
-    metal = devices.get("metal") or {}
-    if metal.get("available") and _num(metal.get("vram_gb")):
-        return _num(metal.get("vram_gb")), "Apple GPU"
+    for vendor, _, gpu in entries:
+        if _num(gpu.get("vram_gb")):
+            return _num(gpu.get("vram_gb")), f"{vendor} GPU"
+    if entries:
+        names = ", ".join(str(g.get("name") or vendor) for vendor, _, g in entries)
+        raise ModelFitError(
+            f"Lemonade reports a GPU ({names}) but not its memory, so GAIA cannot "
+            "tell which models fit. Update Lemonade (`gaia init`) and retry."
+        )
     return None
 
 

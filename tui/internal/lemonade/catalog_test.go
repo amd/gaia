@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -243,6 +245,44 @@ func TestCloudRecommendationTheAccountLacksSaysWhy(t *testing.T) {
 	for _, e := range BuildEntries("fireworks", nil, Capacity{}, nil) {
 		if e.Model.ID == FireworksModel && !strings.Contains(e.Reason, "not offered") {
 			t.Fatalf("no reason for a missing Fireworks model: %+v", e)
+		}
+	}
+}
+
+func fixtureCapacity(t *testing.T, name string, physical string) (Capacity, error) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "hardware", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info systemInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatal(err)
+	}
+	if physical != "" {
+		info.PhysicalMemory = physical
+	}
+	return capacityFrom(info)
+}
+
+func TestRealLemonadeReportsMatchThePythonRule(t *testing.T) {
+	c, err := fixtureCapacity(t, "lemonade11_amd_igpu_linux.json", "")
+	if err != nil || c.MemorySource != "AMD iGPU" || c.MemoryGB < 62.9 || c.MemoryGB > 63.1 {
+		t.Fatalf("linux strix halo: %+v %v", c, err)
+	}
+	if c, err = fixtureCapacity(t, "lemonade11_metal_macos.json", ""); err != nil || c.MemorySource != "Apple GPU" {
+		t.Fatalf("macos: %+v %v", c, err)
+	}
+	// A GPU without reported memory must not be judged on a big system RAM.
+	if c, err = fixtureCapacity(t, "lemonade11_amd_dgpu_windows.json", "128 GB"); err == nil {
+		t.Fatalf("judged a VRAM-less GPU on system RAM: %+v", c)
+	}
+}
+
+func TestUnknownFitIsLabelledAsSuch(t *testing.T) {
+	for _, e := range BuildEntries("local", []Model{{ID: "Tiny-GGUF", Size: 1, Labels: []string{"chat"}}}, Capacity{}, fmt.Errorf("boom")) {
+		if e.Model.ID == "Tiny-GGUF" && (!e.FitUnknown || e.Selectable()) {
+			t.Fatalf("%+v", e)
 		}
 	}
 }

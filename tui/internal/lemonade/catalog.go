@@ -25,6 +25,9 @@ type Entry struct {
 	// Fits is meaningful for local models only; Reason says why not.
 	Fits   bool
 	Reason string
+	// FitUnknown is set when the PC or the model's size could not be read,
+	// so the row is blocked without having been judged too big.
+	FitUnknown bool
 }
 
 // SizeGB is the download size, from the catalog or the recommendation.
@@ -119,11 +122,13 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 			return
 		}
 		if capErr != nil {
+			e.FitUnknown = true
 			e.Reason = "cannot check this PC's memory: " + capErr.Error()
 			return
 		}
 		size := e.SizeGB()
 		if size <= 0 {
+			e.FitUnknown = true
 			e.Reason = "Lemonade did not report its size, so GAIA cannot check it fits"
 			return
 		}

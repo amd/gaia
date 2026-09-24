@@ -15,9 +15,10 @@ the terminal UI meant building it from source.
 ### Changed
 
 - The default chat model now follows the hardware. On a PC with the memory for it
-  (a 128 GB Strix Halo), `gaia init` sets up Qwen3.8 Flash Next instead of
-  Gemma 4 E4B and records it as `default_model`; the agent and its
-  `GET /v1/gaia/init` readiness check use that model. Every other PC keeps Gemma.
+  (a 128 GB Strix Halo), `gaia init` also sets up Qwen3.8 Flash Next and records
+  it as `default_model`; the agent and its `GET /v1/gaia/init` readiness check
+  use it for chat. Gemma 4 E4B is still downloaded for vision. Every other PC
+  keeps Gemma alone.
 
 ### Fixed
 

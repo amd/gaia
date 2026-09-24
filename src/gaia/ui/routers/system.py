@@ -475,6 +475,10 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     except Exception as exc:  # noqa: BLE001
         logger.warning("system status: could not resolve the start hint: %s", exc)
 
+    # Resolved outside the probe below: its catch-all would report a corrupt
+    # config as "Lemonade not running".
+    default_model = _default_model_name()
+
     # Check Lemonade Server
     # Use a generous timeout (10s) because when the LLM is handling many
     # parallel requests it may take a while to respond to the health check.
@@ -578,7 +582,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             custom_model
                         )
                     else:
-                        acceptable = {_norm_model_id(_default_model_name())}
+                        acceptable = {_norm_model_id(default_model)}
                         registry = getattr(request.app.state, "agent_registry", None)
                         if registry is not None:
                             for reg in registry.list():
@@ -588,7 +592,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         status.expected_model_loaded = loaded_lower in acceptable
                     # Surface the actual expected name in the response so the
                     # frontend can name it precisely in the warning banner.
-                    status.default_model_name = custom_model or _default_model_name()
+                    status.default_model_name = custom_model or default_model
 
                 # When no LLM is loaded, check if the expected model is downloaded.
                 # Respects custom_model override; falls back to the built-in default.
@@ -604,9 +608,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         )
                         if catalog_resp.status_code == 200:
                             _custom = db.get_setting("custom_model")
-                            default_lower = _norm_model_id(
-                                _custom or _default_model_name()
-                            )
+                            default_lower = _norm_model_id(_custom or default_model)
                             for m in catalog_resp.json().get("data", []):
                                 if _norm_model_id(m.get("id", "")) == default_lower:
                                     status.model_downloaded = m.get("downloaded", False)
@@ -803,7 +805,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # Surfaced for whichever model the UI cares about (custom override
     # wins, else the registered default). Looking up by model name keeps
     # us decoupled from concurrent pulls of unrelated models.
-    target_model = db.get_setting("custom_model") or _default_model_name()
+    target_model = db.get_setting("custom_model") or default_model
     progress_dict = _get_download_progress(target_model)
     if progress_dict:
         status.download_progress = DownloadProgress(**progress_dict)

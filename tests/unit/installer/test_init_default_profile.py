@@ -208,6 +208,39 @@ class TestGoTuiContract:
             main()
         assert exc.value.code == (0 if ready else 1)
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "gaia.config:GaiaConfigError",
+            "gaia.llm.model_fit:ModelFitError",
+            "gaia.llm.lemonade_client:LemonadeClientError",
+        ],
+    )
+    def test_an_unanswerable_check_is_not_reported_as_needs_setup(
+        self, error, monkeypatch, capsys
+    ):
+        """A corrupt config or a default_model that cannot fit is not something
+        setup fixes, so --check must not answer 1 (which offers setup) and must
+        not print a traceback."""
+        import importlib
+
+        module, name = error.split(":")
+        exc_type = getattr(importlib.import_module(module), name)
+
+        def boom(**kwargs):
+            raise exc_type("explained problem")
+
+        monkeypatch.setattr("gaia.installer.init_command.check_setup_status", boom)
+        monkeypatch.setattr(
+            sys, "argv", ["gaia", "init", "--check", "--profile", DEFAULT_INIT_PROFILE]
+        )
+        from gaia.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+        assert "explained problem" in capsys.readouterr().err
+
     def test_the_tuis_exact_argv_is_accepted_by_the_real_cli(self):
         """End-to-end on the argv gaiainit.CheckArgs builds. An unrecognised
         flag exits 2, which the TUI reports as "could not determine" — this

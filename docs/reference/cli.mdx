@@ -239,9 +239,10 @@ profile. The default `gaia` profile is a superset, so a bare `gaia init` covers 
 <Note>
 For the `gaia`, `chat`, `rag` and `all` profiles the chat model follows the
 hardware. Where Lemonade reports enough memory for it — about 87 GB for models, as on a
-128 GB Strix Halo — `gaia init` sets up `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download)
-in place of `Gemma-4-E4B-it-GGUF`, prints why, and records it as `default_model`. Every
-other PC gets Gemma. A `default_model` you set yourself always wins, and `--check` asks for
+128 GB Strix Halo — `gaia init` also sets up `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB
+download) as the chat model, prints why, and records it as `default_model`. Gemma is still
+downloaded, since vision and document-image extraction load it by name. Every other PC
+gets Gemma alone. A `default_model` you set yourself always wins, and `--check` asks for
 the same model `gaia init` would download.
 </Note>
 
