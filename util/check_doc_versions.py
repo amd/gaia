@@ -34,12 +34,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Source of truth
 VERSION_FILE = PROJECT_ROOT / "src" / "gaia" / "version.py"
 
-# Directories and file patterns to scan
+# Directories and file patterns to scan.
+#
+# ``tui`` and ``.claude`` are here because the v2026.39.1 bump found stale pins in
+# both that no gate could see — a bump is only as complete as the paths scanned.
+#
+# Only PIN references are matched, and the ``v`` prefix is what separates them from
+# a minimum-version floor: the text pattern below requires ``v`` before the number,
+# so "Lemonade Server v11.8.1+" (tracks the pin, bumped every release) is checked
+# while "through Lemonade 11.8.1+" and "requires Lemonade 11.8.1 or later" (the
+# release a feature first shipped in — never bumped) are left alone. Write a floor
+# WITHOUT the ``v`` prefix, or this gate will march it forward and turn a true
+# statement into a false one.
 SCAN_PATHS = [
     (PROJECT_ROOT / "docs", "**/*.mdx"),
     (PROJECT_ROOT / "docs", "**/*.md"),
     (PROJECT_ROOT / "cpp", "**/*.md"),
     (PROJECT_ROOT / "cpp", "**/*.mdx"),
+    (PROJECT_ROOT / "tui", "**/*.md"),
+    (PROJECT_ROOT / ".claude", "**/*.md"),
 ]
 
 # Files to exclude from scanning (relative to PROJECT_ROOT)
