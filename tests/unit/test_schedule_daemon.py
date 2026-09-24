@@ -183,7 +183,9 @@ class TestBuildScheduler:
 class TestJob:
 
     @pytest.mark.parametrize("change", ["pause", "remove"])
-    def test_does_not_fire_after_pause_or_remove(self, mocker, tmp_path, change):
+    def test_does_not_fire_after_pause_or_remove(
+        self, mocker, tmp_path, change, caplog
+    ):
         store = _store_with(tmp_path, _make_schedule("a"))
         job = daemon.build_scheduler(store).get_job("a")
         if change == "pause":
@@ -192,9 +194,13 @@ class TestJob:
             store.remove("a")
         fire = mocker.patch.object(runner, "fire")
 
-        job.func(*job.args)
+        with caplog.at_level("DEBUG", logger=daemon.log.name):
+            job.func(*job.args)
 
         fire.assert_not_called()
+        # A skipped fire must leave a trace -- otherwise "my schedule didn't
+        # run" has no diagnostic (#4143 nit).
+        assert "skipping" in caplog.text and "a" in caplog.text
 
     def test_fires_current_prompt_after_store_edit(self, mocker, tmp_path):
         store = _store_with(tmp_path, _make_schedule("a"))

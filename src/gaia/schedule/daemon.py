@@ -34,6 +34,7 @@ def _job(schedule: Schedule, store: ScheduleStore) -> None:
     try:
         current = store.load().get(schedule.name)
         if current is None or not current.enabled or current.cron != schedule.cron:
+            log.debug("skipping %r: store changed since it was armed", schedule.name)
             return
         schedule = current
         runner.fire(schedule)
