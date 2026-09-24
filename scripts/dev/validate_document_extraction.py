@@ -8,9 +8,9 @@ occurrences survive extraction/export and a later turn retrieves a planted cue
 through the existing memory tool. OUTPUT_DIRECTORY must not already exist.
 """
 
+import argparse
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
@@ -23,8 +23,17 @@ from gaia.security import PathValidator
 
 
 def main():
-    model = sys.argv[1]
-    root = Path(sys.argv[2]).resolve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("model")
+    parser.add_argument("output_directory")
+    parser.add_argument(
+        "--unlined",
+        action="store_true",
+        help="Use an unbroken transcript with an entirely empty extraction page",
+    )
+    args = parser.parse_args()
+    model = args.model
+    root = Path(args.output_directory).resolve()
     root.mkdir(parents=True, exist_ok=False)
     base = root
     label = "validation"
@@ -42,6 +51,11 @@ def main():
             + f"Exercise: {name}. Reps: {i+3}. Cue: keep marker violet-{i:02d} visible.\n"
         )
     source = "\n".join(blocks)
+    if args.unlined:
+        # Exercise a full barren page, not just gaps between nearby items.
+        source = (
+            "The room opens later. Please wait by the door. " * 150
+        ) + source.replace("\n", " ")
     (root / "workshop.txt").write_text(source)
 
     class TestAgent(MemoryMixin, Agent, FileIOToolsMixin):
@@ -144,6 +158,8 @@ def main():
         "model": model,
         "seconds": round(time.monotonic() - start, 2),
         "source_chars": len(source),
+        "source_newlines": source.count("\n"),
+        "fixture": "unlined-with-empty-page" if args.unlined else "lined",
         "expected": 40,
         "extracted": len(items),
         "missing": missing,
@@ -201,7 +217,7 @@ def main():
         ),
         flush=True,
     )
-    sys.exit(0 if record["passed"] else 1)
+    raise SystemExit(0 if record["passed"] else 1)
 
 
 if __name__ == "__main__":

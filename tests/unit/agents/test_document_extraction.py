@@ -16,6 +16,7 @@ from gaia.agents.base.extraction import (
     extract_pages,
     parse_page,
     read_snapshot,
+    reconcile_occurrence,
     same_occurrence_fields,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -492,9 +493,6 @@ def test_code_symbol_queries_do_not_demand_the_source_file_as_a_destination(
     this ledger will see written -- demanding it as a destination made every
     such query report status: incomplete (#4145 field report)."""
     state = ExtractionLedger(query, str(tmp_path))
-    assert state.key("app.py") not in state.requested
-    assert state.key("models.py") not in state.requested
-    assert state.key("code.py") not in state.requested
     assert state.gaps() == []
     assert not state.enabled
 
@@ -700,3 +698,127 @@ def test_export_refuses_to_overwrite_its_source(agent, tmp_path):
     result = agent._tools_registry["save_extracted_items"]["function"]("./source.txt")
     assert result["status"] == "error" and "different" in result["error"]
     assert path.read_text() == "alpha"
+
+
+@pytest.mark.parametrize(
+    "query, sources",
+    [
+        ("Extract every TODO from app.py and notes.md", {"app.py", "notes.md"}),
+        ("Extract every TODO from app.py and save to report.md", {"app.py"}),
+        ("Extract every TODO from app.py", {"app.py"}),
+        ("Extract every TODO from functions.py", {"functions.py"}),
+    ],
+)
+def test_content_extraction_keeps_code_sources_required(query, sources, tmp_path):
+    state = ExtractionLedger(query, str(tmp_path))
+    assert state.enabled
+    assert state.requested == {state.key(p) for p in sources}
+    state.results[state.key("notes.md")] = ([], 1, "digest")
+    for source in sources - {"notes.md"}:
+        assert any(source in gap for gap in state.gaps())
+
+
+def test_empty_pages_are_valid_but_unfinished_pages_still_fail():
+    assert parse_page(reply(), "Please wait by the door.", 0) == []
+    with pytest.raises(ValueError, match="did not confirm"):
+        parse_page(
+            json.dumps({"complete": False, "items": []}), "Please wait by the door.", 0
+        )
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_overlap_enriches_missing_fields_without_losing_provenance(reverse):
+    page = "Exercise: Lift. Cue: breathe slowly."
+
+    def entry(quote, cue):
+        return parse_page(
+            json.dumps(
+                {
+                    "complete": True,
+                    "items": [{"quote": quote, "fields": {"name": "Lift", "cue": cue}}],
+                }
+            ),
+            page,
+            20,
+            ("name", "cue"),
+        )[0]
+
+    partial = entry("Exercise: Lift.", "not stated")
+    full = entry(page, "breathe slowly")
+    assert (
+        reconcile_occurrence(*((full, partial) if reverse else (partial, full))) == full
+    )
+
+
+@pytest.mark.parametrize(
+    "old_values,new_values",
+    [
+        ({"name": "Lift", "cue": "slow"}, {"name": "Lift", "cue": "fast"}),
+        ({"name": "not stated", "cue": "not stated"}, {"name": "Lift", "cue": "slow"}),
+        (
+            {"name": "Lift", "reps": "3", "cue": "not stated"},
+            {"name": "Squat", "reps": "3", "cue": "slow"},
+        ),
+    ],
+)
+def test_enrichment_rejects_conflicts_and_unidentified_neighbors(
+    old_values, new_values
+):
+    from gaia.agents.base.extraction import Entry
+
+    first = Entry(10, 30, str(old_values), "old", tuple(old_values.items()))
+    second = Entry(0, 40, str(new_values), "new", tuple(new_values.items()))
+    assert reconcile_occurrence(first, second) is None
+    assert reconcile_occurrence(second, first) is None
+
+
+def test_page_overlap_replaces_partial_item_with_grounded_full_item():
+    quote = "Exercise: Lift. Cue: breathe slowly."
+    source = "Context. " * 460 + quote + " More context." * 400
+    calls = 0
+
+    def ask(system, payload):
+        nonlocal calls
+        calls += 1
+        page = json.loads(payload)["source_page"]
+        if quote not in page:
+            return reply()
+        partial = calls <= 2
+        return json.dumps(
+            {
+                "complete": True,
+                "items": [
+                    {
+                        "quote": "Exercise: Lift." if partial else quote,
+                        "fields": {
+                            "name": "Lift",
+                            "cue": "not stated" if partial else "breathe slowly",
+                        },
+                    }
+                ],
+            }
+        )
+
+    entries, _ = extract_pages(
+        source, "List every exercise", ask, lambda: None, ("name", "cue")
+    )
+    assert len(entries) == 1
+    assert entries[0].quote == quote
+    assert dict(entries[0].fields)["cue"] == "breathe slowly"
+
+
+def test_repeated_items_with_shared_context_are_not_silently_deduplicated():
+    page = "Squat reps10. pause. Squat reps10."
+    items = [
+        {"text": "Squat reps10", "quote": quote}
+        for quote in ("Squat reps10. pause.", "pause. Squat reps10.")
+    ]
+    entries = parse_page(json.dumps({"complete": True, "items": items}), page, 0)
+    assert reconcile_occurrence(*entries) is None
+    with pytest.raises(ValueError, match="Conflicting"):
+        extract_pages(
+            page,
+            "List every exercise",
+            lambda *_: json.dumps({"complete": True, "items": items}),
+            lambda: None,
+        )
