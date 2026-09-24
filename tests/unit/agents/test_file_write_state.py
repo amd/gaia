@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Every file mutation honors the read ledger and records its own changes."""
 
+import os
 from unittest.mock import Mock, patch
 
 import pytest
@@ -71,6 +72,27 @@ def test_stale_write_preserves_external_content_and_reanchors_retry(writer):
     assert path.read_text(encoding="utf-8") == EXTERNAL
     host.path_validator.create_backup.assert_not_called()
     assert call()["status"] == "success"
+
+
+def test_stale_write_is_recorded_as_a_denied_audit_entry(writer):
+    path, call, host, kind = writer
+    path.write_text(ORIGINAL, encoding="utf-8")
+    record_read(str(path), ORIGINAL)
+    path.write_text(EXTERNAL, encoding="utf-8")
+    result = call()
+    assert result["stale"] is True
+    if kind == "search_write_file":
+        assert result["operation"] == "write_file"
+    denied = [
+        entry.args
+        for entry in host.path_validator.audit_write.call_args_list
+        if entry.args[3] == "denied"
+    ]
+    assert len(denied) == 1
+    operation, audited_path, _, _, reason = denied[0]
+    assert operation == ("edit" if kind == "replace_function" else "write")
+    assert os.path.basename(audited_path) == path.name
+    assert reason == "stale"
 
 
 def test_successful_write_records_new_contents_for_later_edits(writer):

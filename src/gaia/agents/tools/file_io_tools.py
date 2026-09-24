@@ -462,6 +462,9 @@ class FileIOToolsMixin:
 
                 stale_error = check_file_state(str(file_path))
                 if stale_error is not None:
+                    path_validator.audit_write(
+                        "write", str(file_path), content_size, "denied", "stale"
+                    )
                     return stale_error
 
                 # Backup existing file before overwrite
@@ -843,6 +846,9 @@ class FileIOToolsMixin:
 
                 stale_error = check_file_state(str(file_path))
                 if stale_error is not None:
+                    path_validator.audit_write(
+                        "write", str(file_path), content_size, "denied", "stale"
+                    )
                     return stale_error
 
                 # Backup existing file before overwrite
@@ -939,6 +945,9 @@ class FileIOToolsMixin:
 
                 stale_error = check_file_state(str(path))
                 if stale_error is not None:
+                    path_validator.audit_write(
+                        "write", str(path), content_size, "denied", "stale"
+                    )
                     return stale_error
 
                 # Backup existing file before overwrite
@@ -1245,6 +1254,13 @@ class FileIOToolsMixin:
 
                 stale_error = check_file_state(gaia_path)
                 if stale_error is not None:
+                    path_validator.audit_write(
+                        "write",
+                        gaia_path,
+                        len(content.encode("utf-8")),
+                        "denied",
+                        "stale",
+                    )
                     return stale_error
                 # Write the file
                 with open(gaia_path, "w", encoding="utf-8") as f:
@@ -1337,6 +1353,9 @@ class FileIOToolsMixin:
 
                 stale_error = check_file_state(str(file_path), content)
                 if stale_error is not None:
+                    path_validator.audit_write(
+                        "edit", str(file_path), new_size, "denied", "stale"
+                    )
                     return stale_error
                 # Parse the file to find the function
                 try:

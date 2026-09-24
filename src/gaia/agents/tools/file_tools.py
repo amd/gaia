@@ -1162,7 +1162,11 @@ class FileSearchToolsMixin:
 
                 stale_error = check_file_state(str(resolved_path))
                 if stale_error is not None:
-                    return stale_error
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "write", str(resolved_path), content_size, "denied", "stale"
+                        )
+                    return {**stale_error, "operation": "write_file"}
                 if path_validator is not None:
                     if resolved_path.exists():
                         backup_path = path_validator.create_backup(str(resolved_path))
