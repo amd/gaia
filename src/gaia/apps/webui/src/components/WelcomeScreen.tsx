@@ -11,6 +11,13 @@ import './WelcomeScreen.css';
 interface WelcomeScreenProps {
     onNewTask: () => void;
     onSendPrompt: (prompt: string) => void;
+    /**
+     * Start a task on an agent the user picked here. Separate from
+     * `onSendPrompt` because that one runs the flagship: a deliberate choice
+     * has to carry its agent id all the way to session creation, or it is
+     * silently downgraded to a flagship chat.
+     */
+    onStartAgentTask: (agentId: string, prompt?: string) => void;
     onCreateAgent?: () => void;
 }
 
@@ -43,13 +50,16 @@ const DEFAULT_SUGGESTIONS = [
     'What hardware is in my PC? Tell me about my CPU and GPU',
 ];
 
-export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNewTask, onSendPrompt, onStartAgentTask, onCreateAgent }: WelcomeScreenProps) {
     const { systemStatus, agents, activeAgentId, setActiveAgentId } = useChatStore();
 
-    const suggestions = useMemo(() => {
+    // A chip runs on the agent it came from. `starterOf` is null for the
+    // generic list, which belongs to no agent and so goes to the flagship.
+    const { suggestions, starterOf } = useMemo(() => {
         const active = agents.find((a) => a.id === activeAgentId);
-        if (active?.conversation_starters?.length) return active.conversation_starters;
-        return DEFAULT_SUGGESTIONS;
+        if (active?.conversation_starters?.length)
+            return { suggestions: active.conversation_starters, starterOf: active.id };
+        return { suggestions: DEFAULT_SUGGESTIONS, starterOf: null as string | null };
     }, [agents, activeAgentId]);
     const [displayedText, setDisplayedText] = useState('');
     const [typingComplete, setTypingComplete] = useState(false);
@@ -166,11 +176,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                         agents={agents}
                         activeAgentId={activeAgentId}
                         onSelect={setActiveAgentId}
-                        onStartChat={(id, prompt) => {
-                            setActiveAgentId(id);
-                            if (prompt) onSendPrompt(prompt);
-                            else onNewTask();
-                        }}
+                        onStartChat={(id, prompt) => onStartAgentTask(id, prompt)}
                         onCreateAgent={onCreateAgent}
                     />
                 )}
@@ -214,7 +220,12 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                     <span className="suggestions-label">Try asking:</span>
                     <div className="suggestion-chips">
                         {suggestions.map((s) => (
-                            <button key={s} className="chip" onClick={() => onSendPrompt(s)} disabled={isInitializing}>
+                            <button
+                                key={s}
+                                className="chip"
+                                onClick={() => (starterOf ? onStartAgentTask(starterOf, s) : onSendPrompt(s))}
+                                disabled={isInitializing}
+                            >
                                 {s}
                             </button>
                         ))}

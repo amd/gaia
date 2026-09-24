@@ -15,9 +15,20 @@ vi.mock('../services/api');
 import App from '../App';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import type { Session } from '../types';
+import type { AgentInfo, Session } from '../types';
 
 const mocked = vi.mocked(api);
+
+function agent(over: Partial<AgentInfo> & { id: string }): AgentInfo {
+    return {
+        name: over.id,
+        description: '',
+        source: 'installed',
+        conversation_starters: [],
+        models: [],
+        ...over,
+    };
+}
 
 function session(over: Partial<Session> = {}): Session {
     return {
@@ -55,8 +66,11 @@ beforeEach(() => {
     mocked.getTunnelStatus.mockResolvedValue({ active: false } as never);
     mocked.createSession.mockResolvedValue(session({ id: 'sess-new-0001', message_count: 0 }));
     mocked.getMessages.mockResolvedValue({ messages: [] } as never);
+    mocked.listCatalog.mockResolvedValue({ agents: [], offline: false } as never);
 
-    useChatStore.setState({ sessions: [], currentSessionId: null, messages: [] });
+    useChatStore.setState({
+        sessions: [], currentSessionId: null, messages: [], agents: [], activeAgentId: 'gaia',
+    });
 });
 
 afterEach(() => {
@@ -111,5 +125,59 @@ describe('the New Task button', () => {
         expect(mocked.updateSession).not.toHaveBeenCalled();
         expect(useChatStore.getState().sessions.find((s) => s.id === legacy.id)?.agent_type)
             .toBe('doc');
+    });
+});
+
+// The welcome screen embeds the hub, so it is a second way to start a chat —
+// and the one place a user names an agent on purpose. Routing every new chat to
+// the flagship must not swallow that choice, which is exactly what happened
+// when the hub's callback only moved the agent picker and then asked for a
+// plain new task.
+describe('the welcome screen', () => {
+    const email = agent({
+        id: 'email',
+        name: 'Email Triage',
+        conversation_starters: ['Summarise my unread mail'],
+    });
+
+    beforeEach(() => {
+        mocked.listAgents.mockResolvedValue({ agents: [email], total: 1 });
+        useChatStore.setState({ agents: [email], activeAgentId: 'gaia' });
+    });
+
+    it('starts the chosen agent, not the flagship, from a hub card', async () => {
+        render(<App />);
+
+        const start = await screen.findByRole('button', { name: 'Start Chat' });
+        await userEvent.click(start);
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalled());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ agent_type: 'email' });
+    });
+
+    it('runs an agent-specific suggestion on that agent', async () => {
+        // Chips swap to the active agent's own starters; sending one to the
+        // flagship would answer a question the flagship was never given the
+        // tools for.
+        useChatStore.setState({ activeAgentId: 'email' });
+        render(<App />);
+
+        const chip = await screen.findByRole('button', { name: 'Summarise my unread mail' });
+        await userEvent.click(chip);
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalled());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ agent_type: 'email' });
+    });
+
+    it('keeps the generic suggestions on the flagship', async () => {
+        render(<App />);
+
+        const chip = await screen.findByRole('button', {
+            name: 'What hardware is in my PC? Tell me about my CPU and GPU',
+        });
+        await userEvent.click(chip);
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalled());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ agent_type: 'gaia' });
     });
 });

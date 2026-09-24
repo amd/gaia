@@ -723,6 +723,7 @@ function App() {
                                 <WelcomeScreen
                                     onNewTask={handleNewTask}
                                     onSendPrompt={handleNewTaskWithPrompt}
+                                    onStartAgentTask={handleStartAgentTask}
                                     onCreateAgent={handleNewBuilderTask}
                                 />
                             )}
