@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Cloud inference must never acquire or reconfigure the local model slot."""
 
+import contextlib
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -457,6 +458,95 @@ def test_cloud_sse_backend_error_uses_status_without_reflecting_body(
     assert remedy in str(error.value)
     assert reflected_key not in str(error.value)
     assert reflected_key not in caplog.text
+
+
+_PENALTIES = (
+    "frequency_penalty",
+    "presence_penalty",
+    "repeat_penalty",
+    "repeat_last_n",
+)
+
+
+def _sent_body(monkeypatch, model, stream, **chat_kwargs):
+    """Send one LemonadeProvider.chat through the real client; return the wire body."""
+    client = LemonadeClient(verbose=False, ctx_size_override=1024)
+    monkeypatch.setattr(client, "_ensure_model_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(
+        client, "_model_slot_lease", lambda *a, **k: contextlib.nullcontext()
+    )
+    adapter = LemonadeProvider(model=model)
+    adapter._backend = client
+    messages = [{"role": "user", "content": "hi"}]
+    sent = []
+
+    if stream:
+        chunk = {
+            "id": "c",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [
+                {"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}
+            ],
+        }
+
+        def handle(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+
+        with OpenAI(
+            base_url=client.base_url,
+            api_key="test-placeholder",
+            http_client=httpx.Client(transport=httpx.MockTransport(handle)),
+        ) as sdk:
+            monkeypatch.setattr("gaia.llm.lemonade_client.OpenAI", lambda **kw: sdk)
+            list(adapter.chat(messages, stream=True, **chat_kwargs))
+    else:
+
+        def handle(request):
+            sent.append(json.loads(request.body))
+            return 200, {}, json.dumps({"choices": [{"message": {"content": "ok"}}]})
+
+        with responses.RequestsMock() as mock:
+            mock.add_callback(
+                responses.POST, f"{client.base_url}/chat/completions", callback=handle
+            )
+            adapter.chat(messages, **chat_kwargs)
+
+    assert len(sent) == 1
+    return sent[0]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_cloud_model_request_carries_no_repetition_penalties(monkeypatch, stream):
+    body = _sent_body(monkeypatch, "fireworks.deepseek-v4p1-flash", stream)
+    assert [key for key in _PENALTIES if key in body] == []
+    assert body["temperature"] == 0.1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_local_model_request_keeps_repetition_penalties(monkeypatch, stream):
+    body = _sent_body(monkeypatch, "Gemma-4-E4B-it-GGUF", stream)
+    assert {key: body[key] for key in _PENALTIES} == {
+        "frequency_penalty": 0.3,
+        "presence_penalty": 0.1,
+        "repeat_penalty": 1.1,
+        "repeat_last_n": 256,
+    }
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_cloud_model_request_keeps_explicit_caller_penalty(monkeypatch, stream):
+    body = _sent_body(
+        monkeypatch, "fireworks.deepseek-v4p1-flash", stream, frequency_penalty=0.5
+    )
+    assert body["frequency_penalty"] == 0.5
+    assert "presence_penalty" not in body
 
 
 class TestCachedTokenCapture:
