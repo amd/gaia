@@ -149,7 +149,10 @@ describe('the glob that everything below depends on', () => {
     expect(SOURCES[TOKENS_PATH], `${TOKENS_PATH} was not read`).toBeTruthy();
     // A silent glob failure would make every assertion below vacuously pass.
     expect(Object.keys(SOURCES).filter((p) => p.endsWith('.astro')).length).toBeGreaterThan(5);
-    expect(SOURCES['/src/design/global.css']).toContain('.g-code-panel');
+    // Probe global.css for structure, not for any one rule: a rule can be
+    // deleted legitimately, and this failing for that reason would send the
+    // reader hunting a glob bug that isn't there.
+    expect(SOURCES['/src/design/global.css']).toContain('@tailwind');
   });
 });
 
