@@ -91,6 +91,7 @@ describe('installMethods', () => {
   it('leaves the agent lane on the agent installer', () => {
     const methods = installMethods(entry({ id: 'chat', type: 'agent', language: 'python' }));
     expect(methods[0].command).toBe('gaia agent install chat');
+    expect(methods.map((method) => method.key)).toEqual(['gaia', 'source']);
   });
 
   it('offers GAIA first for an npm agent, then npm', () => {
@@ -285,5 +286,19 @@ describe('getAgentPackages / getSkills — the rendered lane split', () => {
     await mod.getCatalog();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0][0])).toContain(`${HUB}/index.json`);
+  });
+});
+
+
+describe('flagship distribution manifest', () => {
+  it('offers the declared npm package without inventing a PyPI wheel', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { parse } = await import('yaml');
+    const manifest = parse(readFileSync(new URL('../../../hub/agents/gaia/python/gaia-agent.yaml', import.meta.url), 'utf8'));
+    const pkg = JSON.parse(readFileSync(new URL('../../../hub/agents/gaia/npm/package.json', import.meta.url), 'utf8'));
+    expect(manifest.npm_package).toBe(pkg.name);
+    const methods = installMethods(entry({ ...manifest, type: 'agent' }));
+    expect(methods.map((method) => method.key)).toEqual(['gaia', 'npm']);
+    expect(methods[1].command).toBe(`npm i ${pkg.name}`);
   });
 });

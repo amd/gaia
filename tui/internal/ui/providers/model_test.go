@@ -173,13 +173,93 @@ func TestNarrowProviderNoticeWrapsAtWords(t *testing.T) {
 	}
 }
 
+func TestSetupNoticesExistingEnvironmentKey(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 1
+	m.providers = []lemonade.Provider{{Name: "fireworks", EnvKey: true}}
+	m = m.setup()
+	view := m.View()
+	if !strings.Contains(view, "environment key is already active") {
+		t.Fatal("existing environment key was not surfaced to the user", view)
+	}
+	if !strings.Contains(m.fields[3].Placeholder, "environment key") {
+		t.Fatal("key field placeholder does not mention the environment key", m.fields[3].Placeholder)
+	}
+}
+
+func TestSetupNoticesExistingRuntimeKey(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 2
+	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
+	m = m.setup()
+	view := m.View()
+	if !strings.Contains(view, "already configured for AMD LLM Gateway") {
+		t.Fatal("existing runtime key was not surfaced to the user", view)
+	}
+	if strings.Contains(view, "environment key is already active") {
+		t.Fatal("runtime-only key incorrectly reported as an environment key", view)
+	}
+}
+
+func TestSetupNoticeIsShortOnCompactTerminal(t *testing.T) {
+	m := New("", 48, 18)
+	m.selected = 2
+	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
+	m = m.setup()
+	view := m.View()
+	if !strings.Contains(view, "Key already saved") {
+		t.Fatal("compact terminal should get the short notice variant", view)
+	}
+	if strings.Contains(view, "leave API key blank to keep using it, or paste a new one to replace it") {
+		t.Fatal("compact terminal should not get the long notice variant", view)
+	}
+}
+
+func TestSetupWithNoExistingKeyShowsNoNotice(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 1
+	// A present provider with both flags false is the state a real first-run
+	// user is in — not a missing provider entry (see keyStatus's fallback).
+	m.providers = []lemonade.Provider{{Name: "fireworks"}}
+	m = m.setup()
+	view := m.View()
+	if strings.Contains(view, "already active") || strings.Contains(view, "already configured for") {
+		t.Fatal("notice shown despite no existing credential", view)
+	}
+	if m.fields[3].Placeholder != "Paste API key" {
+		t.Fatalf("placeholder should be plain with no existing key, got %q", m.fields[3].Placeholder)
+	}
+}
+
+// Regression: the notice used to be snapshotted once in setup() and never
+// re-derived, so it kept claiming a key was active after Ctrl+D cleared it.
+func TestClearingRuntimeKeyDropsTheExistingKeyNotice(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 2
+	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
+	m = m.setup()
+	if !strings.Contains(m.View(), "already configured for AMD LLM Gateway") {
+		t.Fatal("precondition: notice should show before clearing")
+	}
+	next, _ := m.Update(clearedMsg{})
+	m = next.(Model)
+	view := m.View()
+	if strings.Contains(view, "already configured for") || strings.Contains(view, "already active") {
+		t.Fatal("stale notice still claims a key is active after it was cleared", view)
+	}
+	if !strings.Contains(view, "Runtime key cleared") {
+		t.Fatal("missing clear confirmation", view)
+	}
+}
+
 func TestCompactGatewayKeepsProviderAndFieldsVisible(t *testing.T) {
 	m := New("", 48, 18)
 	m.selected = 2
+	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
 	m = m.setup()
 	for _, label := range []string{"AMD LLM Gateway", "Gateway URL", "Auth header", "API key", "esc back"} {
 		if !strings.Contains(m.View(), label) {
-			t.Fatalf("compact gateway lost %s: %s", label, m.View())
+			t.Fatalf("compact gateway with an existing key lost %s: %s", label, m.View())
 		}
 	}
 }
