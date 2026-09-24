@@ -20,11 +20,21 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    cloud_model_provider,
     is_llm_model_entry,
+    resolve_default_chat_model,
     resolve_effective_ctx_size,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
+
+
+def _preload_model() -> str:
+    """The local model an idle server is seeded with: this machine's default
+    chat model, or Gemma when that default is a cloud model (nothing to load)."""
+    model = resolve_default_chat_model()
+    return DEFAULT_MODEL_NAME if cloud_model_provider(model) else model
+
 
 # Allow-list mapping from detected device -> Lemonade recipe
 # TODO: Confirm full recipe vocabulary with the Lemonade specialist
@@ -450,7 +460,7 @@ class LemonadeManager:
             f"Lemonade Server at {base_url} has no LLM loaded ({loaded_desc}), so "
             f"GAIA cannot confirm the {min_context_size}-token context it needs and "
             f"has no model to answer with.\n"
-            f"To fix: run `gaia init` to install and load {DEFAULT_MODEL_NAME}, or "
+            f"To fix: run `gaia init` to install and load {_preload_model()}, or "
             f"load an LLM yourself "
             f"({describe_start_hint(min_context_size).instruction}).\n"
             f"See the Lemonade server log for details "
@@ -1089,26 +1099,27 @@ class LemonadeManager:
                 command) so the user can recover manually if the auto-preload
                 cannot.
         """
+        model = _preload_model()
         # Proactive clamp (#2992): a model already downloaded from a prior
         # run has its ceiling in the catalog before we ever call /load, so
         # request the real value up front instead of relying on Lemonade's
         # own internal cap (which loads fine but keeps echoing the
         # over-large request back in status).
-        ceiling = client.get_model_max_context_window(DEFAULT_MODEL_NAME)
+        ceiling = client.get_model_max_context_window(model)
         requested_ctx = resolve_effective_ctx_size(min_context_size, ceiling)
         if ceiling is None:
             cls._log.warning(
                 "Lemonade reported no max_context_window for %s (metadata "
                 "not yet resolved); proceeding with ctx_size=%d — the "
                 "effective window may be capped lower once loaded.",
-                DEFAULT_MODEL_NAME,
+                model,
                 min_context_size,
             )
         elif requested_ctx < min_context_size:
             cls._log.warning(
                 "%s's trained context caps at %d tokens; requested %d, "
                 "loading at %d instead.",
-                DEFAULT_MODEL_NAME,
+                model,
                 ceiling,
                 min_context_size,
                 requested_ctx,
@@ -1116,12 +1127,12 @@ class LemonadeManager:
 
         cls._log.info(
             "Preloading '%s' with ctx_size=%d on idle Lemonade server",
-            DEFAULT_MODEL_NAME,
+            model,
             requested_ctx,
         )
         if not quiet:
             print(
-                f"\n⏳ Loading {DEFAULT_MODEL_NAME} with ctx_size={requested_ctx} "
+                f"\n⏳ Loading {model} with ctx_size={requested_ctx} "
                 f"tokens. This may take a moment (first run downloads the model)...",
                 flush=True,
             )
@@ -1133,14 +1144,14 @@ class LemonadeManager:
         lock.release()
         try:
             client.load_model(
-                DEFAULT_MODEL_NAME,
+                model,
                 ctx_size=requested_ctx,
                 prompt=False,
                 auto_download=True,
             )
         except Exception as e:
             raise LemonadeClientError(
-                f"Failed to preload Lemonade model {DEFAULT_MODEL_NAME!r} with "
+                f"Failed to preload Lemonade model {model!r} with "
                 f"ctx_size={requested_ctx} on idle server at "
                 f"{client.base_url}.\n"
                 f"To recover manually: stop the running server, then restart it "
@@ -1158,25 +1169,24 @@ class LemonadeManager:
         # pre-load guess.
         final_status = client.get_status()
         final_ceiling = (
-            client.get_model_max_context_window(DEFAULT_MODEL_NAME, status=final_status)
-            or ceiling
+            client.get_model_max_context_window(model, status=final_status) or ceiling
         )
         effective_ctx = resolve_effective_ctx_size(requested_ctx, final_ceiling)
         if final_ceiling:
             cls._context_ceiling = final_ceiling
-            cls._context_ceiling_model = DEFAULT_MODEL_NAME
+            cls._context_ceiling_model = model
 
         if not quiet:
             if effective_ctx < min_context_size:
                 print(
-                    f"⚠️  Loaded {DEFAULT_MODEL_NAME} with ctx_size={effective_ctx} "
+                    f"⚠️  Loaded {model} with ctx_size={effective_ctx} "
                     f"tokens (requested {min_context_size}; the model's trained "
                     f"context caps it at {effective_ctx}).",
                     flush=True,
                 )
             else:
                 print(
-                    f"✅ Loaded {DEFAULT_MODEL_NAME} with ctx_size={effective_ctx}.",
+                    f"✅ Loaded {model} with ctx_size={effective_ctx}.",
                     flush=True,
                 )
         return effective_ctx, final_status

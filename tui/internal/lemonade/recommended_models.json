@@ -1,7 +1,7 @@
 {
   "fit": {
-    "memory_overhead_factor": 1.1,
-    "memory_overhead_gb": 2.0
+    "memory_overhead_factor": 1.05,
+    "memory_overhead_gb": 1.0
   },
   "models": [
     {
@@ -9,7 +9,7 @@
       "register_as": "user.Qwen3.8-Flash-Next-GGUF",
       "provider": "local",
       "label": "Qwen3.8 Flash Next",
-      "note": "default on PCs with ~96 GB for models (Strix Halo 128 GB)",
+      "note": "default on PCs with ~87 GB for models (Strix Halo 128 GB)",
       "size_gb": 81.96,
       "checkpoint": "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS",
       "recipe": "llamacpp",

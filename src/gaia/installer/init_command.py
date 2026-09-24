@@ -223,24 +223,37 @@ class ChatModelChoice:
     capacity: Optional[MachineCapacity] = None
 
 
-def resolve_init_chat_model(client) -> ChatModelChoice:
-    """The chat model `gaia init` sets up: the user's ``default_model``, else
-    the largest default that fits this machine (Qwen3.8-Flash on a 128 GB Strix
-    Halo, Gemma 4 E4B everywhere else).
+def resolve_init_chat_model(client, *, reset_corrupt: bool) -> ChatModelChoice:
+    """The chat model `gaia init` sets up: the user's ``default_model`` when it
+    is a local Lemonade model, else the largest default that fits this machine
+    (Qwen3.8-Flash on a 128 GB Strix Halo, Gemma 4 E4B everywhere else).
 
     ``--check`` and ``run()`` both go through here so they can never disagree
-    about what "set up" means on this machine.
+    about what "set up" means on this machine. ``reset_corrupt`` is run()'s
+    policy (it rewrites a corrupt config); the read-only check raises instead.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
-    from gaia.llm.lemonade_client import recommend_default_chat_model
+    from gaia.llm.lemonade_client import (
+        cloud_model_provider,
+        recommend_default_chat_model,
+    )
 
     try:
         configured = GaiaConfig.load().default_model
     except GaiaConfigError as e:
-        # Same policy as run(): init resets a corrupt config, so it holds no choice.
-        log.warning("Ignoring corrupt config while choosing the chat model: %s", e)
+        if not reset_corrupt:
+            raise
+        log.warning("Ignoring corrupt config; gaia init rewrites it: %s", e)
         configured = None
-    if configured:
+    # A Claude or cloud default has nothing to download; the local chat model
+    # then follows the hardware, and the user's setting is left as it is.
+    is_local = (
+        configured
+        and not configured.startswith("claude-")
+        and not cloud_model_provider(configured)
+    )
+    if is_local:
+        _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
     model_id, skipped, capacity = recommend_default_chat_model(client)
     return ChatModelChoice(
@@ -248,9 +261,45 @@ def resolve_init_chat_model(client) -> ChatModelChoice:
     )
 
 
-# Profiles whose agents resolve their model through ``default_model`` — their
-# chat model follows the hardware. vlm, email and sd agents pin Gemma themselves.
-HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "minimal", "all"})
+def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
+    """Raise when a user-chosen model is known not to fit this machine.
+
+    Setup must never download a model the PC cannot run. A model whose size
+    neither GAIA nor Lemonade knows cannot be judged here; Lemonade still
+    refuses a download that would not fit the disk.
+    """
+    from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        check_fit,
+    )
+
+    mr = find_model_requirement(model_id)
+    size = mr.size_gb if mr else None
+    if not size:
+        for entry in client.list_models(show_all=True).get("data", []):
+            if _model_ids_match(entry.get("id"), model_id):
+                if entry.get("downloaded"):
+                    return
+                size = entry.get("size")
+                break
+    if not size:
+        return
+    verdict = check_fit(
+        float(size), capacity_from_system_info(client.get_system_info())
+    )
+    if not verdict.fits:
+        raise ModelFitError(
+            f"default_model {model_id} will not fit this PC: {verdict.reason}. "
+            "Choose a smaller one with `gaia config set default_model <id>` "
+            "(`/provider` in the TUI lists what fits), then re-run `gaia init`."
+        )
+
+
+# Profiles whose chat model follows the hardware. ``minimal`` promises a small
+# setup, and the vlm, email and sd agents pin Gemma themselves.
+HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
 
 
 def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
@@ -338,7 +387,9 @@ def check_setup_status(
 
     if not skip_chat_model:
         model_ids = with_chat_model(
-            profile, model_ids, lambda: resolve_init_chat_model(client).model_id
+            profile,
+            model_ids,
+            lambda: resolve_init_chat_model(client, reset_corrupt=False).model_id,
         )
 
     if skip_chat_model:
@@ -415,6 +466,8 @@ class InitCommand:
         self.profile = profile.lower()
         # This machine's chat model, resolved once so download and verify agree.
         self._chat_choice: Optional[ChatModelChoice] = None
+        # Set once that model is confirmed on disk; only then is it recorded.
+        self._chat_model_ready = False
         self.skip_models = skip_models
         self.skip_lemonade = skip_lemonade
         self.skip_webui_build = skip_webui_build
@@ -1735,12 +1788,16 @@ class InitCommand:
     def _record_chat_choice(self, config) -> None:
         """Save a hardware-picked chat model as ``default_model`` so every agent
         resolves to it. Never overwrites a model the user chose, and records
-        nothing when the pick is the floor model every agent already defaults to.
+        nothing when the pick is the floor model every agent already defaults to
+        or when setup did not download it (declined, or ``--skip-models``).
         """
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
         choice = self._chat_choice
         if choice is None or choice.user_set or config.default_model:
+            return
+        # An undownloaded default would make every agent's first load fail.
+        if not self._chat_model_ready:
             return
         if choice.model_id != DEFAULT_MODEL_NAME:
             config.default_model = choice.model_id
@@ -1748,7 +1805,7 @@ class InitCommand:
     def _chat_model(self, client) -> str:
         """This machine's chat model; says why on first resolution."""
         if self._chat_choice is None:
-            choice = resolve_init_chat_model(client)
+            choice = resolve_init_chat_model(client, reset_corrupt=True)
             self._chat_choice = choice
             if choice.user_set:
                 self._print(
@@ -1877,6 +1934,8 @@ class InitCommand:
                     pull_kwargs["timeout"] = max(7200, int(mr.size_gb * 200))
                 if client.ensure_model_downloaded(model_id, **pull_kwargs):
                     self._print_success(f"Downloaded {model_id}")
+                    if self._chat_choice and model_id == self._chat_choice.model_id:
+                        self._chat_model_ready = True
                 else:
                     self._print_error(f"Failed to download {model_id}")
                     success = False

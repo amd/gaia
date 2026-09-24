@@ -26,9 +26,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 #: Multiplier on the weights' size for runtime buffers that scale with the model.
-MEMORY_OVERHEAD_FACTOR = 1.1
+MEMORY_OVERHEAD_FACTOR = 1.05
 #: Fixed headroom for the KV cache and compute buffers.
-MEMORY_OVERHEAD_GB = 2.0
+MEMORY_OVERHEAD_GB = 1.0
 
 
 class ModelFitError(RuntimeError):

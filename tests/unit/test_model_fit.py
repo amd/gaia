@@ -205,3 +205,21 @@ class TestTuiDrift:
         local = {m["id"] for m in doc["models"] if m["provider"] == "local"}
         assert lc.DEFAULT_MODEL_NAME in local
         assert lc.LARGE_DEFAULT_MODEL_NAME[len("user.") :] in local
+
+
+class TestAgentUiFollowsTheMachineDefault:
+    def test_ui_default_is_the_configured_model(self):
+        from gaia.ui.routers.system import _default_model_name
+
+        assert _default_model_name() == lc.DEFAULT_MODEL_NAME
+        cfg = GaiaConfig()
+        cfg.default_model = lc.LARGE_DEFAULT_MODEL_NAME
+        cfg.save()
+        assert _default_model_name() == lc.LARGE_DEFAULT_MODEL_NAME
+
+    def test_ui_matches_a_user_model_by_its_listed_id(self):
+        from gaia.ui.routers.system import _norm_model_id
+
+        assert _norm_model_id(lc.LARGE_DEFAULT_MODEL_NAME) == _norm_model_id(
+            "Qwen3.8-Flash-Next-GGUF"
+        )

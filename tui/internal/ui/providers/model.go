@@ -296,7 +296,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.source != m.client || m.stage != "download" {
 			return m, nil
 		}
-		m.pullCancel = nil
+		if m.pullCancel != nil {
+			m.pullCancel()
+			m.pullCancel = nil
+		}
 		m.pulling = nil
 		if v.err != nil {
 			m.stage = "models"

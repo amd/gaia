@@ -2881,6 +2881,7 @@ class TestHardwareChatModel(unittest.TestCase):
         client = self._client(STRIX_HALO_128)
         with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
             self.assertTrue(cmd._download_models())
+        self.assertTrue(cmd._chat_model_ready)
         calls = {
             c.args[0]: c.kwargs for c in client.ensure_model_downloaded.call_args_list
         }
@@ -2918,6 +2919,12 @@ class TestHardwareChatModel(unittest.TestCase):
         cmd._chat_choice = ChatModelChoice(LARGE_DEFAULT_MODEL_NAME, False, [])
         cfg = GaiaConfig()
         cmd._record_chat_choice(cfg)
+        self.assertIsNone(
+            cfg.default_model, "recorded a default that was never downloaded"
+        )
+
+        cmd._chat_model_ready = True
+        cmd._record_chat_choice(cfg)
         self.assertEqual(cfg.default_model, LARGE_DEFAULT_MODEL_NAME)
 
         cfg = GaiaConfig(default_model="mine")
@@ -2928,3 +2935,56 @@ class TestHardwareChatModel(unittest.TestCase):
         cfg = GaiaConfig()
         cmd._record_chat_choice(cfg)
         self.assertIsNone(cfg.default_model)
+
+    def test_a_cloud_or_claude_default_is_not_a_local_download(self):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        for configured in ("claude-sonnet-5", "fireworks.deepseek-v4-flash-0731"):
+            cfg = GaiaConfig()
+            cfg.default_model = configured
+            cfg.save()
+            client = self._client(STRIX_HALO_128)
+            with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+                status = check_setup_status(profile="gaia")
+            self.assertFalse(any(configured in r for r in status.reasons))
+            self.assertTrue(any(LARGE_DEFAULT_MODEL_NAME in r for r in status.reasons))
+
+    def test_check_refuses_a_corrupt_config_instead_of_guessing(self):
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfigError
+        from gaia.installer.init_command import check_setup_status
+
+        config_mod.GAIA_CONFIG_FILE.write_text("{not json", encoding="utf-8")
+        client = self._client(STRIX_HALO_128)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            with self.assertRaises(GaiaConfigError):
+                check_setup_status(profile="gaia")
+
+    def test_a_user_default_that_does_not_fit_is_refused(self):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+        from gaia.llm.model_fit import ModelFitError
+
+        cfg = GaiaConfig()
+        cfg.default_model = LARGE_DEFAULT_MODEL_NAME
+        cfg.save()
+        client = self._client(SMALL_MACHINE)
+        client.list_models.return_value = {"data": []}
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            with self.assertRaisesRegex(ModelFitError, "gaia config set default_model"):
+                check_setup_status(profile="gaia")
+
+    def test_minimal_profile_stays_small_on_a_big_machine(self):
+        from gaia.installer.init_command import with_chat_model
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+        def fail():
+            raise AssertionError("minimal must not resolve a hardware chat model")
+
+        self.assertEqual(
+            with_chat_model("minimal", [DEFAULT_MODEL_NAME], fail),
+            [DEFAULT_MODEL_NAME],
+        )

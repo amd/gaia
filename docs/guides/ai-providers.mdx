@@ -47,7 +47,7 @@ for models and how much disk is free, both read from Lemonade:
 - **won't fit** — shown so you know it exists, but it cannot be downloaded. The
   details line says what it needs against what this PC has.
 
-A model fits when its size plus 10% and 2 GB of working room fits the memory
+A model fits when its size plus 5% and 1 GB of working room fits the memory
 llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared
 memory — and its download fits the free disk. If Lemonade cannot report this PC's
 memory, every download is disabled rather than guessed.
@@ -62,7 +62,9 @@ where it fits (a 128 GB Strix Halo), **Gemma 4 E4B** on every other PC. It recor
 a Qwen pick as `default_model` in `~/.gaia/config.json`, so the TUI's agent starts
 on it. Set `gaia config set default_model <id>` to choose your own; `gaia init`
 never overwrites it. To stay on Gemma on a large machine and skip the 82 GB
-download, run `gaia config set default_model Gemma-4-E4B-it-GGUF` before setup.
+download, run `gaia config set default_model Gemma-4-E4B-it-GGUF` before setup,
+or press **p** at the setup screen and pick Gemma: a local model you pick there
+replaces the default, and setup then downloads only the embedding models.
 
 ## Keys and settings
 

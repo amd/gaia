@@ -922,3 +922,31 @@ def test_is_llm_model_entry_rejects_non_llm_types():
     assert is_llm_model_entry({"labels": ["embeddings"]}) is False
     # Explicit JSON null for labels must not raise TypeError.
     assert is_llm_model_entry({"id": "X", "labels": None}) is True
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        ("user.Qwen3.8-Flash-Next-GGUF", "user.Qwen3.8-Flash-Next-GGUF"),
+        # A cloud default has nothing to load locally; the floor model is seeded.
+        ("fireworks.deepseek-v4-flash-0731", "Gemma-4-E4B-it-GGUF"),
+    ],
+)
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_idle_preload_loads_this_machines_default_model(mock_cls, configured, expected):
+    """On a PC whose `gaia init` picked a larger model, the idle-server preload
+    must seed that model — not download and load Gemma the agent never uses."""
+    from gaia.config import GaiaConfig
+
+    cfg = GaiaConfig()
+    cfg.default_model = configured
+    cfg.save()
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(running=True, context_size=65536, loaded_models=[{"id": expected}]),
+    ]
+    mock_cls.return_value = client
+
+    assert LemonadeManager.ensure_ready(min_context_size=65536, quiet=True) is True
+    assert client.load_model.call_args.args[0] == expected
