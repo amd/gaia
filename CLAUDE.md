@@ -601,8 +601,9 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 - **LLM Backend** (`src/gaia/llm/`): Multi-provider support with AMD optimization
   - `lemonade_client.py` - Lemonade Server (AMD NPU/GPU)
   - `providers/claude.py` - Claude API
-  - `providers/openai_provider.py` - OpenAI API
-  - `factory.py` - Client factory for provider selection
+  - `providers/lemonade.py` - Lemonade provider adapter
+  - `factory.py` - Client factory for provider selection (`openai`/`litellm` were
+    retired in #3899 and are rejected with a migration error)
 - **API Server** (`src/gaia/api/`): OpenAI-compatible REST API for agent access
 - **MCP Integration** (`src/gaia/mcp/`): Model Context Protocol for external integrations
 - **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/guides/chat.mdx`](docs/guides/chat.mdx)

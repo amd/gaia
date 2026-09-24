@@ -132,6 +132,15 @@ QUERY_KEY = "gaia_query"
 #: screen; ``bypass`` turns unattended approval on or off for the session.
 CONTROL_TOOL_DECISION = "tool_decision"
 CONTROL_BYPASS = "bypass"
+#: ``clear_history`` starts a fresh conversation: the host's /clear must clear
+#: the child's ``conversation_history`` too, or "cleared" context keeps riding
+#: into every later prompt. Routed through the query queue so a clear typed
+#: mid-turn lands after that turn, matching the host's queued-/clear semantics.
+CONTROL_CLEAR_HISTORY = "clear_history"
+
+
+class _ClearHistory:
+    """Queue sentinel: the turn loop (which owns the agent) performs the clear."""
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and the bypass mode all survive it.
 CONTROL_CANCEL = "cancel"
@@ -599,7 +608,7 @@ def _apply_local_switch(agent: Any, target: str) -> str:
     return target
 
 
-def _switch_model(agent: Any, target: str) -> str:
+def switch_model(agent: Any, target: str) -> str:
     """Swap the agent's live LLM client to *target*.
 
     Returns the friendly display name on success; raises RuntimeError with an
@@ -607,10 +616,22 @@ def _switch_model(agent: Any, target: str) -> str:
     both branches build the new client (and, for local, confirm Lemonade is
     reachable) before mutating anything, and the mutation itself is
     snapshotted/rolled-back as a unit (see ``_apply_switch``).
+
+    Public because the HTTP surface reuses it: a session there retains its agent
+    the same way this process does, so "switch the model without losing the
+    conversation" is the same operation and must not be implemented twice. It
+    lives here rather than in a module of its own because this is where the
+    machinery it depends on already is — moving 200 working lines to improve a
+    filename is not worth the risk.
     """
     if target.startswith("claude-"):
         return _apply_claude_switch(agent, target)
     return _apply_local_switch(agent, target)
+
+
+#: Pre-rename alias. ``run_model_command`` and this module's tests reach it by
+#: the private name.
+_switch_model = switch_model
 
 
 def _format_model_list(agent: Any) -> str:
@@ -716,6 +737,11 @@ def _pump_stdin(queries: "queue.Queue", state: PermissionState) -> None:
             control = parse_control(line)
             if control is None:
                 queries.put(parse_query(line))
+                continue
+            if control.get(CONTROL_KEY) == CONTROL_CLEAR_HISTORY:
+                # The agent lives on the turn-loop thread; hand the clear over
+                # as a queued sentinel rather than mutating history from here.
+                queries.put(_ClearHistory())
                 continue
             try:
                 apply_control(control, state)
@@ -1234,6 +1260,12 @@ def main(argv: Optional[list] = None) -> int:
         query = queries.get()
         if query is None:  # stdin closed
             break
+        if isinstance(query, _ClearHistory):
+            history = getattr(agent, "conversation_history", None)
+            if history is not None:
+                history.clear()
+            logger.info("conversation history cleared by host /clear")
+            continue
         try:
             dispatch_query(agent, query, out, dev=args.dev, state=state)
         except BrokenPipeError:

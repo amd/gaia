@@ -31,6 +31,13 @@ DEEP_ROOT_DEPTH = 999
 #: reason.
 SHALLOW_ROOT_DEPTH = 5
 
+#: Wall-clock budget for one search walk. Well under the 180 s tool watchdog,
+#: so the model gets partial results and a hint instead of an abandoned call.
+SEARCH_TIME_BUDGET_S = 20.0
+
+#: Directory entries one search walk may examine before it stops (#3889).
+SEARCH_ENTRY_BUDGET = 200_000
+
 
 def path_validator_of(host: Any) -> Any:
     """The host's PathValidator under either of the two attribute names."""
@@ -87,10 +94,12 @@ def search_roots(host: Any) -> List[Path]:
     The fallback is only for library use with no sandbox declared at all.
     """
     validator = path_validator_of(host)
+    # The scratch dir often nests deeper than the project and would outrank it.
+    scratch_dir = getattr(validator, "scratch_dir", None)
     roots = [
         Path(root)
         for root in (getattr(validator, "allowed_paths", None) or [])
-        if Path(root).exists()
+        if Path(root).exists() and Path(root) != scratch_dir
     ]
     if not roots:
         return [Path.cwd().resolve()]

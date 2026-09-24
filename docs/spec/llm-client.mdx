@@ -28,27 +28,49 @@ The LLM client package provides a unified interface for generating text from mul
 
 **Key Features:**
 - **Factory-based client creation** with `create_client()`
-- **Three providers**: Lemonade (local AMD-optimized), OpenAI, Claude
+- **Two providers**: Lemonade (local AMD-optimized, plus models configured behind Lemonade such as on-prem gateways) and Claude
 - **Abstract base class** for type safety and extensibility
 - **Graceful handling** of unsupported features via `NotSupportedError`
 - **Streaming and non-streaming** generation
-- **Backward-compatible** `use_claude`/`use_openai` flags
+- **Backward-compatible** `use_claude` flag
 
 **Provider Capabilities:**
 
-| Method | Lemonade | OpenAI | Claude |
-|--------|:--------:|:------:|:------:|
-| `generate()` | ✓ | ✓ | ✓ |
-| `chat()` | ✓ | ✓ | ✓ |
-| `embed()` | ✓ | ✓ | ✗ |
-| `vision()` | ✓ | ✗ | ✓ |
-| `get_performance_stats()` | ✓ | ✗ | ✗ |
-| `load_model()` | ✓ | ✗ | ✗ |
-| `unload_model()` | ✓ | ✗ | ✗ |
+| Method | Lemonade | Claude |
+|--------|:--------:|:------:|
+| `generate()` | ✓ | ✓ |
+| `chat()` | ✓ | ✓ |
+| `embed()` | ✓ | ✗ |
+| `vision()` | ✓ | ✓ |
+| `get_performance_stats()` | ✓ | ✓ |
+| `load_model()` | ✓ | ✗ |
+| `unload_model()` | ✓ | ✗ |
 
 <Note>
 Methods marked with ✗ raise `NotSupportedError` when called on that provider.
+Cloud models served through Lemonade have their own capabilities; selecting
+Lemonade does not imply that every remote model supports every operation.
 </Note>
+
+---
+
+## Removed adapters and migration
+
+The direct `openai` and `litellm` adapters were removed because they discarded
+native tool calls. The `litellm` installation extra is removed too. The
+`openai` Python dependency remains: Lemonade uses it for compatible HTTP requests.
+
+`provider="openai"`, `provider="litellm"`, and `use_openai=True` raise `ValueError`
+with migration guidance before importing a provider or issuing requests.
+`use_chatgpt=True` in the agent, chat/audio/talk SDK chain and the legacy
+`--use-chatgpt` CLI flag also fail explicitly. These flags are retained only as
+migration-error shims; they do not select another backend or ignore the setting.
+
+Configure the upstream model in Lemonade, then pass the Lemonade server URL and
+its catalog model ID. Do not substitute a raw upstream endpoint for Lemonade's
+URL: a generic OpenAI-compatible service does not implement Lemonade's catalog
+and lifecycle API. See [gateway migration](/sdk/sdks/llm#gateway-migration).
+Historical release notes describe the providers that shipped in those releases.
 
 ---
 
@@ -58,10 +80,12 @@ Methods marked with ✗ raise `NotSupportedError` when called on that provider.
 
 1. **Factory Pattern**
    - `create_client()` factory function for client creation
-   - Explicit provider selection via `provider` parameter ("lemonade", "openai", "claude")
-   - Backward-compatible `use_claude`/`use_openai` flags
+   - Explicit provider selection via `provider` parameter ("lemonade", "claude")
+   - Backward-compatible `use_claude` flag
    - Auto-detection of provider from flags when `provider` not specified
    - Default to Lemonade provider when no flags set
+   - Retired names (`"openai"`, `"litellm"`) and a true `use_openai` flag raise
+     `ValueError` with migration guidance before any provider is imported
 
 2. **Abstract Interface**
    - `LLMClient` ABC defines unified interface
@@ -78,8 +102,7 @@ Methods marked with ✗ raise `NotSupportedError` when called on that provider.
 
 3. **Provider Implementations**
    - **LemonadeProvider**: Full support for all methods, connects to local Lemonade server
-   - **OpenAIProvider**: `generate`, `chat`, `embed` only
-   - **ClaudeProvider**: `generate`, `chat`, `vision` only
+   - **ClaudeProvider**: `generate`, `chat`, `vision`, `get_performance_stats` (last-call usage)
    - All providers support streaming and non-streaming modes
 
 4. **Error Handling**
@@ -122,7 +145,6 @@ src/gaia/llm/
 ├── lemonade_client.py       # Low-level REST client for Lemonade
 └── providers/
     ├── lemonade.py          # LemonadeProvider
-    ├── openai_provider.py   # OpenAIProvider
     └── claude.py            # ClaudeProvider
 ```
 
@@ -147,20 +169,21 @@ def create_client(
     **kwargs,
 ) -> LLMClient:
     """
-    Create an LLM client, auto-detecting provider from parameters.
+    Create a Lemonade or Claude client.
 
     Args:
-        provider: Explicit provider name ("lemonade", "openai", or "claude").
-                  If not specified, auto-detected from use_claude/use_openai flags.
+        provider: Explicit provider name ("lemonade" or "claude").
+                  If not specified, auto-detected from the use_claude flag.
         use_claude: If True, use Claude provider (ignored if provider is specified)
-        use_openai: If True, use OpenAI provider (ignored if provider is specified)
+        use_openai: Retained only to reject legacy callers; True always raises
         **kwargs: Provider-specific arguments (base_url, model, api_key, etc.)
 
     Returns:
         LLMClient instance for the specified or detected provider
 
     Raises:
-        ValueError: If provider is unknown or both use_claude and use_openai are True
+        ValueError: If provider is unknown, is a retired name ("openai",
+                    "litellm"), or use_openai is True
 
     Examples:
         # Default Lemonade provider
@@ -168,16 +191,14 @@ def create_client(
 
         # Explicit provider selection
         client = create_client(provider="lemonade", model="Qwen3-0.6B-GGUF")
-        client = create_client(provider="openai", api_key="sk-...")
         client = create_client(provider="claude", api_key="sk-ant-...")
 
-        # Backward-compatible flags
+        # Backward-compatible flag
         client = create_client(use_claude=True, api_key="sk-ant-...")
-        client = create_client(use_openai=True, api_key="sk-...")
 
     Note:
         Provider defaults to "lemonade" when no flags are set.
-        The design maintains backward compatibility while allowing explicit provider selection.
+        An explicit supported provider takes precedence over use_claude.
     """
 ```
 
@@ -266,7 +287,7 @@ class LLMClient(ABC):
 
         Args:
             texts: List of text strings to embed
-            **kwargs: Additional parameters (e.g., model="text-embedding-3-small" for OpenAI)
+            **kwargs: Additional parameters
 
         Returns:
             List of embedding vectors (list of floats)
@@ -275,7 +296,7 @@ class LLMClient(ABC):
             NotSupportedError: If provider doesn't support embeddings
 
         Note:
-            Supported by: Lemonade, OpenAI (default: "text-embedding-3-small")
+            Supported by: Lemonade
             Not supported by: Claude
         """
         raise NotSupportedError(self.provider_name, "embed")
@@ -297,7 +318,6 @@ class LLMClient(ABC):
 
         Note:
             Supported by: Lemonade, Claude
-            Not supported by: OpenAI
         """
         raise NotSupportedError(self.provider_name, "vision")
 
@@ -312,7 +332,7 @@ class LLMClient(ABC):
             NotSupportedError: If provider doesn't support performance stats
 
         Note:
-            Only supported by: Lemonade
+            Supported by: Lemonade, Claude (last-call token usage)
         """
         raise NotSupportedError(self.provider_name, "get_performance_stats")
 
@@ -406,40 +426,9 @@ class LemonadeProvider(LLMClient):
     # get_performance_stats, load_model, unload_model
 ```
 
-#### OpenAIProvider (`providers/openai_provider.py`)
-
-**Partial support** - `generate`, `chat`, `embed` only.
-
-```python
-class OpenAIProvider(LLMClient):
-    """OpenAI (OpenAI API) provider."""
-
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "gpt-4o",
-        system_prompt: Optional[str] = None,
-        **_kwargs,
-    ):
-        """
-        Initialize OpenAI provider.
-
-        Args:
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
-            model: Model name (default: "gpt-4o")
-            system_prompt: Default system prompt for chat
-
-        Environment:
-            OPENAI_API_KEY: API key for OpenAI
-        """
-
-    # Supports: generate, chat, embed
-    # Raises NotSupportedError: vision, get_performance_stats, load_model, unload_model
-```
-
 #### ClaudeProvider (`providers/claude.py`)
 
-**Partial support** - `generate`, `chat`, `vision` only.
+**Partial support** - `generate`, `chat`, `vision`, `get_performance_stats`.
 
 ```python
 class ClaudeProvider(LLMClient):
@@ -448,8 +437,10 @@ class ClaudeProvider(LLMClient):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "claude-3-5-sonnet-20241022",
+        model: str = DEFAULT_CLAUDE_MODEL,  # "claude-sonnet-5"
         system_prompt: Optional[str] = None,
+        max_retries: int = 3,
+        timeout: float = 300.0,
         **_kwargs,
     ):
         """
@@ -457,7 +448,7 @@ class ClaudeProvider(LLMClient):
 
         Args:
             api_key: Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
-            model: Model name (default: "claude-3-5-sonnet-20241022")
+            model: Model name (default: DEFAULT_CLAUDE_MODEL)
             system_prompt: Default system prompt for chat
 
         Environment:
@@ -465,10 +456,11 @@ class ClaudeProvider(LLMClient):
 
         Raises:
             ImportError: If anthropic package not installed
+            ValueError: If no API key is available
         """
 
-    # Supports: generate, chat, vision
-    # Raises NotSupportedError: embed, get_performance_stats, load_model, unload_model
+    # Supports: generate, chat, vision, get_performance_stats
+    # Raises NotSupportedError: embed, load_model, unload_model
 ```
 
 ---
@@ -482,16 +474,11 @@ The factory function auto-detects the provider based on parameters:
 ```python
 # From factory.py
 def create_client(provider=None, use_claude=False, use_openai=False, **kwargs):
-    # Auto-detect provider from flags if not explicitly specified
+    # Retired selections fail before any provider import
+    if use_openai or (provider and provider.lower() in {"openai", "litellm"}):
+        raise ValueError(REMOVED_PROVIDER_MESSAGE)
     if provider is None:
-        if use_claude and use_openai:
-            raise ValueError("Cannot specify both use_claude and use_openai")
-        elif use_claude:
-            provider = "claude"
-        elif use_openai:
-            provider = "openai"
-        else:
-            provider = "lemonade"  # Default
+        provider = "claude" if use_claude else "lemonade"
 
     # Validate provider
     if provider.lower() not in _PROVIDERS:
@@ -508,7 +495,6 @@ Providers are loaded dynamically using `importlib` to avoid importing unnecessar
 ```python
 _PROVIDERS = {
     "lemonade": "gaia.llm.providers.lemonade.LemonadeProvider",
-    "openai": "gaia.llm.providers.openai_provider.OpenAIProvider",
     "claude": "gaia.llm.providers.claude.ClaudeProvider",
 }
 
@@ -538,14 +524,13 @@ class LLMClient(ABC):
 Providers override only the methods they support:
 
 ```python
-# OpenAIProvider overrides embed but not vision
-class OpenAIProvider(LLMClient):
-    def embed(self, texts: list[str], **kwargs):
-        # Implementation for OpenAI embeddings
-        response = self._client.embeddings.create(...)
-        return [item.embedding for item in response.data]
+# ClaudeProvider overrides vision but not embed
+class ClaudeProvider(LLMClient):
+    def vision(self, images: list[bytes], prompt: str, **kwargs) -> str:
+        # Sends the image as a base64 content block
+        ...
 
-    # vision() inherited - raises NotSupportedError
+    # embed() inherited - raises NotSupportedError
 ```
 
 ### Temperature Defaults
@@ -553,9 +538,8 @@ class OpenAIProvider(LLMClient):
 All providers default to `temperature=0.1` for deterministic responses:
 
 ```python
-# In LemonadeProvider
+# In LemonadeProvider.chat()
 kwargs.setdefault("temperature", 0.1)
-response = self._backend.completions(model=model, prompt=prompt, **kwargs)
 ```
 
 ### Provider-Specific Implementation
@@ -568,28 +552,41 @@ class LemonadeProvider(LLMClient):
         self._backend = LemonadeClient(model=model, base_url=base_url, **kwargs)
 
     def generate(self, prompt, model=None, stream=False, **kwargs):
-        return self._backend.completions(prompt=prompt, stream=stream, **kwargs)
-```
-
-**OpenAIProvider** uses the OpenAI SDK directly:
-
-```python
-class OpenAIProvider(LLMClient):
-    def __init__(self, api_key=None, model="gpt-4o", **kwargs):
-        import openai
-        self._client = openai.OpenAI(api_key=api_key)
-        self._model = model
+        # Routed through chat (completions endpoint not available in Lemonade v9.1+)
+        return self.chat([{"role": "user", "content": prompt}], model=model, stream=stream, **kwargs)
 ```
 
 **ClaudeProvider** uses the Anthropic SDK:
 
 ```python
 class ClaudeProvider(LLMClient):
-    def __init__(self, api_key=None, model="claude-3-5-sonnet-20241022", **kwargs):
+    def __init__(self, api_key=None, model=DEFAULT_CLAUDE_MODEL, **kwargs):
         import anthropic
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model
 ```
+
+### Native tool-call transport
+
+The shared agent consumes the provider's string response. Lemonade preserves
+native calls in the `__tool_calls__` sentinel envelope, including call IDs,
+function names and arguments; it does not replace a tool-only response with empty
+assistant text. Streaming deltas are accumulated before dispatch so a partial
+argument fragment cannot execute as a complete call. The agent turns results back
+into the corresponding tool messages for the next model request.
+
+Provider usage is available through `get_last_usage()` when the backend reports
+it. Missing usage is not proof of zero tokens or zero cost. Per-turn timing and
+usage records are owned by `agents/base/turn_metrics.py`.
+
+### Error boundaries
+
+Configuration errors fail before inference. Lemonade transport errors are
+classified by the Lemonade provider into typed failures with user-facing guidance.
+Authentication and upstream service failures must remain attributable to the
+configured destination; no implicit retry with a different model or provider is
+permitted. Optional dependencies must not be required merely to reject a removed
+provider name.
 
 ---
 
@@ -640,21 +637,10 @@ class TestFactory:
             client = create_client(use_claude=True, api_key="test")
             assert client.provider_name == "Claude"
 
-    def test_use_openai_flag(self):
-        """Test backward-compatible use_openai flag."""
-        with patch("openai.OpenAI"):
-            client = create_client(use_openai=True, api_key="test")
-            assert client.provider_name == "OpenAI"
-
     def test_invalid_provider_raises_error(self):
         """Test unknown provider raises ValueError."""
         with pytest.raises(ValueError, match="Unknown provider"):
             create_client(provider="invalid")
-
-    def test_both_flags_raises_error(self):
-        """Test both flags raise ValueError."""
-        with pytest.raises(ValueError, match="Cannot specify both"):
-            create_client(use_claude=True, use_openai=True)
 
     def test_case_insensitive_provider(self):
         """Test provider names are case-insensitive."""
@@ -678,22 +664,13 @@ class TestNotSupportedError:
         assert "Claude" in str(exc.value)
         assert "embed" in str(exc.value)
 
-    def test_openai_vision_raises_not_supported(self):
-        """Test OpenAI provider raises NotSupportedError for vision."""
-        with patch("openai.OpenAI"):
-            client = create_client(provider="openai", api_key="test")
-        with pytest.raises(NotSupportedError) as exc:
-            client.vision([b"image"], "describe")
-        assert "OpenAI" in str(exc.value)
-        assert "vision" in str(exc.value)
-
 class TestProviderMethods:
     def test_lemonade_generate(self):
         """Test LemonadeProvider.generate()."""
         with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockClient:
             mock_backend = Mock()
-            mock_backend.completions.return_value = {
-                "choices": [{"text": "Hello"}]
+            mock_backend.chat_completions.return_value = {
+                "choices": [{"message": {"content": "Hello"}}]
             }
             MockClient.return_value = mock_backend
 
@@ -732,6 +709,22 @@ class TestProviderMethods:
             assert len(chunks) == 2
             assert "".join(chunks) == "Hi there"
 ```
+
+**File:** `tests/unit/test_removed_llm_providers.py` — retired names and flags are
+rejected across the factory, SDK, base agent and CLI, before provider import or
+model initialization.
+
+### Regression coverage
+
+- `test_llm_client_factory.py`: supported selection and shared interface.
+- `test_removed_llm_providers.py`: rejected legacy names and flags across the
+  factory, SDK, base agent and CLI, before model initialization.
+- `test_lemonade_client.py`: supported Lemonade operations.
+- `test_lemonade_cloud_models.py`: local/cloud lifecycle separation.
+- `test_parallel_tool_calls.py`: preservation and execution of native calls.
+
+The unit workflow triggers for changes to shared source and the packaged chat
+agent. Tests must exercise the retained route as well as migration failures.
 
 ### Integration Tests
 
@@ -778,7 +771,7 @@ def test_integration_lemonade_performance_stats():
 # pyproject.toml
 [project]
 dependencies = [
-    "openai>=1.0.0",      # OpenAI Python SDK (used for local + OpenAI)
+    "openai>=1.0.0",      # OpenAI-compatible HTTP client used by LemonadeClient
     "httpx>=0.24.0",      # HTTP client with timeout support
     "requests>=2.31.0",   # For performance stats/control endpoints
     "python-dotenv>=1.0.0",  # Environment variable management
@@ -812,13 +805,6 @@ from ..lemonade_client import LemonadeClient, DEFAULT_MODEL_NAME
 # DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 ```
 
-**OpenAIProvider (`providers/openai_provider.py`):**
-```python
-from typing import Iterator, Optional, Union
-import openai  # Requires: pip install openai
-from ..base_client import LLMClient
-```
-
 **ClaudeProvider (`providers/claude.py`):**
 ```python
 from typing import Iterator, Optional, Union
@@ -845,7 +831,7 @@ client = create_client()
 response = client.generate("Write a hello world program in Python")
 print(response)
 
-# Get performance stats (Lemonade only)
+# Get performance stats
 stats = client.get_performance_stats()
 print(f"Speed: {stats.get('tokens_per_second', 'N/A')} tokens/sec")
 ```
@@ -858,13 +844,10 @@ from gaia.llm import create_client
 # Lemonade (local)
 lemonade = create_client(provider="lemonade", model="Qwen3-0.6B-GGUF")
 
-# OpenAI
-openai_client = create_client(provider="openai", api_key="sk-...")
-
 # Claude
 claude = create_client(provider="claude", api_key="sk-ant-...")
 
-# Backward-compatible flags
+# Backward-compatible flag
 legacy_claude = create_client(use_claude=True, api_key="sk-ant-...")
 ```
 
@@ -873,18 +856,18 @@ legacy_claude = create_client(use_claude=True, api_key="sk-ant-...")
 ```python
 from gaia.llm import create_client, NotSupportedError
 
-# Create OpenAI client
-client = create_client(provider="openai", api_key="sk-...")
+# Create Claude client
+client = create_client(provider="claude", api_key="sk-ant-...")
 
-# This works (OpenAI supports embed)
-embeddings = client.embed(["Hello world", "How are you?"])
+# This works (Claude supports vision)
+description = client.vision([image_bytes], "Describe this image")
 
-# This raises NotSupportedError (OpenAI doesn't support vision)
+# This raises NotSupportedError (Claude doesn't support embeddings)
 try:
-    result = client.vision([image_bytes], "Describe this image")
+    embeddings = client.embed(["Hello world"])
 except NotSupportedError as e:
     print(f"Feature not available: {e}")
-    # Output: "OpenAI does not support vision"
+    # Output: "Claude does not support embed"
 ```
 
 ### Example 4: Chat with Message History
@@ -924,19 +907,14 @@ for chunk in client.chat([{"role": "user", "content": "Hello"}], stream=True):
     print(chunk, end="", flush=True)
 ```
 
-### Example 6: Embeddings (Lemonade and OpenAI only)
+### Example 6: Embeddings (Lemonade only)
 
 ```python
 from gaia.llm import create_client
 
-# With Lemonade
 lemonade = create_client()
 embeddings = lemonade.embed(["Hello world", "How are you?"])
 print(f"Embedding dimensions: {len(embeddings[0])}")
-
-# With OpenAI
-openai_client = create_client(provider="openai", api_key="sk-...")
-embeddings = openai_client.embed(["Text to embed"])
 ```
 
 ### Example 7: Vision (Lemonade and Claude only)
@@ -1006,15 +984,19 @@ print(response)
 
 ## Third-Party LLM Integration
 
-<Info>
-GAIA supports third-party LLM service providers through its **OpenAI-compatible API interface**. Any service implementing the OpenAI API specification can be used with GAIA.
-</Info>
+<Warning>
+The Lemonade provider sends inference over **OpenAI-compatible endpoints**, but
+before a local-model request it also calls Lemonade's model-lifecycle API (for
+example `/load`). A generic OpenAI-compatible server is therefore not a drop-in
+replacement: configure the third-party or on-prem model in a Lemonade server and
+point GAIA at that server. See [gateway migration](/sdk/sdks/llm#gateway-migration).
+</Warning>
 
 ---
 
-### Required API Endpoints
+### Inference Endpoints
 
-Your LLM service must implement at least one of these OpenAI-compatible endpoints:
+GAIA sends inference requests in the OpenAI-compatible shapes below.
 
 <CardGroup cols={2}>
   <Card title="Completions Endpoint" icon="code">
@@ -1129,18 +1111,20 @@ Your LLM service must implement at least one of these OpenAI-compatible endpoint
 
 ### Configuration
 
+Point GAIA at the Lemonade server that fronts your model:
+
 <Tabs>
   <Tab title="Environment Variable">
     ```bash Linux
-    export LEMONADE_BASE_URL="http://your-llm-service:8080"
+    export LEMONADE_BASE_URL="http://your-lemonade-server:8080"
     ```
 
     ```powershell Windows (PowerShell)
-    $env:LEMONADE_BASE_URL="http://your-llm-service:8080"
+    $env:LEMONADE_BASE_URL="http://your-lemonade-server:8080"
     ```
 
     ```cmd Windows (CMD)
-    set LEMONADE_BASE_URL=http://your-llm-service:8080
+    set LEMONADE_BASE_URL=http://your-lemonade-server:8080
     ```
   </Tab>
 
@@ -1148,7 +1132,7 @@ Your LLM service must implement at least one of these OpenAI-compatible endpoint
     ```python
     from gaia.llm import create_client
 
-    client = create_client(base_url="http://your-llm-service:8080")
+    client = create_client(base_url="http://your-lemonade-server:8080")
     response = client.generate("Hello world")
     ```
   </Tab>
@@ -1157,7 +1141,7 @@ Your LLM service must implement at least one of these OpenAI-compatible endpoint
 <Note>
 **URL Normalization:** LemonadeClient automatically appends `/api/v1` if not present:
 - `http://localhost:8080` → `http://localhost:8080/api/v1`
-- If your service uses `/v1` instead, provide the full path: `http://localhost:8080/v1`
+- If your server uses `/v1` instead, provide the full path: `http://localhost:8080/v1`
 </Note>
 
 ---
@@ -1168,8 +1152,11 @@ Your LLM service must implement at least one of these OpenAI-compatible endpoint
 ```python Basic Connection
 from gaia.llm import create_client
 
-# Connect to your third-party LLM service
-client = create_client(base_url="http://your-service:8080/v1")
+# Connect to the Lemonade server that fronts your model
+client = create_client(
+    base_url="http://your-lemonade-server:8080",
+    model="your-catalog-model-id",
+)
 
 # Test connection
 response = client.generate("Hello, are you working?")
@@ -1179,60 +1166,16 @@ print(response)
 ```python Streaming
 from gaia.llm import create_client
 
-client = create_client(base_url="http://your-service:8080/v1")
+client = create_client(
+    base_url="http://your-lemonade-server:8080",
+    model="your-catalog-model-id",
+)
 
 # Stream response chunks
 for chunk in client.generate("Tell me a story", stream=True):
     print(chunk, end="", flush=True)
 ```
-
-```python With Agent
-from gaia.llm import create_client
-from gaia.agents import Agent
-
-class CustomAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            name="custom_agent",
-            base_url="http://your-service:8080/v1",
-            model="your-model-name"
-        )
-
-    def process_task(self, task: str) -> str:
-        return self.llm.generate(task)
-
-# Use your agent
-agent = CustomAgent()
-result = agent.process_task("Analyze this code...")
-```
 </CodeGroup>
-
----
-
-### Compatibility Checklist
-
-<AccordionGroup>
-  <Accordion title="Required Features" icon="check">
-    - ✅ **OpenAI-compatible endpoints** (`/v1/completions` or `/v1/chat/completions`)
-    - ✅ **JSON request/response format** matching OpenAI specification
-    - ✅ **HTTP POST method** for generation requests
-    - ✅ **Non-streaming responses** (complete response as JSON)
-  </Accordion>
-
-  <Accordion title="Optional Features" icon="circle-check">
-    - ⚠️ **Streaming responses** (Server-Sent Events format)
-    - ⚠️ **Error handling** (proper HTTP status codes: 200, 400, 404, 500)
-    - ⚠️ **Model listing** (`GET /v1/models` endpoint)
-    - ⚠️ **Token counting** (usage statistics in responses)
-  </Accordion>
-
-  <Accordion title="GAIA-Specific Features" icon="info">
-    The following features are specific to Lemonade provider and raise `NotSupportedError` with third-party services:
-    - `get_performance_stats()` - Performance statistics
-    - `load_model()` - Model loading
-    - `unload_model()` - Model unloading
-  </Accordion>
-</AccordionGroup>
 
 ---
 
@@ -1240,29 +1183,28 @@ result = agent.process_task("Analyze this code...")
 
 <AccordionGroup>
   <Accordion title="Connection Errors" icon="plug">
-    **Problem:** `ConnectionError: LLM Server Connection Error`
+    **Problem:** Requests fail because the server can't be reached (connection refused, DNS, or TLS)
 
     **Solutions:**
-    1. Verify service is running:
+    1. Verify the server is running:
        ```bash
-       curl http://your-service:port/v1/models
+       curl http://your-lemonade-server:port/api/v1/models
        ```
     2. Check firewall settings
     3. Ensure correct base URL format
     4. Test with explicit base URL:
        ```python
-       client = create_client(base_url="http://localhost:8080/v1")
+       client = create_client(base_url="http://localhost:8080/api/v1")
        ```
   </Accordion>
 
   <Accordion title="404 Endpoint Errors" icon="magnifying-glass">
-    **Problem:** `404 endpoint not found`
+    **Problem:** Requests fail with HTTP 404
 
     **Solutions:**
-    1. Check if service uses `/v1/completions` (OpenAI standard)
-    2. Verify API path structure: `/v1` vs `/api/v1`
-    3. Consult service documentation for correct endpoint paths
-    4. Use chat method explicitly if needed:
+    1. Verify API path structure: `/v1` vs `/api/v1`
+    2. Confirm `base_url` points at the Lemonade server, not the raw upstream endpoint
+    3. Use chat method explicitly if needed:
        ```python
        client.chat([{"role": "user", "content": "Test"}])
        ```
@@ -1276,18 +1218,18 @@ result = agent.process_task("Analyze this code...")
        ```python
        client.generate("Test", model="your-model-name")
        ```
-    2. List available models (if service supports):
+    2. List the models the server exposes:
        ```bash
-       curl http://your-service:port/v1/models
+       curl http://your-lemonade-server:port/api/v1/models
        ```
-    3. Ensure model is loaded in your service before connecting
+    3. Use the exact model ID from that catalog
   </Accordion>
 
   <Accordion title="Streaming Issues" icon="signal-stream">
     **Problem:** Streaming responses not working
 
     **Solutions:**
-    1. Verify service supports Server-Sent Events (SSE)
+    1. Verify the server supports Server-Sent Events (SSE)
     2. Check Content-Type headers: `text/event-stream`
     3. Test non-streaming first:
        ```python
@@ -1318,7 +1260,7 @@ Add to LLM Section:
 
 **Features:**
 - Factory-based client creation with `create_client()`
-- Three providers: Lemonade (local), OpenAI, Claude
+- Two providers: Lemonade (local), Claude
 - Abstract base class for type safety
 - `NotSupportedError` for unsupported features
 - Streaming and non-streaming generation

@@ -247,6 +247,7 @@ jobs:
           restore-keys: fetchcontent-integration-windows-
 
       - name: Configure and build integration tests
+        id: cpp_configure_build
         shell: powershell
         run: |
           # Auto-detect generator: MinGW Makefiles when using w64devkit
@@ -265,6 +266,48 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
           cmake --build cpp/build-integration --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
+
+      # CMake reports a try_compile that could not start its build program as a
+      # bare "unknown error", which reads as a broken compiler and sends people
+      # debugging their PR instead of the machine (issue #4113). Name the runner
+      # and re-launch each toolchain binary so the log says which one failed.
+      - name: Attribute a C++ toolchain failure
+        if: failure() && steps.cpp_configure_build.outcome == 'failure'
+        shell: powershell
+        run: |
+          Write-Host "Runner: $env:RUNNER_NAME"
+          foreach ($name in @('cc.exe', 'g++.exe', 'mingw32-make.exe')) {
+              $cmd = Get-Command $name -ErrorAction SilentlyContinue
+              if (-not $cmd) { Write-Host "$name : NOT ON PATH"; continue }
+              $prev = $ErrorActionPreference
+              $ErrorActionPreference = 'Continue'
+              try {
+                  # Drain the pipeline before trimming: Select-Object -First on a
+                  # native command stops it mid-write and masks the real exit code.
+                  $raw = & $cmd.Source --version 2>&1
+                  $code = $LASTEXITCODE
+                  $out = (($raw | Out-String) -split "`r?`n")[0]
+              } catch {
+                  $out = $_.Exception.Message
+                  $code = -1
+              } finally {
+                  $ErrorActionPreference = $prev
+              }
+              if ($code -eq 0) {
+                  Write-Host "$name : launched OK -- $out"
+              } else {
+                  Write-Host "$name : COULD NOT LAUNCH (exit $code) from $($cmd.Source) -- $out"
+                  Write-Host "  The file is on PATH but will not execute. This runner is blocking it"
+                  Write-Host "  (same pattern as amd/gaia#2826); the failure is the machine, not this PR."
+              }
+          }
+          foreach ($log in @('CMakeError.log', 'CMakeOutput.log')) {
+              $path = "cpp/build-integration/CMakeFiles/$log"
+              if (Test-Path -LiteralPath $path) {
+                  Write-Host "`n===== $log (last 60 lines) ====="
+                  Get-Content -LiteralPath $path -Tail 60
+              }
+          }
 
       - name: Probe windows-mcp availability
         id: uvx_check

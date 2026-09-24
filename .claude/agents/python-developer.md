@@ -152,7 +152,7 @@ python -m pytest tests/ -xvs
 - File-tools mixin: `src/gaia/agents/tools/file_tools.py`
 - AgentSDK: `src/gaia/chat/sdk.py`
 - Lemonade client: `src/gaia/llm/lemonade_client.py`
-- Provider adapters: `src/gaia/llm/providers/{claude.py,openai_provider.py,lemonade.py}`
+- Provider adapters: `src/gaia/llm/providers/{claude.py,lemonade.py}`
 - Registry + `KNOWN_TOOLS`: `src/gaia/agents/registry.py`
 
 ## Common pitfalls

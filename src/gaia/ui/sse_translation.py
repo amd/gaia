@@ -391,6 +391,8 @@ class CanonicalTranslator:
             ("tokens", "tokens"),
             ("ttft", "ttft"),
             ("tok_per_s", "tok_per_s"),
+            ("input_tokens", "input_tokens"),
+            ("cached_tokens", "cached_tokens"),
             # Dev-mode per-turn record, passed through verbatim — the client
             # decides what of it to show, so a new field needs no change here.
             ("metrics", "metrics"),
