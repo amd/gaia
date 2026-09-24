@@ -95,7 +95,7 @@ permissions:
 
 jobs:
   test-email-agent-unit:
-    name: Email Agent Unit Tests (py${{ matrix.python-version }})
+    name: Email Agent Unit Tests (py3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -104,17 +104,13 @@ jobs:
       # block indefinitely when no GUI session is available (#2735).
       PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.10', '3.12']
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.12'
 
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh

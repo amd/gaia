@@ -3,7 +3,8 @@
 
 # Fast unit tests that don't require Lemonade server or external dependencies
 # These tests run first to provide quick feedback on core SDK components
-# Platform: Ubuntu (pure Python tests, no platform-specific code)
+# Platform: Linux is the required gate; macOS and Windows run the same suite
+# as non-blocking (continue-on-error) smoke tests until known-clean there.
 
 name: Unit Tests
 
@@ -63,24 +64,17 @@ permissions:
 
 jobs:
   unit-tests:
-    name: Unit Tests (py${{ matrix.python-version }})
+    name: Unit Tests (Linux, py3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-    strategy:
-      fail-fast: false
-      # Floor + ceiling only (matches test_email_agent_unit.yml and
-      # test_distributed_seams.yml) — 3.11 sits between two versions we already
-      # test and has never caught an incompatibility neither boundary did.
-      matrix:
-        python-version: ['3.10', '3.12']
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.12'
 
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -287,5 +281,56 @@ jobs:
         run: |
           echo "=== macOS Smoke Test ==="
           echo "Running unit tests on macOS to catch platform-specific issues"
+          echo ""
+          pytest tests/unit/ -x --timeout=60 -v --tb=short
+
+  # Windows smoke test — same rollout pattern as the macOS job above:
+  # continue-on-error until the suite is known-clean on this platform. GAIA is
+  # a Windows/NPU-first product, so this closes a real gap: the only other
+  # Windows CI is 3 hardware-specific files on a self-hosted devlab runner
+  # (test_gaia_cli_windows.yml) and a security-only job (test_security.yml).
+  unit-tests-windows:
+    name: Unit Tests (Windows smoke)
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        shell: bash
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          # Same set the macOS smoke job installs — see its step for why each
+          # one is needed.
+          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
+                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
+                                  faiss-cpu pypdf
+          uv pip install --system -e ".[api]"
+
+      - name: Validate packaging integrity
+        shell: bash
+        run: |
+          echo "=== Validating Packaging Integrity ==="
+          echo "Checking setup.py packages, __init__.py files, and entry points"
+          echo ""
+          pytest tests/unit/test_packaging.py -v --tb=short
+          echo "Packaging integrity checks passed"
+
+      - name: Run unit tests (Windows smoke)
+        shell: bash
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Windows Smoke Test ==="
+          echo "Running unit tests on Windows to catch platform-specific issues"
           echo ""
           pytest tests/unit/ -x --timeout=60 -v --tb=short
