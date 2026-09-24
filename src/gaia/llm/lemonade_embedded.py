@@ -7,9 +7,9 @@ Upstream ships an "embeddable" Lemonade build: a ``lemond`` daemon plus a
 state. This module downloads that artifact, unpacks it under ``~/.gaia``, and
 runs it on a private port behind a generated API key.
 
-The point is a GAIA that carries its own inference server. The system-wide
-Lemonade install keeps working and stays the fallback -- see
-``gaia.llm.lemonade_launcher`` for that path.
+The point is a GAIA that carries its own inference server: ``gaia init``
+installs and starts this one, and a system-wide Lemonade install is never
+used unless ``LEMONADE_BASE_URL`` points at it.
 
 Layout under ``$GAIA_HOME/lemonade`` (``~/.gaia/lemonade`` by default)::
 
@@ -161,8 +161,9 @@ def _normalized_machine() -> str:
     if normalized is None:
         raise UnsupportedPlatformError(
             f"Unsupported CPU architecture '{platform.machine()}' for embedded "
-            f"Lemonade. Install Lemonade Server system-wide instead ("
-            f"`gaia init`), or see {RELEASES_PAGE} for the published assets."
+            f"Lemonade. Run Lemonade Server on a supported machine and set "
+            f"LEMONADE_BASE_URL to it, or see {RELEASES_PAGE} for the published "
+            f"assets."
         )
     return normalized
 
@@ -185,8 +186,8 @@ def asset_name(version: str = LEMONADE_VERSION) -> str:
         supported = ", ".join(f"{s}/{m}" for s, m in sorted(_ASSET_TEMPLATES))
         raise UnsupportedPlatformError(
             f"Embedded Lemonade is not published for {key[0]}/{key[1]}. "
-            f"Supported: {supported}. Install Lemonade Server system-wide "
-            f"instead (`gaia init`), or check {RELEASES_PAGE}."
+            f"Supported: {supported}. Run Lemonade Server on a supported "
+            f"machine and set LEMONADE_BASE_URL to it, or check {RELEASES_PAGE}."
         )
     return template.format(version=version)
 

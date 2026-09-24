@@ -5,11 +5,10 @@
 GAIA Init Command
 
 Main entry point for `gaia init` command that:
-1. Checks if Lemonade Server is installed and version matches
-2. Downloads and installs Lemonade from GitHub releases if needed
-3. Starts Lemonade server
-4. Downloads required models for the selected profile
-5. Verifies setup is working
+1. Installs and starts GAIA's embedded Lemonade Server (or checks the one
+   LEMONADE_BASE_URL names)
+2. Downloads required models for the selected profile
+3. Verifies setup is working
 """
 
 import importlib.util
@@ -34,14 +33,7 @@ except ImportError:
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import source_install_command
 from gaia.installer._stdin import stdin_is_tty
-from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
-from gaia.llm.lemonade_launcher import (
-    build_start_command,
-    describe_start_hint,
-    resolve_lemonade,
-)
 from gaia.ui.build import WebuiBuildStatus
-from gaia.version import LEMONADE_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -216,8 +208,8 @@ def check_setup_status(
     """Check whether `gaia init --profile <profile>` still has work to do.
 
     Read-only: never installs, starts a server, prompts, or downloads
-    anything. Checks the SAME real state `run()` itself acts on (Lemonade
-    installed + reachable, required models present) so this can never
+    anything. Checks the SAME real state `run()` itself acts on (GAIA's
+    Lemonade Server installed + running, required models present) so this can never
     disagree with what `gaia init` would actually do — the alternative, a
     marker file recording "setup ran once", goes stale the moment a model is
     deleted or Lemonade is uninstalled without GAIA's knowledge.
@@ -226,8 +218,8 @@ def check_setup_status(
         profile: Profile to check (gaia, minimal, chat, rag, all, ...)
         skip_chat_model: Match run()'s --skip-chat-model filtering (Claude
             backend): only the profile's embedding model(s) are required.
-        remote: Lemonade is expected on a remote machine (skip local-install
-            reasoning; a probe failure just means "not reachable").
+        remote: Check the server LEMONADE_BASE_URL names, which must be set.
+            A configured URL is checked the same way without it.
 
     Returns:
         SetupStatus with ready=True iff nothing below would need to run.
@@ -237,33 +229,61 @@ def check_setup_status(
         valid = ", ".join(INIT_PROFILES.keys())
         raise ValueError(f"Invalid profile '{profile}'. Valid profiles: {valid}")
 
-    from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL, LemonadeClient
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        resolve_lemonade_base_url,
+    )
 
     profile_config = INIT_PROFILES[profile]
-    base_url = os.environ.get("LEMONADE_BASE_URL") or DEFAULT_LEMONADE_URL
-    client = LemonadeClient(verbose=False)
+    configured = os.environ.get("LEMONADE_BASE_URL", "").strip()
+    if remote and not configured:
+        raise ValueError("--remote needs LEMONADE_BASE_URL set to the server to check.")
 
-    server_reachable = False
-    try:
-        server_reachable = bool(client.health_check())
-    except Exception as e:
-        log.debug("check_setup_status: health probe failed: %s", e)
+    if configured:
+        base_url = resolve_lemonade_base_url(configured)
+    else:
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-    if not server_reachable:
-        if remote:
+        embedded = EmbeddedLemonade()
+        status = embedded.status()
+        # Model availability can't be probed without a running server, so a
+        # stopped one is the only thing this check can report.
+        if status.unresponsive_pid:
             return SetupStatus(
                 ready=False,
-                reasons=[f"Remote Lemonade Server at {base_url} is not reachable"],
+                reasons=[
+                    f"GAIA's Lemonade Server (pid {status.unresponsive_pid}) "
+                    "is running but not answering"
+                ],
             )
-        installer = LemonadeInstaller(target_version=LEMONADE_VERSION)
-        info = installer.check_installation()
-        if not (info.installed and info.version):
-            reason = "Lemonade Server is not installed"
-        else:
-            reason = f"Lemonade Server v{info.version} is installed but not running"
-        # Model availability can't be probed without a reachable server, so
-        # there is nothing more this check can say.
-        return SetupStatus(ready=False, reasons=[reason])
+        if not status.installed:
+            return SetupStatus(
+                ready=False, reasons=["GAIA's Lemonade Server is not installed"]
+            )
+        if not status.running:
+            return SetupStatus(
+                ready=False,
+                reasons=["GAIA's Lemonade Server is installed but not running"],
+            )
+        if status.version != embedded.version:
+            return SetupStatus(
+                ready=False,
+                reasons=[
+                    f"GAIA's Lemonade Server is v{status.version}; this GAIA "
+                    f"needs v{embedded.version}"
+                ],
+            )
+        base_url = status.base_url
+
+    client = LemonadeClient(base_url=base_url, verbose=False)
+    try:
+        client.health_check()
+    except LemonadeClientError as e:
+        return SetupStatus(
+            ready=False,
+            reasons=[f"Lemonade Server at {base_url} is not reachable: {e}"],
+        )
 
     if profile_config["models"]:
         model_ids = list(profile_config["models"])
@@ -283,9 +303,9 @@ def check_setup_status(
     for model_id in model_ids:
         try:
             available = client.check_model_available(model_id)
-        except Exception as e:
-            log.debug("check_setup_status: model probe failed for %s: %s", model_id, e)
-            available = False
+        except LemonadeClientError as e:
+            reasons.append(f"Could not check model '{model_id}': {e}")
+            continue
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
@@ -297,10 +317,9 @@ class InitCommand:
     Main handler for the `gaia init` command.
 
     Orchestrates the full initialization workflow:
-    1. Check/install Lemonade Server
-    2. Start server if needed
-    3. Download models for profile
-    4. Verify setup
+    1. Install and start GAIA's embedded Lemonade Server
+    2. Download models for profile
+    3. Verify setup
     """
 
     # Per-model context verification state, set dynamically during model
@@ -313,7 +332,6 @@ class InitCommand:
         self,
         profile: str = DEFAULT_INIT_PROFILE,
         skip_models: bool = False,
-        skip_lemonade: bool = False,
         force_reinstall: bool = False,
         force_models: bool = False,
         yes: bool = False,
@@ -329,12 +347,12 @@ class InitCommand:
         Args:
             profile: Profile to initialize (minimal, chat, rag, all)
             skip_models: Skip model downloads
-            skip_lemonade: Skip Lemonade installation check (for CI)
-            force_reinstall: Force reinstall even if compatible version exists
+            force_reinstall: Reinstall GAIA's embedded Lemonade Server
             force_models: Force re-download models even if already available
             yes: Skip confirmation prompts
             verbose: Enable verbose output
-            remote: Lemonade is on a remote machine (skip local start, still check version)
+            remote: Use the Lemonade Server LEMONADE_BASE_URL names instead
+                of GAIA's own; set automatically for a non-local URL
             skip_webui_build: Skip the Agent UI frontend build step entirely
                 (same-day escape hatch if the Node preflight ever false-positives;
                 same effect as setting GAIA_SKIP_WEBUI_BUILD)
@@ -349,7 +367,6 @@ class InitCommand:
         """
         self.profile = profile.lower()
         self.skip_models = skip_models
-        self.skip_lemonade = skip_lemonade
         self.skip_webui_build = skip_webui_build
         self.force_reinstall = force_reinstall
         self.force_models = force_models
@@ -359,18 +376,22 @@ class InitCommand:
         self.skip_chat_model = skip_chat_model
         self.progress_callback = progress_callback
 
-        # Auto-detect remote mode from LEMONADE_BASE_URL environment variable
-        self._lemonade_base_url = os.environ.get("LEMONADE_BASE_URL")
-        if self._lemonade_base_url is not None and not self.remote:
+        # A configured server is someone else's to run; init only checks it.
+        self._lemonade_base_url = (
+            os.environ.get("LEMONADE_BASE_URL", "").strip() or None
+        )
+        if self.remote and not self._lemonade_base_url:
+            raise ValueError(
+                "--remote needs LEMONADE_BASE_URL set to the server to use, e.g. "
+                "LEMONADE_BASE_URL=http://<host>:13305. Without it, drop --remote "
+                "and `gaia init` sets up GAIA's own Lemonade Server."
+            )
+        if self._lemonade_base_url:
             from urllib.parse import urlparse
 
-            parsed = urlparse(self._lemonade_base_url)
-            hostname = parsed.hostname or "localhost"
+            hostname = urlparse(self._lemonade_base_url).hostname or "localhost"
             if hostname not in ("localhost", "127.0.0.1", "::1"):
                 self.remote = True
-                log.info(
-                    f"Auto-detected remote mode from LEMONADE_BASE_URL={self._lemonade_base_url}"
-                )
 
         # Validate profile
         if self.profile not in INIT_PROFILES:
@@ -382,17 +403,6 @@ class InitCommand:
 
         # Initialize AgentConsole for formatted output
         self.agent_console = AgentConsole()
-
-        # Use minimal installer for minimal profile OR when using --yes (silent mode)
-        # Minimal installer is faster and more reliable for CI
-        use_minimal = self.profile == "minimal" or yes
-
-        self.installer = LemonadeInstaller(
-            target_version=LEMONADE_VERSION,
-            progress_callback=self._download_progress if verbose else None,
-            minimal=use_minimal,
-            console=self.console,
-        )
 
         # Context verification state. _ctx_verified is set per-model during
         # verification (only for LLM models with a min context size); its
@@ -492,56 +502,6 @@ class InitCommand:
         except EOFError:
             self._print("")
             return False
-
-    def _refresh_path_environment(self):
-        """
-        Refresh PATH environment variable from Windows registry.
-
-        This allows the current Python process to find executables
-        that were just installed by MSI, without requiring a terminal restart.
-        """
-        if sys.platform != "win32":
-            # On Linux, standard paths (/usr/bin, /usr/local/bin) are already in PATH
-            return
-
-        try:
-            import winreg
-
-            # Read user PATH from registry
-            user_path = ""
-            try:
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
-                    user_path, _ = winreg.QueryValueEx(key, "Path")
-            except (FileNotFoundError, OSError):
-                pass
-
-            # Read system PATH from registry
-            system_path = ""
-            try:
-                with winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE,
-                    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-                ) as key:
-                    system_path, _ = winreg.QueryValueEx(key, "Path")
-            except (FileNotFoundError, OSError):
-                pass
-
-            # Merge registry paths with current PATH (don't replace entirely)
-            if user_path or system_path:
-                current_path = os.environ.get("PATH", "")
-                registry_path = (
-                    f"{user_path};{system_path}"
-                    if user_path and system_path
-                    else (user_path or system_path)
-                )
-                # Expand environment variables like %SystemRoot%, %USERPROFILE%, etc.
-                registry_path = os.path.expandvars(registry_path)
-                # Prepend registry paths to preserve current session paths
-                os.environ["PATH"] = f"{registry_path};{current_path}"
-                log.debug("Merged and expanded registry PATH with current environment")
-
-        except Exception as e:
-            log.debug(f"Failed to refresh PATH: {e}")
 
     def _download_progress(self, downloaded: int, total: int):
         """Callback for download progress."""
@@ -657,11 +617,7 @@ class InitCommand:
                 f"Error: refusing to run 'gaia init --profile {self.profile}' "
                 "non-interactively without --yes.\n"
                 "Pass --yes to auto-confirm setup prompts (add --skip-models "
-                "to also skip downloading models).\n"
-                "Note: --yes also authorizes an unattended Lemonade upgrade, "
-                "which uninstalls the current Lemonade install before "
-                "reinstalling, if the detected version is below this "
-                "profile's minimum.",
+                "to also skip downloading models).",
                 file=sys.stderr,
             )
             return 1
@@ -685,7 +641,7 @@ class InitCommand:
         has_device_check = bool(profile_config.get("required_device"))
         has_backend_install = bool(profile_config.get("backend"))
 
-        total_steps = 4 if not self.skip_models else 3
+        total_steps = 3 if not self.skip_models else 2
         if has_device_check:
             total_steps += 1
         if has_backend_install:
@@ -698,39 +654,9 @@ class InitCommand:
             total_steps += 1
 
         try:
-            # Step 1: Check/Install Lemonade (skip for remote servers or CI)
-            if self.remote:
-                self._print_step(1, total_steps, "Checking remote Lemonade Server...")
-                if self._lemonade_base_url:
-                    self._print_success(
-                        f"Using remote Lemonade Server at {self._lemonade_base_url}"
-                    )
-                else:
-                    self._print_success("Using remote Lemonade Server")
-            elif self.skip_lemonade:
-                self._print_step(
-                    1, total_steps, "Skipping Lemonade installation check..."
-                )
-                # Still show version info for transparency
-                info = self.installer.check_installation()
-                if info.installed and info.version:
-                    self._print_success(
-                        f"Using pre-installed Lemonade Server v{info.version}"
-                    )
-                else:
-                    self._print_success("Using pre-installed Lemonade Server")
-            else:
-                self._print_step(
-                    1, total_steps, "Checking Lemonade Server installation..."
-                )
-                if not self._ensure_lemonade_installed():
-                    return 1
-
-            # Step 2: Check server
-            step_num = 2
-            self._print("")
-            self._print_step(step_num, total_steps, "Checking Lemonade Server...")
-            if not self._ensure_server_running():
+            step_num = 1
+            self._print_step(step_num, total_steps, "Starting Lemonade Server...")
+            if not self._ensure_lemonade_ready():
                 return 1
 
             # NPU-specific: Detect hardware
@@ -882,670 +808,113 @@ class InitCommand:
                 traceback.print_exc()
             return 1
 
-    def _ensure_lemonade_installed(self) -> bool:
-        """
-        Check Lemonade installation and install if needed.
+    def _ensure_lemonade_ready(self) -> bool:
+        """Get a Lemonade Server answering: the configured one, or GAIA's own.
+
+        ``LEMONADE_BASE_URL`` names a server someone else runs, so init only
+        checks it. Otherwise init installs and starts GAIA's embedded Lemonade,
+        which needs no admin rights and never touches a system-wide install.
 
         Returns:
-            True if Lemonade is ready, False on failure
+            True when a server is up, False after printing why it is not.
         """
-        # Check platform support
-        if not self.installer.is_platform_supported():
-            platform_name = self.installer.get_platform_name()
+        if self._lemonade_base_url:
+            return self._check_configured_server()
+        return self._start_embedded_server()
+
+    def _check_configured_server(self) -> bool:
+        """Check the server ``LEMONADE_BASE_URL`` names: reachable and new enough."""
+        from gaia.agents.base.readiness import version_meets_min
+        from gaia.llm.lemonade_client import (
+            LemonadeClient,
+            LemonadeClientError,
+            resolve_lemonade_base_url,
+        )
+
+        url = resolve_lemonade_base_url(self._lemonade_base_url)
+        try:
+            health = LemonadeClient(base_url=url, verbose=self.verbose).health_check()
+        except LemonadeClientError as e:
+            self._print_error(f"Lemonade Server at {url} is not reachable: {e}")
+            self._print(
+                "   Start that server, or unset LEMONADE_BASE_URL so `gaia init` "
+                "sets up GAIA's own."
+            )
+            return False
+
+        version = health.get("version") if isinstance(health, dict) else None
+        minimum = INIT_PROFILES[self.profile].get("min_lemonade_version")
+        if version_meets_min(version, minimum) is False:
             self._print_error(
-                f"Platform '{platform_name}' is not supported for automatic installation."
+                f"Lemonade Server at {url} is v{version}; the '{self.profile}' "
+                f"profile needs v{minimum} or newer."
             )
-            self._print("   GAIA init only supports Windows, Linux, and macOS.")
             self._print(
-                "   Please install Lemonade Server manually from: https://www.lemonade-server.ai"
+                "   Upgrade that server, or unset LEMONADE_BASE_URL so `gaia init` "
+                "sets up GAIA's own."
             )
             return False
 
-        # First, try probing any configured LEMONADE_BASE_URL (or localhost
-        # at the default port) to detect a running server even when the
-        # lemonade-server binary isn't visible to this process (for example
-        # when running from an AppImage that strips PATH). If a healthy
-        # server responds we treat it as present and skip installation.
-        try:
-            from gaia.llm.lemonade_client import (
-                DEFAULT_LEMONADE_URL,
-                LemonadeClient,
-                LemonadeClientError,
-            )
+        label = f"Lemonade Server v{version}" if version else "Lemonade Server"
+        self._print_success(f"Using {label} at {url}")
+        return True
 
-            prev_env = os.environ.get("LEMONADE_BASE_URL")
-            try:
-                # Prefer explicit env var provided by the user/session
-                probe_urls = []
-                if self._lemonade_base_url:
-                    probe_urls.append(self._lemonade_base_url)
+    def _start_embedded_server(self) -> bool:
+        """Install GAIA's embedded Lemonade if needed, then start it.
 
-                # Also probe the well-known local URL used by Lemonade (use
-                # client constant so tests and future port changes remain in
-                # sync with Lemonade defaults). Avoid duplicate probes.
-                if DEFAULT_LEMONADE_URL not in probe_urls:
-                    probe_urls.append(DEFAULT_LEMONADE_URL)
-
-                for url in probe_urls:
-                    try:
-                        os.environ["LEMONADE_BASE_URL"] = url
-                        client = LemonadeClient(verbose=self.verbose)
-                        # Use a short timeout for probes to avoid hanging the init
-                        # process on poorly responsive networks or captive portals.
-                        try:
-                            health = client._send_request(
-                                "get", f"{client.base_url}/health", timeout=5
-                            )
-                        except TypeError:
-                            # Fall back to health_check() if _send_request signature
-                            # differs; keep health_check as a last resort.
-                            health = client.health_check()
-
-                        if health:
-                            # Good enough to consider Lemonade present
-                            self._print_success(f"Using Lemonade Server at {url}")
-                            # Restore prior env and continue (server is reachable)
-                            return True
-                    except (
-                        OSError,
-                        ConnectionError,
-                        TimeoutError,
-                        LemonadeClientError,
-                    ) as e:
-                        # Network-level probe failures are expected; log and continue
-                        log.debug("Probe failed for %s: %s", url, e)
-                        continue
-            finally:
-                # Restore original environment variable if present
-                if prev_env is None:
-                    os.environ.pop("LEMONADE_BASE_URL", None)
-                else:
-                    os.environ["LEMONADE_BASE_URL"] = prev_env
-        except Exception as e:
-            # Import errors or client failures should not block install flow,
-            # but include exception text to aid debugging per 'fail loud' rule.
-            log.debug("Could not probe LEMONADE_BASE_URL for existing server: %s", e)
-
-        info = self.installer.check_installation()
-
-        if info.installed and info.version:
-            self._print_success(f"Lemonade Server found: v{info.version}")
-            # Show the path where it was found (only in verbose mode)
-            if self.verbose and info.path:
-                self.console.print(f"   [dim]Path: {info.path}[/dim]")
-
-            # Check version match
-            if not self._check_version_compatibility(info):
-                return False
-
-            if self.force_reinstall:
-                self._print("   Force reinstall requested.")
-                return self._install_lemonade()
-
-            # Only print "compatible" for exact match; mismatch cases
-            # already print their own status in _check_version_compatibility
-            if info.version_tuple == self._parse_version(LEMONADE_VERSION):
-                self._print_success("Version is compatible")
-
-            return True
-
-        elif info.installed:
-            self._print_warning("Lemonade Server found but version unknown")
-            if info.error:
-                self._print(f"   Error: {info.error}")
-
-            if not self._prompt_yes_no(
-                f"Install/update Lemonade v{LEMONADE_VERSION}?", default=True
-            ):
-                self._print("")
-                self._print("   Skipping update. Will verify server connectivity.")
-                # Continue to next step - server health check will verify connectivity
-                return True
-
-            return self._install_lemonade()
-
-        else:
-            self._print("   Lemonade Server not found")
-            self._print("")
-
-            if not self._prompt_yes_no(
-                f"Install Lemonade v{LEMONADE_VERSION}?", default=True
-            ):
-                self._print("")
-                self._print("   Skipping local installation.")
-                self._print(
-                    "   To install manually, visit: https://www.lemonade-server.ai"
-                )
-                self._print(
-                    "   Or set LEMONADE_BASE_URL environment variable for a remote server."
-                )
-                # Continue to next step - server health check will verify connectivity
-                return True
-
-            return self._install_lemonade()
-
-    @staticmethod
-    def _parse_version(version: str) -> Optional[tuple]:
-        """Parse version string into tuple."""
-        try:
-            ver = version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
-            return None
-
-    def _check_version_compatibility(self, info: LemonadeInfo) -> bool:
+        Init is the recovery path, so it also replaces an instance running an
+        older version and one that stopped answering.
         """
-        Check if installed version is compatible and upgrade if needed.
+        from gaia.llm.lemonade_embedded import (
+            EmbeddedLemonade,
+            EmbeddedLemonadeError,
+        )
 
-        Version policy:
-        - Newer or equal version: always accepted (no downgrade prompt)
-        - Older version >= profile minimum: accepted with optional upgrade offer
-        - Older version < profile minimum: upgrade required
-
-        Args:
-            info: Lemonade installation info
-
-        Returns:
-            True if compatible or upgrade successful, False otherwise
-        """
-        current = info.version_tuple
-        target = self._parse_version(LEMONADE_VERSION)
-
-        if not current or not target:
-            log.warning(
-                f"Could not parse version(s) for comparison: "
-                f"installed={info.version!r}, expected={LEMONADE_VERSION!r}"
-            )
-            return True
-
-        current_ver = info.version
-        target_ver = LEMONADE_VERSION
-
-        # --- Newer or equal: always accept ---
-        if current >= target:
-            if current > target:
-                self._print_warning(
-                    f"Lemonade v{current_ver} is newer than expected v{target_ver}"
-                )
-                if RICH_AVAILABLE and self.console:
-                    self.console.print(
-                        "   [dim]This should work fine, but if you encounter issues, "
-                        f"consider installing v{target_ver}.[/dim]"
-                    )
-                else:
-                    self._print(
-                        "   This should work fine, but if you encounter issues, "
-                        f"consider installing v{target_ver}."
-                    )
-            return True
-
-        # --- Older version: check against profile minimum ---
-        profile_config = INIT_PROFILES[self.profile]
-        min_version_str = profile_config.get("min_lemonade_version", "9.0.0")
-        min_version = self._parse_version(min_version_str)
-
-        if min_version and current >= min_version:
-            # Older than target but meets profile minimum — acceptable
-            self._print("")
-            self._print_warning("Older version detected")
-            if RICH_AVAILABLE and self.console:
-                self.console.print(
-                    f"      [dim]Installed:[/dim] [yellow]v{current_ver}[/yellow]"
-                )
-                self.console.print(
-                    f"      [dim]Latest:[/dim]    [green]v{target_ver}[/green]"
-                )
-                self.console.print("")
-                self.console.print(
-                    f"   [dim]Meets minimum v{min_version_str} for profile '{self.profile}'.[/dim]"
-                )
-            else:
-                self._print(f"      Installed: v{current_ver}")
-                self._print(f"      Latest:    v{target_ver}")
-                self._print("")
+        embedded = EmbeddedLemonade(progress_callback=self._download_progress)
+        try:
+            current = embedded.status()
+            if current.unresponsive_pid:
                 self._print(
-                    f"   Meets minimum v{min_version_str} for profile '{self.profile}'."
+                    f"   Lemonade Server (pid {current.unresponsive_pid}) stopped "
+                    "answering -- restarting it..."
                 )
-            self._print("")
+                embedded.stop()
+            elif current.running and current.version != embedded.version:
+                self._print(
+                    f"   Replacing Lemonade Server v{current.version} with "
+                    f"v{embedded.version}..."
+                )
+                embedded.stop()
+            elif current.running and self.force_reinstall:
+                self._print("   Stopping Lemonade Server to reinstall it...")
+                embedded.stop()
 
-            # In CI mode, accept without prompting
-            if self.yes and not self.force_reinstall:
+            if self.force_reinstall or not embedded.is_installed():
+                self._print(f"   Downloading Lemonade Server v{embedded.version}...")
+                embedded.install(force=self.force_reinstall)
+                self._print("")
                 self._print_success(
-                    f"Version v{current_ver} is sufficient for profile '{self.profile}'"
+                    f"Installed Lemonade Server v{embedded.version} "
+                    f"in {embedded.dist_dir}"
                 )
-                return True
 
-            # In interactive mode, offer optional upgrade (default: no)
-            if not self._prompt_yes_no(
-                f"Upgrade to v{target_ver}?",
-                default=False,
-            ):
-                self._print_success(f"Continuing with v{current_ver}")
-                return True
-
-            return self._upgrade_lemonade(current_ver)
-
-        # --- Below profile minimum: upgrade required ---
-        self._print("")
-        self._print_warning("Version too old for this profile!")
-        if RICH_AVAILABLE and self.console:
-            self.console.print(f"      [dim]Installed:[/dim] [red]v{current_ver}[/red]")
-            self.console.print(
-                f"      [dim]Required:[/dim]  [green]v{min_version_str}+[/green] [dim](profile: {self.profile})[/dim]"
-            )
-            self.console.print("")
-            self.console.print(
-                "   [dim]Some features may not work correctly with this version.[/dim]"
-            )
-        else:
-            self._print(f"      Installed: v{current_ver}")
-            self._print(
-                f"      Required:  v{min_version_str}+ (profile: {self.profile})"
-            )
-            self._print("")
-            self._print("   Some features may not work correctly with this version.")
-        self._print("")
-
-        # In CI mode, auto-upgrade
-        if self.yes and not self.force_reinstall:
-            if RICH_AVAILABLE and self.console:
-                self.console.print(
-                    f"   [bold cyan]Upgrading:[/bold cyan] v{current_ver} → v{target_ver}"
-                )
-            else:
-                self._print(f"   Upgrading from v{current_ver} to v{target_ver}...")
-            return self._upgrade_lemonade(current_ver)
-
-        # Prompt user to upgrade (default: yes, since it's required)
-        if not self._prompt_yes_no(
-            f"Upgrade to v{target_ver}? (will uninstall current version)",
-            default=True,
-        ):
-            self._print_warning("Continuing with current version (may not work)")
-            return True
-
-        return self._upgrade_lemonade(current_ver)
-
-    def _upgrade_lemonade(self, old_version: str) -> bool:
-        """
-        Uninstall old version and install the target version.
-
-        Args:
-            old_version: The currently installed version string
-
-        Returns:
-            True on success, False on failure
-        """
-        self._print("")
-
-        # macOS has no scripted uninstall, but `installer -pkg` upgrades in place —
-        # calling uninstall() would only print removal instructions the user
-        # doesn't need.
-        if self.installer.system == "darwin":
-            self._print(f"   Upgrading Lemonade v{old_version} in place...")
-            return self._install_lemonade()
-
-        if RICH_AVAILABLE and self.console:
-            self.console.print(
-                f"   [bold]Uninstalling[/bold] Lemonade [red]v{old_version}[/red]..."
-            )
-        else:
-            self._print(f"   Uninstalling Lemonade v{old_version}...")
-
-        # Uninstall old version
-        try:
-            result = self.installer.uninstall(silent=True)
-            if result.success:
-                self._print_success("Uninstalled old version")
-            else:
-                self._print_error(f"Failed to uninstall: {result.error}")
-                self._print_warning("Attempting to install new version anyway...")
-        except Exception as e:
-            self._print_error(f"Uninstall error: {e}")
-            self._print_warning("Attempting to install new version anyway...")
-
-        # Wait for MSI to fully release before installing new version
-        if not self.installer.wait_for_msi_mutex(timeout=30):
-            self._print_warning(
-                "Another MSI operation still running after 30s — proceeding anyway..."
-            )
-
-        # Install new version
-        return self._install_lemonade()
-
-    def _install_lemonade(self) -> bool:
-        """
-        Download and install Lemonade Server.
-
-        Returns:
-            True on success, False on failure
-        """
-        self._print("")
-
-        try:
-            if self.installer.system == "linux":
-                label = f"Adding Lemonade [cyan]v{LEMONADE_VERSION}[/cyan] PPA and installing..."
-                installer_path = None
-            else:
-                label = f"Downloading Lemonade [cyan]v{LEMONADE_VERSION}[/cyan]..."
-                installer_path = self.installer.download_installer()
-                self._print("")
-                self._print_success("Download complete")
-
-            if RICH_AVAILABLE and self.console:
-                self.console.print(f"   [bold]{label}[/bold]")
-            else:
-                import re as _re
-
-                plain_label = _re.sub(r"\[.*?\]", "", label)
-                self._print(f"   {plain_label}")
-
-            # macOS installs run headless via `installer -pkg`; only the MSI pops a window.
-            if (
-                installer_path is not None
-                and not self.yes
-                and self.installer.system == "windows"
-            ):
-                if RICH_AVAILABLE and self.console:
-                    self.console.print()
-                    self.console.print(
-                        "   [yellow]⚠️  The installer window will appear - please complete the installation[/yellow]"
-                    )
-                    self.console.print()
-                else:
-                    self._print(
-                        "   ⚠️  The installer window will appear - please complete the installation"
-                    )
-            result = self.installer.install(installer_path, silent=self.yes)
-
-            if result.success:
-                self._print_success(f"Installed Lemonade v{result.version}")
-
-                # Refresh PATH so current session can find lemonade-server
-                if self.verbose:
-                    self.console.print("   [dim]Refreshing PATH environment...[/dim]")
-                self._refresh_path_environment()
-
-                # Verify installation by checking version
-                if self.verbose:
-                    self.console.print("   [dim]Verifying installation...[/dim]")
-                verify_info = self.installer.check_installation()
-
-                if verify_info.installed and verify_info.version:
-                    self._print_success(
-                        f"Verified: lemonade-server v{verify_info.version}"
-                    )
-                    if self.verbose and verify_info.path:
-                        self.console.print(f"   [dim]Path: {verify_info.path}[/dim]")
-
-                return True
-            else:
-                self._print_error(f"Installation failed: {result.error}")
-                self._print_install_fallback_help()
-                return False
-
-        except Exception as e:
-            self._print_error(f"Failed to install: {e}")
-            self._print_install_fallback_help()
+            status = embedded.start(install_if_missing=False)
+        except EmbeddedLemonadeError as e:
+            self._print_error(str(e))
             return False
 
-    def _print_install_fallback_help(self):
-        """Print manual install instructions when automatic installation fails."""
-        self._print("")
-        if RICH_AVAILABLE and self.console:
-            self.console.print(
-                "   [bold]Please install Lemonade Server manually:[/bold]"
-            )
-            self.console.print("   [cyan]https://lemonade-server.ai[/cyan]")
-            self.console.print("")
-            self.console.print(
-                "   [dim]After installing, re-run:[/dim] [cyan]gaia init[/cyan]"
-            )
-        else:
-            self._print("   Please install Lemonade Server manually:")
-            self._print("   https://lemonade-server.ai")
-            self._print("")
-            self._print("   After installing, re-run: gaia init")
+        self._print_success(
+            f"Lemonade Server v{status.version} running on port {status.port}"
+        )
+        return True
 
-    def _find_lemonade_server(self) -> Optional[str]:
-        """
-        Find the Lemonade server launcher executable (modern or legacy).
+    def _server_problem_hint(self) -> str:
+        """Where to look when the server misbehaves after it started."""
+        if self._lemonade_base_url:
+            return f"Check the Lemonade Server at {self._lemonade_base_url}."
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-        Retained as a compatibility surface only — no in-tree callers remain;
-        new code should call :func:`gaia.llm.lemonade_launcher.resolve_lemonade`.
-
-        Uses the installer's PATH refresh to pick up recent MSI changes,
-        then delegates detection to
-        :func:`gaia.llm.lemonade_launcher.resolve_lemonade` (which honors
-        the LEMONADE_SERVER_PATH override and finds modern installs at
-        their canonical path before falling back to the legacy CLI).
-
-        Returns:
-            Path to the server launcher, or None if not found
-        """
-        # Use installer's PATH refresh (reads from Windows registry)
-        self.installer.refresh_path_from_registry()
-
-        tooling = resolve_lemonade()
-        if tooling.found:
-            return tooling.server_launcher
-        return None
-
-    def _auto_start_server(self, client) -> bool:
-        """
-        Attempt to auto-start the Lemonade server and wait for it to be healthy.
-
-        Resolves the installed tooling via resolve_lemonade() — which honors
-        the LEMONADE_SERVER_PATH override set by CI — and launches it through
-        build_start_command(), so modern installs get
-        ``LemonadeServer.exe --silent`` + ``LEMONADE_CTX_SIZE`` env and legacy
-        installs keep the ``serve --ctx-size`` argv.
-
-        Args:
-            client: A LemonadeClient used for health polling.
-
-        Returns:
-            True if the server came up healthy within 30s, False otherwise.
-        """
-        try:
-            tooling = resolve_lemonade()
-            if not tooling.found:
-                raise FileNotFoundError(
-                    "Lemonade Server not found (no modern install at its "
-                    "canonical path, no lemonade-server in PATH)"
-                )
-
-            # Pass the profile's context size so the auto-started server
-            # comes up with GAIA's required context window (issue #839).
-            min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
-            if not min_ctx:
-                raise RuntimeError(
-                    f"Profile {self.profile!r} is missing 'min_context_size' "
-                    f"in INIT_PROFILES; cannot determine the context size for "
-                    f"the Lemonade server. Add the key to INIT_PROFILES "
-                    f"in src/gaia/installer/init_command.py."
-                )
-
-            spec = build_start_command(tooling, min_ctx)
-            log.info("Starting Lemonade Server: %s", " ".join(spec.argv))
-
-            popen_kwargs = {
-                "stdout": subprocess.DEVNULL,
-                "stderr": subprocess.DEVNULL,
-                # Merge — never replace — the parent environment; the child
-                # loses PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
-                "env": {**os.environ, **spec.env},
-            }
-            if sys.platform == "win32":
-                popen_kwargs["creationflags"] = (
-                    subprocess.CREATE_NO_WINDOW
-                    if hasattr(subprocess, "CREATE_NO_WINDOW")
-                    else 0
-                )
-            subprocess.Popen(spec.argv, **popen_kwargs)
-
-            # Wait for server to become healthy
-            import time
-
-            max_wait = 30
-            waited = 0
-            while waited < max_wait:
-                time.sleep(2)
-                waited += 2
-                try:
-                    health = client.health_check()
-                    if (
-                        health
-                        and isinstance(health, dict)
-                        and health.get("status") == "ok"
-                    ):
-                        self._print_success(
-                            f"Server started and ready (waited {waited}s)"
-                        )
-                        return True
-                except Exception as e:
-                    log.debug("Health poll not ready yet: %s", e)
-
-            self._print_error(f"Server failed to start after {max_wait}s")
-            return False
-
-        except Exception as e:
-            self._print_error(f"Failed to start server: {e}")
-            return False
-
-    def _ensure_server_running(self) -> bool:
-        """
-        Ensure Lemonade server is running with health check verification.
-
-        In remote mode, only checks if server is reachable - does not prompt
-        user to start it (assumes it's managed externally).
-
-        In local mode, auto-start is attempted FIRST in both CI (yes=True)
-        and interactive modes; the manual "Please start Lemonade Server"
-        prompt is reachable only when an interactive auto-start fails.
-
-        Returns:
-            True if server is running and healthy, False on failure
-        """
-        try:
-            # Import here to avoid circular imports
-            from gaia.llm.lemonade_client import LemonadeClient
-
-            client = LemonadeClient(verbose=self.verbose)
-
-            # Check if already running using health_check
-            try:
-                health = client.health_check()
-                if health:
-                    self._print_success("Server is already running")
-                    # Verify health status
-                    if isinstance(health, dict):
-                        status = health.get("status", "unknown")
-                        if status == "ok":
-                            self._print_success("Server health: OK")
-                        else:
-                            self._print_warning(f"Server status: {status}")
-                    return True
-            except Exception as e:
-                # Log the health check error for debugging
-                log.debug(f"Health check failed: {e}")
-                # Server not running
-
-            # In remote mode, don't prompt to start - just report error
-            if self.remote:
-                self._print_error("Remote Lemonade Server is not reachable")
-                self.console.print()
-                self.console.print(
-                    "   [dim]Ensure the remote Lemonade Server is running and accessible.[/dim]"
-                )
-                self.console.print(
-                    "   [dim]Check LEMONADE_BASE_URL environment variable if using a custom URL.[/dim]"
-                )
-                return False
-
-            # Server not running — auto-start FIRST in both CI and
-            # interactive modes (issue #316).
-            if self.yes:
-                # CI mode: auto-start is the only path; never prompts.
-                self._print("   Lemonade Server is not running")
-                self.console.print()
-                self.console.print(
-                    "   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]"
-                )
-                return self._auto_start_server(client)
-
-            # Interactive mode: try auto-start before ever prompting.
-            self._print("   Lemonade Server is not running — starting it...")
-            if self._auto_start_server(client):
-                return True
-
-            # Auto-start failed — the manual prompt below is the only
-            # remaining fall-through path (interactive mode only).
-            self._print_error("Could not start Lemonade Server automatically")
-            self.console.print()
-            self.console.print("   [bold]Please start Lemonade Server:[/bold]")
-            if sys.platform == "win32":
-                self.console.print(
-                    "   [dim]• Double-click the Lemonade icon in your system tray, or[/dim]"
-                )
-                self.console.print(
-                    "   [dim]• Search for 'Lemonade' in Start Menu and launch it[/dim]"
-                )
-            else:
-                # Give the user the exact start command for their tooling
-                min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
-                hint = describe_start_hint(min_ctx)
-                if hint.command:
-                    # We block on input() next — hand back the shell.
-                    cmd_str = f"{hint.command} &" if hint.foreground else hint.command
-                    self.console.print(f"   [dim]• Run:[/dim] [cyan]{cmd_str}[/cyan]")
-                    self.console.print(
-                        "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
-                    )
-                else:
-                    self.console.print(f"   [dim]• {hint.instruction}[/dim]")
-            self.console.print()
-
-            # Wait for user to start the server
-            try:
-                self.console.print(
-                    "   [bold]Press Enter when server is started...[/bold]", end=""
-                )
-                input()
-            except EOFError:
-                self.console.print()
-                self._print_error("Initialization cancelled")
-                return False
-
-            self.console.print()
-
-            # Check if server is now running
-            try:
-                health = client.health_check()
-                if health and isinstance(health, dict) and health.get("status") == "ok":
-                    self._print_success("Server is now running")
-                    self._print_success("Server health: OK")
-                    return True
-                else:
-                    self._print_error("Server still not responding")
-                    return False
-            except Exception:
-                self._print_error("Server still not responding")
-                return False
-
-        except ImportError as e:
-            self._print_error(f"Lemonade SDK not installed: {e}")
-            if RICH_AVAILABLE and self.console:
-                self.console.print(
-                    "   [dim]Run:[/dim] [cyan]pip install lemonade-sdk[/cyan]"
-                )
-            else:
-                self._print("   Run: pip install lemonade-sdk")
-            return False
-        except Exception as e:
-            self._print_error(f"Failed to check/start server: {e}")
-            return False
+        return f"Read {EmbeddedLemonade().log_path} for the server's own error."
 
     def _verify_model(self, client, model_id: str) -> tuple:
         """
@@ -1586,9 +955,9 @@ class InitCommand:
         if not required:
             return True
 
-        try:
-            from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
+        try:
             client = LemonadeClient(verbose=self.verbose)
             sysinfo = client.get_system_info()
             devices = sysinfo.get("devices", {})
@@ -1610,15 +979,9 @@ class InitCommand:
             )
             self._print_error("Run 'gaia init' for GPU-based setup instead.")
             return False
-        except ConnectionError as e:
-            self._print_error(f"Cannot reach Lemonade Server to detect hardware: {e}")
-            self._print_error(
-                f"Ensure Lemonade Server is running. {describe_start_hint().instruction}"
-            )
-            return False
-        except Exception as e:
-            self._print_error(f"Failed to detect hardware: {e}")
-            log.error("Hardware detection error", exc_info=True)
+        except LemonadeClientError as e:
+            self._print_error(f"Lemonade Server could not report the hardware: {e}")
+            self._print_error(self._server_problem_hint())
             return False
 
     def _install_backend(self) -> bool:
@@ -1635,9 +998,9 @@ class InitCommand:
         if not backend_spec:
             return True
 
-        try:
-            from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
+        try:
             client = LemonadeClient(verbose=self.verbose)
 
             # Check if already installed via recipe status
@@ -1659,9 +1022,9 @@ class InitCommand:
             self._print_success(f"Backend '{backend_spec}' installed")
             return True
 
-        except Exception as e:
+        except LemonadeClientError as e:
             self._print_error(f"Failed to install backend '{backend_spec}': {e}")
-            self._print_error(f"Try manually: lemonade backends install {backend_spec}")
+            self._print_error(self._server_problem_hint())
             return False
 
     def _download_models(self) -> bool:
@@ -1971,10 +1334,9 @@ class InitCommand:
                 if success:
                     self._print_success(f"Context size verified: {min_ctx} tokens")
                 else:
-                    self._print_error(f"Failed to configure {min_ctx} token context")
                     self._print_error(
-                        f"Restart Lemonade Server with a {min_ctx} token context. "
-                        f"{describe_start_hint(min_ctx).instruction}"
+                        f"Lemonade Server could not load a model with a {min_ctx} "
+                        f"token context. {self._server_problem_hint()}"
                     )
                     return False
 
@@ -2497,7 +1859,6 @@ class InitCommand:
 def run_init(
     profile: str = DEFAULT_INIT_PROFILE,
     skip_models: bool = False,
-    skip_lemonade: bool = False,
     force_reinstall: bool = False,
     force_models: bool = False,
     yes: bool = False,
@@ -2512,12 +1873,11 @@ def run_init(
     Args:
         profile: Profile to initialize (minimal, chat, rag, all)
         skip_models: Skip model downloads
-        skip_lemonade: Skip Lemonade installation check (for CI)
-        force_reinstall: Force reinstall even if compatible version exists
+        force_reinstall: Reinstall GAIA's embedded Lemonade Server
         force_models: Force re-download models (deletes then re-downloads)
         yes: Skip confirmation prompts
         verbose: Enable verbose output
-        remote: Lemonade is on a remote machine (skip local start, still check version)
+        remote: Use the Lemonade Server LEMONADE_BASE_URL names
         skip_webui_build: Skip the Agent UI frontend build step entirely
         skip_chat_model: Skip the profile's chat LLM, keep any embedding model
             (see InitCommand's docstring — for a Claude-backed session)
@@ -2529,7 +1889,6 @@ def run_init(
         cmd = InitCommand(
             profile=profile,
             skip_models=skip_models,
-            skip_lemonade=skip_lemonade,
             force_reinstall=force_reinstall,
             force_models=force_models,
             yes=yes,

@@ -3121,12 +3121,7 @@ Examples:
     init_parser.add_argument(
         "--skip-models",
         action="store_true",
-        help="Skip model downloads (only install Lemonade)",
-    )
-    init_parser.add_argument(
-        "--skip-lemonade",
-        action="store_true",
-        help="Skip Lemonade installation check (for CI with pre-installed Lemonade)",
+        help="Skip model downloads (only set up Lemonade Server)",
     )
     init_parser.add_argument(
         "--skip-webui-build",
@@ -3136,7 +3131,7 @@ Examples:
     init_parser.add_argument(
         "--force-reinstall",
         action="store_true",
-        help="Force reinstall even if compatible version exists",
+        help="Reinstall GAIA's embedded Lemonade Server",
     )
     init_parser.add_argument(
         "--force-models",
@@ -3157,7 +3152,9 @@ Examples:
     init_parser.add_argument(
         "--remote",
         action="store_true",
-        help="Use remote Lemonade Server (skip local install/start; downloads models via API). Auto-detected when LEMONADE_BASE_URL points to a non-localhost URL.",
+        help="Use the Lemonade Server LEMONADE_BASE_URL names instead of GAIA's "
+        "own (checks it; downloads models via its API). Implied by a non-localhost "
+        "LEMONADE_BASE_URL.",
     )
     init_parser.add_argument(
         "--skip-chat-model",
@@ -4679,7 +4676,6 @@ Let me know your answer!
         exit_code = run_init(
             profile=profile,
             skip_models=args.skip_models,
-            skip_lemonade=getattr(args, "skip_lemonade", False),
             force_reinstall=args.force_reinstall,
             force_models=args.force_models,
             yes=args.yes,

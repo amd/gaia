@@ -71,14 +71,14 @@ class TestAssetResolution:
         with pytest.raises(UnsupportedPlatformError) as exc:
             asset_name()
         assert "riscv64" in str(exc.value)
-        assert "gaia init" in str(exc.value)
+        assert "LEMONADE_BASE_URL" in str(exc.value)
 
     def test_unpublished_os_arch_pair_names_the_remedy(self, monkeypatch):
         # macOS x86_64: the architecture is known, but no asset is published.
         _fake_platform(monkeypatch, "Darwin", "x86_64")
         with pytest.raises(UnsupportedPlatformError) as exc:
             asset_name()
-        assert "gaia init" in str(exc.value)
+        assert "LEMONADE_BASE_URL" in str(exc.value)
 
 
 class TestChecksumPinning:

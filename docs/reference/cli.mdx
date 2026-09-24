@@ -188,14 +188,13 @@ gaia init [OPTIONS]
 |--------|------|---------|-------------|
 | `--profile, -p` | string | gaia | Profile to initialize (gaia, minimal, sd, chat, rag, mcp, vlm, email, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
-| `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
-| `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
+| `--skip-models` | flag | false | Skip model downloads (only set up Lemonade Server) |
 | `--skip-webui-build` | flag | false | Skip building the Agent UI frontend (dev/source installs only; same effect as setting `GAIA_SKIP_WEBUI_BUILD`) |
-| `--force-reinstall` | flag | false | Force reinstall even if compatible version exists |
+| `--force-reinstall` | flag | false | Reinstall GAIA's own Lemonade Server |
 | `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |
 | `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
 | `--verbose` | flag | false | Enable verbose output |
-| `--remote` | flag | false | Use remote Lemonade Server (skip local install/start, download models via API). Auto-detected when `LEMONADE_BASE_URL` is set to a non-localhost URL. |
+| `--remote` | flag | false | Use the Lemonade Server `LEMONADE_BASE_URL` names instead of GAIA's own (checks it, downloads models via its API). Requires `LEMONADE_BASE_URL`; implied when it is a non-localhost URL. |
 | `--skip-chat-model` | flag | false | Skip the profile's chat LLM but still install Lemonade and any embedding model the profile needs — for a session backed by a remote LLM (e.g. the Go TUI's `--use-claude`) that never calls the local chat model but still needs Lemonade for RAG/memory embeddings |
 | `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download, no side effects. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 
@@ -259,15 +258,11 @@ gaia init --profile vlm
 gaia init --yes
 ```
 
-```bash Remote Lemonade Server
-gaia init --remote
-```
-
-```bash Remote via Environment Variable
+```bash Use Another Lemonade Server
 LEMONADE_BASE_URL=http://192.168.1.100:13305/api/v1 gaia init
 ```
 
-```bash Force Reinstall Lemonade
+```bash Reinstall GAIA's Lemonade Server
 gaia init --force-reinstall
 ```
 
@@ -278,43 +273,37 @@ gaia init --force-models
 
 **What It Does:**
 
-GAIA works with Lemonade Server in two modes:
-
-- **Local** — Lemonade runs on the same machine (default)
-- **Remote** — Lemonade runs on another machine; enable with `--remote` or by setting `LEMONADE_BASE_URL`
+GAIA runs its own Lemonade Server: a private copy under `~/.gaia/lemonade`, on a
+port only GAIA uses, behind a generated API key. It needs no admin rights and
+never touches a Lemonade app you installed yourself.
 
 <Tabs>
-  <Tab title="Local Mode">
-    1. **Checks Lemonade Server** - Detects if installed and verifies version compatibility
-    2. **Installs/Upgrades Lemonade** - Downloads and installs from GitHub releases (Windows/Linux only). Automatically uninstalls old version if version mismatch detected.
-    3. **Starts Server** - Ensures Lemonade server is running, prompts to start if not
-    4. **Downloads Models** - Pulls required models for the selected profile
-    5. **Verifies Setup** - Tests each model with inference to detect corrupted downloads
+  <Tab title="GAIA's own server (default)">
+    1. **Starts Lemonade Server** — downloads GAIA's copy on first run (checksum-verified), then starts it. Re-running replaces an older copy or one that stopped answering.
+    2. **Downloads Models** — pulls the models for the selected profile (the NPU profile also installs the FLM backend)
+    3. **Verifies Setup** — tests each model with inference to detect corrupted downloads
   </Tab>
-  <Tab title="Remote Mode">
-    Enable with `--remote`, or set `LEMONADE_BASE_URL` to a remote URL
-    (e.g., `http://192.168.1.100:13305/api/v1`). The environment variable auto-detects
-    remote mode when the hostname is not localhost/127.0.0.1/::1.
+  <Tab title="Another Lemonade Server">
+    Set `LEMONADE_BASE_URL` to use a Lemonade Server you run yourself, on this
+    machine or another (e.g., `http://192.168.1.100:13305/api/v1`). `gaia init`
+    then installs and starts nothing: it checks that server and downloads models
+    through its API.
 
-    If the remote Lemonade Server requires authentication, also set
-    `LEMONADE_API_KEY` to the regular API key — GAIA sends it as
-    `Authorization: Bearer <key>` on every Lemonade-bound request
+    If that server requires authentication, also set `LEMONADE_API_KEY` —
+    GAIA sends it as `Authorization: Bearer <key>` on every Lemonade-bound request
     (see [Lemonade docs](https://lemonade-server.ai/docs/guide/configuration/#api-key-and-security)).
 
-    1. **Checks Remote Server** — Verifies remote Lemonade server version via API
-    2. **Checks Connectivity** — Verifies remote server is reachable
-    3. **Downloads Models** — Downloads models on the remote server via REST API
-    4. **Verifies Setup** — Tests each model with inference to detect corrupted downloads
+    1. **Checks the Server** — it must answer and meet the profile's minimum Lemonade version
+    2. **Downloads Models** — downloads models on that server via its REST API
+    3. **Verifies Setup** — tests each model with inference to detect corrupted downloads
   </Tab>
 </Tabs>
 
 <Warning>
-**Platform Support:** Automatic installation supports Windows (MSI), Linux (`ppa:lemonade-team/stable`, Ubuntu 24.04+), and macOS on Apple Silicon (`.pkg`, requires admin rights). Intel Macs and other architectures have no upstream Lemonade build — install manually from [lemonade-server.ai](https://www.lemonade-server.ai).
+**Platform Support:** GAIA's own Lemonade Server runs on Windows and Linux (x64 and
+arm64) and on Apple Silicon Macs. Intel Macs have no upstream Lemonade build — point
+`LEMONADE_BASE_URL` at a Lemonade Server on another machine.
 </Warning>
-
-<Tip>
-**Automatic Upgrade:** If your installed Lemonade version doesn't match the expected version, `gaia init` will offer to automatically uninstall the old version and install the correct one.
-</Tip>
 
 <Tip>
 **Corrupted Model Detection:** `gaia init` verifies each model with a quick inference test. If a model fails verification (e.g., corrupted download), you'll see instructions to manually delete and re-download it, or use `gaia init --force-models` to force re-download all models.
