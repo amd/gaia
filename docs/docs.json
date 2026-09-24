@@ -407,6 +407,7 @@
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
               "plans/slack-tui-integration",
+              "plans/daemon-convergence",
               "plans/autonomy-engine"
             ]
           },

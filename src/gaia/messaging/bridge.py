@@ -69,7 +69,7 @@ TERMINAL_EVENTS = frozenset({"final", "error"})
 NEEDS_CONFIRMATION = "needs_confirmation"
 
 #: Console script installed by the ``gaia-agent-gaia`` wheel
-#: (``[project.scripts] gaia-agent = "gaia_agent.stdio:main"``).
+#: (``[project.scripts] gaia-agent = "gaia_agent.entry:main"``).
 DEFAULT_AGENT_BINARY = "gaia-agent"
 
 

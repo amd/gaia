@@ -19,7 +19,6 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
-	"github.com/amd/gaia/tui/internal/gaiaslack"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
@@ -387,6 +386,10 @@ type ChatModel struct {
 	// auto-started because the first-boot check said not ready, or started on
 	// demand by /setup.
 	setupRunning bool
+	// slackSetup is the in-flight Slack setup, if any — which question the
+	// panel is on and what it has collected. Non-nil only between /slack setup
+	// and the flow finishing or being cancelled.
+	slackSetup *slackSetupState
 	// slackOffered records that the one-time Slack offer has already been shown
 	// this session, so a second launch-time probe cannot repeat it. The durable
 	// answer lives in `gaia slack decline`; this only stops a duplicate inside
@@ -826,8 +829,11 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case slackDeclinedMsg:
 		return m.handleSlackDeclined(msg)
 
-	case slackSetupDoneMsg:
-		return m.handleSlackSetupDone(msg)
+	case slackURLMsg:
+		return m.handleSlackURL(msg)
+
+	case slackConnectedMsg:
+		return m.handleSlackConnected(msg)
 
 	case setupStreamMsg:
 		if m.supersededSetup(msg.ch) {
@@ -965,6 +971,14 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A late answer for a question that is no longer up — dropping it is
 			// correct, but never silently: the agent moved on.
 			return m, nil
+		}
+		if isSlackSetupQuestion(msg.RequestID) {
+			// A local panel's question, not one the agent is parked on. Posting
+			// it to the agent would answer a question nobody asked — and for
+			// the token steps it would put a secret in the transcript.
+			m.question = nil
+			m.updateViewport()
+			return m.handleSlackSetupAnswer(msg.RequestID, msg.Value)
 		}
 		m.messages = append(m.messages, Message{
 			Role:    RoleUser,
@@ -1663,8 +1677,10 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		return m.startSlackCheck()
 
 	case "/slack setup":
-		return m.statusNote("Handing over to `"+gaiaslack.TypedCommand+"`…"),
-			runSlackSetupCmd()
+		if m.slackSetup != nil {
+			return m.statusNote("Slack setup is already open — answer it, or press Esc."), nil
+		}
+		return m.startSlackSetup()
 
 	case "/slack skip":
 		return m, declineSlackCmd(false)

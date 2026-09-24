@@ -193,28 +193,160 @@ func TestAFailedDeclineNamesTheManualCommand(t *testing.T) {
 // Setup hand-over
 // ----------------------------------------------------------------------
 
-func TestSetupSuccessReprobesRatherThanClaimingSuccess(t *testing.T) {
-	// The user can quit setup half-way. Saying "connected" when no token was
-	// stored is worse than saying nothing.
+// ----------------------------------------------------------------------
+// Setup runs inside the TUI
+// ----------------------------------------------------------------------
+
+func TestSetupAsksInsideTheTUIRatherThanHandingOverTheTerminal(t *testing.T) {
+	// tea.ExecProcess was the first implementation and it is wrong: a suspended
+	// TUI cannot be drawn, cannot be driven by the control API, and cannot be
+	// exercised end to end. It also reads as the app crashing and returning.
 	m := slackModel(t)
-	updated, cmd := m.handleSlackSetupDone(slackSetupDoneMsg{})
-	if cmd == nil {
-		t.Fatal("a finished setup must re-probe")
+	// The real sequence: /slack setup opens the flow, then the URL arrives.
+	m.slackSetup = &slackSetupState{step: slackStepConfirmCreated}
+	updated, _ := m.handleSlackURL(slackURLMsg{url: "https://api.slack.com/apps?x=1"})
+	after := updated.(ChatModel)
+
+	if after.question == nil {
+		t.Fatal("setup must put its question up in the TUI")
 	}
-	text := lastStatus(t, updated.(ChatModel))
-	if strings.Contains(strings.ToLower(text), "connected") {
-		t.Errorf("success must not be claimed before it is checked, got %q", text)
+	if !isSlackSetupQuestion(after.question.RequestID()) {
+		t.Errorf("question %q is not owned by the Slack flow", after.question.RequestID())
+	}
+	if !strings.Contains(lastStatus(t, after), "api.slack.com/apps") {
+		t.Error("the create-app URL must be shown, not only opened in a browser")
 	}
 }
 
-func TestAFailedSetupNamesTheRetryCommand(t *testing.T) {
+func TestTheTokenPromptsAreMasked(t *testing.T) {
 	m := slackModel(t)
-	updated, _ := m.handleSlackSetupDone(slackSetupDoneMsg{
-		err: errors.New("exit status 2"),
+	m.slackSetup = &slackSetupState{step: slackStepAppToken}
+
+	updated, _ := m.handleSlackSetupAnswer(slackQuestionPrefix+"created", "yes")
+	after := updated.(ChatModel)
+
+	if after.question == nil {
+		t.Fatal("a token prompt must follow")
+	}
+	// Sensitive:true is what stops a pasted token being echoed into a
+	// scrollback the user may later screen-share.
+	if !after.question.Sensitive() {
+		t.Error("a token prompt must be masked")
+	}
+}
+
+func TestCancellingStoresNothing(t *testing.T) {
+	m := slackModel(t)
+	m.slackSetup = &slackSetupState{step: slackStepConfirmCreated}
+
+	updated, cmd := m.handleSlackSetupAnswer(slackQuestionPrefix+"created", "cancel")
+	after := updated.(ChatModel)
+
+	if after.slackSetup != nil {
+		t.Error("cancelling must end the flow")
+	}
+	if cmd != nil {
+		t.Error("cancelling must not run anything")
+	}
+	if !strings.Contains(lastStatus(t, after), "nothing was stored") {
+		t.Errorf("the user must be told nothing was stored, got: %s", lastStatus(t, after))
+	}
+}
+
+func TestAnEmptyTokenReAsksInsteadOfStoringIt(t *testing.T) {
+	m := slackModel(t)
+	m.slackSetup = &slackSetupState{step: slackStepAppToken}
+
+	updated, cmd := m.handleSlackSetupAnswer(slackQuestionPrefix+"app-token", "   ")
+	after := updated.(ChatModel)
+
+	if cmd != nil {
+		t.Error("an empty token must not be sent anywhere")
+	}
+	if after.question == nil || !strings.Contains(after.question.Prompt(), "empty") {
+		t.Error("the prompt must say it was empty and ask again")
+	}
+}
+
+func TestTheAppTokenIsDroppedFromUIStateOnceHandedOff(t *testing.T) {
+	// A secret sitting in model state outlives the screen it was typed on.
+	m := slackModel(t)
+	m.slackSetup = &slackSetupState{step: slackStepBotToken, appToken: "xapp-secret"}
+
+	updated, cmd := m.handleSlackSetupAnswer(slackQuestionPrefix+"bot-token", "xoxb-secret")
+	after := updated.(ChatModel)
+
+	if cmd == nil {
+		t.Fatal("both tokens collected — the connect must run")
+	}
+	if after.slackSetup.appToken != "" {
+		t.Error("the app token must not stay in UI state after hand-off")
+	}
+}
+
+func TestNoTokenEverReachesTheTranscript(t *testing.T) {
+	m := slackModel(t)
+	m.slackSetup = &slackSetupState{step: slackStepAppToken}
+
+	updated, _ := m.handleSlackSetupAnswer(slackQuestionPrefix+"app-token", "xapp-super-secret")
+	after := updated.(ChatModel)
+
+	for _, msg := range after.messages {
+		if strings.Contains(msg.Content, "super-secret") {
+			t.Fatalf("a token reached the transcript: %q", msg.Content)
+		}
+	}
+}
+
+func TestAFailedConnectSaysHowToRetry(t *testing.T) {
+	m := slackModel(t)
+	m.slackSetup = &slackSetupState{step: slackStepConnecting}
+
+	updated, _ := m.handleSlackConnected(slackConnectedMsg{
+		err: errors.New("Slack rejected the tokens"),
 	})
+	after := updated.(ChatModel)
+
+	text := lastStatus(t, after)
+	if !strings.Contains(text, "Slack rejected the tokens") {
+		t.Errorf("the real reason must reach the user, got: %s", text)
+	}
+	if !strings.Contains(text, "/slack setup") {
+		t.Errorf("a failure must name the retry, got: %s", text)
+	}
+	if after.slackSetup != nil {
+		t.Error("a failed flow must not stay open")
+	}
+}
+
+func TestASuccessfulConnectNamesTheWorkspaceAndTheNextStep(t *testing.T) {
+	m := slackModel(t)
+	m.slackSetup = &slackSetupState{step: slackStepConnecting}
+
+	updated, _ := m.handleSlackConnected(slackConnectedMsg{team: "Acme"})
 	text := lastStatus(t, updated.(ChatModel))
-	if !strings.Contains(text, gaiaslack.TypedCommand) {
-		t.Errorf("a failure must name the retry command, got:\n%s", text)
+
+	if !strings.Contains(text, "Acme") {
+		t.Errorf("the workspace must be named, got: %s", text)
+	}
+	// Starting without an allowlist is refused, so the next step has to be here.
+	if !strings.Contains(text, "--allowed-users") {
+		t.Errorf("the next step must be spelled out, got: %s", text)
+	}
+}
+
+func TestAFailedURLFetchDoesNotLeaveTheFlowOpen(t *testing.T) {
+	m := slackModel(t)
+	m.slackSetup = &slackSetupState{step: slackStepConfirmCreated}
+
+	updated, _ := m.handleSlackURL(slackURLMsg{err: errors.New("gaia is not on PATH")})
+	after := updated.(ChatModel)
+
+	if after.slackSetup != nil {
+		t.Error("a flow that cannot start must not stay open")
+	}
+	if !strings.Contains(lastStatus(t, after), "not on PATH") {
+		t.Error("the reason must be shown")
 	}
 }
 

@@ -7,12 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/gaiaslack"
+	"github.com/amd/gaia/tui/internal/ui/components"
 )
 
 // `/slack` and the one-time offer that precedes it.
@@ -43,9 +43,6 @@ type slackDeclinedMsg struct {
 	err   error
 }
 
-// slackSetupDoneMsg is delivered when the handed-over setup process exits.
-type slackSetupDoneMsg struct{ err error }
-
 // querySlackCmd asks the CLI about Slack without changing anything.
 func querySlackCmd(offer bool) tea.Cmd {
 	return func() tea.Msg {
@@ -62,18 +59,201 @@ func declineSlackCmd(never bool) tea.Cmd {
 	}
 }
 
-// runSlackSetupCmd suspends the TUI and runs `gaia slack setup` on the real
-// terminal. Setup prompts for two tokens, so it needs the keyboard: run as a
-// captured child it would block forever on a prompt nobody can answer — the
-// same trap gaiainit avoids by passing --yes.
-func runSlackSetupCmd() tea.Cmd {
-	bin, args, err := gaiaslack.SetupCommand()
-	if err != nil {
-		return func() tea.Msg { return slackSetupDoneMsg{err: err} }
+// Setup runs INSIDE the TUI — it never hands the terminal over.
+//
+// The obvious implementation, tea.ExecProcess around `gaia slack setup`, was
+// the first one here and it is wrong for three reasons: a suspended TUI cannot
+// be drawn, cannot be driven by the control API (which exists so an assistant
+// can navigate the TUI while the user watches), and cannot be exercised by the
+// end-to-end harness. It also reads as the app crashing and coming back.
+//
+// So the panel collects both tokens with the same QuestionModel the agent's own
+// mid-run questions use — sensitive:true, so a pasted token is masked — and
+// hands them to `gaia slack connect` on STDIN, never argv.
+
+// slackSetupStep is where the panel is in the three-question flow.
+type slackSetupStep int
+
+const (
+	slackStepIdle slackSetupStep = iota
+	slackStepConfirmCreated
+	slackStepAppToken
+	slackStepBotToken
+	slackStepConnecting
+)
+
+// slackQuestionPrefix marks a QuestionModel this file owns, so an answer is
+// handled locally instead of being posted to the agent as a mid-run reply.
+const slackQuestionPrefix = "gaia-slack-setup:"
+
+// slackSetupState is the in-flight setup, if any.
+type slackSetupState struct {
+	step     slackSetupStep
+	url      string
+	appToken string
+}
+
+// slackURLMsg carries the pre-filled create-app URL once the CLI has built it.
+type slackURLMsg struct {
+	url string
+	err error
+}
+
+// slackConnectedMsg is the result of storing the tokens.
+type slackConnectedMsg struct {
+	team string
+	err  error
+}
+
+// fetchSlackURLCmd asks the CLI for the create-app URL. Asked rather than
+// rebuilt in Go: the manifest is a security surface and two copies would drift.
+func fetchSlackURLCmd() tea.Cmd {
+	return func() tea.Msg {
+		url, err := gaiaslack.CreateAppURL(context.Background())
+		return slackURLMsg{url: url, err: err}
 	}
-	return tea.ExecProcess(exec.Command(bin, args...), func(err error) tea.Msg {
-		return slackSetupDoneMsg{err: err}
-	})
+}
+
+// connectSlackCmd validates and stores the pair.
+func connectSlackCmd(appToken, botToken string) tea.Cmd {
+	return func() tea.Msg {
+		team, err := gaiaslack.Connect(context.Background(), appToken, botToken)
+		return slackConnectedMsg{team: team, err: err}
+	}
+}
+
+// startSlackSetup opens the panel.
+func (m ChatModel) startSlackSetup() (tea.Model, tea.Cmd) {
+	m.slackSetup = &slackSetupState{step: slackStepConfirmCreated}
+	return m.statusNote("Preparing Slack setup…"), fetchSlackURLCmd()
+}
+
+// handleSlackURL shows the URL and asks the first question.
+func (m ChatModel) handleSlackURL(msg slackURLMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.slackSetup = nil
+		return m.statusNote(fmt.Sprintf(
+			"Slack setup could not start: %v", msg.err)), nil
+	}
+	if m.slackSetup == nil {
+		return m, nil
+	}
+	m.slackSetup.url = msg.url
+
+	m = m.statusNote(strings.Join([]string{
+		"Slack apps can only be created at api.slack.com, so this part is not",
+		"automatic. The manifest — scopes, Socket Mode, the DM subscription —",
+		"is filled in for you.",
+		"",
+		"1. Open this and click Create (your browser may already be there):",
+		"   " + msg.url,
+		"2. Basic Information → App-Level Tokens → Generate, add the",
+		"   'connections:write' scope, copy the 'xapp-' token.",
+		"3. OAuth & Permissions → Install to Workspace, copy the 'xoxb-' token.",
+	}, "\n"))
+
+	q := components.NewQuestionModel(
+		slackQuestionPrefix+"created",
+		"Created the app and got both tokens?",
+		[]components.QuestionOption{
+			{Value: "yes", Label: "Yes, I have both tokens",
+				Description: "Paste them next — they are masked and go straight to your OS keyring"},
+			{Value: "cancel", Label: "Cancel",
+				Description: "Nothing is stored; /slack setup starts over"},
+		},
+		false, /* allowFreeText */
+		false, /* sensitive */
+	)
+	m.question = &q
+	m.updateViewport()
+	return m, nil
+}
+
+// askSlackToken puts up one masked free-text prompt.
+func (m ChatModel) askSlackToken(id, prompt string) ChatModel {
+	q := components.NewQuestionModel(
+		slackQuestionPrefix+id,
+		prompt,
+		nil,  /* options — free text only */
+		true, /* allowFreeText */
+		true, /* sensitive: a token must not be echoed into the scrollback */
+	)
+	m.question = &q
+	m.updateViewport()
+	return m
+}
+
+// isSlackSetupQuestion reports whether an answer belongs to this flow rather
+// than to a question the agent asked mid-run.
+func isSlackSetupQuestion(requestID string) bool {
+	return strings.HasPrefix(requestID, slackQuestionPrefix)
+}
+
+// handleSlackSetupAnswer advances the flow. The caller has already cleared
+// m.question.
+func (m ChatModel) handleSlackSetupAnswer(requestID, value string) (tea.Model, tea.Cmd) {
+	if m.slackSetup == nil {
+		return m, nil
+	}
+	switch strings.TrimPrefix(requestID, slackQuestionPrefix) {
+	case "created":
+		if value != "yes" {
+			m.slackSetup = nil
+			return m.statusNote(
+				"Cancelled — nothing was stored. Type /slack setup to start over."), nil
+		}
+		m.slackSetup.step = slackStepAppToken
+		return m.askSlackToken("app-token",
+			"Paste the app-level token (starts with 'xapp-')"), nil
+
+	case "app-token":
+		token := strings.TrimSpace(value)
+		if token == "" {
+			return m.askSlackToken("app-token",
+				"That was empty. Paste the app-level token (starts with 'xapp-')"), nil
+		}
+		m.slackSetup.appToken = token
+		m.slackSetup.step = slackStepBotToken
+		return m.askSlackToken("bot-token",
+			"Paste the bot user OAuth token (starts with 'xoxb-')"), nil
+
+	case "bot-token":
+		token := strings.TrimSpace(value)
+		if token == "" {
+			return m.askSlackToken("bot-token",
+				"That was empty. Paste the bot token (starts with 'xoxb-')"), nil
+		}
+		appToken := m.slackSetup.appToken
+		m.slackSetup.step = slackStepConnecting
+		// Dropped from the model the moment it is handed off: the flow has no
+		// further use for it, and a token sitting in UI state outlives the
+		// screen it was typed on.
+		m.slackSetup.appToken = ""
+		return m.statusNote("Checking the tokens with Slack…"),
+			connectSlackCmd(appToken, token)
+	}
+	return m, nil
+}
+
+// handleSlackConnected reports the outcome.
+func (m ChatModel) handleSlackConnected(msg slackConnectedMsg) (tea.Model, tea.Cmd) {
+	m.slackSetup = nil
+	if msg.err != nil {
+		return m.statusNote(fmt.Sprintf(
+			"Slack setup failed: %v\n\nType /slack setup to try again.",
+			msg.err)), nil
+	}
+	return m.statusNote(strings.Join([]string{
+		"Connected to " + msg.team + ". Tokens are in your OS keyring.",
+		"",
+		"Before starting it, decide who may message it — everyone in a",
+		"workspace can DM a bot, and this bridge can read your files and ask",
+		"to run commands:",
+		"",
+		"  gaia slack start --allowed-users <your member ID>",
+		"",
+		"Your member ID: Slack → your avatar → Profile → ... → Copy member ID.",
+	}, "\n")), nil
 }
 
 // startSlackCheck runs the probe for the /slack command.
@@ -122,19 +302,6 @@ func (m ChatModel) handleSlackDeclined(msg slackDeclinedMsg) (tea.Model, tea.Cmd
 	return m.statusNote(
 		"Skipped. Type /slack whenever you want to connect it.",
 	), nil
-}
-
-// handleSlackSetupDone renders the outcome of the handed-over setup run.
-func (m ChatModel) handleSlackSetupDone(msg slackSetupDoneMsg) (tea.Model, tea.Cmd) {
-	if msg.err != nil {
-		return m.statusNote(fmt.Sprintf(
-			"Slack setup did not finish: %v\nRun `%s` in a terminal to retry.",
-			msg.err, gaiaslack.TypedCommand)), nil
-	}
-	// Re-probe rather than assume success: the user may have quit setup
-	// half-way, and claiming "connected" when no token was stored is worse than
-	// saying nothing.
-	return m.statusNote("Setup finished — checking…"), querySlackCmd(false)
 }
 
 // slackOfferText is the one-time offer.

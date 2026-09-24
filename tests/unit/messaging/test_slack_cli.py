@@ -194,6 +194,132 @@ def test_setup_does_not_promise_automatic_configuration():
 
 
 # ----------------------------------------------------------------------
+# connect — the non-interactive half, for a caller that collected the tokens
+# ----------------------------------------------------------------------
+
+
+def test_connect_reads_both_tokens_from_stdin(monkeypatch, tmp_path):
+    """stdin, not argv: an argument is visible to every process through `ps`."""
+    import io
+
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    saved = {}
+    monkeypatch.setattr(
+        credentials,
+        "save",
+        lambda bot_token, app_token: saved.update(bot=bot_token, app=app_token),
+    )
+    monkeypatch.setattr(onboarding, "detect_slack", lambda: True)
+
+    class _Probe:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def verify(self):
+            return {"ok": True, "team": "Acme", "team_id": "T1"}
+
+    monkeypatch.setattr(
+        "gaia.messaging.slack.adapter.SlackAdapter", _Probe, raising=True
+    )
+
+    lines = []
+    code = cli.run_connect(
+        stdin=io.StringIO("xapp-real\nxoxb-real\n"), emit=lines.append
+    )
+
+    assert code == 0, lines
+    assert saved == {"app": "xapp-real", "bot": "xoxb-real"}
+    payload = json.loads(lines[-1])
+    assert payload == {"connected": True, "team": "Acme"}
+
+
+def test_connect_records_the_onboarding_state(monkeypatch, tmp_path):
+    import io
+
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(credentials, "save", lambda **kw: None)
+    monkeypatch.setattr(onboarding, "detect_slack", lambda: True)
+
+    class _Probe:
+        def __init__(self, **kwargs):
+            pass
+
+        def verify(self):
+            return {"ok": True, "team": "Acme"}
+
+    monkeypatch.setattr("gaia.messaging.slack.adapter.SlackAdapter", _Probe)
+
+    cli.run_connect(stdin=io.StringIO("xapp-a\nxoxb-b\n"), emit=lambda _: None)
+
+    assert onboarding.load_state().state == onboarding.STATE_CONNECTED
+
+
+def test_connect_refuses_a_swapped_pair_before_any_network_call(monkeypatch):
+    import io
+
+    def explode(**kwargs):  # pragma: no cover - must never be constructed
+        raise AssertionError("a swapped pair must fail before reaching Slack")
+
+    monkeypatch.setattr("gaia.messaging.slack.adapter.SlackAdapter", explode)
+
+    lines = []
+    code = cli.run_connect(
+        stdin=io.StringIO("xoxb-swapped\nxapp-swapped\n"), emit=lines.append
+    )
+
+    assert code == 2
+    assert any("goes in the other field" in line for line in lines)
+
+
+def test_connect_says_what_it_expected_when_stdin_is_short(monkeypatch):
+    import io
+
+    lines = []
+    code = cli.run_connect(stdin=io.StringIO("xapp-only\n"), emit=lines.append)
+
+    assert code == 2
+    assert any("two lines on stdin" in line for line in lines)
+
+
+def test_connect_stores_nothing_when_slack_rejects_the_tokens(monkeypatch, tmp_path):
+    """Proven against Slack BEFORE anything is written to the keyring."""
+    import io
+
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    saved = []
+    monkeypatch.setattr(credentials, "save", lambda **kw: saved.append(kw))
+
+    class _Rejecting:
+        def __init__(self, **kwargs):
+            pass
+
+        def verify(self):
+            raise RuntimeError("invalid_auth")
+
+    monkeypatch.setattr("gaia.messaging.slack.adapter.SlackAdapter", _Rejecting)
+
+    lines = []
+    code = cli.run_connect(stdin=io.StringIO("xapp-a\nxoxb-b\n"), emit=lines.append)
+
+    assert code == 1
+    assert saved == [], "nothing may be stored for tokens Slack refused"
+    assert any("invalid_auth" in line for line in lines)
+
+
+def test_print_url_emits_only_the_url(monkeypatch):
+    """The TUI runs its own prompts and asks only for the URL, so the manifest
+    stays defined in exactly one place."""
+    monkeypatch.setattr(cli, "_open_browser", lambda *a, **kw: None)
+    lines = []
+
+    code = cli.run_setup(print_url_only=True, emit=lines.append, open_browser=False)
+
+    assert code == 0
+    assert len(lines) == 1
+    assert lines[0].startswith("https://api.slack.com/apps?")
+
+
+# ----------------------------------------------------------------------
 # Liveness — never os.kill(pid, 0), never trust a pid alone
 # ----------------------------------------------------------------------
 
@@ -266,3 +392,28 @@ def test_start_with_two_members_is_refused_with_the_reason(monkeypatch):
     lines = []
     assert cli.run_start(allowed_users="U0AAAAAAA,U0BBBBBBB", emit=lines.append) == 2
     assert any("share one history" in line for line in lines)
+
+
+def test_print_url_honours_no_browser(monkeypatch):
+    """Only main()'s wiring can catch this — the run_setup test passes
+    open_browser explicitly, so it cannot see a default leaking through."""
+    import argparse
+
+    seen = {}
+    monkeypatch.setattr(cli, "run_setup", lambda **kw: seen.update(kw) or 0)
+
+    args = argparse.Namespace(slack_action="setup", print_url=True, no_browser=True)
+    assert cli.main(args) == 0
+
+    assert seen == {"print_url_only": True, "open_browser": False}
+
+
+def test_print_url_still_opens_a_browser_by_default(monkeypatch):
+    import argparse
+
+    seen = {}
+    monkeypatch.setattr(cli, "run_setup", lambda **kw: seen.update(kw) or 0)
+
+    cli.main(argparse.Namespace(slack_action="setup", print_url=True, no_browser=False))
+
+    assert seen["open_browser"] is True
