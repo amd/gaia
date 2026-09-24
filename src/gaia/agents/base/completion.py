@@ -269,7 +269,7 @@ def _instructions(query: str):
                 yield action.group(1).lower(), sentence[action.end() :]
 
 
-def save_obligations(query: str, root: str | None = None) -> tuple[list[str], bool]:
+def save_obligations(query: str) -> tuple[list[str], bool]:
     """Explicit save instructions; advisory/negated instructions aren't tasks.
 
     A request counts only when it names a file, folder or disk: "save me some
@@ -287,14 +287,6 @@ def save_obligations(query: str, root: str | None = None) -> tuple[list[str], bo
             # "Create notes.md" or "make a file called x.md".
             named = _NAMED_FILE.match(tail)
             found = _scan_paths(tail[named.end() :] if named else tail, True, True)
-            if not found and root:
-                # "Create a summary in notes.md" writes notes.md; an existing
-                # file there ("errors in app.log") is the source, not the output.
-                found = [
-                    path
-                    for path in destination_paths(tail, _PUT_PREPOSITION)
-                    if not os.path.lexists(_normalize_key(path, root))
-                ]
         else:
             found = destination_paths(
                 tail, _PUT_PREPOSITION if verb == "put" else _OUTPUT_PREPOSITION
@@ -369,7 +361,7 @@ class CompletionEvidence:
         self.sequence = 0
         self.removed: set[str] = set()
         self.uninspectable: dict[str, str] = {}
-        self.requested, self.save_requested = save_obligations(query, self.root)
+        self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
         self.exec_windows: list[tuple[int, int, bool]] = []

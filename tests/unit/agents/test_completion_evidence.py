@@ -873,12 +873,13 @@ def test_an_impersonal_claim_gets_one_correction_then_stands(agent):
 @pytest.mark.parametrize(
     "query, expected",
     [
-        ("Create a summary of GAIA in notes.md", (["notes.md"], True)),
+        # "in X" is left to the claim check: X may be a source outside the cwd.
+        ("Create a summary of GAIA in notes.md", ([], False)),
         ("Create a summary of the errors in app.log", ([], False)),
         ("Create report.md summarizing the project", (["report.md"], True)),
         ("Create a Next.js landing page", ([], False)),
     ],
 )
-def test_create_in_a_new_file_names_an_output(tmp_path, query, expected):
+def test_create_names_only_its_direct_object(tmp_path, query, expected):
     (tmp_path / "app.log").write_text("ERROR x")
-    assert save_obligations(query, str(tmp_path)) == expected
+    assert save_obligations(query) == expected
