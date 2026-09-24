@@ -9,7 +9,6 @@ import os
 import subprocess
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -381,7 +380,16 @@ class GaiaCliClient:
                 yield chunk
 
         except Exception as e:
-            error_message = f"❌ Error: {str(e)}"
+            # A backend string like "Max length reached!" tells the user
+            # nothing — hand back the typed remediation when we recognise it.
+            from gaia.llm.providers.lemonade import classify_lemonade_exception
+
+            classified = classify_lemonade_exception(e)
+            error_message = (
+                f"❌ Error: {classified.user_message}\n   Details: {e}"
+                if classified
+                else f"❌ Error: {e}"
+            )
             self.log.error(error_message)
             print(error_message)
             yield error_message
@@ -448,9 +456,14 @@ class GaiaCliClient:
                 return full_response
 
         except Exception as e:
-            # Check if it's a connection error and provide helpful message
+            # A backend string like "Max length reached!" tells the user
+            # nothing — hand back the typed remediation when we recognise it.
+            from gaia.llm.providers.lemonade import classify_lemonade_exception
+
             self.log.error(f"Error in chat: {str(e)}")
-            print(f"❌ Error: {str(e)}")
+            classified = classify_lemonade_exception(e)
+            detail = f"\n   Details: {e}" if classified else ""
+            print(f"❌ Error: {classified.user_message if classified else e}{detail}")
             sys.exit(1)
 
 
@@ -1055,102 +1068,6 @@ def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
             f"context windows is invalid — rerun with --ctx-size "
             f"{baseline_ctx}, or record a new baseline at {current_ctx}."
         )
-
-
-def _print_reliability_summary(scorecards, pass_threshold=0.90):
-    """Print a reliability summary table from multiple eval iteration scorecards.
-
-    Groups scenario results across iterations and computes per-scenario pass rates.
-    Prints a colorized table and a GO/NO_GO readiness signal.
-    """
-    # Collect per-scenario results across all iterations
-    by_scenario = defaultdict(list)
-    for sc in scorecards:
-        if not sc:
-            continue
-        for result in sc.get("scenarios", []):
-            sid = result.get("scenario_id", "unknown")
-            by_scenario[sid].append(result.get("status", "ERRORED"))
-
-    if not by_scenario:
-        print("\n[RELIABILITY] No scenario results to aggregate.")
-        return
-
-    n_iterations = sum(1 for sc in scorecards if sc)
-
-    # Compute pass rates
-    rows = []
-    all_pass = True
-    for sid in sorted(by_scenario.keys()):
-        statuses = by_scenario[sid]
-        pass_count = sum(1 for s in statuses if s == "PASS")
-        total = len(statuses)
-        rate = pass_count / total if total > 0 else 0.0
-        passed = rate >= pass_threshold
-        if not passed:
-            all_pass = False
-        rows.append((sid, pass_count, total, rate, passed))
-
-    # Print table — guard colour codes so piped output (CI, log files,
-    # non-ANSI Windows shells) stays clean.
-    use_color = sys.stdout.isatty()
-    green = "\033[32m" if use_color else ""
-    red = "\033[31m" if use_color else ""
-    reset = "\033[0m" if use_color else ""
-
-    print(f"\n{'=' * 72}")
-    print(f"  MCP RELIABILITY SUMMARY  ({n_iterations} iterations)")
-    print(f"{'=' * 72}")
-    print(f"  {'Scenario':<40} {'Pass Rate':>12} {'Result':>8}")
-    print(f"  {'-' * 40} {'-' * 12} {'-' * 8}")
-
-    for sid, pass_count, total, rate, passed in rows:
-        rate_str = f"{pass_count}/{total} ({rate:.0%})"
-        colour = green if passed else red
-        label = "PASS" if passed else "FAIL"
-        result_str = f"{colour}{label:>8}{reset}"
-        print(f"  {sid:<40} {rate_str:>12} {result_str}")
-
-    print(f"  {'-' * 40} {'-' * 12} {'-' * 8}")
-
-    # Readiness signal
-    if all_pass:
-        print(
-            f"\n  Readiness: {green}GO{reset} (all scenarios >= {pass_threshold:.0%})"
-        )
-    else:
-        failing = sum(1 for _, _, _, _, p in rows if not p)
-        print(
-            f"\n  Readiness: {red}NO_GO{reset} ({failing} scenario(s) below {pass_threshold:.0%})"
-        )
-    print(f"{'=' * 72}\n")
-
-    # Write reliability_report.json alongside the last run's results
-    last_sc = next((sc for sc in reversed(scorecards) if sc), None)
-    if last_sc:
-        from gaia.eval.runner import RESULTS_DIR
-
-        report = {
-            "iterations": n_iterations,
-            "pass_threshold": pass_threshold,
-            "readiness": "GO" if all_pass else "NO_GO",
-            "scenarios": [
-                {
-                    "scenario_id": sid,
-                    "pass_count": pc,
-                    "total": t,
-                    "iteration_pass_rate": r,
-                    "status": "PASS" if p else "FAIL",
-                }
-                for sid, pc, t, r, p in rows
-            ],
-        }
-        report_path = RESULTS_DIR / "reliability_report.json"
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        print(f"[RELIABILITY] Report saved → {report_path}")
 
 
 def build_parser():
@@ -2186,6 +2103,14 @@ Examples:
         metavar="TAG",
         help="Run only scenarios with this tag (can be repeated; OR logic — "
         "scenarios matching ANY tag are included)",
+    )
+    agent_eval_parser.add_argument(
+        "--exclude-tag",
+        action="append",
+        metavar="TAG",
+        help="Skip scenarios carrying this tag (can be repeated; applied after "
+        "--tag/--category — e.g. --exclude-tag local_blocked_no_embedder "
+        "--exclude-tag live for a no-Lemonade local run)",
     )
     agent_eval_parser.add_argument(
         "--output-format",
@@ -4206,60 +4131,55 @@ Let me know your answer!
 
             from gaia.eval.runner import AgentEvalRunner
 
-            all_scorecards = []
-            for iter_idx in range(iterations):
-                if iterations > 1:
-                    print(f"\n{'=' * 60}")
-                    print(f"[ITER] Iteration {iter_idx + 1}/{iterations}")
-                    print(f"{'=' * 60}")
+            # Resolve --device to model when --model not explicit
+            eval_model = args.model
+            eval_device = getattr(args, "device", None)
+            if eval_device and not eval_model:
+                from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
 
-                # Resolve --device to model when --model not explicit
-                eval_model = args.model
-                eval_device = getattr(args, "device", None)
-                if eval_device and not eval_model:
-                    from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
-
-                    for dc in DEFAULT_DEVICE_CONFIGS:
-                        if dc.device == eval_device:
-                            eval_model = dc.model
-                            break
-                    device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU"}
-                    print(
-                        f"🖥️  Eval device: {device_labels.get(eval_device, eval_device)}  |  "
-                        f"Model: {eval_model}"
-                    )
-
-                runner = AgentEvalRunner(
-                    backend_url=args.backend,
-                    model=eval_model,
-                    budget_per_scenario=args.budget,
-                    timeout_per_scenario=args.timeout,
-                    agent_type=getattr(args, "agent_type", None),
-                    extra_scenario_dirs=getattr(args, "scenario_dir", None),
-                    extra_corpus_dirs=getattr(args, "corpus_dir", None),
-                    tags=getattr(args, "tag", None),
-                    output_format=getattr(args, "output_format", None),
+                for dc in DEFAULT_DEVICE_CONFIGS:
+                    if dc.device == eval_device:
+                        eval_model = dc.model
+                        break
+                device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU"}
+                print(
+                    f"🖥️  Eval device: {device_labels.get(eval_device, eval_device)}  |  "
+                    f"Model: {eval_model}"
                 )
-                scorecard = runner.run(
-                    scenario_id=getattr(args, "scenario", None),
-                    category=getattr(args, "category", None),
-                    audit_only=getattr(args, "audit_only", False),
-                    fix_mode=fix_mode,
-                    max_fix_iterations=getattr(args, "max_fix_iterations", 3),
-                    target_pass_rate=getattr(args, "target_pass_rate", 0.90),
-                    keep_sessions=getattr(args, "keep_sessions", False),
-                )
-                all_scorecards.append(scorecard)
 
-            if iterations > 1 and all_scorecards:
-                _print_reliability_summary(
-                    all_scorecards,
-                    pass_threshold=getattr(args, "target_pass_rate", 0.90),
-                )
+            runner = AgentEvalRunner(
+                backend_url=args.backend,
+                model=eval_model,
+                budget_per_scenario=args.budget,
+                timeout_per_scenario=args.timeout,
+                agent_type=getattr(args, "agent_type", None),
+                extra_scenario_dirs=getattr(args, "scenario_dir", None),
+                extra_corpus_dirs=getattr(args, "corpus_dir", None),
+                tags=getattr(args, "tag", None),
+                exclude_tags=getattr(args, "exclude_tag", None),
+                output_format=getattr(args, "output_format", None),
+                iterations=iterations,
+            )
+            # --iterations repeats each SCENARIO in-run (runner.iterations) and
+            # folds the repeats into one stability verdict per scenario
+            # (summarize_attempts) -- it does not repeat the whole corpus.
+            # Repeating the whole corpus too (the old outer loop here) made
+            # --iterations N cost N^2 scenario-runs instead of N, and its
+            # cross-run _print_reliability_summary was answering the same
+            # "is this scenario flaky" question the per-scenario stability
+            # verdict already answers, just from N full runs instead of N
+            # attempts inside one.
+            last_scorecard = runner.run(
+                scenario_id=getattr(args, "scenario", None),
+                category=getattr(args, "category", None),
+                audit_only=getattr(args, "audit_only", False),
+                fix_mode=fix_mode,
+                max_fix_iterations=getattr(args, "max_fix_iterations", 3),
+                target_pass_rate=getattr(args, "target_pass_rate", 0.90),
+                keep_sessions=getattr(args, "keep_sessions", False),
+            )
 
             # --save-baseline: copy scorecard to eval/results/baseline.json
-            # (saves the last iteration's scorecard)
-            last_scorecard = all_scorecards[-1] if all_scorecards else None
             if getattr(args, "save_baseline", False) and last_scorecard:
 
                 from gaia.eval.runner import RESULTS_DIR
