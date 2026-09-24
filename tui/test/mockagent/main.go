@@ -21,8 +21,8 @@
 //	MOCKAGENT_TOOL_MS=<n>      how long "slow tool" runs (default 5000)
 //
 // Queries: "slow tool" runs a long tool call that honours a cancel, "stubborn
-// slow tool" one that ignores it, and "report bypass" answers
-// "bypass=<mode> pid=<pid> turn=<n>".
+// slow tool" one that ignores it, and "report full access" answers
+// "full_access=<mode> pid=<pid> turn=<n>".
 package main
 
 import (
@@ -46,7 +46,7 @@ const (
 )
 
 var (
-	bypass      atomic.Bool
+	fullAccess  atomic.Bool
 	turnRunning atomic.Bool
 	cancelled   atomic.Bool
 	turns       int // touched only by the turn loop
@@ -252,12 +252,12 @@ func runTurn(query string) {
 		slowTool(false)
 	case strings.Contains(q, "slow tool"):
 		slowTool(true)
-	case q == "report bypass":
+	case q == "report full access":
 		// pid and turn make every answer unique, so a test can tell this turn's
 		// answer from an earlier one still on screen.
 		emit(map[string]interface{}{
 			"type":       "answer",
-			"content":    fmt.Sprintf("bypass=%t pid=%d turn=%d", bypass.Load(), os.Getpid(), turns),
+			"content":    fmt.Sprintf("full_access=%t pid=%d turn=%d", fullAccess.Load(), os.Getpid(), turns),
 			"steps":      1,
 			"tools_used": 0,
 		})
@@ -285,9 +285,9 @@ func handleControl(line string) bool {
 		if turnRunning.Load() {
 			cancelled.Store(true)
 		}
-	case "bypass":
+	case "full_access":
 		enabled, _ := msg["enabled"].(bool)
-		bypass.Store(enabled)
+		fullAccess.Store(enabled)
 	default:
 		fmt.Fprintf(os.Stderr, "mockagent: ignored control verb %v\n", verb)
 	}
@@ -373,8 +373,8 @@ func main() {
 	}
 
 	for _, a := range os.Args[1:] {
-		if a == "--bypass-permissions" {
-			bypass.Store(true)
+		if a == "--full-access" {
+			fullAccess.Store(true)
 		}
 	}
 	if path := os.Getenv("MOCKAGENT_PIDFILE"); path != "" {

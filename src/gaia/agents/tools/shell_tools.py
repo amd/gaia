@@ -51,9 +51,16 @@ SHELL_KEYWORDS = frozenset(
     }
 )
 
-
-# Security: WHITELIST approach - only allow explicitly safe commands
-# This is much safer than a blacklist which always misses dangerous commands
+# Commands that run WITHOUT ASKING — not the set of commands that exist.
+#
+# Membership here buys one thing: no confirmation prompt. A command that is not
+# on this list is not refused; it is shown to the user, who approves it or does
+# not (``TIER_CONFIRM``). That distinction is the whole permission model — an
+# allowlist used as a refusal list makes the agent unable to do ordinary work
+# its user is sitting right there to approve.
+#
+# So the bar for adding an entry is "safe to run unattended, every time, with
+# arguments nobody reviewed", which in practice still means read-only.
 ALLOWED_COMMANDS = {
     # File listing and navigation (READ-ONLY)
     "ls",
@@ -141,6 +148,35 @@ DANGEROUS_FIND_ACTIONS = {
     "-fls",
 }
 
+# How a blocked command is blocked. Mirrors the three tiers in
+# ``gaia.skills.binaries`` (ALLOW / CONFIRM / REFUSE), spelled locally so this
+# module keeps its light import.
+#
+# REFUSE is for escalations a single yes/no prompt cannot honestly describe:
+# base64-encoded PowerShell, a git option that runs a script behind a
+# ``status``-looking subcommand, a granted CLI's credential-printing action.
+# Asking about those trains a user to click yes on something the prompt text
+# misrepresents.
+#
+# CONFIRM is everything else that is not a read: `git commit`, `npm test`,
+# `rm file`. The user is shown the exact command and answers y / n / always.
+# These MUST NOT be refused here — refusing a command that would run on
+# approval is the dead end this tier exists to remove.
+TIER_CONFIRM = "confirm"
+TIER_REFUSE = "refuse"
+
+
+def _blocked(tier: str, error: str, **extra) -> dict:
+    """One blocked-command result, tagged with the tier that decided it."""
+    return {
+        "status": "error",
+        "error": error,
+        "has_errors": True,
+        "tier": tier,
+        **extra,
+    }
+
+
 # Safe read-only git subcommands
 SAFE_GIT_COMMANDS = {
     "status",
@@ -155,6 +191,92 @@ SAFE_GIT_COMMANDS = {
     "rev-parse",
     "help",
 }
+
+# Global git options that sit BEFORE the subcommand. They have to be stepped
+# over to find what the command actually is, and each one is classified here —
+# an unlisted option is refused rather than skipped, so a future git release
+# cannot slip a value-taking flag past the walk and shift the subcommand index
+# (CWE-184).
+
+# Take a value, either as `--opt=value` or as the following token.
+GIT_GLOBAL_FLAGS_WITH_VALUE = {
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+}
+
+# Standalone switches that change nothing about what gets run.
+GIT_GLOBAL_FLAGS_NO_VALUE = {
+    "-P",
+    "--no-pager",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+}
+
+# Options that ARE the whole command — there is no subcommand after them.
+GIT_TERMINAL_FLAGS = {
+    "--version",
+    "--help",
+    "-h",
+    "--html-path",
+    "--man-path",
+    "--info-path",
+}
+
+# Global options that hand git arbitrary code or configuration, so they stay
+# refused no matter how read-only the subcommand behind them looks.
+GIT_FORBIDDEN_GLOBAL_FLAGS = {
+    "-c": "it sets arbitrary git config for the run (e.g. core.pager, alias.*), which can execute a command",
+    "--config-env": "it sets arbitrary git config from the environment, which can execute a command",
+    "--exec-path": "it changes where git looks for its subcommands, which can execute an arbitrary binary",
+}
+
+
+def _resolve_git_subcommand(cmd_parts: list) -> tuple:
+    """Step over git's global options to find the real subcommand.
+
+    ``git -C <path> branch`` is a branch listing, not a ``-C`` command; reading
+    ``cmd_parts[1]`` blindly refuses every invocation that carries a global flag.
+
+    Returns:
+        ``(subcommand, error_message)`` — exactly one is non-None. A terminal
+        flag like ``--version`` comes back as the subcommand, since nothing
+        follows it.
+    """
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            return token.lower(), None
+
+        name = token.split("=", 1)[0]
+        if name in GIT_TERMINAL_FLAGS:
+            return name, None
+        if name in GIT_FORBIDDEN_GLOBAL_FLAGS:
+            return None, (
+                f"Git global option '{name}' is not allowed: "
+                f"{GIT_FORBIDDEN_GLOBAL_FLAGS[name]}."
+            )
+        if name in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            # `--opt=value` carries its value; `--opt value` consumes the next token.
+            index += 1 if "=" in token else 2
+            continue
+        if name in GIT_GLOBAL_FLAGS_NO_VALUE:
+            index += 1
+            continue
+        return None, (
+            f"Git global option '{name}' is not recognized, so the subcommand "
+            "behind it cannot be identified."
+        )
+
+    return None, "No git subcommand was given."
+
 
 # Safe PowerShell cmdlet prefixes (read-only operations)
 SAFE_PS_CMDLET_PREFIXES = (
@@ -603,15 +725,131 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
+#: Tokens that end one command and begin the next. Only ``|`` reaches here
+#: outside full access — ``_split_connectors`` has already taken ``&&``,
+#: ``||`` and ``;`` off the text and the operator scan refuses the rest — so
+#: extending the set leaves default behaviour untouched.
+_SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
+
+#: Characters shlex is asked to lex as punctuation under full access. A newline is
+#: one of them because the shell that ultimately runs the string treats it as a
+#: command separator, so the segment walk has to as well.
+_FULL_ACCESS_PUNCTUATION = ";&|<>\n"
+
+
+def _heredoc_start(line: str) -> Optional[tuple]:
+    """``(delimiter, strip_tabs)`` for the heredoc *line* opens, else None.
+
+    Tokenised with the same lexer the gates use, so a ``<<`` inside quotes is
+    data and ``<<<`` (a here-string, no body) never opens one.
+    """
+    try:
+        tokens = _tokenize(line, full_access=True)
+    except ValueError:
+        return None
+    for index, token in enumerate(tokens):
+        if token not in ("<<", "<<-") or index + 1 >= len(tokens):
+            continue
+        word = tokens[index + 1]
+        strip_tabs = token == "<<-"
+        if word == "-" and index + 2 < len(tokens):
+            word, strip_tabs = tokens[index + 2], True
+        elif word.startswith("-") and len(word) > 1:
+            word, strip_tabs = word[1:], True
+        if word and all(ch not in _FULL_ACCESS_PUNCTUATION for ch in word):
+            return word, strip_tabs
+    return None
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """*command* with every heredoc body removed.
+
+    A body is input to the command that opened it, not a command, so the gates
+    must not walk ``print(1+1)`` as a binary or choke on an apostrophe in it.
+    Only the text that reaches the shell as commands is returned; the shell
+    still runs the original. An unterminated body is left in place, so the
+    gates see it and refuse what they cannot parse.
+    """
+    if "<<" not in command:
+        return command
+    kept: list = []
+    lines = command.split("\n")
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        kept.append(line)
+        index += 1
+        opened = _heredoc_start(line)
+        if opened is None:
+            continue
+        word, strip_tabs = opened
+        end = index
+        while end < len(lines):
+            body_line = lines[end].lstrip("\t") if strip_tabs else lines[end]
+            if body_line == word:
+                break
+            end += 1
+        if end == len(lines):
+            kept.extend(lines[index:])
+            break
+        index = end + 1
+    return "\n".join(kept)
+
+
+def _tokenize(command: str, full_access: bool = False) -> list:
+    """Split *command* into argv tokens.
+
+    Default mode uses ``shlex.split``, unchanged. Full access asks shlex to
+    treat ``;&|<>`` and the newline as punctuation instead, so ``cd build &&
+    make`` yields a standalone ``&&`` for ``_split_pipeline`` to break on.
+    Parentheses stay out of the punctuation set: making them tokens would
+    mangle ordinary operands like ``find . -name "(draft)*"``.
+
+    The newline is dropped from ``whitespace`` so it survives as a token rather
+    than being eaten as a space. Inside quotes it is still ordinary data, so
+    ``echo "a<newline>b"`` remains one operand.
+    """
+    if not full_access:
+        return shlex.split(command)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_FULL_ACCESS_PUNCTUATION)
+    lexer.whitespace_split = True
+    lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
+    lexer.whitespace = " \t\r"
+    return list(lexer)
+
+
+def _is_segment_separator(token: str) -> bool:
+    """Whether *token* ends one command and begins the next.
+
+    shlex emits a *run* of adjacent punctuation as a single token, so a newline
+    reaches here fused to whatever preceded it — ``;\\n``, ``&&\\n``, ``\\n|\\n``.
+    Any all-punctuation run containing a newline therefore separates, which is
+    what stops ``ls\\nrm -rf /tmp/x`` from being walked as one ``ls`` segment.
+    """
+    if token in _SEGMENT_SEPARATORS:
+        return True
+    return (
+        bool(token)
+        and "\n" in token
+        and all(char in _FULL_ACCESS_PUNCTUATION for char in token)
+    )
+
+
 _ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def _split_pipeline(cmd_parts: list) -> list:
-    """Split a shlex-split command on ``|`` into its non-empty segments."""
+    """Split tokenised *cmd_parts* on shell separators into non-empty segments.
+
+    Every segment is validated and audited on its own, which is what keeps a
+    refused binary in ``a && b`` from riding in on an allowed one — and what
+    keeps the audit record honest under full access, where the separators
+    actually reach a shell.
+    """
     segments: list = []
     current: list = []
     for part in cmd_parts:
-        if part == "|":
+        if _is_segment_separator(part):
             if current:
                 segments.append(current)
             current = []
@@ -782,7 +1020,31 @@ def _take_segment_envs(segments: list) -> tuple:
     return tuple(envs), stripped, None
 
 
-def _parse_line(command: str) -> tuple:
+def _parse_full_access_line(command: str) -> tuple:
+    """The whole line as one step: walked segment by segment, run intact.
+
+    Full access hands the original text to a shell, so nothing may be lifted
+    out of it — a heredoc body, a redirection and a ``cd`` are the shell's to
+    read, and it only reads them if they are still there. The segments are
+    split off the heredoc-stripped text all the same, because every one of
+    them still goes through the allowlist and into the audit record.
+    """
+    try:
+        cmd_parts = _tokenize(_strip_heredoc_bodies(command), full_access=True)
+    except ValueError as exc:
+        return [], {
+            "status": "error",
+            "error": f"Invalid command syntax: {exc}",
+            "has_errors": True,
+        }
+    segments = _split_pipeline(cmd_parts)
+    if not segments:
+        return [], {"status": "error", "error": "Empty command", "has_errors": True}
+    text = command.strip()
+    return [_Step(text=text, segments=segments, connector="", shell_text=text)], None
+
+
+def _parse_line(command: str, full_access: bool = False) -> tuple:
     """*command* as steps, or the refusal its text alone earns.
 
     Shape only — operators, quoting, pipes, and ``cd``'s form. What each
@@ -790,6 +1052,8 @@ def _parse_line(command: str) -> tuple:
     skill-grant check share one answer to what a segment IS before they
     disagree about anything else.
     """
+    if full_access:
+        return _parse_full_access_line(command)
     steps: list = []
     parts = _split_connectors(command)
     for raw_text, connector in parts:
@@ -971,7 +1235,7 @@ _UNIX_TO_WIN = {
 
 
 def _run_step(
-    step: _Step, cwd: str, timeout: float, granted: frozenset
+    step: _Step, cwd: str, timeout: float, granted: frozenset, full_access: bool = False
 ) -> subprocess.CompletedProcess:
     """Run one validated pipeline in *cwd*, and return what it produced.
 
@@ -979,7 +1243,9 @@ def _run_step(
 
     On Windows a step goes through cmd.exe as its own string — never the whole
     line, whose connectors cmd.exe would act on without any of the per-segment
-    validation the line has been through here.
+    validation the line has been through here. Under full access the step IS
+    the whole line, and it goes to a shell on every platform: a heredoc body
+    and a redirection are only meaningful to one.
     """
     segments = step.segments
 
@@ -1008,7 +1274,7 @@ def _run_step(
     # An environment assignment is scoped to its own segment, and cmd.exe owns
     # the whole string it is handed — so a step carrying one runs as argv here
     # too, and gives up cmd.exe's built-in resolution to keep that scope.
-    use_shell = (
+    use_shell = full_access or (
         os.name == "nt" and not lone_granted_segment and not any(step.envs or ())
     )
 
@@ -1104,7 +1370,7 @@ class ShellToolsMixin:
     Tools provided:
     - run_shell_command: Execute terminal commands with timeout and safety checks
 
-    Rate Limiting:
+    Rate Limiting (lifted under full access):
     - Max 10 commands per minute to prevent DOS
     - Max 3 commands per 10 seconds for burst prevention
     - A command over either limit waits for the window (up to
@@ -1149,9 +1415,14 @@ class ShellToolsMixin:
             directory, path traversal) stay with the caller, so a command this
             clears may still be refused later; one it rejects never runs.
         """
-        steps, error = _parse_line(command)
+        full_access = self.full_access_active()
+
+        steps, error = _parse_line(command, full_access=full_access)
         if error is not None:
-            return error, []
+            # A line whose shape cannot be parsed has no steps to approve, and
+            # the execution path runs a CONFIRM-tier error once approved — so
+            # the tier is stamped here rather than left for it to guess.
+            return {**error, "tier": TIER_REFUSE}, []
 
         granted = skill_granted_binaries(self)
         for step in steps:
@@ -1161,29 +1432,54 @@ class ShellToolsMixin:
                     segment,
                     step.text if len(step.segments) == 1 else " ".join(segment),
                     granted_binaries=granted,
+                    full_access=full_access,
                 )
                 if error:
-                    return error, []
+                    # Steps travel with the block: a TIER_CONFIRM one still has
+                    # to run once approved, and it can only run what was parsed.
+                    return error, steps
 
         return None, steps
+
+    def full_access_active(self) -> bool:
+        """Whether this session is running under full access (#3373).
+
+        One source of truth, read live: the session's output handler carries
+        ``full_access``, set only by the sidecar's ``PermissionState``
+        from ``--full-access`` or the TUI's ``/full-access``. Every gate reads
+        this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
+        tool description, the executor — so they cannot hold different opinions
+        about whether a command is legal.
+
+        Read live rather than resolved once because full access is toggleable
+        mid-session over the control channel; caching it would leave `/full-access
+        off` half-applied. Each ``run_shell_command`` reads it once and threads
+        that value through its own pre-flight and execution, so a toggle landing
+        mid-call cannot split the two.
+
+        Answers False for any host that never set it — a plain console, the
+        HTTP transport, a library embedding — which is what keeps the shipped
+        default byte-identical.
+        """
+        return bool(getattr(getattr(self, "console", None), "full_access", False))
 
     def policy_refusal_for_call(
         self, tool_name: str, tool_args: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """The refusal this call has already earned, before anyone is asked.
 
-        Read by ``Agent._policy_refusal``. A command the guardrails will refuse
-        must never raise a confirmation prompt: asking someone to approve
-        ``gh auth token`` when the answer is already no trains them to click
-        through, and frames a blocked action as merely risky. Refuse it first
-        and say why.
+        Read by ``Agent._policy_refusal``, which runs *before* the confirmation
+        prompt. ``TIER_REFUSE`` always stops here: an escalation a yes/no cannot
+        honestly describe (``gh auth token``, base64 PowerShell, ``git -c``
+        behind ``status``), or a shape the runner cannot execute at all.
 
-        The mirror of that rule is what makes writes work: a command that WOULD
-        run on approval must not be refused here. ``_validate_shell_command``
-        returns None for a granted binary's confirmable write, so it falls
-        through to the prompt instead of dying in front of it.
+        ``TIER_CONFIRM`` (``git commit``, ``npm test``, ``rm notes.txt``) falls
+        through to the prompt: refusing a command that would run on approval is
+        the dead end this tier removes. The exception is a run where only
+        ``GAIA_AUTO_APPROVE_TOOLS`` would approve it; see
+        :meth:`_approval_is_environment_only`.
 
-        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
         if tool_name != _POLICY_GATED_SHELL_TOOL:
@@ -1192,13 +1488,50 @@ class ShellToolsMixin:
         if not isinstance(command, str):
             return None
         error, _ = self._validate_shell_command(command)
-        if error is not None:
-            logger.info(
-                "Refusing %r before the confirmation prompt: %s",
-                command,
-                error.get("error"),
-            )
+        if error is None:
+            return None
+        if error.get("tier") != TIER_REFUSE:
+            if not self._approval_is_environment_only():
+                return None
+            error = self._environment_only_refusal(error)
+        logger.info(
+            "Refusing %r before the confirmation prompt: %s",
+            command,
+            error.get("error"),
+        )
         return error
+
+    def _approval_is_environment_only(self) -> bool:
+        """True when nothing but ``GAIA_AUTO_APPROVE_TOOLS`` would approve a prompt.
+
+        A host that opted in explicitly (the TUI's full access sets
+        ``auto_approve_gated_tools`` on the turn's handler) is a person deciding
+        for this session. The environment variable is a blanket pre-approval for
+        unattended runs, granted when commands outside the no-prompt list could
+        not be approved at all; it never agreed to widen what those runs execute.
+        """
+        console = getattr(self, "console", None)
+        if bool(getattr(console, "auto_approve_gated_tools", False)):
+            return False
+        if bool(getattr(console, "full_access", False)):
+            return False
+        # Deferred: the console module imports the package root.
+        from gaia.agents.base import console as console_mod
+
+        return console_mod.auto_approve_env_enabled()
+
+    @staticmethod
+    def _environment_only_refusal(error: Dict[str, Any]) -> Dict[str, Any]:
+        """A confirmable command's block, re-explained for an unattended run."""
+        return {
+            **error,
+            "tier": TIER_REFUSE,
+            "hint": (
+                "This run approves prompts through GAIA_AUTO_APPROVE_TOOLS, which "
+                "does not extend to commands outside the no-prompt list. Run it "
+                "interactively to approve it, or turn on full access in the TUI."
+            ),
+        }
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -1234,6 +1567,13 @@ class ShellToolsMixin:
             # anything else would skip the modal without enforcing the policy.
             return False
 
+        full_access = self.full_access_active()
+        if full_access:
+            # Every gated tool is pre-approved under full access; saying so here
+            # keeps this answer aligned with the console's, rather than leaving
+            # two predicates to disagree about whether the call was consented to.
+            return True
+
         granted = skill_granted_binaries(self)
         if not granted:
             return False
@@ -1243,7 +1583,8 @@ class ShellToolsMixin:
             return False
 
         # The same parse as the refusal path, or the two tiers disagree about
-        # what a segment is.
+        # what a segment is. Deliberately the default one: a grant exists to
+        # skip a prompt, and full access has no prompt to skip.
         steps, error = _parse_line(command)
         if error is not None or not steps:
             return False
@@ -1473,6 +1814,7 @@ class ShellToolsMixin:
         cmd_parts: list,
         command: str,
         granted_binaries: frozenset = frozenset(),
+        full_access: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -1484,6 +1826,10 @@ class ShellToolsMixin:
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
+            full_access: This session's ``--full-access`` state. When True
+                every confirmation is already answered yes, so only a
+                ``TIER_REFUSE`` result — something no approval can authorize —
+                is returned; the default path below is unchanged.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -1494,8 +1840,19 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
+        if full_access:
+            error = ShellToolsMixin._validate_command(
+                cmd_base,
+                cmd_parts,
+                command,
+                granted_binaries=granted_binaries,
+            )
+            if error is not None and error.get("tier") == TIER_REFUSE:
+                return error
+            return None
+
         # Skill-granted CLIs are gated by their own policy table instead of
-        # ALLOWED_COMMANDS; anything ungranted is still refused.
+        # ALLOWED_COMMANDS; anything ungranted still needs confirmation.
         # Imported here — gaia.skills pulls in the connector stack.
         from gaia.skills.binaries import (
             BINARY_POLICIES,
@@ -1509,22 +1866,15 @@ class ShellToolsMixin:
         binary = normalize_binary(policy_parts[0])
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
-            if binary not in granted_binaries:
-                return {
-                    "status": "error",
-                    "error": (
-                        f"Command '{binary}' is not available to this agent. It is "
-                        "granted only to a skill that declares "
-                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
-                        "first."
-                    ),
-                    "has_errors": True,
-                    "hint": f"{policy.summary} {policy.install_hint}",
-                }
+            # Classify BEFORE the grant check. A REFUSE-tier invocation
+            # (`gh auth token`) is refused on what it does, not on who may run
+            # it — gating first would let an ungranted one out to the
+            # confirmation prompt, which is weaker than the grant path.
             decision = classify_invocation(policy, policy_parts)
             if decision.outcome == REFUSE:
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": decision.message,
                     "has_errors": True,
                     "hint": (
@@ -1534,18 +1884,43 @@ class ShellToolsMixin:
                         "have run and why it is blocked."
                     ),
                 }
+            if binary not in granted_binaries:
+                return {
+                    "status": "error",
+                    "tier": TIER_CONFIRM,
+                    "error": (
+                        f"Command '{binary}' is not available to this agent. It is "
+                        "granted only to a skill that declares "
+                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
+                        "first."
+                    ),
+                    "has_errors": True,
+                    "hint": f"{policy.summary} {policy.install_hint}",
+                }
             return None
 
         # Special handling for git - only allow read-only operations
         if cmd_base == "git":
             if len(cmd_parts) > 1:
-                git_subcmd = cmd_parts[1].lower()
-                if git_subcmd not in SAFE_GIT_COMMANDS:
+                git_subcmd, resolve_error = _resolve_git_subcommand(cmd_parts)
+                if resolve_error is not None:
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
+                        "error": resolve_error,
+                        "has_errors": True,
+                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
+                    }
+                if (
+                    git_subcmd not in SAFE_GIT_COMMANDS
+                    and git_subcmd not in GIT_TERMINAL_FLAGS
+                ):
+                    return {
+                        "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
                         "has_errors": True,
-                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
+                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
                     }
             # A read-only subcommand still writes a caller-chosen path when it
             # is handed an output flag, and the subcommand check never sees it.
@@ -1585,6 +1960,7 @@ class ShellToolsMixin:
             if cmd_words & dangerous_wmic_ops:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only wmic queries are allowed (get, list). Modifying operations (call, create, delete, set) are blocked.",
                     "has_errors": True,
                     "hint": "Use 'wmic <alias> get <properties>' for safe queries",
@@ -1595,6 +1971,7 @@ class ShellToolsMixin:
             if any(_is_blocked_ps_flag(part) for part in cmd_parts[1:]):
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
                     "has_errors": True,
                     "hint": "Use -Command to pass a readable cmdlet string",
@@ -1647,6 +2024,7 @@ class ShellToolsMixin:
             if any(pat in ps_cmd for pat in DANGEROUS_PS_PATTERNS):
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only PowerShell cmdlets are allowed (Get-*, Select-Object, Format-*, Where-Object, etc.).",
                     "has_errors": True,
                     "hint": "Use Get-* cmdlets for safe queries",
@@ -1672,6 +2050,7 @@ class ShellToolsMixin:
                 ):
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": f"PowerShell cmdlet '{cmdlet}' is not allowed. Only read-only cmdlets are permitted.",
                         "has_errors": True,
                         "hint": "Allowed: Get-*, Select-Object, Format-List, Format-Table, Where-Object, Sort-Object",
@@ -1684,6 +2063,7 @@ class ShellToolsMixin:
                 if part.lower() in DANGEROUS_FIND_ACTIONS:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": (
                             f"find action '{part}' is not allowed: it can run "
                             "arbitrary commands, delete, or write files, "
@@ -1716,6 +2096,7 @@ class ShellToolsMixin:
                 if is_output:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
                         "has_errors": True,
                         "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
@@ -1748,6 +2129,7 @@ class ShellToolsMixin:
             if len(operands) >= 2:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "uniq with an output file is not allowed: it writes to disk, violating the read-only command policy.",
                     "has_errors": True,
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
@@ -1803,13 +2185,30 @@ class ShellToolsMixin:
                 }
             return {
                 "status": "error",
+                "tier": TIER_CONFIRM,
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
-                "hint": "Only read-only, informational commands are allowed",
+                "hint": (
+                    "Commands outside the no-prompt list run once the user "
+                    "approves them; they are not refused."
+                ),
                 "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
             }
 
         return None  # Command is allowed
+
+    def _audit_shell_execution(self, command: str, cwd: str, segments: list) -> None:
+        """Record a command run under full access, arguments and all.
+
+        Skipping the confirmation *prompt* must not mean skipping the *record*:
+        consent was granted in advance, which is exactly when the audit trail is
+        the only evidence of what the agent did.
+        """
+        from gaia.security import audit_shell_command
+
+        audit_shell_command(
+            command=command, cwd=cwd, segments=segments, mode="full_access"
+        )
 
     def register_shell_tools(self) -> None:
         """Register shell command execution tools."""
@@ -1841,8 +2240,12 @@ class ShellToolsMixin:
                 exit code, and 'steps' (each command with its own code)
             """
             try:
+                full_access = self.full_access_active()
+
                 # Check rate limits first to prevent DOS
-                allowed, reason, wait_time, waited = self._pace_rate_limit()
+                allowed, reason, wait_time, waited = (
+                    (True, "", 0.0, 0.0) if full_access else self._pace_rate_limit()
+                )
                 if not allowed:
                     return {
                         **NOT_EXECUTED,
@@ -1893,8 +2296,16 @@ class ShellToolsMixin:
                 # segment of every pipeline on the line. Shared with the
                 # pre-flight that runs before the confirmation prompt, so a
                 # command refused there is refused here for the same reason.
+                #
+                # A CONFIRM-tier command has already been through
+                # ``Agent._execute_tool``'s gate (the same single funnel that has
+                # always gated ``write_file``), so it runs here unless the only
+                # approval was the environment opt-in.
+                env_only = self._approval_is_environment_only()
                 error, steps = self._validate_shell_command(command)
-                if error:
+                if error and error.get("tier") != TIER_REFUSE and env_only:
+                    return self._environment_only_refusal(error)
+                if error and error.get("tier") == TIER_REFUSE:
                     return error
 
                 granted = skill_granted_binaries(self)
@@ -1917,6 +2328,11 @@ class ShellToolsMixin:
                     error = self._path_traversal_refusal(step, step_cwd, granted)
                     if error:
                         return error
+
+                if full_access:
+                    self._audit_shell_execution(
+                        command, cwd, [seg for st in steps for seg in st.segments]
+                    )
 
                 # Log command execution (debug mode)
                 if hasattr(self, "debug") and self.debug:
@@ -1951,6 +2367,7 @@ class ShellToolsMixin:
                             step_cwd,
                             max(deadline - time.monotonic(), 0),
                             granted,
+                            full_access=full_access,
                         )
                     except subprocess.TimeoutExpired as exc:
                         stdout_parts.append(_as_text(exc.stdout))
@@ -2000,8 +2417,10 @@ class ShellToolsMixin:
                 duration = time.monotonic() - start_time
 
                 # One line is one model step, so it costs one slot however many
-                # commands it chains.
-                self._record_command_execution()
+                # commands it chains. Full access spends no slot: it skipped the
+                # check that lazily creates the deque this would write to.
+                if not full_access:
+                    self._record_command_execution()
 
                 stdout = "".join(stdout_parts)
                 stderr = "".join(stderr_parts)

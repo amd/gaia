@@ -12,6 +12,13 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Changed
+
+- **Bypass permissions is now called full access, everywhere.** `--full-access`
+  and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
+  fail with a message naming the new one. `/full-access always` (or
+  `gaia config set full_access true`) keeps it on across launches.
+
 ### Fixed
 
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
@@ -73,6 +80,18 @@ the terminal UI meant building it from source.
   starts one in the background; `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns that off,
   and `GAIA_PROJECT_ROOT` picks the project when the working directory is not
   it. See SKILL §11.
+- **`--full-access` now lifts the shell guardrails too.** It used to skip
+  only the confirmation prompt, which left the agent unable to run a build or a
+  test suite even with the user's blanket consent: compound commands were
+  refused before they parsed, and no interpreter, test runner or package manager
+  was reachable. Under full access, `&&` / `||` / `;` / `>` and heredocs now
+  parse and run, any command runs inside the allowed paths without a prompt
+  (`rm` included), and the shell rate limit is dropped. Paths outside the
+  allowed directories and what no approval can authorize (`gh auth token`,
+  `git -c`, encoded PowerShell) stay refused. Off by default and unchanged when
+  off. Every command run this way is audit-logged with its full arguments.
+  Stdio only — the HTTP transport cannot be put in full access, and the request
+  body cannot ask for it. See SPEC §5.5.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a
@@ -240,9 +259,9 @@ the terminal UI meant building it from source.
   that killed only the launcher: the cancelled tool call ran to completion and
   the surviving process consumed the next message. The first Esc now sends the
   agent a `cancel` control message, so the turn ends and the session keeps its
-  loaded skills, "always" grants, history and bypass mode. A second Esc stops
+  loaded skills, "always" grants, history and full access. A second Esc stops
   the whole process tree.
-- **A restart after a hard stop no longer turns bypass permissions back on.**
+- **A restart after a hard stop no longer turns full access back on.**
   The replacement agent is launched in the session's current permission mode
   instead of from the original flags, and the TUI says what the restart lost.
 

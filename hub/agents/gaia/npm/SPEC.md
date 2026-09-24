@@ -401,8 +401,8 @@ It emits the identical canonical event vocabulary, but its input channel accepts
 a JSON line carrying a `gaia_control` key, which gives it something HTTP does
 not have: a back-channel that can answer a confirmation prompt *while* a turn is
 in flight, and stop that turn (`cancel`) without ending the process — so loaded
-skills, "always" grants, history and the bypass mode survive a cancel. It also
-takes `--bypass-permissions` (start with gating off) and
+skills, "always" grants, history and full access survive a cancel. It also
+takes `--full-access` (start with gating off) and
 `--use-claude` / `--claude-model` (route chat to the Anthropic API instead of
 local Lemonade; embeddings stay on Lemonade either way). None of that is
 reachable over `/v1/gaia/query`.
@@ -416,6 +416,30 @@ The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
+
+`--full-access` turns off more than the prompt. It also lifts the shell
+tool's own guardrails for the session: compound operators (`&&`, `||`, `;`, `>`)
+and heredocs parse and run, any command runs inside the allowed paths without a
+prompt (`rm`, `npm`, `make`, `pytest` alike), and the shell rate limit is
+dropped. That is arbitrary code execution in the working directory, which is why
+it exists only on this transport: one local parent process on a private pipe. It
+is **not** reachable over HTTP, and the request body cannot ask for it. Two
+refusals remain: a path outside the allowed directories (an argument, a
+redirect target, `working_directory`, `git -C`), and an invocation no approval
+can authorize (`gh auth token`, `git -c`, encoded PowerShell).
+
+Every shell command run under full access is recorded with its full arguments and its
+per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
+does not skip the record. Treat that file as sensitive; arguments are verbatim.
+The host can toggle full access mid-session over `gaia_control`, and the shell gates
+follow on the very next command.
+
+`--use-claude` is the one with a reach beyond the machine, and it cannot be
+turned on for what this package delivers: the terminal UI **refuses** it for a
+daemon-transport agent, with an error saying so, because the daemon relay has no
+way to switch inference backends. So the local-only claim in the README holds
+for every path this package installs — it is a property of the transport, not a
+default someone can flip.
 
 ---
 

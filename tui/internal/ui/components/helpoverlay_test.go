@@ -81,7 +81,7 @@ func isMsgTypeSwitch(tag ast.Expr) bool {
 }
 
 // chatModelCommands parses the string literals out of submit's `switch
-// query` the same way, plus normalizes the four /bypass variants (each is a
+// query` the same way, plus normalizes the four /full-access variants (each is a
 // distinct case value) down to the one command they all belong to.
 func chatModelCommands(t *testing.T) []string {
 	t.Helper()
@@ -178,18 +178,23 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 
 	// commandText does the same for submit's local commands.
 	commandText := map[string]string{
-		"/provider": "/provider",
-		"/help":     "/help",
-		"/clear":    "/clear",
-		"/memory":   "/memory",
-		"/setup":    "/setup",
-		"/bypass":   "/bypass",
-		"/agents":   "/agents",
+		"/provider":    "/provider",
+		"/help":        "/help",
+		"/clear":       "/clear",
+		"/memory":      "/memory",
+		"/setup":       "/setup",
+		"/full-access": "/full-access",
+		"/agents":      "/agents",
 	}
 	for _, cmd := range chatModelCommands(t) {
-		key := cmd
 		if strings.HasPrefix(cmd, "/bypass") {
-			key = "/bypass"
+			// The retired name: answered with a rename notice and deliberately
+			// never offered, so it has no palette or help entry.
+			continue
+		}
+		key := cmd
+		if strings.HasPrefix(cmd, "/full-access") {
+			key = "/full-access"
 		}
 		want, ok := commandText[key]
 		if !ok {

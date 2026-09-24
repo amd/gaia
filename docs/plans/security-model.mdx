@@ -219,6 +219,76 @@ The `risk_tier` parameter is stored in `_TOOL_REGISTRY[tool_name]["risk_tier"]`.
 The `_execute_tool` method in `src/gaia/agents/base/agent.py` checks the tier
 before execution and gates on confirmation if required.
 
+### 4.5 Full access and the shell guardrails
+
+**Status:** Shipped. **GitHub issues:** #3373, #3374.
+
+The flagship sidecar's `--full-access` (and the TUI's `/full-access`) is the
+one sanctioned place session-wide trust lives — see
+`src/gaia/agents/base/tool_grants.py`. It turns the confirmation prompt off, and
+it also lifts the shell tool's **own** guardrails, because turning off the prompt
+alone left the agent unable to do the work the user had just consented to:
+compound commands were refused before they parsed.
+
+**What comes off, together, and only under full access:**
+
+| Gate | Default | Under full access |
+|------|---------|-------------------|
+| Shell operator block (`&&`, `\|\|`, `;`, `>`, `>>`, `<`, `` ` ``, `$()`, heredocs) | refused before parsing | parsed and executed by a real shell |
+| Confirmation prompts | asked for anything outside the no-prompt list | pre-approved |
+| No-prompt allowlist (`ALLOWED_COMMANDS` + the git / PowerShell / `find` / `sort` / `uniq` sub-guards) | outside it, the user is asked | nothing inside the allowed paths is allow-listed; `rm`, `npm`, `make` run |
+| Shell rate limit | enforced | lifted |
+
+**What stays refused.** Full access answers every *confirmation* yes; it does not
+widen what the session can reach:
+
+- **Paths outside the allowed directories** — an argument, a redirect target,
+  `working_directory`, or `git -C`/`--git-dir`/`--work-tree`.
+- **The refuse tier** — invocations a yes/no cannot honestly describe:
+  credential-printing CLI calls (`gh auth token`), `git -c` / `--config-env` /
+  `--exec-path`, encoded or file-launched PowerShell, and a command the
+  tokenizer cannot parse.
+
+A heredoc body is input to its command, not a command, so the per-segment walk
+skips it; the lines before and after it are still validated.
+
+**Blast radius: arbitrary code execution** inside the allowed paths. An
+interpreter can reach anything the process can, so the path checks bound what the
+*shell tool* names, not what a script it launches does.
+
+**Stdio transport only.** Full access exists on the sidecar's stdio transport,
+which is one local parent process on a private pipe. It is not reachable on the
+HTTP transport (`hub/agents/gaia/python/gaia_agent/server.py`): that is a bound
+socket, and an unguarded shell reachable over it is remote code execution rather
+than a relaxed permission model. The HTTP handler pins `full_access = False`, the
+request model forbids unknown fields so a client cannot ask for it, and there is
+no HTTP equivalent of the `gaia_control` full-access verb. Token auth and
+`HostOriginMiddleware` (`caller_auth.py`) continue to guard that surface for
+everything else.
+
+**It still audits.** Skipping the confirmation *prompt* does not skip the
+*record*. Every command executed under full access is written to
+`~/.gaia/cache/file_audit.log` with its full arguments and its per-segment
+breakdown, so `cd build && make` is two auditable invocations rather than one
+opaque string. Arguments are recorded verbatim, so a secret passed on a command
+line lands in that file — treat it as sensitive.
+
+Command substitution is the one thing full access cannot audit precisely: the
+body of a `$(...)` is not a segment and is not individually validated. It runs
+because the shell runs it.
+
+<Note>
+`full_access` is a **separate** handler attribute from
+`auto_approve_gated_tools`, and only `PermissionState` sets both. An unattended
+harness that merely pre-approves prompts — `GAIA_AUTO_APPROVE_TOOLS=1`, or a
+library host passing `auto_approve_gated_tools=True` — does **not** inherit an
+unguarded shell.
+
+Full access is toggleable mid-session over the control channel, so the shell
+gates read it live rather than caching it: `/full-access off` puts the
+guardrails back on the very next command.
+</Note>
+
 ---
 
 ## 5. MCP Security

@@ -5,7 +5,7 @@
 
 The rule these pin: a grant may never exceed the call the prompt showed. One
 keypress on a prompt about `gh auth token` must not hand over the shell for the
-rest of the session — that is what bypass mode is for, and bypass mode is
+rest of the session — that is what full access is for, and full access is
 explicit and indicated.
 """
 

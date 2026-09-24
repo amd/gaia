@@ -53,9 +53,12 @@ type FlagshipModel struct {
 	width  int
 	height int
 	dev    bool
-	// bypassPermissions starts the agent with confirmation prompts off
-	// (--bypass-permissions). Off unless the launch asked for it.
-	bypassPermissions bool
+	// fullAccess starts the agent with confirmation prompts off
+	// (--full-access). Off unless the launch asked for it.
+	fullAccess bool
+	// fullAccessNotice explains, in the first chat frame, why a saved full-access
+	// preference was not applied to this launch. Empty when there is nothing to say.
+	fullAccessNotice string
 	// useClaude starts the agent against Anthropic's Claude API instead of the
 	// local Lemonade backend (--use-claude). claudeModel optionally picks the
 	// Claude model.
@@ -192,14 +195,20 @@ func (m FlagshipModel) WithLocalPreflight(opts preflight.LocalOptions) FlagshipM
 	return m
 }
 
-// WithBypassPermissions starts the agent with confirmation prompts off.
+// WithFullAccess starts the agent with confirmation prompts off.
 //
 // A builder rather than a constructor parameter, for the same reason
 // WithPreflight is one: the flag is opt-in and rare, and threading it through
 // every caller — including a dozen tests that do not care — would make the
 // default path noisier than the feature.
-func (m FlagshipModel) WithBypassPermissions(enabled bool) FlagshipModel {
-	m.bypassPermissions = enabled
+func (m FlagshipModel) WithFullAccess(enabled bool) FlagshipModel {
+	m.fullAccess = enabled
+	return m
+}
+
+// WithFullAccessNotice carries a status line into the chat view when it opens.
+func (m FlagshipModel) WithFullAccessNotice(text string) FlagshipModel {
+	m.fullAccessNotice = text
 	return m
 }
 
@@ -467,11 +476,11 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
 		Dev: m.dev, Logf: m.logf, Interactive: true,
-		Model:             m.model,
-		Trace:             m.trace,
-		BypassPermissions: m.bypassPermissions,
-		UseClaude:         m.useClaude,
-		ClaudeModel:       m.claudeModel,
+		Model:       m.model,
+		Trace:       m.trace,
+		FullAccess:  m.fullAccess,
+		UseClaude:   m.useClaude,
+		ClaudeModel: m.claudeModel,
 	})
 	if err != nil {
 		m.pendingTranscript = nil
@@ -504,6 +513,9 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 
 	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, agent.Version, m.dev, setupVerified).
 		WithHubClient(m.hub())
+	if m.fullAccessNotice != "" {
+		chatModel = chatModel.WithNotice(m.fullAccessNotice)
+	}
 	if len(m.pendingTranscript) > 0 {
 		// Set only on the switch path (switchAgent) — a fresh launch never
 		// has one, so this is a no-op there.
