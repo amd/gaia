@@ -681,9 +681,8 @@ class TestFilesystemFailureModes:
 
         assert result is None
 
-    def test_unreadable_file_is_skipped_not_crashed(self, tmp_path):
-        """A permission error while reading must be caught, not propagated —
-        one unreadable file must not abort the whole index."""
+    def test_unreadable_file_is_distinct_from_policy_skip(self, tmp_path):
+        """The caller must distinguish failed reads from intentionally skipped files."""
         skip_if_unavailable()
         sdk = make_sdk(tmp_path)
         f = tmp_path / "locked.py"
@@ -692,9 +691,8 @@ class TestFilesystemFailureModes:
         with patch(
             "pathlib.Path.read_text", side_effect=PermissionError("access denied")
         ):
-            result = sdk._read_file_safe(str(f))
-
-        assert result is None
+            with pytest.raises(PermissionError, match="access denied"):
+                sdk._read_file_safe(str(f))
 
 
 class TestDroppedChunksAreRetriedNextIndex:
@@ -770,9 +768,10 @@ class TestWalkBound:
         import logging
 
         with caplog.at_level(logging.WARNING):
-            files = sdk._discover_files()
+            files, truncated = sdk._discover_files()
 
         assert 0 < len(files) < 30
+        assert truncated
         assert any("max_walk_entries" in r.message for r in caplog.records)
 
     def test_default_budget_does_not_touch_a_normal_repo(self, tmp_path):
@@ -782,4 +781,6 @@ class TestWalkBound:
         for i in range(5):
             (repo / f"f{i}.py").write_text("x = 1\n", encoding="utf-8")
         sdk = make_sdk(tmp_path)
-        assert len(sdk._discover_files()) == 5
+        files, truncated = sdk._discover_files()
+        assert len(files) == 5
+        assert not truncated

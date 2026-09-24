@@ -88,6 +88,8 @@ setup(
         "gaia.web",
         "gaia.code_index",
         "gaia.apps.webui",
+        "gaia.messaging",
+        "gaia.messaging.slack",
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
@@ -232,6 +234,13 @@ setup(
         ],
         "telegram": [
             "python-telegram-bot>=20.3",
+        ],
+        "slack": [
+            "slack-sdk>=3.27",
+            "psutil>=5.9.0",
+        ],
+        "litellm": [
+            "litellm>=1.35.0,<2.0",
         ],
         "dev": [
             "pytest",
