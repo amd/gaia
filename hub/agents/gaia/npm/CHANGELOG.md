@@ -14,6 +14,7 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.
 - Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
