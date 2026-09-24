@@ -292,3 +292,26 @@ class TestVerifyAfterChangeHelpers:
 
     def test_no_root_means_no_suite(self):
         assert not project_has_tests(None)
+
+
+@pytest.mark.parametrize(
+    "output,is_a_test_run",
+    [
+        # A compiler, a downloader, a packager — all print these, and reading
+        # one as "the tests ran" silently cancels the reminder.
+        ("2 warnings", False),
+        ("12 skipped", False),
+        ("Found 3 errors", False),
+        # A real runner: an outcome, or pytest's own rule / timing tail.
+        ("1 failed, 2 passed in 0.20s", True),
+        ("===== 3 skipped in 0.01s =====", True),
+        ("3 skipped in 0.01s", True),
+        ("===== 2 warnings =====", True),
+        ("no tests ran", True),
+        ("Ran 4 tests in 0.003s", True),
+    ],
+)
+def test_soft_counts_alone_are_not_a_test_run(output, is_a_test_run):
+    from gaia.agents.base.verification import has_test_run_summary
+
+    assert has_test_run_summary(output) is is_a_test_run
