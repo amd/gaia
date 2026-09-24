@@ -133,6 +133,33 @@ class TestSystemPromptAgreesWithTheToolset:
 
 
 class TestTranscribeMedia:
+    @pytest.mark.parametrize("fail_decode", [False, True])
+    def test_owned_scratch_directory_is_removed_on_failure(self, tmp_path, fail_decode):
+        source = tmp_path / "meeting.mp4"
+        source.write_bytes(b"source")
+        decoded = []
+
+        def decode(_source, *, dest, progress_callback):
+            decoded.append(dest)
+            dest.write_bytes(b"partial audio")
+            if fail_decode:
+                raise RuntimeError("decode failed")
+            return dest
+
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=10),
+            patch("gaia.audio.media.to_wav16k_mono", side_effect=decode),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.transcribe.side_effect = ConnectionError("ASR down")
+            result = Host()._transcribe_media(str(source))
+
+        assert result["status"] == "error"
+        assert len(decoded) == 1
+        assert not decoded[0].parent.exists()
+        assert source.read_bytes() == b"source"
+
     def test_missing_file_is_actionable_and_does_no_work(self, tmp_path):
         """A bad path must not trigger an ffmpeg install or a model pull."""
         with patch("gaia.audio.media.ensure_ffmpeg") as ffmpeg:
@@ -288,26 +315,6 @@ class TestTranscribeMedia:
         # The full transcript is still on disk, in one piece.
         assert (tmp_path / "t.txt").read_text(encoding="utf-8").strip()
 
-    def test_scratch_wav_is_removed_even_on_failure(self, tmp_path):
-        """The decoded WAV is large; it must not survive a failed transcription."""
-        source = tmp_path / "meeting.mp4"
-        source.write_bytes(b"stub")
-        wav = tmp_path / "scratch.wav"
-        wav.write_bytes(b"stub")
-
-        with (
-            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
-            patch("gaia.audio.media.probe_duration", return_value=2754.0),
-            patch("gaia.audio.media.to_wav16k_mono", return_value=wav),
-            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
-        ):
-            client.return_value.transcribe.side_effect = ConnectionError("server down")
-            result = Host()._transcribe_media(str(source))
-
-        assert result["status"] == "error"
-        assert "server down" in result["error"]
-        assert not wav.exists()
-
     def test_ffmpeg_failure_surfaces_the_install_hint(self, tmp_path):
         """No silent degradation — the user must be told how to fix it."""
         source = tmp_path / "meeting.mp4"
@@ -354,6 +361,52 @@ class TestRefineTranscript:
             encoding="utf-8",
         )
         return raw
+
+    @pytest.mark.parametrize("method", ["_name_known_voices", "_consolidate_speakers"])
+    @pytest.mark.parametrize(
+        "failure", [ConnectionError("server down"), RuntimeError("empty reply")]
+    )
+    def test_speaker_processing_does_not_hide_infrastructure_failure(
+        self, method, failure
+    ):
+        host = Host()
+        turns = [("A", "first"), ("B", "second"), ("C", "third")]
+        with patch.object(host, "_llm_text", side_effect=failure):
+            with pytest.raises(type(failure), match=str(failure)):
+                getattr(host, method)(turns)
+
+    @pytest.mark.parametrize("diarized", [True, False], ids=["diarized", "text-only"])
+    def test_naming_failure_returns_error_without_output(self, tmp_path, diarized):
+        """Both branches report a failed model call and leave the raw files alone."""
+        from gaia.agents.tools.audio_tools import timings_path_for
+
+        raw = self._transcript_with_timings(
+            tmp_path, [{"start": 0.0, "end": 1.0, "text": "Hello"}]
+        )
+        timings = timings_path_for(raw)
+        if diarized:
+            payload = json.loads(timings.read_text(encoding="utf-8"))
+            payload["speakers"] = [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}]
+            timings.write_text(json.dumps(payload), encoding="utf-8")
+        raw_before, timings_before = raw.read_text(), timings.read_text()
+        destination = tmp_path / "refined.md"
+        host = Host()
+        failing = "_name_known_voices" if diarized else "_consolidate_speakers"
+        with (
+            patch.object(host, "_name_turns", return_value=[("A", "Hello")]),
+            patch.object(host, failing, side_effect=ConnectionError("server down")),
+        ):
+            result = host._refine_transcript(str(raw), str(destination))
+
+        assert result["status"] == "error"
+        assert "server down" in result["error"]
+        # The error says the raw transcript survived and how to retry.
+        assert str(raw) in result["error"]
+        assert "refine_transcript" in result["error"]
+        assert result["source_transcript"] == str(raw)
+        assert not destination.exists()
+        assert raw.read_text() == raw_before
+        assert timings.read_text() == timings_before
 
     def test_missing_transcript_is_actionable(self, tmp_path):
         result = Host()._refine_transcript(str(tmp_path / "nope.txt"))
