@@ -3,7 +3,6 @@
 """Coverage, exact evidence, turn isolation and deterministic enumeration."""
 
 import json
-import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -131,8 +130,8 @@ def test_same_span_sentence_period_variants_keep_original_values():
     assert reconcile_occurrence(first, second) == first
     assert reconcile_occurrence(second, first) == first
     assert first.text == "cue: look up."
-    # With no identity field, a different value is a different item.
-    assert reconcile_occurrence(entry("up."), first) is None
+    # The same spot named less fully is the same item; keep the fuller value.
+    assert reconcile_occurrence(entry("up."), first) == first
 
 
 def test_broad_quote_does_not_hide_missed_neighbor_on_later_page():
@@ -142,15 +141,15 @@ def test_broad_quote_does_not_hide_missed_neighbor_on_later_page():
     def ask(system, payload):
         page = json.loads(payload)["source_page"]
         seen.append(page)
-        if len(seen) <= 2:
-            return reply("Exercise A then Exercise B") if len(seen) == 1 else reply()
-        return reply("Exercise B")
+        if len(seen) == 1:
+            return reply("Exercise A then Exercise B")
+        return (
+            reply("Exercise B") if "Exercise B" in page and len(seen) > 2 else reply()
+        )
 
-    # Ambiguous overlapping evidence is explicit failure, never masking B
-    # out of the next page and silently reporting the first inventory complete.
-    with pytest.raises(ValueError, match="Conflicting"):
-        extract_pages(source, "List every exercise", ask, lambda: None)
-    assert "Exercise B" in seen[2]
+    entries, _ = extract_pages(source, "List every exercise", ask, lambda: None)
+    # The broad item never swallows B: B is kept as its own entry.
+    assert "Exercise B" in [e.text for e in entries]
 
 
 def test_new_field_schema_invalidates_every_cached_source(tmp_path):
@@ -560,15 +559,15 @@ def test_item_found_only_from_neighboring_page_is_retained():
     assert len(items) == 1 and items[0].start == 3900
 
 
-def test_overlapping_conflicting_items_fail_instead_of_guessing():
+def test_different_items_over_one_quote_are_both_kept():
     answers = iter([reply("Squat — 5 reps"), reply("Squat"), reply("Squat")])
-    with pytest.raises(ValueError, match="Conflicting"):
-        extract_pages(
-            "Squat — 5 reps",
-            "List every exercise",
-            lambda *a: next(answers),
-            lambda: None,
-        )
+    entries, _ = extract_pages(
+        "Squat — 5 reps",
+        "List every exercise",
+        lambda *a: next(answers),
+        lambda: None,
+    )
+    assert sorted(e.text for e in entries) == ["Squat", "Squat — 5 reps"]
 
 
 def test_required_fields_cannot_be_silently_omitted():
@@ -787,20 +786,28 @@ def test_overlap_enriches_missing_fields_without_losing_provenance(reverse):
     )
 
 
+def test_two_descriptions_of_one_item_are_both_kept():
+    from gaia.agents.base.extraction import Entry
+
+    old_values, new_values = {"name": "Lift", "cue": "slow"}, {
+        "name": "Lift",
+        "cue": "fast",
+    }
+    first = Entry(10, 30, "a", "old", tuple(old_values.items()))
+    second = Entry(0, 40, "b", "new", tuple(new_values.items()))
+    assert dict(reconcile_occurrence(first, second).fields)["cue"] == "slow / fast"
+
+
 @pytest.mark.parametrize(
     "old_values,new_values",
     [
-        ({"name": "Lift", "cue": "slow"}, {"name": "Lift", "cue": "fast"}),
-        ({"name": "not stated", "cue": "not stated"}, {"name": "Lift", "cue": "slow"}),
         (
             {"name": "Lift", "reps": "3", "cue": "not stated"},
             {"name": "Squat", "reps": "3", "cue": "slow"},
         ),
     ],
 )
-def test_enrichment_rejects_conflicts_and_unidentified_neighbors(
-    old_values, new_values
-):
+def test_different_names_over_one_quote_are_different_items(old_values, new_values):
     from gaia.agents.base.extraction import Entry
 
     first = Entry(10, 30, str(old_values), "old", tuple(old_values.items()))
@@ -852,13 +859,13 @@ def test_repeated_items_with_shared_context_are_not_silently_deduplicated():
     ]
     entries = parse_page(json.dumps({"complete": True, "items": items}), page, 0)
     assert reconcile_occurrence(*entries) is None
-    with pytest.raises(ValueError, match="Conflicting"):
-        extract_pages(
-            page,
-            "List every exercise",
-            lambda *_: json.dumps({"complete": True, "items": items}),
-            lambda: None,
-        )
+    kept, _ = extract_pages(
+        page,
+        "List every exercise",
+        lambda *_: json.dumps({"complete": True, "items": items}),
+        lambda: None,
+    )
+    assert len(kept) >= 2
 
 
 FIELDS = ("name", "target area", "cue")
@@ -983,38 +990,29 @@ def test_broad_quote_never_absorbs_two_repeated_items(fields, broad_first):
         # A retry repeats the model's last answer.
         return json.dumps({"complete": True, "items": replies[min(len(calls), 2) - 1]})
 
-    # Either the ambiguity fails loudly, or the retry keeps both squats.
-    try:
-        entries, _ = extract_pages(
-            page, "List every exercise", ask, lambda: None, fields
-        )
-    except ValueError as error:
-        assert re.search("Conflicting|multiple occurrences|more than once", str(error))
+    # Neither squat may vanish: each occurrence keeps an entry of its own.
+    entries, _ = extract_pages(page, "List every exercise", ask, lambda: None, fields)
+    if fields:
+        assert sorted(e.anchor[0] for e in entries) == [0, 20]
     else:
-        assert len(entries) == 2
+        assert any(e.end <= 17 for e in entries)
+        assert any(e.start >= 16 for e in entries)
 
 
-def test_ambiguous_reply_is_retried_with_the_validation_error():
+def test_one_reply_naming_a_person_twice_keeps_both_and_says_so(tmp_path):
     page = "Today Bob and Carol, engineers, joined."
-    # One reply reporting the same person twice is ambiguous.
-    bad = [
+    items = [
         {"quote": "Today Bob", "fields": {"name": "Bob"}},
         {"quote": "Bob and", "fields": {"name": "Bob"}},
     ]
-    good = [
-        {"quote": "Bob and", "fields": {"name": "Bob"}},
-        {"quote": "Carol, engineers", "fields": {"name": "Carol"}},
-    ]
-    payloads = []
-
-    def ask(system, payload):
-        payloads.append(json.loads(payload))
-        items = bad if len(payloads) == 1 else good if len(payloads) == 2 else []
-        return json.dumps({"complete": True, "items": items})
-
-    entries, _ = extract_pages(page, "List every person", ask, lambda: None, ("name",))
-    assert "validation_error" in payloads[1]
-    assert [dict(e.fields)["name"] for e in entries] == ["Bob", "Carol"]
+    state = ExtractionLedger("List every person in s.txt fields: name", str(tmp_path))
+    state.run(
+        "s.txt",
+        lambda p: page,
+        lambda *a: json.dumps({"complete": True, "items": items}),
+        lambda: None,
+    )
+    assert "(may repeat item 1)" in state.render()
 
 
 def test_transcript_sentence_quoted_differently_across_pages_extracts_once():
@@ -1305,8 +1303,10 @@ def test_values_and_quotes_match_whole_words_only():
     raw = json.dumps(
         {"complete": True, "items": [{"quote": "the farm", "fields": {"name": "arm"}}]}
     )
-    with pytest.raises(ValueError, match="verbatim"):
-        parse_page(raw, "go to the farm", 0, ("name",))
+    # "arm" is not a word of "the farm".
+    assert (
+        parse_page(raw, "go to the farm", 0, ("name",))[0].note == "label not in quote"
+    )
     roster = "Ana Lee 10, Ana Lee 1."
     raw = json.dumps(
         {
@@ -1384,3 +1384,22 @@ def test_free_text_repeat_in_one_quote_is_never_merged():
     first = Entry(5, 15, "march", "then march")
     second = Entry(10, 25, "march", "march march and")
     assert reconcile_occurrence(first, second) is None
+
+
+@pytest.mark.parametrize(
+    "name, quote, grounded",
+    [
+        ("Big circles (arms)", "let's do some big circles and bring one arm", True),
+        ("Stretch arms back", "let's just stretch the arms back", True),
+        ("Core Lean", "leaning back into the chair", True),
+        ("squats", "hi everyone welcome", False),
+    ],
+)
+def test_a_composed_name_must_come_from_its_quote(name, quote, grounded):
+    raw = json.dumps(
+        {"complete": True, "items": [{"quote": quote, "fields": {"name": name}}]}
+    )
+    entry = parse_page(raw, quote, 0, ("name",))[0]
+    assert entry.anchor == ()
+    # An untraceable label is kept with its quote, but marked.
+    assert entry.note == ("" if grounded else "label not in quote")

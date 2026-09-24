@@ -147,6 +147,8 @@ class Entry:
     anchor: tuple = ()
     # Every span of that value when the quote names it more than once.
     choices: tuple = ()
+    # Shown with the item: its label could not be traced to the quote.
+    note: str = ""
 
 
 def _place(entry):
@@ -155,13 +157,47 @@ def _place(entry):
 
 
 def _same_place(first, second):
+    """Located names must overlap; otherwise the quotes must mostly overlap.
+
+    Neighbouring items often quote a little of each other's text; only a
+    quote sharing at least half of the shorter one is the same stretch.
+    """
     if first.anchor and second.anchor:
         return _overlaps(first.anchor, second.anchor)
-    return _overlaps((first.start, first.end), (second.start, second.end))
+    shared = min(first.end, second.end) - max(first.start, second.start)
+    return shared > 0 and 2 * shared >= min(
+        first.end - first.start, second.end - second.start
+    )
 
 
 def _stated(value):
     return value.lower() != "not stated"
+
+
+_FILLER = frozenset(
+    "the and with your our you for this that just now then let lets into from "
+    "are was were will can have has here there what when".split()
+)
+
+
+def _words(text):
+    """Content words, crudely stemmed: "leaning" and "lean" count as one."""
+    return {
+        re.sub(r"(?:ing|ed|es|s)$", "", word) or word
+        for word in re.findall(r"[a-z0-9]+", text.lower())
+        if len(word) > 2 and word not in _FILLER
+    }
+
+
+def _shares_words(label, quote):
+    """A composed name ("Big circles (arms)") must come from its quote's words."""
+    return bool(_words(label) & _words(quote))
+
+
+def _same_value(first, second):
+    return " ".join(first.lower().split()).rstrip(".") == " ".join(
+        second.lower().split()
+    ).rstrip(".")
 
 
 def _identity_fields(fields):
@@ -238,57 +274,40 @@ def _union_quote(first, second):
 
 
 def reconcile_occurrence(first, second):
-    """Merge two overlapping extractions of one occurrence, or return None.
+    """Merge two extractions of the same item, or return None for two items.
 
-    Field values are verbatim in their quotes. Two extractions are one
-    occurrence when an identity field (one named for a name, id or title, else
-    the first requested field) states the same value at a shared source offset
-    and every other value both state sits at one location, one inside the other
-    (a page boundary may cut a description short, never a name). The merged entry spans both quotes and
-    keeps the fuller value of each field. A shared name at different offsets is
-    a repeated item, never merged. Free text cannot be located, so it needs
-    equal text and a quote that contains the other, locates the text at a
-    shared offset, or shares at least half of the shorter quote.
+    Items at different places, or two free-text items that say different
+    things, stay separate; so does a free-text item repeated inside one quote.
+    For fields, matching or nested values keep the fuller one; different names
+    are different items, and differing descriptions of one item are both kept,
+    joined with " / ", so nothing stated is lost.
     """
     if not _same_place(first, second):
         return None
     if not first.fields or not second.fields:
-        if first.text != second.text:
-            return None
-        contained = (first.start <= second.start and first.end >= second.end) or (
-            second.start <= first.start and second.end >= first.end
-        )
         first_at, second_at = _anchors(first, first.text), _anchors(second, second.text)
         if len(first_at) > 1 or len(second_at) > 1:
             # "march march": the text cannot say which occurrence it means.
             return None
-        anchored = first_at & second_at
-        # Repeats can share only the context between them, not most of a quote.
-        shared = min(first.end, second.end) - max(first.start, second.start)
-        mostly = 2 * shared >= min(len(first.quote), len(second.quote))
-        return first if contained or anchored or mostly else None
+        return first if _same_value(first.text, second.text) else None
     old, new = dict(first.fields), dict(second.fields)
     if old.keys() != new.keys():
         return None
     identity = _identity_fields([name for name, _ in first.fields])
-    both = [name for name in old if _stated(old[name]) and _stated(new[name])]
     values = {}
     for name, value in first.fields:
         other = new[name]
-        if name not in both:
+        if not (_stated(value) and _stated(other)):
             values[name] = value if _stated(value) else other
-            continue
-        # "march" inside "march in place" names a different item.
-        if name in identity and value.rstrip(".") != other.rstrip("."):
+        elif _same_value(value, other) or _nested(first, value, second, other):
+            values[name] = max(value, other, key=len)
+        elif name in identity:
+            # Two different names are two items, even over one stretch of text.
             return None
-        if not _nested(first, value, second, other):
-            return None
-        values[name] = max(value, other, key=len)
-    # An unstated name (page opened mid-item) falls back to any equal field.
-    if not any(name in both for name in identity) and not any(
-        old[name].rstrip(".") == new[name].rstrip(".") for name in both
-    ):
-        return None
+        else:
+            values[name] = (
+                value if other in value.split(" / ") else f"{value} / {other}"
+            )
     start, end, quote = _union_quote(first, second)
     return Entry(
         start,
@@ -304,6 +323,8 @@ def reconcile_occurrence(first, second):
             if first.anchor and second.anchor
             else first.anchor or second.anchor
         ),
+        # A label traced on either side is traced.
+        note=first.note if first.note and second.note else "",
     )
 
 
@@ -340,13 +361,6 @@ def parse_page(reply, page, base, fields=()):
                     "Every requested field must be present (use not stated for missing source facts)"
                 )
             values = {name: " ".join(v.split()) for name, v in values.items()}
-            if isinstance(quote, str) and any(
-                value.lower() != "not stated" and not _spans(quote, value)
-                for value in values.values()
-            ):
-                raise ValueError(
-                    "Field values must be copied verbatim from their source quote"
-                )
             text = "; ".join(f"{name}: {values[name]}" for name in fields)
         if not isinstance(text, str) or not text.strip() or len(text) > 4000:
             raise ValueError("Missing or oversized item fields")
@@ -360,16 +374,18 @@ def parse_page(reply, page, base, fields=()):
                 "Ambiguous repeated quote; include distinctive surrounding source words"
             )
         start, end = found[0]
-        anchor, choices = (), ()
+        anchor, choices, note = (), (), ""
         if fields:
-            stated = [n for n in _identity_fields(fields) if _stated(values[n])]
-            stated = stated or [n for n in fields if _stated(values[n])]
-            if not stated:
+            if not any(_stated(v) for v in values.values()):
                 raise ValueError("Every field is not stated; that is not an item")
-            spans = _spans(page[start:end], values[stated[0]])
-            if stated[0] in _identity_fields(fields):
-                # A quote may name its item twice ("shoulder rolls ... shoulder
-                # rolls"); merge_occurrences picks which occurrence it is.
+            # A name copied from the quote locates the item; a label the model
+            # composed ("Big circles (arms)") leaves the quote to locate it.
+            named = [n for n in _identity_fields(fields) if _stated(values[n])]
+            spans = _spans(page[start:end], values[named[0]]) if named else []
+            if named and not spans and not _shares_words(values[named[0]], quote):
+                # Keep the item, with its verbatim quote, but say so.
+                note = "label not in quote"
+            if spans:
                 choices = tuple((base + start + a, base + start + b) for a, b in spans)
                 anchor = choices[0]
         entries.append(
@@ -382,6 +398,7 @@ def parse_page(reply, page, base, fields=()):
                 tuple((name, values[name]) for name in fields),
                 anchor,
                 choices if fields and len(choices) > 1 else (),
+                note,
             )
         )
     return entries
@@ -442,44 +459,55 @@ def merge_occurrences(entries, members, candidates):
     """Merge ``(entry, reply)`` candidates into copies of the ledger.
 
     *members* maps each entry to every ``(extraction, reply)`` merged into it.
-    Two items from one reply are distinct by definition, and a candidate must
-    match every extraction already merged, so one entry never absorbs two
-    occurrences. Ambiguous evidence raises.
+    A candidate joins an entry only when it reconciles with every extraction
+    already merged there and none came from its own reply (one reply's items
+    are distinct by definition). Anything uncertain stays a separate entry:
+    a possible repeat is shown, never silently dropped.
     """
     entries, members = dict(entries), dict(members)
     for entry, origin in candidates:
         if entry.choices:
             entry = _resolve_occurrence(entry, origin, entries, members)
-        overlaps = [
+        matches = [
             key
             for key in entries
-            if any(_same_place(m, entry) for m, _ in members[key])
-        ]
-        if len(overlaps) > 1:
-            raise ValueError(
-                "One extraction overlaps multiple occurrences; use distinct source quotes"
-            )
-        merged = [(entry, origin)]
-        if overlaps:
-            key = overlaps[0]
-            prior = entries[key]
-            retained = reconcile_occurrence(prior, entry)
-            if retained is None or any(
-                reply == origin or reconcile_occurrence(m, entry) is None
+            if all(
+                reply != origin and reconcile_occurrence(m, entry) is not None
                 for m, reply in members[key]
-            ):
-                raise ValueError(
-                    f"Conflicting evidence at source characters {prior.start}-"
-                    f"{prior.end} (quote: {prior.quote[:80]!r}). One item was "
-                    "reported twice with different values, or two items share a "
-                    "name span; do not discard stated values: " + prior.text
-                )
-            del entries[key]
-            merged += members.pop(key)
-            entry = retained
-        entries[(entry.start, entry.end)] = entry
-        members[(entry.start, entry.end)] = merged
+            )
+        ]
+        merged = [(entry, origin)]
+        # Try the entry sharing the most source text first.
+        ranked = sorted(
+            (-_shared(_place(entries[key]), _place(entry)), index, key)
+            for index, key in enumerate(matches)
+        )
+        for _, _, key in ranked:
+            retained = reconcile_occurrence(entries[key], entry)
+            if retained is not None:
+                del entries[key]
+                merged += members.pop(key)
+                entry = retained
+                break
+        # Two separate items may share a quote span; the id keeps keys unique.
+        key = (entry.start, entry.end, id(entry))
+        entries[key] = entry
+        members[key] = merged
     return entries, members
+
+
+def _likely_repeat(first, second):
+    """Two kept entries that share text and name: possibly one item twice."""
+    if max(first.start, second.start) >= min(first.end, second.end):
+        return False
+    if not first.fields or not second.fields:
+        return _same_value(first.text, second.text)
+    name = _identity_fields([n for n, _ in first.fields])[0]
+    return _same_value(dict(first.fields)[name], dict(second.fields).get(name, ""))
+
+
+def _shared(first, second):
+    return max(0, min(first[1], second[1]) - max(first[0], second[0]))
 
 
 def extract_pages(source, request, ask, check_cancelled, fields=()):
@@ -759,6 +787,7 @@ class ExtractionLedger:
                 "source": source,
                 "text": entry.text,
                 **({"fields": dict(entry.fields)} if entry.fields else {}),
+                **({"note": entry.note} if entry.note else {}),
                 "quote": entry.quote,
                 "start": entry.start,
                 "end": entry.end,
@@ -788,7 +817,7 @@ class ExtractionLedger:
             )
             writer.writeheader()
             for record in records:
-                row = {k: v for k, v in record.items() if k != "fields"}
+                row = {k: v for k, v in record.items() if k not in {"fields", "note"}}
                 fields = record.get("fields", {})
                 row.update({col: fields.get(name, "") for name, col in columns.items()})
                 # Source text must never open as a spreadsheet formula.
@@ -839,8 +868,20 @@ class ExtractionLedger:
                 "Page coverage is verified; implicit items may still need human review."
             )
             for number, entry in enumerate(entries, 1):
+                # Kept apart because the evidence was ambiguous: say so.
+                repeat = next(
+                    (
+                        index
+                        for index, other in enumerate(entries[: number - 1], 1)
+                        if _likely_repeat(other, entry)
+                    ),
+                    None,
+                )
+                note = f" (may repeat item {repeat})" if repeat else ""
+                if entry.note:
+                    note += f" ({entry.note})"
                 parts.append(
-                    f"{number}. {entry.text}\n   Source characters {entry.start}–{entry.end}: {entry.quote}"
+                    f"{number}. {entry.text}{note}\n   Source characters {entry.start}–{entry.end}: {entry.quote}"
                 )
         return "\n\n".join(parts)
 

@@ -1146,9 +1146,9 @@ A `fields` list that differs from the request's is rejected rather than merged.
 
 The framework retains entries with exact source quotations and character spans,
 checks the source fingerprint again before completion, and appends the accumulated
-inventory to the final answer. A final model summary cannot drop retained entries. Repeated
-names need distinctive quotations; ambiguous or conflicting evidence fails
-explicitly. Reading every page without extracting an inventory is insufficient.
+inventory to the final answer. A final model summary cannot drop retained entries.
+Ambiguous evidence keeps both entries and marks the possible repeat rather than
+dropping one. Reading every page without extracting an inventory is insufficient.
 
 `save_extracted_items(file_path)` exports the retained inventory as JSON, CSV, or
 readable text, using the existing write permission gate. JSON records carry each
@@ -1184,21 +1184,29 @@ memory database or cloud sync is introduced.
 The default `gaia-voice` skill supplies a short routing rule; the detailed
 `document-extract` procedure is loaded for the task. The implementation uses
 schema-constrained page responses and an omission check per page. Overlap keeps
-source text visible, aligns to whole lines or sentences, and preserves verbatim
-field values. Quotes and values are matched ignoring case and spacing (captions
-use non-breaking and doubled spaces), but a match must fall on whole words and the
-stored quote is always the source's own text at its exact offsets.
+source text visible and aligns pages to whole lines, sentences, or (for unpunctuated
+captions) words. Quotes are matched ignoring case and spacing (captions use
+non-breaking and doubled spaces), but only on whole words, and the stored quote is
+always the source's own text at its exact offsets.
 
-An item is located by its identity value (a field named for a `name`, `id` or
-`title`, such as `exercise_name`; else the first requested field), not by its
-whole quote, so neighbouring items' quotes may overlap. Two extractions are one
-item when their identity values sit at the same source span; other values must
-sit at one location, one inside the other (a page boundary may cut a description
-short, never a name), and the merged entry keeps the fuller value of each field.
-When a quote names its item twice, an omission pass takes the occurrence no
-earlier item claimed. Two items from one reply are never merged. Conflicting
-evidence is retried once per page, naming the conflicting quote, then fails
-visibly.
+An item's identity value is a field named for a `name`, `id` or `title` (such
+as `exercise_name`), else the first requested field. When that value is copied
+from the quote, its source span locates the item; when the model composes a label
+instead ("Big circles (arms)"), the quote locates the item, and a label sharing no
+words with its quote is kept but marked "(label not in quote)". Descriptions may
+paraphrase; the verbatim quote is their evidence. An item with no stated field is
+rejected.
+
+Merging never fails a run and never drops an item. Two extractions are one item
+when they sit at the same place (the same name span, or quotes sharing at least
+half their text) and their names match or nest ("march" and "march in place" at
+one spot keep the fuller name). Different names are different items, and
+differing descriptions of one item are both kept, joined with ` / `. Items from
+one reply are never merged, and when a quote names its item twice an omission
+pass takes the occurrence no earlier item claimed. Evidence too ambiguous to
+merge keeps both entries, and the rendered inventory marks the later one
+"(may repeat item N)" for review. Only an unusable reply (not JSON, a quote not
+in the page, an unfinished page) is retried once and then fails visibly.
 
 Each page call allows 16,384 output tokens. Cloud models are asked for low
 reasoning effort, and a page that still spends the whole budget reasoning is
