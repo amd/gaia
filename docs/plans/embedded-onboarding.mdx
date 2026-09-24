@@ -122,7 +122,12 @@ starts it when it's stopped.** A system Lemonade is no longer installed, found o
   exercise `gaia init` move to the embedded path.
 - Windows and Linux (Strix Halo) checked on hardware before merge.
 
-## 4. PR 2: remove legacy commands
+## 4. PR 2: plain `gaia` opens the terminal UI; remove legacy commands
+
+**Running `gaia` with no arguments starts the terminal UI**, launching the verified
+`gaia-tui` binary the installer put in place, with the same flags passed through. Today it
+opens the web Agent UI. If the terminal UI binary is missing, `gaia` says how to install it
+rather than opening something else.
 
 **Removed**, each with a one-line message naming what replaces it, plus every doc page, guide
 section, test and workflow step about it:
@@ -154,7 +159,7 @@ agent is built on, keeps its name until a separate rename.
 | PR | Scope |
 |---|---|
 | **3. `npx @amd-gaia/gaia install`** | New `install` command: runs `install.sh` / `install.ps1`, fetches and verifies the binaries into GAIA's own folder, and leaves `gaia` on `PATH`. `npx @amd-gaia/gaia` with no command keeps opening the terminal UI, the same as `gaia`. |
-| **4. One command per surface** | `gaia` opens the terminal UI (running the verified `gaia-tui` binary), `gaia web` starts the web app and opens the browser, `gaia app` opens the desktop app (installing it on first use if it's missing). |
+| **4. `gaia web` and `gaia app`** | `gaia web` starts the web app and opens the browser; `gaia app` opens the desktop app (installing it on first use if it's missing). |
 | **5. TUI `/init`** | First launch still sets up automatically. `/init` (with `/setup` as an alias) shows a health report (Lemonade running and its version, model on disk and loadable, context size), and offers to re-download a damaged model (`gaia init --force-models`) or change the model. |
 | **6. Claude Code plugin** | The plugin from the [v1 scope](/plans/claude-code-plugin-v1), now relying on the installed `gaia`. A missing setup gives "run `gaia init`" and never downloads silently. |
 | **7. CI on the golden flows** | Move the self-hosted workflows from their system Lemonade to the embedded one, and add end-to-end jobs that run exactly what a user does on each OS: npx install → `gaia init` (small model) → the terminal UI answers a question → `gaia web` loads → the Claude Code plugin completes a task. The same scripts run locally. |
