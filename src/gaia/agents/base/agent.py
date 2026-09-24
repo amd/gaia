@@ -735,6 +735,16 @@ _PLAN_HEADING_PATTERN = re.compile(
 )
 
 
+def _same_file(first: str, second: str) -> bool:
+    """Path identity, including case-insensitive filesystems such as APFS."""
+    if first == second:
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
 def _unfinished_answer_kind(answer: str) -> Optional[str]:
     """Classify an answer that did not actually finish the task.
 
@@ -1765,7 +1775,9 @@ Do NOT wrap conversational replies in JSON.
         ledger = self._extraction_ledger
         validator = self._read_validator()
         ledger.validate_sources(lambda path: read_snapshot(path, validator))
-        ledger.validate_outputs(lambda path: read_snapshot(path, validator))
+        ledger.validate_outputs(
+            lambda path, limit: read_snapshot(path, validator, limit)
+        )
 
     def _make_extraction_chat(self):
         """Isolate SDK state from timed-out workers and subsequent turns."""
@@ -1821,7 +1833,7 @@ Do NOT wrap conversational replies in JSON.
                 }
             )
 
-            def ask(system, prompt):
+            def send(system, prompt, options):
                 check()
                 response = extraction_chat.send_messages(
                     messages=[{"role": "user", "content": prompt}],
@@ -1829,7 +1841,7 @@ Do NOT wrap conversational replies in JSON.
                     tools=[],
                     response_format=extraction_response_format(ledger.fields),
                     max_tokens=EXTRACTION_MAX_TOKENS,
-                    **sampling,
+                    **options,
                 )
                 check()
                 # These calls are outside the outer conversation's stats.
@@ -1840,9 +1852,24 @@ Do NOT wrap conversational replies in JSON.
                 spent = (
                     usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
                 )
-                if getattr(response, "finish_reason", None) == "length" or (
+                exhausted = getattr(response, "finish_reason", None) == "length" or (
                     isinstance(spent, int) and spent >= EXTRACTION_MAX_TOKENS
-                ):
+                )
+                return response, exhausted
+
+            def ask(system, prompt):
+                response, exhausted = send(system, prompt, sampling)
+                if exhausted and sampling.get("reasoning_effort") == "low":
+                    # Copying quotes needs no reasoning; retry this page without it.
+                    logger.warning(
+                        "Extraction page used its %d-token budget reasoning; "
+                        "retrying the page with reasoning_effort=none",
+                        EXTRACTION_MAX_TOKENS,
+                    )
+                    response, exhausted = send(
+                        system, prompt, {**sampling, "reasoning_effort": "none"}
+                    )
+                if exhausted:
                     raise ValueError(
                         f"Extraction reply used its whole {EXTRACTION_MAX_TOKENS}-token "
                         "output budget without finishing the page"
@@ -4416,7 +4443,7 @@ Do NOT wrap conversational replies in JSON.
             or tool_name not in _INVENTORY_HAND_EDITS
             or not isinstance(path, str)
             or "\x00" in path
-            or ledger.key(path) not in ledger.exported
+            or not any(_same_file(ledger.key(path), out) for out in ledger.exported)
         ):
             return None
         return {

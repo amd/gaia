@@ -3,6 +3,7 @@
 """Coverage, exact evidence, turn isolation and deterministic enumeration."""
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ from gaia.agents.base.extraction import (
     ExtractionLedger,
     exhaustive_request,
     extract_pages,
+    merge_occurrences,
     parse_page,
     read_snapshot,
     reconcile_occurrence,
@@ -919,11 +921,32 @@ def test_partial_overlap_of_repeated_names_stays_two_occurrences():
     assert reconcile_occurrence(first, second) is None
 
 
+def test_a_quote_naming_its_item_twice_still_parses():
+    entry = field_entry(SENTENCE, SENTENCE[:120], {"name": "march"})
+    assert len(entry.choices) == 2 and entry.anchor == entry.choices[0]
+
+
+def test_an_omission_pass_repeat_is_never_folded_into_the_first():
+    page = "okay then march march and rest"
+    replies = iter(
+        [
+            {"quote": "then march", "fields": {"name": "march"}},
+            {"quote": "march march and", "fields": {"name": "march"}},
+        ]
+    )
+
+    def ask(system, payload):
+        return json.dumps({"complete": True, "items": [next(replies)]})
+
+    entries, _ = extract_pages(
+        page, "List every exercise", ask, lambda: None, ("name",)
+    )
+    assert [e.anchor for e in entries] == [(10, 15), (16, 21)]
+
+
 @pytest.mark.parametrize(
     "page, values, early, late",
     [
-        # The name also occurs earlier in one quote.
-        (SENTENCE, {"name": "march"}, SENTENCE[:120], SENTENCE[40:]),
         # "3" also occurs inside "30".
         (
             "Next: Squat 3 sets, rest 30 seconds between them.",
@@ -960,15 +983,23 @@ def test_broad_quote_never_absorbs_two_repeated_items(fields, broad_first):
         # A retry repeats the model's last answer.
         return json.dumps({"complete": True, "items": replies[min(len(calls), 2) - 1]})
 
-    with pytest.raises(ValueError, match="Conflicting|multiple occurrences"):
-        extract_pages(page, "List every exercise", ask, lambda: None, fields)
+    # Either the ambiguity fails loudly, or the retry keeps both squats.
+    try:
+        entries, _ = extract_pages(
+            page, "List every exercise", ask, lambda: None, fields
+        )
+    except ValueError as error:
+        assert re.search("Conflicting|multiple occurrences|more than once", str(error))
+    else:
+        assert len(entries) == 2
 
 
 def test_ambiguous_reply_is_retried_with_the_validation_error():
     page = "Today Bob and Carol, engineers, joined."
+    # One reply reporting the same person twice is ambiguous.
     bad = [
-        {"quote": "Bob and Carol", "fields": {"name": "Bob"}},
-        {"quote": "Carol, engineers", "fields": {"name": "Carol"}},
+        {"quote": "Today Bob", "fields": {"name": "Bob"}},
+        {"quote": "Bob and", "fields": {"name": "Bob"}},
     ]
     good = [
         {"quote": "Bob and", "fields": {"name": "Bob"}},
@@ -1014,12 +1045,23 @@ def test_transcript_sentence_quoted_differently_across_pages_extracts_once():
     assert entries[0].start == sentence_at
 
 
-def test_contained_quote_may_repeat_the_name_it_identifies():
-    page = "The march. Keep the march slow and lift your knees."
+def test_a_fuller_quote_of_one_item_merges_with_its_short_quote():
+    page = "The warm-up. Keep the march slow and lift your knees."
     values = {"name": "march", "cue": "not stated"}
     short = field_entry(page, "Keep the march slow", values)
     full = field_entry(page, page, {"name": "march", "cue": "lift your knees"})
     assert reconcile_occurrence(short, full) == full
+
+
+def test_overlapping_quotes_of_neighbouring_items_stay_separate():
+    # Page two quotes each item with context from the other side.
+    page = "Now lift your arms high then kick your legs out wide please."
+    arms = field_entry(page, "lift your arms high then", {"name": "arms"})
+    legs = field_entry(page, "then kick your legs out", {"name": "legs"})
+    wide = field_entry(page, "arms high then kick", {"name": "arms"})
+    entries, _ = merge_occurrences({}, {}, [(arms, 1), (legs, 1)])
+    entries, _ = merge_occurrences(entries, _, [(wide, 2)])
+    assert sorted(dict(e.fields)["name"] for e in entries.values()) == ["arms", "legs"]
 
 
 def test_free_text_quotes_of_one_sentence_merge_but_repeats_do_not():
@@ -1037,7 +1079,7 @@ def test_free_text_quotes_of_one_sentence_merge_but_repeats_do_not():
     [
         (
             "Warm-up: march, then march in place for a minute.",
-            ("Warm-up: march, then march in place", "march"),
+            ("Warm-up: march, then", "march"),
             ("march in place for a minute", "march in place"),
         ),
         (
@@ -1239,3 +1281,106 @@ def test_quotes_match_captions_despite_non_breaking_and_doubled_spaces():
     assert entry.quote == "lift\xa0 your arms  up"
     assert (entry.start, entry.end) == (104, 104 + len(entry.quote))
     assert dict(entry.fields) == {"name": "arms up"}
+
+
+@pytest.mark.parametrize(
+    "query, fields",
+    [
+        (
+            "List every exercise in s.txt with fields: name, reps and save them to x.csv",
+            ("name", "reps"),
+        ),
+        (
+            "List every exercise with fields: name, cue. Save to out.json.",
+            ("name", "cue"),
+        ),
+        ("List every exercise with fields: name, cue", ("name", "cue")),
+    ],
+)
+def test_fields_stop_before_the_save_clause(query, fields, tmp_path):
+    assert ExtractionLedger(query, str(tmp_path)).fields == fields
+
+
+def test_values_and_quotes_match_whole_words_only():
+    raw = json.dumps(
+        {"complete": True, "items": [{"quote": "the farm", "fields": {"name": "arm"}}]}
+    )
+    with pytest.raises(ValueError, match="verbatim"):
+        parse_page(raw, "go to the farm", 0, ("name",))
+    roster = "Ana Lee 10, Ana Lee 1."
+    raw = json.dumps(
+        {
+            "complete": True,
+            "items": [{"quote": "Ana Lee 1", "fields": {"name": "Ana Lee 1"}}],
+        }
+    )
+    assert parse_page(raw, roster, 0, ("name",))[0].start == 12
+
+
+@pytest.mark.parametrize(
+    "reply", [None, "[" * 5000 + "]" * 5000, '{"items": [], "complete": true'], ids=str
+)
+def test_malformed_replies_are_retryable_errors(reply):
+    with pytest.raises(ValueError):
+        parse_page(reply, "page", 0)
+
+
+def test_an_item_with_nothing_stated_is_rejected():
+    raw = json.dumps(
+        {
+            "complete": True,
+            "items": [{"quote": "page", "fields": {"name": "not stated"}}],
+        }
+    )
+    with pytest.raises(ValueError, match="not an item"):
+        parse_page(raw, "page", 0, ("name",))
+
+
+def test_csv_keeps_colliding_fields_and_never_writes_formulas(tmp_path):
+    state = ExtractionLedger(
+        "List every quote in s.txt fields: speaker, quote", str(tmp_path)
+    )
+    page = "=HYPERLINK(x) said Ana"
+    state.run(
+        "s.txt",
+        lambda p: page,
+        lambda *a: json.dumps(
+            {
+                "complete": True,
+                "items": [
+                    {
+                        "quote": page,
+                        "fields": {"speaker": "Ana", "quote": "=HYPERLINK(x)"},
+                    }
+                ],
+            }
+        ),
+        lambda: None,
+    )
+    header, row = state.export("out.csv").splitlines()
+    assert header == "source,text,speaker,field:quote,quote,start,end"
+    assert "'=HYPERLINK(x)" in row and ",=HYPERLINK" not in row
+
+
+def test_a_large_export_validates_right_after_saving(tmp_path, monkeypatch):
+    import gaia.agents.base.extraction as extraction
+
+    monkeypatch.setattr(extraction, "MAX_CHARS", 50)
+    state = ExtractionLedger(
+        "List every item in s.txt and save to out.json", str(tmp_path)
+    )
+    state.results[state.key("s.txt")] = (
+        [extraction.Entry(0, 5, "alpha " * 20, "alpha")],
+        1,
+        "d",
+    )
+    (tmp_path / "out.json").write_text(state.export("out.json"))
+    validator = PathValidator(allowed_paths=[str(tmp_path)])
+    state.validate_outputs(lambda p, limit: read_snapshot(p, validator, limit))
+    assert not state.output_errors
+
+
+def test_free_text_repeat_in_one_quote_is_never_merged():
+    first = Entry(5, 15, "march", "then march")
+    second = Entry(10, 25, "march", "march march and")
+    assert reconcile_occurrence(first, second) is None

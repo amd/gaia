@@ -1151,10 +1151,13 @@ names need distinctive quotations; ambiguous or conflicting evidence fails
 explicitly. Reading every page without extracting an inventory is insufficient.
 
 `save_extracted_items(file_path)` exports the retained inventory as JSON, CSV, or
-readable text, using the existing write permission gate. Saved results must be read
-back and contain all retained entries before completion. Every requested source
+readable text, using the existing write permission gate. JSON records carry each
+requested field under `fields`, and CSV gives each field its own column (prefixed
+`field:` if it collides with a built-in column; cells that would open as formulas
+are escaped). Saved results must be read back and contain all retained entries
+before completion, and hand edits to a file it wrote this turn are refused. Every requested source
 must finish; a failed page, cancellation, source change, or exceeded budget yields
-an incomplete result. Limits are 256,000 source characters, 512 entries, 24,000
+an incomplete result. Limits are 256,000 source characters, 512 entries, 40,000
 characters per extraction prompt, and 100,000 characters of retained item text and
 quotes, with a 30-minute extraction deadline (the enclosing tool timeout adds 60 seconds).
 These bounds fail visibly rather than silently dropping data.
@@ -1182,15 +1185,25 @@ The default `gaia-voice` skill supplies a short routing rule; the detailed
 `document-extract` procedure is loaded for the task. The implementation uses
 schema-constrained page responses and an omission check per page. Overlap keeps
 source text visible, aligns to whole lines or sentences, and preserves verbatim
-field values. Two pages that quote one occurrence with different boundaries merge
-when an identity field (one named for a `name`, `id` or `title`, such as
-`exercise_name`; else the first requested field) states the same value at a
-shared source offset, and every other value
-both state sits at one location, one inside the other (a page boundary may cut
-a description short, never a name). The merged entry's quote spans both quotes
-and keeps the fuller value of each field. Two items from one reply, or quotes
-that do not overlap, are never merged. Conflicting evidence is retried once per
-page, naming the conflicting quote, then fails visibly.
+field values. Quotes and values are matched ignoring case and spacing (captions
+use non-breaking and doubled spaces), but a match must fall on whole words and the
+stored quote is always the source's own text at its exact offsets.
+
+An item is located by its identity value (a field named for a `name`, `id` or
+`title`, such as `exercise_name`; else the first requested field), not by its
+whole quote, so neighbouring items' quotes may overlap. Two extractions are one
+item when their identity values sit at the same source span; other values must
+sit at one location, one inside the other (a page boundary may cut a description
+short, never a name), and the merged entry keeps the fuller value of each field.
+When a quote names its item twice, an omission pass takes the occurrence no
+earlier item claimed. Two items from one reply are never merged. Conflicting
+evidence is retried once per page, naming the conflicting quote, then fails
+visibly.
+
+Each page call allows 16,384 output tokens. Cloud models are asked for low
+reasoning effort, and a page that still spends the whole budget reasoning is
+retried once with reasoning off; local models get no anti-repetition penalties,
+which work against verbatim copying.
 
 Run the explicit live regression with either backend:
 

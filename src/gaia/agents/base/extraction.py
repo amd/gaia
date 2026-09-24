@@ -15,7 +15,7 @@ import re
 import stat
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
@@ -29,6 +29,8 @@ OVERLAP = 600
 MAX_CHARS = 256000
 MAX_ITEMS = 512
 MAX_SECONDS = 1800
+# Request (12K) + page (5.2K) + already-found quotes must fit with room to spare.
+MAX_PROMPT_CHARS = 40000
 # Output room per page reply, reasoning included.
 MAX_TOKENS = 16384
 SYSTEM = """Extract every requested item from this source page, not a summary.
@@ -106,8 +108,9 @@ def exhaustive_request(text):
     return False
 
 
-def read_snapshot(path, validator):
+def read_snapshot(path, validator, limit=None):
     """Read once through the existing file permission boundary, with a hard cap."""
+    limit = MAX_CHARS if limit is None else limit
     if validator is None:
         raise ValueError("File permission validator is unavailable")
     real = os.path.realpath(os.path.expanduser(path))
@@ -120,7 +123,7 @@ def read_snapshot(path, validator):
         raise ValueError("Extraction requires a regular text file")
     with os.fdopen(descriptor, encoding="utf-8") as stream:
         before = os.fstat(stream.fileno())
-        text = stream.read(MAX_CHARS + 1)
+        text = stream.read(limit + 1)
         after = os.fstat(stream.fileno())
     if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
         after.st_size,
@@ -128,8 +131,8 @@ def read_snapshot(path, validator):
         after.st_ctime_ns,
     ):
         raise ValueError("Source changed while reading; retry against a stable file")
-    if len(text) > MAX_CHARS:
-        raise ValueError(f"Source exceeds the {MAX_CHARS}-character extraction limit")
+    if len(text) > limit:
+        raise ValueError(f"Source exceeds the {limit}-character extraction limit")
     return text
 
 
@@ -140,6 +143,21 @@ class Entry:
     text: str
     quote: str
     fields: tuple = ()
+    # Source span of the item's identifying value; quotes may overlap freely.
+    anchor: tuple = ()
+    # Every span of that value when the quote names it more than once.
+    choices: tuple = ()
+
+
+def _place(entry):
+    """Where an item is: its identifying value, else its whole quote."""
+    return entry.anchor or (entry.start, entry.end)
+
+
+def _same_place(first, second):
+    if first.anchor and second.anchor:
+        return _overlaps(first.anchor, second.anchor)
+    return _overlaps((first.start, first.end), (second.start, second.end))
 
 
 def _stated(value):
@@ -158,14 +176,19 @@ def _identity_fields(fields):
 
 
 def _collapse(text):
-    """*text* with each whitespace run as one space, and each kept char's index."""
+    """*text* lowercased, each whitespace run as one space, with each kept char's index.
+
+    Captions are lowercase while models capitalise names; the stored quote is
+    always the source's own text, so matching may ignore case and spacing.
+    """
     chars, index = [], []
     for position, char in enumerate(text):
         if char.isspace():
             if chars and chars[-1] == " ":
                 continue
             char = " "
-        chars.append(char)
+        lower = char.lower()
+        chars.append(lower if len(lower) == 1 else char)
         index.append(position)
     return "".join(chars), index
 
@@ -180,7 +203,12 @@ def _spans(haystack, needle):
     target = _collapse(needle)[0].strip()
     found, at = [], flat.find(target) if target else -1
     while at >= 0:
-        found.append((index[at], index[at + len(target) - 1] + 1))
+        end = at + len(target)
+        # "arm" is not in "the farm": a word-edged needle matches whole words.
+        cut_before = target[0].isalnum() and at > 0 and flat[at - 1].isalnum()
+        cut_after = target[-1].isalnum() and end < len(flat) and flat[end].isalnum()
+        if not cut_before and not cut_after:
+            found.append((index[at], index[end - 1] + 1))
         at = flat.find(target, at + 1)
     return found
 
@@ -202,6 +230,9 @@ def _nested(first, a, second, b):
 def _union_quote(first, second):
     """Stitch two overlapping verbatim quotes into the source text they span."""
     left, right = sorted((first, second), key=lambda e: e.start)
+    if right.start > left.end:
+        # Same item, quoted from non-touching sides: keep the earlier evidence.
+        return left.start, left.end, left.quote
     tail = right.quote[left.end - right.start :] if right.end > left.end else ""
     return left.start, max(left.end, right.end), left.quote + tail
 
@@ -219,7 +250,7 @@ def reconcile_occurrence(first, second):
     equal text and a quote that contains the other, locates the text at a
     shared offset, or shares at least half of the shorter quote.
     """
-    if max(first.start, second.start) >= min(first.end, second.end):
+    if not _same_place(first, second):
         return None
     if not first.fields or not second.fields:
         if first.text != second.text:
@@ -227,7 +258,11 @@ def reconcile_occurrence(first, second):
         contained = (first.start <= second.start and first.end >= second.end) or (
             second.start <= first.start and second.end >= first.end
         )
-        anchored = _anchors(first, first.text) & _anchors(second, second.text)
+        first_at, second_at = _anchors(first, first.text), _anchors(second, second.text)
+        if len(first_at) > 1 or len(second_at) > 1:
+            # "march march": the text cannot say which occurrence it means.
+            return None
+        anchored = first_at & second_at
         # Repeats can share only the context between them, not most of a quote.
         shared = min(first.end, second.end) - max(first.start, second.start)
         mostly = 2 * shared >= min(len(first.quote), len(second.quote))
@@ -261,14 +296,29 @@ def reconcile_occurrence(first, second):
         "; ".join(f"{name}: {value}" for name, value in values.items()),
         quote,
         tuple(values.items()),
+        (
+            (
+                min(first.anchor[0], second.anchor[0]),
+                max(first.anchor[1], second.anchor[1]),
+            )
+            if first.anchor and second.anchor
+            else first.anchor or second.anchor
+        ),
     )
 
 
 def parse_page(reply, page, base, fields=()):
+    if not isinstance(reply, str):
+        raise ValueError("Extractor returned no text")
     raw = reply.strip()
     if raw.startswith("```") and raw.endswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)[:-3].strip()
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except (ValueError, RecursionError) as error:
+        raise ValueError(
+            f"Reply is not complete JSON ({str(error)[:80]}); it may have been cut off"
+        ) from error
     if not isinstance(data, dict) or data.get("complete") is not True:
         raise ValueError("Extractor did not confirm that the page was finished")
     items = data.get("items")
@@ -289,7 +339,7 @@ def parse_page(reply, page, base, fields=()):
                 raise ValueError(
                     "Every requested field must be present (use not stated for missing source facts)"
                 )
-            values = {name: _collapse(v)[0].strip() for name, v in values.items()}
+            values = {name: " ".join(v.split()) for name, v in values.items()}
             if isinstance(quote, str) and any(
                 value.lower() != "not stated" and not _spans(quote, value)
                 for value in values.values()
@@ -310,6 +360,18 @@ def parse_page(reply, page, base, fields=()):
                 "Ambiguous repeated quote; include distinctive surrounding source words"
             )
         start, end = found[0]
+        anchor, choices = (), ()
+        if fields:
+            stated = [n for n in _identity_fields(fields) if _stated(values[n])]
+            stated = stated or [n for n in fields if _stated(values[n])]
+            if not stated:
+                raise ValueError("Every field is not stated; that is not an item")
+            spans = _spans(page[start:end], values[stated[0]])
+            if stated[0] in _identity_fields(fields):
+                # A quote may name its item twice ("shoulder rolls ... shoulder
+                # rolls"); merge_occurrences picks which occurrence it is.
+                choices = tuple((base + start + a, base + start + b) for a, b in spans)
+                anchor = choices[0]
         entries.append(
             Entry(
                 base + start,
@@ -318,6 +380,8 @@ def parse_page(reply, page, base, fields=()):
                 # The source's own text, whatever spacing the model copied.
                 page[start:end],
                 tuple((name, values[name]) for name in fields),
+                anchor,
+                choices if fields and len(choices) > 1 else (),
             )
         )
     return entries
@@ -360,6 +424,20 @@ def _overlaps(first, second):
     return max(first[0], second[0]) < min(first[1], second[1])
 
 
+def _resolve_occurrence(entry, origin, entries, members):
+    """Pick which of a repeated name's occurrences an extraction means.
+
+    An omission pass reports missed items, so it takes an occurrence nobody has
+    claimed; any other pass re-reports, so it takes one already found.
+    """
+    claimed = [m.anchor for key in entries for m, _ in members[key] if m.anchor]
+    taken = [c for c in entry.choices if any(_overlaps(c, a) for a in claimed)]
+    free = [c for c in entry.choices if c not in taken]
+    omission = isinstance(origin, tuple) and len(origin) == 2 and origin[1] == 1
+    preferred = (free if omission else taken) or entry.choices
+    return replace(entry, anchor=preferred[0], choices=())
+
+
 def merge_occurrences(entries, members, candidates):
     """Merge ``(entry, reply)`` candidates into copies of the ledger.
 
@@ -370,11 +448,12 @@ def merge_occurrences(entries, members, candidates):
     """
     entries, members = dict(entries), dict(members)
     for entry, origin in candidates:
-        span = (entry.start, entry.end)
+        if entry.choices:
+            entry = _resolve_occurrence(entry, origin, entries, members)
         overlaps = [
             key
             for key in entries
-            if any(_overlaps((m.start, m.end), span) for m, _ in members[key])
+            if any(_same_place(m, entry) for m, _ in members[key])
         ]
         if len(overlaps) > 1:
             raise ValueError(
@@ -391,9 +470,9 @@ def merge_occurrences(entries, members, candidates):
             ):
                 raise ValueError(
                     f"Conflicting evidence at source characters {prior.start}-"
-                    f"{prior.end} (quote: {prior.quote[:80]!r}). Quotes of different "
-                    "items must not overlap; do not discard stated values: "
-                    + prior.text
+                    f"{prior.end} (quote: {prior.quote[:80]!r}). One item was "
+                    "reported twice with different values, or two items share a "
+                    "name span; do not discard stated values: " + prior.text
                 )
             del entries[key]
             merged += members.pop(key)
@@ -430,16 +509,16 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
             payload = {"request": request, "source_page": page}
 
             if pass_number:
-                payload["already_found"] = [
-                    {"text": e.text, "quote": e.quote} for e, _ in found
-                ]
+                payload["already_found"] = [e.quote for e, _ in found]
                 payload["instruction"] = (
                     "Return the same JSON object schema. In its items array include "
                     "only additional missed items; use an empty items array if none. "
                     "Set complete true when this page's omission check is finished."
                 )
-            if len(json.dumps(payload, ensure_ascii=False)) > 24000:
-                raise ValueError("Page extraction prompt exceeds 24000 characters")
+            if len(json.dumps(payload, ensure_ascii=False)) > MAX_PROMPT_CHARS:
+                raise ValueError(
+                    f"Page extraction prompt exceeds {MAX_PROMPT_CHARS} characters"
+                )
             for attempt in range(2):
                 check_cancelled()
                 if time.monotonic() - started > MAX_SECONDS:
@@ -536,7 +615,12 @@ _CSV_COLUMNS = frozenset({"source", "text", "quote", "start", "end"})
 class ExtractionLedger:
     def __init__(self, query, root, available=True):
         self.query = query
-        match = re.search(r"\bfields\s*:\s*([^.!?\n]+)", query, re.I)
+        match = re.search(
+            r"\bfields\s*:\s*(.+?)(?=[.!?](?:\s|$)|\n|"
+            r"\b(?:and\s+|then\s+)?(?:save|write|export|store|put)\b|$)",
+            query,
+            re.I,
+        )
         self.fields = (
             tuple(p.strip() for p in re.split(r",|\band\b", match[1]) if p.strip())
             if match
@@ -685,19 +769,35 @@ class ExtractionLedger:
         if path.lower().endswith(".json"):
             return json.dumps(records, ensure_ascii=False, indent=2)
         if path.lower().endswith(".csv"):
-            columns = [f for f in self.fields if f not in _CSV_COLUMNS]
+            columns = {
+                name: f"field:{name}" if name in _CSV_COLUMNS else name
+                for name in self.fields
+            }
             stream = io.StringIO()
             writer = csv.DictWriter(
                 stream,
-                fieldnames=["source", "text", *columns, "quote", "start", "end"],
+                fieldnames=[
+                    "source",
+                    "text",
+                    *columns.values(),
+                    "quote",
+                    "start",
+                    "end",
+                ],
                 lineterminator="\n",
             )
             writer.writeheader()
             for record in records:
                 row = {k: v for k, v in record.items() if k != "fields"}
                 fields = record.get("fields", {})
-                row.update({name: fields.get(name, "") for name in columns})
-                writer.writerow(row)
+                row.update({col: fields.get(name, "") for name, col in columns.items()})
+                # Source text must never open as a spreadsheet formula.
+                writer.writerow(
+                    {
+                        k: "'" + v if isinstance(v, str) and v[:1] in "=+-@" else v
+                        for k, v in row.items()
+                    }
+                )
             return stream.getvalue()
         return self.render()
 
@@ -718,10 +818,11 @@ class ExtractionLedger:
             return
         for path in sorted(self.destinations):
             try:
-                content = read(path)
+                expected = self.export(path)
+                content = read(path, len(expected) + 1)
                 # Deterministic content includes occurrence identity. Substring
                 # membership cannot distinguish repeated source occurrences.
-                if content.strip() != self.export(path).strip():
+                if content.strip() != expected.strip():
                     raise ValueError(
                         "does not preserve the complete extracted inventory and provenance; use save_extracted_items then read_file"
                     )
@@ -755,7 +856,8 @@ class ExtractionLedger:
                     raise ValueError("fields must be a list of nonempty names")
                 if self.fields and tuple(fields) != self.fields:
                     raise ValueError(
-                        "Requested fields changed; keep the original field schema"
+                        "Requested fields changed; call again with "
+                        f"fields={list(self.fields)}"
                     )
                 if tuple(fields) != self.fields:
                     self.results.clear()
