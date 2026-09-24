@@ -95,11 +95,12 @@ _FENCES = re.compile(r"```.*?```", re.DOTALL)
 _SAVE_REQUEST = re.compile(
     r"(?:^|\band\b|\bthen\b|[,;:]|\b(?:can|could|would|will)\s+you\b|\byou\s+to\b|"
     r"\bplease\b)\s*(?:(?:please|also|now|just|then|and|kindly|ok(?:ay)?|so),?\s+)*"
-    r"\b(save|write|export|store|put|copy|extract)\b",
+    r"\b(save|write|export|store|put|copy|extract|create|make|generate)\b",
     re.I,
 )
 # These verbs store by themselves; the others name a target only via "to/into".
 _STORAGE_VERBS = frozenset({"save", "export", "store"})
+_CREATE_VERBS = frozenset({"create", "make", "generate"})
 _OUTPUT_PREPOSITION = re.compile(r"\b(?:to|into)\s+", re.I)
 _PUT_PREPOSITION = re.compile(r"\b(?:in|into)\s+", re.I)
 _NAMED_FILE = re.compile(
@@ -125,7 +126,12 @@ _FROM_COLLECTION = re.compile(
     r"list|summary|context|plan|library|queue|results?|inputs?|documents?)\b",
     re.I,
 )
-_FIRST_PERSON = re.compile(r"\b(?:I|I've|I'm|I'd|we|we've)\b")
+# "I saved x", not "I think downloads are saved to x".
+_FIRST_PERSON = re.compile(
+    r"\b(?:I|we)(?:'ve|\s+have|\s+had|\s+just|\s+also|\s+already)*\s+"
+    r"(?:saved|wrote|stored|exported|created|put|generated|made|copied)\b",
+    re.I,
+)
 _EARLIER = re.compile(
     r"\b(?:previous|last|earlier|prior)\s+(?:session|conversation|turn|time|chat)\b|"
     r"\b(?:earlier|yesterday)\b",
@@ -141,7 +147,7 @@ _TOPIC_OBJECT = re.compile(
 _MODIFIER = re.compile(
     r"\s+(?!(?:and|or|then|to|into|in|on|at|as|with|for|from|now|please|too|so|"
     r"because|if|when|but|instead|not|which|that|using|via|during|about|by|"
-    r"where|while|here|below|above)\b)[a-z][a-z-]*\b"
+    r"where|while|here|below|above|file|document)\b|[a-z]+(?:ing|ed)\b)[a-z][a-z-]*\b"
 )
 _NEGATED_TARGET = re.compile(r"\b(?:not|instead of|rather than)\s*$", re.I)
 _NOT_REQUEST = re.compile(
@@ -196,8 +202,12 @@ def _path_token(match: re.Match) -> str | None:
     return None
 
 
-def _scan_paths(text: str, immediate: bool) -> list[str]:
-    """Paths listed in *text*; with *immediate*, only when they open it."""
+def _scan_paths(text: str, immediate: bool, modifiers: bool = False) -> list[str]:
+    """Paths listed in *text*; with *immediate*, only when they open it.
+
+    A bare name followed by a plain word modifies that word ("a Node.js app");
+    that is checked unless a destination preposition already anchored *text*.
+    """
     if immediate:
         text = text[_LEAD.match(text).end() :]
     paths = []
@@ -205,7 +215,7 @@ def _scan_paths(text: str, immediate: bool) -> list[str]:
         path = _path_token(match)
         if (
             path is not None
-            and not immediate
+            and (modifiers or not immediate)
             and match.group(4)
             and _MODIFIER.match(text[match.end() :])
         ):
@@ -269,6 +279,11 @@ def save_obligations(query: str) -> tuple[list[str], bool]:
             found = destination_paths(tail)
         elif verb == "write" and _NAMED_FILE.match(tail):
             found = _scan_paths(tail[_NAMED_FILE.match(tail).end() :], immediate=True)
+        elif verb in _CREATE_VERBS:
+            # "Create notes.md", "make a file called x.md", "generate it in x.md".
+            named = _NAMED_FILE.match(tail)
+            found = _scan_paths(tail[named.end() :] if named else tail, True, True)
+            found = found or destination_paths(tail, _PUT_PREPOSITION)
         else:
             found = destination_paths(
                 tail, _PUT_PREPOSITION if verb == "put" else _OUTPUT_PREPOSITION
@@ -304,6 +319,8 @@ class FileEvidence:
     observed: bool = False
     ranges: list[tuple[int, int]] = field(default_factory=list)
     end: int | None = None
+    # Found by modification time, not reported by a tool: it proves only its path.
+    inferred: bool = False
 
     def page(self, start: int, end: int, total: int | None) -> None:
         self.ranges.append((start, end))
@@ -344,8 +361,8 @@ class CompletionEvidence:
         self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
-        self.exec_ran = False
-        self.started_ns = time.time_ns()
+        self.exec_windows: list[tuple[int, int, bool]] = []
+        self._exec_started = 0
 
     def key(self, path: str, root: str | None = None) -> str:
         return _normalize_key(
@@ -374,6 +391,7 @@ class CompletionEvidence:
         """Metadata only, for concrete executor targets within the read boundary."""
         if tool not in _EXEC_TOOLS:
             return {}
+        self._exec_started = time.time_ns()
         paths = set(self.files) | {self.key(p) for p in self.requested}
         code = args.get("code")
         if isinstance(code, str):
@@ -429,7 +447,8 @@ class CompletionEvidence:
             return
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
-        self.exec_ran |= tool in _EXEC_TOOLS and successful
+        if tool in _EXEC_TOOLS:
+            self.exec_windows.append((self._exec_started, time.time_ns(), successful))
         for path, old in (before or {}).items():
             current = self._stamp(path)
             if current is _UNOBSERVABLE or old is _UNOBSERVABLE:
@@ -486,13 +505,16 @@ class CompletionEvidence:
             )
 
     def _written_by_executor(self, key: str) -> FileEvidence | None:
-        """A file a shell or Python run modified during this turn."""
-        if not self.exec_ran:
-            return None
+        """A file last modified during a successful shell or Python run."""
         stamp = self._stamp(key)
-        if not isinstance(stamp, tuple) or stamp[3] < self.started_ns:
+        if not isinstance(stamp, tuple):
             return None
-        self.files[key] = FileEvidence(key, self.sequence, True)
+        during = [
+            ok for start, end, ok in self.exec_windows if start <= stamp[3] <= end
+        ]
+        if not during or not all(during):
+            return None
+        self.files[key] = FileEvidence(key, self.sequence, True, inferred=True)
         return self.files[key]
 
     def delivered(self, tool: str, args: dict, original: Any, delivered: Any) -> None:
@@ -549,9 +571,9 @@ class CompletionEvidence:
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
             if _EARLIER.search(sentence):
                 continue
+            sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
             if not checkable and not _FIRST_PERSON.search(sentence):
                 continue
-            sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
             if claims_file_write(sentence):
                 paths = destination_paths(sentence)
                 required.update(self.key(path) for path in paths)
@@ -581,7 +603,10 @@ class CompletionEvidence:
         if (
             not required
             and (self.save_requested or claim_without_path)
-            and not any(item.direct and item.written for item in self.files.values())
+            and not any(
+                item.direct and item.written and not item.inferred
+                for item in self.files.values()
+            )
         ):
             gaps.append(
                 "The requested output file has no recorded successful write; an earlier side-effect file does not fulfill that save."

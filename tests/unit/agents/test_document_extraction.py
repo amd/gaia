@@ -1139,3 +1139,18 @@ def test_an_unstated_first_field_still_merges_on_an_equal_field():
     b = field_entry(page, "send the deck to the board by Friday.", values)
     merged = reconcile_occurrence(a, b)
     assert merged is not None and dict(merged.fields) == values
+
+
+def test_running_out_of_steps_keeps_the_extracted_inventory(agent, tmp_path):
+    (tmp_path / "source.txt").write_text("Exercise ALPHA\nExercise BETA")
+    script(
+        agent,
+        {"tool": "extract_document_items", "tool_args": {"file_path": "source.txt"}},
+        {"tool": "save_extracted_items", "tool_args": {"file_path": "report.txt"}},
+    )
+    agent._tool_requires_confirmation = lambda *a, **kw: False
+    result = agent.process_query(
+        "List every exercise in source.txt. Save to report.txt.", max_steps=2
+    )
+    assert result["status"] == "incomplete"
+    assert "Exercise ALPHA" in result["result"] and "Exercise BETA" in result["result"]

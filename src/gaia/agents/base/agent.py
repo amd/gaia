@@ -8197,6 +8197,10 @@ Do NOT wrap conversational replies in JSON.
                     if final_answer and self.error_history
                     else report
                 )
+                # Items already extracted stay visible when the turn runs out.
+                inventory = self._extraction_ledger.render()
+                if inventory:
+                    final_answer += "\n\n" + inventory
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context

@@ -930,9 +930,11 @@ that names a file, folder or disk is checked even when the answer silently omits
 the save; a pathless "save it" is checked through the answer's own save claim.
 Negated instructions, how-to questions, idioms ("save me some time") and topics
 ("write a guide to Node.js") do not create save obligations, and a reference to
-a save from an earlier session is not a claim about this turn. An answer's save
-claims are checked only when the user asked for a save or a file-writing tool
-ran, so "downloads are saved to ~/Downloads" stays an answer.
+a save from an earlier session is not a claim about this turn. "Create",
+"make" or "generate" a named file (`notes.md`, not "a Node.js app") is a save
+request. An answer's save claims are checked when the user asked for a save, a
+file-writing tool ran, or the answer says "I" or "we" saved something; so "I think
+downloads are saved to ~/Downloads" stays an answer.
 
 Requested and claimed text outputs must be read back after their latest
 mutation; an ordinary edit the user did not ask to save does not need readback. A read before
@@ -946,9 +948,11 @@ For Python and shell executors, the loop compares file metadata before and after
 the call for requested and previously tracked targets, plus literal Python path
 candidates. These probes respect the read boundary and never read file contents.
 A successful executor call alone is not proof of a save; a failed call that
-changed an output invalidates earlier evidence. A file that a successful
-executor modified during the turn, such as `ls > listing.txt`, counts as written
-once it is read back. Cached transcripts are not new writes.
+changed an output invalidates earlier evidence. A file last modified during a
+successful executor call, such as `ls > listing.txt`, counts as written once it
+is read back; one touched by a failed call does not, and such a file proves only
+its own path, never a pathless "saved it to a file" claim. Cached transcripts are
+not new writes.
 Cleanup claims likewise need concrete paths observed disappearing during the
 turn; a general statement that everything was cleaned up is not proof. A claimed
 path that is absent and untouched already agrees with the claim, and removal from

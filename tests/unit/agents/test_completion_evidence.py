@@ -787,3 +787,59 @@ def test_a_shell_save_read_back_this_turn_is_complete(agent, tmp_path):
     )
     result = agent.process_query("Save the directory listing to a file", max_steps=6)
     assert result["status"] == "success", result["completion_gaps"]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I think downloads are saved to ~/Downloads by default.",
+        "From what I can tell, your settings are stored in ~/.gaia/config.json.",
+    ],
+)
+def test_a_hedged_answer_is_not_a_first_person_claim(tmp_path, answer):
+    assert (
+        gaps(CompletionEvidence("Where do downloads go?", str(tmp_path)), answer) == []
+    )
+
+
+@pytest.mark.parametrize(
+    "answer",
+    ["We saved the summary to notes.md.", "Created notes.md with the summary."],
+)
+def test_create_names_an_output_for_any_claim_form(tmp_path, answer):
+    ledger = CompletionEvidence("Create notes.md with a summary", str(tmp_path))
+    assert gaps(ledger, answer)
+
+
+def test_create_a_project_is_not_a_file(tmp_path):
+    assert save_obligations("Create a Node.js app that serves pages") == ([], False)
+    assert save_obligations("Generate a report.md summarizing it") == (
+        ["report.md"],
+        True,
+    )
+    assert save_obligations("Make a notes.md file summarizing it") == (
+        ["notes.md"],
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # The run that touched the file failed.
+        "import sys; open('summary.md', 'w').write('x'); sys.exit(1)",
+        # The run succeeded but wrote a different file than the claim names.
+        "open('run.log', 'a').write('started')",
+    ],
+)
+def test_shell_files_count_only_from_a_successful_run_of_the_named_path(
+    agent, tmp_path, code
+):
+    script(
+        agent,
+        call("run_python", code=code),
+        call("read_file", file_path="summary.md" if "summary" in code else "run.log"),
+        {"answer": "I saved the summary to a file."},
+    )
+    result = agent.process_query("Save the summary to a file", max_steps=4)
+    assert result["status"] == "incomplete"
