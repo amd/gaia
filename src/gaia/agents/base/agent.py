@@ -1199,7 +1199,7 @@ Do NOT wrap conversational replies in JSON.
 
         Args:
             use_claude: If True, uses Claude API (default: False)
-            use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
+            use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
@@ -1230,8 +1230,12 @@ Do NOT wrap conversational replies in JSON.
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
 
-        Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
+        Note: Uses local LLM server by default unless use_claude is True.
         """
+        if use_chatgpt:
+            from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+            raise ValueError(REMOVED_PROVIDER_MESSAGE)
         self.device = device
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -1288,7 +1292,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
-        if not (use_claude or use_chatgpt or skip_lemonade):
+        if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
             from gaia.llm.lemonade_manager import LemonadeManager
 
@@ -1383,7 +1387,6 @@ Do NOT wrap conversational replies in JSON.
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
-            use_chatgpt=use_chatgpt,
             claude_model=claude_model,
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking

@@ -31,7 +31,7 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    use_chatgpt: bool = False  # Removed; True raises migration guidance
     use_local_llm: bool = (
         True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
     )
