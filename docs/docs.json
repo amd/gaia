@@ -419,6 +419,7 @@
               "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
               "plans/flagship-installer",
+              "plans/embedded-onboarding",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
