@@ -46,7 +46,7 @@ class TalkConfig:
 
     # General settings
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    use_chatgpt: bool = False  # Removed; True raises migration guidance
     show_stats: bool = False
     logging_level: str = "INFO"
 

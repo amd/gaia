@@ -4,6 +4,13 @@ description: "Programmable interface for text chat, conversation memory, and doc
 icon: "comments"
 ---
 
+<Warning>
+The direct OpenAI and LiteLLM provider adapters have been removed. Any
+`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
+raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
+</Warning>
+
+
 <Info>
   **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py) · [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
@@ -33,12 +40,18 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False       # Use Claude API
-    use_chatgpt: bool = False      # Use ChatGPT/OpenAI API
+    use_chatgpt: bool = False      # Removed; True raises migration guidance
     use_local_llm: bool = True     # Use local LLM
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None # Lemonade server URL
     assistant_name: str = "gaia"
 ```
+
+The SDK applies the system prompt once per request. `set_system_prompt()` and
+`update_config(system_prompt=...)` take effect on the next request; structured
+message calls can override it for one request without changing the stored prompt.
+
+Custom prompts use the native system-message channel for every provider.
 
 ### AgentResponse
 

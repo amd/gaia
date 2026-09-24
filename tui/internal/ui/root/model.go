@@ -128,14 +128,15 @@ func (b *clientBox) set(c client.AgentClient) {
 	b.c = c
 }
 
-func (b *clientBox) close() {
+func (b *clientBox) close() error {
 	b.mu.Lock()
 	c := b.c
 	b.c = nil
 	b.mu.Unlock()
-	if c != nil {
-		c.Close()
+	if c == nil {
+		return nil
 	}
+	return c.Close()
 }
 
 // NewFlagshipModel builds the TUI around one agent.
@@ -171,7 +172,9 @@ func (m FlagshipModel) Close() error {
 		m.chat.CancelActiveTurn()
 	}
 	if m.chatClient != nil {
-		m.chatClient.close()
+		// Returned, not dropped: app.go prints it, and a wedged agent that
+		// outlives quit is only diagnosable from this line.
+		return m.chatClient.close()
 	}
 	return nil
 }

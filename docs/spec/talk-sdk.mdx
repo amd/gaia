@@ -4,6 +4,13 @@ description: "Voice and text chat integration with conversation management"
 icon: "microphone"
 ---
 
+<Warning>
+The direct OpenAI and LiteLLM provider adapters have been removed. Any
+`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
+raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
+</Warning>
+
+
 <Info>
   **Source Code:** [`src/gaia/talk/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/talk/sdk.py)
 </Info>

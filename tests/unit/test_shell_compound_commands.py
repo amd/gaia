@@ -11,6 +11,11 @@ anything runs, and no line ever reaches a shell on POSIX.
 
 Real host, real subprocesses, ``tmp_path`` — a mock here would prove the code
 was called, not that the command it built runs.
+
+Only the tests that actually launch a process carry ``@posix_only``. The
+refusal, parsing and grant tests decide before anything reaches a shell, so
+they run everywhere — a module-level skip would hide them on the platform most
+GAIA contributors develop on.
 """
 
 import os
@@ -23,7 +28,7 @@ from gaia.agents.tools import shell_tools
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.skills.binaries import BinaryGrants
 
-pytestmark = pytest.mark.skipif(
+posix_only = pytest.mark.skipif(
     sys.platform == "win32", reason="Windows runs each pipeline through cmd.exe"
 )
 
@@ -73,6 +78,7 @@ def notes(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@posix_only
 def test_and_runs_both_and_concatenates_their_output(notes):
     result = _run("ls && cat notes.txt", notes)
 
@@ -83,6 +89,7 @@ def test_and_runs_both_and_concatenates_their_output(notes):
     assert result["return_code"] == 0
 
 
+@posix_only
 def test_and_stops_at_the_first_failure_and_reports_its_code(notes):
     result = _run("cat missing.txt && echo never", notes)
 
@@ -93,6 +100,7 @@ def test_and_stops_at_the_first_failure_and_reports_its_code(notes):
     assert [step["command"] for step in result["steps"]] == ["cat missing.txt"]
 
 
+@posix_only
 def test_or_runs_the_fallback_only_when_the_first_fails(notes):
     result = _run("cat missing.txt || echo fallback", notes)
 
@@ -104,6 +112,7 @@ def test_or_runs_the_fallback_only_when_the_first_fails(notes):
     assert "fallback" not in skipped["stdout"], skipped
 
 
+@posix_only
 def test_semicolon_runs_the_next_command_regardless(notes):
     result = _run("cat missing.txt; echo after", notes)
 
@@ -112,6 +121,7 @@ def test_semicolon_runs_the_next_command_regardless(notes):
     assert "missing.txt" in result["stderr"]
 
 
+@posix_only
 def test_a_failure_a_semicolon_walked_past_is_still_a_failure(notes):
     """`pytest -q; ls` must not report a failing suite as a passing check.
 
@@ -124,6 +134,7 @@ def test_a_failure_a_semicolon_walked_past_is_still_a_failure(notes):
     assert result["steps"][0]["return_code"] != 0
 
 
+@posix_only
 def test_a_skipped_step_leaves_the_status_for_the_next_connector(notes):
     """``false && a || b`` runs b — skipping a does not reset the exit code."""
     result = _run("cat missing.txt && echo a || echo b", notes)
@@ -131,6 +142,7 @@ def test_a_skipped_step_leaves_the_status_for_the_next_connector(notes):
     assert result["stdout"].strip() == "b", result
 
 
+@posix_only
 def test_a_pipeline_inside_a_compound_line_still_pipes(notes):
     result = _run("cat notes.txt | sort && wc -l notes.txt", notes)
 
@@ -140,6 +152,7 @@ def test_a_pipeline_inside_a_compound_line_still_pipes(notes):
     assert result["return_code"] == 0
 
 
+@posix_only
 def test_every_step_reports_its_own_exit_code(notes):
     result = _run("cat missing.txt; echo after; cat notes.txt", notes)
 
@@ -152,6 +165,7 @@ def test_every_step_reports_its_own_exit_code(notes):
     assert codes[0] != 0 and codes[1] == 0 and codes[2] == 0, result
 
 
+@posix_only
 def test_one_line_costs_the_rate_limiter_one_command(notes):
     """The point of the change is fewer round trips, so a line is one step."""
     host = _Host()
@@ -213,6 +227,7 @@ def test_redirection_substitution_and_backgrounding_stay_refused(command, notes)
     assert not (notes / "marker.txt").exists()
 
 
+@posix_only
 def test_an_inline_environment_assignment_is_scoped_to_its_own_command(notes):
     """See tests/unit/test_shell_env_assignment.py for the rule in full."""
     result = _run("ls && FOO=bar ls", notes)
@@ -234,6 +249,7 @@ def test_a_newline_is_not_a_connector(notes):
     assert result["executed"] is False
 
 
+@posix_only
 def test_an_operator_inside_double_quotes_is_data_not_a_connector(notes):
     result = _run('echo "a && b; c" && echo done', notes)
 
@@ -270,6 +286,7 @@ def test_a_missing_operand_is_refused_not_guessed(command, notes):
 # ---------------------------------------------------------------------------
 
 
+@posix_only
 def test_cd_moves_the_commands_after_it(notes):
     (notes / "sub").mkdir()
     (notes / "sub" / "only-here.txt").write_text("x\n")
@@ -313,6 +330,7 @@ def test_cd_is_only_allowed_as_a_bare_one_argument_command(command, notes):
     assert result["executed"] is False
 
 
+@posix_only
 def test_cd_does_not_leak_into_the_next_call(notes):
     (notes / "sub").mkdir()
     host = _Confined(notes)
@@ -323,6 +341,7 @@ def test_cd_does_not_leak_into_the_next_call(notes):
     assert result["stdout"].strip() == str(notes.resolve())
 
 
+@posix_only
 def test_a_line_whose_only_command_is_missing_says_nothing_ran(notes):
     """The verification footer reads that flag to tell a check that never ran
     apart from one that ran and failed (#3677). `tasklist` is whitelisted and
@@ -336,6 +355,7 @@ def test_a_line_whose_only_command_is_missing_says_nothing_ran(notes):
     assert result["executed"] is False
 
 
+@posix_only
 def test_a_missing_command_mid_line_does_not_disown_what_already_ran(notes):
     result = _run("ls && tasklist && ls", notes)
 
@@ -350,6 +370,7 @@ def test_a_missing_command_mid_line_does_not_disown_what_already_ran(notes):
 # ---------------------------------------------------------------------------
 
 
+@posix_only
 def test_a_timeout_kills_every_process_and_starts_no_later_step(notes, monkeypatch):
     started = []
     real_popen = shell_tools.subprocess.Popen

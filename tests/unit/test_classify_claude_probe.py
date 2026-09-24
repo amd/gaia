@@ -29,6 +29,16 @@ REAL_QUOTA_REJECTION = (
     "(America/Los_Angeles)"
 )
 
+# Verbatim from the failing "Scenario eval" preflight of run 35681533582,
+# job 106629918099. The BOM is real: the step writes the probe with
+# PowerShell's `Set-Content -Encoding UTF8`, and the classifier reads that
+# file back as utf-8 rather than utf-8-sig, so U+FEFF reaches classify().
+UTF8_BOM = chr(0xFEFF)
+REAL_WEEKLY_LIMIT_REJECTION = (
+    UTF8_BOM + "You've hit your weekly limit · resets Sep 23, 8am "
+    "(America/Los_Angeles)"
+)
+
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 EVAL_WORKFLOW = WORKFLOWS / "eval_flagship.yml"
 CANARY_WORKFLOW = WORKFLOWS / "claude-auth-canary.yml"
@@ -79,6 +89,33 @@ def test_real_spend_limit_rejection_is_a_quota_problem():
     # The whole point: it must send the reader to billing, not to the secrets.
     assert "Do NOT rotate the repository secrets" in v.action
     assert "admin-settings/usage" in v.action
+
+
+def test_real_weekly_limit_rejection_is_a_quota_problem():
+    """The phrase that turned the spend cap into five fake eval regressions.
+
+    It names no spend limit and carries a U+00B7 between "limit" and "resets",
+    so neither "spend limit" nor "limit resets" saw it.
+    """
+    v = ccp.classify(REAL_WEEKLY_LIMIT_REJECTION, exit_code=1)
+    assert v.kind == "quota"
+    assert v.exit_code == ccp.EXIT_QUOTA
+    assert "weekly limit" in v.matched
+    assert "Do NOT rotate the repository secrets" in v.action
+
+
+def test_the_weekly_limit_pattern_does_not_depend_on_the_reset_date():
+    """The date moves every reset; matching on it would re-break next week."""
+    v = ccp.classify("You've hit your weekly limit - resets Jan 5, 3pm", exit_code=1)
+    assert v.kind == "quota"
+
+
+def test_main_reports_the_weekly_limit_as_quota(tmp_path, capsys):
+    """End to end through the eval preflight's own invocation."""
+    p = tmp_path / "claude_probe.txt"
+    p.write_text(REAL_WEEKLY_LIMIT_REJECTION, encoding="utf-8")
+    assert ccp.main(["--exit-code", "1", "--text-file", str(p)]) == ccp.EXIT_QUOTA
+    assert "QUOTA EXHAUSTED" in capsys.readouterr().out
 
 
 def test_401_body_is_a_credential_problem():

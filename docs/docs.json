@@ -104,6 +104,7 @@
                     "pages": [
                       "guides/email",
                       "guides/email-integration",
+                      "guides/slack",
                       "guides/telegram-adapter"
                     ]
                   },
@@ -397,6 +398,7 @@
             "group": "Agent UI",
             "pages": [
               "plans/agent-ui",
+              "plans/gaia-ui-redesign",
               "plans/setup-wizard",
               "plans/security-model",
               "plans/connectors",
@@ -404,6 +406,8 @@
               "plans/email-triage-agent",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
+              "plans/slack-tui-integration",
+              "plans/daemon-convergence",
               "plans/autonomy-engine"
             ]
           },

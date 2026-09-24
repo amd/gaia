@@ -18,6 +18,7 @@ from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
+    check_file_state,
     record_read,
     record_write,
 )
@@ -234,12 +235,22 @@ class FileIOToolsMixin:
         preferred about half the time (#3600) — but the omission was not
         deliberate and this is the largest single lever measured.
         """
+        registry = getattr(self, "_tools_registry", {})
+        # edit_file alone, not both: ChatAgent pops edit_python_file out of
+        # every profile that registers this mixin, so requiring the pair would
+        # silence the fragment everywhere it is supposed to apply.
+        if "edit_file" not in registry:
+            return ""
+        python_clause = (
+            ", or edit_python_file for .py when you want the edit syntax-checked"
+            if "edit_python_file" in registry
+            else ""
+        )
         return (
             "==== CHANGING A FILE ====\n"
             "To change a file, call edit_file with the exact existing text as "
-            "old_content, or edit_python_file for .py when you want the edit "
-            "syntax-checked. Both work on any text file — source, documentation, "
-            "configuration.\n"
+            f"old_content{python_clause}. It works on any text file — source, "
+            "documentation, configuration.\n"
             "Do not shell out to sed, awk, python or a heredoc to rewrite a file: "
             "the edit tools validate the path, keep a backup and report what "
             "changed, and a shell rewrite does none of that.\n"
@@ -449,6 +460,13 @@ class FileIOToolsMixin:
                     )
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
+                stale_error = check_file_state(str(file_path))
+                if stale_error is not None:
+                    path_validator.audit_write(
+                        "write", str(file_path), content_size, "denied", "stale"
+                    )
+                    return stale_error
+
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -528,7 +546,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(file_path)):
-                    reason = f"Access denied: {file_path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {file_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(file_path))}"
+                    )
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
@@ -663,7 +684,8 @@ class FileIOToolsMixin:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Access denied: {directory} is not in allowed paths",
+                        "error": f"Access denied: {directory} is not in allowed paths."
+                        f"{path_validator.scratch_hint(directory)}",
                     }
 
                 results = []
@@ -822,6 +844,13 @@ class FileIOToolsMixin:
                     )
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
+                stale_error = check_file_state(str(file_path))
+                if stale_error is not None:
+                    path_validator.audit_write(
+                        "write", str(file_path), content_size, "denied", "stale"
+                    )
+                    return stale_error
+
                 # Backup existing file before overwrite
                 backup_path = None
                 if os.path.exists(file_path):
@@ -913,6 +942,13 @@ class FileIOToolsMixin:
                         "write", str(path), content_size, "denied", reason
                     )
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
+
+                stale_error = check_file_state(str(path))
+                if stale_error is not None:
+                    path_validator.audit_write(
+                        "write", str(path), content_size, "denied", "stale"
+                    )
+                    return stale_error
 
                 # Backup existing file before overwrite
                 backup_path = None
@@ -1027,7 +1063,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(path)):
-                    reason = f"Access denied: {path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(path))}"
+                    )
                     path_validator.audit_write("edit", str(path), 0, "denied", reason)
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
@@ -1162,7 +1201,8 @@ class FileIOToolsMixin:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Access denied: {gaia_path} is not in allowed paths",
+                        "error": f"Access denied: {gaia_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(gaia_path)}",
                     }
 
                 # Start building content
@@ -1212,9 +1252,20 @@ class FileIOToolsMixin:
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
 
+                stale_error = check_file_state(gaia_path)
+                if stale_error is not None:
+                    path_validator.audit_write(
+                        "write",
+                        gaia_path,
+                        len(content.encode("utf-8")),
+                        "denied",
+                        "stale",
+                    )
+                    return stale_error
                 # Write the file
                 with open(gaia_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                record_write(gaia_path, content)
 
                 return {
                     "status": "success",
@@ -1267,7 +1318,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(file_path)):
-                    reason = f"Access denied: {file_path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {file_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(file_path))}"
+                    )
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
@@ -1297,6 +1351,12 @@ class FileIOToolsMixin:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
 
+                stale_error = check_file_state(str(file_path), content)
+                if stale_error is not None:
+                    path_validator.audit_write(
+                        "edit", str(file_path), new_size, "denied", "stale"
+                    )
+                    return stale_error
                 # Parse the file to find the function
                 try:
                     tree = ast.parse(content)
@@ -1353,6 +1413,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
+                record_write(str(file_path), modified_content)
 
                 # Generate diff
                 diff = "\n".join(

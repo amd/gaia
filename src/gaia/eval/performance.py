@@ -30,7 +30,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 
 @dataclass
@@ -42,6 +42,8 @@ class StepResult:
     tool_name: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    # None = provider never reported a cache count; 0 = measured, nothing cached.
+    cached_tokens: Optional[int] = None
     reasoning_tokens: int = 0  # tokens in <thinking> blocks (estimated)
     total_tokens: int = 0
     duration_ms: int = 0
@@ -94,6 +96,7 @@ class RunResult:
     total_duration_ms: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cached_tokens: Optional[int] = None
     total_reasoning_tokens: int = 0
     total_tokens: int = 0
     avg_time_to_first_token_ms: float = 0.0
@@ -222,6 +225,24 @@ def _last_assistant_text(conversation: list, stats_msg: dict) -> str:
     return ""
 
 
+def _cached_tokens(stats: dict) -> Optional[int]:
+    """Prompt tokens served from the provider's cache, in any provider's spelling.
+
+    Lemonade's cloud usage flattens it to ``cached_tokens``, Claude reports
+    ``cache_read_input_tokens``, and a raw OpenAI-shape body nests it under
+    ``prompt_tokens_details``. A reported 0 is kept; no report at all is None.
+    """
+    details = stats.get("prompt_tokens_details")
+    for value in (
+        stats.get("cached_tokens"),
+        stats.get("cache_read_input_tokens"),
+        details.get("cached_tokens") if isinstance(details, dict) else None,
+    ):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+    return None
+
+
 def extract_step_stats(conversation: list) -> tuple[list[StepResult], int]:
     """Extract per-step ``StepResult`` objects and total reasoning tokens.
 
@@ -258,8 +279,11 @@ def extract_step_stats(conversation: list) -> tuple[list[StepResult], int]:
                 step_num += 1
                 raw_ttft = stats.get("time_to_first_token")
                 ttft_ms = float(raw_ttft) * 1000 if raw_ttft else 0.0
-                in_tok = stats.get("input_tokens", 0) or 0
-                out_tok = stats.get("output_tokens", 0) or 0
+                # Local /stats says input/output; cloud usage says prompt/completion.
+                in_tok = stats.get("input_tokens") or stats.get("prompt_tokens") or 0
+                out_tok = (
+                    stats.get("output_tokens") or stats.get("completion_tokens") or 0
+                )
                 step_results.append(
                     StepResult(
                         step_number=step_num,
@@ -267,6 +291,7 @@ def extract_step_stats(conversation: list) -> tuple[list[StepResult], int]:
                         tool_name=last_tool_name,
                         input_tokens=in_tok,
                         output_tokens=out_tok,
+                        cached_tokens=_cached_tokens(stats),
                         reasoning_tokens=_extract_reasoning_tokens(
                             _last_assistant_text(conversation, msg)
                         ),
@@ -354,6 +379,9 @@ def extract_from_agent_result(
     peak_memory_mb = max((s.peak_memory_mb for s in step_results), default=0.0)
     # NPU utilization is best-effort: scan each step's raw /stats for a value.
     npu = _harvest_npu(conversation)
+    cached_counts = [
+        s.cached_tokens for s in step_results if s.cached_tokens is not None
+    ]
 
     return RunResult(
         run_id=run_id,
@@ -365,6 +393,7 @@ def extract_from_agent_result(
         total_duration_ms=total_duration_ms,
         total_input_tokens=input_tokens,
         total_output_tokens=output_tokens,
+        total_cached_tokens=sum(cached_counts) if cached_counts else None,
         total_reasoning_tokens=total_reasoning_tokens,
         total_tokens=total_tokens,
         avg_time_to_first_token_ms=round(avg_ttft, 1),
@@ -392,7 +421,10 @@ def to_performance_summary(run: RunResult) -> dict[str, Any]:
         "avg_time_to_first_token_ms": run.avg_time_to_first_token_ms,
         "total_input_tokens": run.total_input_tokens,
         "total_output_tokens": run.total_output_tokens,
+        "total_cached_tokens": run.total_cached_tokens,
         "total_tokens": run.total_tokens,
+        # Tool-calling steps, distinct from the LLM-call count in "steps".
+        "tool_calls": sum(1 for s in run.step_results if s.tool_name),
         "total_duration_ms": run.total_duration_ms,
         "pipeline_latency_s": round(run.total_duration_ms / 1000.0, 3),
         "peak_memory_mb": run.peak_memory_mb,
@@ -415,6 +447,7 @@ def run_to_dict(run: RunResult) -> dict[str, Any]:
         "total_duration_ms": run.total_duration_ms,
         "total_input_tokens": run.total_input_tokens,
         "total_output_tokens": run.total_output_tokens,
+        "total_cached_tokens": run.total_cached_tokens,
         "total_reasoning_tokens": run.total_reasoning_tokens,
         "total_tokens": run.total_tokens,
         "avg_time_to_first_token_ms": run.avg_time_to_first_token_ms,

@@ -10,6 +10,11 @@ mix agents, which ``compare_scorecards`` cannot see because it keys on
 ``scenario_id`` alone and would report "improved/regressed" across two different
 agents.
 
+Enforcement is ``validate_scenario``, which rejects the key wherever a scenario
+comes from — the repo, ``~/.gaia/eval/scenarios``, or a ``--scenario-dir``. This
+file only walks the repo, so it names in-tree offenders early; it is not what
+makes the rule hold.
+
 The original hazard this file guarded still applies to the one remaining pin —
 the default: a scenario pointed at an agent that does not exist never reaches
 the model, every turn gets the backend's "couldn't load the agent" reply, and
@@ -21,10 +26,12 @@ caught in CI rather than in an eval run.
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 from gaia.agents.registry import AgentRegistry
 from gaia.eval.config import DEFAULT_AGENT_TYPE
+from gaia.eval.runner import validate_scenario
 from gaia.ui._chat_helpers import _SIDECAR_AGENT_TYPES
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -106,8 +113,36 @@ def test_no_scenario_pins_an_agent_type():
     assert not pinned, (
         f"{len(pinned)} scenario(s) set 'agent_type', which the eval no longer "
         f"honours — the runner passes --agent-type (default "
-        f"'{DEFAULT_AGENT_TYPE}') for every scenario, so the key is dead weight "
-        "that reads as if it still pins an agent. Delete the line; to measure a "
+        f"'{DEFAULT_AGENT_TYPE}') for every scenario. validate_scenario rejects "
+        "the key, so these fail at load. Delete the line; to measure a "
         "different agent pass --agent-type on the command line for the whole "
         "run. Offenders: " + "; ".join(pinned)
     )
+
+
+def test_validate_scenario_rejects_a_pin_from_any_directory():
+    """The guard above only walks the repo; the runner also loads
+    ``~/.gaia/eval/scenarios`` and every ``--scenario-dir``. Rejecting at load
+    is what covers those, so a local scenario cannot quietly score one agent
+    while the scorecard records another.
+    """
+    scenario = {
+        "id": "pinned",
+        "category": "rag_quality",
+        "persona": "casual_user",
+        "agent_type": "chat",
+        "setup": {"index_documents": []},
+        "turns": [
+            {
+                "turn": 1,
+                "objective": "greet",
+                "user_message": "hi",
+                "success_criteria": "the agent says hello",
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="agent_type"):
+        validate_scenario(Path("anywhere/pinned.yaml"), scenario)
+
+    del scenario["agent_type"]
+    validate_scenario(Path("anywhere/pinned.yaml"), scenario)  # should not raise

@@ -104,7 +104,7 @@ jobs:
           TITLE="WARNING: Claude CI auth canary failed - CI cannot call Claude"
           BODY="The monthly Claude auth canary failed. **The failing step's error line names which of the two causes applies** - they need different people, so read it before acting.
 
-          **Quota exhausted (\`QUOTA EXHAUSTED\` in the log):** the credential is fine and the org is out of budget. An Anthropic org admin raises the monthly spend limit at https://claude.ai/admin-settings/usage. Rotating the repo secrets will not help.
+          **Quota exhausted (\`QUOTA EXHAUSTED\` in the log):** the credential is fine and the org is out of budget. Read the error line for which limit was hit and when it resets - usage limits lapse on their own, spend caps do not. An Anthropic org admin can raise it at https://claude.ai/admin-settings/usage. Rotating the repo secrets will not help.
 
           **Credential invalid (\`CREDENTIAL INVALID\` in the log):** run \`claude setup-token\` locally, then update the repo secret:
           \`\`\`
