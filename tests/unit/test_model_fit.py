@@ -307,3 +307,7 @@ class TestLemonadeVersionGate:
         assert model_id == expected
         if expected == lc.DEFAULT_MODEL_NAME:
             assert "--force-reinstall" in skipped[0][1]
+
+    def test_a_pc_too_small_is_told_it_is_too_small_not_to_upgrade(self):
+        _, skipped, _ = lc.recommend_default_chat_model(self._client(MAC_M4, "11.9.0"))
+        assert "memory" in skipped[0][1] and "force-reinstall" not in skipped[0][1]

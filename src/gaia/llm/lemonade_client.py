@@ -773,6 +773,7 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
+        check_fit,
         check_server_supports,
         pick_default_model,
     )
@@ -783,16 +784,20 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
     except ModelFitError as e:
         return floor, [(m, str(e)) for m in DEFAULT_MODEL_LADDER[:-1]], None
     server_version = lemonade_server_version(client)
+    # Fit first, then version: "upgrade Lemonade" is only useful advice for a
+    # model this PC could actually hold.
     candidates, unsupported = [], []
     for model_id in DEFAULT_MODEL_LADDER:
         mr = find_model_requirement(model_id)
-        verdict = check_server_supports(
-            mr.min_lemonade_version if mr else None, server_version
-        )
-        if model_id != floor and not verdict.fits:
-            unsupported.append((model_id, verdict.reason))
-            continue
-        candidates.append((model_id, (mr.size_gb if mr else None) or 0.0))
+        size = (mr.size_gb if mr else None) or 0.0
+        if model_id != floor and check_fit(size, capacity).fits:
+            verdict = check_server_supports(
+                mr.min_lemonade_version if mr else None, server_version
+            )
+            if not verdict.fits:
+                unsupported.append((model_id, verdict.reason))
+                continue
+        candidates.append((model_id, size))
     model_id, skipped = pick_default_model(candidates, capacity)
     return model_id, unsupported + skipped, capacity
 

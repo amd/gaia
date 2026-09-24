@@ -128,13 +128,6 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 			e.Reason = "cannot check this PC's memory: " + capErr.Error()
 			return
 		}
-		if e.Recommended != nil {
-			if ok, why := capacity.SupportsModel(e.Recommended.MinLemonade); !ok {
-				e.NeedsUpgrade = true
-				e.Reason = why
-				return
-			}
-		}
 		size := e.SizeGB()
 		if size <= 0 {
 			e.FitUnknown = true
@@ -142,6 +135,12 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 			return
 		}
 		e.Fits, e.Reason = capacity.Fit(size)
+		// Version after fit: "upgrade Lemonade" only helps a model that fits.
+		if e.Fits && e.Recommended != nil {
+			if ok, why := capacity.SupportsModel(e.Recommended.MinLemonade); !ok {
+				e.Fits, e.NeedsUpgrade, e.Reason = false, true, why
+			}
+		}
 	}
 
 	used := make([]bool, len(models))

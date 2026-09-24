@@ -2989,3 +2989,19 @@ class TestHardwareChatModel(unittest.TestCase):
             with_chat_model("minimal", [DEFAULT_MODEL_NAME], fail),
             [DEFAULT_MODEL_NAME],
         )
+
+    def test_a_user_default_the_server_cannot_load_is_refused(self):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+        from gaia.llm.model_fit import ModelFitError
+
+        cfg = GaiaConfig()
+        cfg.default_model = LARGE_DEFAULT_MODEL_NAME
+        cfg.save()
+        client = self._client(STRIX_HALO_128)
+        client.health_check.return_value = {"status": "ok", "version": "11.9.0"}
+        client.list_models.return_value = {"data": []}
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            with self.assertRaisesRegex(ModelFitError, "--force-reinstall"):
+                check_setup_status(profile="gaia")

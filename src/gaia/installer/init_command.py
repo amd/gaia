@@ -289,23 +289,22 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
             size = entry.get("size")
             break
     mr = find_model_requirement(model_id)
+    size = size or (mr.size_gb if mr else None)
+    if size:
+        capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+        verdict = check_fit(float(size), capacity)
+        if not verdict.fits:
+            raise ModelFitError(
+                f"default_model {model_id} will not fit this PC: {verdict.reason}. "
+                "Choose a smaller one with `gaia config set default_model <id>` "
+                "(`/provider` in the TUI lists what fits), then re-run `gaia init`."
+            )
     if mr and mr.min_lemonade_version:
         supported = check_server_supports(
             mr.min_lemonade_version, lemonade_server_version(client)
         )
         if not supported.fits:
             raise ModelFitError(f"default_model {model_id} {supported.reason}.")
-    size = size or (mr.size_gb if mr else None)
-    if not size:
-        return
-    capacity = capacity_from_system_info(client.get_system_info(timeout=15))
-    verdict = check_fit(float(size), capacity)
-    if not verdict.fits:
-        raise ModelFitError(
-            f"default_model {model_id} will not fit this PC: {verdict.reason}. "
-            "Choose a smaller one with `gaia config set default_model <id>` "
-            "(`/provider` in the TUI lists what fits), then re-run `gaia init`."
-        )
 
 
 # Profiles whose chat model follows the hardware. ``minimal`` promises a small
