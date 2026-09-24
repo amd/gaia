@@ -1259,7 +1259,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should have error background tint', () => {
-      expect(msgCss).toContain('rgba(239, 68, 68');
+      // Tinted from the danger role, like the border above it. Pinning the hex
+      // instead would make any re-theming look like a broken error style.
+      expect(msgCss).toContain('background: color-mix(in srgb, var(--danger)');
     });
 
     it('should have copy feedback green style', () => {
