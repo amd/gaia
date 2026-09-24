@@ -160,10 +160,27 @@ def test_generic_save_needs_direct_output_not_transcription(tmp_path):
     ledger = CompletionEvidence("Summarize the video and save it", str(tmp_path))
     ledger.record("transcribe_media", {}, {"transcript_path": "input.txt"}, True)
     read(ledger, "input.txt")
-    assert gaps(ledger)
+    claim = "I saved the summary to a file."
+    assert gaps(ledger, claim)
     write(ledger)
     read(ledger)
-    assert not gaps(ledger)
+    assert not gaps(ledger, claim)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Save me some time and just give me the summary.",
+        "Store this in memory: my favorite color is blue.",
+        "Export as JSON please.",
+        "Can you write a Python script that saves data to a file?",
+        "Write a guide to Node.js.",
+        "Write a script to clean logs/app.log.",
+        "Write the steps to edit /etc/hosts.",
+    ],
+)
+def test_topics_and_idioms_are_not_save_targets(query):
+    assert save_obligations(query) == ([], False)
 
 
 class FileAgent(Agent):
@@ -573,7 +590,11 @@ def test_questions_that_mention_saving_answer_normally(agent, query):
     "query, expected",
     [
         ("Can you save it to `a.md`?", (["a.md"], True)),
-        ("Summarize this, then store the result.", ([], True)),
+        ("Summarize this, then store the result.", ([], False)),
+        ("Could you save this to notes.md?", (["notes.md"], True)),
+        ("Write a haiku and store it in haiku.txt", (["haiku.txt"], True)),
+        ("OK save it to todo.txt", (["todo.txt"], True)),
+        ("Write a file called notes.md", (["notes.md"], True)),
         ("Please write it to a file.", ([], True)),
         ("List every U.S. state and save to `states.md`.", (["states.md"], True)),
     ],
@@ -640,5 +661,31 @@ def test_explaining_deletion_is_not_a_cleanup_claim(ledger, answer):
     assert ledger.cleanup_gaps(answer) == []
 
 
-def test_terse_cleanup_report_naming_a_path_is_still_checked(ledger):
+def test_terse_cleanup_report_naming_a_path_is_still_checked(ledger, tmp_path):
+    (tmp_path / "scratch.py").write_text("still here")
     assert ledger.cleanup_gaps("Deleted `scratch.py`.")
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "We removed Node.js 16 support in v2.0.",
+        "I also removed README.md references from the summary.",
+        "I deleted `gone.txt`.",
+    ],
+)
+def test_removal_claims_that_match_the_disk_are_not_flagged(ledger, tmp_path, answer):
+    (tmp_path / "README.md").write_text("present")
+    assert ledger.cleanup_gaps(answer) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I wrote a function below that saves to output.txt.",
+        "Once saved to disk, the file is at report.md.",
+    ],
+)
+def test_describing_code_or_conditions_is_not_a_save_claim(tmp_path, answer):
+    ledger = CompletionEvidence("Write a function that saves results.", str(tmp_path))
+    assert gaps(ledger, answer) == []

@@ -1163,11 +1163,11 @@ schema-constrained page responses and an omission check per page. Overlap keeps
 source text visible, aligns to whole lines or sentences, and preserves verbatim
 field values. Two pages that quote one occurrence with different boundaries merge
 when an identity field (`name`, `id` or `title`, else any field) is stated by
-both and every value both state occurs at a shared source offset. The retained
-extraction may fill fields the other left `not stated`, but not the reverse at
-the same time, and a final sentence period is the only tolerated value
-difference. Two quotes that do not overlap are never merged into one entry.
-Conflicting evidence is retried once per page, then fails visibly.
+both and every value both state sits at one source location, one inside the
+other (as when a page boundary cut a value short). The merged entry's quote spans
+both quotes and keeps the fuller value of each field. Two items from one reply,
+or quotes that do not overlap, are never merged. Conflicting evidence is retried
+once per page, naming the conflicting quote, then fails visibly.
 
 Run the explicit live regression with either backend:
 

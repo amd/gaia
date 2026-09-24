@@ -11,6 +11,7 @@ import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.extraction import (
     PAGE_CHARS,
+    Entry,
     ExtractionLedger,
     exhaustive_request,
     extract_pages,
@@ -120,8 +121,10 @@ def test_same_span_sentence_period_variants_keep_original_values():
 
     first, second = entry("look up."), entry("look up")
     assert reconcile_occurrence(first, second) == first
+    assert reconcile_occurrence(second, first) == first
     assert first.text == "cue: look up."
-    assert reconcile_occurrence(first, entry("up.")) is None
+    # A value cut short at the same place keeps the fuller copy.
+    assert reconcile_occurrence(entry("up."), first) == first
 
 
 def test_broad_quote_does_not_hide_missed_neighbor_on_later_page():
@@ -871,15 +874,30 @@ def test_differently_bounded_quotes_of_one_sentence_are_one_occurrence():
     early = field_entry(SENTENCE, SENTENCE[:120], VALUES)
     late = field_entry(SENTENCE, SENTENCE[40:], VALUES)
     assert early.start < late.start < early.end < late.end
-    assert reconcile_occurrence(early, late) == early
-    assert reconcile_occurrence(late, early) == late
+    merged = reconcile_occurrence(early, late)
+    assert merged == reconcile_occurrence(late, early)
+    # The merged quote is still verbatim source text, spanning both quotes.
+    assert (merged.start, merged.end, merged.quote) == (0, len(SENTENCE), SENTENCE)
+    assert dict(merged.fields) == VALUES
 
 
-def test_partial_overlap_keeps_the_occurrence_that_states_more_fields():
-    early = field_entry(SENTENCE, SENTENCE[:110], {**VALUES, "cue": "not stated"})
-    late = field_entry(SENTENCE, SENTENCE[40:], VALUES)
-    assert reconcile_occurrence(early, late) == late
-    assert reconcile_occurrence(late, early) == late
+@pytest.mark.parametrize(
+    "early_values",
+    [
+        {**VALUES, "cue": "not stated"},
+        # The page boundary cut the cue short.
+        {**VALUES, "cue": "start picking your feet"},
+    ],
+)
+def test_partial_overlap_keeps_the_fuller_value_of_each_field(early_values):
+    early = field_entry(SENTENCE, SENTENCE[:110], early_values)
+    late = field_entry(SENTENCE, SENTENCE[40:], {**VALUES, "target area": "feet"})
+    for merged in (
+        reconcile_occurrence(early, late),
+        reconcile_occurrence(late, early),
+    ):
+        assert dict(merged.fields) == {**VALUES, "target area": "feet"}
+        assert merged.quote == SENTENCE
 
 
 def test_partial_overlap_of_repeated_names_stays_two_occurrences():
@@ -908,7 +926,7 @@ def test_values_repeated_inside_one_quote_still_match_their_occurrence(
     page, values, early, late
 ):
     first, second = field_entry(page, early, values), field_entry(page, late, values)
-    assert reconcile_occurrence(first, second) == first
+    assert dict(reconcile_occurrence(first, second).fields) == values
 
 
 @pytest.mark.parametrize("fields", [(), ("name", "reps")])
@@ -991,3 +1009,13 @@ def test_contained_quote_may_repeat_the_name_it_identifies():
     short = field_entry(page, "Keep the march slow", values)
     full = field_entry(page, page, {"name": "march", "cue": "lift your knees"})
     assert reconcile_occurrence(short, full) == full
+
+
+def test_free_text_quotes_of_one_sentence_merge_but_repeats_do_not():
+    early = Entry(0, 120, "slow march", SENTENCE[:120])
+    late = Entry(40, len(SENTENCE), "slow march", SENTENCE[40:])
+    assert reconcile_occurrence(early, late) == early
+    page = "Squat reps10. pause. Squat reps10."
+    first = Entry(0, 20, "Squat reps10", page[:20])
+    second = Entry(14, 34, "Squat reps10", page[14:])
+    assert reconcile_occurrence(first, second) is None

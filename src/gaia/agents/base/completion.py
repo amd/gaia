@@ -93,15 +93,23 @@ _FENCES = re.compile(r"```.*?```", re.DOTALL)
 # The verb must be an instruction, never a noun ("the store") or a question topic.
 _SAVE_REQUEST = re.compile(
     r"(?:^|\band\b|\bthen\b|[,;:]|\b(?:can|could|would|will)\s+you\b|\byou\s+to\b|"
-    r"\bplease\b)\s*(?:(?:please|also|now|just|then|and|kindly)\s+)*"
+    r"\bplease\b)\s*(?:(?:please|also|now|just|then|and|kindly|ok(?:ay)?|so),?\s+)*"
     r"\b(save|write|export|store)\b",
     re.I,
 )
-# 'write a poem' requests an answer; writing needs a file object or target.
+# An explicit file or disk object, before any relative clause describing code.
 _FILE_OBJECT = re.compile(
     r"^\s*(?:(?:a|an|the|new|this|that|it|them)\s+)*(?:[\w-]+\s+)?(?:file|disk)\b|"
-    r"\b(?:to|into|onto|on)\s+(?:(?:a|an|the|new|this|that)\s+)*(?:[\w-]+\s+)?"
+    r"\b(?:to|into|onto|on|in)\s+(?:(?:a|an|the|new|this|that)\s+)*(?:[\w-]+\s+)?"
     r"(?:file|disk)\b",
+    re.I,
+)
+_RELATIVE_CLAUSE = re.compile(r"\b(?:that|which|who|so that)\b", re.I)
+_CONDITION = re.compile(r"^\s*(?:once|when|after|before|if|whenever)\b[^,]*,", re.I)
+# "Write a guide to X" is a topic; writing *it* or *the summary* to X is a save.
+_WRITE_OBJECT = re.compile(
+    r"^\s*(?:(?:it|this|that|them|these|those|everything|all of (?:it|this|them)|"
+    r"the\s+[\w-]+(?:\s+[\w-]+)?)\s+)?$",
     re.I,
 )
 _NOT_REQUEST = re.compile(
@@ -111,7 +119,13 @@ _NOT_REQUEST = re.compile(
 )
 # Quoting allows spaces; bare paths are scanned as tokens, never suffix matches.
 _TARGET = re.compile(r"`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'|([^\s`\"'<>]+)")
-_DESTINATION = re.compile(r"\b(?:to|into|at|as)\s+", re.I)
+_DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+", re.I)
+# Words allowed between a destination preposition and its path.
+_LEAD = re.compile(
+    r"^\s*(?:(?:a|an|the|this|that|your|my|new|file|folder|directory|called|named)"
+    r"\s+)*",
+    re.I,
+)
 
 
 def _payload(value: Any) -> dict:
@@ -127,7 +141,7 @@ def _payload(value: Any) -> dict:
 
 
 def _path_token(match: re.Match) -> str | None:
-    value = next(g for g in match.groups() if g is not None).strip().rstrip(".,;:)")
+    value = next(g for g in match.groups() if g is not None).strip().rstrip(".,;:)?!")
     if not value or "://" in value or "@" in value:
         return None
     quoted = any(match.group(i) is not None for i in (1, 2, 3))
@@ -149,6 +163,22 @@ def _path_token(match: re.Match) -> str | None:
     return None
 
 
+def _scan_paths(text: str, immediate: bool) -> list[str]:
+    """Paths listed in *text*; with *immediate*, only when they open it."""
+    if immediate:
+        text = text[_LEAD.match(text).end() :]
+    paths = []
+    for match in _TARGET.finditer(text):
+        path = _path_token(match)
+        if path is not None:
+            paths.append(path)
+        elif immediate and not paths:
+            return []
+        elif paths and match.group().lower().strip(",") not in {"and", "or"}:
+            break
+    return paths
+
+
 def destination_paths(text: str) -> list[str]:
     """Read a destination noun phrase, stopping at the next action."""
     # A later 'email it to me' must not replace the save's destination.
@@ -160,36 +190,41 @@ def destination_paths(text: str) -> list[str]:
         flags=re.I,
     )[0]
     destinations = list(_DESTINATION.finditer(clause))
-    scan = clause[destinations[-1].end() :] if destinations else clause
-    paths = []
-    for match in _TARGET.finditer(scan):
-        path = _path_token(match)
-        if path is not None:
-            paths.append(path)
-        elif paths and match.group().lower().strip(",") not in {"and", "or"}:
-            break
-    return list(dict.fromkeys(paths))
+    if not destinations:
+        return list(dict.fromkeys(_scan_paths(clause, immediate=False)))
+    # The last preposition that names a path: "to clean logs/app.log" names none.
+    for destination in reversed(destinations):
+        paths = _scan_paths(clause[destination.end() :], immediate=True)
+        if paths:
+            return list(dict.fromkeys(paths))
+    return []
 
 
 def save_obligations(query: str) -> tuple[list[str], bool]:
-    """Explicit save instructions; advisory/negated instructions aren't tasks."""
+    """Explicit save instructions; advisory/negated instructions aren't tasks.
+
+    A request counts only when it names a file or disk: "save me some time" and
+    "store this in memory" are not saves, and a pathless "save it" is checked
+    through the answer's own save claim instead.
+    """
     paths = []
     requested = False
     for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", query)):
         sentence = sentence.strip()
-        action = _SAVE_REQUEST.search(sentence)
-        if not action or _NOT_REQUEST.search(sentence[: action.end()]):
-            continue
-        verb = action.group(1).lower()
-        tail = sentence[action.end() :]
-        found = destination_paths(tail)
-        if verb == "write" and not _DESTINATION.search(tail):
-            first = _TARGET.search(tail)
-            if not first or _path_token(first) is None:
-                found = []
-        if found or verb != "write" or _FILE_OBJECT.search(tail):
-            requested = True
-            paths.extend(found)
+        for action in _SAVE_REQUEST.finditer(sentence):
+            if _NOT_REQUEST.search(sentence[: action.end()]):
+                continue
+            tail = sentence[action.end() :]
+            destination = _DESTINATION.search(tail)
+            found = destination_paths(tail)
+            if action.group(1).lower() == "write":
+                if destination and not _WRITE_OBJECT.match(tail[: destination.start()]):
+                    found = []
+                elif not destination:
+                    found = _scan_paths(tail, immediate=True)
+            if found or _FILE_OBJECT.search(_RELATIVE_CLAUSE.split(tail)[0]):
+                requested = True
+                paths.extend(found)
     return list(dict.fromkeys(paths)), requested
 
 
@@ -420,6 +455,8 @@ class CompletionEvidence:
         required = {self.key(path) for path in self.requested}
         claim_without_path = False
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
+            # Only the main clause reports this turn: not "code that saves to x".
+            sentence = _RELATIVE_CLAUSE.split(_CONDITION.sub("", sentence))[0]
             if claims_file_write(sentence):
                 paths = destination_paths(sentence)
                 required.update(self.key(path) for path in paths)
@@ -504,16 +541,33 @@ class CompletionEvidence:
             )
             if not is_file and (not first or _path_token(first) is None):
                 continue
+            if first and first.group(4) and _path_token(first):
+                after = tail[first.end() :].split(None, 1)
+                # "removed README.md references": the path modifies another noun.
+                if after and after[0].strip(".,;:!?").lower() not in {
+                    "",
+                    "and",
+                    "or",
+                    "from",
+                    "in",
+                    "at",
+                    "to",
+                    "as",
+                    "too",
+                }:
+                    continue
             paths = destination_paths(tail)
             if not paths:
                 gaps.append(
                     "The cleanup claim names no concrete files whose removal can be verified. Name the removed paths or omit that claim."
                 )
             for path in paths:
-                if self.key(path) not in self.removed:
-                    gaps.append(
-                        f"No removal of `{self.key(path)}` was observed this turn."
-                    )
+                key = self.key(path)
+                # An absent, untouched path already agrees with the claim.
+                if key not in self.removed and (
+                    key in self.files or os.path.lexists(key)
+                ):
+                    gaps.append(f"No removal of `{key}` was observed this turn.")
         return gaps
 
 
