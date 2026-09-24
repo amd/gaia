@@ -813,10 +813,13 @@ def test_create_names_an_output_for_any_claim_form(tmp_path, answer):
 
 def test_create_a_project_is_not_a_file(tmp_path):
     assert save_obligations("Create a Node.js app that serves pages") == ([], False)
-    assert save_obligations("Generate a report.md summarizing it") == (
-        ["report.md"],
-        True,
-    )
+    for query in (
+        "Create a summary of the errors in app.log",
+        "Make sure the imports are sorted in main.py",
+        "Create a Next.js landing page",
+        "Make a Node.js based REST API",
+    ):
+        assert save_obligations(query) == ([], False), query
     assert save_obligations("Make a notes.md file summarizing it") == (
         ["notes.md"],
         True,
@@ -843,3 +846,16 @@ def test_shell_files_count_only_from_a_successful_run_of_the_named_path(
     )
     result = agent.process_query("Save the summary to a file", max_steps=4)
     assert result["status"] == "incomplete"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I've successfully saved the summary to notes.md.",
+        "I have now saved the summary to notes.md.",
+        "I successfully wrote the summary to notes.md.",
+    ],
+)
+def test_adverbs_do_not_hide_a_first_person_claim(tmp_path, answer):
+    ledger = CompletionEvidence("Summarize GAIA's key features", str(tmp_path))
+    assert gaps(ledger, answer)

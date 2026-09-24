@@ -1154,3 +1154,14 @@ def test_running_out_of_steps_keeps_the_extracted_inventory(agent, tmp_path):
     )
     assert result["status"] == "incomplete"
     assert "Exercise ALPHA" in result["result"] and "Exercise BETA" in result["result"]
+
+
+def test_a_finished_extraction_survives_the_step_limit(agent, tmp_path):
+    (tmp_path / "source.txt").write_text("Exercise ALPHA\nExercise BETA")
+    script(
+        agent,
+        {"tool": "extract_document_items", "tool_args": {"file_path": "source.txt"}},
+    )
+    result = agent.process_query("List every exercise in source.txt", max_steps=1)
+    assert result["status"] == "incomplete"
+    assert "Exercise BETA" in result["result"]

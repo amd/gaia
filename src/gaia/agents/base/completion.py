@@ -126,10 +126,12 @@ _FROM_COLLECTION = re.compile(
     r"list|summary|context|plan|library|queue|results?|inputs?|documents?)\b",
     re.I,
 )
-# "I saved x", not "I think downloads are saved to x".
+# "I've gone ahead and saved x", not "I think downloads are saved to x": no
+# be-verb or clause break may sit between the speaker and the save verb.
 _FIRST_PERSON = re.compile(
-    r"\b(?:I|we)(?:'ve|\s+have|\s+had|\s+just|\s+also|\s+already)*\s+"
-    r"(?:saved|wrote|stored|exported|created|put|generated|made|copied)\b",
+    r"\b(?:I|we)(?:'ve|'d)?(?:\s+(?!(?:am|is|are|was|were|be|been|being)\b)"
+    r"[\w-]+(?<!'s)){0,4}?\s+(?:saved|wrote|written|stored|exported|created|"
+    r"put|generated|made|copied)\b",
     re.I,
 )
 _EARLIER = re.compile(
@@ -147,7 +149,7 @@ _TOPIC_OBJECT = re.compile(
 _MODIFIER = re.compile(
     r"\s+(?!(?:and|or|then|to|into|in|on|at|as|with|for|from|now|please|too|so|"
     r"because|if|when|but|instead|not|which|that|using|via|during|about|by|"
-    r"where|while|here|below|above|file|document)\b|[a-z]+(?:ing|ed)\b)[a-z][a-z-]*\b"
+    r"where|while|here|below|above|file|document)\b)[a-z][a-z-]*\b"
 )
 _NEGATED_TARGET = re.compile(r"\b(?:not|instead of|rather than)\s*$", re.I)
 _NOT_REQUEST = re.compile(
@@ -283,7 +285,6 @@ def save_obligations(query: str) -> tuple[list[str], bool]:
             # "Create notes.md", "make a file called x.md", "generate it in x.md".
             named = _NAMED_FILE.match(tail)
             found = _scan_paths(tail[named.end() :] if named else tail, True, True)
-            found = found or destination_paths(tail, _PUT_PREPOSITION)
         else:
             found = destination_paths(
                 tail, _PUT_PREPOSITION if verb == "put" else _OUTPUT_PREPOSITION

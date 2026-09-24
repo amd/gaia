@@ -8234,6 +8234,11 @@ Do NOT wrap conversational replies in JSON.
                     self._generate_max_steps_message(
                         conversation, steps_taken, steps_limit
                     )
+                    + (
+                        "\n\n" + self._extraction_ledger.render()
+                        if self._extraction_ledger.results
+                        else ""
+                    )
                 )
             ),
             "system_prompt": self.system_prompt,  # Include system prompt in the result
