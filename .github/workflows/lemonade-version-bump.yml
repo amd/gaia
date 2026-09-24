@@ -207,14 +207,16 @@ jobs:
                filename — which contains the version. Bumping LEMONADE_VERSION without
                refreshing them leaves every key stale, so the embedded install fails for
                users and tests/integration/test_lemonade_embeddable_assets.py fails in CI.
-               Read the real digests from the release API (the `digest` field, already
-               `sha256:<hex>`) and rewrite the dict so it has exactly these four keys:
+               Read the real digests from the release API and rewrite the dict so it has
+               exactly these four keys. The API's `digest` field is `sha256:<hex>`; the
+               dict holds the BARE hex (the installer compares it to `hexdigest()`), which
+               this query already strips:
                  ```
                  gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} \
-                   --jq '.assets[] | select(.name|test("embeddable")) | "\(.name) \(.digest)"'
+                   --jq '.assets[] | select(.name|test("embeddable")) | "\(.name) \(.digest | ltrimstr("sha256:"))"'
                  ```
-               Use the digests exactly as published — never carry over an old value, and
-               never invent one. If any of the four embeddable assets has no digest, do NOT
+               Use those hex values exactly — no `sha256:` prefix, never carry over an old
+               value, and never invent one. If any of the four embeddable assets has no digest, do NOT
                open a PR: delete the branch and stop.
             4. Sync the hardcoded Lemonade version strings in the docs. CI runs
                `python util/check_doc_versions.py`, which FAILS the build when any doc or
