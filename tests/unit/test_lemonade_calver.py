@@ -19,18 +19,26 @@ modes matter and neither raises:
 
 These tests pin the real strings the server reports (verified against a live
 v2026.39.1 ``/api/v1/health``), so a future parser "simplification" that drops
-CalVer support fails here instead of in the field. Every copy is parametrized in
-so that fixing only some of them fails here — the flagship agent's copy was
+CalVer support fails here instead of in the field. Every copy is covered — the
+tuple parsers by parametrization, the two that compare instead of returning a
+tuple (the Lemonade client's gate and the flagship agent's) by their own cases —
+so fixing only some of them still fails here. The flagship agent's copy was
 missed on the first pass of exactly this change.
 """
+
+import ast
+from pathlib import Path
 
 import pytest
 
 from gaia.agents.base.readiness import parse_version, version_meets_min
 from gaia.installer.init_command import InitCommand
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
+from gaia.llm.lemonade_client import LemonadeClient
 from gaia.llm.lemonade_launcher import _VERSION_RE
 from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # What a live Lemonade v2026.39.1 reports in /api/v1/health.
 RELEASE_CALVER = "2026.39.1"
@@ -64,11 +72,50 @@ PARSERS = [
 ]
 
 
+def _load_function_from_source(relative_path: str, name: str):
+    """Compile ONE pure function out of a hub agent's module, without importing it.
+
+    The hub agents are separate distributions. The root ``conftest`` only puts
+    one on ``sys.path`` when it already resolves somewhere, so ``gaia_agent`` is
+    absent in the unit-test CI job and a plain import raises
+    ``ModuleNotFoundError``. The usual answer is ``importorskip`` — but that
+    turns this file's whole reason for existing into a silent skip, which is the
+    exact "the gate stopped running and nothing said so" failure these tests
+    guard against.
+
+    Both parsers are self-contained and need only ``re``, so compile the real
+    function out of the real file instead. No package import, no FastAPI, no
+    skip — and it still fails if someone edits the source it reads.
+    """
+    source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            module = ast.Module(
+                body=[
+                    ast.ImportFrom(
+                        module="__future__",
+                        names=[ast.alias(name="annotations", asname=None)],
+                        level=0,
+                    ),
+                    ast.Import(names=[ast.alias(name="re", asname=None)]),
+                    node,
+                ],
+                type_ignores=[],
+            )
+            ast.fix_missing_locations(module)
+            namespace: dict = {}
+            exec(compile(module, relative_path, "exec"), namespace)  # noqa: S102
+            return namespace[name]
+    raise AssertionError(f"{name} not found in {relative_path} — did it move?")
+
+
 def _email_parse(version):
     """The frozen email sidecar keeps its own copy — cover it too."""
-    from gaia_agent_email.api_routes import _parse_version
-
-    return _parse_version(version)
+    parse = _load_function_from_source(
+        "hub/agents/email/python/gaia_agent_email/api_routes.py", "_parse_version"
+    )
+    return parse(version)
 
 
 # The flagship agent's copy compares rather than exposing a tuple, so it is
@@ -79,9 +126,10 @@ def _gaia_server_meets_min(version, minimum):
     It reads ``/api/v1/health``'s ``version`` VERBATIM — nothing normalizes the
     CalVer dev suffix away first — so it must tolerate it itself.
     """
-    from gaia_agent.server import _version_meets_min
-
-    return _version_meets_min(version, minimum)
+    meets = _load_function_from_source(
+        "hub/agents/gaia/python/gaia_agent/server.py", "_version_meets_min"
+    )
+    return meets(version, minimum)
 
 
 @pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
@@ -166,3 +214,38 @@ def test_flagship_agent_reports_garbage_as_indeterminate():
 
 def test_flagship_agent_accepts_the_pinned_version():
     assert _gaia_server_meets_min(LEMONADE_VERSION, LEMONADE_MIN_VERSION) is True
+
+
+# -- the Lemonade client's compatibility gate -------------------------------
+# Its parser is a closure inside ``_check_version_compatibility``, so it is
+# reached through the public method rather than the ``PARSERS`` list. The method
+# returns False ONLY below the supported floor.
+
+
+def _client_gate(actual):
+    client = LemonadeClient.__new__(LemonadeClient)
+    return LemonadeClient._check_version_compatibility(
+        client, LEMONADE_VERSION, actual_version=actual, quiet=True
+    )
+
+
+def test_client_gate_accepts_release_calver():
+    assert _client_gate(RELEASE_CALVER) is True
+
+
+def test_client_gate_accepts_dev_calver():
+    """Regression: ``int("0~12")`` raised, and the except-branch passed it anyway.
+
+    It returned True for the *wrong* reason — "parsing failed, do not block" —
+    so a genuinely old dev build would have been waved through too.
+    """
+    assert _client_gate(DEV_CALVER) is True
+
+
+def test_client_gate_rejects_an_old_dev_build():
+    """The case the pre-fix except-branch got wrong: old AND unparseable."""
+    assert _client_gate("9.1.0~4.deadbee") is False
+
+
+def test_client_gate_still_rejects_old_releases():
+    assert _client_gate("9.1.4") is False
