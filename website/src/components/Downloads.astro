@@ -1,0 +1,311 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The two ways to get GAIA, side by side: the desktop app and the terminal.
+//
+// They are two front ends onto the same local agent, not two products, so the
+// page's job is to let a visitor pick in one read rather than explain the
+// architecture. Each card says what the thing IS and who it is for; the
+// download itself is resolved for this machine.
+//
+// Platform coverage is NOT symmetric and the cards say so. The terminal hub
+// builds all six ({win,darwin,linux} x {x64,arm64}); the desktop app builds
+// three. A machine with no desktop build is TOLD that, and pointed at the
+// terminal — never shown a disabled button, a dead link, or wording that
+// implies a build is on the way.
+//
+// Every platform renders server-side, so a visitor with no JS gets the full
+// list below and a working link for both surfaces. JS reveals the block for
+// the machine it can place; a Mac behind Safari reports no architecture and so
+// matches BOTH Mac blocks (which is why the desktop card reads "Apple Silicon
+// download" and "no Intel build" together there), and a machine it cannot
+// place at all keeps the full list rather than guessing.
+//
+// Nothing here builds a URL. Each link is the `url` the hub manifest published
+// for an artifact whose filename matched a key exactly, so a platform the hub
+// has not published for is absent rather than a dead link.
+
+import { formatBytes, getComponentRelease, type PlatformBinary } from '../data/catalog';
+import {
+  DESKTOP_DOWNLOAD_LABELS,
+  DESKTOP_MISSING_PLATFORMS,
+  DESKTOP_PLATFORMS,
+  DOWNLOAD_LABELS,
+  INSTALLERS_FOR,
+  INSTALLER_CTA_LABELS,
+  PLATFORM_LABELS,
+  PLATFORM_ORDER,
+  artifactFileName,
+  desktopArtifactFileName,
+  type DownloadKey,
+  type InstallerKey,
+  type PlatformKey,
+} from '../scripts/download-target';
+
+interface Props {
+  class?: string;
+}
+
+const { class: className = '' } = Astro.props;
+
+const [desktop, tui] = await Promise.all([
+  getComponentRelease('agent-ui'),
+  getComponentRelease('terminal-hub'),
+]);
+
+// Key -> exact filename -> the artifact the hub actually published. The reverse
+// direction does not work: the manifest records no platform field, so deriving
+// one from a filename that carries a version silently drops artifacts.
+const publishedBy = (binaries: PlatformBinary[]) => {
+  const byFilename = new Map(binaries.map((b) => [b.filename, b]));
+  return (filename: string | null) => (filename ? byFilename.get(filename) : undefined);
+};
+
+const desktopPublished = publishedBy(desktop.binaries);
+const tuiPublished = publishedBy(tui.binaries);
+
+const desktopRows = DESKTOP_PLATFORMS.flatMap((platform) => {
+  const artifact = desktopPublished(desktopArtifactFileName(platform, desktop.version));
+  return artifact ? [{ platform, artifact }] : [];
+});
+
+// A single platform missing is a coverage decision the page renders around.
+// ALL of them missing is not: the manifest has artifacts (getComponentRelease
+// throws otherwise), so the naming convention drifted and the desktop card
+// would quietly render with no download at all.
+if (!desktopRows.length) {
+  throw new Error(
+    `[downloads] The 'agent-ui' manifest publishes ${desktop.binaries.length} artifacts at ` +
+      `${desktop.version}, none of which match a known desktop filename ` +
+      `(${DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, desktop.version)).join(', ')}). ` +
+      `Update DESKTOP_FILENAMES in src/scripts/download-target.ts to what the hub now publishes.`,
+  );
+}
+
+interface TuiRow {
+  platform: PlatformKey;
+  binary: PlatformBinary | undefined;
+  installers: { key: InstallerKey; artifact: PlatformBinary }[];
+}
+
+const tuiRow = (platform: PlatformKey): TuiRow => ({
+  platform,
+  binary: tuiPublished(artifactFileName(platform, tui.version)),
+  installers: INSTALLERS_FOR[platform].flatMap((key) => {
+    const artifact = tuiPublished(artifactFileName(key as DownloadKey, tui.version));
+    return artifact ? [{ key, artifact }] : [];
+  }),
+});
+
+const tuiRows = PLATFORM_ORDER.map(tuiRow).filter((r) => r.binary || r.installers.length);
+
+// Until a release publishes installers none of these exist — a valid state, and
+// the terminal card is the binary offer it was before. Naming the architectures
+// that have no installer only makes sense once some architecture has one.
+const anyInstaller = tuiRows.some((r) => r.installers.length > 0);
+
+// "a, b or c" — the missing-desktop platforms read as a sentence, not a list.
+const joinWithOr = (parts: string[]): string =>
+  parts.length <= 1
+    ? (parts[0] ?? '')
+    : `${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}`;
+
+const noDesktopFor = joinWithOr(DESKTOP_MISSING_PLATFORMS.map((p) => PLATFORM_LABELS[p]));
+
+const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+---
+
+<div data-downloads class:list={['w-full min-w-0', className]}>
+  <div class="mx-auto grid w-full max-w-[720px] gap-[18px] text-left sm:grid-cols-2">
+    {/* ---- Desktop app ---- */}
+    <section class="g-card p-[26px]">
+      <h2 class="g-h-card">Desktop app</h2>
+      <p class="g-body mt-2.5">
+        A window you open like any other app. Chat, your documents and your files, with
+        every tool call shown before it runs. Start here if you have not used GAIA before.
+      </p>
+
+      <div class="mt-5">
+        {desktopRows.map((row) => (
+          <div data-dl-cta data-surface="desktop" data-kind="build" data-platform={row.platform} hidden>
+            <a href={row.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
+              <Fragment set:html={DOWNLOAD_ICON} />
+              <span>Download for {PLATFORM_LABELS[row.platform]}</span>
+            </a>
+            <p class="g-body mt-2.5 text-[13px]">
+              {DESKTOP_DOWNLOAD_LABELS[row.platform]} · v{desktop.version} ·{' '}
+              {formatBytes(row.artifact.size_bytes)}
+            </p>
+          </div>
+        ))}
+
+        {/* Told plainly, and pointed somewhere that works. The app publishes no
+            build for these three, so there is nothing to wait for. */}
+        {DESKTOP_MISSING_PLATFORMS.map((platform) => (
+          <div data-dl-cta data-surface="desktop" data-kind="none" data-platform={platform} hidden>
+            <p class="g-body text-[13.5px]">
+              There is no desktop build for {PLATFORM_LABELS[platform]}. The terminal runs
+              there — take that one instead.
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    {/* ---- Terminal ---- */}
+    <section class="g-card p-[26px]">
+      <h2 class="g-h-card">Terminal</h2>
+      <p class="g-body mt-2.5">
+        The same agent in your shell, on every platform GAIA builds for. Start here if you
+        work over SSH, or would rather stay in a terminal.
+      </p>
+
+      <div class="mt-5">
+        {tuiRows.map((row) => (
+          <div
+            data-dl-cta
+            data-surface="tui"
+            data-kind={row.installers.length ? 'installer' : 'binary'}
+            data-platform={row.platform}
+            hidden
+          >
+            <div class="flex flex-wrap items-center gap-3">
+              {row.installers.length > 0
+                ? row.installers.map((i) => (
+                    <a href={i.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
+                      <Fragment set:html={DOWNLOAD_ICON} />
+                      <span>{INSTALLER_CTA_LABELS[i.key]}</span>
+                    </a>
+                  ))
+                : row.binary && (
+                    <a href={row.binary.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
+                      <Fragment set:html={DOWNLOAD_ICON} />
+                      <span>Download for {PLATFORM_LABELS[row.platform]}</span>
+                    </a>
+                  )}
+            </div>
+          </div>
+        ))}
+
+        {/* One caption per kind, at card level: with two Mac blocks revealed at
+            once, a caption inside each would say the same thing twice. */}
+        <p data-dl-note="installer" class="g-body mt-2.5 text-[13px]" hidden>
+          Installs the agent and puts <code class="text-g-text">gaia-tui</code> on your PATH.
+          v{tui.version}.
+        </p>
+        <p data-dl-note="binary" class="g-body mt-2.5 text-[13px]" hidden>
+          {anyInstaller
+            ? 'No installer is published for this architecture, so this is the standalone binary — put it on your PATH yourself.'
+            : 'The standalone binary — put it on your PATH and run gaia-tui.'}
+          {' '}v{tui.version}.
+        </p>
+      </div>
+    </section>
+  </div>
+
+  {/* Every download, both surfaces, grouped so each version and each coverage
+      gap is stated once beside the thing it applies to. Rendered open; JS folds
+      it away once a machine has been placed. */}
+  <div data-dl-list class="mx-auto mt-8 w-full max-w-[720px] text-left">
+    <div class="g-label mb-3" data-dl-list-label>Download for your platform</div>
+
+    <div class="grid gap-x-10 gap-y-7 sm:grid-cols-2">
+      <div>
+        <div class="text-[13.5px] font-semibold text-g-text">
+          Desktop app · v{desktop.version}
+        </div>
+        <ul class="mt-1.5 space-y-1">
+          {desktopRows.map((row) => (
+            <li>
+              <a
+                href={row.artifact.url}
+                class="inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-accent-text"
+              >
+                <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                <span>
+                  {PLATFORM_LABELS[row.platform]} — {DESKTOP_DOWNLOAD_LABELS[row.platform]} ·{' '}
+                  {formatBytes(row.artifact.size_bytes)}
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+        {noDesktopFor && (
+          <p class="g-body mt-2 text-[12.5px]">No desktop build for {noDesktopFor}.</p>
+        )}
+      </div>
+
+      <div>
+        <div class="text-[13.5px] font-semibold text-g-text">Terminal · v{tui.version}</div>
+        <ul class="mt-1.5 space-y-1">
+          {tuiRows.map((row) => (
+            <li>
+              <div class="text-[13.5px] text-g-muted">
+                {PLATFORM_LABELS[row.platform]}
+                <span class="ml-2 inline-flex flex-wrap gap-x-3">
+                  {[
+                    ...row.installers.map((i) => ({
+                      href: i.artifact.url,
+                      label: DOWNLOAD_LABELS[i.key],
+                    })),
+                    ...(row.binary
+                      ? [{ href: row.binary.url, label: DOWNLOAD_LABELS[row.platform] }]
+                      : []),
+                  ].map((o) => (
+                    <a
+                      href={o.href}
+                      class="inline-flex items-baseline gap-1.5 transition-colors hover:text-g-accent-text"
+                    >
+                      <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                      <span>{o.label}</span>
+                    </a>
+                  ))}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  import { resolveTargets } from '../scripts/download-target';
+
+  document.querySelectorAll<HTMLElement>('[data-downloads]').forEach(async (root) => {
+    const blocks = Array.from(root.querySelectorAll<HTMLElement>('[data-dl-cta]'));
+    if (!blocks.length) return;
+
+    const targets = await resolveTargets(navigator).catch(() => []);
+    // An unplaceable machine — an iPad sending the Mac UA, an unreadable arch —
+    // keeps the full list open rather than being shown a guess.
+    const matched = blocks.filter((b) => targets.includes(b.dataset.platform as never));
+    if (!matched.length) return;
+
+    for (const block of matched) block.hidden = false;
+
+    // The captions live at card level, so reveal the ones whose kind is now on
+    // screen. Two Mac blocks can share a caption; that is the point of it.
+    const kinds = new Set(matched.map((b) => b.dataset.kind));
+    root.querySelectorAll<HTMLElement>('[data-dl-note]').forEach((note) => {
+      if (kinds.has(note.dataset.dlNote)) note.hidden = false;
+    });
+
+    // Every platform stays one disclosure away, including this machine's other
+    // options — so someone who came for the standalone binary still finds it.
+    const list = root.querySelector<HTMLElement>('[data-dl-list]');
+    const listLabel = root.querySelector('[data-dl-list-label]');
+    if (!list || !listLabel) return;
+    const details = document.createElement('details');
+    details.className = 'mx-auto mt-8 w-full max-w-[720px] text-left';
+    const summary = document.createElement('summary');
+    summary.className = 'g-label cursor-pointer list-none transition-colors hover:text-g-text';
+    summary.textContent = 'All downloads, every platform';
+    list.replaceWith(details);
+    details.append(summary, list);
+    list.classList.remove('mt-8');
+    listLabel.remove();
+  });
+</script>

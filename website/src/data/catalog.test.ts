@@ -279,6 +279,26 @@ describe('getAgentPackages / getSkills — the rendered lane split', () => {
     expect((await mod.getAgentPackages()).map((a) => a.id).sort()).toEqual(['chat', 'demo']);
   });
 
+  // The home page offers the Agent UI desktop app as one of two primary
+  // downloads, so it needs a /hub page describing what it is. A hide list used
+  // to filter it out of getCatalog() — which feeds the listing, the pills, the
+  // counts AND getStaticPaths() — leaving Download pointing at a product the
+  // site would not talk about.
+  it('renders the desktop app the home page offers, rather than hiding it', async () => {
+    const { mod } = await loadWith([
+      { id: 'agent-ui', name: 'Agent UI', type: 'app' },
+      ...MIXED,
+    ]);
+    expect((await mod.getCatalog()).map((a) => a.id)).toContain('agent-ui');
+    expect((await mod.getAgentPackages()).map((a) => a.id)).toContain('agent-ui');
+    expect(await mod.getAgent('agent-ui')).toBeDefined();
+  });
+
+  it('serves every entry the hub publishes, filtering none of them out', async () => {
+    const { mod } = await loadWith(MIXED);
+    expect((await mod.getCatalog()).length).toBe(MIXED.length);
+  });
+
   it('fetches the catalog once per build across both lanes', async () => {
     const { mod, fetchMock } = await loadWith(MIXED);
     await mod.getAgentPackages();

@@ -3,15 +3,17 @@
 // SPDX-License-Identifier: MIT
 
 // The landing page has exactly one job: get a visitor to install the GAIA agent
-// and put it to work. One product, one install, one entry point — so the page
-// carries one primary CTA and no competing paths, and the only branch it offers
-// is what you do with that one agent: run it, integrate it, build on it.
+// and put it to work. One product, one install — the hero's only branch is
+// which front end you open it in, desktop app or terminal, and that branch is
+// on screen because both ship and a visitor has to be able to tell them apart.
+// Everything below is what you do with the one agent: run it, integrate it,
+// build on it.
 
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 import InstallCommand from '../components/InstallCommand.astro';
-import TuiDownload from '../components/TuiDownload.astro';
+import Downloads from '../components/Downloads.astro';
 import Feature from '../components/Feature.astro';
 
 const DOCS = 'https://amd-gaia.ai/docs';
@@ -129,7 +131,7 @@ const ARCHITECTURE = [
         air-gapped, and there are no token costs.
       </p>
 
-      <TuiDownload align="center" class="animate-g-rise mt-10 [animation-delay:0.14s]" />
+      <Downloads class="animate-g-rise mt-10 [animation-delay:0.14s]" />
     </section>
 
     <!-- 2. The whole product, in three boxes. -->

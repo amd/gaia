@@ -4,11 +4,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DESKTOP_DOWNLOAD_LABELS,
+  DESKTOP_MISSING_PLATFORMS,
+  DESKTOP_PLATFORMS,
   DOWNLOAD_LABELS,
   INSTALLERS_FOR,
   INSTALLER_CTA_LABELS,
   PLATFORM_LABELS,
+  PLATFORM_ORDER,
   artifactFileName,
+  desktopArtifactFileName,
   detectOs,
   placeOs,
   resolveArch,
@@ -38,14 +43,16 @@ const INSTALLER_FILES = [
   'gaia_0.23.0_amd64.deb',
   'gaia-0.23.0.x86_64.rpm',
 ];
-// The same order TuiDownload.astro renders.
-const ORDER: PlatformKey[] = [
-  'win-x64',
-  'darwin-arm64',
-  'linux-x64',
-  'win-arm64',
-  'darwin-x64',
-  'linux-arm64',
+// The order Downloads.astro renders, shared by both surfaces.
+const ORDER = PLATFORM_ORDER;
+
+// The desktop app's version and its three artifacts, copied from
+// https://hub.amd-gaia.ai/agents/agent-ui/manifest.json. Three, not six.
+const DV = '0.24.1';
+const DESKTOP_FILES = [
+  'gaia-agent-ui-0.24.1-x64-setup.exe',
+  'gaia-agent-ui-0.24.1-arm64.dmg',
+  'gaia-agent-ui-0.24.1-x86_64.AppImage',
 ];
 
 const UA = {
@@ -186,7 +193,7 @@ describe('artifactFileName', () => {
     expect(artifactFileName('linux-x64-rpm', V)).toBe('gaia-0.23.0.x86_64.rpm');
   });
 
-  // The regression this replaces: TuiDownload derived the platform by stripping
+  // The regression this replaces: the download block derived the platform by stripping
   // `gaia-`/`.exe` off the filename, which turned the setup into the key
   // "0.23.0-win-x64-setup" and then filtered every installer off the page.
   it('round-trips a version-carrying installer name back to its key', () => {
@@ -238,7 +245,7 @@ describe('INSTALLERS_FOR', () => {
   });
 });
 
-// What TuiDownload.astro does with a manifest: resolve each key to its exact
+// What Downloads.astro does with a manifest: resolve each key to its exact
 // filename and look that up in what the hub published. Nothing is constructed
 // from a guess, so an unpublished key is simply absent.
 const resolveRows = (filenames: string[], version: string) => {
@@ -305,5 +312,133 @@ describe('resolving a manifest into download rows', () => {
 describe('PLATFORM_LABELS', () => {
   it('names every platform the page orders', () => {
     for (const platform of ORDER) expect(PLATFORM_LABELS[platform]).toBeTruthy();
+  });
+});
+
+describe('PLATFORM_ORDER', () => {
+  // Both surfaces list their platforms from this one array, so a missing or
+  // duplicated key drops a machine from a list or prints it twice.
+  it('covers all six platforms exactly once', () => {
+    const all: PlatformKey[] = [
+      'win-x64',
+      'win-arm64',
+      'darwin-x64',
+      'darwin-arm64',
+      'linux-x64',
+      'linux-arm64',
+    ];
+    expect([...PLATFORM_ORDER].sort()).toEqual([...all].sort());
+  });
+});
+
+describe('desktopArtifactFileName', () => {
+  // The exact three the hub serves at 0.24.1. Each follows its own platform's
+  // packaging convention (NSIS, dmg, AppImage), not one house style, so a
+  // "tidied up" name here is a 404 on the visitor's click.
+  it('matches the desktop app filenames the hub published', () => {
+    expect(desktopArtifactFileName('win-x64', DV)).toBe('gaia-agent-ui-0.24.1-x64-setup.exe');
+    expect(desktopArtifactFileName('darwin-arm64', DV)).toBe('gaia-agent-ui-0.24.1-arm64.dmg');
+    expect(desktopArtifactFileName('linux-x64', DV)).toBe(
+      'gaia-agent-ui-0.24.1-x86_64.AppImage'
+    );
+  });
+
+  it('resolves every name to an artifact the manifest actually lists', () => {
+    const published = new Set(DESKTOP_FILES);
+    for (const platform of DESKTOP_PLATFORMS) {
+      expect(published.has(desktopArtifactFileName(platform, DV)!)).toBe(true);
+    }
+  });
+
+  // Not pending, absent: the app's manifest declares three platforms. Returning
+  // a name here would render a button pointing at a file that was never built.
+  it('returns null for the three platforms with no desktop build', () => {
+    expect(desktopArtifactFileName('win-arm64', DV)).toBeNull();
+    expect(desktopArtifactFileName('darwin-x64', DV)).toBeNull();
+    expect(desktopArtifactFileName('linux-arm64', DV)).toBeNull();
+  });
+
+  it('takes the version from the manifest rather than a hardcoded one', () => {
+    expect(desktopArtifactFileName('win-x64', '9.9.9')).toBe('gaia-agent-ui-9.9.9-x64-setup.exe');
+    // A stale version resolves to a name the hub never published, so the row is
+    // dropped — the same fail-to-absent the terminal installers rely on.
+    const published = new Set(DESKTOP_FILES);
+    expect(published.has(desktopArtifactFileName('win-x64', '0.24.0')!)).toBe(false);
+  });
+});
+
+describe('desktop platform coverage', () => {
+  it('builds for exactly three platforms, in the shared reading order', () => {
+    expect(DESKTOP_PLATFORMS).toEqual(['win-x64', 'darwin-arm64', 'linux-x64']);
+  });
+
+  // The copy names these three so the visitor is told why there is no download,
+  // instead of being shown a dead option or a promise of one.
+  it('names the three with no build, and never overlaps the built ones', () => {
+    expect(DESKTOP_MISSING_PLATFORMS).toEqual(['win-arm64', 'darwin-x64', 'linux-arm64']);
+    expect(DESKTOP_PLATFORMS.some((p) => DESKTOP_MISSING_PLATFORMS.includes(p))).toBe(false);
+  });
+
+  it('partitions every ordered platform between built and missing', () => {
+    expect([...DESKTOP_PLATFORMS, ...DESKTOP_MISSING_PLATFORMS].sort()).toEqual(
+      [...PLATFORM_ORDER].sort()
+    );
+  });
+
+  // The desktop app covers strictly less than the terminal, which is why the
+  // terminal is what the "no build for your machine" copy points at.
+  it('covers fewer platforms than the terminal, never more', () => {
+    expect(DESKTOP_PLATFORMS.length).toBeLessThan(PLATFORM_ORDER.length);
+  });
+
+  it('labels every built platform and nothing else', () => {
+    for (const platform of DESKTOP_PLATFORMS) {
+      expect(DESKTOP_DOWNLOAD_LABELS[platform]).toBeTruthy();
+    }
+    for (const platform of DESKTOP_MISSING_PLATFORMS) {
+      expect(DESKTOP_DOWNLOAD_LABELS[platform]).toBeUndefined();
+    }
+  });
+});
+
+// What Downloads.astro does per card: match this machine's targets against the
+// blocks it rendered. A platform with no desktop build has a "no build" block,
+// never a download one; an unplaceable machine matches nothing at all and the
+// full list stays on screen.
+const desktopOptionFor = (targets: PlatformKey[]) =>
+  targets.filter((t) => new Set(DESKTOP_FILES).has(desktopArtifactFileName(t, DV) ?? ''));
+
+describe('offering the desktop app to a machine', () => {
+  it('offers the app to a machine it builds for', async () => {
+    const targets = await resolveTargets(nav(UA.win));
+    expect(desktopOptionFor(targets)).toEqual(['win-x64']);
+  });
+
+  it('offers no desktop download to a platform with no desktop build', async () => {
+    const armLinux = await resolveTargets(nav(UA.linuxArm));
+    expect(armLinux).toEqual(['linux-arm64']);
+    expect(desktopOptionFor(armLinux)).toEqual([]);
+
+    const armWindows = await resolveTargets(nav(UA.win, { architecture: 'arm' }));
+    expect(armWindows).toEqual(['win-arm64']);
+    expect(desktopOptionFor(armWindows)).toEqual([]);
+  });
+
+  // Safari reports no chip, so both Mac blocks are revealed: the Apple Silicon
+  // download AND the "no Intel build" line. Together they read as the truth.
+  it('gives a Safari Mac the Apple Silicon build and nothing for Intel', async () => {
+    const targets = await resolveTargets(nav(UA.macSafari));
+    expect(targets).toEqual(['darwin-arm64', 'darwin-x64']);
+    expect(desktopOptionFor(targets)).toEqual(['darwin-arm64']);
+    expect(targets.filter((t) => DESKTOP_MISSING_PLATFORMS.includes(t))).toEqual(['darwin-x64']);
+  });
+
+  // An iPad on the Mac UA, an unreadable arch: no block matches, so the card
+  // shows no button and the server-rendered list is what the visitor uses.
+  it('leaves an unplaceable machine the full list rather than a guess', async () => {
+    const targets = await resolveTargets(nav(UA.macSafari, { maxTouchPoints: 5 }));
+    expect(targets).toEqual([]);
+    expect(desktopOptionFor(targets)).toEqual([]);
+    expect(ORDER.filter((p) => targets.includes(p))).toEqual([]);
   });
 });

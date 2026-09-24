@@ -211,13 +211,12 @@ async function loadCatalog(): Promise<CatalogFile> {
  * Every catalog entry, all lanes, sorted: verified first, then alphabetical.
  * Use this when you genuinely want everything (e.g. generating a page per
  * published package); use getAgentPackages()/getSkills() to render one lane.
+ *
+ * Every entry the hub serves is rendered — there is no hide list. The home
+ * page offers the Agent UI desktop app as one of two primary downloads, so
+ * suppressing its /hub page would leave a visitor who clicks Download with
+ * nowhere on the site that says what it needs or what changed in it.
  */
-// Published to the hub, deliberately absent from the site: the Agent UI desktop
-// app is no longer maintained, and the terminal hub replaced it as the way in.
-// Filtered here rather than per-page so it cannot reappear in a listing, a
-// category pill, a stat count, or a generated /hub/<id> page.
-const HIDDEN_FROM_SITE = new Set(["agent-ui"]);
-
 export async function getCatalog(): Promise<Agent[]> {
   const { agents } = await loadCatalog();
   const tierRank: Record<SecurityTier, number> = {
@@ -225,14 +224,12 @@ export async function getCatalog(): Promise<Agent[]> {
     community: 1,
     experimental: 2,
   };
-  return [...agents]
-    .filter((a) => !HIDDEN_FROM_SITE.has(a.id))
-    .sort((a, b) => {
-      if (a.deprecated !== b.deprecated) return a.deprecated ? 1 : -1;
-      const tier = tierRank[a.security_tier] - tierRank[b.security_tier];
-      if (tier !== 0) return tier;
-      return a.name.localeCompare(b.name);
-    });
+  return [...agents].sort((a, b) => {
+    if (a.deprecated !== b.deprecated) return a.deprecated ? 1 : -1;
+    const tier = tierRank[a.security_tier] - tierRank[b.security_tier];
+    if (tier !== 0) return tier;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /**

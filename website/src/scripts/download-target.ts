@@ -1,10 +1,11 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Which published terminal-hub download this visitor's machine can run, and
-// what the hub calls the file.
+// Which published download this visitor's machine can run, and what the hub
+// calls the file. Two surfaces ship: the terminal hub and the Agent UI desktop
+// app, and their platform coverage is NOT the same — see DESKTOP_PLATFORMS.
 //
-// The hub publishes six: {win,darwin,linux} x {x64,arm64}, so unlike a
+// The terminal hub publishes six: {win,darwin,linux} x {x64,arm64}, so unlike a
 // single-architecture installer this has to resolve the ARCHITECTURE too, and
 // only the client hints report it truthfully — every OS masks arm64 in the UA
 // string to keep old sites working. Nothing here guesses: a machine we cannot
@@ -58,6 +59,21 @@ export const PLATFORM_LABELS: Record<PlatformKey, string> = {
   'linux-x64': 'Linux (x64)',
   'linux-arm64': 'Linux (ARM64)',
 };
+
+/**
+ * Reading order for every platform list on the site: the common machines
+ * first, then the three the desktop app does not build for. Shared so the two
+ * surfaces list their platforms in the same order and a visitor scanning for
+ * their own machine finds it in the same place twice.
+ */
+export const PLATFORM_ORDER: readonly PlatformKey[] = [
+  'win-x64',
+  'darwin-arm64',
+  'linux-x64',
+  'win-arm64',
+  'darwin-x64',
+  'linux-arm64',
+];
 
 /**
  * Which installers exist for each platform.
@@ -208,4 +224,53 @@ export function artifactFileName(key: DownloadKey, version: string): string {
   const installer = INSTALLER_FILENAMES[key as InstallerKey];
   if (installer) return installer(version);
   return key.startsWith('win-') ? `gaia-${key}.exe` : `gaia-${key}`;
+}
+
+// ---- The Agent UI desktop app (hub id `agent-ui`) ----
+
+// One artifact per platform, each named by its own platform's packaging
+// convention rather than a house style — these are what electron-builder emits
+// and what the hub publishes, not a scheme this file chose.
+const DESKTOP_FILENAMES: Partial<Record<PlatformKey, (version: string) => string>> = {
+  'win-x64': (v) => `gaia-agent-ui-${v}-x64-setup.exe`,
+  'darwin-arm64': (v) => `gaia-agent-ui-${v}-arm64.dmg`,
+  'linux-x64': (v) => `gaia-agent-ui-${v}-x86_64.AppImage`,
+};
+
+/**
+ * The three platforms the desktop app builds for.
+ *
+ * Deliberately NOT the six the terminal hub covers. The app's manifest
+ * declares win-x64, linux-x64 and darwin-arm64 and nothing else, so an Intel
+ * Mac, a Windows ARM64 machine and an ARM64 Linux box have no desktop build at
+ * all. The site says that plainly — see DESKTOP_MISSING_PLATFORMS — instead of
+ * showing an option that 404s or wording it as one that is on the way.
+ */
+export const DESKTOP_PLATFORMS: readonly PlatformKey[] = PLATFORM_ORDER.filter(
+  (p) => p in DESKTOP_FILENAMES,
+);
+
+/** The three with no desktop build, for the copy that has to name them. */
+export const DESKTOP_MISSING_PLATFORMS: readonly PlatformKey[] = PLATFORM_ORDER.filter(
+  (p) => !(p in DESKTOP_FILENAMES),
+);
+
+/** What the desktop file IS, under a heading that already names the platform. */
+export const DESKTOP_DOWNLOAD_LABELS: Partial<Record<PlatformKey, string>> = {
+  'win-x64': 'Installer (.exe)',
+  'darwin-arm64': 'Disk image (.dmg)',
+  'linux-x64': 'AppImage',
+};
+
+/**
+ * The desktop app's artifact filename for a platform, or null where it
+ * publishes none. Same key -> filename -> published-artifact direction as
+ * artifactFileName: null here means the caller renders no desktop option,
+ * never a constructed URL.
+ */
+export function desktopArtifactFileName(
+  platform: PlatformKey,
+  version: string,
+): string | null {
+  return DESKTOP_FILENAMES[platform]?.(version) ?? null;
 }
