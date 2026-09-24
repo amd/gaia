@@ -23,10 +23,12 @@ daemon.
 
 from __future__ import annotations
 
+import datetime
 import json
 import sys
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.daemon import client, paths
@@ -59,6 +61,7 @@ class QueryOutcome:
     terminal_type: Optional[str]  # "final" | "error" | None (no terminal seen)
     final_answer: Optional[str] = None
     error_detail: Optional[str] = None
+    trace_path: Optional[str] = None  # set when run_query(trace=True)
 
 
 class ConsoleRenderer:
@@ -168,6 +171,10 @@ class ConsoleRenderer:
             print("", file=self._out, flush=True)
         print("⏹  cancelled.", file=self._err, flush=True)
 
+    def on_trace_written(self, path: str) -> None:
+        """Rendered once ``--trace`` has flushed the run's events to disk."""
+        print(f"  📝 trace written to {path}", file=self._err, flush=True)
+
 
 def _compact(value: Any, limit: int = 200) -> str:
     """Compact one-line repr of a value for verbose/progress lines."""
@@ -242,16 +249,71 @@ def _best_effort_cancel(inst, agent_id: str, run_id: str) -> None:
         )
 
 
-def _consume(response, renderer: ConsoleRenderer) -> Optional[str]:
+def _consume(
+    response,
+    renderer: ConsoleRenderer,
+    sink: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[str]:
     """Render each event; return the terminal type seen (``final``/``error``) or
-    ``None`` if the stream ended without one."""
+    ``None`` if the stream ended without one.
+
+    When *sink* is given, every event is appended to it as it arrives, so a run
+    cut short by Ctrl-C or a crashed sidecar still yields the events seen so far.
+    """
     terminal_type: Optional[str] = None
     for event in _iter_sse_events(response):
+        if sink is not None:
+            sink.append(event)
         renderer.render(event)
         if event.get("type") in TERMINAL_TYPES:
             terminal_type = event.get("type")
             break
     return terminal_type
+
+
+def _write_trace(
+    *,
+    agent_id: str,
+    payload: Dict[str, Any],
+    events: List[Dict[str, Any]],
+    terminal_type: Optional[str],
+    renderer: ConsoleRenderer,
+) -> str:
+    """Write the run's request + full canonical event stream to a JSON file in
+    the current working directory and return its absolute path.
+
+    The relay path has no in-process agent to introspect, so the SSE stream *is*
+    the trace: every ``status``/``token``/``tool_call``/``tool_result``/
+    ``needs_confirmation`` frame the sidecar emitted, in order, plus the request
+    that produced them.
+    """
+    stamp = datetime.datetime.now()
+    run_id = str(payload.get("run_id") or "")
+    # run_id in the name so two REPL turns inside the same second can't collide.
+    name = f"{agent_id}_trace_{stamp.strftime('%Y%m%d_%H%M%S')}_{run_id[:8]}.json"
+    path = (Path.cwd() / name).resolve()
+    document = {
+        "agent_id": agent_id,
+        "run_id": run_id,
+        "recorded_at": stamp.isoformat(timespec="seconds"),
+        "request": {k: v for k, v in payload.items() if k != "run_id"},
+        "terminal_type": terminal_type,
+        "final_answer": renderer.final_answer,
+        "error_detail": renderer.error_detail,
+        "events": events,
+    }
+    try:
+        path.write_text(
+            json.dumps(document, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        raise DaemonError(
+            f"could not write the '{agent_id}' --trace file to {path}: {e}. "
+            "Re-run from a writable working directory, or drop --trace."
+        ) from e
+    renderer.on_trace_written(str(path))
+    return str(path)
 
 
 def run_query(
@@ -264,6 +326,7 @@ def run_query(
     session_id: Optional[str] = None,
     renderer: Optional[ConsoleRenderer] = None,
     verbose: bool = False,
+    trace: bool = False,
 ) -> QueryOutcome:
     """Ensure the daemon + *agent_id* sidecar, stream ``POST /v1/<agent>/query``
     through the relay, and render the canonical SSE events.
@@ -275,6 +338,12 @@ def run_query(
     exactly, matching ``model``/``max_steps``: left out of the payload dict
     entirely rather than sent as ``null``, so an older sidecar's strict
     request model never sees an unknown field.
+
+    ``trace`` records the request and every canonical event to
+    ``./<agent_id>_trace_<timestamp>_<run_id>.json`` (path echoed on stderr, returned
+    as ``QueryOutcome.trace_path``) — the relay-path equivalent of the in-process
+    agent's ``--trace``, which has no agent object here to introspect. A run cut
+    short by Ctrl-C or a dead sidecar still writes what it saw.
 
     The CLI presents ONLY the daemon client token; it never learns the sidecar's
     port or bearer. Returns a :class:`QueryOutcome` whose ``exit_code`` is 0 on a
@@ -308,6 +377,19 @@ def run_query(
         "Accept": "text/event-stream",
     }
 
+    trace_events: Optional[List[Dict[str, Any]]] = [] if trace else None
+
+    def _trace(*, terminal_type: Optional[str]) -> Optional[str]:
+        if trace_events is None:
+            return None
+        return _write_trace(
+            agent_id=agent_id,
+            payload=payload,
+            events=trace_events,
+            terminal_type=terminal_type,
+            renderer=renderer,
+        )
+
     try:
         with requests.post(
             url,
@@ -323,13 +405,17 @@ def run_query(
                     f"Check `gaia daemon status` and the daemon log at "
                     f"{paths.log_path()}."
                 )
-            terminal_type = _consume(response, renderer)
+            terminal_type = _consume(response, renderer, trace_events)
     except KeyboardInterrupt:
         # Closing the stream already triggers the relay's cancel propagation;
         # send an explicit cancel too so the sidecar stops between tool steps.
         _best_effort_cancel(inst, agent_id, run_id)
         renderer.on_interrupt()
-        return QueryOutcome(exit_code=130, terminal_type=None)
+        return QueryOutcome(
+            exit_code=130,
+            terminal_type=None,
+            trace_path=_trace(terminal_type=None),
+        )
     except requests.exceptions.RequestException as e:
         raise DaemonError(
             f"could not stream the '{agent_id}' query from the daemon at "
@@ -345,14 +431,23 @@ def run_query(
             "final/error event — the sidecar may have crashed mid-run. "
             f"Check `gaia daemon status` and the daemon log at {paths.log_path()}."
         )
-        renderer.render({"type": "error", "detail": detail, "source": "cli"})
-        return QueryOutcome(exit_code=1, terminal_type=None, error_detail=detail)
+        synthetic = {"type": "error", "detail": detail, "source": "cli"}
+        if trace_events is not None:
+            trace_events.append(synthetic)
+        renderer.render(synthetic)
+        return QueryOutcome(
+            exit_code=1,
+            terminal_type=None,
+            error_detail=detail,
+            trace_path=_trace(terminal_type=None),
+        )
 
     return QueryOutcome(
         exit_code=0 if terminal_type == "final" else 1,
         terminal_type=terminal_type,
         final_answer=renderer.final_answer,
         error_detail=renderer.error_detail,
+        trace_path=_trace(terminal_type=terminal_type),
     )
 
 
