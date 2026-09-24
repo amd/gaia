@@ -293,7 +293,7 @@ jobs:
     timeout-minutes: 90
     env:
       TASK_SUITE: ${{ github.event.inputs.task_suite || 'core' }}
-      TASK_JUDGE_MODEL: claude-opus-5
+      TASK_JUDGE_MODEL: claude-opus-5-5
       TASKS_OUT: eval-out\tasks
     steps:
       - name: Checkout

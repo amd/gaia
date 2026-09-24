@@ -353,3 +353,55 @@ def test_the_security_audit_never_files_a_public_issue(security: dict):
         assert "issues" not in (
             job.get("permissions") or {}
         ), "no security-audit job may hold issues: write"
+
+
+# ----------------------------------------------------------------------
+# A lens that stops early (turn ceiling, spent quota, bad credential)
+# ----------------------------------------------------------------------
+
+
+def _lens_prompt(workflow: dict) -> str:
+    return "\n".join(
+        str(s.get("with", {}).get("prompt", "")) for s in _claude_steps(workflow)
+    )
+
+
+def test_nightly_lenses_write_findings_as_they_go(nightly: dict):
+    """A lens that hit its turn ceiling used to hand over nothing: the prompt told
+    it to write the file in its last few turns, and it cannot count turns. The
+    `features` lens spent $3.85 investigating one night and filed nothing."""
+    prompt = _lens_prompt(nightly)
+    assert (
+        '"complete": false' in prompt
+    ), "lenses must create the file before investigating"
+    assert '"complete": true' in prompt, "lenses must mark a finished sweep"
+
+
+def test_nightly_names_a_lens_that_did_not_finish(nightly: dict):
+    run = "\n".join(
+        str(s.get("run", ""))
+        for s in _steps(nightly)
+        if s.get("name") == "Require every dimension to have reported in"
+    )
+    assert (
+        '"complete"' in run
+    ), "a partial sweep must be reported, not filed as a full one"
+
+
+def test_the_security_audit_does_not_write_findings_incrementally(security: dict):
+    """A partial security file would pass the lens count and upload a SARIF
+    missing whatever the lens had not reached, clearing those alerts."""
+    assert '"complete": false' not in _lens_prompt(security)
+
+
+@pytest.mark.parametrize("path", (NIGHTLY_AUDIT, SECURITY_AUDIT), ids=lambda p: p.name)
+def test_a_lens_that_stops_early_says_why(path: Path):
+    """Quota, credential and turn-ceiling failures all showed as `is_error:true`;
+    the weekly-limit outages read as an install flake."""
+    steps = [
+        s for s in _steps(_load(path)) if s.get("name") == "Say why Claude stopped"
+    ]
+    assert steps, f"{path.name} does not explain why a lens stopped"
+    run = str(steps[0].get("run", ""))
+    assert "error_max_turns" in run
+    assert "classify_claude_probe.py" in run

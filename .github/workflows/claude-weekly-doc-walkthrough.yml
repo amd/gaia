@@ -38,7 +38,7 @@
 # summary, same principle the gaia-testing skill states explicitly). See design
 # doc "Job structure".
 #
-# Both now run claude-opus-5. This used to be a cost split (Sonnet executes,
+# Both now run claude-opus-5-5. This used to be a cost split (Sonnet executes,
 # Opus judges); the repo standardised every Claude workflow on Opus 5. The split
 # that matters is STRUCTURAL, not model-tier -- the judge must be a fresh context
 # that never sees the executor's self-assessment. Keep the two roles separate even
@@ -131,8 +131,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  WALKTHROUGH_EXECUTOR_MODEL: claude-opus-5
-  WALKTHROUGH_JUDGE_MODEL: claude-opus-5
+  WALKTHROUGH_EXECUTOR_MODEL: claude-opus-5-5
+  WALKTHROUGH_JUDGE_MODEL: claude-opus-5-5
   # Dedicated port for this workflow's own Lemonade instance -- never touches
   # the shared 13305 port the other self-hosted-runner workflows use.
   WALKTHROUGH_LEMONADE_PORT: 13405
@@ -396,7 +396,7 @@ jobs:
       - name: "Executor: walk ${{ matrix.doc.path }}"
         id: executor
         continue-on-error: true
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -476,11 +476,11 @@ jobs:
             indistinguishable from the walk never having started.
 
             ## Budget
-            You have --max-turns 60. Stop walking the guide at ~5 turns remaining and
+            You have --max-turns 150. Stop walking the guide at ~5 turns remaining and
             spend them writing the transcript. Reaching the ceiling mid-walk discards
             everything you captured; a partial transcript beats a perfect one never written.
           claude_args: |
-            --max-turns 60
+            --max-turns 150
             --model ${{ env.WALKTHROUGH_EXECUTOR_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
@@ -535,7 +535,7 @@ jobs:
         id: judge
         if: always()
         continue-on-error: true
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -629,10 +629,10 @@ jobs:
                hard-fails on it.
 
             ## Budget
-            You have --max-turns 25. Stop judging at ~3 turns remaining and spend them
+            You have --max-turns 100. Stop judging at ~3 turns remaining and spend them
             writing the findings file -- partial findings written beat complete findings lost.
           claude_args: |
-            --max-turns 25
+            --max-turns 100
             --model ${{ env.WALKTHROUGH_JUDGE_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
@@ -831,7 +831,7 @@ jobs:
       - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -957,7 +957,7 @@ jobs:
             - Never close any issue.
             - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
           claude_args: |
-            --max-turns 32
+            --max-turns 100
             --model ${{ env.WALKTHROUGH_JUDGE_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 

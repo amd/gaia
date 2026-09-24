@@ -60,7 +60,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AUDIT_MODEL: claude-opus-5
+  AUDIT_MODEL: claude-opus-5-5
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ jobs:
       - name: Run Claude (${{ matrix.lens }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -307,7 +307,7 @@ jobs:
             channel). STDOUT is never a substitute for the file — only the file is collected.
 
             ## Budget
-            You have --max-turns 45 and share one rate-limited subscription pool with the
+            You have --max-turns 150 and share one rate-limited subscription pool with the
             sibling lenses (run back-to-back), the nightly code audit, and the interactive
             PR-review jobs. The worklist is long and you are told not to sample, so pace
             yourself: STOP investigating at ~5 turns remaining and spend them writing the
@@ -321,9 +321,35 @@ jobs:
             double-check your own findings, and prefer one subagent over several. Spend
             turns reading code, not coordinating.
           claude_args: |
-            --max-turns 45
+            --max-turns 150
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
+
+      # A lens that stops early leaves no reason in the log beyond "is_error:true", and
+      # the synthesis error cannot tell a spent subscription from a bad credential from
+      # a turn ceiling. Name it here, where the log is.
+      - name: Say why Claude stopped
+        if: steps.claude.outcome == 'failure'
+        continue-on-error: true
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          if [ -z "$EXECUTION_FILE" ] || [ ! -f "$EXECUTION_FILE" ]; then
+            echo "::error title=Claude stopped::No execution log was written, so Claude never started. Look at the 'Run Claude' step above for the install or startup error."
+            exit 1
+          fi
+          subtype=$(python3 -c 'import json,sys
+          for l in open(sys.argv[1],encoding="utf-8",errors="replace"):
+              l=l.strip()
+              if not l.startswith("{"): continue
+              try: e=json.loads(l)
+              except ValueError: continue
+              if e.get("type")=="result": print(e.get("subtype",""))' "$EXECUTION_FILE" | tail -1)
+          if [ "$subtype" = "error_max_turns" ]; then
+            echo "::error title=Claude stopped::The lens hit its --max-turns ceiling before writing its findings, so this run uploads no SARIF rather than a partial one that would clear alerts it never re-checked."
+            exit 1
+          fi
+          python3 util/classify_claude_probe.py --exit-code 1 --format stream-json --text-file "$EXECUTION_FILE"
 
       - name: Upload findings
         if: always()

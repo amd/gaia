@@ -330,7 +330,7 @@ jobs:
           fi
 
       - name: Draft release notes and open the release PR
-        uses: anthropics/claude-code-action@d75b94d5ad426cb8546e6628b6f5f19b84e5cce1  # v1.0.216
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.216
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -408,7 +408,7 @@ jobs:
               PR open — do not push a branch with failing validation.
           claude_args: |
             --max-turns 100
-            --model claude-opus-5
+            --model claude-opus-5-5
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Fail loudly regardless of which job broke: `check` failing (e.g. the GitHub API call for

@@ -304,11 +304,11 @@ jobs:
             post any PR comment — writing the file is your only output.
         run: |
           # claude-code pinned — bump deliberately. Direct CLI = no GitHub auth / no github token.
-          npm install -g @anthropic-ai/claude-code@2.1.218
+          npm install -g @anthropic-ai/claude-code@2.1.282
           claude -p "$EVIDENCE_PROMPT" \
             --allowedTools "Read,Grep,Glob,Bash,Write" \
-            --max-turns 50 \
-            --model claude-opus-5
+            --max-turns 100 \
+            --model claude-opus-5-5
 
       # Fail loudly, don't mask: the step above is continue-on-error, so a broken evidence
       # harness (auth / install / rate-limit) leaves NO bundle — which otherwise reads as
@@ -330,7 +330,7 @@ jobs:
       # not red-X a contributor's PR CI. Visibility comes from the verification step.
       - name: Run Claude (attempt 1)
         id: a1
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
@@ -353,7 +353,7 @@ jobs:
       - name: Run Claude (attempt 2 — retry install-phase crash)
         id: a2
         if: "!cancelled() && steps.a1.outcome == 'failure' && steps.a1.outputs.execution_file == ''"
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}

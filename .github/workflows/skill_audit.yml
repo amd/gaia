@@ -66,7 +66,7 @@ permissions:
   contents: read
 
 env:
-  AUDIT_MODEL: claude-opus-4-8
+  AUDIT_MODEL: claude-opus-5-5
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -477,7 +477,7 @@ jobs:
       - name: Run Claude (skill-intent lens)
         id: claude
         continue-on-error: true   # advisory: a crash here must not gate the merge
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -536,6 +536,6 @@ jobs:
             line what you checked. End with a one-paragraph plain-language summary for the human
             reading this log.
           claude_args: |
-            --max-turns 30
+            --max-turns 100
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash

@@ -60,9 +60,10 @@
 # deterministic dedup pass (scripts/audit/prepare_synthesis.py), and files one issue per
 # surviving defect.
 #
-# MODEL: claude-opus-5 (Claude Opus 5) — excellent for static review at half the token
-# burn of Fable ($5/$25 vs $10/$50 per MTok), and priced identically to the Opus 4.8 it
-# replaced. A measured deep run on Fable cost ~$45 of API-equivalent subscription usage;
+# MODEL: claude-opus-5-5 (Claude Opus 5.5) — strong static review at under half the token
+# price of Fable ($4/$20 vs $10/$50 per MTok). It runs at its default effort (medium, one
+# level below Opus 5's high); raise it with `--effort` in claude_args if lenses start
+# missing things. A measured deep run on Fable cost ~$45 of API-equivalent subscription usage;
 # Opus roughly halves that. Swap AUDIT_MODEL below to claude-fable-5 for maximum depth if
 # you accept ~2x the cost.
 #
@@ -79,7 +80,7 @@
 # (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
-# COST CEILING: 4 dimension jobs (--max-turns 45) + 1 synthesis job (--max-turns 32) =
+# COST CEILING: 4 dimension jobs (--max-turns 150) + 1 synthesis job (--max-turns 100) =
 # a known per-run ceiling, now paid up to 7x/week instead of once since the cadence went
 # nightly. window_days=1 and skip-if-empty are what keep that affordable. This shares one
 # Max subscription pool with claude-security-audit.yml (also nightly) and the interactive
@@ -145,7 +146,7 @@ concurrency:
 env:
   # Single source of truth for the model. Opus 5 by default — half the token burn of
   # Fable for comparable static-review quality (see the MODEL note in the file header).
-  AUDIT_MODEL: claude-opus-5
+  AUDIT_MODEL: claude-opus-5-5
 
 jobs:
   # Resolve mode (auto → deep/normal) and short-circuit a night with no commits.
@@ -262,7 +263,7 @@ jobs:
       - name: Run Claude (${{ matrix.dimension }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -360,10 +361,18 @@ jobs:
 
             ## Output — write findings to `findings-${{ matrix.dimension }}.json`
             Write a JSON file at the repo root named exactly `findings-${{ matrix.dimension }}.json`
-            with this shape (write `{"findings": []}` if you find nothing):
+            with this shape (write `{"findings": [], "complete": true}` if you find nothing).
+
+            **Write it early and keep it current.** Before you start investigating, create
+            the file as `{"findings": [], "complete": false}`. Each time you confirm a
+            finding, rewrite the file with it added — do not hold findings in your head to
+            write at the end. When the sweep is finished, set `"complete": true`. If you are
+            cut off by the turn ceiling, whatever the file already holds is still collected
+            and filed; anything you had not written down is lost.
 
             ```json
-            {"findings": [
+            {"complete": true | false,
+             "findings": [
               {
                 "severity": "🔴" | "🟠" | "🟡",
                 "path": "src/gaia/....py",
@@ -442,25 +451,51 @@ jobs:
             conservatism back into a lens prompt.
 
             ## Budget
-            You have --max-turns 45 and share one rate-limited subscription pool with the
+            You have --max-turns 150 and share one rate-limited subscription pool with the
             sibling lenses (run back-to-back), the nightly security audit, and the
             interactive PR-review jobs. Delegate to a subagent only for a genuinely wide,
             parallelizable investigation — not for work you can finish in a handful of tool
             calls, and never to verify or double-check your own findings. Prefer one
             subagent over several. Spend turns reading code, not coordinating.
 
-            STOP investigating at ~5 turns remaining and spend them writing the findings
-            file. Hitting the ceiling mid-investigation discards everything you found and
-            fails the whole audit — partial findings written beat perfect findings lost.
+            The file is written as you go (see Output), so the turn ceiling can cut the
+            sweep short without losing what you already confirmed. Still, prefer finishing
+            a smaller area properly over skimming a large one.
 
             ## Security is out of scope — hand it off, do not file it here
             If you notice a security weakness, do NOT put it in this audit's findings — they
             become public issues, which would disclose it. Security has a dedicated
             private-channel workflow (claude-security-audit.yml). Leave it to that sweep.
           claude_args: |
-            --max-turns 45
+            --max-turns 150
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
+
+      # A lens that stops early leaves no reason in the log beyond "is_error:true", and
+      # the synthesis error cannot tell a spent subscription from a bad credential from
+      # a turn ceiling. Name it here, where the log is.
+      - name: Say why Claude stopped
+        if: steps.claude.outcome == 'failure'
+        continue-on-error: true
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          if [ -z "$EXECUTION_FILE" ] || [ ! -f "$EXECUTION_FILE" ]; then
+            echo "::error title=Claude stopped::No execution log was written, so Claude never started. Look at the 'Run Claude' step above for the install or startup error."
+            exit 1
+          fi
+          subtype=$(python3 -c 'import json,sys
+          for l in open(sys.argv[1],encoding="utf-8",errors="replace"):
+              l=l.strip()
+              if not l.startswith("{"): continue
+              try: e=json.loads(l)
+              except ValueError: continue
+              if e.get("type")=="result": print(e.get("subtype",""))' "$EXECUTION_FILE" | tail -1)
+          if [ "$subtype" = "error_max_turns" ]; then
+            echo "::error title=Claude stopped::The lens hit its --max-turns ceiling before finishing. Whatever it had written to its findings file is still collected."
+            exit 1
+          fi
+          python3 util/classify_claude_probe.py --exit-code 1 --format stream-json --text-file "$EXECUTION_FILE"
 
       - name: Upload findings
         if: always()
@@ -508,6 +543,20 @@ jobs:
             exit 1
           fi
           echo "All $got/$EXPECTED_DIMENSIONS dimensions reported in."
+          # A lens cut off by its turn ceiling still hands over what it had confirmed
+          # (it writes the file as it goes). File those, but say which sweep was partial.
+          incomplete=$(python3 - <<'EOF'
+          import json, pathlib
+          for f in sorted(pathlib.Path("audit-findings").rglob("findings-*.json")):
+              if json.loads(f.read_text(encoding="utf-8")).get("complete") is not True:
+                  print(f.stem.removeprefix("findings-"))
+          EOF
+          )
+          if [ -n "$incomplete" ]; then
+            for d in $incomplete; do
+              echo "::warning title=Nightly audit::The '$d' lens did not finish its sweep (turn ceiling or error) — its confirmed findings are filed, but areas it had not reached were not audited tonight."
+            done
+          fi
 
       - name: Ensure labels exist
         env:
@@ -560,7 +609,7 @@ jobs:
       - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -692,7 +741,7 @@ jobs:
               JSON contains a security issue, omit it rather than disclosing it publicly.
             - Never collapse a security concern or a @kovtcharov-amd tag inside `<details>`.
           claude_args: |
-            --max-turns 32
+            --max-turns 100
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
