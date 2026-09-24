@@ -65,7 +65,9 @@ def test_a_burst_waits_for_the_window_then_runs(clock, tmp_path):
     assert result["status"] == "success", result
     assert result.get("rate_limited") is not True
     assert result["waited_seconds"] == pytest.approx(9.0)
-    assert clock.slept == [pytest.approx(9.0)]
+    # Sliced, not one long sleep, so a Stop mid-wait is seen promptly.
+    assert sum(clock.slept) == pytest.approx(9.0)
+    assert max(clock.slept) <= ShellToolsMixin._PACE_POLL_SECONDS
 
 
 def test_the_minute_window_is_paced_too(clock, tmp_path):
@@ -104,4 +106,24 @@ def test_no_wait_is_reported_when_under_the_limit(clock, tmp_path):
 
     assert result["status"] == "success"
     assert "waited_seconds" not in result
+    assert clock.slept == []
+
+
+def test_a_stop_during_the_wait_ends_it_instead_of_sleeping_on(
+    clock, tmp_path, monkeypatch
+):
+    """A cancelled call must stop waiting: it runs inside a bounded window.
+
+    `_call_tool_bounded` joins the worker with a timeout and sets the
+    cancellation flag on expiry. A wait that slept straight through it kept the
+    worker alive past that point and delayed a user's Stop by up to a minute.
+    """
+    host = _Host()
+    host.shell_command_times.extend([clock.now - 1] * 3)
+    monkeypatch.setattr(shell_tools, "tool_cancelled", lambda: True)
+
+    result = _run(host, tmp_path)
+
+    assert result["rate_limited"] is True
+    assert result["executed"] is False
     assert clock.slept == []

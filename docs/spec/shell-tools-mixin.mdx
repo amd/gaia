@@ -228,8 +228,9 @@ class ShellToolsMixin:
                 "cwd": str,
                 "output_truncated": bool,
                 "check_result": dict | None,  # CheckResult when a test/lint/build runner ran
-                "rate_limited": bool,  # If rate limited
+                "rate_limited": bool,  # If refused rather than paced
                 "wait_time_seconds": float,  # Time to wait
+                "waited_seconds": float,  # Present only when it paced first
                 "timed_out": bool  # If command timed out
             }
 
@@ -361,9 +362,16 @@ def test_run_shell_command_rate_limit_burst(agent):
         result = agent.run_shell_command("pwd")
         assert result["status"] == "success"
 
-    # 4th should be rate limited
+    # The 4th waits out the burst window, then runs
     result = agent.run_shell_command("pwd")
-    assert result["status"] == "error"
+    assert result["status"] == "success"
+    assert result["waited_seconds"] > 0
+
+def test_run_shell_command_rate_limit_cap(agent):
+    """A wait past max_rate_limit_wait_seconds is refused, not paced."""
+    agent.max_rate_limit_wait_seconds = 1
+    for i in range(4):
+        result = agent.run_shell_command("pwd")
     assert result["rate_limited"] is True
 
 def test_run_shell_command_rate_limit_sustained(agent):
@@ -469,14 +477,17 @@ result = agent.run_shell_command("git commit -m 'test'")
 ### Example 3: Rate Limiting
 
 ```python
-# Quick burst of commands
+# Quick burst of commands. The mixin paces itself: a command over the limit
+# waits for the window and then runs, so the caller writes no retry loop. The
+# wait is sliced and stops early if the agent cancels the call.
 for i in range(5):
     result = agent.run_shell_command("pwd")
-    if result.get("rate_limited"):
-        wait_time = result["wait_time_seconds"]
-        print(f"Rate limited. Wait {wait_time:.1f}s")
-        time.sleep(wait_time)
-        result = agent.run_shell_command("pwd")
+    if result.get("waited_seconds"):
+        print(f"Paced {result['waited_seconds']:.1f}s before running")
+
+# Only a wait longer than max_rate_limit_wait_seconds is refused outright.
+if result.get("rate_limited"):
+    print(f"Refused: the window is {result['wait_time_seconds']:.1f}s away")
 ```
 
 ---
