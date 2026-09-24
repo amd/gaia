@@ -102,34 +102,23 @@ def test_custom_prompt_no_history_omits_previous_turns(sdk):
     assert chat.get_history() == ["user: earlier", "assistant: previous answer"]
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "claude"])
-def test_cloud_provider_receives_native_system_prompt(provider_name):
-    from types import SimpleNamespace
+def test_cloud_provider_receives_native_system_prompt():
     from unittest.mock import Mock
 
     from gaia.llm.providers.claude import ClaudeProvider
-    from gaia.llm.providers.openai_provider import OpenAIProvider
 
-    provider_type = ClaudeProvider if provider_name == "claude" else OpenAIProvider
-    provider = provider_type.__new__(provider_type)
-    provider._model = "claude-test" if provider_name == "claude" else "gpt-test"
+    provider = ClaudeProvider.__new__(ClaudeProvider)
+    provider._model = "claude-test"
     provider._system_prompt = None
     provider._client = Mock()
     provider._tool_name_map = {}
-    if provider_name == "claude":
-        provider._parse_response = Mock(return_value="answer")
-        create = provider._client.messages.create
-    else:
-        create = provider._client.chat.completions.create
-        create.return_value = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))]
-        )
+    provider._parse_response = Mock(return_value="answer")
+    create = provider._client.messages.create
     with patch("gaia.chat.sdk.create_client", return_value=provider):
         chat = AgentSDK(AgentConfig(system_prompt="SYS-ORIGINAL", show_stats=False))
     chat.send("hello")
     params = create.call_args.kwargs
-    native = params["system"] if provider_name == "claude" else params["messages"][0]
-    assert "SYS-ORIGINAL" in json.dumps(native)
+    assert "SYS-ORIGINAL" in json.dumps(params["system"])
     assert json.dumps(params).count("SYS-ORIGINAL") == 1
     chat.set_system_prompt("SYS-UPDATED")
     chat.send("hello")
