@@ -1,6 +1,6 @@
 ---
 title: "Two-command setup on embedded Lemonade"
-description: "Scope for installing GAIA with npx, initializing it with gaia init (or on first launch), and running it from the TUI, web UI, desktop app or Claude Code, with GAIA's embedded Lemonade replacing a system-wide install."
+description: "Scope for installing GAIA with npx, initializing it with gaia init (or on first launch), and opening it with gaia, gaia web, gaia app or Claude Code, with GAIA's embedded Lemonade replacing a system-wide install."
 ---
 
 **A new user runs two commands, maybe three, and has a working GAIA.** Today it takes a
@@ -13,7 +13,7 @@ on first launch if the user skipped that step.
 |---|---|---|
 | 1. Install | `npx @amd-gaia/gaia install` | Installs the `gaia` command and the verified TUI and agent binaries. No models yet. |
 | 2. Initialize (optional) | `gaia init` | Installs and starts GAIA's embedded Lemonade, picks the model for this PC, downloads and checks it. |
-| 3. Use | `gaia tui`, `gaia chat --ui`, the desktop app, or `/plugin install gaia --marketplace amd/gaia` in Claude Code | If step 2 was skipped, the first launch runs it. |
+| 3. Use | `gaia` (terminal UI), `gaia web` (web app in the browser), `gaia app` (desktop app), or `/plugin install gaia --marketplace amd/gaia` in Claude Code | If step 2 was skipped, the first launch runs it. |
 
 ## 1. Decisions
 
@@ -23,6 +23,7 @@ on first launch if the user skipped that step.
 | How `npx` leaves a `gaia` command | **It runs the existing installer** (`install.sh` / `install.ps1`, Python `gaia` via uv) and fetches the verified binaries. A Python-free packaged binary is a later option. |
 | Who starts Lemonade | **Any GAIA entry point may start the embedded server** when it's stopped: it is GAIA's own private process on a private port, so starting it can't disturb anything else. This replaces the current rule that only `gaia init` starts Lemonade. |
 | Downloads | Only `gaia init`, the TUI's first-run setup, or an explicit re-download pulls models, and each shows the size first. |
+| Entry points | **`gaia` opens the terminal UI, `gaia web` the web app, `gaia app` the desktop app.** `gaia chat --ui` and the top-level `--ui` / `--cli` flags are legacy and removed. |
 | Technical debt | Fixed in the PR that touches it, not deferred. |
 
 ## 2. What exists today
@@ -41,6 +42,9 @@ on first launch if the user skipped that step.
   - `LemonadeManager.ensure_ready()` only checks, and reports a stopped server as an error.
   - The TUI's auto-start and start hints (`preflight/autostart.go`, `lemonadeStartRemedy`).
   - About 20 CI workflows run on self-hosted machines with a system Lemonade.
+- **`gaia` with no command opens the web Agent UI**, not the terminal UI; the terminal UI is
+  a separate `gaia-tui` binary. `gaia chat --ui`, and the top-level `--ui` and `--cli` flags,
+  are other routes into the same web UI, referenced in 43 files.
 - **`npx @amd-gaia/gaia`** fetches the TUI and agent binaries and opens the TUI, but needs
   the Python `gaia` command installed separately, and leaves no lasting `gaia` command.
 
@@ -67,7 +71,8 @@ starts it when it's stopped.** A system Lemonade is no longer installed, found o
      evals start the embedded server instead of failing;
    - the TUI's setup screen, replacing the system auto-start with
      `gaia lemonade embedded start`;
-   - the GAIA daemon, when it starts a local agent.
+   - the GAIA daemon, when it starts a local agent;
+   - `gaia web` and `gaia app` once they exist (PR 3).
    With `LEMONADE_BASE_URL` set, none of these start anything: the user chose that server.
 4. **Remove the system-Lemonade code** that nothing uses any more: `LemonadeInstaller`'s
    MSI, package and pkg installers, the system launch paths in `lemonade_launcher`, the
@@ -111,10 +116,11 @@ starts it when it's stopped.** A system Lemonade is no longer installed, found o
 
 | PR | Scope |
 |---|---|
-| **2. `npx @amd-gaia/gaia install`** | New `install` command: runs `install.sh` / `install.ps1`, fetches and verifies the binaries into GAIA's own folder, and leaves `gaia` and `gaia tui` on `PATH`. `npx @amd-gaia/gaia` with no command keeps opening the TUI. |
-| **3. TUI `/init`** | First launch still sets up automatically. `/init` (with `/setup` as an alias) shows a health report (Lemonade running and its version, model on disk and loadable, context size), and offers to re-download a damaged model (`gaia init --force-models`) or change the model. |
-| **4. Claude Code plugin** | The plugin from the [v1 scope](/plans/claude-code-plugin-v1), now relying on the installed `gaia`. A missing setup gives "run `gaia init`" and never downloads silently. |
-| **5. CI** | Move the self-hosted workflows from their system Lemonade to the embedded one, so CI tests what users run. |
+| **2. `npx @amd-gaia/gaia install`** | New `install` command: runs `install.sh` / `install.ps1`, fetches and verifies the binaries into GAIA's own folder, and leaves `gaia` on `PATH`. `npx @amd-gaia/gaia` with no command keeps opening the terminal UI, the same as `gaia`. |
+| **3. One command per surface** | `gaia` opens the terminal UI (running the verified `gaia-tui` binary), `gaia web` starts the web app and opens the browser, `gaia app` opens the desktop app (installing it on first use if it's missing). Remove `gaia chat --ui` and the top-level `--ui` / `--cli` flags, with a one-line message naming the new command, and update all 43 files that reference them. `gaia chat` stays as the plain terminal chat. |
+| **4. TUI `/init`** | First launch still sets up automatically. `/init` (with `/setup` as an alias) shows a health report (Lemonade running and its version, model on disk and loadable, context size), and offers to re-download a damaged model (`gaia init --force-models`) or change the model. |
+| **5. Claude Code plugin** | The plugin from the [v1 scope](/plans/claude-code-plugin-v1), now relying on the installed `gaia`. A missing setup gives "run `gaia init`" and never downloads silently. |
+| **6. CI** | Move the self-hosted workflows from their system Lemonade to the embedded one, so CI tests what users run. |
 
 ## 5. Risks and open questions
 
