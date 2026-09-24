@@ -1239,9 +1239,7 @@ class InitCommand:
             if RICH_AVAILABLE and self.console:
                 self.console.print(f"   [bold]{label}[/bold]")
             else:
-                import re as _re
-
-                plain_label = _re.sub(r"\[.*?\]", "", label)
+                plain_label = re.sub(r"\[.*?\]", "", label)
                 self._print(f"   {plain_label}")
 
             # macOS installs run headless via `installer -pkg`; only the MSI pops a window.
