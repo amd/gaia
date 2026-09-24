@@ -14,9 +14,9 @@ import (
 	"strings"
 )
 
-// Entry is one row of the model picker: a catalog model, or a recommendation
-// the catalog does not list yet (a custom model before its first pull, or a
-// Fireworks model the account has not deployed).
+// Entry is one row of the model picker: a catalog model, or a local
+// recommendation the catalog does not list yet (a custom model before its
+// first pull, or a built-in an older Lemonade lacks).
 type Entry struct {
 	Model       Model
 	Recommended *Recommended
@@ -53,10 +53,10 @@ func (e Entry) Selectable() bool {
 	return e.Model.Downloaded || e.Fits
 }
 
-// Unavailable reports a recommendation the server cannot provide at all, as
+// Unavailable reports a recommended built-in this Lemonade does not offer, as
 // opposed to one that does not fit this PC.
 func (e Entry) Unavailable() bool {
-	return !e.Listed && e.Recommended != nil && (e.Recommended.Provider != "local" || e.Recommended.RegisterAs == "")
+	return !e.Listed && e.Recommended != nil && e.Recommended.RegisterAs == ""
 }
 
 // NeedsDownload reports whether choosing the row must pull the model first.
@@ -148,16 +148,12 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 				head = append(head, e)
 			}
 		}
-		if matched {
+		// A cloud recommendation the account does not list is simply absent.
+		if matched || provider != "local" {
 			continue
 		}
 		e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec}
 		switch {
-		case provider != "local":
-			e.Reason = rec.Note
-			if e.Reason == "" {
-				e.Reason = "not offered to this account by " + Label(provider)
-			}
 		case rec.RegisterAs == "":
 			// A built-in this Lemonade does not ship: it cannot be pulled by name.
 			e.Reason = "this Lemonade server does not offer it; update Lemonade with `gaia init`"

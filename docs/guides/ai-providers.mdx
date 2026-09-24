@@ -15,15 +15,9 @@ on your Lemonade server.
 2. Select **Fireworks AI**. Paste your API key into the masked field and press
    **Enter**. Keys go directly to your local Lemonade server, never through the
    conversation or the agent.
-3. Pick a discovered model. The **Recommended** group comes first: Gemma 4 31B IT
-   (`fireworks.gemma-4-31b-it`) and the DeepSeek V4 Flash models GAIA has been
-   benchmarked on, then every other model your account exposes. Type to filter
-   the list; use **↑/↓** and **Enter** to select.
-
-**Qwen3.8 Flash Next** is listed under Recommended but is not serverless on
-Fireworks: it needs an on-demand deployment on your Fireworks account. Until one
-exists the row explains that and cannot be selected; once Lemonade discovers the
-deployment (`fireworks.qwen3p8-flash-next-…`) it becomes selectable.
+3. Pick a discovered model. **Gemma 4 31B IT**
+   (`fireworks.gemma-4-31b-it`) appears first when your account exposes it.
+   Type to filter the list; use **↑/↓** and **Enter** to select.
 
 The model list comes from Lemonade's provider discovery. A listed model may still
 require deployment or additional account access to serve requests. GAIA does not create a paid
@@ -46,6 +40,8 @@ for models and how much disk is free, both read from Lemonade:
   progress, then switches to it. **Esc** stops the download.
 - **won't fit** — shown so you know it exists, but it cannot be downloaded. The
   details line says what it needs against what this PC has.
+- **fit unknown** — Lemonade did not report this PC's GPU memory or the model's
+  size, so it cannot be judged and is not downloaded.
 
 A model fits when its size plus 5% and 1 GB of working room fits the memory
 llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared

@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // Recommended is a model GAIA points users at ahead of the rest of Lemonade's
@@ -19,9 +18,6 @@ type Recommended struct {
 	Provider string `json:"provider"`
 	Label    string `json:"label"`
 	Note     string `json:"note"`
-	// MatchPrefix makes ID a prefix: a Fireworks deployment's id carries a
-	// suffix GAIA cannot know in advance.
-	MatchPrefix bool `json:"match_prefix"`
 
 	// Registration for a model that is not a Lemonade built-in. Empty for
 	// built-ins, which Lemonade pulls by name.
@@ -36,9 +32,6 @@ type Recommended struct {
 
 // Matches reports whether a catalog id is this recommendation.
 func (r Recommended) Matches(id string) bool {
-	if r.MatchPrefix {
-		return strings.HasPrefix(id, r.ID)
-	}
 	return id == r.ID || (r.RegisterAs != "" && id == r.RegisterAs)
 }
 

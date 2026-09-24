@@ -123,21 +123,14 @@ func TestUnreadableMachineBlocksEveryDownload(t *testing.T) {
 	}
 }
 
-func TestFireworksFlashIsShownButNotSelectableUntilDeployed(t *testing.T) {
-	entries := BuildEntries("fireworks", []Model{{ID: FireworksModel, Recipe: "cloud"}}, Capacity{}, nil)
-	var flash *Entry
-	for i := range entries {
-		if strings.HasPrefix(entries[i].Model.ID, "fireworks.qwen3p8-flash-next") {
-			flash = &entries[i]
-		}
+func TestFireworksKeepsItsSuggestionFirstAndHidesWhatTheAccountLacks(t *testing.T) {
+	entries := BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: FireworksModel, Recipe: "cloud"}}, Capacity{}, nil)
+	if len(entries) != 2 || entries[0].Model.ID != FireworksModel || !entries[0].Selectable() {
+		t.Fatalf("suggested Fireworks model should lead: %+v", entries)
 	}
-	if flash == nil || flash.Selectable() || flash.NeedsDownload() || !strings.Contains(flash.Reason, "deploy") {
-		t.Fatalf("undeployed Fireworks Flash row wrong: %+v", flash)
-	}
-	deployed := BuildEntries("fireworks", []Model{{ID: "fireworks.qwen3p8-flash-next-fp8", Recipe: "cloud"}}, Capacity{}, nil)
-	for _, e := range deployed {
-		if e.Model.ID == "fireworks.qwen3p8-flash-next-fp8" && (!e.Selectable() || e.Recommended == nil) {
-			t.Fatalf("deployed Fireworks Flash should be a selectable recommendation: %+v", e)
+	for _, e := range BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}}, Capacity{}, nil) {
+		if e.Model.ID == FireworksModel {
+			t.Fatal("a Fireworks model the account lacks was listed")
 		}
 	}
 }
@@ -239,14 +232,6 @@ func TestRecommendedBuiltinMissingFromLemonadeIsUnavailableNotTooBig(t *testing.
 		return
 	}
 	t.Fatal("Qwen3 Coder Next recommendation missing")
-}
-
-func TestCloudRecommendationTheAccountLacksSaysWhy(t *testing.T) {
-	for _, e := range BuildEntries("fireworks", nil, Capacity{}, nil) {
-		if e.Model.ID == FireworksModel && !strings.Contains(e.Reason, "not offered") {
-			t.Fatalf("no reason for a missing Fireworks model: %+v", e)
-		}
-	}
 }
 
 func fixtureCapacity(t *testing.T, name string, physical string) (Capacity, error) {
