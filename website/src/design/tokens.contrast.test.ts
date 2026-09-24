@@ -204,15 +204,18 @@ describe('tokens.css parses', () => {
     expect(dark.get('--g-accent-fill')).toBe(light.get('--g-accent-fill'));
   });
 
+  // `dark` is light merged with the dark block, so its key set is the union of
+  // both themes. Walking `light` instead would let a token declared only under
+  // [data-theme='dark'] reach the screen with no floor attached to it.
   it('every colour token declares a floor', () => {
-    const undeclared = [...light.keys()].filter(
-      (k) => !NON_COLOUR.has(k) && !(k in ROLES) && asPaint(light.get(k)!) !== null,
+    const undeclared = [...dark.keys()].filter(
+      (k) => !NON_COLOUR.has(k) && !(k in ROLES) && asPaint(dark.get(k)!) !== null,
     );
     expect(undeclared, 'add these to ROLES with the contrast they owe').toEqual([]);
   });
 
   it('declares no floor for a token that no longer exists', () => {
-    const stale = Object.keys(ROLES).filter((k) => !light.has(k));
+    const stale = Object.keys(ROLES).filter((k) => !dark.has(k));
     expect(stale).toEqual([]);
   });
 
@@ -231,6 +234,13 @@ describe.each(THEMES)('%s theme holds its floors', (themeName, vars) => {
 
   it.each(entries)('%s', (token, { role, on }) => {
     const floor = FLOOR[role as keyof typeof FLOOR];
+    // A dark-only token has nothing to measure in the light theme. Assert it
+    // exists somewhere rather than returning quietly, so a typo in ROLES still
+    // fails here and not only in the staleness check.
+    if (!vars.has(token)) {
+      expect(dark.has(token), `${token} is declared in neither theme`).toBe(true);
+      return;
+    }
     const paint = asPaint(vars.get(token)!)!;
     for (const ground of groundsFor(on, vars)) {
       // A translucent token (a hairline) is judged as it is actually painted.

@@ -33,9 +33,10 @@ const WEBSITE_CI = fileURLToPath(
 /**
  * Website role → the Agent UI role it must equal.
  *
- * Only status hues belong here. The syntax-only colours (purple, cyan) have no
- * Agent UI counterpart by design, and the surface/text roles differ on purpose:
- * the panels are near-black but not the same near-black.
+ * The status hues inside the code panel, plus the copper the primary button is
+ * painted with. The syntax-only colours (purple, cyan) have no Agent UI
+ * counterpart by design, and the surface/text roles differ on purpose: the
+ * panels are near-black but not the same near-black.
  */
 const SHARED: Record<string, string> = {
   '--g-code-accent': '--code-accent',
@@ -43,19 +44,37 @@ const SHARED: Record<string, string> = {
   '--g-code-blue': '--code-info',
   '--g-code-amber': '--code-warning',
   '--g-code-danger': '--code-danger',
+  // The primary button. Its resting fill, its hover step and the text on top
+  // are the same three literals on both surfaces — a reader who clicks Download
+  // on the site and Send in the app is looking at one control, not two.
+  '--g-accent': '--accent',
+  '--g-accent-fill': '--accent-fill',
+  '--g-accent-fill2': '--accent-fill-hover',
+  '--g-on-accent': '--accent-fill-text',
 };
 
-/** `--name: 12 34 56;` → `#0c2238`. Space-separated triplets, Tailwind style. */
-function readTriplet(source: string, token: string): string | null {
-  const m = new RegExp(`${token}\\s*:\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s*;`).exec(source);
-  if (!m) return null;
-  return `#${[m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, '0')).join('')}`;
-}
-
-/** `--name: #AABBCC;` → `#aabbcc`. */
-function readHex(source: string, token: string): string | null {
-  const m = new RegExp(`${token}\\s*:\\s*(#[0-9a-fA-F]{6})\\s*;`).exec(source);
-  return m ? m[1].toLowerCase() : null;
+/**
+ * Every declaration of `token`, in file order, deduped — `#aabbcc` whichever
+ * syntax it was written in (`12 34 56` triplet here, `#AABBCC` there).
+ *
+ * Reading *all* of them matters because a themed role is declared twice, once
+ * per `:root` block. Matching only the first would compare the light values and
+ * let a dark-theme drift through, which is the whole class of bug this file
+ * exists to catch.
+ */
+function readValues(source: string, token: string): string[] {
+  const pattern = new RegExp(
+    `${token}\\s*:\\s*(?:(#[0-9a-fA-F]{6})|(\\d+)\\s+(\\d+)\\s+(\\d+))\\s*;`,
+    'g',
+  );
+  const seen: string[] = [];
+  for (const m of source.matchAll(pattern)) {
+    const hex = m[1]
+      ? m[1].toLowerCase()
+      : `#${[m[2], m[3], m[4]].map((n) => Number(n).toString(16).padStart(2, '0')).join('')}`;
+    if (!seen.includes(hex)) seen.push(hex);
+  }
+  return seen;
 }
 
 describe('status hues are one set of literals across both surfaces', () => {
@@ -68,12 +87,13 @@ describe('status hues are one set of literals across both surfaces', () => {
   });
 
   it.each(Object.entries(SHARED))('%s equals %s', (siteToken, appToken) => {
-    const siteValue = readTriplet(website, siteToken);
-    const appValue = readHex(agentUi, appToken);
+    const siteValues = readValues(website, siteToken);
+    const appValues = readValues(agentUi, appToken);
 
-    expect(siteValue, `${siteToken} is not declared as an RGB triplet`).not.toBeNull();
-    expect(appValue, `${appToken} is not declared as a hex literal`).not.toBeNull();
-    expect(siteValue).toBe(appValue);
+    expect(siteValues, `${siteToken} is declared nowhere in tokens.css`).not.toEqual([]);
+    expect(appValues, `${appToken} is declared nowhere in index.css`).not.toEqual([]);
+    // Order is light-then-dark in both files, so this also catches a swap.
+    expect(appValues).toEqual(siteValues);
   });
 });
 

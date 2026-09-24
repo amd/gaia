@@ -40,10 +40,16 @@ dark one does not.
 
 macOS Terminal is 256-colour only, so every value is rounded to the nearest of
 256 fixed indices before it reaches the screen. Among the colours dark enough to
-hold 4.5:1 on a white terminal, that cube offers exactly one saturated warm
-entry: `#875F00` — and `#875F00` is already where Warning and Selected land. A
+hold 4.5:1 on *every* light terminal background the TUI measures — pure white
+through Solarized Light `#FDF6E3` — that cube offers exactly one saturated warm
+entry: `#875F00`, and `#875F00` is already where Warning and Selected land. A
 light copper that rounds there stops being a distinct colour and silently becomes
 the warning colour.
+
+The qualifier is load-bearing. Against pure white alone the cube offers two:
+`#AF5F00` reads 4.71:1 there and 4.51:1 on One Half Light, then drops to 4.37:1
+on Solarized Light. Judging the palette against white only is how a value that
+fails on a real terminal passes review.
 
 `#9A4930` is the most saturated light copper that rounds to `#875F5F` instead: a
 warm near-neutral. On a 256-colour light terminal GAIA's accent therefore reads
@@ -134,9 +140,10 @@ Shared starting points, not pixel-matched measurements:
 - Light, dark, and system appearance; motion that honours `prefers-reduced-motion`;
   visible keyboard focus at every interactive element.
 
-Three gaps stand between those rules and what ships today. Only "no glow" is
-enforced by a test (`styles/__tests__/contrast.test.ts`); the rest are held by
-review. Where each gap is scheduled in the
+Four gaps stand between those rules and what ships today. "No glow" and "no
+gradient-filled panels" are enforced by a test on both web surfaces
+(`styles/__tests__/contrast.test.ts` in the app, `design/literals.test.ts` on
+the site); the rest are held by review. Where each gap is scheduled in the
 [redesign plan](/plans/gaia-ui-redesign):
 
 - The welcome screen types its headline on a randomised per-character delay and
@@ -147,6 +154,13 @@ review. Where each gap is scheduled in the
 - `outline: none` appears in most component stylesheets. Most sit on a `:focus`
   rule that draws a border or ring in its place, but the pairing is unverified
   and nothing fails when it is missing. Milestone 3 covers keyboard behaviour.
+- "A hue that carries a status meaning is not available for decoration" is
+  enforced for red only. Extending it to amber, green, blue, cyan and purple
+  surfaces 84 rules that wear a status hue for decoration — a switch whose on
+  state is the information blue, memory categories each given their own colour,
+  links tinted green — so closing it is a repaint across 18 stylesheets, not a
+  test change. Milestone 3 for the task surfaces, Milestone 4 for Settings and
+  the document and memory panels.
 
 The [mobile design system](https://github.com/amd/gaia/blob/main/docs/spec/mobile-design-system.md)
 remains the responsive baseline, including its 768px boundary and 44px touch targets.

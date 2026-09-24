@@ -193,12 +193,19 @@ describe('colour reaches the screen through a role, never a literal', () => {
 describe('the design language forbids these outright', () => {
   // "No glow, no simulated typing, no decorative blinking, no gradient-filled
   // panels" — docs/spec/gaia-design-language.mdx, Typography and spacing.
+  //
+  // A gradient in `mask-image` paints nothing: it is an alpha ramp, used to
+  // fade an overflowing label instead of cutting it with an ellipsis. The Agent
+  // UI guard carries the same exemption so both surfaces enforce one rule.
+  const MASK = /(?:^|[;{\s])(?:-webkit-)?mask(?:-image)?\s*:/;
+
   it('fills no panel with a gradient', () => {
     const offenders: string[] = [];
     for (const [path, source] of Object.entries(SOURCES)) {
       withoutComments(source)
         .split(/\r?\n/)
         .forEach((line, i) => {
+          if (MASK.test(line)) return;
           if (/(?:linear|radial|conic)-gradient\(/.test(line) || /\bbg-gradient-to-/.test(line))
             offenders.push(`${path}:${i + 1}  ${line.trim()}`);
         });

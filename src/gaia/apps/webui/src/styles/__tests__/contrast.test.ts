@@ -34,6 +34,24 @@ const TS_SOURCES = import.meta.glob('/src/**/*.{ts,tsx}', {
     eager: true,
 }) as Record<string, string>;
 
+/**
+ * Electron's own windows. They live outside `/src`, so the two globs above
+ * miss them -- which is how the first-launch window kept an indigo canvas and
+ * a blue gradient progress bar through a palette migration.
+ */
+const CJS_SOURCES = {
+    ...(import.meta.glob('/*.cjs', {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+    }) as Record<string, string>),
+    ...(import.meta.glob('/services/*.cjs', {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+    }) as Record<string, string>),
+};
+
 const INDEX_PATH = '/src/styles/index.css';
 const INDEX_CSS = CSS_SOURCES[INDEX_PATH];
 if (!INDEX_CSS) throw new Error(`the glob did not pick up ${INDEX_PATH}`);
@@ -288,6 +306,115 @@ describe('component stylesheets route colour through tokens', () => {
     });
 });
 
+describe('the Electron windows mirror the dark theme rather than inventing one', () => {
+    // Both windows load from a `data:` URL, so no stylesheet reaches them and
+    // `var()` has nothing to resolve against. Each one opens its inline CSS
+    // with a `:root` block copying the dark theme by hand, and every rule below
+    // it references a role. A copy drifts, so the copy is checked here instead
+    // of being left to a comment asking the next editor to keep it in step.
+    const DARK_TABLE: Record<string, string> = { ...LIGHT, ...DARK };
+
+    /**
+     * Blank comments, keeping the line count so a reported line number is the
+     * real one. `//` counts only at line start or after whitespace, so a URL's
+     * `https://` survives. Blanking matters more here than in a stylesheet:
+     * main.cjs cites issues (`#1388`, `#782`) that read as valid four- and
+     * three-digit hex.
+     */
+    function withoutComments(src: string): string {
+        const blank = (m: string) => m.replace(/[^\n]/g, ' ');
+        return src
+            .replace(/\/\*[\s\S]*?\*\//g, blank)
+            .split(/\r?\n/)
+            .map((line: string) => line.replace(/(^|\s)\/\/.*$/, '$1'))
+            .join('\n');
+    }
+
+    /** A `--token: #hex;` line inside one of the mirrored `:root` blocks. */
+    const DECLARATION = /^\s*(--[A-Za-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;/;
+    const HEX = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/g;
+
+    /**
+     * A literal that cannot be a `var()`. Each entry names the token it copies,
+     * so the value is held to index.css like the CSS ones rather than waved
+     * through.
+     */
+    const MIRRORED: Array<{ path: string; literal: string; token: string; why: string }> = [
+        {
+            path: '/services/backend-installer-progress-dialog.cjs',
+            literal: '#17161C',
+            token: '--bg-primary',
+            why: 'BrowserWindow backgroundColor is a main-process option, not CSS -- there is no cascade to read a custom property from',
+        },
+    ];
+
+    it('reads the Electron sources, not an empty set', () => {
+        // A glob that silently matches nothing makes every check below pass.
+        expect(Object.keys(CJS_SOURCES), 'the /*.cjs glob picked up nothing').toContain('/main.cjs');
+        expect(Object.keys(CJS_SOURCES).filter((p) => p.startsWith('/services/')).length).toBeGreaterThan(5);
+    });
+
+    it('declares every mirrored token at its dark-theme value', () => {
+        const wrong: string[] = [];
+        for (const [path, source] of Object.entries(CJS_SOURCES)) {
+            withoutComments(source)
+                .split('\n')
+                .forEach((line: string, i: number) => {
+                    const m = DECLARATION.exec(line);
+                    if (!m) return;
+                    const [, token, value] = m;
+                    const expected = DARK_TABLE[token];
+                    if (expected === undefined)
+                        wrong.push(`${path}:${i + 1}  ${token} is not a token index.css declares`);
+                    else if (expected.toLowerCase() !== value.toLowerCase())
+                        wrong.push(`${path}:${i + 1}  ${token} is ${value} here, ${expected} in index.css`);
+                });
+        }
+        expect(wrong, 'copy the value from the [data-theme="dark"] block of index.css').toEqual([]);
+    });
+
+    it('names no other colour', () => {
+        const offenders: string[] = [];
+        for (const [path, source] of Object.entries(CJS_SOURCES)) {
+            const exempt = MIRRORED.filter((e) => e.path === path).map((e) => e.literal);
+            withoutComments(source)
+                .split('\n')
+                .forEach((line: string, i: number) => {
+                    if (DECLARATION.test(line)) return;
+                    let probe = line;
+                    for (const literal of exempt) probe = probe.split(literal).join('');
+                    if (probe.match(HEX) || /\brgba?\(\s*\d/.test(probe))
+                        offenders.push(`${path}:${i + 1}  ${line.trim()}`);
+                });
+        }
+        expect(
+            offenders,
+            "reference a --token from the window's own :root block, or add it to MIRRORED with the token it copies",
+        ).toEqual([]);
+    });
+
+    it('keeps the exemption list honest -- every entry still holds its literal', () => {
+        // Look past the `:root` declarations: the drift check already covers
+        // those, so an entry whose only remaining match is one of them is
+        // exempting nothing and would sit here forever unnoticed.
+        const stale = MIRRORED.filter(({ path, literal }) => {
+            const lines = withoutComments(CJS_SOURCES[path] ?? '').split('\n');
+            return !lines.some((line: string) => !DECLARATION.test(line) && line.includes(literal));
+        }).map(({ path, literal }) => `${path}  ${literal}`);
+        expect(stale, 'nothing left to exempt here -- drop the entry').toEqual([]);
+    });
+
+    it('holds every exempted literal to the token it mirrors', () => {
+        for (const { path, literal, token, why } of MIRRORED) {
+            expect(DARK_TABLE[token], `${path}: index.css declares no ${token}`).toBeDefined();
+            expect(DARK_TABLE[token].toLowerCase(), `${path}: ${literal} is no longer ${token}`).toBe(
+                literal.toLowerCase(),
+            );
+            expect(why.length, path).toBeGreaterThan(20);
+        }
+    });
+});
+
 /** Every rule in every component stylesheet, comments stripped. */
 const RULES = Object.entries(CSS_SOURCES).flatMap(([path, source]) =>
     [...source.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
@@ -407,7 +534,32 @@ describe('component rules that set their own background', () => {
  * failed, which is the whole failure mode the status roles exist to prevent.
  */
 describe('status hues stay on status', () => {
-    const STATUS_ROLES = /var\(\s*(--(?:danger|warning))\s*\)/g;
+    /**
+     * Built from a list rather than written inline so the names can be checked
+     * against the stylesheet. The first version of this guard matched
+     * `--warning` -- a token the Agent UI has never declared -- so half of what
+     * it claimed to police matched nothing, and nothing said so.
+     *
+     * Only `--danger` is here today. Widening it to --accent-green/-yellow/
+     * -blue/-cyan/-purple surfaces 84 rules that paint a status hue for
+     * decoration, which is a repaint across 18 stylesheets rather than a test
+     * change; it is listed as a scheduled gap in the design-language spec.
+     */
+    const STATUS_ROLE_NAMES = ['--danger'];
+    const STATUS_ROLES = new RegExp(
+        String.raw`var\(\s*(${STATUS_ROLE_NAMES.join('|')})\s*\)`,
+        'g',
+    );
+
+    it('names only roles the stylesheet actually declares', () => {
+        const undeclared = STATUS_ROLE_NAMES.filter(
+            (t) => !new RegExp(String.raw`${t}\s*:`).test(CSS_SOURCES[INDEX_PATH]),
+        );
+        expect(
+            undeclared,
+            'no such token -- this alternative matches nothing and enforces nothing',
+        ).toEqual([]);
+    });
 
     /** A selector naming any of these is claiming a status, so it may paint one. */
     const STATUS_WORDS = [
@@ -467,6 +619,11 @@ describe('status hues stay on status', () => {
 });
 
 describe('the design language forbids these outright', () => {
+    // Everything that paints, including the two Electron windows -- their CSS
+    // is a template string rather than a stylesheet, but it reaches a screen
+    // the same way, and the install window is where the gradient was found.
+    const PAINTED: Record<string, string> = { ...CSS_SOURCES, ...CJS_SOURCES };
+
     // Hard-coded white survives a theme flip; the fill under it does not.
     // --danger is a deep red on the light canvas but #F2787C on the dark one,
     // so `color: white` on it reads 6.4:1 in one theme and 2.4:1 in the other.
@@ -474,7 +631,7 @@ describe('the design language forbids these outright', () => {
     // against every semantic fill.
     it('never paints fill text as a fixed white', () => {
         const offenders: string[] = [];
-        for (const [path, source] of Object.entries(CSS_SOURCES)) {
+        for (const [path, source] of Object.entries(PAINTED)) {
             if (path === INDEX_PATH) continue; // owns --accent-fill-text
             source
                 .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -500,7 +657,7 @@ describe('the design language forbids these outright', () => {
 
     it('leaves no glow behind', () => {
         const offenders: string[] = [];
-        for (const [path, source] of Object.entries(CSS_SOURCES)) {
+        for (const [path, source] of Object.entries(PAINTED)) {
             source
                 .replace(/\/\*[\s\S]*?\*\//g, '')
                 .split(/\r?\n/)
@@ -520,5 +677,29 @@ describe('the design language forbids these outright', () => {
                 });
         }
         expect(offenders, 'docs/spec/gaia-design-language.mdx: no glow').toEqual([]);
+    });
+
+    // "No gradient-filled panels" is the line next to "no glow", and until now
+    // only the website enforced it -- which is how the install progress bar
+    // kept an animated gradient shimmer through a palette migration.
+    //
+    // A gradient in `mask-image` paints nothing: it is an alpha ramp, used to
+    // fade an overflowing label instead of cutting it with an ellipsis. The
+    // website guard carries the same exemption for the same reason.
+    const MASK = /(?:^|[;{\s])(?:-webkit-)?mask(?:-image)?\s*:/;
+
+    it('fills no panel with a gradient', () => {
+        const offenders: string[] = [];
+        for (const [path, source] of Object.entries(PAINTED)) {
+            source
+                .replace(/\/\*[\s\S]*?\*\//g, '')
+                .split(/\r?\n/)
+                .forEach((line: string, i: number) => {
+                    if (MASK.test(line)) return;
+                    if (/(?:linear|radial|conic)-gradient\(/.test(line))
+                        offenders.push(`${path}:${i + 1}  ${line.trim()}`);
+                });
+        }
+        expect(offenders, 'use a raised-surface token plus a border').toEqual([]);
     });
 });
