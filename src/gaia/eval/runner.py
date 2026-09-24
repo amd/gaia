@@ -21,7 +21,9 @@ import functools
 import json
 import logging
 import os
+import re
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -50,6 +52,67 @@ RESULTS_DIR = EVAL_DIR / "results"
 MCP_CONFIG = EVAL_DIR / "mcp-config.json"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
+
+# ── MCP interpreter resolution ────────────────────────────────────────────
+#
+# ``mcp-config.json`` is a template: hosts with ``python3`` but no bare
+# ``python`` (macOS, most Linux distros) would ENOENT the server, and the
+# scenario scores INFRA_ERROR rather than naming the cause. ``sys.executable``
+# is the one Python guaranteed to exist *and* to have ``gaia`` importable.
+_PYTHON_COMMAND_RE = re.compile(r"python[0-9.]*(\.exe)?$", re.IGNORECASE)
+
+
+def _is_python_command(command: str) -> bool:
+    """True if ``command`` names a generic Python interpreter to be resolved."""
+    return bool(_PYTHON_COMMAND_RE.fullmatch(Path(command).name))
+
+
+def _resolve_mcp_command(command: str) -> str:
+    """Map a generic interpreter name onto the running interpreter."""
+    return sys.executable if _is_python_command(command) else command
+
+
+def load_mcp_config_template() -> dict:
+    """Read the tracked MCP config template.
+
+    Raises with context rather than returning a partial config — a malformed
+    template means every scenario would lose its tools.
+    """
+    try:
+        return json.loads(MCP_CONFIG.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise OSError(f"Cannot read MCP config template at {MCP_CONFIG}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"MCP config template at {MCP_CONFIG} is not valid JSON: {e}"
+        ) from e
+
+
+def resolve_mcp_config(run_dir) -> Path:
+    """Write a runnable copy of the MCP config into ``run_dir``; return its path.
+
+    The tracked template is never modified; the resolved copy ships with the
+    run's artifacts. The path is absolute because ``claude -p`` runs from
+    ``REPO_ROOT``, not the caller's cwd.
+    """
+    config = load_mcp_config_template()
+    for name, server in (config.get("mcpServers") or {}).items():
+        command = server.get("command")
+        if isinstance(command, str):
+            server["command"] = _resolve_mcp_command(command)
+            if server["command"] != command:
+                logger.debug(
+                    "MCP server %r: resolved command %r -> %r",
+                    name,
+                    command,
+                    server["command"],
+                )
+
+    resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return resolved
+
 
 # ── Single-runner lock ────────────────────────────────────────────────────
 #
@@ -233,6 +296,124 @@ _STARTUP_OVERHEAD_S = (
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
 
+def _resolve_scenario_agent_type(scenario_data: dict, cli_agent_type):
+    """Return the agent a scenario asks for: its own ``agent_type:`` wins."""
+    return scenario_data.get("agent_type") or cli_agent_type
+
+
+def _canonical_agent_type(value):
+    """Resolve legacy aliases so ``doc-lite`` and ``doc`` compare equal.
+
+    Alias resolution alone — no registry discovery, which would need the hub
+    wheels installed in whatever process reads a result back.
+    """
+    if not value:
+        return None
+    from gaia.agents.registry import AgentRegistry
+
+    return AgentRegistry().canonical_id(value)
+
+
+def _read_session_agent_type(backend_url: str, session_id: str, timeout: float = 15.0):
+    """Return the ``agent_type`` the backend stored for *session_id*.
+
+    Raises on any transport or parse failure — a provenance check that guesses
+    is worth nothing.
+    """
+    import requests  # local import — only needed when a scenario actually runs
+
+    url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json().get("agent_type")
+
+
+# Statuses meaning the scenario produced NO measurement, as distinct from
+# "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
+# death scores 0.0 (or null), which is indistinguishable from a model that
+# answered badly, so comparing the two reports infrastructure as a regression.
+# BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
+# integrity gate also counts blocked/skipped outcomes as incomplete.
+_NO_MEASUREMENT_STATUSES = frozenset(
+    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
+)
+
+
+def _stamp_agent_provenance(
+    result: dict,
+    scenario_data: dict,
+    cli_agent_type,
+    backend_url: str,
+    read_session_agent_type=_read_session_agent_type,
+) -> None:
+    """Record requested vs observed agent, failing the scenario on a mismatch.
+
+    The runner asks for an agent in prompt prose, so a driver that drops the
+    kwarg runs the backend default while the result still claims the requested
+    id (#4069). Over HTTP a dropped kwarg reads back as the string ``"chat"``,
+    never ``None`` — so a scenario legitimately requesting ``chat`` is the one
+    case this cannot tell apart.
+
+    Two rules, and they are not the same severity. A **mismatch** is always
+    fatal: the score belongs to an agent nobody asked for. Being **unable to
+    verify** only discards a score, so it downgrades a PASS/FAIL and leaves
+    every other status intact. Nothing is checked when no agent was requested —
+    the backend default is the right answer by definition.
+    """
+    requested = _resolve_scenario_agent_type(scenario_data, cli_agent_type)
+    result["agent_type_requested"] = requested
+    result.setdefault("agent_type_observed", None)
+
+    if not requested:
+        return
+
+    # A scenario that never produced a measurement never got a session either.
+    if result.get("status") in _NO_MEASUREMENT_STATUSES:
+        return
+
+    scenario_id = result.get("scenario_id", scenario_data.get("id", "<unknown>"))
+
+    def _unverifiable(reason: str) -> None:
+        """Discard a score that cannot be attributed; keep any other status."""
+        message = (
+            f"{scenario_id}: requested agent_type '{requested}' but {reason}, so "
+            "the agent that answered cannot be verified."
+        )
+        if result.get("status") in ("PASS", "FAIL"):
+            result["status"] = "INFRA_ERROR"
+            result["error"] = message
+        else:
+            result.setdefault("provenance_warning", []).append(message)
+        print(f"[WARN] {message}", file=sys.stderr)
+
+    session_id = result.get("session_id")
+    if not session_id:
+        _unverifiable(
+            "the eval driver returned no session_id (it must return the one "
+            "create_session gave it in Phase 1)"
+        )
+        return
+
+    try:
+        observed = read_session_agent_type(backend_url, session_id)
+    except Exception as e:  # transport, HTTP status, or malformed body
+        _unverifiable(
+            f"session {session_id} could not be read back from {backend_url} "
+            f"({e}); check the Agent UI backend is still up at that URL"
+        )
+        return
+
+    result["agent_type_observed"] = observed
+    if _canonical_agent_type(observed) != _canonical_agent_type(requested):
+        result["status"] = "INFRA_ERROR"
+        result["error"] = (
+            f"{scenario_id}: requested agent_type '{requested}' but session "
+            f"{session_id} ran '{observed}'. The eval driver dropped the "
+            "agent_type kwarg on create_session; the score measures the wrong "
+            "agent and is discarded."
+        )
+
+
 def _compute_effective_timeout(base_timeout: int, scenario_data: dict) -> int:
     """Return per-scenario timeout covering startup overhead + turns + docs."""
     num_turns = len(scenario_data.get("turns", []))
@@ -348,7 +529,9 @@ def _documents_exist(scenario_data: dict) -> bool:
     return True
 
 
-def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
+def find_scenarios(
+    scenario_id=None, category=None, extra_dirs=None, tags=None, exclude_tags=None
+):
     """Find scenario YAML files matching filters.
 
     Args:
@@ -358,6 +541,8 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
             Scenarios from extra_dirs override built-in scenarios with the same ID.
         tags: List of tags to filter by. If specified, only scenarios whose ``tags``
             field contains at least one of these tags are returned (OR logic).
+        exclude_tags: List of tags to exclude. A scenario carrying ANY of these
+            tags is dropped, after the include filters are applied.
 
     Returns list of (path, data) tuples. Raises RuntimeError if any YAML is
     unparseable or fails schema validation.
@@ -416,6 +601,8 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
             scenario_tags = set(data.get("tags", []))
             if not scenario_tags.intersection(tags):
                 continue
+        if exclude_tags and set(data.get("tags", [])).intersection(exclude_tags):
+            continue
         scenarios.append((path, data))
     return scenarios
 
@@ -534,9 +721,12 @@ Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
 Do NOT call delete_session. Leave the session intact so it can be reviewed in the Agent UI after the eval completes.
 
 ### Phase 6: Return result
-Return a single JSON object to stdout with this structure:
+Return a single JSON object to stdout with this structure.
+`session_id` MUST be the id returned by create_session in Phase 1 — the runner
+reads that session back to verify which agent actually answered.
 {{
   "scenario_id": "...",
+  "session_id": "...",
   "status": "PASS|FAIL|BLOCKED_BY_ARCHITECTURE|INFRA_ERROR|SETUP_ERROR|TIMEOUT|ERRORED",
   "overall_score": 0-10,
   "turns": [
@@ -586,16 +776,6 @@ _SCORE_WEIGHTS = {
 
 # Significant score drop within the same pass/fail status warrants a warning
 _SCORE_REGRESSION_THRESHOLD = 2.0
-
-# Statuses meaning the scenario produced NO measurement, as distinct from
-# "measured and failed" — FAIL is a legitimate, comparable outcome. A harness
-# death scores 0.0 (or null), which is indistinguishable from a model that
-# answered badly, so comparing the two reports infrastructure as a regression.
-# BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
-# integrity gate also counts blocked/skipped outcomes as incomplete.
-_NO_MEASUREMENT_STATUSES = frozenset(
-    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
-)
 
 
 @functools.lru_cache(maxsize=1)
@@ -687,14 +867,37 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
         if isinstance(flags, list):
             all_flags.update(flags)
 
+    # Tool calls come from the judge's observed agent_tools, which is recorded
+    # for every turn whether or not the backend reported inference stats — so
+    # this is available even when performance is flagged no_stats.
+    tool_calls_per_turn = [
+        len(turn.get("agent_tools") or []) for turn in result.get("turns", [])
+    ]
+    total_tool_calls = sum(tool_calls_per_turn)
+
     if tps_values or ttft_values or total_input or total_output:
         avg_tps = sum(tps_values) / len(tps_values) if tps_values else None
         avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else None
         result["performance_summary"] = {
             "avg_tokens_per_second": round(avg_tps, 1) if avg_tps else None,
+            # min/max alongside the average: an average hides the slow turn,
+            # and the slow turn is the one a user notices.
+            "min_tokens_per_second": round(min(tps_values), 1) if tps_values else None,
+            "max_tokens_per_second": round(max(tps_values), 1) if tps_values else None,
             "avg_time_to_first_token": round(avg_ttft, 3) if avg_ttft else None,
+            "min_time_to_first_token": (
+                round(min(ttft_values), 3) if ttft_values else None
+            ),
+            "max_time_to_first_token": (
+                round(max(ttft_values), 3) if ttft_values else None
+            ),
             "total_input_tokens": total_input,
             "total_output_tokens": total_output,
+            "turns_measured": len(tps_values),
+            "total_tool_calls": total_tool_calls,
+            "max_tool_calls_in_a_turn": (
+                max(tool_calls_per_turn) if tool_calls_per_turn else None
+            ),
             "flags": sorted(all_flags),
         }
         if avg_tps:
@@ -704,7 +907,126 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
                 file=sys.stderr,
             )
     else:
+        # Stays None with no inference stats — deliberately. scorecard.py counts
+        # any dict here toward `scenarios_with_data`, so emitting a stats-less
+        # summary would inflate that number and overstate what was measured.
+        # Tool usage is reported separately below instead.
         result["performance_summary"] = None
+
+    # Tool usage is measured from the judge's observed calls, so it is real even
+    # when the backend reported no inference stats — kept out of
+    # performance_summary so it can never be mistaken for stats coverage.
+    if tool_calls_per_turn:
+        result["tool_usage"] = {
+            "total_tool_calls": total_tool_calls,
+            "max_tool_calls_in_a_turn": max(tool_calls_per_turn),
+            "turns": len(tool_calls_per_turn),
+        }
+
+
+#: A scenario's result is judged when the judge actually scored it; infra
+#: failures say nothing about quality and must not count toward a pass rate.
+_STABILITY_JUDGED = {"PASS", "FAIL", "BLOCKED_BY_ARCHITECTURE"}
+
+
+def summarize_attempts(attempts: list) -> dict:
+    """Fold N runs of one scenario into a single result carrying stability.
+
+    The representative result is the WORST judged attempt, so a scenario that
+    fails intermittently never reports as a clean pass. ``stability`` is what
+    n=1 cannot express:
+
+    ``stable-pass`` every judged attempt passed; ``flaky`` some did and some did
+    not — the case that silently looks like either a pass or a hard failure at
+    n=1; ``stable-fail`` none passed.
+    """
+    if not attempts:
+        raise ValueError("summarize_attempts requires at least one attempt")
+    if len(attempts) == 1:
+        return attempts[0]
+
+    judged = [a for a in attempts if a.get("status") in _STABILITY_JUDGED]
+    passes = [a for a in judged if a.get("status") == "PASS"]
+    # Worst-first: a FAIL outranks a PASS as the representative outcome.
+    representative = min(
+        judged or attempts,
+        key=lambda a: (a.get("status") == "PASS", a.get("overall_score") or 0.0),
+    )
+    result = dict(representative)
+
+    scores = [
+        a["overall_score"]
+        for a in judged
+        if isinstance(a.get("overall_score"), (int, float))
+    ]
+    if judged:
+        pass_rate = len(passes) / len(judged)
+        stability = (
+            "stable-pass"
+            if len(passes) == len(judged)
+            else "stable-fail" if not passes else "flaky"
+        )
+    else:
+        pass_rate = None
+        stability = None
+
+    result["stability"] = {
+        "runs": len(attempts),
+        "judged": len(judged),
+        "pass_count": len(passes),
+        "pass_rate": round(pass_rate, 4) if pass_rate is not None else None,
+        "stability": stability,
+        "score_avg": round(statistics.fmean(scores), 3) if scores else None,
+        "score_min": round(min(scores), 3) if scores else None,
+        "score_max": round(max(scores), 3) if scores else None,
+        # stdev needs 2+ points; a single judged attempt has no spread to report.
+        "score_stdev": round(statistics.stdev(scores), 3) if len(scores) > 1 else None,
+        "statuses": [a.get("status") for a in attempts],
+    }
+    return result
+
+
+def _check_mcp_server_commands() -> list:
+    """Verify every MCP server in the config has a runnable command.
+
+    Without this, a missing interpreter surfaces mid-run as a scenario with no
+    callable tools — scored ``INFRA_ERROR 0.0/10``, which reads like an agent
+    failure rather than a broken host.
+    """
+    errors = []
+    try:
+        config = load_mcp_config_template()
+    except (OSError, ValueError) as e:
+        return [str(e)]
+
+    for name, server in (config.get("mcpServers") or {}).items():
+        command = (server or {}).get("command")
+        if not isinstance(command, str) or not command:
+            errors.append(
+                f"MCP server '{name}' in {MCP_CONFIG} has no 'command' — "
+                f"add one naming the executable that serves it."
+            )
+            continue
+
+        resolved = _resolve_mcp_command(command)
+        found = shutil.which(resolved)
+        if not found and Path(resolved).is_file() and os.access(resolved, os.X_OK):
+            found = resolved
+        if not found:
+            hint = (
+                f"the eval is running under {sys.executable}, which is missing or "
+                f"not executable"
+                if resolved != command
+                else f"install it or correct 'command' in {MCP_CONFIG}"
+            )
+            errors.append(
+                f"MCP server '{name}' command not executable: {resolved!r} "
+                f"(from 'command': {command!r} in {MCP_CONFIG}) — {hint}. "
+                f"Without it no eval tools are callable and every scenario "
+                f"scores INFRA_ERROR."
+            )
+
+    return errors
 
 
 def preflight_check(backend_url, scenarios=None):
@@ -741,6 +1063,8 @@ def preflight_check(backend_url, scenarios=None):
     # Check MCP config
     if not MCP_CONFIG.exists():
         errors.append(f"MCP config not found: {MCP_CONFIG}")
+    else:
+        errors.extend(_check_mcp_server_commands())
 
     # Check claude CLI
     claude_bin = shutil.which("claude")
@@ -917,6 +1241,7 @@ def run_scenario_subprocess(
     keep_sessions=False,
     extra_corpus_dirs=None,
     agent_type=None,
+    attempt=None,
 ):
     """Invoke claude -p for one scenario. Returns parsed result dict."""
     scenario_id = scenario_data["id"]
@@ -936,6 +1261,11 @@ def run_scenario_subprocess(
             "required": ["scenario_id", "status", "overall_score", "turns"],
             "properties": {
                 "scenario_id": {"type": "string"},
+                # Not `required`: a driver that aborts before create_session
+                # (Phase 1 step 1) has no id to give. Whether its absence is
+                # fatal depends on the scenario, which a static schema cannot
+                # see, so _stamp_agent_provenance owns that rule.
+                "session_id": {"type": ["string", "null"]},
                 "status": {"type": "string"},
                 "overall_score": {"type": ["number", "null"]},
                 "turns": {"type": "array"},
@@ -968,7 +1298,7 @@ def run_scenario_subprocess(
             "--json-schema",
             result_schema,
             "--mcp-config",
-            str(MCP_CONFIG),
+            str(resolve_mcp_config(run_dir)),
             "--strict-mcp-config",
             # No built-in tools: the driver works only through the agent UI's
             # MCP tools, and holds the judge's credentials.
@@ -1128,6 +1458,9 @@ def run_scenario_subprocess(
     # Inject category from scenario YAML — eval agent doesn't include this field
     result.setdefault("category", scenario_data.get("category", "unknown"))
 
+    # Provenance: which agent answered, not which one the runner asked for.
+    _stamp_agent_provenance(result, scenario_data, agent_type, backend_url)
+
     # Trust dimension scores, not LLM arithmetic — overwrite per-turn overall_score
     # with the recomputed weighted sum.  Log when the LLM's value differed by > 0.25.
     for turn in result.get("turns", []):
@@ -1275,10 +1608,17 @@ def run_scenario_subprocess(
             file=sys.stderr,
         )
 
-    # Write trace file
+    # Write trace file. With --iterations every attempt gets its OWN trace:
+    # writing them all to <sid>.json would leave only the last attempt on disk,
+    # so a `flaky` verdict could never be investigated, and resume would reload
+    # a single attempt in place of the summarized result and silently change the
+    # scorecard. The summarized <sid>.json is written by the caller.
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(exist_ok=True)
-    trace_path = traces_dir / f"{scenario_id}.json"
+    if attempt is not None:
+        trace_path = traces_dir / f"{scenario_id}.attempt{attempt}.json"
+    else:
+        trace_path = traces_dir / f"{scenario_id}.json"
     trace_path.write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -1769,8 +2109,10 @@ class AgentEvalRunner:
         extra_scenario_dirs=None,
         extra_corpus_dirs=None,
         tags=None,
+        exclude_tags=None,
         output_format=None,
         agent_type=None,
+        iterations=1,
     ):
         self.backend_url = backend_url
         self.model = model
@@ -1780,6 +2122,12 @@ class AgentEvalRunner:
         self.extra_scenario_dirs = extra_scenario_dirs or []
         self.extra_corpus_dirs = extra_corpus_dirs or []
         self.tags = tags or []
+        self.exclude_tags = exclude_tags or []
+        if iterations is None:
+            iterations = 1
+        if int(iterations) < 1:
+            raise ValueError(f"iterations must be >= 1, got {iterations!r}")
+        self.iterations = int(iterations)
         self.output_format = output_format
         self.agent_type = agent_type
 
@@ -1855,11 +2203,14 @@ class AgentEvalRunner:
             category=category,
             extra_dirs=self.extra_scenario_dirs,
             tags=self.tags if self.tags else None,
+            exclude_tags=self.exclude_tags if self.exclude_tags else None,
         )
         if not scenarios:
             filter_desc = f"id={scenario_id}, category={category}"
             if self.tags:
                 filter_desc += f", tags={self.tags}"
+            if self.exclude_tags:
+                filter_desc += f", exclude_tags={self.exclude_tags}"
             print(
                 f"[ERROR] No scenarios found ({filter_desc})",
                 file=sys.stderr,
@@ -1924,6 +2275,10 @@ class AgentEvalRunner:
                 result = {
                     "scenario_id": sid,
                     "category": scenario_data.get("category", "unknown"),
+                    "agent_type_requested": _resolve_scenario_agent_type(
+                        scenario_data, self.agent_type
+                    ),
+                    "agent_type_observed": None,
                     "status": "SKIPPED_NO_DOCUMENT",
                     "overall_score": None,
                     "turns": [],
@@ -1944,22 +2299,43 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
-            # Per-scenario agent_type from YAML overrides CLI --agent-type
-            scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
-            result = run_scenario_subprocess(
-                scenario_path,
-                scenario_data,
-                run_dir,
-                self.backend_url,
-                self.model,
-                self.budget,
-                effective_timeout,
-                keep_sessions=keep_sessions,
-                extra_corpus_dirs=(
-                    self.extra_corpus_dirs if self.extra_corpus_dirs else None
-                ),
-                agent_type=scenario_agent_type,
+            scenario_agent_type = _resolve_scenario_agent_type(
+                scenario_data, self.agent_type
             )
+            # Repeat the scenario N times so a flaky result is distinguishable
+            # from a hard failure — at N=1 they are indistinguishable.
+            attempts = []
+            for attempt_idx in range(1, self.iterations + 1):
+                if self.iterations > 1:
+                    print(
+                        f"[RUN] {sid} — iteration {attempt_idx}/{self.iterations}",
+                        flush=True,
+                    )
+                attempts.append(
+                    run_scenario_subprocess(
+                        scenario_path,
+                        scenario_data,
+                        run_dir,
+                        self.backend_url,
+                        self.model,
+                        self.budget,
+                        effective_timeout,
+                        keep_sessions=keep_sessions,
+                        extra_corpus_dirs=(
+                            self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                        ),
+                        agent_type=scenario_agent_type,
+                        attempt=(attempt_idx if self.iterations > 1 else None),
+                    )
+                )
+            result = summarize_attempts(attempts)
+            if self.iterations > 1:
+                # The summarized result is what resume must reload — never one
+                # attempt, which would drop `stability` and could flip status.
+                (run_dir / "traces" / f"{sid}.json").write_text(
+                    json.dumps(result, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
             results.append(result)
 
             completed[sid] = result.get("status")
@@ -2041,7 +2417,9 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
-                scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
+                scenario_agent_type = _resolve_scenario_agent_type(
+                    scenario_data, self.agent_type
+                )
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
@@ -2250,7 +2628,6 @@ def capture_session(session_id, output_dir=None, db_path=None):
     Returns:
         Path to the written YAML file
     """
-    import re
     import sqlite3
 
     db = Path(db_path) if db_path else GAIA_DB_PATH

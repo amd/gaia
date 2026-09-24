@@ -232,13 +232,6 @@ class ShellToolsMixin:
                 "wait_time_seconds": float,  # Time to wait
                 "timed_out": bool  # If command timed out
             }
-
-        Allowed Commands:
-            File operations: ls, cat, head, tail, grep, find
-            File info: file, stat, du, df
-            System info: whoami, hostname, uname, date
-            Git (read-only): status, log, show, diff, branch
-            Path utils: which, basename, dirname
         """
         pass
 ```
@@ -301,21 +294,43 @@ if cmd_base not in ALLOWED_COMMANDS:
 
 ### Git Command Filtering
 
+Git's global options sit *before* the subcommand, so the subcommand is never
+simply `cmd_parts[1]`: in `git -C /repo status` that token is `-C`. The walk
+steps over the known global flags to reach the real subcommand, and refuses any
+flag it does not recognize rather than skipping it — an unlisted value-taking
+flag would shift the subcommand index and let an unsafe subcommand through.
+
 ```python
+SAFE_GIT_COMMANDS = {
+    "status", "log", "show", "diff", "branch",
+    "remote", "ls-files", "ls-tree", "describe",
+    "rev-parse", "help"
+}
+
 if cmd_base == "git":
-    safe_git_commands = {
-        "status", "log", "show", "diff", "branch",
-        "remote", "ls-files", "ls-tree", "describe",
-        "rev-parse", "config", "help"
-    }
-    git_subcmd = cmd_parts[1].lower()
-    if git_subcmd not in safe_git_commands:
+    git_subcmd, error_message = _resolve_git_subcommand(cmd_parts)
+    if error_message is not None:
+        return {"status": "error", "error": error_message, "has_errors": True}
+    if git_subcmd not in SAFE_GIT_COMMANDS | GIT_TERMINAL_FLAGS:
         return {
             "status": "error",
             "error": f"Git command '{git_subcmd}' is not allowed",
-            "allowed_git_commands": list(safe_git_commands)
+            "allowed_git_commands": sorted(SAFE_GIT_COMMANDS)
         }
 ```
+
+Global-flag classes (`_resolve_git_subcommand` in `shell_tools.py`):
+
+| Class | Members | Handling |
+|-------|---------|----------|
+| `GIT_GLOBAL_FLAGS_WITH_VALUE` | `-C`, `--git-dir`, `--work-tree`, `--namespace` | Skipped with their value (`--opt=v` or `--opt v`); the paths then get the same allowed-paths check as `working_directory` |
+| `GIT_GLOBAL_FLAGS_NO_VALUE` | `-P`, `--no-pager`, `--bare`, `--literal-pathspecs`, … | Skipped |
+| `GIT_TERMINAL_FLAGS` | `--version`, `--help`, `-h`, `--man-path`, … | Are the whole command; nothing follows |
+| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Always refused — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks |
+
+Note `config` is **not** in `SAFE_GIT_COMMANDS`: `git config` writes repo and
+global configuration, including values (`core.pager`, `alias.*`) that execute
+commands.
 
 ### Path Traversal Prevention
 

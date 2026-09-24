@@ -226,18 +226,31 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
 			m.messages = append(m.messages, Message{
-				Role:      RoleAssistant,
-				Content:   content,
-				Rendered:  components.RenderMarkdown(content),
-				Duration:  time.Since(m.queryStart),
-				TTFT:      ttft,
-				TokPerS:   usage.TokPerS,
-				Steps:     usage.Steps,
-				ToolsUsed: usage.ToolsUsed,
-				Tokens:    usage.Tokens,
-				Metrics:   usage.Metrics,
+				Role:         RoleAssistant,
+				Content:      content,
+				Rendered:     components.RenderMarkdown(content),
+				Duration:     time.Since(m.queryStart),
+				TTFT:         ttft,
+				TokPerS:      usage.TokPerS,
+				InputTokens:  usage.InputTokens,
+				CachedTokens: usage.CachedTokens,
+				Steps:        usage.Steps,
+				ToolsUsed:    usage.ToolsUsed,
+				Tokens:       usage.Tokens,
+				Metrics:      usage.Metrics,
 			})
 		}
+		// One ledger entry per turn, from what the backend reported. A turn
+		// with no token counts still counts as a turn — see sessionCost.
+		m.cost.add(turnCost{
+			duration:  time.Since(m.queryStart),
+			steps:     usage.Steps,
+			tools:     usage.ToolsUsed,
+			inTok:     usage.InputTokens,
+			outTok:    usage.Tokens,
+			cachedTok: usage.CachedTokens,
+			measured:  usage.InputTokens > 0 || usage.Tokens > 0,
+		})
 		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
 		m.drainPendingPreScan()
 		m.streaming = false
@@ -375,8 +388,20 @@ func (m *ChatModel) resolveConfirmationOnTurnEnd() {
 // canRespondToPermission reports whether this transport can carry a decision
 // back to an agent that is still parked on the prompt.
 func (m ChatModel) canRespondToPermission() bool {
-	_, ok := m.client.(client.ToolPermissionResponder)
-	return ok
+	if _, ok := m.client.(client.ToolPermissionResponder); !ok {
+		return false
+	}
+	return livePermissionsAvailable(m.client)
+}
+
+// livePermissionsAvailable asks a transport whose support depends on its peer —
+// the daemon relay reaches agents that do and do not serve the routes. One that
+// does not report is taken as able: the stdio child always has its channel.
+func livePermissionsAvailable(c client.AgentClient) bool {
+	if r, ok := c.(client.LivePermissionReporter); ok {
+		return r.SupportsLivePermissions()
+	}
+	return true
 }
 
 // resolveConfirmationDecision records a confirmation's outcome — from a

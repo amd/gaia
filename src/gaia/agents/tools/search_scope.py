@@ -94,10 +94,12 @@ def search_roots(host: Any) -> List[Path]:
     The fallback is only for library use with no sandbox declared at all.
     """
     validator = path_validator_of(host)
+    # The scratch dir often nests deeper than the project and would outrank it.
+    scratch_dir = getattr(validator, "scratch_dir", None)
     roots = [
         Path(root)
         for root in (getattr(validator, "allowed_paths", None) or [])
-        if Path(root).exists()
+        if Path(root).exists() and Path(root) != scratch_dir
     ]
     if not roots:
         return [Path.cwd().resolve()]

@@ -529,6 +529,31 @@ def _sum_conversation_tokens(
     return total_input, total_output
 
 
+def _sum_cached_tokens(conversation: List[Dict[str, Any]]) -> int:
+    """Prompt tokens the backend served from its own cache this turn.
+
+    Reported by a cloud-routed step (Fireworks puts it in
+    ``prompt_tokens_details.cached_tokens``); a local llama.cpp run reports
+    nothing and sums to 0, which is the truth there rather than a gap — the
+    prompt genuinely was not served from a provider-side cache.
+
+    Worth its own total because it is the one token class that is billed
+    differently, and because a turn whose prompt is mostly cache is a very
+    different cost from one that is not.
+    """
+    total = 0
+    for entry in conversation:
+        if entry.get("role") != "system" or not isinstance(entry.get("content"), dict):
+            continue
+        content = entry["content"]
+        if content.get("type") != "stats" or "performance_stats" not in content:
+            continue
+        stats = content["performance_stats"]
+        if isinstance(stats, dict):
+            total += _safe_number(stats.get("cached_tokens"))
+    return total
+
+
 def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
     """Turn's generation rate, from the backend's OWN per-call measurement.
 
@@ -918,6 +943,9 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Class-level so a subclass that never runs ``__init__`` still increments.
+    _turn_seq: int = 0
+
     # Dynamic tool loader (#1449): the sorted subset of tool names to surface
     # this turn, or ``None`` to render the full registry (legacy, byte-identical).
     # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
@@ -1171,7 +1199,7 @@ Do NOT wrap conversational replies in JSON.
 
         Args:
             use_claude: If True, uses Claude API (default: False)
-            use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
+            use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
@@ -1187,7 +1215,7 @@ Do NOT wrap conversational replies in JSON.
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
-            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
             min_context_size: Minimum context size required for this agent (default: 32768).
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
@@ -1202,8 +1230,12 @@ Do NOT wrap conversational replies in JSON.
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
 
-        Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
+        Note: Uses local LLM server by default unless use_claude is True.
         """
+        if use_chatgpt:
+            from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+            raise ValueError(REMOVED_PROVIDER_MESSAGE)
         self.device = device
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -1230,6 +1262,12 @@ Do NOT wrap conversational replies in JSON.
         self.debug = debug
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
+        if max_consecutive_repeats < 2:
+            raise ValueError(
+                f"max_consecutive_repeats must be at least 2, got "
+                f"{max_consecutive_repeats}: the guard counts the call being made, "
+                "so below 2 every tool call is a repeat of itself and none runs."
+            )
         self.max_consecutive_repeats = max_consecutive_repeats
         self._current_query: Optional[str] = (
             None  # Store current query for error context
@@ -1254,7 +1292,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
-        if not (use_claude or use_chatgpt or skip_lemonade):
+        if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
             from gaia.llm.lemonade_manager import LemonadeManager
 
@@ -1349,7 +1387,6 @@ Do NOT wrap conversational replies in JSON.
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
-            use_chatgpt=use_chatgpt,
             claude_model=claude_model,
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking
@@ -2220,7 +2257,24 @@ Do NOT wrap conversational replies in JSON.
         # A skill whose CLI is missing must not load and then improvise.
         policies = resolve_binary_policies(permissions, skill_name=skill.name)
 
-        registered = register_skill_tools(skill)
+        # Captured code is inert until `gaia skill promote` — instructions
+        # inject, tools.py is never imported (gaia.skills.capture).
+        from gaia.skills.capture import code_is_deferred
+
+        code_deferred = code_is_deferred(skill)
+        if code_deferred:
+            registered = {}
+            logger.warning(
+                "Skill '%s' is captured and its code is not yet trusted: %d "
+                "tool(s) (%s) deferred — instructions loaded. Run "
+                "'gaia skill promote %s' in a terminal to enable them.",
+                skill.name,
+                len(skill.gaia.tools),
+                ", ".join(skill.tool_names),
+                skill.name,
+            )
+        else:
+            registered = register_skill_tools(skill)
         try:
             if registered and self._instance_tools is not None:
                 self._instance_tools.update(registered)
@@ -2234,8 +2288,22 @@ Do NOT wrap conversational replies in JSON.
                         existing.append(requirement)
                 self.REQUIRED_CONNECTORS = existing
 
-            for policy in policies:
-                self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+            # A binary grant IS executable reach, so untrusted captured code
+            # must not get one either. An ALLOW-tier subcommand runs with no
+            # prompt because "loading the skill is the consent" — and a pasted
+            # or fetched skill is exactly the case where loading is not consent.
+            # `gaia skill promote` re-audits and reloads, which grants then.
+            if not code_deferred:
+                for policy in policies:
+                    self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+            elif policies:
+                logger.warning(
+                    "Skill '%s' is captured and untrusted: binary grant(s) %s "
+                    "withheld until 'gaia skill promote %s'.",
+                    skill.name,
+                    ", ".join(p.binary for p in policies),
+                    skill.name,
+                )
 
             self.loaded_skills[name] = skill
             self._note_skill_active(name)
@@ -4878,11 +4946,10 @@ Do NOT wrap conversational replies in JSON.
         Returns ``None`` for unrelated exceptions so the caller falls
         through to its normal generic copy.
         """
-        try:
-            from gaia.llm.providers.lemonade import LemonadeError
-            from gaia.ui._chat_helpers import _classify_chat_exception
-        except Exception:  # pylint: disable=broad-except
-            return None
+        from gaia.llm.providers.lemonade import (
+            LemonadeError,
+            classify_lemonade_exception,
+        )
 
         # 1. Direct match anywhere in the cause chain.
         cur: Optional[BaseException] = exc
@@ -4897,9 +4964,9 @@ Do NOT wrap conversational replies in JSON.
 
         # 2. String-based reclassification — covers the case where the typed
         # exception was stringified into a generic ``Exception`` by AgentSDK.
-        # ``_classify_chat_exception`` already does the timeout-vs-network
+        # ``classify_lemonade_exception`` already does the timeout-vs-network
         # split we need for #1030.
-        classified = _classify_chat_exception(exc)
+        classified = classify_lemonade_exception(exc)
         if classified is not None:
             msg = getattr(classified, "user_message", None)
             if msg:
@@ -4912,10 +4979,12 @@ Do NOT wrap conversational replies in JSON.
         Out of funds or suspended: no retry can succeed, so the turn ends as an
         error instead of an answer.
         """
-        from gaia.llm.providers.lemonade import LemonadeCloudAccountError
-        from gaia.ui._chat_helpers import _classify_chat_exception
+        from gaia.llm.providers.lemonade import (
+            LemonadeCloudAccountError,
+            classify_lemonade_exception,
+        )
 
-        classified = _classify_chat_exception(exc)
+        classified = classify_lemonade_exception(exc)
         if isinstance(classified, LemonadeCloudAccountError):
             return classified.user_message
         return None
@@ -5534,6 +5603,7 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+        self._turn_seq += 1
         self._begin_turn_provenance()
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
@@ -5585,6 +5655,8 @@ Do NOT wrap conversational replies in JSON.
         cancelled_by_console = False
         error_count = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
+        # Repeated calls already sent one correction; the next repeat ends the turn.
+        loop_corrected_calls: set = set()
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
@@ -6805,8 +6877,21 @@ Do NOT wrap conversational replies in JSON.
                         # ``result`` field so the helper sees actual tool
                         # results, not the wrapper dicts.
                         recent_results = [o.get("result") for o in previous_outputs]
+                        if current_call not in loop_corrected_calls:
+                            loop_corrected_calls.add(current_call)
+                            # Sent as this call's result so tool_call_id pairing holds.
+                            messages.append(
+                                self._create_tool_message(
+                                    tool_name,
+                                    self._loop_correction_result(
+                                        tool_name, consecutive_count - 1, recent_results
+                                    ),
+                                    tool_call_id=tool_call_id,
+                                )
+                            )
+                            continue
                         final_answer = self._build_loop_break_summary(
-                            tool_name, consecutive_count, recent_results
+                            tool_name, consecutive_count - 2, recent_results
                         )
                         self.console.print_repeated_tool_warning()
                         fanout_repeat_break = True
@@ -6815,6 +6900,11 @@ Do NOT wrap conversational replies in JSON.
                     # Execute
                     tool_result = self._execute_tool_timed(tool_name, tool_args)
                     self.console.stop_progress()
+                    if self._is_throttled_result(tool_result):
+                        # Never ran, so not a repeat. Bounded: the shell
+                        # limiter's windows drain within a few capped waits.
+                        tool_call_history.pop()
+                        self._wait_out_rate_limit(tool_result)
 
                     # Result-based dedup for query family tools
                     _QUERY_TOOLS = (
@@ -7025,11 +7115,25 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
+                    # Not ``step_results``: error recovery clears it before each retry.
+                    recent_results = [o.get("result") for o in previous_outputs]
+                    if current_call not in loop_corrected_calls:
+                        loop_corrected_calls.add(current_call)
+                        messages.append(
+                            self._create_tool_message(
+                                tool_name,
+                                self._loop_correction_result(
+                                    tool_name, consecutive_count - 1, recent_results
+                                ),
+                            )
+                        )
+                        continue
+
                     # Force a final answer if the same tool is called repeatedly.
                     # Branches on whether the recent calls were errors so we
                     # never claim success on a loop of failures.
                     final_answer = self._build_loop_break_summary(
-                        tool_name, consecutive_count, step_results
+                        tool_name, consecutive_count - 2, recent_results
                     )
 
                     self.console.print_repeated_tool_warning()
@@ -7040,6 +7144,11 @@ Do NOT wrap conversational replies in JSON.
 
                 # Stop progress indicator
                 self.console.stop_progress()
+                if self._is_throttled_result(tool_result):
+                    # Never ran, so not a repeat. Bounded: the shell limiter's
+                    # windows drain within a few capped waits.
+                    tool_call_history.pop()
+                    self._wait_out_rate_limit(tool_result)
 
                 # Issue #1023: record success/failure of capability tools so
                 # the verbose-failure override downstream fires only when the
@@ -7754,6 +7863,8 @@ Do NOT wrap conversational replies in JSON.
                     final_answer,
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
+                    input_tokens=_pre_input_tokens,
+                    cached_tokens=_sum_cached_tokens(conversation),
                     ttft_seconds=_query_ttft_seconds(conversation),
                     tok_per_s=_query_tok_per_s(conversation),
                 )
@@ -7919,30 +8030,133 @@ Do NOT wrap conversational replies in JSON.
             or result.get("return_code", 0) != 0
         )
 
+    _RATE_LIMIT_WAIT_CAP_S = 15.0
+    _LOOP_CONNECTION_RE = re.compile(
+        r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
+        r"|unreachable|could not connect|failed to establish|max retries exceeded"
+        r"|name or service not known|getaddrinfo|connect(?:ion)? timed out"
+        # Windows words a refused connection as "no connection could be made
+        # because the target machine actively refused it" (WinError 10061) —
+        # without these a dead service reads as a permissions problem.
+        r"|no connection could be made|actively refused|connection attempt failed"
+        r"|winerror 1006\d",
+        re.IGNORECASE,
+    )
+    _LOOP_NOT_PERMITTED_RE = re.compile(
+        r"not allowed|not permitted|not in (?:the )?allowed|access denied"
+        # "blocked" only as a verdict, not as a word in unrelated output
+        # ("unblocked", "blocked ports", "IO blocked").
+        r"|permission denied|\bblocked by\b|\b(?:is|are|was|were|been) blocked\b"
+        r"|\bedit blocked\b|refused (?:by|to)"
+        r"|refus(?:ed|es) (?:the )?(?:request|access|operation)",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _is_throttled_result(result: Any) -> bool:
+        """True when the tool refused the call for rate limiting — it never ran."""
+        return isinstance(result, dict) and result.get("rate_limited") is True
+
+    def _wait_out_rate_limit(self, result: Dict[str, Any]) -> None:
+        """Sleep the throttle's reported wait (capped) so the retry can run."""
+        try:
+            seconds = float(result.get("wait_time_seconds") or 0.0)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Rate-limited result has a non-numeric wait_time_seconds: %r",
+                result.get("wait_time_seconds"),
+            )
+            return
+        seconds = min(max(seconds, 0.0), self._RATE_LIMIT_WAIT_CAP_S)
+        if seconds <= 0:
+            return
+        logger.info("Tool call was rate-limited; waiting %.1fs", seconds)
+        cancel = getattr(self, "_cancel_event", None)
+        if cancel is not None:
+            cancel.wait(seconds)
+        else:
+            time.sleep(seconds)
+
+    @staticmethod
+    def _loop_error_brief(result: Any) -> str:
+        """The error a failed result reports: ``error``, else last stderr line."""
+        if isinstance(result, dict):
+            err = result.get("error")
+            if err:
+                return str(err).strip()
+            stderr = result.get("stderr")
+            if isinstance(stderr, str):
+                lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+                if lines:
+                    return lines[-1]
+            return_code = result.get("return_code")
+            if return_code not in (None, 0):
+                return f"it exited with return code {return_code}"
+        return "the tool returned an error"
+
+    def _loop_correction_result(
+        self, tool_name: str, executed_count: int, recent_results: list
+    ) -> Dict[str, Any]:
+        """The tool result sent in place of a repeated call, asking for a new approach."""
+        last = recent_results[-1] if recent_results else None
+        if Agent._is_error_result(last):
+            brief = " ".join(self._loop_error_brief(last).split())
+            if len(brief) > 200:
+                brief = brief[:197] + "..."
+            outcome = f"the same error ({brief})"
+        else:
+            outcome = "no new progress"
+        correction = (
+            f"You have called {tool_name} {executed_count} times with the same "
+            f"arguments and it returned {outcome}. Do not repeat it — try a "
+            "different approach, or give your final answer."
+        )
+        logger.warning("Loop guard correction: %s", correction)
+        return {**NOT_EXECUTED, "status": "error", "error": correction}
+
     def _build_loop_break_summary(
         self,
         tool_name: str,
-        consecutive_count: int,
-        step_results: list,
+        executed_count: int,
+        recent_results: list,
     ) -> str:
-        """Final-answer text when the loop breaks on repeats; honest on errors."""
-        last = step_results[-1] if step_results else None
-        if Agent._is_error_result(last):
-            err = (last or {}).get("error") or "the tool returned an error"
+        """Final-answer text when the loop breaks on repeats; names the real cause."""
+        last = recent_results[-1] if recent_results else None
+        denied = isinstance(last, dict) and last.get("status") == "denied"
+        if not (denied or Agent._is_error_result(last)):
+            # A loop break is evidence of neither outcome: the work may be done
+            # (the model kept re-verifying it) or never started (it had no tool
+            # for the job). Say which is unknown instead of claiming either,
+            # which is what "Task completed with ..." used to do here (#3750).
             return (
-                f"I tried calling `{tool_name}` {consecutive_count} times "
-                f"and it kept failing: {err}\n\n"
+                f"I stopped after calling `{tool_name}` {executed_count} "
+                "times in a row without making progress, so I can't confirm "
+                "the task is finished. Please check the result before relying "
+                "on it, or rephrase the request."
+            )
+        err = self._loop_error_brief(last)
+        attempts = f"I tried calling `{tool_name}` {executed_count} times"
+        if self._is_throttled_result(last):
+            return (
+                f"{attempts}, but it was rate-limited and did not run: {err}\n\n"
+                "Wait a moment and ask again, or ask for a different approach."
+            )
+        if self._LOOP_CONNECTION_RE.search(err):
+            return (
+                f"{attempts} and it kept failing: {err}\n\n"
                 "I couldn't recover from this — please rephrase the request "
                 "or check that the underlying service is running."
             )
-        # A loop break is evidence of neither outcome: the work may be done
-        # (the model kept re-verifying it) or never started (it had no tool for
-        # the job). Say which is unknown instead of claiming either (#3750).
+        if denied or self._LOOP_NOT_PERMITTED_RE.search(err):
+            return (
+                f"{attempts}, but it is not permitted here: {err}\n\n"
+                "Try a different approach — for example, split it into separate "
+                "steps or use another tool."
+            )
         return (
-            f"I stopped after calling `{tool_name}` {consecutive_count} times "
-            "in a row without making progress, so I can't confirm the task is "
-            "finished. Please check the result before relying on it, or "
-            "rephrase the request."
+            f"{attempts} and it kept failing: {err}\n\n"
+            "I couldn't recover from this — please rephrase the request "
+            "or try a different approach."
         )
 
     def _dedup_mutation_call(

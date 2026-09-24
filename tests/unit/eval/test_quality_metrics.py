@@ -132,6 +132,24 @@ class TestComputeCost:
             == 2.0
         )
 
+    def test_cached_input_bills_at_the_cached_rate(self):
+        # glm-5p3: $1.40/Mtok input, $0.26/Mtok cached
+        usd = compute_cost(
+            1_000_000, 0, model="fireworks.glm-5p3", cached_input_tokens=750_000
+        )
+        assert usd == pytest.approx(0.25 * 1.40 + 0.75 * 0.26)
+
+    def test_overrides_without_a_cached_rate_bill_cached_at_the_input_rate(self):
+        usd = compute_cost(
+            1_000_000,
+            0,
+            model="fireworks.glm-5p3",
+            cached_input_tokens=750_000,
+            cost_per_1m_input=2.0,
+            cost_per_1m_output=8.0,
+        )
+        assert usd == 2.0
+
 
 # Needs-attention axis used across export/gate tests: urgent+actionable positive.
 _ATTENTION = {"urgent", "actionable"}
