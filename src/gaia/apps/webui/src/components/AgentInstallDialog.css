@@ -295,10 +295,6 @@
         animation: none;
     }
 
-    .install-progress-fill::after {
-        animation: none;
-    }
-
     .install-progress-fill {
         transition: none;
     }

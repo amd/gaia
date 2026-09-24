@@ -1712,11 +1712,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 )}
 
                 {messages.map((msg, idx) => {
-                    // Show a solid terminal cursor on the last assistant message
-                    // (only when not actively streaming — the streaming bubble has its own cursor)
-                    const isLastAssistant = !isStreaming && !streamEnding
-                        && msg.role === 'assistant'
-                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
                     // During stream-ending, skip rendering the just-completed
                     // assistant message entirely — the streaming bubble shows it.
                     // This prevents the flash/jump when transitioning.
@@ -1731,7 +1726,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
                             <MessageBubble
                                 message={msg}
-                                showTerminalCursor={isLastAssistant}
                                 agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
                                 onDelete={!isStreaming ? handleDeleteMessage : undefined}
                                 onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
@@ -1755,7 +1749,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                                 rag_sources: null,
                             }}
                             isStreaming={isStreaming}
-                            showTerminalCursor={streamEnding}
                             agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                             agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                             cards={isStreaming ? cards : lastCardsRef.current}
