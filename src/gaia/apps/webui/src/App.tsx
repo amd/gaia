@@ -26,6 +26,7 @@ import { getSessionHash } from './utils/format';
 import { resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
+import { planNewTask } from './utils/newTask';
 
 /** Wrapper that delays unmount to allow CSS exit animations to play. */
 function AnimatedPresence({ show, children, duration = 250 }: {
@@ -439,15 +440,14 @@ function App() {
     // Create new task
     const [createError, setCreateError] = useState<string | null>(null);
 
-    const handleNewTask = useCallback(async () => {
+    // Core create path. `explicitAgentId` is for deliberate choices only (Agent
+    // Hub, agent switch); leaving it out means the flagship, never whatever
+    // agent the last-viewed session happened to use.
+    const createTask = useCallback(async (explicitAgentId?: string) => {
         log.chat.info('Creating new task session...');
         setCreateError(null);
         try {
             const store = useChatStore.getState();
-            const { activeAgentId, activeDevice, activeModelTier, agents } = store;
-            // Don't stack phantom drafts: if we're already sitting on an empty
-            // "New Task" draft for this same agent, reuse it instead of minting
-            // another abandoned row (#2119).
             const outgoingId = store.currentSessionId;
             const outgoing = store.sessions.find((s) => s.id === outgoingId);
             const outgoingIsDraft = outgoingId != null && isAbandonedDraft(outgoingId, {
@@ -457,21 +457,23 @@ function App() {
                 isStreaming: store.isStreaming,
                 runningSessionIds: store.runningSessionIds,
             });
-            if (outgoingIsDraft && outgoing?.agent_type === activeAgentId) {
-                log.chat.info(`Reusing existing empty draft ${outgoingId} for agent ${activeAgentId}`);
+            const plan = planNewTask({
+                explicitAgentId,
+                outgoingSession: outgoing,
+                outgoingIsDraft,
+                agents: store.agents,
+                modelTier: store.activeModelTier,
+            });
+            if (plan.action === 'reuse-draft') {
+                log.chat.info(`Reusing existing empty draft ${outgoingId} for agent ${outgoing?.agent_type}`);
                 if (window.innerWidth <= 768) setSidebarOpen(false);
                 return;
             }
-            // Resolve the selected model-size tier to a concrete model (#1162).
-            // Only the "lite" tier pins a model; "full" defers to the agent default.
-            const activeAgent = agents.find((a) => a.id === activeAgentId);
-            const tier = activeAgent?.model_tiers?.find((t) => t.name === activeModelTier);
-            const tierModel = tier?.models?.[0];
             const session = await api.createSession({
                 title: 'New Task',
-                agent_type: activeAgentId,
-                device: activeDevice,
-                ...(tierModel ? { model: tierModel } : {}),
+                agent_type: plan.agentType,
+                device: store.activeDevice,
+                ...(plan.model ? { model: plan.model } : {}),
             });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
@@ -492,11 +494,17 @@ function App() {
         }
     }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus]);
 
+    // Takes no arguments on purpose: it is wired straight to onClick in the
+    // sidebar and welcome screen, so any parameter here would be a MouseEvent.
+    const handleNewTask = useCallback(async () => {
+        await createTask();
+    }, [createTask]);
+
     // Switch to a different agent — creates a new session with the chosen agent
     const handleAgentChange = useCallback(async (newAgentId: string) => {
         useChatStore.getState().setActiveAgentId(newAgentId);
-        await handleNewTask();
-    }, [handleNewTask]);
+        await createTask(newAgentId);
+    }, [createTask]);
 
     // Create task with a pre-filled prompt — stores the prompt in Zustand
     // so ChatView can consume it reliably on mount (no timing race).
@@ -504,21 +512,22 @@ function App() {
     const handleNewTaskWithPrompt = useCallback(async (prompt: string) => {
         log.chat.info(`New task with prompt: "${prompt.slice(0, 60)}..."`);
         setPendingPrompt(prompt);
-        await handleNewTask();
-    }, [handleNewTask, setPendingPrompt]);
+        await createTask();
+    }, [createTask, setPendingPrompt]);
 
     // Launch a task with an explicitly-chosen agent (from the Agent Hub). Pins
     // the agent for the new session and leaves the Hub view. The chosen agent
-    // becomes the session's persisted agent_type via handleNewTask (#2179).
+    // becomes the session's persisted agent_type (#2179) — passed down
+    // explicitly rather than read back out of the picker.
     const handleStartAgentTask = useCallback(async (agentId: string, prompt?: string) => {
         useChatStore.getState().setActiveAgentId(agentId);
         setShowHub(false);
         if (prompt) {
-            await handleNewTaskWithPrompt(prompt);
-        } else {
-            await handleNewTask();
+            log.chat.info(`New task with prompt: "${prompt.slice(0, 60)}..."`);
+            setPendingPrompt(prompt);
         }
-    }, [handleNewTask, handleNewTaskWithPrompt, setShowHub]);
+        await createTask(agentId);
+    }, [createTask, setPendingPrompt, setShowHub]);
 
     // Launch the Gaia Builder Agent in a new session.
     // Uses a dedicated agent_type so the session always gets the builder,
