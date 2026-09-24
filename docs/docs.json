@@ -398,6 +398,7 @@
             "group": "Agent UI",
             "pages": [
               "plans/agent-ui",
+              "plans/gaia-ui-redesign",
               "plans/setup-wizard",
               "plans/security-model",
               "plans/connectors",
