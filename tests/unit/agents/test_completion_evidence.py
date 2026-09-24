@@ -761,3 +761,29 @@ def test_malformed_paths_never_crash_the_turn(agent):
     )
     result = agent.process_query("Save it to a file", max_steps=5)
     assert result["status"] in {"incomplete", "failed"}
+
+
+def test_a_first_person_save_claim_is_checked_without_a_save_verb(tmp_path):
+    ledger = CompletionEvidence("Create notes.md with a summary of GAIA", str(tmp_path))
+    assert gaps(ledger, "I saved the summary to `notes.md`.")
+
+
+def test_a_trailing_word_keeps_the_destination():
+    assert save_obligations("Save it to out/notes.txt thanks") == (
+        ["out/notes.txt"],
+        True,
+    )
+
+
+def test_a_shell_save_read_back_this_turn_is_complete(agent, tmp_path):
+    script(
+        agent,
+        call(
+            "run_python",
+            code="from pathlib import Path; Path('listing.txt').write_text('a b')",
+        ),
+        call("read_file", file_path="listing.txt"),
+        {"answer": "I saved the listing to `listing.txt`."},
+    )
+    result = agent.process_query("Save the directory listing to a file", max_steps=6)
+    assert result["status"] == "success", result["completion_gaps"]

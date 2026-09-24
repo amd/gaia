@@ -14,6 +14,7 @@ import ntpath
 import os
 import re
 import stat
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -124,6 +125,7 @@ _FROM_COLLECTION = re.compile(
     r"list|summary|context|plan|library|queue|results?|inputs?|documents?)\b",
     re.I,
 )
+_FIRST_PERSON = re.compile(r"\b(?:I|I've|I'm|I'd|we|we've)\b")
 _EARLIER = re.compile(
     r"\b(?:previous|last|earlier|prior)\s+(?:session|conversation|turn|time|chat)\b|"
     r"\b(?:earlier|yesterday)\b",
@@ -201,7 +203,12 @@ def _scan_paths(text: str, immediate: bool) -> list[str]:
     paths = []
     for match in _TARGET.finditer(text):
         path = _path_token(match)
-        if path is not None and match.group(4) and _MODIFIER.match(text[match.end() :]):
+        if (
+            path is not None
+            and not immediate
+            and match.group(4)
+            and _MODIFIER.match(text[match.end() :])
+        ):
             path = None  # "a Three.js scene": the name describes another noun
         if path is not None:
             paths.append(path)
@@ -337,6 +344,8 @@ class CompletionEvidence:
         self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
+        self.exec_ran = False
+        self.started_ns = time.time_ns()
 
     def key(self, path: str, root: str | None = None) -> str:
         return _normalize_key(
@@ -420,6 +429,7 @@ class CompletionEvidence:
             return
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
+        self.exec_ran |= tool in _EXEC_TOOLS and successful
         for path, old in (before or {}).items():
             current = self._stamp(path)
             if current is _UNOBSERVABLE or old is _UNOBSERVABLE:
@@ -475,6 +485,16 @@ class CompletionEvidence:
                 tool in WRITE_TOOLS or tool in _EXEC_TOOLS,
             )
 
+    def _written_by_executor(self, key: str) -> FileEvidence | None:
+        """A file a shell or Python run modified during this turn."""
+        if not self.exec_ran:
+            return None
+        stamp = self._stamp(key)
+        if not isinstance(stamp, tuple) or stamp[3] < self.started_ns:
+            return None
+        self.files[key] = FileEvidence(key, self.sequence, True)
+        return self.files[key]
+
     def delivered(self, tool: str, args: dict, original: Any, delivered: Any) -> None:
         data = _payload(delivered)
         if tool == "read_tool_output":
@@ -497,7 +517,7 @@ class CompletionEvidence:
         if not isinstance(path, str) or "\x00" in path:
             return
         key = self.key(path, args.get("project_dir"))
-        item = self.files.get(key)
+        item = self.files.get(key) or self._written_by_executor(key)
         if item is None or not item.written or raw.get("is_binary"):
             return
         content = raw.get("content")
@@ -527,7 +547,9 @@ class CompletionEvidence:
         # ~/Downloads" is information, not a report of this turn's work.
         checkable = self.instructed or self.disk_tool_ran
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
-            if not checkable or _EARLIER.search(sentence):
+            if _EARLIER.search(sentence):
+                continue
+            if not checkable and not _FIRST_PERSON.search(sentence):
                 continue
             sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
             if claims_file_write(sentence):

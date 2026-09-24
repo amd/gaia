@@ -1130,3 +1130,12 @@ def test_extracting_into_a_file_makes_it_an_output(tmp_path):
         "Extract all action items from meeting.txt into actions.json", str(tmp_path)
     )
     assert state.destinations == {state.key("actions.json")}
+
+
+def test_an_unstated_first_field_still_merges_on_an_equal_field():
+    page = "Next: send the deck to the board by Friday."
+    values = {"owner": "not stated", "task": "send the deck", "deadline": "Friday"}
+    a = field_entry(page, "Next: send the deck to the board by Friday", values)
+    b = field_entry(page, "send the deck to the board by Friday.", values)
+    merged = reconcile_occurrence(a, b)
+    assert merged is not None and dict(merged.fields) == values

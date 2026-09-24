@@ -946,9 +946,9 @@ For Python and shell executors, the loop compares file metadata before and after
 the call for requested and previously tracked targets, plus literal Python path
 candidates. These probes respect the read boundary and never read file contents.
 A successful executor call alone is not proof of a save; a failed call that
-changed an output invalidates earlier evidence. Paths computed dynamically and
-not already tracked require an explicit destination in the request or a file
-write tool that returns its destination. Cached transcripts are not new writes.
+changed an output invalidates earlier evidence. A file that a successful
+executor modified during the turn, such as `ls > listing.txt`, counts as written
+once it is read back. Cached transcripts are not new writes.
 Cleanup claims likewise need concrete paths observed disappearing during the
 turn; a general statement that everything was cleaned up is not proof. A claimed
 path that is absent and untouched already agrees with the claim, and removal from

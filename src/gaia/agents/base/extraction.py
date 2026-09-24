@@ -225,7 +225,10 @@ def reconcile_occurrence(first, second):
         if not _nested(first, value, second, other):
             return None
         values[name] = max(value, other, key=len)
-    if not any(name in both for name in identity):
+    # An unstated name (page opened mid-item) falls back to any equal field.
+    if not any(name in both for name in identity) and not any(
+        old[name].rstrip(".") == new[name].rstrip(".") for name in both
+    ):
         return None
     start, end, quote = _union_quote(first, second)
     return Entry(
