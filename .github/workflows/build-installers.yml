@@ -948,7 +948,7 @@ jobs:
               # first iteration. Fall back to 4200 for older builds.
               HEALTH_OK=0
               for i in $(seq 1 30); do
-                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+" || true)
                 PORT=${PORT:-4200}
                 # Use bash /dev/tcp instead of curl — curl is purged in this
                 # container to prove the bundled-uv path eliminates that dep.
@@ -1049,7 +1049,7 @@ jobs:
               }
               HEALTH_OK=0
               for i in $(seq 1 30); do
-                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+" || true)
                 PORT=${PORT:-4200}
                 if curl -sSf "http://127.0.0.1:${PORT}/api/health" \
                     | grep -q "gaia-agent-ui"; then
@@ -1156,8 +1156,11 @@ jobs:
             exit 1
           fi
           HEALTH_OK=0
+          # Re-read the port every attempt: main.cjs logs "--ui-port <n>"
+          # shortly AFTER state: ready, so it is often missing on the first
+          # pass and an unguarded grep would abort the step under set -e.
           for i in $(seq 1 30); do
-            PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+            PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+" || true)
             PORT=${PORT:-4200}
             if curl -sSf "http://127.0.0.1:${PORT}/api/health" \
                 | grep -q "gaia-agent-ui"; then
