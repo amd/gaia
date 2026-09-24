@@ -135,6 +135,21 @@ class TestStatsAndActivity:
 
 
 class TestKnowledgeCRUD:
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT"])
+    def test_search_literal_keywords(self, client, test_store, keyword):
+        content = f"The {keyword} operator is documented"
+        kid = test_store.store(category="fact", content=content)
+        test_store.store_turn("literal-query", "user", content)
+
+        response = client.get("/api/memory/knowledge", params={"search": keyword})
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()["items"]] == [kid]
+
+        response = client.get(
+            "/api/memory/conversations/search", params={"query": keyword}
+        )
+        assert response.status_code == 200
+        assert content in response.text
 
     def test_create_knowledge(self, client):
         resp = client.post(

@@ -71,12 +71,18 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
     if not sanitized:
         return None
 
-    words = sanitized.split()
+    # Quote each token so words such as AND/OR/NOT stay literal FTS5 terms.
+    # FTS5's unicode61 tokenizer treats "_" as a separator, so a token of only
+    # underscores would quote to an empty phrase and zero out an AND query —
+    # drop it rather than let it silently empty the whole search.
+    words = [f'"{word}"' for word in sanitized.split() if word.strip("_")]
+    if not words:
+        return None
     if len(words) > 1:
         operator = " AND " if use_and else " OR "
         return operator.join(words)
 
-    return sanitized
+    return words[0]
 
 
 # ============================================================================
@@ -1169,7 +1175,10 @@ class MemoryStore:
                     )
                     return cast(str, existing_id)
         except sqlite3.OperationalError as e:
-            logger.debug("[MemoryStore] FTS5 dedup search error: %s", e)
+            # A failed dedup search means store() falls through to inserting a
+            # duplicate -- debug level hid exactly that for as long as this
+            # query could raise (#4142's own bug was one such cause).
+            logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None
 
