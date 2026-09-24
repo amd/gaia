@@ -1578,6 +1578,36 @@ class TestSearchPastConversationsTool:
         results = result.get("results", result.get("items", []))
         assert len(results) == 0
 
+    def test_an_empty_history_says_there_is_nothing_to_find(self, mixin_with_tools):
+        """A model needs a fact to stop on, not a bare 'empty' to retry."""
+        mixin_with_tools.memory_store.store_turn(
+            mixin_with_tools.memory_session_id, "user", "turn from this session"
+        )
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+
+        result = func(query="deploy", days=30)
+
+        assert result["status"] == "empty"
+        assert result["results"] == []
+        assert result["past_conversation_turns"] == 0
+        assert result["message"].startswith("No past conversations are stored")
+
+    def test_a_miss_in_a_populated_history_says_how_much_exists(self, mixin_with_tools):
+        mixin_with_tools.memory_store.store_turn(
+            "an-earlier-session", "user", "we talked about gardening"
+        )
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+
+        result = func(query="zzz_nonexistent_conversation_xyz")
+
+        assert result["status"] == "empty"
+        assert result["past_conversation_turns"] == 1
+        assert "No past conversations are stored" not in result["message"]
+
 
 # ===========================================================================
 # 10. Tool Execution Logging (_execute_tool override)
