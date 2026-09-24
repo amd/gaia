@@ -464,7 +464,7 @@ def _overlaps(first, second):
     return max(first[0], second[0]) < min(first[1], second[1])
 
 
-def _resolve_occurrence(entry, origin, entries, members):
+def _resolve_occurrence(entry, entries, members):
     """Pick which of a repeated name's occurrences an extraction means.
 
     It takes an occurrence nobody has claimed, and merge_occurrences keeps it
@@ -489,7 +489,7 @@ def merge_occurrences(entries, members, candidates):
     for entry, origin in candidates:
         ambiguous = bool(entry.choices)
         if ambiguous:
-            entry = _resolve_occurrence(entry, origin, entries, members)
+            entry = _resolve_occurrence(entry, entries, members)
         matches = [
             key
             for key in entries

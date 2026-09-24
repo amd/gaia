@@ -1448,7 +1448,7 @@ def test_a_trailing_period_on_the_name_still_locates_it():
 
 
 def test_free_text_items_at_different_name_positions_stay_apart():
-    page = "next is plank then hold it and next is plank again"
+    # Source: "next is plank then hold it and next is plank again"
     first = Entry(8, 35, "plank", "plank then hold it and next")
     second = Entry(14, 44, "plank", "then hold it and next is plank")
     assert reconcile_occurrence(first, second) is None
