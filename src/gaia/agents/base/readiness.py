@@ -39,18 +39,26 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Test-only hold on "model loaded" reporting (#2539): Lemonade lazily
-# reloads an unloaded model on the next inference request, which makes
-# "model unavailable" un-testable through this GET probe alone — by the time
-# a second check runs, a query elsewhere may have already triggered the
-# reload. Setting this env var to a comma-separated list of model ids (or
-# "*" for all) makes the probe report those ids as absent from
-# ``all_models_loaded`` regardless of what Lemonade actually answers, so the
+# Test-only hold on model reporting (#2539): Lemonade lazily reloads an
+# unloaded model on the next inference request, which makes "model unavailable"
+# un-testable through these probes alone — by the time a second check runs, a
+# query elsewhere may have already triggered the reload. Setting this env var to
+# a comma-separated list of model ids (or "*" for all) makes this module report
+# those ids as absent regardless of what Lemonade actually answers, so the
 # preflight gate's "model unavailable" messaging can be exercised on demand.
-# This never touches real inference: the only production caller of
-# ``probe_backend_health`` is the read-only ``GET /v1/<id>/init`` readiness
-# route (``gaia.agents.base.server``) — nothing in the actual chat/query path
-# reads this function's return value. Unset in every normal install/run.
+#
+# The hold covers BOTH halves of the readiness picture, because they drive
+# different rows and only one of them produces the failing gate: it strips the
+# ids from ``all_models_loaded`` (which feeds the ctx-size annotation) AND makes
+# ``probe_model_present`` report them absent (which is what actually fails the
+# gate). Holding only the first yields a green row with no ctx — the bug #3853
+# describes. A held id therefore also fails POST provisioning's post-pull verify,
+# which is the honest result: the hook says this model is not there.
+#
+# This never touches real inference: the production callers are the read-only
+# ``GET /v1/<id>/init`` readiness route and its POST provisioning counterpart
+# (``gaia.agents.base.server``) — nothing in the actual chat/query path reads
+# these return values. Unset in every normal install/run.
 INHIBIT_MODEL_ENV_VAR = "GAIA_TEST_INHIBIT_MODEL"
 
 
@@ -59,19 +67,28 @@ def _inhibited_model_ids() -> "set[str]":
     return {part.strip() for part in raw.split(",") if part.strip()}
 
 
-def _filter_inhibited_loaded_models(loaded_models: List[dict]) -> List[dict]:
+def _is_inhibited_model_id(model_id: Optional[str]) -> bool:
+    """Whether the test hook holds ``model_id`` down as absent."""
     inhibited = _inhibited_model_ids()
     if not inhibited:
-        return loaded_models
+        return False
+    if "*" in inhibited:
+        return True
+    if model_id is None:
+        return False
     from gaia.llm.lemonade_client import _model_ids_match
 
+    return any(_model_ids_match(model_id, want) for want in inhibited)
+
+
+def _filter_inhibited_loaded_models(loaded_models: List[dict]) -> List[dict]:
+    if not _inhibited_model_ids():
+        return loaded_models
+
     def _is_inhibited(entry: dict) -> bool:
-        if "*" in inhibited:
-            return True
-        candidates = (entry.get("model_name"), entry.get("checkpoint"))
         return any(
-            c is not None and any(_model_ids_match(c, want) for want in inhibited)
-            for c in candidates
+            _is_inhibited_model_id(c)
+            for c in (entry.get("model_name"), entry.get("checkpoint"))
         )
 
     return [m for m in loaded_models if not _is_inhibited(m)]
@@ -325,6 +342,15 @@ def probe_model_present(probe_base: str, model_id: str) -> bool:
     caller MUST distinguish that from "absent": they mean different things and
     have different remedies.
     """
+    if _is_inhibited_model_id(model_id):
+        logger.warning(
+            "%s is holding %r down as absent — this is a test hook, not a real "
+            "backend answer. Unset it to restore normal readiness reporting.",
+            INHIBIT_MODEL_ENV_VAR,
+            model_id,
+        )
+        return False
+
     import requests
 
     from gaia.llm.lemonade_client import (

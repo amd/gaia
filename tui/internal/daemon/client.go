@@ -246,41 +246,73 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	return c.spawnAndWait(ctx)
 }
 
+// installGaiaHint is the one place the install commands are written, so the
+// "never installed" and "installed-but-gone" messages cannot drift apart.
+const installGaiaHint = "Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
+	"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or `pip install amd-gaia` " +
+	"into the Python environment on your PATH, then retry. " +
+	"From a clone of the repo, `pip install -e .` works too"
+
 // gaiaDaemonStart builds the default launcher command.
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
-		if evidence := findInstalledButUnresolvable(); evidence != "" {
-			return nil, &StartError{Reason: fmt.Sprintf(
-				"GAIA appears to be installed (%s), but the `gaia` CLI is not resolvable "+
-					"on this process's PATH, so the daemon cannot be launched. "+
-					"Add its directory to PATH, or launch this TUI from a shell where "+
-					"`gaia --version` already works, then retry.", evidence)}
-		}
-		return nil, &StartError{Reason: "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
-			"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
-			"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or `pip install amd-gaia` " +
-			"into the Python environment on your PATH, then retry. " +
-			"From a clone of the repo, `pip install -e .` works too"}
+		return nil, &StartError{Reason: unresolvableGaiaReason(findInstalledButUnresolvable())}
 	}
 	return exec.CommandContext(ctx, bin, "daemon", "start"), nil
 }
 
+// installEvidence is what the filesystem says about a past GAIA install after
+// `gaia` failed to resolve on PATH.
+type installEvidence struct {
+	// description names what was found, or "" when nothing was.
+	description string
+	// runnable is true only when an actual `gaia` executable was found on disk.
+	// Leftover config proves GAIA *ran* here once, never that it still can.
+	runnable bool
+}
+
+// unresolvableGaiaReason explains an unresolvable `gaia` in terms of what was
+// actually found. The distinction matters: only executable evidence justifies a
+// PATH-only remedy. Weak evidence must still offer reinstall instructions, or a
+// user whose install really is gone is sent to fix a PATH that is already fine.
+func unresolvableGaiaReason(ev installEvidence) string {
+	switch {
+	case ev.description == "":
+		return "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
+			installGaiaHint
+	case ev.runnable:
+		return fmt.Sprintf(
+			"GAIA appears to be installed (%s), but the `gaia` CLI is not resolvable "+
+				"on this process's PATH, so the daemon cannot be launched. "+
+				"Add its directory to PATH, or launch this TUI from a shell where "+
+				"`gaia --version` already works, then retry.", ev.description)
+	default:
+		return fmt.Sprintf(
+			"GAIA ran on this machine before (%s), but no `gaia` executable can be "+
+				"found now, so the daemon cannot be launched. That file outlives "+
+				"`pip uninstall` and every `gaia uninstall` short of `--purge`, so it "+
+				"does not prove GAIA is still installed. If `gaia --version` works in "+
+				"another shell, add that directory to PATH and retry. Otherwise, "+
+				"reinstall: %s", ev.description, installGaiaHint)
+	}
+}
+
 // findInstalledButUnresolvable looks for filesystem evidence that GAIA is
 // already installed even though `gaia` didn't resolve on PATH, so the error
-// above can stop telling an existing user to (re)install it. It never runs
+// above can tell an existing user the truth about their machine. It never runs
 // Python or trusts PATH again — only direct, deterministic file checks:
 //
-//   - $VIRTUAL_ENV/bin/gaia (or Scripts\gaia.exe on Windows): the interpreter
-//     that ran this process activated a venv, but the venv's script dir
-//     itself isn't on this process's PATH.
+//   - $VIRTUAL_ENV/bin/gaia (or Scripts\gaia.exe on Windows): a real executable,
+//     so the venv's script dir merely isn't on this process's PATH — runnable.
 //   - ~/.gaia/config.json: `gaia config` and `gaia init` both write here
-//     (see docs/reference/cli.mdx), so its presence means a `gaia` binary
-//     ran successfully on this machine before, just not in this environment.
+//     (see docs/reference/cli.mdx), so a `gaia` binary ran successfully on this
+//     machine before. It says nothing about now — the file survives an
+//     uninstall — so it is NOT runnable evidence.
 //
-// Returns a human-readable description of what was found, or "" if neither
-// check found anything (i.e. GAIA genuinely looks uninstalled).
-func findInstalledButUnresolvable() string {
+// Returns zero-valued evidence if neither check found anything (i.e. GAIA
+// genuinely looks uninstalled).
+func findInstalledButUnresolvable() installEvidence {
 	if venv := os.Getenv("VIRTUAL_ENV"); venv != "" {
 		name := "gaia"
 		if runtime.GOOS == "windows" {
@@ -292,16 +324,21 @@ func findInstalledButUnresolvable() string {
 		}
 		candidate := filepath.Join(venv, dir, name)
 		if _, err := os.Stat(candidate); err == nil {
-			return fmt.Sprintf("found %s in the active virtualenv", candidate)
+			return installEvidence{
+				description: fmt.Sprintf("found %s in the active virtualenv", candidate),
+				runnable:    true,
+			}
 		}
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		configPath := filepath.Join(home, ".gaia", "config.json")
 		if _, err := os.Stat(configPath); err == nil {
-			return fmt.Sprintf("found %s from a previous `gaia init`/`gaia config`", configPath)
+			return installEvidence{
+				description: fmt.Sprintf("found %s from a previous `gaia init`/`gaia config`", configPath),
+			}
 		}
 	}
-	return ""
+	return installEvidence{}
 }
 
 // spawnAndWait launches the daemon and polls until a live instance registers.
