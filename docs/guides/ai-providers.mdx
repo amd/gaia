@@ -42,6 +42,8 @@ for models and how much disk is free, both read from Lemonade:
   details line says what it needs against what this PC has.
 - **fit unknown** — Lemonade did not report this PC's GPU memory or the model's
   size, so it cannot be judged and is not downloaded.
+- **needs newer Lemonade** — the model needs a newer Lemonade than this PC runs
+  (Qwen3.8 Flash Next needs v2026.39.1). Upgrade with `gaia init --force-reinstall`.
 
 A model fits when its size plus 5% and 1 GB of working room fits the memory
 llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared

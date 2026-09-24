@@ -15,7 +15,8 @@
       "recipe": "llamacpp",
       "mmproj": "mmproj-F16.gguf",
       "vision": true,
-      "reasoning": true
+      "reasoning": true,
+      "min_lemonade_version": "2026.39.1"
     },
     {
       "id": "Gemma-4-E4B-it-GGUF",

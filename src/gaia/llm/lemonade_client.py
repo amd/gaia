@@ -501,6 +501,8 @@ class ModelRequirement:
     # Download size in GB, for the fit check (gaia.llm.model_fit). Built-ins
     # leave it None — Lemonade's catalog reports their size.
     size_gb: Optional[float] = None
+    # Oldest Lemonade whose bundled llama.cpp can load the model.
+    min_lemonade_version: Optional[str] = None
 
     def pull_kwargs(self) -> Dict[str, Any]:
         """Registration fields for ``ensure_model_downloaded`` on a ``user.`` model.
@@ -580,6 +582,7 @@ MODELS = {
         vision=True,
         reasoning=True,
         size_gb=81.96,
+        min_lemonade_version="2026.39.1",
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
@@ -746,6 +749,13 @@ def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement
     return None
 
 
+def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
+    """The version a running Lemonade reports on ``/health``, or None."""
+    health = client.health_check()
+    version = health.get("version") if isinstance(health, dict) else None
+    return str(version) if version else None
+
+
 #: Largest-first default chat models; the last is the floor every machine gets.
 DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 
@@ -763,20 +773,28 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
+        check_server_supports,
         pick_default_model,
     )
 
+    floor = DEFAULT_MODEL_LADDER[-1]
     try:
         capacity = capacity_from_system_info(client.get_system_info(timeout=15))
     except ModelFitError as e:
-        floor = DEFAULT_MODEL_LADDER[-1]
         return floor, [(m, str(e)) for m in DEFAULT_MODEL_LADDER[:-1]], None
-    candidates = []
+    server_version = lemonade_server_version(client)
+    candidates, unsupported = [], []
     for model_id in DEFAULT_MODEL_LADDER:
         mr = find_model_requirement(model_id)
+        verdict = check_server_supports(
+            mr.min_lemonade_version if mr else None, server_version
+        )
+        if model_id != floor and not verdict.fits:
+            unsupported.append((model_id, verdict.reason))
+            continue
         candidates.append((model_id, (mr.size_gb if mr else None) or 0.0))
     model_id, skipped = pick_default_model(candidates, capacity)
-    return model_id, skipped, capacity
+    return model_id, unsupported + skipped, capacity
 
 
 def is_tool_calling_model(model_id: Optional[str]) -> bool:

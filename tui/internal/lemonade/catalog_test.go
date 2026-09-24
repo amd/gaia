@@ -33,6 +33,7 @@ func capacityOf(t *testing.T, body string) Capacity {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.ServerVersion = "2026.39.1"
 	return c
 }
 
@@ -268,6 +269,21 @@ func TestUnknownFitIsLabelledAsSuch(t *testing.T) {
 	for _, e := range BuildEntries("local", []Model{{ID: "Tiny-GGUF", Size: 1, Labels: []string{"chat"}}}, Capacity{}, fmt.Errorf("boom")) {
 		if e.Model.ID == "Tiny-GGUF" && (!e.FitUnknown || e.Selectable()) {
 			t.Fatalf("%+v", e)
+		}
+	}
+}
+
+func TestQwenFlashNeedsANewEnoughLemonade(t *testing.T) {
+	halo := capacityOf(t, strixHalo128)
+	for version, want := range map[string]bool{"2026.39.1": true, "2026.40.0~3.abc": true, "11.9.0": false, "": false} {
+		halo.ServerVersion = version
+		for _, e := range BuildEntries("local", nil, halo, nil) {
+			if e.Recommended == nil || e.Recommended.RegisterAs == "" {
+				continue
+			}
+			if e.Selectable() != want || e.NeedsUpgrade == want {
+				t.Errorf("Lemonade %q: selectable=%v needsUpgrade=%v reason=%q", version, e.Selectable(), e.NeedsUpgrade, e.Reason)
+			}
 		}
 	}
 }

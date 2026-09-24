@@ -139,6 +139,9 @@ class TestDefaultPick:
             def get_system_info(self, timeout=None):
                 return info
 
+            def health_check(self):
+                return {"version": "2026.39.1"}
+
         model_id, _, _ = lc.recommend_default_chat_model(FakeClient())
         assert model_id == expected
 
@@ -200,6 +203,7 @@ class TestTuiDrift:
             assert entry.get("vision", False) == mr.vision
             assert entry.get("reasoning", False) == mr.reasoning
             assert entry["size_gb"] == mr.size_gb
+            assert entry.get("min_lemonade_version") == mr.min_lemonade_version
 
     def test_both_defaults_are_recommended(self, doc):
         local = {m["id"] for m in doc["models"] if m["provider"] == "local"}
@@ -266,6 +270,40 @@ class TestRealLemonadeReports:
             def get_system_info(self, timeout=None):
                 return info
 
+            def health_check(self):
+                return {"version": "2026.39.1"}
+
         model_id, skipped, capacity = lc.recommend_default_chat_model(FakeClient())
         assert model_id == lc.DEFAULT_MODEL_NAME and capacity is None
         assert "not its memory" in skipped[0][1]
+
+
+class TestLemonadeVersionGate:
+    """Qwen3.8 Flash needs llama.cpp's qwen4exp, first bundled in v2026.39.1."""
+
+    def _client(self, info, version):
+        class FakeClient:
+            def get_system_info(self, timeout=None):
+                return info
+
+            def health_check(self):
+                return {"version": version} if version else {}
+
+        return FakeClient()
+
+    @pytest.mark.parametrize(
+        "version,expected",
+        [
+            ("2026.39.1", lc.LARGE_DEFAULT_MODEL_NAME),
+            ("2026.40.0~3.abc1234", lc.LARGE_DEFAULT_MODEL_NAME),
+            ("11.9.0", lc.DEFAULT_MODEL_NAME),
+            (None, lc.DEFAULT_MODEL_NAME),
+        ],
+    )
+    def test_a_big_pc_on_an_old_lemonade_keeps_gemma(self, version, expected):
+        model_id, skipped, _ = lc.recommend_default_chat_model(
+            self._client(STRIX_HALO_128, version)
+        )
+        assert model_id == expected
+        if expected == lc.DEFAULT_MODEL_NAME:
+            assert "--force-reinstall" in skipped[0][1]

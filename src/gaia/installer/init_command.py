@@ -269,11 +269,16 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
     cannot be judged here; Lemonade still refuses one that would not fit the
     disk.
     """
-    from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
+    from gaia.llm.lemonade_client import (
+        _model_ids_match,
+        find_model_requirement,
+        lemonade_server_version,
+    )
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
         check_fit,
+        check_server_supports,
     )
 
     size = None
@@ -284,6 +289,12 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
             size = entry.get("size")
             break
     mr = find_model_requirement(model_id)
+    if mr and mr.min_lemonade_version:
+        supported = check_server_supports(
+            mr.min_lemonade_version, lemonade_server_version(client)
+        )
+        if not supported.fits:
+            raise ModelFitError(f"default_model {model_id} {supported.reason}.")
     size = size or (mr.size_gb if mr else None)
     if not size:
         return
@@ -1808,14 +1819,15 @@ class InitCommand:
                 self._print(
                     f"   Chat model: {choice.model_id} (default_model in ~/.gaia/config.json)"
                 )
-            elif choice.capacity is None:
-                self._print(f"   Chat model: {choice.model_id}")
             else:
                 cap = choice.capacity
-                self._print(
-                    f"   Chat model: {choice.model_id} — this PC has "
-                    f"{cap.memory_gb:.0f} GB for models ({cap.memory_source})"
+                where = (
+                    f" — this PC has {cap.memory_gb:.0f} GB for models "
+                    f"({cap.memory_source})"
+                    if cap
+                    else ""
                 )
+                self._print(f"   Chat model: {choice.model_id}{where}")
                 for skipped_id, reason in choice.skipped:
                     self._print(f"   Not using {skipped_id}: {reason}")
         return self._chat_choice.model_id

@@ -174,6 +174,8 @@ func entryStatus(e lemonade.Entry) string {
 		return "downloaded"
 	case e.FitUnknown:
 		return "fit unknown"
+	case e.NeedsUpgrade:
+		return "needs newer Lemonade"
 	case e.Fits:
 		return fmt.Sprintf("download %.1f GB", e.SizeGB())
 	case e.SizeGB() > 0:

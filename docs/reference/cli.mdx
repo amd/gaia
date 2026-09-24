@@ -242,7 +242,9 @@ hardware. Where Lemonade reports enough memory for it — about 87 GB for models
 128 GB Strix Halo — `gaia init` also sets up `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB
 download) as the chat model, prints why, and records it as `default_model`. Gemma is still
 downloaded, since vision and document-image extraction load it by name. Every other PC
-gets Gemma alone. A `default_model` you set yourself always wins, and `--check` asks for
+gets Gemma alone. Qwen is also skipped, with the reason printed, when the running Lemonade
+is older than v2026.39.1 (its llama.cpp cannot load the model): `gaia init --yes` keeps an
+older Lemonade that meets the profile minimum, so upgrade with `gaia init --force-reinstall`. A `default_model` you set yourself always wins, and `--check` asks for
 the same model `gaia init` would download.
 </Note>
 

@@ -28,6 +28,8 @@ type Recommended struct {
 	MMProj     string  `json:"mmproj"`
 	Vision     bool    `json:"vision"`
 	Reasoning  bool    `json:"reasoning"`
+	// MinLemonade is the oldest Lemonade whose llama.cpp can load the model.
+	MinLemonade string `json:"min_lemonade_version"`
 }
 
 // Matches reports whether a catalog id is this recommendation.

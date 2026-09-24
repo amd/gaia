@@ -2826,7 +2826,7 @@ class TestHardwareChatModel(unittest.TestCase):
 
     def _client(self, system_info, have=()):
         client = MagicMock()
-        client.health_check.return_value = {"status": "ok"}
+        client.health_check.return_value = {"status": "ok", "version": "2026.39.1"}
         client.get_system_info.return_value = system_info
         client.check_model_available.side_effect = lambda m: m in have
         client.ensure_model_downloaded.return_value = True

@@ -28,6 +28,8 @@ type Entry struct {
 	// FitUnknown is set when the PC or the model's size could not be read,
 	// so the row is blocked without having been judged too big.
 	FitUnknown bool
+	// NeedsUpgrade is set when this Lemonade is too old to load the model.
+	NeedsUpgrade bool
 }
 
 // SizeGB is the download size, from the catalog or the recommendation.
@@ -125,6 +127,13 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 			e.FitUnknown = true
 			e.Reason = "cannot check this PC's memory: " + capErr.Error()
 			return
+		}
+		if e.Recommended != nil {
+			if ok, why := capacity.SupportsModel(e.Recommended.MinLemonade); !ok {
+				e.NeedsUpgrade = true
+				e.Reason = why
+				return
+			}
 		}
 		size := e.SizeGB()
 		if size <= 0 {

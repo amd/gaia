@@ -53,6 +53,45 @@ class FitVerdict:
     reason: str = ""
 
 
+def version_tuple(version: str) -> Tuple[int, ...]:
+    """``"2026.39.1"`` or ``"v11.8.1"`` as comparable ints.
+
+    Leading digits per part, so a CalVer dev build (``2026.39.0~12.abc1234``)
+    still compares; CalVer's year sorts above every old semver major.
+    """
+    parts = []
+    for part in str(version).strip().lstrip("v").split(".")[:3]:
+        match = re.match(r"\d+", part)
+        if not match:
+            break
+        parts.append(int(match.group(0)))
+    return tuple(parts)
+
+
+def check_server_supports(
+    min_version: Optional[str], server_version: Optional[str]
+) -> FitVerdict:
+    """Whether a Lemonade server is new enough to load a model.
+
+    An unknown server version cannot show support, so it does not pass: the
+    cost of guessing wrong is a large download the server then cannot load.
+    """
+    if not min_version:
+        return FitVerdict(True)
+    if server_version and version_tuple(server_version) >= version_tuple(min_version):
+        return FitVerdict(True)
+    running = (
+        f"this server is v{server_version}"
+        if server_version
+        else ("this server's version is unknown")
+    )
+    return FitVerdict(
+        False,
+        f"needs Lemonade v{min_version} or newer ({running}); "
+        "upgrade it with `gaia init --force-reinstall`",
+    )
+
+
 def required_memory_gb(size_gb: float) -> float:
     """Memory a model of ``size_gb`` weights needs to load and run."""
     return size_gb * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB
