@@ -75,15 +75,20 @@ class LemonadeInfo:
 
     @property
     def version_tuple(self) -> Optional[tuple]:
-        """Parse version string into tuple for comparison."""
+        """Parse version string into tuple for comparison.
+
+        Handles "9.1.4", "v9.1.4" and Lemonade's CalVer dev suffix
+        ("2026.39.0~12.abc1234"). ``check_installation`` fills ``version``
+        from ``get_installed_version``, which already strips the suffix — but
+        that is an invariant two files away, and callers construct
+        ``LemonadeInfo`` directly, so do not rely on it here.
+        """
         if not self.version:
             return None
         try:
-            # Handle versions like "9.1.4" or "v9.1.4"
-            ver = self.version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
+            parts = self.version.lstrip("v").split(".")[:3]
+            return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
+        except (ValueError, IndexError, AttributeError):
             return None
 
 
@@ -826,7 +831,7 @@ class LemonadeInstaller:
     def _uninstall_macos() -> InstallResult:
         """macOS: the upstream .pkg ships no uninstaller, so say so and hand over steps.
 
-        Paths and pkgutil identifiers come from the v11.8.1 .pkg BOMs. Upstream
+        Paths and pkgutil identifiers come from the v2026.39.1 .pkg BOMs. Upstream
         renamed the launchd labels and receipts com.lemonade.* -> ai.lemonadeserver.*
         after 11.5.0, so these track the pin.
         """
