@@ -352,8 +352,10 @@ def _normalize_key(path: str, base: str) -> str:
 class CompletionEvidence:
     """Evidence for this turn, with no reads outside the tool permission boundary."""
 
-    def __init__(self, query: str, root: str | None):
+    def __init__(self, query: str, root: str | None, scratch: Any = None):
         self.root = root or os.getcwd()
+        # The agent's scratch folder is deleted on close: never the user's save.
+        self.scratch = self.key(str(scratch)) if scratch else None
         self.files: dict[str, FileEvidence] = {}
         self.archives: dict[
             str, tuple[str, int, FileEvidence, int, int, int | None]
@@ -626,7 +628,10 @@ class CompletionEvidence:
             not required
             and (self.save_requested or claim_without_path)
             and not any(
-                item.direct and item.written and not item.inferred
+                item.direct
+                and item.written
+                and not item.inferred
+                and not (self.scratch and inside(item.path, self.scratch))
                 for item in self.files.values()
             )
         ):

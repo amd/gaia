@@ -43,6 +43,7 @@ from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
+from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
 from gaia.agents.base.extraction import (
     ExtractionLedger,
     extraction_response_format,
@@ -775,6 +776,17 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
 # Fabricated-save guard (#4010): a final answer that asserts a file was
 # written when no write tool ran this turn.
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
+# Tools that could hand-edit a file save_extracted_items exported this turn.
+_INVENTORY_HAND_EDITS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "write_markdown_file",
+        "write_python_file",
+        "edit_python_file",
+        "replace_function",
+    }
+)
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
 # Adverbs the model sprinkles around the verb. They carry no meaning for the
 # guard, but every slot they can occupy has to be spelled out or the claim
@@ -1794,6 +1806,21 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     raise ValueError("Extraction cancelled or superseded")
 
+            from gaia.llm.lemonade_client import cloud_model_provider
+
+            # A cloud reasoning model can spend its whole budget thinking about
+            # one dense page; copying quotes out of it needs little reasoning.
+            # Local anti-repetition penalties fight verbatim quote copying.
+            sampling = (
+                {"reasoning_effort": "low"}
+                if cloud_model_provider(getattr(self, "model_id", None))
+                else {
+                    "frequency_penalty": 0.0,
+                    "presence_penalty": 0.0,
+                    "repeat_penalty": 1.0,
+                }
+            )
+
             def ask(system, prompt):
                 check()
                 response = extraction_chat.send_messages(
@@ -1801,6 +1828,8 @@ Do NOT wrap conversational replies in JSON.
                     system_prompt=system,
                     tools=[],
                     response_format=extraction_response_format(ledger.fields),
+                    max_tokens=EXTRACTION_MAX_TOKENS,
+                    **sampling,
                 )
                 check()
                 # These calls are outside the outer conversation's stats.
@@ -1808,8 +1837,16 @@ Do NOT wrap conversational replies in JSON.
                 usage_sink.append(
                     usage if isinstance(usage, dict) else (response.stats or {})
                 )
-                if getattr(response, "finish_reason", None) == "length":
-                    raise ValueError("Extraction reply hit its output-token limit")
+                spent = (
+                    usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
+                )
+                if getattr(response, "finish_reason", None) == "length" or (
+                    isinstance(spent, int) and spent >= EXTRACTION_MAX_TOKENS
+                ):
+                    raise ValueError(
+                        f"Extraction reply used its whole {EXTRACTION_MAX_TOKENS}-token "
+                        "output budget without finishing the page"
+                    )
                 return response.text
 
             # Parallel tool batches share the ledger; serialize its updates.
@@ -1858,9 +1895,12 @@ Do NOT wrap conversational replies in JSON.
                     "status": "error",
                     "error": "write_file is unavailable for this agent",
                 }
-            return writer["function"](
+            result = writer["function"](
                 file_path=file_path, content=ledger.export(file_path)
             )
+            if isinstance(result, dict) and result.get("status") == "success":
+                ledger.exported.add(ledger.key(file_path))
+            return result
 
         for name, function, gated in (
             ("extract_document_items", extract_document_items, False),
@@ -4364,6 +4404,32 @@ Do NOT wrap conversational replies in JSON.
         logger.debug("Tool '%s' reported its own LLM usage: %s", tool_name, usage)
         self._tool_reported_usage.append(usage)
 
+    def _refuse_inventory_hand_edit(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """An exported inventory is rewritten only by save_extracted_items."""
+        ledger = getattr(self, "_extraction_ledger", None)
+        path = (tool_args or {}).get("file_path")
+        if (
+            ledger is None
+            or not ledger.exported
+            or tool_name not in _INVENTORY_HAND_EDITS
+            or not isinstance(path, str)
+            or "\x00" in path
+            or ledger.key(path) not in ledger.exported
+        ):
+            return None
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": (
+                f"{path} holds the complete extracted inventory written by "
+                "save_extracted_items; editing it by hand would drop or reshape "
+                "entries. Leave it as saved, call save_extracted_items again to "
+                "rewrite it, and read it back with read_file."
+            ),
+        }
+
     def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """Run :meth:`_execute_tool`, timing it for the turn record.
 
@@ -4375,6 +4441,9 @@ Do NOT wrap conversational replies in JSON.
         ``_execute_tool`` has — refusals, unknown names, declined confirmations
         — so a refused call's latency is never misfiled as agent overhead.
         """
+        refused = self._refuse_inventory_hand_edit(tool_name, tool_args)
+        if refused is not None:
+            return refused
         evidence = getattr(self, "_completion_evidence", None)
         before = (
             evidence.snapshot(
@@ -5913,7 +5982,11 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
-        self._completion_evidence = CompletionEvidence(user_input, os.getcwd())
+        self._completion_evidence = CompletionEvidence(
+            user_input,
+            os.getcwd(),
+            scratch=getattr(self._read_validator(), "scratch_dir", None),
+        )
         # Files edited this turn, so an empty response can name what it left
         # behind (#3733). Per-turn: an instance persists across queries.
         self._turn_file_edits: List[Dict[str, Any]] = []

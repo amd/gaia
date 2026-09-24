@@ -883,3 +883,23 @@ def test_an_impersonal_claim_gets_one_correction_then_stands(agent):
 def test_create_names_only_its_direct_object(tmp_path, query, expected):
     (tmp_path / "app.log").write_text("ERROR x")
     assert save_obligations(query) == expected
+
+
+def test_a_scratch_file_is_not_the_users_save(tmp_path):
+    scratch = tmp_path / "gaia-scratch-1"
+    ledger = CompletionEvidence(
+        "Summarize it and save it", str(tmp_path), scratch=scratch
+    )
+    claim = "I saved the summary to a file."
+    write(ledger, str(scratch / "summary.md"))
+    read(ledger, str(scratch / "summary.md"))
+    assert gaps(ledger, claim)
+    write(ledger, "summary.md")
+    read(ledger, "summary.md")
+    assert not gaps(ledger, claim)
+
+
+def test_saving_an_inventory_offers_a_path_grant():
+    from gaia.agents.base.tool_grants import PATH_TOOLS
+
+    assert "save_extracted_items" in PATH_TOOLS

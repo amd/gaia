@@ -1165,3 +1165,77 @@ def test_a_finished_extraction_survives_the_step_limit(agent, tmp_path):
     result = agent.process_query("List every exercise in source.txt", max_steps=1)
     assert result["status"] == "incomplete"
     assert "Exercise BETA" in result["result"]
+
+
+def test_exports_give_each_requested_field_its_own_key(tmp_path):
+    state = ExtractionLedger(
+        "List every exercise in s.txt fields: name, reps", str(tmp_path)
+    )
+    page = "Squat for 10 reps."
+    state.run(
+        "s.txt",
+        lambda p: page,
+        lambda *a: json.dumps(
+            {
+                "complete": True,
+                "items": [{"quote": page, "fields": {"name": "Squat", "reps": "10"}}],
+            }
+        ),
+        lambda: None,
+    )
+    record = json.loads(state.export("out.json"))[0]
+    assert record["fields"] == {"name": "Squat", "reps": "10"}
+    header, row = state.export("out.csv").splitlines()
+    assert header == "source,text,name,reps,quote,start,end"
+    assert ",Squat,10," in row
+
+
+def test_a_saved_inventory_cannot_be_hand_edited(agent, tmp_path):
+    (tmp_path / "source.txt").write_text("Exercise ALPHA\nExercise BETA")
+    script(
+        agent,
+        {"tool": "extract_document_items", "tool_args": {"file_path": "source.txt"}},
+        {"tool": "save_extracted_items", "tool_args": {"file_path": "out.json"}},
+        {"tool": "write_file", "tool_args": {"file_path": "out.json", "content": "[]"}},
+        {"tool": "read_file", "tool_args": {"file_path": "out.json"}},
+        {"answer": "Saved to out.json."},
+    )
+    agent._tool_requires_confirmation = lambda *a, **kw: False
+    result = agent.process_query(
+        "List every exercise in source.txt. Save to out.json.", max_steps=8
+    )
+    saved = json.loads((tmp_path / "out.json").read_text())
+    assert len(saved) == 2
+    assert result["status"] == "success", result["completion_gaps"]
+
+
+def test_unpunctuated_captions_never_split_a_word_across_pages():
+    words = "and now lift your arms up nice and slow keep breathing\xa0 "
+    source = words * (3 * PAGE_CHARS // len(words))
+    pages = []
+
+    def ask(system, payload):
+        data = json.loads(payload)
+        if "already_found" not in data:
+            pages.append(data["source_page"])
+        return json.dumps({"complete": True, "items": []})
+
+    extract_pages(source, "List every exercise", ask, lambda: None)
+    assert len(pages) > 2
+    for page in pages[1:]:
+        start = source.index(page)
+        assert source[start - 1].isspace() and not page[0].isspace()
+
+
+def test_quotes_match_captions_despite_non_breaking_and_doubled_spaces():
+    page = "now lift\xa0 your arms  up nice and slow"
+    raw = json.dumps(
+        {
+            "complete": True,
+            "items": [{"quote": "lift your arms up", "fields": {"name": "arms  up"}}],
+        }
+    )
+    entry = parse_page(raw, page, 100, ("name",))[0]
+    assert entry.quote == "lift\xa0 your arms  up"
+    assert (entry.start, entry.end) == (104, 104 + len(entry.quote))
+    assert dict(entry.fields) == {"name": "arms up"}

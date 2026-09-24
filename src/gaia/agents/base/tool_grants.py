@@ -97,6 +97,7 @@ PATH_TOOLS = frozenset(
         "edit_python_file",
         "replace_function",
         "update_gaia_md",
+        "save_extracted_items",
     }
 )
 
