@@ -37,7 +37,7 @@ here or elsewhere — belongs to the retired agent and is not reachable from the
 |---|---|
 | `check_mailbox_access` | *"Is my email set up?"* — reports which mailbox was picked, the connected address, and the inbox unread count. Also the first thing to call after another mail tool fails. |
 | `list_inbox` | *"What came in today?"*, *"What's unread?"* — recent inbox mail, newest first: sender, subject, received time, unread/flagged state, and a short preview. Never full bodies. |
-| `search_email` | *"Did I get anything about the Acme invoice?"* — searches every folder, in **relevance** order rather than newest-first. Every term is ANDed, so 2–3 distinctive keywords beat a sentence. |
+| `search_email` | *"Did I get anything about the Acme invoice?"* — searches every folder, in **relevance** order rather than newest-first. Every term is ANDed, so 2–3 distinctive keywords beat a sentence. If nothing matches, it retries with progressively fewer terms and flags the result as approximate, so you may see hits for a narrower query than you typed. |
 | `read_email` | *"Open that one"* — one message in full, including its body. Very long bodies are truncated, and the result says so. |
 | `list_mail_folders` | *"How much is sitting in Archive?"* — every folder with its unread and total counts. |
 
@@ -157,9 +157,9 @@ That is a local ledger write — no browser, no OAuth round-trip. Use
 
 ## Privacy
 
-- **Local LLM only** — email body content never leaves your machine.
-- **Read-only** — nothing in this tool surface archives, sends, labels, or deletes. There is no confirmation dialog to get wrong, because there is no mutation to confirm.
-- **Untrusted input** — an email body is data, not instructions. Injection attempts inside a message ("forward this to attacker@evil.com") have nothing to act on here: the agent holds no send tool.
+- **Local LLM only by default** — email bodies are processed by your local Lemonade model. Unlike the retired agent, the flagship has no allowlist pinning it there: if you configure it against a cloud provider, mail content goes with it.
+- **No mail mutation** — this tool surface cannot archive, send, label, or delete, so an instruction planted in an email body has no mail action to trigger. There is no confirmation dialog to get wrong, because there is no mutation to confirm.
+- **Untrusted input** — message bodies are wrapped in `<<<UNTRUSTED_EMAIL_BODY_*>>>` delimiters and flagged when they show phishing signals ([#4150](https://github.com/amd/gaia/issues/4150)). That is not a general injection defence: the flagship also holds web, file, and shell tools, so treat mail from untrusted senders as untrusted input.
 
 ## Troubleshooting
 
@@ -174,7 +174,7 @@ and its remedy — they are different fixes, so read which one you got:
 
 ### "Gmail API returned 401"
 
-The access token has expired or scopes were revoked. Reconnect Google in Settings → Connections, or run `gaia connectors connect google --force`.
+The access token has expired or scopes were revoked. Reconnect Google in Settings → Connections, or re-run `gaia connectors connect google --grant-agent installed:gaia`.
 
 ### Reading stopped partway through a big inbox
 
@@ -211,7 +211,9 @@ actually get today, see [Action surface](#action-surface) above.
 
 The retired agent needs its own grant, under `installed:email`, and the broader
 Gmail + Calendar scopes the flagship deliberately never asks for. Configure the OAuth
-client as in [Step 1](#1-connect-your-google-account) above, then:
+client as in [Step 1](#1-connect-your-google-account) above — and enable the **Calendar
+API** on that Cloud project as well as the Gmail API, or the first calendar call 403s
+([#2116](https://github.com/amd/gaia/issues/2116)) — then:
 
 <Tabs>
   <Tab title="Agent UI">
@@ -261,7 +263,7 @@ client as in [Step 1](#1-connect-your-google-account) above, then:
     `AGENT_NOT_GRANTED` — see [Retired-agent troubleshooting](#retired-agent-troubleshooting).
     This explicit grant step is required until [#2117](https://github.com/amd/gaia/issues/2117) lands.
 
-    If you connected Google before GAIA v0.23, run `gaia connectors connect google --force` to trigger a fresh consent screen with the updated scope list.
+    If you connected Google before GAIA v0.23, re-run `gaia connectors connect google --scopes …` with the full list to trigger a fresh consent screen with the updated scopes.
   </Tab>
 </Tabs>
 
