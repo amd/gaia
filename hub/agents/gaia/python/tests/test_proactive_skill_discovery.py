@@ -14,7 +14,6 @@ Built with ``GaiaAgent.__new__(GaiaAgent)`` like ``test_lazy_skill_activation.py
 
 from __future__ import annotations
 
-
 import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
