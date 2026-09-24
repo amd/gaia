@@ -12,6 +12,13 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Changed
+
+- **Bypass permissions is now called full access, everywhere.** `--full-access`
+  and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
+  fail with a message naming the new one. `/full-access always` (or
+  `gaia config set full_access true`) keeps it on across launches.
+
 ### Fixed
 
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
@@ -240,9 +247,9 @@ the terminal UI meant building it from source.
   that killed only the launcher: the cancelled tool call ran to completion and
   the surviving process consumed the next message. The first Esc now sends the
   agent a `cancel` control message, so the turn ends and the session keeps its
-  loaded skills, "always" grants, history and bypass mode. A second Esc stops
+  loaded skills, "always" grants, history and full access. A second Esc stops
   the whole process tree.
-- **A restart after a hard stop no longer turns bypass permissions back on.**
+- **A restart after a hard stop no longer turns full access back on.**
   The replacement agent is launched in the session's current permission mode
   instead of from the original flags, and the TUI says what the restart lost.
 

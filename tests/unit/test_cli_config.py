@@ -467,3 +467,107 @@ class TestConfigFlag:
 
         main()
         assert "Flag-GGUF" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# full_access — the one setting that turns confirmation prompts off
+# ---------------------------------------------------------------------------
+
+
+class TestFullAccessSetting:
+    """A true/false setting the CLI only ever hands strings to."""
+
+    @staticmethod
+    def _cfg():
+        from gaia.config import GaiaConfig
+
+        return GaiaConfig
+
+    @staticmethod
+    def _err():
+        from gaia.config import GaiaConfigError
+
+        return GaiaConfigError
+
+    def test_off_by_default(self):
+        assert self._cfg()().full_access is False
+
+    def test_absent_from_config_reads_as_off(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text('{"profile": "chat"}', encoding="utf-8")
+        assert self._cfg().load(path).full_access is False
+
+    @pytest.mark.parametrize(
+        "word,expected",
+        [
+            ("true", True),
+            ("yes", True),
+            ("on", True),
+            ("1", True),
+            ("TRUE", True),
+            ("On", True),
+            ("false", False),
+            ("no", False),
+            ("off", False),
+            ("0", False),
+            ("FALSE", False),
+            ("Off", False),
+        ],
+    )
+    def test_words_mean_what_they_say(self, word, expected):
+        config = self._cfg()()
+        config.set("full_access", word)
+        assert config.full_access is expected
+
+    def test_the_word_false_does_not_enable_it(self):
+        """`gaia config set full_access false` must not turn prompts OFF.
+
+        Every CLI value arrives as a string, and a bare ``setattr`` would store
+        ``"false"`` — truthy — so the setting meant to disable full access
+        would enable it. That is the worst possible direction for this
+        particular field to fail in.
+        """
+        config = self._cfg()()
+        config.set("full_access", "false")
+        assert config.full_access is False
+        assert bool(config.full_access) is False
+
+    @pytest.mark.parametrize("junk", ["maybe", "", "2", "tru", "y e s"])
+    def test_an_unreadable_value_is_refused_not_guessed(self, junk):
+        with pytest.raises(self._err(), match="true/false"):
+            self._cfg()().set("full_access", junk)
+
+    @pytest.mark.parametrize(
+        "raw", ['"yes"', '"true"', '"no"', '"false"', '"sometimes"', "1", "0", "null"]
+    )
+    def test_a_hand_edited_non_boolean_fails_loudly_on_load(self, tmp_path, raw):
+        """Strict on disk, like the TUI's reader, so the two never disagree.
+
+        The TUI reads anything but a JSON boolean as off; reading ``"yes"`` as
+        on here would give opposite answers from one file.
+        """
+        path = tmp_path / "config.json"
+        path.write_text(f'{{"full_access": {raw}}}', encoding="utf-8")
+        with pytest.raises(self._err(), match="must be true or false"):
+            self._cfg().load(path)
+
+    @pytest.mark.parametrize("raw,expected", [("true", True), ("false", False)])
+    def test_a_json_boolean_loads_as_itself(self, tmp_path, raw, expected):
+        path = tmp_path / "config.json"
+        path.write_text(f'{{"full_access": {raw}}}', encoding="utf-8")
+        assert self._cfg().load(path).full_access is expected
+
+    def test_round_trips_through_the_file(self, tmp_path):
+        path = tmp_path / "config.json"
+        config = self._cfg()()
+        config.set("full_access", "true")
+        config.save(path)
+        assert self._cfg().load(path).full_access is True
+
+        config.set("full_access", "off")
+        config.save(path)
+        assert self._cfg().load(path).full_access is False
+
+    def test_it_is_a_listed_config_key(self):
+        """So `gaia config set` accepts it and `gaia config show` prints it."""
+        assert "full_access" in self._cfg().field_names()

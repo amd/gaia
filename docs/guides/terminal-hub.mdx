@@ -278,7 +278,9 @@ outright.
 | `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model |
-| `/bypass` | Let the agent run tools without asking (off by default) |
+| `/full-access` | Let the agent run tools without asking (off by default) |
+| `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
+| `/full-access never` | Stop it coming back on future launches |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on

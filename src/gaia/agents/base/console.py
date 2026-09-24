@@ -90,7 +90,8 @@ def auto_approve_env_enabled() -> bool:
     Reads the environment as it was at startup, before any ``.env`` was merged
     in (``gaia.pre_dotenv_env``): a project-local file must not be able to switch
     off every confirmation prompt. A library host that wants unattended approval
-    passes ``auto_approve_gated_tools=True`` to its console instead.
+    passes ``auto_approve_gated_tools=True`` to its console instead. Neither
+    widens the shell: see ``OutputHandler.auto_approve_gated_tools``.
     """
     import gaia  # deferred: gaia/__init__ imports this module
 
@@ -205,6 +206,19 @@ class OutputHandler(ABC):
     Never default-on. A host sets this (or the operator sets
     ``GAIA_AUTO_APPROVE_TOOLS=1``) when it has already obtained consent or is a
     trusted unattended harness. Every approval taken this way is logged.
+
+    It answers prompts; it does not widen the shell. A command outside
+    ``run_shell_command``'s no-prompt list is still refused under it, exactly
+    as under the environment variable. Only :attr:`full_access` runs those.
+    """
+
+    full_access: bool = False
+    """A person turned on full access for this session, and can see that it is on.
+
+    Set only by an interactive host that shows it on every frame (the TUI's
+    ``/full-access``), always together with ``auto_approve_gated_tools``. On top
+    of skipping prompts, it lets ``run_shell_command`` run commands outside its
+    no-prompt list without asking. An unattended harness must not set it.
     """
 
     _last_denial: Optional[Tuple[str, str]] = None

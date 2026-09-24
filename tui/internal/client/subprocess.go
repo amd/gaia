@@ -21,7 +21,7 @@ import (
 
 var (
 	_ ToolPermissionResponder = (*SubprocessClient)(nil)
-	_ PermissionBypasser      = (*SubprocessClient)(nil)
+	_ FullAccessSetter        = (*SubprocessClient)(nil)
 	_ AgentCanceler           = (*SubprocessClient)(nil)
 	_ LocalAgentStopper       = (*SubprocessClient)(nil)
 	_ CapabilityReporter      = (*SubprocessClient)(nil)
@@ -169,10 +169,10 @@ type SubprocessClient struct {
 	// turnDone is closed by the in-flight turn's reader when it exits. nil when
 	// no turn is running.
 	turnDone chan struct{}
-	// bypass is the permission mode the SESSION is in, which is not necessarily
+	// fullAccess is the permission mode the SESSION is in, which is not necessarily
 	// the one the child was launched with. A respawn rebuilds argv from this, so
-	// a `/bypass off` typed before a hard cancel cannot come back on by itself.
-	bypass bool
+	// a `/full-access off` typed before a hard cancel cannot come back on by itself.
+	fullAccess bool
 	// respawned records that the child now backing this client is a REPLACEMENT
 	// for one that was killed. Read and cleared by the next Send, which reports
 	// it: the replacement has no loaded skills, no "always" grants and no prompt
@@ -196,28 +196,28 @@ func NewSubprocessClient(path string, args []string, debug bool) *SubprocessClie
 		args:  args,
 		debug: debug,
 	}
-	c.bypass = c.BypassAtLaunch()
+	c.fullAccess = c.FullAccessAtLaunch()
 	return c
 }
 
-// spawnArgs is argv for the NEXT child: the launch arguments with the bypass
+// spawnArgs is argv for the NEXT child: the launch arguments with the full access
 // flag forced to match the session's current permission mode.
 //
-// Respawning from s.args verbatim silently reverted `/bypass off` — the killed
+// Respawning from s.args verbatim silently reverted `/full-access off` — the killed
 // child had prompts back on, its replacement did not, and the banner that is
 // supposed to make unattended mode impossible to miss was gone. Deriving argv
 // from the live mode means the flag cannot disagree with it; the control line
-// SetBypassPermissions writes stays the mechanism for a LIVE child.
-func (s *SubprocessClient) spawnArgs(bypass bool) []string {
+// SetFullAccess writes stays the mechanism for a LIVE child.
+func (s *SubprocessClient) spawnArgs(fullAccess bool) []string {
 	out := make([]string, 0, len(s.args)+1)
 	for _, a := range s.args {
-		if a == BypassPermissionsFlag {
+		if a == FullAccessFlag {
 			continue
 		}
 		out = append(out, a)
 	}
-	if bypass {
-		out = append(out, BypassPermissionsFlag)
+	if fullAccess {
+		out = append(out, FullAccessFlag)
 	}
 	return out
 }
@@ -287,7 +287,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 		return turnState{}, fmt.Errorf("no agent binary was given, so nothing can be launched")
 	}
 
-	cmd := exec.Command(s.path, s.spawnArgs(s.bypass)...)
+	cmd := exec.Command(s.path, s.spawnArgs(s.fullAccess)...)
 	stderr := &bytes.Buffer{}
 	cmd.Stderr = stderr
 
@@ -622,7 +622,7 @@ const queryKey = "gaia_query"
 // goroutine exists only for the duration of one turn — between turns nobody is
 // scanning the pipe at all. A control message answered by writing a reply
 // event (rather than resolving state already parked in-process, the way
-// RespondToolPermission/SetBypassPermissions do) would sit unread in the OS
+// RespondToolPermission/SetFullAccess do) would sit unread in the OS
 // pipe buffer until some LATER, unrelated Send() call started scanning again —
 // at which point it would be misread as the first event of THAT turn. This is
 // why live model switching (`/model`, gaia_agent.stdio.run_model_command) does
@@ -661,18 +661,18 @@ func (s *SubprocessClient) RespondToolPermission(confirmID string, decision Perm
 	return s.writeControl(fields)
 }
 
-// SetBypassPermissions turns unattended approval on or off for the session.
+// SetFullAccess turns unattended approval on or off for the session.
 //
 // Recorded on the client as well as sent, because the client is what outlives
 // a respawn: the next child's argv is built from it. With no child running
 // there is nobody to tell, and recording it IS the whole change.
-func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
+func (s *SubprocessClient) SetFullAccess(enabled bool) error {
 	s.mu.Lock()
 	started := s.started
-	// A failed disable must never restore bypass on respawn. A failed enable
+	// A failed disable must never restore full access on respawn. A failed enable
 	// must keep the prior mode, because the UI reports that enabling failed.
 	if !enabled || !started {
-		s.bypass = enabled
+		s.fullAccess = enabled
 	}
 	s.mu.Unlock()
 	if !started {
@@ -680,14 +680,14 @@ func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
 	}
 
 	if err := s.writeControl(map[string]interface{}{
-		controlKey: "bypass",
+		controlKey: "full_access",
 		"enabled":  enabled,
 	}); err != nil {
 		return err
 	}
 	if enabled {
 		s.mu.Lock()
-		s.bypass = true
+		s.fullAccess = true
 		s.mu.Unlock()
 	}
 	return nil
@@ -696,7 +696,7 @@ func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
 // Cancel asks the child to stop the running turn WITHOUT killing it.
 //
 // Killing throws away everything the child holds in memory: loaded skills,
-// "always" grants, the prompt history, a /bypass toggle. A cooperative stop
+// "always" grants, the prompt history, a /full-access toggle. A cooperative stop
 // keeps the process, and the turn ends through its normal terminal event,
 // which is what the caller's still-open read settles on. Killing stays the
 // escalation for a turn that does not stop: the caller's context cancel.
@@ -754,14 +754,14 @@ func (s *SubprocessClient) AgentStarted() bool {
 	return s.started
 }
 
-// BypassAtLaunch reports whether the child was spawned with bypass already on,
+// FullAccessAtLaunch reports whether the child was spawned with full access already on,
 // so the UI can show the warning from the very first frame rather than only
 // after a toggle.
-func (s *SubprocessClient) BypassAtLaunch() bool {
+func (s *SubprocessClient) FullAccessAtLaunch() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, a := range s.args {
-		if a == "--bypass-permissions" {
+		if a == FullAccessFlag {
 			return true
 		}
 	}
@@ -833,18 +833,18 @@ func (s *SubprocessClient) discard(proc *procHandle, killErr error) {
 	s.turnDone = nil
 	s.turnCtx = nil
 	if proc.served.Load() || killErr != nil {
-		s.respawned = respawnNotice(s.bypass, killErr)
+		s.respawned = respawnNotice(s.fullAccess, killErr)
 	}
 }
 
 // respawnNotice says what a replacement child no longer has. The permission
 // mode is always stated: it is the state a user acts on without looking.
-func respawnNotice(bypass bool, killErr error) string {
+func respawnNotice(fullAccess bool, killErr error) string {
 	var b strings.Builder
 	b.WriteString("The agent was restarted. The new process does not have this session's " +
 		"loaded skills, \"always allow\" grants or earlier messages — repeat anything it needs.")
-	if bypass {
-		b.WriteString(" Bypass permissions is still ON: it runs tools without asking.")
+	if fullAccess {
+		b.WriteString(" Full access is still ON: it runs tools without asking.")
 	} else {
 		b.WriteString(" Permission prompts are on.")
 	}

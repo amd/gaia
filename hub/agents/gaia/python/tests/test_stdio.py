@@ -144,37 +144,37 @@ def test_a_turn_still_writes_only_json_events(configure_logging):
 #
 # The switch that makes every gated tool run unattended must leave a record in
 # a NORMAL session. apply_control writes nothing to stdout by design, so if the
-# log drops it too, enabling bypass happened nowhere at all.
+# log drops it too, enabling full access happened nowhere at all.
 
 
-def test_a_bypass_toggle_is_recorded_at_the_default_log_level(configure_logging):
+def test_a_full_access_toggle_is_recorded_at_the_default_log_level(configure_logging):
     wire = io.StringIO()
     path = configure_logging(wire, dev=False)  # user mode, NOT --dev
 
-    stdio.PermissionState().set_bypass(True)
+    stdio.PermissionState().set_full_access(True)
 
-    assert "Bypass permissions ENABLED" in _log_text(path)
+    assert "Full access ENABLED" in _log_text(path)
     assert wire.getvalue() == "", "the audit trail must never touch the wire"
 
 
-def test_turning_bypass_off_is_recorded_too(configure_logging):
+def test_turning_full_access_off_is_recorded_too(configure_logging):
     wire = io.StringIO()
     path = configure_logging(wire, dev=False)
 
-    stdio.PermissionState(bypass=True).set_bypass(False)
+    stdio.PermissionState(full_access=True).set_full_access(False)
 
-    assert "Bypass permissions disabled" in _log_text(path)
+    assert "Full access disabled" in _log_text(path)
 
 
 def test_launching_unattended_is_recorded_too(configure_logging):
-    """--bypass-permissions never goes through set_bypass, so the strongest
+    """--full-access never goes through set_full_access, so the strongest
     case for a record is the one that had none."""
     wire = io.StringIO()
     path = configure_logging(wire, dev=False)
 
-    stdio.PermissionState(bypass=True)
+    stdio.PermissionState(full_access=True)
 
-    assert "Bypass permissions ENABLED at launch" in _log_text(path)
+    assert "Full access ENABLED at launch" in _log_text(path)
 
 
 def test_a_denied_and_dropped_decision_is_recorded_at_the_default_level(
@@ -1119,7 +1119,7 @@ class TestAMultiLineQuestionArrivesWhole:
     def test_control_messages_are_still_routed_away_from_queries(self):
         from gaia_agent.stdio import CONTROL_KEY, parse_control, parse_query
 
-        control = json.dumps({CONTROL_KEY: "bypass", "enabled": True})
+        control = json.dumps({CONTROL_KEY: "full_access", "enabled": True})
         assert parse_control(control) is not None
         # And a query is never mistaken for control.
         assert parse_control(json.dumps({"gaia_query": "hello"})) is None
@@ -1153,14 +1153,14 @@ def test_the_pump_routes_control_away_from_queries(monkeypatch):
     lines = [
         "",
         "   ",
-        json.dumps({stdio.CONTROL_KEY: "bypass", "enabled": True}),
+        json.dumps({stdio.CONTROL_KEY: stdio.CONTROL_FULL_ACCESS, "enabled": True}),
         "what is 2+2?",
         json.dumps({stdio.QUERY_KEY: "line one\nline two"}),
     ]
 
     drained, state = _pump(monkeypatch, "\n".join(lines) + "\n")
 
-    assert state.bypass is True, "the control line never reached apply_control"
+    assert state.full_access is True, "the control line never reached apply_control"
     assert drained == ["what is 2+2?", "line one\nline two", None]
 
 
@@ -1180,7 +1180,10 @@ def test_a_control_line_that_explodes_does_not_take_the_pump_down(monkeypatch):
         raise RuntimeError("control handler bug")
 
     monkeypatch.setattr(stdio, "apply_control", _boom)
-    lines = [json.dumps({stdio.CONTROL_KEY: "bypass", "enabled": True}), "still here?"]
+    lines = [
+        json.dumps({stdio.CONTROL_KEY: stdio.CONTROL_FULL_ACCESS, "enabled": True}),
+        "still here?",
+    ]
 
     drained, _ = _pump(monkeypatch, "\n".join(lines) + "\n")
 
@@ -1239,7 +1242,7 @@ def test_the_parser_accepts_the_spellings_the_go_side_pins():
             "--use-claude",
             "--claude-model",
             "claude-opus-5",
-            "--bypass-permissions",
+            "--full-access",
             "--json-events",
             "--dev",
         ]
@@ -1247,16 +1250,39 @@ def test_the_parser_accepts_the_spellings_the_go_side_pins():
 
     assert args.use_claude is True
     assert args.claude_model == "claude-opus-5"
-    assert args.bypass_permissions is True
+    assert args.full_access is True
     assert args.json_events is True
     assert args.dev is True
+
+
+def test_the_retired_flag_fails_naming_the_new_one(capsys):
+    """One name: the old spelling must not quietly keep working."""
+    with pytest.raises(SystemExit) as exc:
+        stdio.build_parser().parse_args(["--" + "bypass-permissions"])
+
+    assert exc.value.code == 2
+    assert "renamed to --full-access" in capsys.readouterr().err
+
+
+def test_the_retired_control_verb_turns_full_access_off(configure_logging):
+    """An older host's toggle is trusted in neither direction; OFF runs nothing."""
+    wire = io.StringIO()
+    path = configure_logging(wire, dev=False)
+    state = stdio.PermissionState(full_access=True)
+
+    stdio.apply_control(
+        {stdio.CONTROL_KEY: stdio._RETIRED_CONTROL_VERB, "enabled": True}, state
+    )
+
+    assert state.full_access is False
+    assert "renamed" in _log_text(path)
 
 
 def test_the_parser_defaults_to_local_and_prompting():
     args = stdio.build_parser().parse_args([])
 
     assert args.use_claude is False
-    assert args.bypass_permissions is False, "permissions must never default off"
+    assert args.full_access is False, "permissions must never default off"
     assert args.claude_model is None
     assert args.model is None
 
@@ -1424,7 +1450,7 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     agent.conversation_history = []
     agent.model_id = "chosen-model"
     agent.loaded_skills = {"coding": "loaded"}
-    state = stdio.PermissionState(bypass=True)
+    state = stdio.PermissionState(full_access=True)
     seen = []
 
     def turn(agent, query, out, **kwargs):
@@ -1440,7 +1466,7 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     assert seen == [[], []]
     assert agent.model_id == "chosen-model"
     assert agent.loaded_skills == {"coding": "loaded"}
-    assert state.bypass
+    assert state.full_access
     assert json.loads(_lines(wire)[1]) == {
         "type": "final",
         "answer": "conversation_cleared",
