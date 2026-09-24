@@ -237,7 +237,16 @@ profile. The default `gaia` profile is a superset, so a bare `gaia init` covers 
 </Note>
 
 <Note>
-`gaia llm` quick queries use the global default model (`Gemma-4-E4B-it-GGUF`).
+For the `gaia`, `chat`, `rag`, `minimal` and `all` profiles the chat model follows the
+hardware. Where Lemonade reports enough memory for it — about 92 GB for models, as on a
+128 GB Strix Halo — `gaia init` sets up `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download)
+in place of `Gemma-4-E4B-it-GGUF`, prints why, and records it as `default_model`. Every
+other PC gets Gemma. A `default_model` you set yourself always wins, and `--check` asks for
+the same model `gaia init` would download.
+</Note>
+
+<Note>
+`gaia llm` quick queries use `default_model` when set, else `Gemma-4-E4B-it-GGUF`.
 </Note>
 
 **Examples:**
@@ -1452,7 +1461,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `user.Qwen3.8-Flash-Next-GGUF` on a PC with the memory for it and never overwrites a value you set |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 

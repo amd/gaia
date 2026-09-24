@@ -60,10 +60,10 @@ from gaia.agents.base.verification import (
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import (
-    DEFAULT_MODEL_NAME,
     budget_for_ctx,
     is_context_overflow_error,
     profile_ctx_size,
+    resolve_default_chat_model,
     truncation_budget,
 )
 
@@ -1382,10 +1382,10 @@ Do NOT wrap conversational replies in JSON.
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Every agent shares DEFAULT_MODEL_NAME so switching agents never evicts
+        # Every agent resolves the same default so switching agents never evicts
         # and cold-reloads the resident model.
         chat_config = AgentConfig(
-            model=model_id or DEFAULT_MODEL_NAME,
+            model=model_id or resolve_default_chat_model(),
             use_claude=use_claude,
             claude_model=claude_model,
             base_url=base_url,

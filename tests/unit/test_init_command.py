@@ -20,6 +20,14 @@ from gaia.installer.lemonade_installer import (
 from gaia.ui.build import WebuiBuildResult, WebuiBuildStatus
 from gaia.version import LEMONADE_VERSION
 
+# Lemonade /system-info for a PC too small for the large default (16 GB Mac), so
+# `gaia init` keeps choosing Gemma 4 E4B as these tests assume.
+SMALL_MACHINE = {
+    "Physical Memory": "16 GB",
+    "devices": {"metal": {"available": True, "vram_gb": 11.8}},
+    "model_storage": {"free_bytes": 200e9},
+}
+
 
 class TestLemonadeInfo(unittest.TestCase):
     """Test LemonadeInfo dataclass."""
@@ -698,6 +706,7 @@ class TestDownloadModels(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.get_required_models.return_value = []
             mock_client.check_model_available.return_value = False
             mock_client.ensure_model_downloaded.return_value = True
@@ -717,6 +726,7 @@ class TestDownloadModels(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.get_required_models.return_value = []
             mock_client.check_model_available.return_value = False
             mock_client.ensure_model_downloaded.return_value = False
@@ -739,6 +749,7 @@ class TestDownloadModels(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.get_required_models.return_value = []
             mock_client.check_model_available.return_value = False
             mock_client.ensure_model_downloaded.return_value = True
@@ -757,6 +768,7 @@ class TestDownloadModels(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.get_required_models.return_value = []
             mock_client.check_model_available.return_value = True
             mock_client.ensure_model_downloaded.return_value = True
@@ -783,6 +795,7 @@ class TestDownloadModels(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.ensure_model_downloaded.return_value = True
             mock_client_class.return_value = mock_client
 
@@ -815,6 +828,7 @@ class TestSkipChatModel(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.ensure_model_downloaded.return_value = True
             mock_client_class.return_value = mock_client
 
@@ -840,6 +854,7 @@ class TestSkipChatModel(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.ensure_model_downloaded.return_value = True
             mock_client_class.return_value = mock_client
 
@@ -869,6 +884,7 @@ class TestSkipChatModel(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.health_check.return_value = True
             mock_client.check_model_available.return_value = False
             mock_client_class.return_value = mock_client
@@ -908,6 +924,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.health_check.return_value = False
             mock_client_class.return_value = mock_client
 
@@ -924,6 +941,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.health_check.return_value = True
             mock_client.check_model_available.return_value = True
             mock_client_class.return_value = mock_client
@@ -941,6 +959,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.health_check.return_value = True
             mock_client.check_model_available.return_value = False
             mock_client_class.return_value = mock_client
@@ -2782,3 +2801,130 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Lemonade /system-info for a 128 GB Strix Halo (96 GB carve-out + shared GTT).
+STRIX_HALO_128 = {
+    "Physical Memory": "128 GB",
+    "devices": {
+        "amd_gpu": [
+            {
+                "available": True,
+                "integrated": True,
+                "vram_gb": 96.0,
+                "virtual_mem_gb": 15.8,
+            }
+        ]
+    },
+    "model_storage": {"free_bytes": 900e9},
+}
+
+
+class TestHardwareChatModel(unittest.TestCase):
+    """The chat model follows the hardware: Qwen3.8 Flash where it fits,
+    Gemma 4 E4B everywhere else, and a user's default_model always wins."""
+
+    def _client(self, system_info, have=()):
+        client = MagicMock()
+        client.health_check.return_value = {"status": "ok"}
+        client.get_system_info.return_value = system_info
+        client.check_model_available.side_effect = lambda m: m in have
+        client.ensure_model_downloaded.return_value = True
+        return client
+
+    def test_check_asks_for_qwen_on_a_big_machine_not_gemma(self):
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+        )
+
+        client = self._client(STRIX_HALO_128, have={DEFAULT_MODEL_NAME})
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            status = check_setup_status(profile="gaia")
+        self.assertFalse(status.ready)
+        self.assertTrue(any(LARGE_DEFAULT_MODEL_NAME in r for r in status.reasons))
+        probed = {c.args[0] for c in client.check_model_available.call_args_list}
+        self.assertNotIn(DEFAULT_MODEL_NAME, probed)
+
+    def test_check_keeps_gemma_on_a_small_machine(self):
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+        client = self._client(SMALL_MACHINE)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            status = check_setup_status(profile="gaia")
+        self.assertTrue(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
+
+    def test_user_default_model_wins_without_probing_hardware(self):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import check_setup_status
+
+        cfg = GaiaConfig()
+        cfg.default_model = "Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        cfg.save()
+        client = self._client(STRIX_HALO_128)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            status = check_setup_status(profile="gaia")
+        client.get_system_info.assert_not_called()
+        self.assertTrue(any("Qwen3-Coder" in r for r in status.reasons))
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_download_registers_qwen_with_a_size_scaled_timeout(self, _installer):
+        from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+        )
+
+        cmd = InitCommand(profile="gaia", yes=True)
+        client = self._client(STRIX_HALO_128)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            self.assertTrue(cmd._download_models())
+        calls = {
+            c.args[0]: c.kwargs for c in client.ensure_model_downloaded.call_args_list
+        }
+        self.assertNotIn(DEFAULT_MODEL_NAME, calls)
+        qwen = calls[LARGE_DEFAULT_MODEL_NAME]
+        self.assertTrue(
+            qwen["checkpoint"].startswith("unsloth/Qwen3.8-Flash-Next-GGUF:")
+        )
+        self.assertEqual(qwen["recipe"], "llamacpp")
+        self.assertEqual(qwen["mmproj"], "mmproj-F16.gguf")
+        self.assertGreater(qwen["timeout"], 7200)
+
+    def test_vlm_profile_keeps_gemma_and_never_probes(self):
+        from gaia.installer.init_command import with_chat_model
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+        def fail():
+            raise AssertionError("vlm must not resolve a hardware chat model")
+
+        self.assertEqual(
+            with_chat_model("vlm", [DEFAULT_MODEL_NAME], fail), [DEFAULT_MODEL_NAME]
+        )
+
+    def test_recorded_choice_never_overrides_the_user(self):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import ChatModelChoice, InitCommand
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+        )
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = InitCommand(profile="gaia", yes=True)
+
+        cmd._chat_choice = ChatModelChoice(LARGE_DEFAULT_MODEL_NAME, False, [])
+        cfg = GaiaConfig()
+        cmd._record_chat_choice(cfg)
+        self.assertEqual(cfg.default_model, LARGE_DEFAULT_MODEL_NAME)
+
+        cfg = GaiaConfig(default_model="mine")
+        cmd._record_chat_choice(cfg)
+        self.assertEqual(cfg.default_model, "mine")
+
+        cmd._chat_choice = ChatModelChoice(DEFAULT_MODEL_NAME, False, [])
+        cfg = GaiaConfig()
+        cmd._record_chat_choice(cfg)
+        self.assertIsNone(cfg.default_model)

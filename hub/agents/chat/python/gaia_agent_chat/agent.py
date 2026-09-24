@@ -58,8 +58,8 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ShellToolsMixin,
 )
 from gaia.llm.lemonade_client import (
-    DEFAULT_MODEL_NAME,
     is_tool_calling_model,
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
 )
 from gaia.mcp.mixin import MCPClientMixin
@@ -304,8 +304,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use the configured default model (Gemma) when no explicit model is set
-        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
+        # No explicit model: the machine's default (config default_model, else Gemma)
+        effective_model_id = config.model_id or resolve_default_chat_model()
 
         # Debug logging for model selection
         logger.debug(

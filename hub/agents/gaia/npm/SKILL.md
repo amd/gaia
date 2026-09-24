@@ -128,8 +128,10 @@ The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
 1. Lemonade **10.2.0 or newer**, running (`lemonade-server serve`).
-2. The default model downloaded (`gaia download Gemma-4-E4B-it-GGUF`, or
-   `gaia init`).
+2. The machine's default chat model downloaded — run `gaia init`. It picks
+   `user.Qwen3.8-Flash-Next-GGUF` where it fits (a 128 GB Strix Halo) and
+   `Gemma-4-E4B-it-GGUF` everywhere else, and records the pick as `default_model`
+   in `~/.gaia/config.json`. `model.id` below names whichever this machine uses.
 
 Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 (it never pulls or loads) that probes Lemonade, compares its version to the

@@ -1,0 +1,59 @@
+{
+  "fit": {
+    "memory_overhead_factor": 1.1,
+    "memory_overhead_gb": 2.0
+  },
+  "models": [
+    {
+      "id": "Qwen3.8-Flash-Next-GGUF",
+      "register_as": "user.Qwen3.8-Flash-Next-GGUF",
+      "provider": "local",
+      "label": "Qwen3.8 Flash Next",
+      "note": "default on PCs with ~96 GB for models (Strix Halo 128 GB)",
+      "size_gb": 81.96,
+      "checkpoint": "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS",
+      "recipe": "llamacpp",
+      "mmproj": "mmproj-F16.gguf",
+      "vision": true,
+      "reasoning": true
+    },
+    {
+      "id": "Gemma-4-E4B-it-GGUF",
+      "provider": "local",
+      "label": "Gemma 4 E4B",
+      "note": "default on every other PC"
+    },
+    {
+      "id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "provider": "local",
+      "label": "Qwen3 Coder 30B A3B"
+    },
+    {
+      "id": "Qwen3-Coder-Next-GGUF",
+      "provider": "local",
+      "label": "Qwen3 Coder Next"
+    },
+    {
+      "id": "fireworks.gemma-4-31b-it",
+      "provider": "fireworks",
+      "label": "Gemma 4 31B IT"
+    },
+    {
+      "id": "fireworks.deepseek-v4-flash-0731",
+      "provider": "fireworks",
+      "label": "DeepSeek V4 Flash"
+    },
+    {
+      "id": "fireworks.deepseek-v4p1-flash",
+      "provider": "fireworks",
+      "label": "DeepSeek V4.1 Flash"
+    },
+    {
+      "id": "fireworks.qwen3p8-flash-next",
+      "provider": "fireworks",
+      "label": "Qwen3.8 Flash Next",
+      "note": "not serverless on Fireworks: deploy it on your Fireworks account first",
+      "match_prefix": true
+    }
+  ]
+}

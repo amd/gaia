@@ -227,6 +227,25 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
+# The default on machines with the memory for it (a 128 GB Strix Halo): a 125B
+# MoE with 6B active. Not a Lemonade built-in — registered as a ``user.`` model
+# on first pull (see its MODELS entry). ``gaia init`` picks it only when
+# gaia.llm.model_fit says it fits, and records the pick as ``default_model``.
+LARGE_DEFAULT_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
+
+
+def resolve_default_chat_model() -> str:
+    """The chat model an agent uses when nobody passed one.
+
+    ``~/.gaia/config.json``'s ``default_model`` — which ``gaia init`` sets from
+    the hardware — else :data:`DEFAULT_MODEL_NAME`. Every agent resolves the
+    same way, so switching agents never evicts the resident model.
+    """
+    from gaia.config import GaiaConfig
+
+    return GaiaConfig.load().resolve_model(None, DEFAULT_MODEL_NAME)
+
+
 # Default embedding model. EmbeddingGemma 300M (768-dim) replaces
 # nomic-embed-text-v2-moe, which the current llama.cpp server cannot load.
 # Not a Lemonade built-in — registered as a ``user.`` custom model on first
@@ -474,6 +493,30 @@ class ModelRequirement:
     # Lemonade applies the ``embeddings`` label explicitly (avoids the #1745
     # auto-label-from-name bug).
     embedding: bool = False
+    # Custom multimodal / reasoning registration: the vision projector file in
+    # the checkpoint's repo, and the labels Lemonade cannot infer for a user model.
+    mmproj: Optional[str] = None
+    vision: bool = False
+    reasoning: bool = False
+    # Download size in GB, for the fit check (gaia.llm.model_fit). Built-ins
+    # leave it None — Lemonade's catalog reports their size.
+    size_gb: Optional[float] = None
+
+    def pull_kwargs(self) -> Dict[str, Any]:
+        """Registration fields for ``ensure_model_downloaded`` on a ``user.`` model.
+
+        Built-ins get none: passing ``recipe`` for one 400s (#1655).
+        """
+        if not self.model_id.startswith("user."):
+            return {}
+        return {
+            "checkpoint": self.checkpoint,
+            "recipe": self.recipe,
+            "embedding": self.embedding or None,
+            "mmproj": self.mmproj,
+            "vision": self.vision or None,
+            "reasoning": self.reasoning or None,
+        }
 
 
 @dataclass
@@ -518,6 +561,25 @@ MODELS = {
         display_name="Gemma 4 E4B (Multimodal)",
         min_ctx_size=GPU_CTX_SIZE,
         tool_calling=True,
+    ),
+    # --- Qwen3.8-Flash-Next: the default where it fits (Strix Halo 128 GB) ---
+    # 125B MoE (6B active) + 51B n-gram embedding; needs llama.cpp's qwen4exp
+    # support, first bundled in Lemonade v2026.39.1. UD-IQ3_XXS (82 GB, three
+    # shards in one repo folder) is the largest quant that fits a 96 GB GPU
+    # carve-out with room for the 64K window — its KV cache is ~25 KB/token,
+    # since only 12 of 48 layers carry attention.
+    "qwen3.8-flash": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=LARGE_DEFAULT_MODEL_NAME,
+        display_name="Qwen3.8 Flash Next (Multimodal)",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        checkpoint="unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS",
+        recipe="llamacpp",
+        mmproj="mmproj-F16.gguf",
+        vision=True,
+        reasoning=True,
+        size_gb=81.96,
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
@@ -676,6 +738,36 @@ AGENT_PROFILES = {
 }
 
 
+def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement]:
+    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace."""
+    for mr in MODELS.values():
+        if _model_ids_match(mr.model_id, model_id):
+            return mr
+    return None
+
+
+#: Largest-first default chat models; the last is the floor every machine gets.
+DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
+
+
+def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
+    """Pick the default chat model this machine can run, from Lemonade's view of it.
+
+    Returns ``(model_id, skipped, capacity)``: ``skipped`` lists
+    ``(model_id, reason)`` for each larger model passed over, so the caller can
+    say why a big machine did not get the big model.
+    """
+    from gaia.llm.model_fit import capacity_from_system_info, pick_default_model
+
+    capacity = capacity_from_system_info(client.get_system_info())
+    candidates = []
+    for model_id in DEFAULT_MODEL_LADDER:
+        mr = find_model_requirement(model_id)
+        candidates.append((model_id, (mr.size_gb if mr else None) or 0.0))
+    model_id, skipped = pick_default_model(candidates, capacity)
+    return model_id, skipped, capacity
+
+
 def is_tool_calling_model(model_id: Optional[str]) -> bool:
     """Return True if model_id supports native OpenAI tool_calls via Lemonade.
 
@@ -686,7 +778,7 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
     if not model_id:
         return False
     for mr in MODELS.values():
-        if mr.model_id == model_id:
+        if _model_ids_match(mr.model_id, model_id):
             return mr.tool_calling
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
 
@@ -2899,6 +2991,7 @@ class LemonadeClient:
         mmproj: Optional[str] = None,
         embedding: Optional[bool] = None,
         timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
+        vision: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Install a model on the server.
@@ -2912,6 +3005,7 @@ class LemonadeClient:
             embedding: Whether the model is an embedding model — sets the
                 'embeddings' label on registration (for registering new models)
             timeout: Request timeout in seconds (longer for model installation)
+            vision: Whether the model accepts images (for registering new models)
 
         Returns:
             Dict containing the status of the pull operation
@@ -2939,6 +3033,8 @@ class LemonadeClient:
             request_data["mmproj"] = mmproj
         if embedding is not None:
             request_data["embedding"] = embedding
+        if vision is not None:
+            request_data["vision"] = vision
 
         url = f"{self.base_url}/pull"
         try:
@@ -3218,6 +3314,9 @@ class LemonadeClient:
         checkpoint: Optional[str] = None,
         recipe: Optional[str] = None,
         embedding: Optional[bool] = None,
+        mmproj: Optional[str] = None,
+        vision: Optional[bool] = None,
+        reasoning: Optional[bool] = None,
     ) -> bool:
         """
         Ensure a model is downloaded, downloading if necessary.
@@ -3236,6 +3335,10 @@ class LemonadeClient:
             recipe: Lemonade recipe for a custom-model registration (e.g. ``llamacpp``).
             embedding: Set True for a custom embedding model so the ``embeddings``
                 label is applied on registration.
+            mmproj: Vision projector file in the checkpoint's repo, for a custom
+                multimodal model's registration.
+            vision: Set True for a custom model that accepts images.
+            reasoning: Set True for a custom model that emits reasoning.
 
         Returns:
             True if model is available (was already downloaded or successfully downloaded),
@@ -3283,6 +3386,9 @@ class LemonadeClient:
                 checkpoint=checkpoint,
                 recipe=recipe,
                 embedding=embedding,
+                mmproj=mmproj,
+                vision=vision,
+                reasoning=reasoning,
                 timeout=timeout,
             )
 
@@ -3680,7 +3786,7 @@ class LemonadeClient:
         # at 35K-token sections.
         expected_ctx: Optional[int] = None
         for _key, _req in MODELS.items():
-            if _req.model_id == model:
+            if _model_ids_match(_req.model_id, model):
                 expected_ctx = _req.min_ctx_size
                 break
         if expected_ctx is None:
@@ -3812,7 +3918,7 @@ class LemonadeClient:
         # doesn't fall back to its own 4096-token default and silently
         # truncate GAIA's larger prompts.
         if expected_ctx == DEFAULT_CONTEXT_SIZE and not any(
-            req.model_id == model for req in MODELS.values()
+            _model_ids_match(req.model_id, model) for req in MODELS.values()
         ):
             self.log.info(
                 f"Model '{model}' not in MODELS registry; "

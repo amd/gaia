@@ -12,6 +12,13 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Changed
+
+- The default chat model now follows the hardware. On a PC with the memory for it
+  (a 128 GB Strix Halo), `gaia init` sets up Qwen3.8 Flash Next instead of
+  Gemma 4 E4B and records it as `default_model`; the agent and its
+  `GET /v1/gaia/init` readiness check use that model. Every other PC keeps Gemma.
+
 ### Fixed
 
 - The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
