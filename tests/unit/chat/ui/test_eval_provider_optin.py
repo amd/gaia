@@ -145,8 +145,27 @@ def _make_db():
 
 
 def _make_registry():
+    """A registry holding a real wheel-installed ``gaia`` registration.
+
+    Returns an actual ``AgentRegistration`` rather than a bare ``True``: chat
+    dispatch reads ``is_sidecar`` off it to decide in-process vs relay, and a
+    stand-in that does not carry the real object's fields cannot tell us
+    whether that decision is right.
+    """
+    from gaia.agents.registry import AgentRegistration
+
     registry = MagicMock()
-    registry.get.return_value = True
+    registry.get.return_value = AgentRegistration(
+        id="gaia",
+        name="GAIA",
+        description="",
+        source="installed",
+        conversation_starters=[],
+        factory=lambda **kw: None,
+        agent_dir=None,
+        models=[],
+        is_sidecar=False,  # a wheel install — must run in-process
+    )
     registry.resolve_model.return_value = None
     captured = {}
 

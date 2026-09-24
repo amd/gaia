@@ -115,6 +115,28 @@ jobs:
             tests/unit/test_skill_sets.py \
             -v --tb=short
 
+      - name: Run Sidecar Contract Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "================================================================"
+          echo "                  SIDECAR CONTRACT TESTS"
+          echo "================================================================"
+          # These two guard the Agent UI's route to a Hub-installed flagship
+          # (#4161) and BOTH skip themselves when the agent wheel is absent,
+          # so test_unit.yml reports them green without running a single
+          # assertion. This is the lane that installs the wheel, so it is the
+          # only place they actually execute.
+          #   card drift — the spec's transcribed card vs the package's own
+          #   live relay  — a real sidecar over /v1/gaia/{health,version,init}
+          python -m pytest \
+            tests/unit/agents/test_sidecar_card_drift.py \
+            tests/unit/agents/test_binary_install_dispatch.py \
+            tests/unit/chat/ui/test_sidecar_dispatch_coverage.py \
+            tests/unit/chat/ui/test_sidecar_relay_profiles.py \
+            tests/integration/test_gaia_sidecar_relay_live.py \
+            -v --tb=short
+
       - name: Run Command-Injection Regression Tests
         env:
           GAIA_MEMORY_DISABLED: "1"

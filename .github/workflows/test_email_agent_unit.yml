@@ -166,6 +166,9 @@ jobs:
           echo "      Agent UI dev-mode contract (packaging/server.py shim + build_app)"
           echo "  - tests/unit/test_daemon_forward.py + test_daemon_remedy_commands.py"
           echo "      OAuth forward-out to the email sidecar + its remedy strings (#2730)"
+          echo "  - tests/unit/agents/test_sidecar_card_drift.py"
+          echo "      the daemon spec's transcribed card vs the package's own (#4161);"
+          echo "      skips itself without the wheel, so it only runs in this lane"
           echo ""
           python -m pytest \
             tests/unit/agents/email/ \
@@ -178,6 +181,7 @@ jobs:
             tests/unit/test_email_sidecar_server_wiring.py \
             tests/unit/test_daemon_forward.py \
             tests/unit/test_daemon_remedy_commands.py \
+            tests/unit/agents/test_sidecar_card_drift.py \
             -v --tb=short
 
       - name: Test summary

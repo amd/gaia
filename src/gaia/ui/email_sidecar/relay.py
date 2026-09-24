@@ -3,7 +3,7 @@
 """Relay the sidecar's canonical ``/query`` SSE loop into the UI's own SSE
 vocabulary (issue #2109).
 
-The email sidecar's ``POST /v1/email/query`` speaks a frozen, 8-event
+A sidecar's ``POST /v1/<agent>/query`` speaks a frozen, 8-event
 canonical vocabulary (spec #2015/#2016, ``needs_input`` added by #2595) —
 
     status | token | tool_call | tool_result | needs_confirmation | needs_input
@@ -26,6 +26,11 @@ meant for the in-process agent loop and would be label-dead here now that the
 prior in-process ``agent_type=email`` tool-calling loop has been fully
 retired in favor of this relay (#2109).
 
+Agent-agnostic since #4161: everything that differs between sidecars — the
+contract floor, the user-facing copy, tool labels, which tools mutate — lives
+in :mod:`gaia.ui.email_sidecar.profiles`, so the flagship relays through this
+same code path rather than a parallel one.
+
 Cancellation: the relay registers the live (still-open) HTTP response on
 ``handler.active_relay_response`` via ``query_stream``'s ``on_response`` hook
 so a cancel arriving on another thread (``routers/chat.py``'s
@@ -43,6 +48,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
+from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _format_tool_args,
@@ -58,25 +64,16 @@ logger = get_logger(__name__)
 #: (the canonical contract's "exactly one terminal event" guarantee broken).
 #: Pinned as a module constant so tests can assert equality and the copy the
 #: user sees stays stable.
-STREAM_ENDED_UNEXPECTEDLY = (
-    "Email agent stream ended unexpectedly (the sidecar may have crashed). "
-    "Check the sidecar log under ~/.gaia/logs/ and retry."
-)
+STREAM_ENDED_UNEXPECTEDLY = EMAIL_PROFILE.stream_ended_message
+
 
 #: Surfaced both by the dispatch layer's pre-flight version gate (a pre-2.4
 #: Hub binary passes the manager's MAJOR-only handshake, see
-#: ``_chat_helpers._email_query_version_supported``) AND here, as the
+#: ``profiles.api_version_supported``) AND here, as the
 #: backstop when a 404 on ``/query`` itself proves the same thing (the
 #: manager's captured ``api_version`` was missing/stale at pre-flight time).
 #: Both call sites must use this exact string.
-EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = (
-    "The installed email agent doesn't support chat queries (needs contract "
-    "2.4+). Update it from the Hub and retry."
-)
-
-#: Canonical event types that end a ``/query`` run (mirrors
-#: ``gaia_agent_email.sse_translation.TERMINAL_TYPES``).
-_TERMINAL_TYPES = frozenset({"final", "error"})
+EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = EMAIL_PROFILE.version_upgrade_message
 
 #: Appended — never replacing the original text — to a terminal ``error``
 #: detail that looks like a connection/timeout failure. The sidecar emits
@@ -84,11 +81,7 @@ _TERMINAL_TYPES = frozenset({"final", "error"})
 #: otherwise reaches the user as a raw urllib3 repr with no next step.
 #: Root fix (actionable copy sidecar-side) ships via the agent release
 #: pipeline, not this repo — see the #2109 PR notes.
-LEMONADE_CONNECTION_HINT = (
-    "\n\nThis usually means the local LLM backend (Lemonade Server) is not "
-    "running or unreachable from the email agent. Start Lemonade Server, "
-    "then retry."
-)
+LEMONADE_CONNECTION_HINT = EMAIL_PROFILE.lemonade_hint
 
 #: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
 #: Deliberately narrow: a non-match passes through untouched.
@@ -105,129 +98,34 @@ _CONNECTION_SHAPED_RE = re.compile(
 )
 
 
-def _augment_error_detail(detail: str) -> str:
+def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
     """Append (never substitute) an actionable hint to connection-shaped
     error text — boundary translation, not a fallback: the original detail
     is preserved verbatim at the front."""
     if _CONNECTION_SHAPED_RE.search(detail):
-        return detail + LEMONADE_CONNECTION_HINT
+        return detail + profile.lemonade_hint
     return detail
 
 
-#: Mutating email tools that execute WITHOUT confirmation under ``/query``
-#: (``CONFIRMATION_REQUIRED_TOOLS`` gates only send/RSVP/forward/
-#: quarantine/calendar-create — see
-#: ``gaia_agent_email.agent.EmailTriageAgent.CONFIRMATION_REQUIRED_TOOLS``).
-#: Their effects are persistent mailbox/preference changes, so the relay also
-#: emits a visible status line for them — never buried in the collapsed
-#: activity panel just because no confirmation gate fired.
-_MUTATING_TOOLS = frozenset(
-    {
-        "archive_message",
-        "archive_message_batch",
-        "undo_archive_batch",
-        "mark_read",
-        "mark_unread",
-        "mark_read_batch",
-        "mark_unread_batch",
-        "add_star",
-        "remove_star",
-        "add_star_batch",
-        "remove_star_batch",
-        "label_message",
-        "label_message_batch",
-        "move_to_label",
-        "move_to_label_batch",
-        "trash_message",
-        "restore_message",
-        "restore_trashed_message",
-        "snooze_message",
-        "cancel_scheduled_job",
-        "unquarantine_message",
-        "set_priority_sender",
-        "set_low_priority_sender",
-        "set_category_default",
-        "clear_session_preferences",
-        "build_voice_profile",
-        "clear_voice_profile",
-    }
-)
-
-#: Small static label map for the ``tool_start`` "detail" string — the relay
-#: has no in-process tool registry to consult (``get_tool_display_label``
-#: only knows tools registered via ``@tool`` in THIS process, and the email
-#: tools live in the sidecar), so it owns a friendly-label fallback here,
-#: falling back further to a humanized tool name for anything unlisted.
-_TOOL_LABELS: Dict[str, str] = {
-    "pre_scan_inbox": "Scanning inbox",
-    "triage_inbox": "Triaging inbox",
-    "search_messages": "Searching mail",
-    "search_trash": "Searching Trash",
-    "list_inbox": "Listing inbox",
-    "get_message": "Reading message",
-    "get_thread": "Reading thread",
-    "summarize_thread": "Summarizing thread",
-    "summarize_message": "Summarizing message",
-    "list_labels": "Listing labels",
-    "check_followups": "Checking follow-ups",
-    "profile_inbox": "Profiling inbox",
-    "draft_reply": "Drafting reply",
-    "draft_forward": "Drafting forward",
-    "send_draft": "Sending draft",
-    "send_now": "Sending message",
-    "forward_message": "Forwarding message",
-    "schedule_send": "Scheduling send",
-    "archive_message": "Archiving message",
-    "archive_message_batch": "Archiving messages",
-    "undo_archive_batch": "Undoing archive",
-    "mark_read": "Marking read",
-    "mark_unread": "Marking unread",
-    "mark_read_batch": "Marking messages read",
-    "mark_unread_batch": "Marking messages unread",
-    "add_star": "Starring message",
-    "remove_star": "Unstarring message",
-    "add_star_batch": "Starring messages",
-    "remove_star_batch": "Unstarring messages",
-    "label_message": "Labeling message",
-    "label_message_batch": "Labeling messages",
-    "move_to_label": "Moving message",
-    "move_to_label_batch": "Moving messages",
-    "trash_message": "Trashing message",
-    "restore_message": "Restoring message",
-    "restore_trashed_message": "Restoring message from Trash",
-    "snooze_message": "Snoozing message",
-    "cancel_scheduled_job": "Cancelling scheduled job",
-    "list_scheduled_jobs": "Listing scheduled jobs",
-    "list_calendar_events": "Checking calendar",
-    "accept_invite": "Accepting invite",
-    "decline_invite": "Declining invite",
-    "create_event_from_email": "Creating calendar event",
-    "detect_meeting_request": "Detecting meeting request",
-    "detect_calendar_conflicts": "Checking calendar conflicts",
-    "quarantine_phishing_message": "Quarantining suspicious message",
-    "unquarantine_message": "Restoring quarantined message",
-    "set_priority_sender": "Updating priority sender",
-    "set_low_priority_sender": "Updating low-priority sender",
-    "set_category_default": "Updating category preference",
-    "clear_session_preferences": "Clearing session preferences",
-    "build_voice_profile": "Building voice profile",
-    "clear_voice_profile": "Clearing voice profile",
-}
+#: Email's own maps, now owned by ``profiles.EMAIL_PROFILE``. Re-exported
+#: under their original names so existing importers keep working.
+_MUTATING_TOOLS = EMAIL_PROFILE.mutating_tools
+_TOOL_LABELS = EMAIL_PROFILE.tool_labels
 
 
 def _humanize_tool(tool: str) -> str:
     return tool.replace("_", " ").strip() or "tool"
 
 
-def _tool_label(tool: str) -> str:
-    return _TOOL_LABELS.get(tool) or _humanize_tool(tool)
+def _tool_label(tool: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
+    return profile.tool_labels.get(tool) or _humanize_tool(tool)
 
 
-def _derive_summary(tool: str, data: Any) -> str:
+def _derive_summary(tool: str, data: Any, profile: RelayProfile = EMAIL_PROFILE) -> str:
     """Short, human summary for a ``tool_result`` — never a bare "Done"."""
     if isinstance(data, dict) and data:
         return _summarize_tool_result(data)
-    return f"Ran {_tool_label(tool).lower()}"
+    return f"Ran {_tool_label(tool, profile).lower()}"
 
 
 def _kind_re() -> "re.Pattern":
@@ -238,7 +136,9 @@ def _kind_re() -> "re.Pattern":
     return re.compile(rf'"kind"\s*:\s*"(?:{alt})"')
 
 
-def _dispatch_one(handler: Any, event: Dict[str, Any]) -> bool:
+def _dispatch_one(
+    handler: Any, event: Dict[str, Any], profile: RelayProfile = EMAIL_PROFILE
+) -> bool:
     """Emit one canonical event as a UI event. Returns True if terminal."""
     etype = event.get("type")
 
@@ -253,20 +153,21 @@ def _dispatch_one(handler: Any, event: Dict[str, Any]) -> bool:
     elif etype == "tool_call":
         tool = str(event.get("tool") or "unknown")
         args = event.get("args") or {}
-        handler._emit({"type": "tool_start", "tool": tool, "detail": _tool_label(tool)})
+        label = _tool_label(tool, profile)
+        handler._emit({"type": "tool_start", "tool": tool, "detail": label})
         handler._emit(
             {
                 "type": "tool_args",
                 "tool": tool,
                 "args": args,
-                "detail": _format_tool_args(tool, args) or _tool_label(tool),
+                "detail": _format_tool_args(tool, args) or label,
             }
         )
-        if tool in _MUTATING_TOOLS:
+        if tool in profile.mutating_tools:
             handler._emit(
                 {
                     "type": "status",
-                    "message": f"✎ mailbox change: {tool}",
+                    "message": f"✎ {profile.change_noun}: {tool}",
                 }
             )
 
@@ -276,7 +177,7 @@ def _dispatch_one(handler: Any, event: Dict[str, Any]) -> bool:
         out: Dict[str, Any] = {
             "type": "tool_result",
             "tool": tool,
-            "summary": _derive_summary(tool, data),
+            "summary": _derive_summary(tool, data, profile),
             "success": True,
             "data": data if data is not None else {},
         }
@@ -319,9 +220,15 @@ def _dispatch_one(handler: Any, event: Dict[str, Any]) -> bool:
         return True
 
     elif etype == "error":
-        detail = event.get("detail") or "Unknown error from the email agent."
+        detail = (
+            event.get("detail")
+            or f"Unknown error from the {profile.display_name} agent."
+        )
         handler._emit(
-            {"type": "agent_error", "content": _augment_error_detail(str(detail))}
+            {
+                "type": "agent_error",
+                "content": _augment_error_detail(str(detail), profile),
+            }
         )
         return True
 
@@ -340,7 +247,12 @@ def _best_effort_cancel(proxy: Any, rid: str) -> None:
     try:
         proxy.cancel_query(rid)
     except SidecarError as exc:
-        logger.info("email relay: cancel_query for run_id=%s: %s", rid, exc)
+        logger.info(
+            "%s relay: cancel_query for run_id=%s: %s",
+            getattr(proxy, "agent_id", "sidecar"),
+            rid,
+            exc,
+        )
 
 
 def relay_query(
@@ -353,6 +265,8 @@ def relay_query(
     run_id: Optional[str] = None,
     max_steps: Optional[int] = None,
     read_timeout: float = 300.0,
+    profile: RelayProfile = EMAIL_PROFILE,
+    session_id: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
@@ -374,6 +288,18 @@ def relay_query(
     every other agent branch. Relay-level signalling would push a second
     ``None`` sentinel per turn, violating the queue's exactly-once contract.
     """
+    # A proxy pointed at one agent driven with another's profile would send
+    # that agent's body shape to the wrong /v1/<agent> prefix and label its
+    # tools with the wrong names. ``profile`` still defaults to email for the
+    # existing callers, so check rather than trust it.
+    proxy_agent = getattr(proxy, "agent_id", None)
+    if proxy_agent is not None and proxy_agent != profile.agent_id:
+        raise ValueError(
+            f"relay_query got a '{proxy_agent}' proxy with the "
+            f"'{profile.agent_id}' profile; pass the profile that matches the "
+            "sidecar being relayed."
+        )
+
     rid = run_id or str(uuid.uuid4())
     # can_answer_questions=True (#2595): this relay DOES render needs_input
     # and POST the answer back via POST /api/chat/user-input ->
@@ -391,6 +317,11 @@ def relay_query(
         body["model"] = model_id
     if max_steps is not None:
         body["max_steps"] = max_steps
+    if profile.sends_session_id and session_id:
+        # Contract >= 2.12. Without it the sidecar builds a fresh agent per
+        # turn, so a document indexed on turn 1 is gone by turn 2. Gated by
+        # profile because both request models are extra="forbid".
+        body["session_id"] = session_id
 
     # So a later POST /api/chat/user-input can find where to deliver the
     # answer (#2595) — mirrors active_relay_response's lifetime exactly.
@@ -409,26 +340,30 @@ def relay_query(
                 resp.close()
             except Exception:  # noqa: BLE001 - best-effort, mirrors router close
                 logger.debug(
-                    "email relay: failed to close raced-cancel response",
+                    "%s relay: failed to close raced-cancel response",
+                    profile.agent_id,
                     exc_info=True,
                 )
 
     terminated = False
     crashed = False
-    crash_message = STREAM_ENDED_UNEXPECTEDLY
+    crash_message = profile.stream_ended_message
     try:
         for event in proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response
         ):
             if handler.cancelled.is_set():
                 break
-            if _dispatch_one(handler, event):
+            if _dispatch_one(handler, event, profile):
                 terminated = True
                 break
     except SidecarHTTPError as exc:
         if handler.cancelled.is_set():
             logger.info(
-                "email relay: stream closed for cancel (run_id=%s): %s", rid, exc
+                "%s relay: stream closed for cancel (run_id=%s): %s",
+                profile.agent_id,
+                rid,
+                exc,
             )
         else:
             crashed = True
@@ -438,22 +373,35 @@ def relay_query(
                 # a pre-2.4 binary that somehow passed pre-flight (a stale or
                 # missing manager.api_version) 404s here instead — same
                 # actionable message either way.
-                crash_message = EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+                crash_message = profile.version_upgrade_message
             elif detail:
                 # Surface the sidecar's own actionable detail (e.g. the
                 # zero-connector 502) instead of masking it as a generic
                 # crash — #2419. Bodyless transport failures still fall
                 # through to STREAM_ENDED_UNEXPECTEDLY.
-                crash_message = _augment_error_detail(detail)
-            logger.warning("email relay: stream failed for run_id=%s: %s", rid, exc)
+                crash_message = _augment_error_detail(detail, profile)
+            logger.warning(
+                "%s relay: stream failed for run_id=%s: %s",
+                profile.agent_id,
+                rid,
+                exc,
+            )
     except Exception as exc:  # noqa: BLE001 - boundary: translate, never raise
         if handler.cancelled.is_set():
             logger.info(
-                "email relay: stream closed for cancel (run_id=%s): %s", rid, exc
+                "%s relay: stream closed for cancel (run_id=%s): %s",
+                profile.agent_id,
+                rid,
+                exc,
             )
         else:
             crashed = True
-            logger.warning("email relay: stream failed for run_id=%s: %s", rid, exc)
+            logger.warning(
+                "%s relay: stream failed for run_id=%s: %s",
+                profile.agent_id,
+                rid,
+                exc,
+            )
     finally:
         handler.active_relay_response = None
         handler.active_relay_proxy = None
@@ -472,6 +420,7 @@ def relay_query(
 
 __all__ = [
     "relay_query",
+    "RelayProfile",
     "STREAM_ENDED_UNEXPECTEDLY",
     "EMAIL_QUERY_VERSION_UPGRADE_MESSAGE",
     "LEMONADE_CONNECTION_HINT",
