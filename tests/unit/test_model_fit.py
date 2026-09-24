@@ -311,3 +311,11 @@ class TestLemonadeVersionGate:
     def test_a_pc_too_small_is_told_it_is_too_small_not_to_upgrade(self):
         _, skipped, _ = lc.recommend_default_chat_model(self._client(MAC_M4, "11.9.0"))
         assert "memory" in skipped[0][1] and "force-reinstall" not in skipped[0][1]
+
+
+def test_qwen_size_counts_the_vision_projector_lemonade_downloads():
+    """Lemonade's own requirement for this checkpoint is 77.2 GiB (82.9 GB): the
+    three shards plus mmproj. A smaller figure passes disks Lemonade then refuses."""
+    cap = MachineCapacity(memory_gb=112, memory_source="AMD iGPU", disk_free_gb=82.5)
+    verdict = check_fit(QWEN.size_gb, cap)
+    assert not verdict.fits and "disk" in verdict.reason

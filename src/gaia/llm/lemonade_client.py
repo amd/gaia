@@ -581,7 +581,8 @@ MODELS = {
         mmproj="mmproj-F16.gguf",
         vision=True,
         reasoning=True,
-        size_gb=81.96,
+        # Three model shards plus the 0.9 GB vision projector, as Lemonade counts it.
+        size_gb=82.86,
         min_lemonade_version="2026.39.1",
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
