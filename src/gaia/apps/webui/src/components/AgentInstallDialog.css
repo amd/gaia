@@ -97,50 +97,21 @@
     border: 1px solid var(--border-light);
 }
 
+/* The bar's own width already reports progress; a shimmer over it was
+ * decoration, and a gradient fill at that. */
 .install-progress-fill {
     height: 100%;
     border-radius: 3px;
     background: var(--accent);
     transition: width 500ms var(--ease);
-    position: relative;
-}
-
-/* Animated shimmer on active progress */
-.install-progress-fill::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(
-        90deg,
-        transparent 0%,
-        color-mix(in srgb, var(--text-primary) 20%, transparent) 50%,
-        transparent 100%
-    );
-    animation: shimmer 1.5s infinite;
 }
 
 .install-progress-fill.success {
     background: var(--accent-green);
 }
 
-.install-progress-fill.success::after {
-    animation: none;
-}
-
 .install-progress-fill.failed {
     background: var(--danger);
-}
-
-.install-progress-fill.failed::after {
-    animation: none;
-}
-
-@keyframes shimmer {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(200%); }
 }
 
 .install-progress-info {

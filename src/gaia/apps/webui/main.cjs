@@ -616,19 +616,44 @@ async function loadApp() {
     fileUrl.search = new URLSearchParams(indexQuery).toString();
     await mainWindow.loadURL(fileUrl.href);
   } else {
-    // Show a simple loading/error page
-    mainWindow.loadURL(
-      `data:text/html,
-      <html>
-        <head><title>${APP_NAME}</title></head>
-        <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; background:#1a1a2e; color:#eee;">
+    // Show a simple loading/error page. Percent-encoded: an unescaped `#`
+    // in a data: URL starts the fragment and truncates the document there.
+    const waitingHtml = `<!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <title>${APP_NAME}</title>
+          <style>
+            /* Standalone page: it loads from a data: URL and never sees
+             * src/styles/index.css, so the dark theme's role values are
+             * mirrored here. Keep them in step with that file. */
+            :root {
+              --bg-primary: #17161C;
+              --text-primary: #F0EDE7;
+              --text-secondary: #AAA5B0;
+            }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              height: 100vh;
+              margin: 0;
+              background: var(--bg-primary);
+              color: var(--text-primary);
+            }
+            .hint { color: var(--text-secondary); font-size: 12px; }
+          </style>
+        </head>
+        <body>
           <div style="text-align:center;">
             <h1>${APP_NAME}</h1>
             <p>Waiting for backend to start...</p>
-            <p style="color:#888; font-size:12px;">Backend: http://localhost:${backendPort}</p>
+            <p class="hint">Backend: http://localhost:${backendPort}</p>
           </div>
         </body>
-      </html>`
+      </html>`;
+    mainWindow.loadURL(
+      "data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml)
     );
   }
 }

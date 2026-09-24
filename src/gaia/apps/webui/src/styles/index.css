@@ -59,7 +59,7 @@
      * against itself rather than against the canvas behind it. */
     --accent-fill: #9A4930;
     --accent-fill-text: #ffffff;
-    --accent-fill-hover: #7C3A26;    /* pressed/hover; shared like the fill */
+    --accent-fill-hover: #7A3824;    /* pressed/hover; shared like the fill */
 
     /* Semantic status. The brand motif moved off green; status did not.
      * Success stays green, warning amber, danger red, information blue —
@@ -165,7 +165,7 @@
     /* Accent fill is the one value shared with light — see :root. */
     --accent-fill: #9A4930;
     --accent-fill-text: #ffffff;
-    --accent-fill-hover: #7C3A26;
+    --accent-fill-hover: #7A3824;
 
     --accent-green: #5CC96E;
     --accent-green-dim: rgba(92, 201, 110, 0.14);
