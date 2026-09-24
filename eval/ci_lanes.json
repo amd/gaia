@@ -30,6 +30,28 @@
     {
       "lane": "conversation",
       "categories": ["context_retention", "personality", "adversarial"]
+    },
+    {
+      "lane": "gaia-tasks",
+      "categories": ["gaia_skills_tasks", "gaia_tool_selection"]
+    },
+    {
+      "lane": "gaia-signal",
+      "categories": ["gaia_memory", "gaia_honesty", "gaia_web"]
+    },
+    {
+      "lane": "gaia-code",
+      "categories": ["gaia_core", "gaia_files", "gaia_code"]
+    },
+    {
+      "lane": "gaia-tools",
+      "categories": [
+        "gaia_rag",
+        "gaia_skills_lifecycle",
+        "gaia_shell",
+        "gaia_data",
+        "gaia_skills_capture"
+      ]
     }
   ],
   "excluded": {
