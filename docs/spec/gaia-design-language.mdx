@@ -115,7 +115,11 @@ silently change the other.
 ## Rules for adding a colour
 
 1. **Add a role, not a literal.** A new hex in a component file is a colour
-   nothing can police, and every surface has a test that catches it.
+   nothing can police, and every surface has a test that catches it —
+   `website/src/design/literals.test.ts`,
+   `src/gaia/apps/webui/src/styles/__tests__/contrast.test.ts`, and
+   `tui/internal/ui/theme/literals_test.go`. Each sweeps its own tree and keeps
+   a short allowlist where every entry says why a role cannot carry it.
 2. **Declare what it owes the reader.** The TUI will not compile past its tests
    without a contrast floor and a hue family for the new token.
 3. **Check the degraded value, not just the one you typed.** Truecolor contrast

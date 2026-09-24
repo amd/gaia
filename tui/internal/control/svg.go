@@ -41,6 +41,12 @@ const (
 )
 
 // The 16 ANSI colours, in the palette most terminals ship.
+//
+// These are somebody else's colours on purpose: the frame being drawn asked for
+// "SGR 32", and the picture has to show what a terminal would have shown, not
+// what GAIA would have picked. Repainting them from the theme would make the
+// screenshot lie about the bug it was captured for — which is why
+// theme/literals_test.go exempts this table rather than expecting it to move.
 var svgBasePalette = [16]string{
 	"#000000", "#cd3131", "#0dbc79", "#e5e510",
 	"#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
@@ -48,6 +54,7 @@ var svgBasePalette = [16]string{
 	"#3b8eea", "#d670d6", "#29b8db", "#e5e5e5",
 }
 
+// The emulated terminal's own default pair, for cells the frame never coloured.
 const (
 	svgDefaultFG = "#e5e5e5"
 	svgDefaultBG = "#1e1e1e"
