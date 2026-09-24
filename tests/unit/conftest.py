@@ -83,6 +83,19 @@ def _block_network(request, monkeypatch):
     def _blocked_connect_ex(*args, **kwargs):
         return 1
 
+    # Windows has no native socketpair(); asyncio builds its event-loop self
+    # pipe over a loopback TCP connect, which the guard would otherwise block.
+    real_connect = socket.socket.connect
+    real_socketpair = socket.socketpair
+
+    def _unguarded_socketpair(*args, **kwargs):
+        socket.socket.connect = real_connect
+        try:
+            return real_socketpair(*args, **kwargs)
+        finally:
+            socket.socket.connect = _blocked_connect
+
+    monkeypatch.setattr(socket, "socketpair", _unguarded_socketpair)
     monkeypatch.setattr(socket.socket, "connect", _blocked_connect)
     monkeypatch.setattr(socket.socket, "connect_ex", _blocked_connect_ex)
     yield
