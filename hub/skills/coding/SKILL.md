@@ -64,12 +64,17 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest`, so run it directly:
+This skill grants `pytest`, so run it directly. Prefer the `python -m` spelling —
+it puts the project's own directory on `sys.path`, so it works on a checkout
+that was never installed, where bare `pytest` fails to import the project:
 
 ```
-pytest -q tests/
-pytest -x -k discount tests/test_cart.py
+python -m pytest -q tests/
+python -m pytest -x -k discount tests/test_cart.py
 ```
+
+Bare `pytest` carries the same grant and the same flag rules, so either is
+allowed; reach for it only when the project is installed.
 
 The grant is narrow on purpose. `--pdb` would hang waiting for a debugger nobody
 can answer, `-p <plugin>` imports arbitrary code, and `--junitxml` writes outside
