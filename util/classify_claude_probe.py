@@ -34,6 +34,9 @@ from dataclasses import dataclass, field
 QUOTA_PATTERNS: tuple[str, ...] = (
     "spend limit",
     "usage limit",
+    # Match the quantifier, not the reset date - the date changes every reset,
+    # and a U+00B7 sits between "limit" and "resets" in the real text.
+    "weekly limit",
     "rate limit",
     "rate_limit_error",
     "limit resets",

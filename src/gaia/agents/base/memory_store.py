@@ -928,6 +928,16 @@ class MemoryStore:
             for r in rows
         ]
 
+    def count_conversation_turns(self, exclude_session: str | None = None) -> int:
+        """Number of stored turns, optionally leaving out one session's."""
+        sql = "SELECT COUNT(*) FROM conversations"
+        params: tuple = ()
+        if exclude_session is not None:
+            sql += " WHERE session_id != ?"
+            params = (exclude_session,)
+        with self._lock:
+            return int(self._conn.execute(sql, params).fetchone()[0])
+
     # ==================================================================
     # Knowledge — Store (with dedup)
     # ==================================================================

@@ -90,7 +90,7 @@ func (m ChatModel) setBypass(enabled bool) (tea.Model, tea.Cmd) {
 	m.bypassArmed = false
 
 	bypasser, ok := m.client.(client.PermissionBypasser)
-	if !ok {
+	if !ok || !livePermissionsAvailable(m.client) {
 		m.messages = append(m.messages, Message{
 			Role: RoleError,
 			Content: "This agent connection cannot change permission mode — " +

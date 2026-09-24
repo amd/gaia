@@ -28,8 +28,8 @@ developer's own ``~/.gaia``.
 
 from __future__ import annotations
 
-import pathlib
 import base64
+import pathlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -871,8 +871,9 @@ class TestTheListViewNeverLosesASkill:
         """36 skills with 1KB descriptions each must still fit the NPU."""
         import json
 
-        from gaia.llm.lemonade_client import truncation_budget
         from gaia_agent.skill_tools import _summarize
+
+        from gaia.llm.lemonade_client import truncation_budget
 
         entries = [
             {

@@ -4,6 +4,13 @@ description: "Voice interaction with ASR, TTS, and voice chat orchestration"
 icon: "headphones"
 ---
 
+<Warning>
+The direct OpenAI and LiteLLM provider adapters have been removed. Any
+`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
+raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
+</Warning>
+
+
 <Info>
   **Source Code:** [`src/gaia/audio/`](https://github.com/amd/gaia/blob/main/src/gaia/audio/)
 </Info>
@@ -95,7 +102,7 @@ class AudioClient:
             enable_tts: Enable text-to-speech output
             logging_level: Logging level (DEBUG, INFO, WARNING, ERROR)
             use_claude: Use Claude API for LLM
-            use_chatgpt: Use ChatGPT API for LLM
+            use_chatgpt: Removed; True raises migration guidance
             system_prompt: Default system prompt for LLM
         """
         pass

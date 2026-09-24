@@ -11,6 +11,11 @@ route left to verify its own work.
 The value never reaches a shell: it is handed to the subprocess as an
 environment entry, and the command after it is allowlist-checked exactly as it
 was before.
+
+Only the tests that actually launch a process carry ``@posix_only``. The
+refusal and parsing tests decide before anything reaches a shell, so they run
+everywhere — a module-level skip would hide them on the platform most GAIA
+contributors develop on.
 """
 
 import os
@@ -21,7 +26,7 @@ import pytest
 
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 
-pytestmark = pytest.mark.skipif(
+posix_only = pytest.mark.skipif(
     sys.platform == "win32",
     reason="Windows steps run through cmd.exe; TZ/date are not its commands",
 )
@@ -71,6 +76,7 @@ def project(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("pytest") is None, reason="pytest not on PATH")
+@posix_only
 def test_pythonpath_is_what_makes_the_suite_importable(project):
     """The same command passes with the assignment and fails without it."""
     without = _run("pytest -q tests/", project, _PytestHost)
@@ -113,6 +119,7 @@ def _offset(zone):
     return "+0900" if zone == "Asia/Tokyo" else "+0000"
 
 
+@posix_only
 def test_the_assignment_reaches_the_command(tmp_path, other_zone):
     result = _run(f"TZ={other_zone} date +%z", tmp_path)
 
@@ -121,6 +128,7 @@ def test_the_assignment_reaches_the_command(tmp_path, other_zone):
 
 
 @pytest.mark.skipif(shutil.which("pytest") is None, reason="pytest not on PATH")
+@posix_only
 def test_several_assignments_on_one_command_all_apply(tmp_path):
     """The command itself reports what it was given, so both must be there."""
     (tmp_path / "test_env.py").write_text(
@@ -134,12 +142,14 @@ def test_several_assignments_on_one_command_all_apply(tmp_path):
     assert result["return_code"] == 0, result
 
 
+@posix_only
 def test_an_empty_value_is_allowed(tmp_path):
     result = _run("TZ= date +%z", tmp_path)
 
     assert result["status"] == "success", result
 
 
+@posix_only
 def test_it_does_not_leak_into_this_process(tmp_path, other_zone):
     before = os.environ.get("TZ")
 
@@ -148,6 +158,7 @@ def test_it_does_not_leak_into_this_process(tmp_path, other_zone):
     assert os.environ.get("TZ") == before
 
 
+@posix_only
 def test_it_does_not_leak_into_a_later_segment(tmp_path, other_zone):
     """``date`` ignores stdin, so stage two reports its own environment."""
     local = _run("date +%z", tmp_path)["stdout"].strip()
@@ -158,6 +169,7 @@ def test_it_does_not_leak_into_a_later_segment(tmp_path, other_zone):
     assert local != _offset(other_zone)
 
 
+@posix_only
 def test_it_does_not_leak_into_a_later_step(tmp_path, other_zone):
     local = _run("date +%z", tmp_path)["stdout"].strip()
 
@@ -167,12 +179,14 @@ def test_it_does_not_leak_into_a_later_step(tmp_path, other_zone):
     assert result["stdout"].split() == [_offset(other_zone), local]
 
 
+@posix_only
 def test_each_segment_carries_its_own(tmp_path, other_zone):
     result = _run(f"date +%z | TZ={other_zone} date +%z", tmp_path)
 
     assert result["stdout"].strip() == _offset(other_zone), result
 
 
+@posix_only
 def test_it_survives_a_stderr_redirection_on_the_same_command(tmp_path, other_zone):
     """The redirection is lifted out first, so it lands on the right segment."""
     result = _run(f"TZ={other_zone} date +%z 2>&1 | cat", tmp_path)
@@ -259,6 +273,7 @@ def test_cd_takes_no_assignment(tmp_path):
     assert result["executed"] is False
 
 
+@posix_only
 def test_a_later_token_that_looks_like_one_is_an_argument(tmp_path):
     """Only a LEADING token is an assignment; ``grep a=b`` is still a pattern."""
     (tmp_path / "notes.txt").write_text("a=b\nc\n")

@@ -15,6 +15,10 @@
     These tests pin the repaired behaviour: a cache is valid only when the binary
     AND its Modules tree are present AND the binary actually runs.
 
+    The w64devkit guard (issue #4113) is the same mistake one toolchain over: it
+    probed g++ alone, so a tree whose mingw32-make.exe could not be launched was
+    declared healthy and failed minutes later inside CMake's try_compile.
+
     Runs on Linux/macOS (the fake CMake binaries are shell scripts, which Windows
     cannot execute as `cmake.exe`). The logic under test is path/exit-code logic,
     not Windows API logic, so it validates the decision that broke on the runner.
@@ -141,6 +145,61 @@ try {
     Assert-Equal $true  (Test-ToolInstallation -BinDir $bin -ExecutableName (Get-CMakeExeName)) 'runnable binary is valid'
     $bin = New-FakeCMakeInstall -Root (Join-Path $root 'bad') -BinaryFails
     Assert-Equal $false (Test-ToolInstallation -BinDir $bin -ExecutableName (Get-CMakeExeName)) 'failing binary is invalid'
+} finally {
+    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "`nTest-W64DevkitInstallation"
+# Builds a w64devkit bin/ holding the binaries CMake drives:
+#   <root>/bin/{g++,mingw32-make}[.exe]
+function New-FakeW64Devkit {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [string[]]$Omit = @(),
+        [string[]]$Break = @()
+    )
+
+    $binDir = Join-Path $Root 'bin'
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+
+    foreach ($name in (Get-W64DevkitToolNames)) {
+        if ($Omit -contains $name) { continue }
+        $exe = Join-Path $binDir $name
+        # A binary the host refuses to execute cannot be faked portably, so the
+        # stand-in exits non-zero -- the same signal Invoke-ToolProbe records
+        # when CreateProcess fails on the runner.
+        $exitCode = if ($Break -contains $name) { 1 } else { 0 }
+        Set-Content -LiteralPath $exe -Value "#!/bin/sh`necho '$name 15.2.0'`nexit $exitCode`n" -NoNewline
+        if (-not (Test-IsWindowsHost)) { & chmod '+x' $exe }
+    }
+
+    return $binDir
+}
+
+$root = New-TestRoot
+try {
+    $names = Get-W64DevkitToolNames
+    $gxx = $names[0]
+    $make = $names[1]
+
+    $bin = New-FakeW64Devkit -Root (Join-Path $root 'complete')
+    Assert-Equal $true (Test-W64DevkitInstallation -BinDir $bin) 'compiler and make both runnable is valid'
+
+    # The #4113 regression itself: g++ launches, mingw32-make does not, so CMake
+    # identifies the compiler and then dies inside try_compile.
+    $bin = New-FakeW64Devkit -Root (Join-Path $root 'make-blocked') -Break @($make)
+    Assert-Equal $false (Test-W64DevkitInstallation -BinDir $bin) 'compiler runnable but make blocked is INVALID'
+    # Negative control: the check this replaced accepted that same install.
+    Assert-Equal $true (Test-ToolInstallation -BinDir $bin -ExecutableName $gxx) `
+        'negative control: the old g++-only check would have accepted it'
+
+    $bin = New-FakeW64Devkit -Root (Join-Path $root 'no-make') -Omit @($make)
+    Assert-Equal $false (Test-W64DevkitInstallation -BinDir $bin) 'missing make is invalid'
+
+    $bin = New-FakeW64Devkit -Root (Join-Path $root 'no-gxx') -Omit @($gxx)
+    Assert-Equal $false (Test-W64DevkitInstallation -BinDir $bin) 'missing compiler is invalid'
+
+    Assert-Equal $false (Test-W64DevkitInstallation -BinDir (Join-Path $root 'does-not-exist')) 'absent directory is invalid'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

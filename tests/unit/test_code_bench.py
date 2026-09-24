@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from gaia.eval.code_bench import (
+    _AGENT_ERRORS,
     TaskResult,
     materialize,
     report,
@@ -22,6 +23,12 @@ from gaia.eval.code_bench import (
     run_task,
     scorecard,
     tasks,
+)
+
+#: Verbatim from PR #4096, run 35706759444, job 106755245481. The separator is
+#: U+00B7, which is why a "limit resets" pattern never matched it.
+LIVE_USAGE_LIMIT = (
+    "You've hit your weekly limit · resets Sep 23, 8am (America/Los_Angeles)"
 )
 
 
@@ -269,6 +276,7 @@ class TestTheBenchmarkDoesNotBlameTheAgentForTheHarness:
             "Technical details: Anthropic API error (HTTP 400)",
             "credit balance is too low to access the Anthropic API",
             "Lemonade Server is not reachable at 127.0.0.1:13305",
+            LIVE_USAGE_LIMIT,
         ],
     )
     def test_a_backend_failure_is_an_error_not_a_failed_task(self, answer, tmp_path):
@@ -279,6 +287,28 @@ class TestTheBenchmarkDoesNotBlameTheAgentForTheHarness:
 
         assert result.error, "a backend outage was scored as a coding failure"
         assert not result.dishonest, "an errored task cannot be dishonest"
+
+    def test_the_fixture_still_carries_the_separator_that_broke_the_match(self):
+        assert "·" in LIVE_USAGE_LIMIT, (
+            "the live payload separates 'limit' and 'resets' with U+00B7; a copy "
+            "normalised to a hyphen would stop testing the thing that broke"
+        )
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            LIVE_USAGE_LIMIT,
+            "You've hit your 5-hour limit · resets Oct 4, 11pm (UTC)",
+            "You’ve hit your weekly limit · resets Dec 1, 8am (UTC)",
+            "﻿You've hit your weekly limit · resets Sep 23, 8am (UTC)",
+            "You've reached your usage limit for this month.",
+        ],
+    )
+    def test_a_usage_limit_matches_whatever_the_adjective_and_date_are(self, answer):
+        assert any(marker in answer for marker in _AGENT_ERRORS), (
+            "the period, the reset date, the apostrophe and a leading BOM all vary "
+            "between outages; matching any of them would go blind at the next reset"
+        )
 
     def test_an_errored_task_is_excluded_from_the_solve_rate(self):
         results = [
