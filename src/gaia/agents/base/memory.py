@@ -978,7 +978,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     @property
     def memory_store(self):
-        """Access the MemoryStore instance."""
+        """Access the MemoryStore instance, or None for a disabled session."""
         if not hasattr(self, "_memory_store"):
             raise RuntimeError("MemoryMixin not initialized. Call init_memory() first.")
         return self._memory_store
@@ -2200,14 +2200,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         per-turn via get_memory_dynamic_context() to keep this prompt frozen for
         LLM KV-cache reuse.
         """
-        if not hasattr(self, "_memory_store"):
+        if getattr(self, "_memory_store", None) is None:
             return ""
 
-        try:
-            return self._build_stable_memory_prompt()
-        except Exception as e:
-            logger.warning("[MemoryMixin] failed to build stable memory prompt: %s", e)
-            return ""
+        return self._build_stable_memory_prompt()
 
     def get_memory_dynamic_context(self) -> str:
         """Build the per-turn dynamic context string: current time + upcoming items.
@@ -2525,7 +2521,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # Log to tool_history before re-raising
             try:
-                if hasattr(self, "_memory_store") and not getattr(
+                if getattr(self, "_memory_store", None) is not None and not getattr(
                     self, "_incognito", False
                 ):
                     self._memory_store.log_tool_call(
@@ -2538,8 +2534,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         duration_ms=duration_ms,
                     )
                     self._auto_store_error(tool_name, error_msg, tool_args)
-            except Exception as log_exc:
-                logger.debug("[MemoryMixin] tool logging failed: %s", log_exc)
+            except Exception as log_error:
+                logger.warning(
+                    "[MemoryMixin] failed to record tool exception: %s", log_error
+                )
             raise
 
         # Truncate result summary
@@ -3399,7 +3397,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         Generates new session ID and applies confidence decay.
         """
-        if hasattr(self, "_memory_store"):
+        if getattr(self, "_memory_store", None) is not None:
             self._memory_store.apply_confidence_decay()
             self._memory_session_id = str(uuid4())
             # A new session reopens the reminder window; anything still due
