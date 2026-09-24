@@ -73,8 +73,16 @@ python -m pytest -q tests/
 python -m pytest -x -k discount tests/test_cart.py
 ```
 
-Bare `pytest` carries the same grant and the same flag rules, so either is
-allowed; reach for it only when the project is installed.
+`python -m` adds the current directory to the import path, not `src/`. For a
+project whose package lives under `src/`, scope the path to that one command:
+
+```
+PYTHONPATH=src python -m pytest -q tests/
+```
+
+Where only `python3` exists, `python3 -m pytest` works the same way. Bare
+`pytest` carries the same grant and the same flag rules, so it is allowed too;
+reach for it only when the project is installed.
 
 The grant is narrow on purpose. `--pdb` would hang waiting for a debugger nobody
 can answer, `-p <plugin>` imports arbitrary code, and `--junitxml` writes outside

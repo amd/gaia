@@ -2007,11 +2007,7 @@ class ShellToolsMixin:
                         "are not supported."
                     ),
                     "has_errors": True,
-                    "hint": (
-                        "Run the command without the assignment. For "
-                        "PYTHONPATH=. pytest, use python -m pytest — it puts "
-                        "the project on sys.path without an assignment."
-                    ),
+                    "hint": "Run the command without the assignment.",
                 }
             return {
                 "status": "error",
