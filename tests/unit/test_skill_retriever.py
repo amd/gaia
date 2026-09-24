@@ -114,7 +114,7 @@ def test_a_single_name_token_is_enough_evidence(retriever):
     decision = retriever.decide("what is new on github?")
     assert decision.load == "github-triage"
     top = decision.ranked[0]
-    assert top.matched == ("github",) and top.name_hit
+    assert top.matched == ("github",) and top.name_mass > 0
 
 
 def test_a_single_generic_verb_is_not_evidence(retriever):
@@ -136,10 +136,40 @@ def test_a_single_subject_noun_is_evidence(retriever):
 
 
 def test_a_tie_is_reported_as_a_tie_never_resolved(retriever):
-    """Two skills share "watch"; neither dominates, so neither loads."""
+    """Two skills share "watch"; neither dominates, so neither loads.
+
+    Both own the tied term in their *name*, so identity cannot separate them
+    either — which is what makes this a real tie and not the inbox case below.
+    """
     decision = retriever.decide("watch this for me")
     assert decision.load is None
     assert set(decision.shortlist) <= {"price-watch", "source-watch"}
+
+
+def test_identity_outranks_a_description_that_merely_mentions_the_word():
+    """The word the query is about is one skill's name and the other's aside.
+
+    ``github-triage`` describes a notification *inbox*, so "triage my inbox"
+    scored an exact tie and shortlisted — and the model, handed two names with
+    a GitHub skill sorting first alphabetically, took the GitHub one for a
+    mailbox question.
+    """
+    r = SkillRetriever()
+    r.index_texts(
+        dict(
+            CORPUS,
+            **{
+                "inbox-triage": (
+                    "Triage a mailbox — group what arrived and judge what is "
+                    "urgent. Use when asked to check mail or find what needs a "
+                    "reply."
+                )
+            },
+        )
+    )
+    decision = r.decide("triage my inbox")
+    assert decision.load == "inbox-triage"
+    assert decision.ranked[0].name_mass > decision.ranked[1].name_mass
 
 
 def test_unrelated_questions_match_nothing(retriever):
@@ -207,11 +237,61 @@ def _bench():
 
 
 @pytest.fixture(scope="module")
-def starter_pack_metrics():
-    bench = _bench()
+def starter_pack() -> SkillRetriever:
+    """The checked-in skill library, indexed exactly as the agent indexes it."""
     retriever = SkillRetriever()
-    retriever.index_texts(bench.load_corpus("hub/skills"))
-    return bench.evaluate(retriever, bench.QUERIES)
+    retriever.index_texts(_bench().load_corpus("hub/skills"))
+    return retriever
+
+
+@pytest.fixture(scope="module")
+def starter_pack_metrics(starter_pack):
+    bench = _bench()
+    return bench.evaluate(starter_pack, bench.QUERIES)
+
+
+# ── the shipped descriptions, not a fixture ──────────────────────────────
+
+
+def test_a_mail_question_never_ranks_a_github_skill_first(starter_pack):
+    """The reported defect: a mailbox question answered under GitHub triage.
+
+    ``inbox-triage`` matched neither "mail" (its description said *mailbox*)
+    nor "urgent", while ``github-triage`` judges "what is urgent" — so the only
+    candidate on a mail question was the GitHub skill.
+    """
+    decision = starter_pack.decide("Anything urgent in my mail?")
+    assert decision.ranked[0].name == "inbox-triage"
+    assert decision.load == "inbox-triage"
+
+
+def test_the_plainest_mail_phrasing_loads_rather_than_shortlists(starter_pack):
+    """An exact 1.000 tie used to mean nothing loaded at all."""
+    assert starter_pack.decide("Triage my inbox").load == "inbox-triage"
+
+
+def test_identity_does_not_override_the_margin_below_a_tie(starter_pack):
+    """The exception breaks ties; it does not replace ``MARGIN``.
+
+    ``daily-brief`` leads ``check-in`` 0.713 to 0.671 here and owns "brief", so
+    a name-mass rule that ignored the tie condition would auto-load it at a 1.06
+    ratio — well inside the margin that exists for queries the benchmark does
+    not contain.
+    """
+    decision = starter_pack.decide("give me my morning briefing")
+    assert decision.ranked[0].name == "daily-brief"
+    assert decision.load is None
+    assert "daily-brief" in decision.shortlist
+
+
+def test_the_github_phrasings_still_load_the_github_skill(starter_pack):
+    """The other half of the fix: teaching mail must not cost GitHub."""
+    for query in (
+        "what's been going on in my github inbox the past few days?",
+        "triage my github issues",
+        "any new github notifications I should look at?",
+    ):
+        assert starter_pack.decide(query).load == "github-triage", query
 
 
 def test_benchmark_never_loads_the_wrong_skill(starter_pack_metrics):
@@ -226,9 +306,9 @@ def test_benchmark_never_loads_the_wrong_skill(starter_pack_metrics):
 
 
 def test_benchmark_recall_does_not_regress(starter_pack_metrics):
-    # Measured 0.667 auto / 0.952 including shortlist at the shipping constants.
-    assert starter_pack_metrics["auto_recall"] >= 0.65
-    assert starter_pack_metrics["recall_incl_shortlist"] >= 0.90
+    # Measured 0.840 auto / 1.000 including shortlist at the shipping constants.
+    assert starter_pack_metrics["auto_recall"] >= 0.84
+    assert starter_pack_metrics["recall_incl_shortlist"] >= 0.95
 
 
 def test_benchmark_stays_quiet_on_unrelated_turns(starter_pack_metrics):

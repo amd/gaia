@@ -55,6 +55,14 @@ QUERIES: List[Tuple[str, Optional[str]]] = [
     # bare number with no repo named. It is a positive, not a negative: the
     # skill that just triaged the backlog is exactly what should print an issue.
     ("cool, can you print issue 2975?", "github-triage"),
+    # ── inbox-triage ─────────────────────────────────────────────────────
+    # Mail was unrepresented here, which is how a mailbox question reaching
+    # github-triage stayed green: both skills are "triage", and only one of
+    # them was in the query set.
+    ("anything urgent in my mail?", "inbox-triage"),
+    ("triage my inbox", "inbox-triage"),
+    ("what needs a reply in my email?", "inbox-triage"),
+    ("give me a rundown of my inbox", "inbox-triage"),
     # ── document-brief ───────────────────────────────────────────────────
     ("what does this contract say about termination?", "document-brief"),
     ("index the folder of specs and answer questions from it", "document-brief"),

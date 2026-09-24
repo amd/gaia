@@ -61,10 +61,17 @@ TASK_TIMEOUT_S = 1200.0
 #: credit balance, a transport failure. Scoring one of these as a coding failure
 #: blames the model for the harness: an out-of-credit run once came back as
 #: "0 files changed, claimed success", which is neither.
+#:
+#: Usage-limit wording carries an adjective and a reset date that both change
+#: ("weekly" today, "5-hour" next month), and a U+00B7 sits between `limit` and
+#: `resets` — so match the stable lead-in, never the adjective, date, or that
+#: separator.
 _AGENT_ERRORS = (
     "Sorry, I ran into a problem",
     "Anthropic API error",
     "credit balance is too low",
+    "hit your",
+    "usage limit",
     "invalid_request_error",
     "overloaded_error",
     "Lemonade Server is not reachable",
