@@ -2974,9 +2974,14 @@ class TestHardwareChatModel(unittest.TestCase):
         cfg.save()
         client = self._client(SMALL_MACHINE)
         client.list_models.return_value = {"data": []}
+        from gaia.installer.init_command import resolve_init_chat_model
+
+        with self.assertRaisesRegex(ModelFitError, "gaia config set default_model"):
+            resolve_init_chat_model(client, reset_corrupt=True, enforce_fit=True)
+        # --check only reports it missing, so the TUI still offers setup.
         with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
-            with self.assertRaisesRegex(ModelFitError, "gaia config set default_model"):
-                check_setup_status(profile="gaia")
+            status = check_setup_status(profile="gaia")
+        self.assertTrue(any(LARGE_DEFAULT_MODEL_NAME in r for r in status.reasons))
 
     def test_minimal_profile_stays_small_on_a_big_machine(self):
         from gaia.installer.init_command import with_chat_model
@@ -3002,6 +3007,23 @@ class TestHardwareChatModel(unittest.TestCase):
         client = self._client(STRIX_HALO_128)
         client.health_check.return_value = {"status": "ok", "version": "11.9.0"}
         client.list_models.return_value = {"data": []}
+        from gaia.installer.init_command import resolve_init_chat_model
+
+        with self.assertRaisesRegex(ModelFitError, "--force-reinstall"):
+            resolve_init_chat_model(client, reset_corrupt=True, enforce_fit=True)
+
+    def test_a_failed_hardware_request_keeps_gemma_and_still_answers_check(self):
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+            LemonadeClientError,
+        )
+
+        client = self._client(STRIX_HALO_128)
+        client.get_system_info.side_effect = LemonadeClientError("timed out")
         with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
-            with self.assertRaisesRegex(ModelFitError, "--force-reinstall"):
-                check_setup_status(profile="gaia")
+            status = check_setup_status(profile="gaia")
+        self.assertFalse(status.ready)
+        self.assertTrue(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
+        self.assertFalse(any(LARGE_DEFAULT_MODEL_NAME in r for r in status.reasons))

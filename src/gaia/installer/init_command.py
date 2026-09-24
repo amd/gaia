@@ -223,7 +223,9 @@ class ChatModelChoice:
     capacity: Optional[MachineCapacity] = None
 
 
-def resolve_init_chat_model(client, *, reset_corrupt: bool) -> ChatModelChoice:
+def resolve_init_chat_model(
+    client, *, reset_corrupt: bool, enforce_fit: bool
+) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the largest default that fits this machine
     (Qwen3.8-Flash on a 128 GB Strix Halo, Gemma 4 E4B everywhere else).
@@ -231,6 +233,8 @@ def resolve_init_chat_model(client, *, reset_corrupt: bool) -> ChatModelChoice:
     ``--check`` and ``run()`` both go through here so they can never disagree
     about what "set up" means on this machine. ``reset_corrupt`` is run()'s
     policy (it rewrites a corrupt config); the read-only check raises instead.
+    ``enforce_fit`` refuses a user's model that cannot fit — only run(), which
+    would download it, needs that; ``--check`` just reports it missing.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
     from gaia.llm.lemonade_client import (
@@ -253,7 +257,8 @@ def resolve_init_chat_model(client, *, reset_corrupt: bool) -> ChatModelChoice:
         and not cloud_model_provider(configured)
     )
     if is_local:
-        _refuse_if_it_does_not_fit(client, configured)
+        if enforce_fit:
+            _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
     model_id, skipped, capacity = recommend_default_chat_model(client)
     return ChatModelChoice(
@@ -396,7 +401,9 @@ def check_setup_status(
         model_ids = with_chat_model(
             profile,
             model_ids,
-            lambda: resolve_init_chat_model(client, reset_corrupt=False).model_id,
+            lambda: resolve_init_chat_model(
+                client, reset_corrupt=False, enforce_fit=False
+            ).model_id,
         )
 
     if skip_chat_model:
@@ -1812,7 +1819,9 @@ class InitCommand:
     def _chat_model(self, client) -> str:
         """This machine's chat model; says why on first resolution."""
         if self._chat_choice is None:
-            choice = resolve_init_chat_model(client, reset_corrupt=True)
+            choice = resolve_init_chat_model(
+                client, reset_corrupt=True, enforce_fit=True
+            )
             self._chat_choice = choice
             if choice.user_set:
                 self._print(

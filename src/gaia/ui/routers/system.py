@@ -50,9 +50,6 @@ _background_tasks: set[asyncio.Task] = set()
 
 router = APIRouter(tags=["system"])
 
-# Floor model for GAIA Chat; the machine's default is _default_model_name().
-_DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
-
 
 def _default_model_name() -> str:
     """The model this machine runs: config ``default_model`` (which ``gaia init``
@@ -478,6 +475,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # Resolved outside the probe below: its catch-all would report a corrupt
     # config as "Lemonade not running".
     default_model = _default_model_name()
+    # Always named, not only once a model is loaded: the UI's load and download
+    # actions target this, and the schema default is the Gemma floor.
+    status.default_model_name = db.get_setting("custom_model") or default_model
 
     # Check Lemonade Server
     # Use a generous timeout (10s) because when the LLM is handling many

@@ -319,3 +319,27 @@ def test_qwen_size_counts_the_vision_projector_lemonade_downloads():
     cap = MachineCapacity(memory_gb=112, memory_source="AMD iGPU", disk_free_gb=82.5)
     verdict = check_fit(QWEN.size_gb, cap)
     assert not verdict.fits and "disk" in verdict.reason
+
+
+def test_a_ladder_model_without_a_size_is_never_guessed_in(monkeypatch):
+    """A size of 0 would fit every PC; a larger default must have a known size."""
+    import dataclasses
+
+    sizeless = dataclasses.replace(QWEN, size_gb=None)
+    real = lc.find_model_requirement
+    monkeypatch.setattr(
+        lc,
+        "find_model_requirement",
+        lambda mid: sizeless if mid == lc.LARGE_DEFAULT_MODEL_NAME else real(mid),
+    )
+
+    class FakeClient:
+        def get_system_info(self, timeout=None):
+            return STRIX_HALO_128
+
+        def health_check(self):
+            return {"version": "2026.39.1"}
+
+    model_id, skipped, _ = lc.recommend_default_chat_model(FakeClient())
+    assert model_id == lc.DEFAULT_MODEL_NAME
+    assert "size" in skipped[0][1]

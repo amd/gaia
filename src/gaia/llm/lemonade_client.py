@@ -751,8 +751,15 @@ def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement
 
 
 def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
-    """The version a running Lemonade reports on ``/health``, or None."""
-    health = client.health_check()
+    """The version a running Lemonade reports on ``/health``, or None.
+
+    None means "cannot show support", which keeps the version-gated model out.
+    """
+    try:
+        health = client.health_check()
+    except LemonadeClientError:
+        # The caller's reason then reads "this server's version is unknown".
+        return None
     version = health.get("version") if isinstance(health, dict) else None
     return str(version) if version else None
 
@@ -782,7 +789,8 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
     floor = DEFAULT_MODEL_LADDER[-1]
     try:
         capacity = capacity_from_system_info(client.get_system_info(timeout=15))
-    except ModelFitError as e:
+    except (ModelFitError, LemonadeClientError) as e:
+        # An unanswered request is as unjudgeable as an unreadable answer.
         return floor, [(m, str(e)) for m in DEFAULT_MODEL_LADDER[:-1]], None
     server_version = lemonade_server_version(client)
     # Fit first, then version: "upgrade Lemonade" is only useful advice for a
@@ -791,6 +799,10 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
     for model_id in DEFAULT_MODEL_LADDER:
         mr = find_model_requirement(model_id)
         size = (mr.size_gb if mr else None) or 0.0
+        if model_id != floor and not size:
+            # A size of 0 would fit every PC; never guess a larger model in.
+            unsupported.append((model_id, "GAIA does not know its download size"))
+            continue
         if model_id != floor and check_fit(size, capacity).fits:
             verdict = check_server_supports(
                 mr.min_lemonade_version if mr else None, server_version

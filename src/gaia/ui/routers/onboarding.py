@@ -43,8 +43,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["onboarding"])
 
 # The light, multimodal default every first-run profile pulls (see
-# ``INIT_PROFILES`` in ``gaia.installer.init_command``). Kept in sync with
-# ``gaia.ui.routers.system._DEFAULT_MODEL_NAME``.
+# ``INIT_PROFILES`` in ``gaia.installer.init_command``) — the floor,
+# ``gaia.llm.lemonade_client.DEFAULT_MODEL_NAME``. A PC's actual default can be
+# larger (``resolve_default_chat_model``).
 _RECOMMENDED_MODEL = "Gemma-4-E4B-it-GGUF"
 # Disk the recommended first-run download needs (model + embedder + headroom).
 # Deliberately conservative so we block *before* a half-finished pull fills the
