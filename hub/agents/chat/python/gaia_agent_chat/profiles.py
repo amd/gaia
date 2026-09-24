@@ -57,7 +57,10 @@ TOOL_GROUP_REGISTRARS: Dict[str, Tuple[str, ...]] = {
         "register_file_search_tools",
         "register_file_io_tools",
     ),
-    "web_browse": ("register_browser_tools",),
+    # Lightweight fetcher first, live browser second. The browser-use
+    # registrar no-ops when Playwright is absent, so this stays safe on a
+    # core install.
+    "web_browse": ("register_browser_tools", "register_browser_use_tools"),
     "full_screenshot": ("register_screenshot_tools",),
     "media_transcribe": ("register_audio_tools",),
 }

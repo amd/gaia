@@ -86,6 +86,7 @@ setup(
         "gaia.filesystem",
         "gaia.scratchpad",
         "gaia.web",
+        "gaia.browser",
         "gaia.code_index",
         "gaia.apps.webui",
         "gaia.connectors",
@@ -159,6 +160,13 @@ setup(
         'pywin32; sys_platform == "win32"',
     ],
     extras_require={
+        # Live-browser automation (BrowserUseToolsMixin). Deliberately an
+        # extra, not core: Playwright downloads a ~200 MB Chromium, which no
+        # user who never drives a browser should pay for. The mixin registers
+        # nothing when it is absent.
+        "browser": [
+            "playwright>=1.45.0",
+        ],
         "image": [
             "term-image>=0.7.0,<0.8",
         ],

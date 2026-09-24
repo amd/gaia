@@ -384,6 +384,9 @@ class _Gated(ShellToolsMixin):
     confirmation_required_tools = _Agent.confirmation_required_tools
     _call_is_pre_authorized = _Agent._call_is_pre_authorized
     _tool_requires_confirmation = _Agent._tool_requires_confirmation
+    # Rebound rather than borrowed: it walks __mro__, so it has to see this
+    # host's, not Agent's, or a mixin hook added later goes unnoticed here.
+    confirmation_hooks = classmethod(_Agent.confirmation_hooks.__func__)
 
     def __init__(self, *binaries: str):
         super().__init__()

@@ -20,11 +20,13 @@ icon: sparkles
 # (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
 # + 5 read-only email tools (gaia.agents.tools.email_tools)
 # + 3 Stable Diffusion tools (enable_sd_tools is on for this agent)
+# + 8 live-browser tools, which register only with the `browser` extra
+#   installed (gaia.agents.tools.browser_use_tools)
 # + remember_skill_lesson + the load_tools escape hatch, which registers
 # because dynamic_tools is on.
 # This is the REGISTERED size — what the agent can do. Dynamic tool loading
 # means a single turn only shows the model a subset of it.
-tools_count: 81
+tools_count: 89
 
 language: python
 # 0.23.0's daemon has no `gaia` entry in builtin_specs(), so it cannot supervise

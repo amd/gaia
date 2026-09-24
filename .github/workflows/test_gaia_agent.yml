@@ -74,7 +74,11 @@ jobs:
           # Same dependency shape release_agent_gaia.yml tests against, so a
           # PR-time pass here predicts the release gate instead of diverging
           # from it.
-          uv pip install --system -e ".[dev,api]"
+          # `browser` too: FULL_OPTIONAL_TOOLS asserts every optional tool is
+          # registrable on a full install, and the browser tools register only
+          # when Playwright is importable (the Chromium download is not needed
+          # for that).
+          uv pip install --system -e ".[dev,api,browser]"
           uv pip install --system -e hub/agents/chat/python -e hub/agents/gaia/python
 
       - name: Check Capability Matrix Is Current
