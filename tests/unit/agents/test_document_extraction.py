@@ -123,8 +123,8 @@ def test_same_span_sentence_period_variants_keep_original_values():
     assert reconcile_occurrence(first, second) == first
     assert reconcile_occurrence(second, first) == first
     assert first.text == "cue: look up."
-    # A value cut short at the same place keeps the fuller copy.
-    assert reconcile_occurrence(entry("up."), first) == first
+    # With no identity field, a different value is a different item.
+    assert reconcile_occurrence(entry("up."), first) is None
 
 
 def test_broad_quote_does_not_hide_missed_neighbor_on_later_page():
@@ -1019,3 +1019,65 @@ def test_free_text_quotes_of_one_sentence_merge_but_repeats_do_not():
     first = Entry(0, 20, "Squat reps10", page[:20])
     second = Entry(14, 34, "Squat reps10", page[14:])
     assert reconcile_occurrence(first, second) is None
+
+
+@pytest.mark.parametrize(
+    "page, first, second",
+    [
+        (
+            "Warm-up: march, then march in place for a minute.",
+            ("Warm-up: march, then march in place", "march"),
+            ("march in place for a minute", "march in place"),
+        ),
+        (
+            "Hold a plank and side plank, 30 seconds each.",
+            ("plank and side", "plank"),
+            ("side plank, 30", "side plank"),
+        ),
+    ],
+)
+def test_a_name_inside_another_name_is_a_different_item(page, first, second):
+    a = field_entry(page, first[0], {"name": first[1], "duration": "not stated"})
+    b = field_entry(page, second[0], {"name": second[1], "duration": "not stated"})
+    assert reconcile_occurrence(a, b) is None
+    assert reconcile_occurrence(b, a) is None
+
+
+@pytest.mark.parametrize(
+    "query, sources",
+    [
+        (
+            "Extract all action items from meeting.txt into actions.json",
+            {"meeting.txt"},
+        ),
+        ("List every exercise in a.txt and every stretch in b.txt", {"a.txt", "b.txt"}),
+        ("List every exercise in the transcript (workshop.txt)", {"workshop.txt"}),
+        ("List every exercise in workshop.txt as JSON", {"workshop.txt"}),
+    ],
+)
+def test_sources_are_what_the_request_reads_not_where_it_writes(
+    query, sources, tmp_path
+):
+    state = ExtractionLedger(query, str(tmp_path))
+    assert state.requested == {state.key(p) for p in sources}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Find all the bugs in main.py",
+        "Identify every security issue in auth.py",
+        "List all the key dates in contract.pdf",
+        "List all U.S. state capitals",
+    ],
+)
+def test_analysis_binary_and_general_questions_stay_off(query, tmp_path):
+    assert not ExtractionLedger(query, str(tmp_path)).enabled
+
+
+def test_agents_without_a_read_boundary_never_extract(tmp_path):
+    state = ExtractionLedger(
+        "List every exercise in workshop.txt", str(tmp_path), available=False
+    )
+    state.activate_skill("Extract every item from the source document.")
+    assert not state.enabled and not state.gaps()

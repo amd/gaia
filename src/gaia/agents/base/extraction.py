@@ -18,8 +18,9 @@ import time
 from dataclasses import dataclass
 
 from gaia.agents.base.completion import (
+    _BINARY_SUFFIXES,
     _normalize_key,
-    destination_paths,
+    _scan_paths,
     save_obligations,
 )
 
@@ -143,6 +144,9 @@ def _stated(value):
     return value.lower() != "not stated"
 
 
+_IDENTITY = re.compile(r"\b(?:name|id|title)\b", re.I)
+
+
 def _anchors(entry, value):
     """Source offsets where *value* occurs inside the entry's quote."""
     found, at = set(), entry.quote.find(value)
@@ -174,9 +178,10 @@ def reconcile_occurrence(first, second):
     """Merge two overlapping extractions of one occurrence, or return None.
 
     Field values are verbatim in their quotes. Two extractions are one
-    occurrence when every value both state sits at one source location (one
-    value inside the other, as when a page boundary cut a sentence short) and
-    an identity field is among them. The merged entry spans both quotes and
+    occurrence when an identity field (name, id or title; any field if none)
+    states the same value at a shared source offset and every other value both
+    state sits at one location, one inside the other (a page boundary may cut
+    a description short, never a name). The merged entry spans both quotes and
     keeps the fuller value of each field. A shared name at different offsets is
     a repeated item, never merged. Free text cannot be located, so it needs
     equal text and a quote that contains the other, locates the text at a
@@ -198,18 +203,24 @@ def reconcile_occurrence(first, second):
     old, new = dict(first.fields), dict(second.fields)
     if old.keys() != new.keys():
         return None
-    shared, values = [], {}
+    identity = [name for name in old if _IDENTITY.search(name)]
+    both = [name for name in old if _stated(old[name]) and _stated(new[name])]
+    values = {}
     for name, value in first.fields:
         other = new[name]
-        if _stated(value) and _stated(other):
-            if not _nested(first, value, second, other):
-                return None
-            shared.append(name)
-            values[name] = max(value, other, key=len)
-        else:
+        if name not in both:
             values[name] = value if _stated(value) else other
-    identity = [name for name in old if name.lower() in {"name", "id", "title"}]
-    if not any(name in shared for name in (identity or list(old))):
+            continue
+        # "march" inside "march in place" names a different item.
+        if name in identity and value.rstrip(".") != other.rstrip("."):
+            return None
+        if not _nested(first, value, second, other):
+            return None
+        values[name] = max(value, other, key=len)
+    if not any(
+        name in both and old[name].rstrip(".") == new[name].rstrip(".")
+        for name in (identity or list(old))
+    ):
         return None
     start, end, quote = _union_quote(first, second)
     return Entry(
@@ -462,8 +473,21 @@ _CODE_EXTENSIONS = frozenset(
 )
 
 
+_SOURCE = re.compile(r"\b(?:in|from|of|within|across|at)\s+", re.I)
+
+
+def source_paths(clause):
+    """Files a request reads from ("in/from X"), never its outputs ("into X")."""
+    paths = []
+    for match in _SOURCE.finditer(clause):
+        paths += _scan_paths(clause[match.end() :], immediate=True)
+    if not paths:
+        paths = _scan_paths(re.split(r"\b(?:to|into)\s+", clause)[0], False)
+    return list(dict.fromkeys(paths))
+
+
 class ExtractionLedger:
-    def __init__(self, query, root):
+    def __init__(self, query, root, available=True):
         self.query = query
         match = re.search(r"\bfields\s*:\s*([^.!?\n]+)", query, re.I)
         self.fields = (
@@ -472,24 +496,36 @@ class ExtractionLedger:
             else ()
         )
         self.root = root or os.getcwd()
+        # Without a read permission boundary the tool cannot run at all.
+        self.available = available
         saves, _ = save_obligations(query)
         self.destinations = {self.key(p) for p in saves}
         source_clause = re.split(r"\b(?:save|write|export|store)\b", query, flags=re.I)[
             0
         ]
-        candidate_paths = destination_paths(source_clause)
-        # Code-index tools can enumerate symbols without document extraction.
-        # Mixed sources and content requests (e.g. TODOs in code) still require
-        # every named file, even when that file has a code extension.
+        candidate_paths = [
+            p
+            for p in source_paths(source_clause)
+            if os.path.splitext(p)[1].lower() not in _BINARY_SUFFIXES
+        ]
+        # Code tools answer symbol and analysis questions ("find all bugs in
+        # x.py"); listing content such as TODOs still extracts from code.
         self.code_symbols_only = (
             bool(candidate_paths)
             and all(
                 os.path.splitext(p)[1].lower() in _CODE_EXTENSIONS
                 for p in candidate_paths
             )
-            and bool(
-                re.search(
-                    r"\b(?:list|enumerate|find|extract)\s+(?:all|every)\s+(?:the\s+)?(?:functions?|class(?:es)?|methods?|symbols?)\b",
+            and (
+                bool(
+                    re.search(
+                        r"\b(?:list|enumerate|find|extract)\s+(?:all|every)\s+(?:the\s+)?(?:functions?|class(?:es)?|methods?|symbols?)\b",
+                        source_clause,
+                        re.I,
+                    )
+                )
+                or not re.search(
+                    r"\b(?:list|enumerate|extract|catalog(?:ue)?)\b",
                     source_clause,
                     re.I,
                 )
@@ -497,12 +533,16 @@ class ExtractionLedger:
             and not self.destinations
         )
         self.enabled = (
-            exhaustive_request(query)
-            and bool(
-                re.search(
-                    r"\b(?:document|file|transcript|workshop|meeting|log|attached|source)\b|\.[a-zA-Z]{1,5}\b",
-                    query,
-                    re.I,
+            available
+            and exhaustive_request(query)
+            and (
+                bool(candidate_paths)
+                or bool(
+                    re.search(
+                        r"\b(?:document|transcript|workshop|meeting|attached|source)\b",
+                        query,
+                        re.I,
+                    )
                 )
             )
             and not self.code_symbols_only
@@ -523,7 +563,11 @@ class ExtractionLedger:
         return _normalize_key(path, self.root)
 
     def activate_skill(self, instructions):
-        if not self.code_symbols_only and exhaustive_request(instructions):
+        if (
+            self.available
+            and not self.code_symbols_only
+            and exhaustive_request(instructions)
+        ):
             self.enabled = True
             if instructions not in self.query:
                 self.query += "\nActive extraction instructions:\n" + instructions

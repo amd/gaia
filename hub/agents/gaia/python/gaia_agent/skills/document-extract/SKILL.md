@@ -27,8 +27,9 @@ metadata:
    exact destination, then `read_file` to verify it. The exporter preserves all
    entries and provenance as JSON, CSV, or readable text; don't regenerate the
    file by retyping a condensed list. Follow every readback continuation.
-5. Let the framework render the retained inventory: on success it replaces
-   your final answer, so do not re-summarize the list into fewer items.
+5. The framework appends the full retained inventory to your final answer.
+   Briefly state limitations or requested analysis; do not repeat or
+   re-summarize the list.
 
 The existing memory system records the action, source fingerprint, coverage,
 count and final inventory unless the session is private. Use conversation

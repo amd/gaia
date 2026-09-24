@@ -689,3 +689,38 @@ def test_removal_claims_that_match_the_disk_are_not_flagged(ledger, tmp_path, an
 def test_describing_code_or_conditions_is_not_a_save_claim(tmp_path, answer):
     ledger = CompletionEvidence("Write a function that saves results.", str(tmp_path))
     assert gaps(ledger, answer) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I saved the summary that you asked for to `summary.md`.",
+        "I've written the notes, which cover all five topics, to notes.md.",
+        "The report that you wanted has been saved to `report.md`.",
+    ],
+)
+def test_claims_with_a_relative_clause_are_still_checked(tmp_path, answer):
+    ledger = CompletionEvidence("Summarize what we discussed", str(tmp_path))
+    assert gaps(ledger, answer)
+
+
+def test_a_save_from_an_earlier_session_is_not_this_turns_claim(tmp_path):
+    ledger = CompletionEvidence("Where did you save the report?", str(tmp_path))
+    assert gaps(ledger, "I saved it to `report.md` in our previous session.") == []
+
+
+def test_an_ordinary_edit_needs_no_readback(agent, tmp_path):
+    (tmp_path / "notes.md").write_text("teh")
+    script(
+        agent,
+        call("write_file", file_path="notes.md", content="the"),
+        {"answer": "Fixed the typo."},
+    )
+    result = agent.process_query("Fix the typo in notes.md", max_steps=5)
+    assert result["status"] == "success", result["completion_gaps"]
+
+
+def test_removing_a_file_from_an_index_is_not_a_deletion(ledger, tmp_path):
+    (tmp_path / "report.pdf").write_text("still here")
+    assert ledger.cleanup_gaps("I removed report.pdf from the index.") == []
+    assert ledger.cleanup_gaps("I removed `report.pdf`.")

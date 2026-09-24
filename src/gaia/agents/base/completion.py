@@ -106,6 +106,21 @@ _FILE_OBJECT = re.compile(
 )
 _RELATIVE_CLAUSE = re.compile(r"\b(?:that|which|who|so that)\b", re.I)
 _CONDITION = re.compile(r"^\s*(?:once|when|after|before|if|whenever)\b[^,]*,", re.I)
+# "a function that saves to x" describes code, not something done this turn.
+_CODE_BEHAVIOUR = re.compile(
+    r"\b(?:that|which)\s+(?:\w+\s+)?(?:saves|writes|stores|exports|outputs|creates)\b.*$",
+    re.I,
+)
+_FROM_COLLECTION = re.compile(
+    r"\bfrom\s+(?:the|your|my|this|our)\s+(?:[\w-]+\s+)?(?:index|knowledge base|"
+    r"list|summary|context|plan|library|queue|results?|inputs?|documents?)\b",
+    re.I,
+)
+_EARLIER = re.compile(
+    r"\b(?:previous|last|earlier|prior)\s+(?:session|conversation|turn|time|chat)\b|"
+    r"\b(?:earlier|yesterday)\b",
+    re.I,
+)
 # "Write a guide to X" is a topic; writing *it* or *the summary* to X is a save.
 _WRITE_OBJECT = re.compile(
     r"^\s*(?:(?:it|this|that|them|these|those|everything|all of (?:it|this|them)|"
@@ -141,7 +156,8 @@ def _payload(value: Any) -> dict:
 
 
 def _path_token(match: re.Match) -> str | None:
-    value = next(g for g in match.groups() if g is not None).strip().rstrip(".,;:)?!")
+    value = next(g for g in match.groups() if g is not None).strip()
+    value = value.lstrip("([").rstrip(".,;:)]?!")
     if not value or "://" in value or "@" in value:
         return None
     quoted = any(match.group(i) is not None for i in (1, 2, 3))
@@ -455,21 +471,29 @@ class CompletionEvidence:
         required = {self.key(path) for path in self.requested}
         claim_without_path = False
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
-            # Only the main clause reports this turn: not "code that saves to x".
-            sentence = _RELATIVE_CLAUSE.split(_CONDITION.sub("", sentence))[0]
+            if _EARLIER.search(sentence):
+                continue
+            sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
             if claims_file_write(sentence):
                 paths = destination_paths(sentence)
                 required.update(self.key(path) for path in paths)
                 claim_without_path |= not paths
         gaps = self.cleanup_gaps(answer)
+
+        def inside(path: str, folder: str) -> bool:
+            return any(path.startswith(folder.rstrip("/\\") + sep) for sep in "/\\")
+
+        def requested(path: str) -> bool:
+            # A named folder is fulfilled by the files written inside it.
+            return path in required or any(inside(path, f) for f in required)
+
         for path in sorted(required):
-            # A named folder is fulfilled by a write inside it.
-            inside = any(
-                item.written and key.startswith(path.rstrip("/\\") + sep)
-                for key, item in self.files.items()
-                for sep in ("/", "\\")
+            written_inside = any(
+                item.written and inside(key, path) for key, item in self.files.items()
             )
-            if not inside and (path not in self.files or not self.files[path].written):
+            if not written_inside and (
+                path not in self.files or not self.files[path].written
+            ):
                 reason = self.uninspectable.get(path)
                 gaps.append(
                     f"Could not inspect `{path}`: {reason}"
@@ -484,11 +508,12 @@ class CompletionEvidence:
             gaps.append(
                 "The requested output file has no recorded successful write; an earlier side-effect file does not fulfill that save."
             )
+        pathless_save = not required and (self.save_requested or claim_without_path)
         for item in self.files.values():
-            # Only the requested/claimed artifacts and deliberate file edits need
-            # readback; an incidental transcript is not an output obligation.
+            # Requested or claimed outputs need readback; an ordinary edit does not.
             data_output = (
-                item.direct
+                pathless_save
+                and item.direct
                 and os.path.splitext(item.path)[1].lower() not in _CODE_SUFFIXES
             )
             needs_text_readback = (
@@ -496,7 +521,7 @@ class CompletionEvidence:
             )
             if (
                 needs_text_readback
-                and (data_output or item.path in required)
+                and (data_output or requested(item.path))
                 and not item.observed
             ):
                 gaps.append(
@@ -530,6 +555,9 @@ class CompletionEvidence:
             if not match:
                 continue
             tail = sentence[match.end() :]
+            # Removing a file from an index or a list leaves it on disk.
+            if _FROM_COLLECTION.search(tail):
+                continue
             first = _TARGET.search(tail)
             # A terse "Deleted x" report must name a path, not a category.
             if terse and (not first or first.start() or _path_token(first) is None):

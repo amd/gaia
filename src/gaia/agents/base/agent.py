@@ -1742,11 +1742,16 @@ Do NOT wrap conversational replies in JSON.
             if name in skills
         )
 
-    def _check_extraction_sources(self):
-        ledger = self._extraction_ledger
+    def _read_validator(self):
+        """The agent's file read boundary, or None when it has none."""
         validator = getattr(self, "path_validator", None)
         if validator is None:
             validator = getattr(self, "_path_validator", None)
+        return validator
+
+    def _check_extraction_sources(self):
+        ledger = self._extraction_ledger
+        validator = self._read_validator()
         ledger.validate_sources(lambda path: read_snapshot(path, validator))
         ledger.validate_outputs(lambda path: read_snapshot(path, validator))
 
@@ -1812,9 +1817,7 @@ Do NOT wrap conversational replies in JSON.
                 check()
             try:
                 check()
-                validator = getattr(self, "path_validator", None)
-                if validator is None:
-                    validator = getattr(self, "_path_validator", None)
+                validator = self._read_validator()
                 return ledger.run(
                     file_path,
                     lambda path: read_snapshot(path, validator),
@@ -4375,8 +4378,7 @@ Do NOT wrap conversational replies in JSON.
             evidence.snapshot(
                 tool_name,
                 tool_args,
-                getattr(self, "path_validator", None)
-                or getattr(self, "_path_validator", None),
+                self._read_validator(),
             )
             if evidence is not None
             else {}
@@ -5807,7 +5809,9 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_filter = None
 
         # Relative paths resolve against the working directory, as the file tools do.
-        self._extraction_ledger = ExtractionLedger(user_input, os.getcwd())
+        self._extraction_ledger = ExtractionLedger(
+            user_input, os.getcwd(), available=self._read_validator() is not None
+        )
 
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
@@ -8064,10 +8068,8 @@ Do NOT wrap conversational replies in JSON.
                 inventory = self._extraction_ledger.render()
                 if inventory:
                     # Never ask another synthesis call to reproduce the set; it condenses.
-                    if completion_gaps:
-                        answer_candidate += "\n\n" + inventory
-                    else:
-                        answer_candidate = inventory
+                    answer_candidate += "\n\n" + inventory
+                    if not completion_gaps:
                         saved = sorted(self._extraction_ledger.destinations)
                         if saved:
                             answer_candidate += (
