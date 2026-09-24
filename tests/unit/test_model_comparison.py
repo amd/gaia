@@ -111,6 +111,10 @@ class TestPricing:
         assert run.input_tokens == 100_000
         assert run.usd is None
 
+    def test_a_qwencloud_model_is_cloud_so_unpriced_not_free(self):
+        # QwenCloud bills by input-length tier, so GAIA ships no rate for it.
+        assert from_scorecard(scorecard("qwencloud.qwen3.8-max")).usd is None
+
     def test_an_unpriced_claude_model_gets_no_dollars(self):
         assert from_scorecard(scorecard("claude-unlisted-9")).usd is None
 

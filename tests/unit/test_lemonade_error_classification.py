@@ -239,6 +239,14 @@ def test_refusal_names_the_provider_and_where_to_add_funds() -> None:
     assert "https://fireworks.ai/account/billing" in err.user_message
     assert "local model" in err.user_message
 
+    denied = str(_cloud_request_error(401, "qwencloud"))
+    assert "pay-as-you-go key" in denied and "sk-sp-" in denied
+    assert "sk-sp-" not in str(_cloud_request_error(401, "fireworks"))
+
+    qwen = str(_cloud_request_error(402, "qwencloud"))
+    assert qwen.startswith("QwenCloud refused the request")
+    assert "https://home.qwencloud.com/billing/pay-as-you-go" in qwen
+
     unknown = str(_cloud_request_error(402, "amd"))
     assert unknown.startswith("The amd provider refused the request")
     assert "billing console" in unknown and "https://" not in unknown

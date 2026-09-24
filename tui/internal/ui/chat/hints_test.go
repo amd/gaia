@@ -160,6 +160,7 @@ func TestClaudeSessionsShowTheirSpend(t *testing.T) {
 	}{
 		{"claude", ChatModel{modelBackend: "claude", modelID: "claude-sonnet-5", modelRemote: true}, true},
 		{"fireworks", ChatModel{modelBackend: "fireworks", modelID: "fireworks.glm-5p3", modelRemote: true}, true},
+		{"qwencloud", ChatModel{modelBackend: "qwencloud", modelID: "qwencloud.qwen3.8-max", modelRemote: true}, true},
 		{"amd gateway", ChatModel{modelBackend: "amd", modelID: "amd.gpt-4.1", modelRemote: true}, false},
 		{"local", ChatModel{modelBackend: "lemonade", modelID: "Gemma-4-E4B-it-GGUF"}, false},
 	} {

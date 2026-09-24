@@ -27,6 +27,8 @@ from gaia.llm.providers.lemonade import LemonadeProvider
         ("fireworks.gemma-4-31b-it", "fireworks"),
         ("fireworks.accounts/fireworks/models/gemma-4-31b-it", "fireworks"),
         ("amd.gpt-4.1", "amd"),
+        ("qwencloud.qwen3.8-max", "qwencloud"),
+        ("qwencloud.", None),
         ("user.embeddinggemma-300m-GGUF", None),
         ("Qwen3.5-35B-GGUF", None),
         ("qwen3.5-35B-GGUF", None),
@@ -62,7 +64,7 @@ def client(monkeypatch):
     return client
 
 
-@pytest.mark.parametrize("provider", ["fireworks", "amd"])
+@pytest.mark.parametrize("provider", ["fireworks", "qwencloud", "amd"])
 @responses.activate
 def test_cloud_chat_only_calls_inference_and_preserves_tools(client, provider):
     model = f"{provider}.gemma-4-31b-it"
@@ -222,7 +224,7 @@ def test_cloud_factory_auto_load_does_not_download_or_load(monkeypatch):
     pull.assert_not_called()
 
 
-@pytest.mark.parametrize("provider", ["fireworks", "amd"])
+@pytest.mark.parametrize("provider", ["fireworks", "qwencloud", "amd"])
 @pytest.mark.parametrize("stream", [False, True])
 @responses.activate
 def test_cloud_provider_preserves_native_tool_only_response(

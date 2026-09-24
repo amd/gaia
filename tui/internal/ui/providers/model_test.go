@@ -13,6 +13,14 @@ import (
 )
 
 func key(m Model, k tea.KeyType) Model { next, _ := m.Update(tea.KeyMsg{Type: k}); return next.(Model) }
+func pick(name string) int {
+	for i, n := range names {
+		if n == name {
+			return i
+		}
+	}
+	panic(name)
+}
 func TestMaskedPasteNeverReachesViewAndClearsOnCancel(t *testing.T) {
 	m := New("", 100, 30)
 	m.selected = 1
@@ -32,7 +40,7 @@ func TestMaskedPasteNeverReachesViewAndClearsOnCancel(t *testing.T) {
 }
 func TestProviderScreenOffersAllDestinations(t *testing.T) {
 	m := New("", 100, 30)
-	for _, label := range []string{"Local", "Fireworks AI", "AMD LLM Gateway"} {
+	for _, label := range []string{"Local", "Fireworks AI", "QwenCloud", "AMD LLM Gateway"} {
 		if !strings.Contains(m.View(), label) {
 			t.Fatal(label)
 		}
@@ -189,7 +197,7 @@ func TestSetupNoticesExistingEnvironmentKey(t *testing.T) {
 
 func TestSetupNoticesExistingRuntimeKey(t *testing.T) {
 	m := New("", 100, 30)
-	m.selected = 2
+	m.selected = pick("amd")
 	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
 	m = m.setup()
 	view := m.View()
@@ -203,7 +211,7 @@ func TestSetupNoticesExistingRuntimeKey(t *testing.T) {
 
 func TestSetupNoticeIsShortOnCompactTerminal(t *testing.T) {
 	m := New("", 48, 18)
-	m.selected = 2
+	m.selected = pick("amd")
 	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
 	m = m.setup()
 	view := m.View()
@@ -235,7 +243,7 @@ func TestSetupWithNoExistingKeyShowsNoNotice(t *testing.T) {
 // re-derived, so it kept claiming a key was active after Ctrl+D cleared it.
 func TestClearingRuntimeKeyDropsTheExistingKeyNotice(t *testing.T) {
 	m := New("", 100, 30)
-	m.selected = 2
+	m.selected = pick("amd")
 	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
 	m = m.setup()
 	if !strings.Contains(m.View(), "already configured for AMD LLM Gateway") {
@@ -254,12 +262,74 @@ func TestClearingRuntimeKeyDropsTheExistingKeyNotice(t *testing.T) {
 
 func TestCompactGatewayKeepsProviderAndFieldsVisible(t *testing.T) {
 	m := New("", 48, 18)
-	m.selected = 2
+	m.selected = pick("amd")
 	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
 	m = m.setup()
 	for _, label := range []string{"AMD LLM Gateway", "Gateway URL", "Auth header", "API key", "esc back"} {
 		if !strings.Contains(m.View(), label) {
 			t.Fatalf("compact gateway with an existing key lost %s: %s", label, m.View())
 		}
+	}
+}
+
+func TestQwenCloudSitsBesideFireworksWithAFixedEndpoint(t *testing.T) {
+	if pick("qwencloud") != pick("fireworks")+1 {
+		t.Fatal("QwenCloud should be listed next to Fireworks")
+	}
+	m := New("", 100, 30)
+	m.selected = pick("qwencloud")
+	// Another client pointed the provider elsewhere; setup must not reuse it.
+	m.providers = []lemonade.Provider{{Name: "qwencloud", BaseURL: "https://elsewhere.example/v1", Header: "X-Key"}}
+	m = m.setup()
+	if m.fields[0].Value() != lemonade.QwenCloudURL || m.fields[1].Value() != "Authorization" || m.focus != 3 {
+		t.Fatalf("endpoint not pinned: %q %q focus=%d", m.fields[0].Value(), m.fields[1].Value(), m.focus)
+	}
+	view := m.View()
+	for _, want := range []string{"Chat history is sent to QwenCloud", "pay-as-you-go", lemonade.QwenCloudURL} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("setup view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Gateway URL") {
+		t.Fatal("fixed-endpoint provider should not offer a URL field")
+	}
+	m = key(m, tea.KeyTab)
+	if m.focus != 3 {
+		t.Fatal("tab left the key field of a fixed-endpoint provider")
+	}
+}
+
+func TestQwenCloudSuggestsQwenMaxFirst(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = pick("qwencloud")
+	m = m.setup()
+	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "qwencloud.a"}, {ID: lemonade.QwenCloudModel}}})
+	m = next.(Model)
+	if m.models[0].ID != lemonade.QwenCloudModel || !strings.Contains(m.View(), "qwen3.8-max · suggested") {
+		t.Fatalf("suggestion not first:\n%s", m.View())
+	}
+}
+
+func TestProviderCursorWrapsOverEveryDestination(t *testing.T) {
+	m := New("", 100, 30)
+	m = key(m, tea.KeyUp)
+	if m.chosen() != "amd" {
+		t.Fatalf("up from the top should wrap to the last provider, got %s", m.chosen())
+	}
+	for range names {
+		m = key(m, tea.KeyDown)
+	}
+	if m.chosen() != "amd" {
+		t.Fatalf("a full lap should return to the start, got %s", m.chosen())
+	}
+}
+
+func TestCompactQwenCloudSetupStillNamesTheKeyType(t *testing.T) {
+	m := New("", 48, 18)
+	m.selected = pick("qwencloud")
+	m.providers = []lemonade.Provider{{Name: "qwencloud", RuntimeKey: true}}
+	m = m.setup()
+	if !strings.Contains(m.View(), "Pay-as-you-go key") {
+		t.Fatalf("compact QwenCloud setup lost the key type:\n%s", m.View())
 	}
 }

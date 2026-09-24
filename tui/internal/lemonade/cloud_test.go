@@ -137,3 +137,65 @@ func TestAMDGatewayCustomHeaderAndRuntimeKey(t *testing.T) {
 		t.Fatal("gateway configuration or key lifecycle failed")
 	}
 }
+
+func TestQwenCloudRoutesThroughLemonadeOnItsOfficialEndpoint(t *testing.T) {
+	var installed, authenticated bool
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if r.Method == http.MethodPost {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+		}
+		switch r.URL.Path {
+		case "/api/v1/install":
+			installed = body["provider"] == "qwencloud" && body["base_url"] == QwenCloudURL && body["wire_format"] == "openai" && body["api_key"] == nil
+		case "/api/v1/cloud/auth":
+			authenticated = body["provider"] == "qwencloud" && body["api_key"] == "sk-test"
+		case "/api/v1/models":
+			fmt.Fprint(w, `{"data":[{"id":"qwencloud.qwen3.8-max","recipe":"cloud","cloud_provider":"qwencloud"},{"id":"qwencloud.text-embedding-v4","recipe":"cloud","labels":["embeddings"]},{"id":"fireworks.glm-5p3","recipe":"cloud"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer s.Close()
+	c := New(s.URL)
+	if err := c.Configure(context.Background(), Provider{Name: "qwencloud", BaseURL: QwenCloudURL, Header: "Authorization", Prefix: "Bearer "}, "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+	models, err := c.Models(context.Background(), "qwencloud")
+	if err != nil || len(models) != 1 || models[0].ID != QwenCloudModel {
+		t.Fatalf("models=%v err=%v", models, err)
+	}
+	if !installed || !authenticated {
+		t.Fatal("QwenCloud install or key handoff was wrong")
+	}
+}
+
+func TestQwenCloudRefusesOtherEndpointsAndPlanKeysBeforeCallingLemonade(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("Lemonade was called: %s", r.URL.Path)
+	}))
+	defer s.Close()
+	c := New(s.URL)
+	p := Provider{Name: "qwencloud", BaseURL: "https://attacker.example/v1", Header: "Authorization", Prefix: "Bearer "}
+	if err := c.Configure(context.Background(), p, "sk-test"); err == nil || !strings.Contains(err.Error(), "official API endpoint") {
+		t.Fatalf("custom endpoint accepted: %v", err)
+	}
+	p.BaseURL = QwenCloudURL
+	err := c.Configure(context.Background(), p, "sk-sp-plan-key")
+	if err == nil || !strings.Contains(err.Error(), "pay-as-you-go") || strings.Contains(err.Error(), "plan-key") {
+		t.Fatalf("plan key not refused actionably: %v", err)
+	}
+}
+
+func TestCloudIDsNameOnlyKnownProviders(t *testing.T) {
+	for id, want := range map[string]bool{
+		"qwencloud.qwen3.8-max": true, "fireworks.glm-5p3": true, "amd.gemma": true,
+		"Qwen3.5-4B-GGUF": false, "user.qwen3.5": false, "qwencloud.": false,
+	} {
+		if IsCloudID(id) != want {
+			t.Errorf("IsCloudID(%q) = %v", id, !want)
+		}
+	}
+}

@@ -1,9 +1,9 @@
 ---
 title: "Choose an AI provider"
-description: "Run GAIA locally or connect Fireworks AI and AMD LLM Gateway through Lemonade."
+description: "Run GAIA locally or connect Fireworks AI, QwenCloud, and AMD LLM Gateway through Lemonade."
 ---
 
-GAIA's terminal UI offers **Local**, **Fireworks AI**, and **AMD LLM Gateway**.
+GAIA's terminal UI offers **Local**, **Fireworks AI**, **QwenCloud**, and **AMD LLM Gateway**.
 Lemonade runs local models and routes cloud chat requests. The header names the
 active provider and marks remote inference; document and memory embeddings stay
 on your Lemonade server.
@@ -23,6 +23,20 @@ The model list comes from Lemonade's provider discovery. A listed model may stil
 require deployment or additional account access to serve requests. GAIA does not create a paid
 Fireworks deployment or silently substitute another model when Gemma is absent.
 Fireworks chat sends conversation history to Fireworks and may incur usage charges.
+
+For **QwenCloud**, paste a **pay-as-you-go** API key (it starts with `sk-`) from the
+[QwenCloud console](https://home.qwencloud.com/api-keys). GAIA routes requests
+through Lemonade to QwenCloud's OpenAI-compatible endpoint,
+`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`. The endpoint is fixed,
+like Fireworks'. **Qwen3.8 Max** (`qwencloud.qwen3.8-max`) is listed first when your
+account exposes it. Faster models such as `qwencloud.qwen3.8-flash` are in the
+same list. Token Plan and Coding Plan keys (`sk-sp-`) only work with the plan's own
+endpoint and a registered client. The setup screen refuses a pasted one, and an
+authentication failure names the key type if one reaches Lemonade through
+`LEMONADE_QWENCLOUD_API_KEY`. QwenCloud chat sends conversation history to
+QwenCloud and may incur usage charges. QwenCloud bills by input-length tier, so
+GAIA ships no built-in rate for it. The session readout shows tokens, and
+`/cost help` explains how to set your own rate.
 
 For **AMD LLM Gateway**, enter your organization's OpenAI-compatible HTTPS base
 URL. The default authentication header is `Authorization`, with the prefix
@@ -46,8 +60,9 @@ local embedding models, not an unused local chat model.
   before you type anything — you don't have to guess whether a blank field is
   safe to submit.
 - Leave the key field blank to use a credential already configured in Lemonade.
-  `LEMONADE_FIREWORKS_API_KEY` and `LEMONADE_AMD_API_KEY`, set in the **Lemonade
-  server process**, take precedence over pasted keys. A conflict is reported
+  `LEMONADE_FIREWORKS_API_KEY`, `LEMONADE_QWENCLOUD_API_KEY`, and
+  `LEMONADE_AMD_API_KEY`, set in the **Lemonade server process**, take precedence
+  over pasted keys. A conflict is reported
   explicitly.
 - **Ctrl+D** in provider setup clears that provider's runtime key. Environment
   keys remain active. **Esc** cancels input or an in-progress connection.
@@ -85,4 +100,5 @@ contents are omitted from control diagnostics.
 See [Lemonade cloud offload](https://lemonade-server.ai/docs/guide/configuration/cloud/)
 for server administration and
 [Gemma 4 31B IT on Fireworks](https://fireworks.ai/models/fireworks/gemma-4-31b-it)
-for model availability and deployment requirements.
+for model availability and deployment requirements, and
+[QwenCloud models](https://www.qwencloud.com/models) for the Qwen catalog.

@@ -986,7 +986,12 @@ def test_lemonade_models_unreachable_names_url_and_fix(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "provider,name", [("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")]
+    "provider,name",
+    [
+        ("fireworks", "Fireworks AI"),
+        ("qwencloud", "QwenCloud"),
+        ("amd", "AMD LLM Gateway"),
+    ],
 )
 def test_cloud_model_switch_preserves_session_and_reports_remote(
     monkeypatch, stub_lemonade, provider, name
@@ -1021,6 +1026,7 @@ def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
         "data": [
             {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True},
             {"id": "fireworks.gemma-4-31b-it", "downloaded": False},
+            {"id": "qwencloud.qwen3.8-max", "downloaded": False},
             {"id": "amd.gemma", "downloaded": False},
             {"id": "fireworks.embedding", "labels": ["embeddings"]},
             {"id": "other.gemma", "recipe": "cloud", "cloud_provider": "other"},
@@ -1029,6 +1035,8 @@ def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
     answer = _events(_model_run(_ModelSwitchAgent(), "/model"))[0]["answer"]
     assert answer.index("Local (Lemonade") < answer.index("Gemma-4-E4B-it-GGUF")
     assert answer.index("Fireworks AI") < answer.index("fireworks.gemma-4-31b-it")
+    assert answer.index("QwenCloud") < answer.index("qwencloud.qwen3.8-max")
+    assert answer.index("Fireworks AI") < answer.index("QwenCloud")
     assert answer.index("AMD LLM Gateway") < answer.index("amd.gemma")
     assert "fireworks.embedding" not in answer
     assert "other.gemma" not in answer

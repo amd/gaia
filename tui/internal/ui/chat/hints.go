@@ -280,5 +280,6 @@ func (m ChatModel) isMeteredModel() bool {
 	if !m.modelRemote {
 		return false
 	}
-	return m.modelBackend == "claude" || strings.HasPrefix(m.modelID, "fireworks.")
+	return m.modelBackend == "claude" || strings.HasPrefix(m.modelID, "fireworks.") ||
+		strings.HasPrefix(m.modelID, "qwencloud.")
 }

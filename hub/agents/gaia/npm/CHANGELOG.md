@@ -27,6 +27,12 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **QwenCloud as a TUI provider.** `/provider` now offers QwenCloud beside
+  Fireworks AI, routed through Lemonade to QwenCloud's pay-as-you-go endpoint.
+  Qwen models appear as `qwencloud.*` in `/model`, and the status event names
+  QwenCloud as the remote provider. A Token Plan or Coding Plan key (`sk-sp-`)
+  is refused up front with a pointer to create a pay-as-you-go key.
+
 - **Approve a gated tool over HTTP.** `write_file`, `run_shell_command` and the
   seven other confirmation-gated tools can now run through `/v1/gaia/query`:
   the stream stays open on `needs_confirmation` and

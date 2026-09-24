@@ -157,10 +157,11 @@ fine.
 ## Choosing an AI provider
 
 Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
-**Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
+**Fireworks AI**, **QwenCloud**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
 the masked field; it stays in Lemonade memory until the server restarts. Provider
 settings are shared with other clients of that server. Fireworks suggests
-`fireworks.gemma-4-31b-it` when your account exposes it. AMD Gateway accepts your
+`fireworks.gemma-4-31b-it` and QwenCloud suggests `qwencloud.qwen3.8-max` when
+your account exposes them; QwenCloud needs a pay-as-you-go (`sk-`) key. AMD Gateway accepts your
 organization's HTTPS endpoint and authentication header.
 
 Type to search discovered models, then press Enter to select. The header shows
@@ -204,7 +205,7 @@ and `chat --subprocess` tells you to put the flag in the command line you own.
 
 **Switching models mid-session:** the gaia agent also takes `/model` in the
 chat composer — `/model` alone lists every switchable id (the curated Claude
-5 family, downloaded local models, and discovered Fireworks/AMD models), and `/model <id>`
+5 family, downloaded local models, and discovered Fireworks/QwenCloud/AMD models), and `/model <id>`
 swaps the live client without losing conversation history or loaded skills.
 Typing the space in `/model ` turns the slash palette into a model picker, so
 the Claude ids are pickable rather than remembered; local ids stay behind bare

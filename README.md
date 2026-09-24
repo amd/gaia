@@ -12,7 +12,7 @@
 
 **GAIA** is AMD's open-source framework for building intelligent AI agents that run **locally by default** on AMD Ryzen AI hardware. Local inference keeps your data private, avoids cloud usage fees, and supports air-gapped deployment with hardware-accelerated performance.
 
-The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx).
+The terminal UI also supports optional **Fireworks AI**, **QwenCloud**, and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx).
 
 <p align="center">
   <a href="https://amd-gaia.ai/docs/quickstart"><strong>Get Started →</strong></a>

@@ -418,7 +418,7 @@ _NON_CHAT_LABELS = frozenset({"embeddings", "image", "reranker"})
 
 
 def _lemonade_models(base_url: Optional[str]) -> List[str]:
-    """Downloaded local and discovered Fireworks/AMD chat models Lemonade serves.
+    """Downloaded local and discovered cloud chat models Lemonade serves.
 
     Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
     the codebase uses) rather than a bespoke ``requests`` call, so base_url
@@ -445,7 +445,8 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
             for m in catalog.get("data", [])
             if m.get("id")
             and (m.get("downloaded") or cloud_model_provider(m["id"], m))
-            and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
+            and cloud_model_provider(m["id"], m)
+            in {None, "fireworks", "qwencloud", "amd"}
             and not (_NON_CHAT_LABELS & set(m.get("labels") or []))
         }
     )
@@ -653,6 +654,7 @@ def _format_model_list(agent: Any) -> str:
         for provider, heading in (
             (None, "Local (Lemonade — downloaded, chat-capable models)"),
             ("fireworks", "Fireworks AI (remote — via Lemonade)"),
+            ("qwencloud", "QwenCloud (remote — via Lemonade)"),
             ("amd", "AMD LLM Gateway (remote — via Lemonade)"),
         ):
             lines.append(f"**{heading}:**")
@@ -705,6 +707,7 @@ def run_model_command(agent: Any, query: str, out) -> None:
     if cloud_provider and not agent._use_claude:
         provider_name = {
             "fireworks": "Fireworks AI",
+            "qwencloud": "QwenCloud",
             "amd": "AMD LLM Gateway",
         }.get(cloud_provider, cloud_provider)
         where = (

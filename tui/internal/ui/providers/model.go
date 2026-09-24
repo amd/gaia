@@ -54,7 +54,7 @@ type Model struct {
 	width, height int
 }
 
-var names = []string{"local", "fireworks", "amd"}
+var names = []string{"local", "fireworks", "qwencloud", "amd"}
 
 func New(base string, width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,18 +86,16 @@ func (m Model) fetchModels() tea.Cmd {
 	return func() tea.Msg { models, e := c.Models(m.ctx, p); return modelsMsg{source: c, models: models, err: e} }
 }
 func (m Model) setup() Model {
-	p := lemonade.Provider{Name: m.chosen(), Header: "Authorization", Prefix: "Bearer "}
-	if p.Name == "fireworks" {
-		p.BaseURL = lemonade.FireworksURL
-	}
+	fixed := lemonade.FixedURL(m.chosen())
+	p := lemonade.Provider{Name: m.chosen(), BaseURL: fixed, Header: "Authorization", Prefix: "Bearer "}
 	for _, existing := range m.providers {
 		if existing.Name == p.Name {
 			p = existing
 		}
 	}
-	// The Fireworks destination is fixed even if another client edited it.
-	if p.Name == "fireworks" {
-		p.BaseURL = lemonade.FireworksURL
+	// A vendor's destination is fixed even if another client edited it.
+	if fixed != "" {
+		p.BaseURL = fixed
 		p.Header = "Authorization"
 		p.Prefix = "Bearer "
 	}
@@ -117,6 +115,8 @@ func (m Model) setup() Model {
 		m.fields[3].Placeholder = "Blank uses the environment key"
 	case runtime:
 		m.fields[3].Placeholder = "Blank keeps the saved key"
+	case p.Name == "qwencloud":
+		m.fields[3].Placeholder = "Paste pay-as-you-go API key (sk-…)"
 	default:
 		m.fields[3].Placeholder = "Paste API key"
 	}
@@ -179,11 +179,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.models = v.models
+		suggested := lemonade.SuggestedModel(m.chosen())
 		sort.Slice(m.models, func(i, j int) bool {
-			if m.models[i].ID == lemonade.FireworksModel {
+			if suggested != "" && m.models[i].ID == suggested {
 				return true
 			}
-			if m.models[j].ID == lemonade.FireworksModel {
+			if suggested != "" && m.models[j].ID == suggested {
 				return false
 			}
 			return m.models[i].ID < m.models[j].ID
@@ -243,9 +244,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "providers":
 			switch v.String() {
 			case "up":
-				m.selected = (m.selected + 2) % 3
+				m.selected = (m.selected + len(names) - 1) % len(names)
 			case "down", "tab":
-				m.selected = (m.selected + 1) % 3
+				m.selected = (m.selected + 1) % len(names)
 			case "enter":
 				if m.chosen() == "local" {
 					m.busy = true
@@ -292,7 +293,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch v.String() {
 			case "tab", "shift+tab":
 				m.fields[m.focus].Blur()
-				if m.chosen() == "fireworks" {
+				if lemonade.FixedURL(m.chosen()) != "" {
 					m.focus = 3
 				} else if v.String() == "tab" {
 					m.focus = (m.focus + 1) % 4
@@ -376,11 +377,15 @@ func (m Model) View() string {
 		lines = append(lines, title.Render(lemonade.Label(m.chosen())))
 		if m.height < 22 {
 			lines = append(lines, "Remote chat · key kept until restart.")
-			if m.chosen() == "fireworks" {
+			if m.chosen() == "qwencloud" {
+				lines = append(lines, "Pay-as-you-go key (sk-…). Usage may incur charges.")
+			} else if lemonade.FixedURL(m.chosen()) != "" {
 				lines = append(lines, "Usage may incur charges.")
 			}
 		} else if m.chosen() == "fireworks" {
 			lines = append(lines, "Chat history is sent to Fireworks AI. Usage may incur charges.", "Suggested model: Gemma 4 31B IT", "Endpoint: "+lemonade.FireworksURL)
+		} else if m.chosen() == "qwencloud" {
+			lines = append(lines, "Chat history is sent to QwenCloud. Usage may incur charges.", "Suggested model: Qwen3.8 Max · needs a pay-as-you-go key (sk-…)", "Endpoint: "+lemonade.QwenCloudURL)
 		} else {
 			lines = append(lines, "Chat history is sent to your configured AMD gateway.")
 		}
@@ -403,7 +408,7 @@ func (m Model) View() string {
 		lines = append(lines, "")
 		labels := []string{"Gateway URL", "Auth header", "Prefix (include trailing space for Bearer)", "API key"}
 		for i := range m.fields {
-			if m.chosen() == "fireworks" && i < 3 {
+			if lemonade.FixedURL(m.chosen()) != "" && i < 3 {
 				continue
 			}
 			f := m.fields[i]
@@ -425,7 +430,7 @@ func (m Model) View() string {
 				marker = "› "
 			}
 			label := strings.TrimPrefix(models[i].ID, m.chosen()+".")
-			if models[i].ID == lemonade.FireworksModel {
+			if models[i].ID == lemonade.SuggestedModel(m.chosen()) {
 				label += " · suggested"
 			}
 			if i == m.focus {

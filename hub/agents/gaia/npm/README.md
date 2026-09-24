@@ -9,8 +9,8 @@ npx @amd-gaia/gaia
 That fetches the two binaries GAIA needs — the agent sidecar and the terminal UI —
 verifies both against a checksum manifest that ships inside this package, and drops
 you into the terminal UI. No Python to install, no repo to clone, no build step.
-Local inference is the default. The TUI can explicitly select Fireworks AI or AMD
-LLM Gateway through Lemonade; remote chat sends conversation history to that provider. The
+Local inference is the default. The TUI can explicitly select Fireworks AI, QwenCloud,
+or AMD LLM Gateway through Lemonade; remote chat sends conversation history to that provider. The
 terminal UI's `--use-claude` flag, which would send a conversation to the
 Anthropic API, is refused for the agent this package installs — see
 [`SPEC.md` §5.5](./SPEC.md#55-other-transports).

@@ -250,7 +250,7 @@ def cloud_model_provider(
         return None
     if metadata is not None and metadata.get("recipe") == "cloud":
         return metadata.get("cloud_provider") or provider
-    if provider in {"fireworks", "amd"}:
+    if provider in {"fireworks", "qwencloud", "amd"}:
         return provider
     return None
 
@@ -791,7 +791,10 @@ def _cloud_error_status(error: openai.APIError) -> Optional[int]:
 
 
 #: Where a user adds funds, for cloud providers whose billing page is known.
-_CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/billing")}
+_CLOUD_BILLING = {
+    "fireworks": ("Fireworks AI", "https://fireworks.ai/account/billing"),
+    "qwencloud": ("QwenCloud", "https://home.qwencloud.com/billing/pay-as-you-go"),
+}
 
 
 def _cloud_request_error(
@@ -799,11 +802,18 @@ def _cloud_request_error(
 ) -> LemonadeClientError:
     """Actionable cloud failures without reflecting provider response bodies."""
     if status in {401, 403}:
+        # An env-var plan key never passes the TUI's paste-time check.
+        plan_key = (
+            " QwenCloud needs a pay-as-you-go key (sk-...); Token Plan and "
+            "Coding Plan keys (sk-sp-...) are rejected on this endpoint."
+            if provider == "qwencloud"
+            else ""
+        )
         return LemonadeAuthError(
             f"Cloud authentication or access was denied (HTTP {status}). "
             "Reconnect the provider in the TUI provider settings and check "
-            "your account's model access. If Lemonade itself requires "
-            "authentication, verify LEMONADE_API_KEY."
+            f"your account's model access.{plan_key} If Lemonade itself "
+            "requires authentication, verify LEMONADE_API_KEY."
         )
     if status == 404:
         return LemonadeClientError(

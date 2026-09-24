@@ -20,6 +20,39 @@ import (
 const FireworksURL = "https://api.fireworks.ai/inference/v1"
 const FireworksModel = "fireworks.gemma-4-31b-it"
 
+// QwenCloud's pay-as-you-go OpenAI-compatible endpoint. Token Plan and Coding
+// Plan keys use other hosts plus a client User-Agent Lemonade cannot send.
+const QwenCloudURL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+const QwenCloudModel = "qwencloud.qwen3.8-max"
+const QwenCloudKeysURL = "https://home.qwencloud.com/api-keys"
+
+// FixedURL is the only endpoint a vendor provider may use; "" means the user
+// supplies it (the AMD gateway).
+func FixedURL(provider string) string {
+	switch provider {
+	case "fireworks":
+		return FireworksURL
+	case "qwencloud":
+		return QwenCloudURL
+	}
+	return ""
+}
+
+// SuggestedModel is listed first when the provider's catalog exposes it.
+func SuggestedModel(provider string) string {
+	switch provider {
+	case "fireworks":
+		return FireworksModel
+	case "qwencloud":
+		return QwenCloudModel
+	}
+	return ""
+}
+
+func known(provider string) bool {
+	return provider == "fireworks" || provider == "qwencloud" || provider == "amd"
+}
+
 type Provider struct {
 	Name       string `json:"name"`
 	BaseURL    string `json:"base_url"`
@@ -39,7 +72,8 @@ type Model struct {
 
 func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || IsCloudID(m.ID) }
 func IsCloudID(id string) bool {
-	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.")
+	provider, rest, _ := strings.Cut(id, ".")
+	return rest != "" && known(provider)
 }
 func Label(provider string) string {
 	switch provider {
@@ -47,6 +81,8 @@ func Label(provider string) string {
 		return "Local"
 	case "fireworks":
 		return "Fireworks AI"
+	case "qwencloud":
+		return "QwenCloud"
 	case "amd":
 		return "AMD LLM Gateway"
 	}
@@ -156,11 +192,14 @@ func (c *Client) Models(ctx context.Context, provider string) ([]Model, error) {
 	return out, nil
 }
 func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
-	if p.Name != "fireworks" && p.Name != "amd" {
+	if !known(p.Name) {
 		return fmt.Errorf("Unknown provider")
 	}
-	if p.Name == "fireworks" && p.BaseURL != FireworksURL {
-		return fmt.Errorf("Fireworks must use its official API endpoint")
+	if fixed := FixedURL(p.Name); fixed != "" && p.BaseURL != fixed {
+		return fmt.Errorf("%s must use its official API endpoint", Label(p.Name))
+	}
+	if p.Name == "qwencloud" && strings.HasPrefix(key, "sk-sp-") {
+		return fmt.Errorf("That is a QwenCloud Token Plan or Coding Plan key, which only works with plan-specific tools. Create a pay-as-you-go key (sk-...) at %s and retry", QwenCloudKeysURL)
 	}
 	if err := validateURL(p.BaseURL, false); err != nil {
 		return err
@@ -178,7 +217,7 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	return nil
 }
 func (c *Client) Clear(ctx context.Context, provider string) error {
-	if provider != "fireworks" && provider != "amd" {
+	if !known(provider) {
 		return fmt.Errorf("Unknown provider")
 	}
 	return c.request(ctx, "DELETE", "/cloud/auth/"+provider, nil, nil)

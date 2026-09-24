@@ -413,10 +413,10 @@ What remains stdio-only is the *launch* form of those switches:
 `--use-claude` / `--claude-model` pin the backend for the life of the process
 (embeddings stay on Lemonade either way).
 
-The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
+The stdio TUI also supports Local, Fireworks AI, QwenCloud, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models;
 `/model <id>` switches the live client while preserving conversation and skills.
-Cloud IDs (`fireworks.*`, `amd.*`) route through Lemonade without local model
+Cloud IDs (`fireworks.*`, `qwencloud.*`, `amd.*`) route through Lemonade without local model
 loading. Model-state status events identify the provider and remote inference.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
