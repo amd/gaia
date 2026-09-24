@@ -31,6 +31,13 @@ DEEP_ROOT_DEPTH = 999
 #: reason.
 SHALLOW_ROOT_DEPTH = 5
 
+#: Wall-clock budget for one search walk. Well under the 180 s tool watchdog,
+#: so the model gets partial results and a hint instead of an abandoned call.
+SEARCH_TIME_BUDGET_S = 20.0
+
+#: Directory entries one search walk may examine before it stops (#3889).
+SEARCH_ENTRY_BUDGET = 200_000
+
 
 def path_validator_of(host: Any) -> Any:
     """The host's PathValidator under either of the two attribute names."""
