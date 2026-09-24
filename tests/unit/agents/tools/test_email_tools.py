@@ -55,6 +55,32 @@ def json_response(payload, status=200):
     return httpx.Response(status, json=payload)
 
 
+def unfenced(message):
+    """The body a read returns, with the untrusted-content fence stripped.
+
+    ``read_email`` wraps every body in the fence (#4150); these tests are about
+    what is inside it — truncation, and the per-turn budget it is charged to.
+    """
+    from gaia.agents.tools._email.phishing import (
+        UNTRUSTED_BODY_CLOSE,
+        UNTRUSTED_BODY_OPEN,
+    )
+
+    body = message["body"]
+    assert body.startswith(UNTRUSTED_BODY_OPEN) and body.endswith(UNTRUSTED_BODY_CLOSE)
+    return body[len(UNTRUSTED_BODY_OPEN) : -len(UNTRUSTED_BODY_CLOSE)].strip("\n")
+
+
+def graph_error(status, code=None, body=None):
+    """A Graph error response: either a structured `{error: {code}}` body, or
+    a raw text body (HTML, plain text) to simulate what Graph and proxies
+    actually send on failure."""
+    if body is not None:
+        return httpx.Response(status, text=body)
+    payload = {"error": {"code": code, "message": "Access is denied."}}
+    return httpx.Response(status, json=payload)
+
+
 # --------------------------------------------------------------------------
 # message_summary — provider-neutral flattening
 # --------------------------------------------------------------------------
@@ -167,6 +193,64 @@ def test_get_message_selects_body():
     assert out["body"] == "<p>Can you confirm?</p>"
 
 
+# A real-shaped Graph message id: standard base64, padded.
+REAL_GRAPH_ID = (
+    "AAMkADYyMTBjZGZjLTNmNGEtNDU4Yy04MTIxLTgwZDRkZGI4ZmY0NABGAAAAAAB"
+    "b1n5Ct_yWQ4XpZ0ueZLRLBwC0vORhuAAAAAAAEMAAC0vORhuAAACAQwAAA="
+)
+
+
+def test_get_message_accepts_a_real_shaped_graph_id():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = request.url
+        return json_response(GRAPH_MESSAGE)
+
+    make_backend(handler).get_message(REAL_GRAPH_ID)
+
+    assert seen["url"].path == f"/v1.0/me/messages/{REAL_GRAPH_ID}"
+
+
+def test_an_id_containing_a_separator_stays_one_path_segment():
+    """Graph issues standard base64 ids, so `/` and `+` are legitimate."""
+    seen = {}
+
+    def handler(request):
+        seen["url"] = request.url
+        return json_response(GRAPH_MESSAGE)
+
+    make_backend(handler).get_message("AAMk/oQ+Dw==")
+
+    # `.path` is the decoded view; `.raw_path` is what actually goes on the wire.
+    sent = seen["url"].raw_path.split(b"?")[0]
+    assert sent == b"/v1.0/me/messages/AAMk%2FoQ%2BDw%3D%3D"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../mailFolders/inbox",
+        "AAMk-1/../../mailFolders",
+        "AAMk-1?$select=body",
+        "AAMk-1#frag",
+        "AAMk 1",
+    ],
+)
+def test_a_message_id_outside_the_graph_alphabet_is_refused(bad):
+    """The id comes from a model and lands in the URL path."""
+    backend = make_backend(lambda request: json_response(GRAPH_MESSAGE))
+    with pytest.raises(ValueError, match="not a Microsoft Graph message id"):
+        backend.get_message(bad)
+
+
+@pytest.mark.parametrize("bad", ["", "   "])
+def test_an_empty_message_id_is_refused(bad):
+    backend = make_backend(lambda request: json_response(GRAPH_MESSAGE))
+    with pytest.raises(ValueError, match="non-empty message id"):
+        backend.get_message(bad)
+
+
 def test_top_is_clamped_to_graph_maximum():
     seen = {}
 
@@ -248,6 +332,44 @@ def test_error_message_never_contains_the_bearer_token():
         backend.list_inbox()
     assert "test-token" not in str(err.value)
     assert "Bearer" not in str(err.value)
+
+
+def test_403_names_the_structured_error_code():
+    backend = make_backend(lambda r: graph_error(403, code="ErrorAccessDenied"))
+    with pytest.raises(MailboxAuthError) as err:
+        backend.list_inbox()
+    assert "ErrorAccessDenied" in str(err.value)
+    assert '{"error"' not in str(err.value)
+
+
+def test_403_html_body_is_dropped_not_echoed():
+    backend = make_backend(
+        lambda r: graph_error(403, body="<html><body>Blocked by proxy</body></html>")
+    )
+    with pytest.raises(MailboxAuthError) as err:
+        backend.list_inbox()
+    msg = str(err.value)
+    assert "forbidden" in msg
+    assert "Blocked by proxy" not in msg
+    assert "<html" not in msg
+
+
+@pytest.mark.parametrize("body", ["[1,2]", '{"error": "denied"}', '"just a string"'])
+def test_403_non_object_json_body_is_dropped_not_a_crash(body):
+    """A body that parses as JSON but isn't the documented `{error: {code}}`
+    shape must not surface as an AttributeError."""
+    backend = make_backend(lambda r: graph_error(403, body=body))
+    with pytest.raises(MailboxAuthError) as err:
+        backend.list_inbox()
+    assert "forbidden" in str(err.value)
+
+
+def test_generic_error_surfaces_structured_code_not_body():
+    backend = make_backend(lambda r: graph_error(500, code="InternalServerError"))
+    with pytest.raises(MailboxError) as err:
+        backend.list_inbox()
+    assert "InternalServerError" in str(err.value)
+    assert '{"error"' not in str(err.value)
 
 
 def test_network_failure_is_actionable():
@@ -365,6 +487,323 @@ def test_limit_is_clamped_at_the_tool_boundary(harness_factory):
     assert seen["top"] == "100"
 
 
+# --------------------------------------------------------------------------
+# backend selection — which mailbox, and what to say when there isn't one
+# --------------------------------------------------------------------------
+
+GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+MAIL_READWRITE = "https://graph.microsoft.com/Mail.ReadWrite"
+
+
+@pytest.fixture
+def mailbox_env(monkeypatch):
+    """Point the mixin at a synthetic connector state."""
+
+    def apply(connections, grants):
+        import gaia.connectors.api as api
+        import gaia.connectors.grants as grants_mod
+
+        minted = {}
+        monkeypatch.setattr(api, "get_connection", lambda p: connections.get(p))
+        monkeypatch.setattr(
+            grants_mod, "list_agent_grants", lambda p: dict(grants.get(p) or {})
+        )
+
+        def fake_token(*, provider, scopes, agent_id, **_):
+            minted["provider"] = provider
+            minted["scopes"] = list(scopes)
+            minted["agent_id"] = agent_id
+            return "test-token"
+
+        monkeypatch.setattr(api, "get_access_token_sync", fake_token)
+        return minted
+
+    return apply
+
+
+def connection(scopes, **extra):
+    return {
+        "provider": "x",
+        "account_email": "me@example.com",
+        "scopes": list(scopes),
+        **extra,
+    }
+
+
+class _Bare(EmailToolsMixin):
+    """The mixin with nothing pre-wired, so selection actually runs."""
+
+
+@pytest.mark.parametrize(
+    "connections,grants,provider,scope",
+    [
+        # Google connected read-only and granted -> Gmail, readonly.
+        (
+            {"google": connection([GMAIL_READONLY])},
+            {"google": {"installed:gaia": [GMAIL_READONLY]}},
+            "google",
+            GMAIL_READONLY,
+        ),
+        # The measured box: the connection carries modify, so modify is what
+        # gets requested -- asking for readonly would force a reconnect.
+        (
+            {"google": connection([GMAIL_MODIFY])},
+            {"google": {"installed:gaia": [GMAIL_MODIFY]}},
+            "google",
+            GMAIL_MODIFY,
+        ),
+        # Microsoft only.
+        (
+            {"microsoft": connection([MAIL_READWRITE])},
+            {"microsoft": {"installed:gaia": [MAIL_READWRITE]}},
+            "microsoft",
+            MAIL_READWRITE,
+        ),
+        # Google connected but not granted; Microsoft usable -> Microsoft.
+        (
+            {
+                "google": connection([GMAIL_MODIFY]),
+                "microsoft": connection([MAIL_READWRITE]),
+            },
+            {"microsoft": {"installed:gaia": [MAIL_READWRITE]}},
+            "microsoft",
+            MAIL_READWRITE,
+        ),
+    ],
+)
+def test_backend_selected_from_resolved_read_capability(
+    mailbox_env, connections, grants, provider, scope
+):
+    minted = mailbox_env(connections, grants)
+    backend = _Bare()._build_email_backend()
+
+    expected = "GmailReadBackend" if provider == "google" else "OutlookReadBackend"
+    assert type(backend).__name__ == expected
+
+    backend._access_token_fn()
+    assert minted["provider"] == provider
+    # Exactly the one resolved scope, never the pair.
+    assert minted["scopes"] == [scope]
+    assert minted["agent_id"] == EMAIL_AGENT_ID
+
+
+def test_both_usable_prefers_google_and_announces_the_alternative(mailbox_env):
+    mailbox_env(
+        {
+            "google": connection([GMAIL_READONLY]),
+            "microsoft": connection([MAIL_READWRITE]),
+        },
+        {
+            "google": {"installed:gaia": [GMAIL_READONLY]},
+            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
+        },
+    )
+    mixin = _Bare()
+    mixin._build_email_backend()
+    assert mixin._email_provider == "google"
+    assert mixin._email_provider_source == "precedence"
+    assert mixin._email_alternatives == ["microsoft"]
+
+
+def test_revoking_the_grant_switches_the_selected_mailbox(mailbox_env):
+    """The only way to change the pick, and the one `check_mailbox_access` names.
+
+    Selection is connector-derived on purpose: an env-var override would choose
+    a mailbox without consulting the grant ledger, which is the gate that makes
+    the choice auditable in the first place.
+    """
+    both_connected = {
+        "google": connection([GMAIL_READONLY]),
+        "microsoft": connection([MAIL_READWRITE]),
+    }
+    mailbox_env(
+        both_connected,
+        {
+            "google": {"installed:gaia": [GMAIL_READONLY]},
+            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
+        },
+    )
+    mixin = _Bare()
+    mixin._build_email_backend()
+    assert mixin._email_provider == "google"
+
+    # `gaia connectors grants revoke google installed:gaia` — the google row
+    # is gone, so microsoft becomes the only eligible mailbox.
+    mailbox_env(both_connected, {"microsoft": {"installed:gaia": [MAIL_READWRITE]}})
+    switched = _Bare()
+    switched._build_email_backend()
+    assert switched._email_provider == "microsoft"
+    assert switched._email_provider_source == "only-granted"
+    assert switched._email_alternatives == []
+
+
+def test_no_environment_variable_can_choose_the_mailbox(mailbox_env, monkeypatch):
+    """A hidden env override would bypass the grant gate entirely."""
+    mailbox_env(
+        {
+            "google": connection([GMAIL_READONLY]),
+            "microsoft": connection([MAIL_READWRITE]),
+        },
+        {
+            "google": {"installed:gaia": [GMAIL_READONLY]},
+            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
+        },
+    )
+    for name in ("GAIA_MAIL_PROVIDER", "GAIA_EMAIL_PROVIDER", "MAIL_PROVIDER"):
+        monkeypatch.setenv(name, "microsoft")
+
+    mixin = _Bare()
+    mixin._build_email_backend()
+    assert mixin._email_provider == "google"
+    assert mixin._email_provider_source == "precedence"
+
+
+@pytest.mark.parametrize(
+    "connections,grants,needle",
+    [
+        # NOT_CONNECTED
+        ({}, {}, "gaia connectors connect google"),
+        # MISSING_SCOPES — remedy must carry granted UNION needed, because
+        # `--scopes` REPLACES a connection's scopes rather than adding to them.
+        (
+            {
+                "google": connection(
+                    ["https://www.googleapis.com/auth/calendar.readonly"]
+                )
+            },
+            {},
+            "calendar.readonly",
+        ),
+        # NOT_GRANTED — a ledger write, not a browser reconnect.
+        (
+            {"google": connection([GMAIL_MODIFY])},
+            {},
+            "gaia connectors grants grant google installed:gaia",
+        ),
+        # REAUTH_REQUIRED
+        (
+            {"google": {"provider": "google", "scopes": [], "error": "configuration"}},
+            {},
+            "OAuth client",
+        ),
+    ],
+)
+def test_no_mailbox_error_names_each_providers_own_state(
+    mailbox_env, connections, grants, needle
+):
+    from gaia.agents.tools._email import MailboxError
+
+    mailbox_env(connections, grants)
+    with pytest.raises(MailboxError) as err:
+        _Bare()._build_email_backend()
+    message = str(err.value)
+    assert needle in message
+    # Both mailboxes are named, each with its own state.
+    assert "google" in message and "microsoft" in message
+
+
+def test_missing_scopes_remedy_never_names_only_the_gap(mailbox_env):
+    """`--scopes` replaces, so a gap-only remedy strips what the user had."""
+    from gaia.agents.tools._email import MailboxError
+
+    mailbox_env(
+        {"google": connection(["https://www.googleapis.com/auth/calendar.events"])},
+        {},
+    )
+    with pytest.raises(MailboxError) as err:
+        _Bare()._build_email_backend()
+    message = str(err.value)
+    assert "calendar.events" in message
+    assert GMAIL_READONLY in message
+
+
+def test_the_full_mailbox_scope_is_never_requested(mailbox_env):
+    from gaia.agents.tools._email.scopes import SCOPE_GMAIL_FULL_MAILBOX
+
+    minted = mailbox_env(
+        {"google": connection([GMAIL_READONLY, SCOPE_GMAIL_FULL_MAILBOX])},
+        {"google": {"installed:gaia": [GMAIL_READONLY, SCOPE_GMAIL_FULL_MAILBOX]}},
+    )
+    _Bare()._build_email_backend()._access_token_fn()
+    assert minted["scopes"] == [GMAIL_READONLY]
+
+
+def test_backend_reresolves_once_after_an_auth_failure(harness_factory):
+    """A grant made mid-session must not need a restart to take effect."""
+    builds = []
+
+    class Flaky(_Harness):
+        def _build_email_backend(self):
+            builds.append(1)
+            if len(builds) == 1:
+                return make_backend(lambda r: httpx.Response(401, text="expired"))
+            return make_backend(lambda r: json_response({"value": [GRAPH_MESSAGE]}))
+
+    h = Flaky(backend=None)
+    h._email_backend = None
+    h.register_email_tools()
+    out = json.loads(h._tool("list_inbox")())
+
+    assert out["success"] is True
+    assert len(builds) == 2
+
+
+def test_a_second_auth_failure_is_surfaced_not_retried_forever(harness_factory):
+    builds = []
+
+    class AlwaysDead(_Harness):
+        def _build_email_backend(self):
+            builds.append(1)
+            return make_backend(lambda r: httpx.Response(401, text="expired"))
+
+    h = AlwaysDead(backend=None)
+    h._email_backend = None
+    h.register_email_tools()
+    out = json.loads(h._tool("list_inbox")())
+
+    assert out["success"] is False
+    assert len(builds) == 2
+
+
+def test_check_mailbox_access_reports_the_resolved_provider(harness_factory):
+    def handler(request):
+        if request.url.path.endswith("/me"):
+            return json_response({"mail": "me@example.com"})
+        return json_response({"value": []})
+
+    h = harness_factory(handler)
+    h._email_provider = "google"
+    h._email_provider_source = "precedence"
+    h._email_alternatives = ["microsoft"]
+    out = json.loads(h._tool("check_mailbox_access")())
+
+    assert out["provider"] == "google"
+    assert out["provider_source"] == "precedence"
+    assert out["alternatives"] == ["microsoft"]
+
+
+def test_read_email_body_is_bounded_and_truncation_is_visible(harness_factory):
+    """Quoted thread history is unbounded; the NPU profile runs a 32K window."""
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    huge = "x" * (_MAX_BODY_CHARS + 5000)
+    message = dict(GRAPH_MESSAGE, body={"contentType": "text", "content": huge})
+    h = harness_factory(lambda r: json_response(message))
+
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))["message"]
+    assert len(unfenced(out)) == _MAX_BODY_CHARS
+    assert out["body_truncated"] is True
+    assert out["body_original_chars"] == len(huge)
+
+
+def test_a_short_body_is_not_marked_truncated(harness_factory):
+    h = harness_factory(lambda r: json_response(GRAPH_MESSAGE))
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))["message"]
+    assert "body_truncated" not in out
+    assert unfenced(out) == "<p>Can you confirm?</p>"
+
+
 def test_backend_is_not_built_until_a_tool_runs():
     """Composing the mixin must not touch the connectors layer."""
 
@@ -445,3 +884,415 @@ def test_email_tools_are_bundled_for_the_loader():
         "pull the email tools in as a cohort"
     )
     assert email.members == set(_inbox_triage_skill().gaia.tools_required)
+
+
+# --------------------------------------------------------------------------
+# per-turn read budget
+# --------------------------------------------------------------------------
+
+
+def _big_body_message(chars):
+    return dict(GRAPH_MESSAGE, body={"contentType": "text", "content": "x" * chars})
+
+
+def test_turn_budget_refuses_once_the_turn_is_full(harness_factory):
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    h = harness_factory(lambda r: json_response(_big_body_message(_MAX_BODY_CHARS)))
+    h._turn_seq = 1
+
+    results = []
+    for _ in range(6):
+        results.append(json.loads(h._tool("read_email")(message_id="AAMk-1")))
+        if results[-1]["success"] is False:
+            break
+
+    successes = [r for r in results if r["success"] is True]
+    refusal = results[-1]
+    assert len(successes) >= 2
+    assert refusal["success"] is False
+    assert refusal["turn_budget_exhausted"] is True
+    assert "message" not in refusal
+
+    budget = h._email_turn_budget_chars()
+    total_charged = sum(len(unfenced(r["message"])) for r in successes)
+    assert total_charged == h._email_turn_body_chars
+    assert total_charged <= budget + _MAX_BODY_CHARS
+
+
+def test_turn_budget_refusal_tells_the_model_to_stop_and_say_so(harness_factory):
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    h = harness_factory(lambda r: json_response(_big_body_message(_MAX_BODY_CHARS)))
+    h._turn_seq = 1
+    h._email_turn_body_chars = h._email_turn_budget_chars()
+    h._email_turn_token = 1
+    h._email_turn_reads = 3
+
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    assert out["success"] is False
+    error = out["error"].lower()
+    assert "tell the user" in error
+    assert "stopped" in error
+    assert "new turn" in error or "narrow" in error
+
+
+def test_turn_budget_resets_on_a_new_turn(harness_factory):
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    h = harness_factory(lambda r: json_response(_big_body_message(_MAX_BODY_CHARS)))
+    h._turn_seq = 1
+    h._email_turn_body_chars = h._email_turn_budget_chars()
+    h._email_turn_token = 1
+    h._email_turn_reads = 3
+
+    refused = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    assert refused["success"] is False
+
+    h._turn_seq = 2
+    admitted = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    assert admitted["success"] is True
+
+
+def test_turn_budget_is_derived_from_the_device_profile():
+    from gaia.llm.lemonade_client import (
+        GPU_CTX_SIZE,
+        NPU_CTX_SIZE,
+        budget_for_ctx,
+        truncation_budget,
+    )
+
+    class _ProfileHost(EmailToolsMixin):
+        def __init__(self, ctx_size):
+            self._ctx_size = ctx_size
+
+        def _truncation_budget(self):
+            return budget_for_ctx(self._ctx_size)
+
+    npu_budget = _ProfileHost(NPU_CTX_SIZE)._email_turn_budget_chars()
+    gpu_budget = _ProfileHost(GPU_CTX_SIZE)._email_turn_budget_chars()
+    assert npu_budget == budget_for_ctx(NPU_CTX_SIZE)[0]
+    assert gpu_budget == budget_for_ctx(GPU_CTX_SIZE)[0]
+    assert npu_budget != gpu_budget
+
+    class _DeviceHost(EmailToolsMixin):
+        def __init__(self, device):
+            self.device = device
+
+    assert _DeviceHost("npu")._email_turn_budget_chars() == truncation_budget("npu")[0]
+    assert _DeviceHost("gpu")._email_turn_budget_chars() == truncation_budget("gpu")[0]
+    assert _DeviceHost(None)._email_turn_budget_chars() == truncation_budget(None)[0]
+
+
+def test_turn_budget_guard_runs_before_the_backend_call():
+    """The refusal must not depend on which backend is behind the mailbox."""
+
+    class _AssertingHost(EmailToolsMixin):
+        _email_backend = object()  # any truthy sentinel; must never be used
+
+        def _email_call(self, *args, **kwargs):
+            raise AssertionError("backend must not be called once the turn is full")
+
+        def _tool(self, name):
+            from gaia.agents.base.tools import _TOOL_REGISTRY
+
+            return _TOOL_REGISTRY[name]["function"]
+
+    h = _AssertingHost()
+    h.register_email_tools()
+    h._turn_seq = 1
+    budget = h._email_turn_budget_chars()
+    h._email_turn_token = 1
+    h._email_turn_body_chars = budget
+    h._email_turn_reads = 1
+
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    assert out["success"] is False
+    assert out["turn_budget_exhausted"] is True
+
+
+def test_turn_budget_guard_would_fail_if_the_admission_check_were_removed(
+    harness_factory,
+):
+    """Documents the invariant: deleting the ``used >= budget`` check breaks this."""
+    from gaia.agents.tools.email_tools import _MAX_BODY_CHARS
+
+    h = harness_factory(lambda r: json_response(_big_body_message(_MAX_BODY_CHARS)))
+    h._turn_seq = 1
+    budget = h._email_turn_budget_chars()
+    h._email_turn_token = 1
+    h._email_turn_body_chars = budget
+    h._email_turn_reads = 5
+
+    out = json.loads(h._tool("read_email")(message_id="AAMk-1"))
+    # Without the admission check this would be a success carrying a body —
+    # the assertion below is the one a deleted guard would fail.
+    assert out["success"] is False
+    assert "message" not in out
+
+
+def test_turn_counter_increments_without_agent_init():
+    """A subclass that never runs ``Agent.__init__`` must still count turns.
+
+    Test doubles and lightweight subclasses build instances directly; a
+    counter that only exists after ``__init__`` raises ``AttributeError``
+    in the turn-setup path for all of them.
+    """
+    from gaia.agents.base.agent import Agent
+
+    assert Agent._turn_seq == 0
+
+    class _NoInit(Agent):
+        def __init__(self):  # pylint: disable=super-init-not-called
+            pass
+
+        def _register_tools(self):
+            pass
+
+    bare = _NoInit()
+    bare._turn_seq += 1
+    assert bare._turn_seq == 1
+    assert Agent._turn_seq == 0
+
+
+# --------------------------------------------------------------------------
+# recollection search — broadening a query the provider ANDs down to zero
+# --------------------------------------------------------------------------
+
+
+def _mailbox_matching(*matching_queries):
+    """A Graph handler whose mailbox only answers the given `$search` terms.
+
+    Models the real failure: every term is ANDed, so the long paraphrase the
+    model builds from a user's recollection matches nothing while two words
+    from the message match immediately.
+    """
+    wanted = {q.lower() for q in matching_queries}
+    seen = []
+
+    def handler(request):
+        term = (request.url.params.get("$search") or "").strip('"')
+        seen.append(term)
+        hit = term.lower() in wanted
+        return json_response({"value": [GRAPH_MESSAGE] if hit else []})
+
+    return handler, seen
+
+
+def test_search_docstring_warns_that_terms_are_anded(harness_factory):
+    """The model must be told a longer query is a narrower one.
+
+    Without this the natural translation of a sentence into keywords is
+    always wrong, and the zero result reads as "no such mail".
+    """
+    h = harness_factory(lambda r: json_response({"value": []}))
+    doc = h._tool("search_email").__doc__.lower()
+
+    assert "anded" in doc and "narrower" in doc
+
+
+def test_zero_result_query_is_broadened_until_it_hits(harness_factory):
+    handler, seen = _mailbox_matching("argument cameras")
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(query="the argument over cameras police use")
+    )
+
+    assert out["count"] == 1
+    assert out["broadened"] is True
+    assert out["query_used"] == "argument cameras"
+    assert seen[0] == "the argument over cameras police use"  # full query tried first
+    assert seen[-1] == "argument cameras"
+
+
+def test_broadened_result_names_the_query_that_produced_it(harness_factory):
+    handler, _ = _mailbox_matching("contract counter-signature")
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="please sign off on the contract counter-signature schedule"
+        )
+    )
+
+    assert out["query_requested"] == (
+        "please sign off on the contract counter-signature schedule"
+    )
+    assert out["query_used"] == "contract counter-signature"
+    assert [a["count"] for a in out["attempts"]] == [0, 0, 1]
+    # The model must not present a looser match as an exact one.
+    assert "approximate" in out["note"]
+
+
+def test_absent_message_still_reports_zero_after_broadening(harness_factory):
+    """The case a naive retry loop gets wrong: broadening must not invent a hit."""
+    handler, seen = _mailbox_matching()  # nothing matches, ever
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="quarterly budget from Dana"))
+
+    assert out["success"] is True
+    assert out["count"] == 0
+    assert out["messages"] == []
+    assert len(seen) == len(out["attempts"]) >= 2
+    assert len(seen) <= 6  # broadening is bounded, not an unbounded retry loop
+    assert all(a["count"] == 0 for a in out["attempts"])
+    assert "No message matched" in out["note"]
+
+
+def test_short_query_that_hits_is_not_broadened(harness_factory):
+    handler, seen = _mailbox_matching("flock newsletter")
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="flock newsletter"))
+
+    assert out["count"] == 1
+    assert out["broadened"] is False
+    assert out["query_used"] == "flock newsletter"
+    assert seen == ["flock newsletter"]  # one round trip, no wasted retry
+
+
+def test_empty_query_still_fails_loudly(harness_factory):
+    """Broadening must not turn a rejected query into a silent empty result."""
+    h = harness_factory(lambda r: json_response({"value": []}))
+
+    out = json.loads(h._tool("search_email")(query="   "))
+
+    assert out["success"] is False
+    assert "non-empty search string" in out["error"]
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        # Nothing to drop — the pair rung is the query itself, so it is skipped.
+        ("flock cameras", ["flock cameras", "cameras", "flock"]),
+        # Stopwords go first, then the two longest terms, then one at a time.
+        (
+            "the argument over surveillance cameras police",
+            [
+                "the argument over surveillance cameras police",
+                "argument surveillance cameras police",
+                "argument surveillance",
+                "surveillance",
+                "argument",
+                "cameras",
+            ],
+        ),
+        # A boolean the model emitted is operator noise, not a keyword.
+        (
+            "camera debate OR argument policy",
+            [
+                "camera debate OR argument policy",
+                "camera debate argument policy",
+                "camera argument",
+                "argument",
+                "camera",
+                "debate",
+            ],
+        ),
+        # A quoted phrase stays one term, whole, at every rung.
+        (
+            '"Fieldstone MSA" needs a counter-signature',
+            [
+                '"Fieldstone MSA" needs a counter-signature',
+                '"Fieldstone MSA" counter-signature',
+                "counter-signature",
+                '"Fieldstone MSA"',
+            ],
+        ),
+        # An all-stopword query has no content rung to fall back to.
+        ("did you get it", ["did you get it"]),
+    ],
+)
+def test_broadening_ladder_is_deterministic(query, expected):
+    from gaia.agents.tools.email_tools import _broadening_ladder
+
+    assert _broadening_ladder(query) == expected
+
+
+def test_no_broadened_rung_is_a_bare_mailbox_filter():
+    """A rung of only operators returns a slice of the mailbox, not a match.
+
+    ``is:unread`` alone is non-empty for almost every mailbox, so the ladder
+    would stop there and hand the model 25 unrelated messages labelled as a
+    broadened hit — the confident wrong answer this feature exists to prevent.
+    """
+    from gaia.agents.tools.email_tools import _broadening_ladder
+
+    def names_content(term):
+        """Independent of the implementation: does this term say what to find?"""
+        field, separator, _ = term.partition(":")
+        return not term.startswith("-") and not (separator and field.isidentifier())
+
+    for query in (
+        "is:unread flock",
+        "invoice newer_than:7d",
+        "from:dana invoice",
+        "label:work contract signature",
+        "-promo receipt",
+    ):
+        for rung in _broadening_ladder(query):
+            assert any(
+                names_content(t) for t in rung.split()
+            ), f"{query!r} produced an operator-only rung: {rung!r}"
+
+    # An operator-only query is still run once, exactly as asked.
+    assert _broadening_ladder("is:unread") == ["is:unread"]
+
+
+def test_surrounding_whitespace_is_not_a_broadening(harness_factory):
+    """``broadened`` must track terms, not spacing.
+
+    Small models emit trailing and doubled spaces constantly. Reporting one
+    as a broadening tells the model to hedge about an exact first-try hit.
+    """
+    handler, seen = _mailbox_matching("Acme invoice")
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query=" Acme  invoice "))
+
+    assert out["count"] == 1
+    assert out["broadened"] is False
+    assert "note" not in out  # nothing to hedge about
+    assert seen == ["Acme invoice"]
+
+
+def test_mid_ladder_backend_failure_is_reported_not_swallowed(harness_factory):
+    """A rung that errors must surface the error, not read as 'no such mail'."""
+    calls = []
+
+    def handler(request):
+        calls.append((request.url.params.get("$search") or "").strip('"'))
+        if len(calls) == 1:
+            return json_response({"value": []})
+        return httpx.Response(401, text="expired")
+
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="quarterly budget Dana"))
+
+    assert out["success"] is False
+    assert "gaia connectors" in out["error"]
+    # An empty result here would read to the model as a genuine miss.
+    assert "messages" not in out and "count" not in out
+    assert len(calls) == 2
+
+
+def test_limit_is_clamped_on_every_broadened_rung(harness_factory):
+    """The clamp lives inside the loop; a rung outside it would send limit raw."""
+    from gaia.agents.tools.email_tools import _MAX_LIMIT
+
+    tops = []
+
+    def handler(request):
+        tops.append(int(request.url.params["$top"]))
+        return json_response({"value": []})
+
+    h = harness_factory(handler)
+
+    json.loads(h._tool("search_email")(query="quarterly budget from Dana", limit=500))
+
+    assert len(tops) >= 3  # the ladder really did run several rungs
+    assert set(tops) == {_MAX_LIMIT}
