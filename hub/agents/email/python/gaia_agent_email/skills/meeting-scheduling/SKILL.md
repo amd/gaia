@@ -24,6 +24,8 @@ three; never leave it open.
 - Check before answering: `detect_calendar_conflicts` for the slot,
   `list_calendar_events` for the surrounding day. A free slot wedged between two
   calls is worth flagging.
+- `truncated: true` on a conflict check means the window was only partially
+  scanned — report the slot as unverified, not free.
 - Free and relevant → recommend accepting. Conflicting → offer at most three
   genuinely free alternatives. Not the user's concern → recommend declining with
   a one-line reason.

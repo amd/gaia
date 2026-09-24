@@ -9,6 +9,15 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A conflict check that could only see the calendar's first page no longer
+  reports a busy slot as free (#3610).** `detect_calendar_conflicts` scanned
+  the provider's first page (25 events) and said nothing about the rest, so a
+  meeting sitting past that page came back as `has_conflict: false`. The tool
+  now returns `truncated`, derived from the provider's own continuation token;
+  when it is true the "no conflict" answer is explicitly unverified, and the
+  agent is instructed to say the slot could not be checked rather than call it
+  free. Fully-scanned windows are unchanged (`truncated: false`).
+
 - **Received-invite grounding now recognizes Google events with omitted
   organizer flags (#2787).** Calendar tools preserve the provider's explicit
   organizer signal and treat the authenticated attendee as externally invited
