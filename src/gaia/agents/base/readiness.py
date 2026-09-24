@@ -32,6 +32,7 @@ status. The TUI's preflight gate already does (``tui/internal/ui/preflight``).
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Iterator, List, Optional, Tuple
 
@@ -371,11 +372,17 @@ def extract_loaded_ctx(loaded_models: List[dict], model_id: str) -> Optional[int
 
 
 def parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
-    """Parse a dotted version into a comparable int tuple, or None."""
+    """Parse a dotted version into a comparable int tuple, or None.
+
+    Tolerates Lemonade's CalVer dev suffix (``2026.39.0~12.abc1234``) by
+    keeping each component's leading digits — without it the whole gate goes
+    indeterminate on every candidate build.
+    """
     if not version:
         return None
     try:
-        return tuple(int(p) for p in version.lstrip("v").split(".")[:3])
+        parts = version.lstrip("v").split(".")[:3]
+        return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
     except (ValueError, IndexError, AttributeError):
         return None
 

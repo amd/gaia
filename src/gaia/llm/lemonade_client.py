@@ -11,6 +11,7 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import socket
@@ -4804,7 +4805,10 @@ class LemonadeClient:
         try:
 
             def _version_tuple(v: str) -> tuple:
-                return tuple(int(p) for p in v.lstrip("v").split(".")[:3])
+                # Leading digits per part: Lemonade's CalVer dev builds look
+                # like "2026.39.0~12.abc1234".
+                parts = v.lstrip("v").split(".")[:3]
+                return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
 
             actual_tuple = _version_tuple(actual_version)
             min_tuple = _version_tuple(LEMONADE_MIN_VERSION)

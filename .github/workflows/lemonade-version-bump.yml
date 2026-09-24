@@ -6,8 +6,9 @@
 # lemonade-sdk/lemonade GitHub API on a schedule. When a newer stable release exists
 # than the LEMONADE_VERSION pinned in src/gaia/version.py — and the Windows installer
 # assets are actually published for it — it hands off to Claude to open a bump PR with
-# a changelog-aware description (bumping version.py plus the hardcoded Lemonade version
-# strings in docs that util/check_doc_versions.py enforces). The cheap shell gate runs
+# a changelog-aware description (bumping version.py, refreshing the embeddable SHA-256
+# pins, plus the hardcoded Lemonade version strings in docs that util/check_doc_versions.py
+# enforces). The cheap shell gate runs
 # weekly; the (paid) Claude
 # step only fires when there is genuinely something to bump, and never twice for the
 # same version (it skips when a bump PR for that version is already open).
@@ -89,15 +90,31 @@ jobs:
             fi
           fi
 
-          # Guard 2: don't bump to a release missing the Windows installers GAIA downloads
-          # (a release can exist before all assets finish uploading).
-          for required in lemonade.msi lemonade-server-minimal.msi; do
+          # Guard 2: don't bump to a release missing an asset GAIA downloads (a release can
+          # exist before all assets finish uploading). Covers the Windows installers AND the
+          # four embeddable archives, whose SHA-256 pins the bump has to refresh — catching a
+          # partial upload here is free, whereas discovering it inside the Claude step is not.
+          for required in lemonade.msi lemonade-server-minimal.msi \
+                          "lemonade-embeddable-${target}-windows-x64.zip" \
+                          "lemonade-embeddable-${target}-ubuntu-x64.tar.gz" \
+                          "lemonade-embeddable-${target}-ubuntu-arm64.tar.gz" \
+                          "lemonade-embeddable-${target}-macos-arm64.tar.gz"; do
             if ! echo "$assets" | grep -qx "$required"; then
               echo "::warning::Lemonade $target is published but missing asset '$required' — skipping bump until it appears."
               echo "should_bump=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           done
+
+          # Guard 2b: every embeddable asset must carry a sha256 digest, since the bump
+          # rewrites EMBEDDABLE_SHA256 from it. No digest -> nothing trustworthy to pin.
+          missing_digest=$(echo "$release_json" | jq -r \
+            '.assets[] | select(.name|test("embeddable")) | select((.digest // "") | startswith("sha256:") | not) | .name')
+          if [ -n "$missing_digest" ]; then
+            echo "::warning::Lemonade $target publishes no sha256 digest for: $missing_digest — skipping bump."
+            echo "should_bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # Guard 3: idempotency — don't re-open a bump PR for a version already handled.
           # --state all (not just open) so a bump PR a maintainer deliberately CLOSED isn't
@@ -184,7 +201,22 @@ jobs:
                download URLs from it. Do NOT touch the per-profile `min_lemonade_version`
                floors in src/gaia/installer/init_command.py (those are deliberately
                conservative minimums, not "latest").
-            3. Sync the hardcoded Lemonade version strings in the docs. CI runs
+            3. Refresh the embeddable SHA-256 pins. `gaia lemonade embedded install`
+               verifies its download against the digests in
+               `EMBEDDABLE_SHA256` (src/gaia/llm/lemonade_embedded.py), keyed by asset
+               filename — which contains the version. Bumping LEMONADE_VERSION without
+               refreshing them leaves every key stale, so the embedded install fails for
+               users and tests/integration/test_lemonade_embeddable_assets.py fails in CI.
+               Read the real digests from the release API (the `digest` field, already
+               `sha256:<hex>`) and rewrite the dict so it has exactly these four keys:
+                 ```
+                 gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} \
+                   --jq '.assets[] | select(.name|test("embeddable")) | "\(.name) \(.digest)"'
+                 ```
+               Use the digests exactly as published — never carry over an old value, and
+               never invent one. If any of the four embeddable assets has no digest, do NOT
+               open a PR: delete the branch and stop.
+            4. Sync the hardcoded Lemonade version strings in the docs. CI runs
                `python util/check_doc_versions.py`, which FAILS the build when any doc or
                README under docs/ or cpp/ still references the OLD Lemonade version (release
                download URLs, release-page links, .deb filenames, "vX.Y.Z" text callouts,
@@ -197,20 +229,20 @@ jobs:
                re-run the checker until it prints `[OK] All documentation version references
                are consistent!`. Change nothing but the version numbers — no surrounding
                prose, and never edit files the checker excludes (docs/releases/, docs/plans/).
-            4. Validate the target release's Windows installers actually exist (a sanity
+            5. Validate the target release's Windows installers actually exist (a sanity
                re-check; the workflow already gated on this):
                  `gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} --jq '.assets[].name'`
                Confirm `lemonade.msi` and `lemonade-server-minimal.msi` are present. If either
                is missing, do NOT open a PR — delete the branch and stop.
-            5. Run lint on the changed files so formatting stays clean:
+            6. Run lint on the changed files so formatting stays clean:
                  `python util/lint.py --black --isort`
                (Tooling is pre-installed. The version.py edit and doc edits should produce
                no formatting changes.)
 
             ## Commit
-            Stage version.py plus every doc file you updated in step 3 (`git add -u` picks up
-            all modified tracked files — you have only edited version.py and flagged docs, so
-            this stays in scope):
+            Stage version.py, lemonade_embedded.py, plus every doc file you updated (`git add -u` picks up
+            all modified tracked files — you have only edited version.py,
+            lemonade_embedded.py and flagged docs, so this stays in scope):
             ```
             git add -u
             git commit -m "chore(deps): bump Lemonade Server to v${{ steps.detect.outputs.target_version }}"
@@ -315,7 +347,8 @@ jobs:
                If you filed no issues, leave the PR body as-is.
 
             ## Hard constraints
-            - The only repo FILES you may change are src/gaia/version.py and the docs/README
+            - The only repo FILES you may change are src/gaia/version.py,
+              src/gaia/llm/lemonade_embedded.py (the EMBEDDABLE_SHA256 dict only), and the docs/README
               files under docs/ or cpp/ that `util/check_doc_versions.py` flags for a Lemonade
               version update — and in those docs, only the version numbers. No other files, no
               drive-by edits. (Feature scouting creates GitHub issues only — it never edits files.)
