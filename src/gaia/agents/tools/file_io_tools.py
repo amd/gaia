@@ -650,7 +650,7 @@ class FileIOToolsMixin:
                     "status": "success",
                     "file_path": file_path,
                     "diff": diff,
-                    "backup_created": backup,
+                    "backup_created": backup_path is not None,
                     "backup_path": backup_path,
                 }
             except Exception as e:
