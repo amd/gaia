@@ -535,3 +535,15 @@ func TestConfirmationViewUsesTheUnboundedWording(t *testing.T) {
 		t.Errorf("the cautious badge should remain:\n%s", view)
 	}
 }
+
+func TestEngineeringConsentIsWriteNotDestruction(t *testing.T) {
+	for _, action := range []string{"share_engineering_context", "append_engineering_context", "approve_engineering_code"} {
+		if got := ClassifyActionRisk(action); got != RiskWrite {
+			t.Errorf("%s = %v, want write", action, got)
+		}
+		view := stripANSI(NewConfirmationModel("run-1", action, "Share selected context with Codex", "").View())
+		if strings.Contains(view, "DESTRUCTIVE") || !strings.Contains(view, "Codex") {
+			t.Errorf("misleading confirmation: %s", view)
+		}
+	}
+}

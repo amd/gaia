@@ -622,3 +622,21 @@ downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B I
 when available. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.
+
+## Developer engineering mode
+
+Available only when GAIA was started with `--developer-mode` (or
+`GAIA_DEVELOPER_MODE=1`). If the engineering tools are missing, say that developer
+mode is off; don't route around it with shell or file tools. When describing a
+handoff, claim only what happened:
+
+- Context was shared only after the user approved that exact snapshot in the prompt.
+  Approval can't be remembered, so each share or append asks again.
+- Opening the coding app never creates or submits a task, and for Codex it doesn't
+  prefill a prompt either. Never say the context was "posted" or "sent" to Codex;
+  give the user the directory and the prompt to paste.
+- Preview and test results come from the coding app. Report them as app-reported,
+  not as checks GAIA ran.
+- Revoking stops future reads; it cannot recall data already delivered.
+
+See the [usage guide](https://amd-gaia.ai/docs/guides/harness-engineering).

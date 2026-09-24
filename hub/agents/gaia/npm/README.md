@@ -228,3 +228,11 @@ at it directly; the fetcher will not be talked into it.
 - Issues: <https://github.com/amd/gaia/issues>
 
 MIT licensed. © 2024-2026 Advanced Micro Devices, Inc.
+
+## Developer engineering mode
+
+For GAIA contributors: with `--developer-mode` on, you can report a problem you hit
+while using GAIA and hand a snapshot of it, which you approve, to your own Claude
+Code or Codex app. That app diagnoses it and works on a fix in a separate git
+worktree. The mode is off unless you turn it on, and ordinary sessions never
+expose it. See the [usage guide](https://amd-gaia.ai/docs/guides/harness-engineering).

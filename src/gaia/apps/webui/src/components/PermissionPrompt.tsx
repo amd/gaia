@@ -9,7 +9,7 @@ import {
   Clock,
   AlertTriangle,
 } from 'lucide-react';
-import { useNotificationStore, selectActivePermissionPrompt } from '../stores/notificationStore';
+import { useNotificationStore, selectActivePermissionPrompt, requiresFreshConsent } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import './PermissionPrompt.css';
 
@@ -60,6 +60,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
   // State for UI disabled + ref guard for handler (ref avoids recreating useCallback)
   const [isResponding, setIsResponding] = useState(false);
   const [remember, setRemember] = useState(false);
+  const freshConsent = requiresFreshConsent(notification.tool);
   const isRespondingRef = useRef(false);
 
   // Stable ref for onRespond to avoid stale closures in timer
@@ -103,12 +104,12 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
     setIsResponding(true);
     if (timerRef.current) clearInterval(timerRef.current);
     try {
-      await onRespond(notification.id, 'allow', remember);
+      await onRespond(notification.id, 'allow', freshConsent ? false : remember);
     } finally {
       isRespondingRef.current = false;
       setIsResponding(false);
     }
-  }, [notification.id, onRespond, remember]);
+  }, [notification.id, onRespond, remember, freshConsent]);
 
   const handleDeny = useCallback(async () => {
     if (isRespondingRef.current) return;
@@ -192,7 +193,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
         )}
 
         {/* Remember choice */}
-        <label className="permission-remember">
+        {!freshConsent && <label className="permission-remember">
           <input
             type="checkbox"
             checked={remember}
@@ -205,7 +206,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
               Only in this chat, until you reload or restart GAIA. Revoke any time in Settings → Tools &amp; Permissions.
             </small>
           </span>
-        </label>
+        </label>}
       </div>
 
       {/* Actions */}

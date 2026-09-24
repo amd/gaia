@@ -63,6 +63,7 @@ setup(
         "gaia.apps",
         "gaia.apps.llm",
         "gaia.eval",
+        "gaia.engineering",
         "gaia.installer",
         "gaia.hub",
         "gaia.rag",
