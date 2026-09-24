@@ -5,7 +5,7 @@ import { useEffect, useCallback } from 'react';
 import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle, BarChart2, Tag } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo } from '../types';
-import { displayVersion } from '../utils/agentHub';
+import { displayVersion, isInstalledStatus } from '../utils/agentHub';
 
 const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI;
 
@@ -212,7 +212,7 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                                         <div className="agent-detail-meta-label" style={{ marginTop: 2 }}>
                                             measured on v{agent.eval_score_version}
                                             {version && version !== agent.eval_score_version && (
-                                                <> (current: v{version})</>
+                                                <> ({isInstalledStatus(agent) ? 'current' : 'latest'}: v{version})</>
                                             )}
                                         </div>
                                     )}

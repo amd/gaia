@@ -5,7 +5,6 @@ import { describe, it, expect } from 'vitest';
 import {
     formatBytes,
     isInstalling,
-    compatLevel,
     displayVersion,
     mergeCatalogStatus,
     splitAvailable,
@@ -60,16 +59,6 @@ describe('isInstalling', () => {
     });
 });
 
-describe('compatLevel', () => {
-    it('defaults to compatible when no verdict', () => {
-        expect(compatLevel(agent({ id: 'x' }))).toBe('compatible');
-    });
-
-    it('reads the catalog verdict', () => {
-        expect(compatLevel(agent({ id: 'x', compatibility: { level: 'incompatible' } }))).toBe('incompatible');
-    });
-});
-
 describe('displayVersion', () => {
     // Fixtures use only the fields GET /api/agents/catalog actually sends.
     it('prefers the installed version straight off the wire', () => {
@@ -88,6 +77,27 @@ describe('displayVersion', () => {
 
     it('is undefined when the catalog sent no version at all', () => {
         expect(displayVersion(agent({ id: 'local-only' }))).toBeUndefined();
+    });
+
+    // Registry / entry-point / editable dev installs report no
+    // installed_version (gaia.hub.catalog). Badging those with the catalog's
+    // latest_version would show a version the user does not actually have.
+    it('shows no version for an installed agent whose version is unknown', () => {
+        expect(displayVersion(agent({
+            id: 'dev-install', status: 'installed', latest_version: '0.7.0',
+        }))).toBeUndefined();
+    });
+
+    it('shows no version for an update_available agent whose version is unknown', () => {
+        expect(displayVersion(agent({
+            id: 'dev-install', status: 'update_available', latest_version: '0.7.0',
+        }))).toBeUndefined();
+    });
+
+    it('still offers latest_version on a not-yet-installed catalog entry', () => {
+        expect(displayVersion(agent({
+            id: 'new', status: 'available', latest_version: '0.7.0',
+        }))).toBe('0.7.0');
     });
 });
 

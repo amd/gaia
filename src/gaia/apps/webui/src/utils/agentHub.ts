@@ -31,7 +31,16 @@ export function formatBytes(bytes?: number | null): string {
  * reading it alone leaves every raw catalog entry blank.
  */
 export function displayVersion(agent: AgentInfo): string | undefined {
-    return agent.installed_version ?? agent.version ?? agent.latest_version;
+    const installed = agent.installed_version ?? agent.version;
+    if (installed) return installed;
+    // Never badge an installed card with a version the user doesn't have —
+    // ``latest_version`` is what's on offer, not what's on disk.
+    return isInstalledStatus(agent) ? undefined : agent.latest_version;
+}
+
+/** True when the catalog reports this agent as already present on disk. */
+export function isInstalledStatus(agent: AgentInfo): boolean {
+    return agent.status === 'installed' || agent.status === 'update_available';
 }
 
 /** True when an install-status snapshot represents an in-flight install. */
@@ -40,25 +49,6 @@ export function isInstalling(status?: InstallStatus | null): boolean {
     return status.state === 'downloading'
         || status.state === 'verifying'
         || status.state === 'installing';
-}
-
-/**
- * Compatibility level for the indicator dot. Falls back to ``compatible`` when
- * the catalog didn't supply a verdict (local-only agents are always runnable).
- */
-export function compatLevel(
-    agent: AgentInfo,
-): 'compatible' | 'warning' | 'incompatible' {
-    return agent.compatibility?.level ?? 'compatible';
-}
-
-/** Human label for a compatibility level. */
-export function compatLabel(level: 'compatible' | 'warning' | 'incompatible'): string {
-    switch (level) {
-        case 'compatible': return 'Compatible with your system';
-        case 'warning': return 'May run with limitations';
-        case 'incompatible': return 'Not compatible with your system';
-    }
 }
 
 /**
@@ -83,7 +73,6 @@ export function mergeCatalogStatus(
             // never as ``version`` — that key never appears on the wire.
             version: cat.installed_version ?? agent.version,
             latest_version: cat.latest_version,
-            compatibility: cat.compatibility ?? agent.compatibility,
             security_tier: cat.security_tier ?? agent.security_tier,
             deprecated: cat.deprecated ?? agent.deprecated,
             status: hasUpdate ? 'update_available' : 'installed',
