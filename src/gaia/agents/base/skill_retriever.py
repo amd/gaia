@@ -46,12 +46,13 @@ Confidence, not guessing
 ``NONE``       no real lexical evidence — proceed with no skill.
 
 The margin rule is what keeps "never guess" honest: a tie is reported as a tie.
-Its one documented exception is *identity* — see :data:`NAME_WEIGHT` and
-:attr:`SkillCandidate.name_mass`. "Triage my inbox" matched ``inbox-triage`` and
-``github-triage`` at exactly 1.000 (the latter's description mentions a
-notification *inbox*), so the tie shortlisted and the model picked a GitHub skill
-for a mailbox question. Both terms are ``inbox-triage``'s own name and only one is
-``github-triage``'s: that is not a tie, it is the user naming a skill.
+Its one documented exception is *identity*, and it breaks exact ties only — see
+:attr:`SkillCandidate.name_mass` and :meth:`SkillRetriever.decide`. "Triage my
+inbox" matched ``inbox-triage`` and ``github-triage`` at exactly 1.000 (the
+latter's description mentions a notification *inbox*), so the tie shortlisted and
+the model picked a GitHub skill for a mailbox question. Both terms are
+``inbox-triage``'s own name and only one is ``github-triage``'s: that is not a
+tie, it is the user naming a skill. Below a tie, ``MARGIN`` still decides.
 """
 
 from __future__ import annotations
@@ -221,8 +222,6 @@ class SkillCandidate:
     idf_mass: float
     #: The query terms that hit this skill, rarest first.
     matched: Tuple[str, ...] = ()
-    #: Whether any matched term is a token of the skill's own name.
-    name_hit: bool = False
     #: IDF mass of the matched terms that are tokens of the skill's own name —
     #: how much of what the query is *about* this skill is actually called.
     name_mass: float = 0.0
@@ -411,7 +410,6 @@ class SkillRetriever:
                     score=min(raw / query_mass, 1.0),
                     idf_mass=mass,
                     matched=matched,
-                    name_hit=bool(own.intersection(matched)),
                     name_mass=sum(idf for idf, term in hits if term in own),
                     strong=tuple(
                         t for t in matched if t in own or t not in _WEAK_ALONE
@@ -453,15 +451,13 @@ class SkillRetriever:
         top = credible[0]
         rival = credible[1] if len(credible) > 1 else None
         runner_up = rival.score if rival else 0.0
-        # Identity is not a tie. When the top is at least level on score *and*
-        # more of the query's rare mass is its own name than the rival's, the
-        # user named this skill and merely mentioned a word the other one uses.
-        # Without this, "triage my inbox" is a 1.000 tie that resolves to
-        # nothing, and a mailbox question reaches the model as a shortlist with
-        # a GitHub skill on it.
+        # Identity is not a tie. When the scores are equal *and* more of the
+        # query's rare mass is the top's own name than the rival's, the user
+        # named this skill and merely mentioned a word the other one uses.
+        # Ties only — below a tie, MARGIN stays in force.
         named = (
             rival is not None
-            and top.score >= rival.score
+            and math.isclose(top.score, rival.score)
             and top.name_mass > rival.name_mass
         )
         confident = (
