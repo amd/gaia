@@ -135,7 +135,7 @@ def read_snapshot(path, validator, limit=None):
     ):
         raise ValueError("Source changed while reading; retry against a stable file")
     if len(text) > limit:
-        raise ValueError(f"Source exceeds the {limit}-character extraction limit")
+        raise ValueError(f"File exceeds the {limit}-character extraction read limit")
     return text
 
 
@@ -167,6 +167,10 @@ def _same_place(first, second):
     """
     if first.anchor and second.anchor:
         return _overlaps(first.anchor, second.anchor)
+    located = first.anchor or second.anchor
+    other = second if first.anchor else first
+    if located and not (other.start <= located[0] and located[1] <= other.end):
+        return False
     shared = min(first.end, second.end) - max(first.start, second.start)
     return shared > 0 and 2 * shared >= min(
         first.end - first.start, second.end - second.start
@@ -195,6 +199,14 @@ def _words(text):
 def _shares_words(label, quote):
     """A composed name ("Big circles (arms)") must come from its quote's words."""
     return bool(_words(label) & _words(quote))
+
+
+def _encodable(text):
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _same_value(first, second):
@@ -292,6 +304,8 @@ def reconcile_occurrence(first, second):
         if len(first_at) > 1 or len(second_at) > 1:
             # "march march": the text cannot say which occurrence it means.
             return None
+        if first_at and second_at and not _overlaps(*first_at, *second_at):
+            return None
         return first if _same_value(first.text, second.text) else None
     old, new = dict(first.fields), dict(second.fields)
     if old.keys() != new.keys():
@@ -353,6 +367,11 @@ def parse_page(reply, page, base, fields=()):
         if not isinstance(item, dict):
             raise ValueError("Invalid extraction entry")
         text, quote = item.get("text"), item.get("quote")
+        if isinstance(text, str):
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+        for value in (text, quote, *(item.get("fields") or {}).values()):
+            if isinstance(value, str) and not _encodable(value):
+                raise ValueError("Reply contains invalid Unicode text")
         if fields:
             values = item.get("fields")
             if (
@@ -384,8 +403,9 @@ def parse_page(reply, page, base, fields=()):
             # A name copied from the quote locates the item; a label the model
             # composed ("Big circles (arms)") leaves the quote to locate it.
             named = [n for n in _identity_fields(fields) if _stated(values[n])]
-            spans = _spans(page[start:end], values[named[0]]) if named else []
-            if named and not spans and not _shares_words(values[named[0]], quote):
+            label = values[named[0]].rstrip(".,;:!?") if named else ""
+            spans = _spans(page[start:end], label) if label else []
+            if named and not spans and not _shares_words(label, quote):
                 # Keep the item, with its verbatim quote, but say so.
                 note = "label not in quote"
             if spans:
@@ -447,15 +467,13 @@ def _overlaps(first, second):
 def _resolve_occurrence(entry, origin, entries, members):
     """Pick which of a repeated name's occurrences an extraction means.
 
-    An omission pass reports missed items, so it takes an occurrence nobody has
-    claimed; any other pass re-reports, so it takes one already found.
+    It takes an occurrence nobody has claimed, and merge_occurrences keeps it
+    as its own entry: guessing would pin its values on the wrong item. A true
+    re-report then shows as a flagged possible repeat.
     """
     claimed = [m.anchor for key in entries for m, _ in members[key] if m.anchor]
-    taken = [c for c in entry.choices if any(_overlaps(c, a) for a in claimed)]
-    free = [c for c in entry.choices if c not in taken]
-    omission = isinstance(origin, tuple) and len(origin) == 2 and origin[1] == 1
-    preferred = (free if omission else taken) or entry.choices
-    return replace(entry, anchor=preferred[0], choices=())
+    free = [c for c in entry.choices if not any(_overlaps(c, a) for a in claimed)]
+    return replace(entry, anchor=(free or entry.choices)[0], choices=())
 
 
 def merge_occurrences(entries, members, candidates):
@@ -469,12 +487,14 @@ def merge_occurrences(entries, members, candidates):
     """
     entries, members = dict(entries), dict(members)
     for entry, origin in candidates:
-        if entry.choices:
+        ambiguous = bool(entry.choices)
+        if ambiguous:
             entry = _resolve_occurrence(entry, origin, entries, members)
         matches = [
             key
             for key in entries
-            if all(
+            if not ambiguous
+            and all(
                 reply != origin and reconcile_occurrence(m, entry) is not None
                 for m, reply in members[key]
             )
@@ -506,7 +526,9 @@ def _likely_repeat(first, second):
     if not first.fields or not second.fields:
         return _same_value(first.text, second.text)
     name = _identity_fields([n for n, _ in first.fields])[0]
-    return _same_value(dict(first.fields)[name], dict(second.fields).get(name, ""))
+    a, b = dict(first.fields)[name], dict(second.fields).get(name, "")
+    # "march" and "Seated marching (arms)" over one stretch may be one item.
+    return _same_value(a, b) or _shares_words(a, b)
 
 
 def _shared(first, second):

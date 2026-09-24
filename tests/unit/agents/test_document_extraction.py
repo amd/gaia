@@ -993,7 +993,8 @@ def test_broad_quote_never_absorbs_two_repeated_items(fields, broad_first):
     # Neither squat may vanish: each occurrence keeps an entry of its own.
     entries, _ = extract_pages(page, "List every exercise", ask, lambda: None, fields)
     if fields:
-        assert sorted(e.anchor[0] for e in entries) == [0, 20]
+        # Both squats keep entries; a doubled-name quote stays apart, flagged.
+        assert {e.anchor[0] for e in entries} == {0, 20}
     else:
         assert any(e.end <= 17 for e in entries)
         assert any(e.start >= 16 for e in entries)
@@ -1424,3 +1425,55 @@ def test_a_verified_export_needs_no_model_readback(agent, tmp_path):
     (tmp_path / "out.json").write_text("[]")
     agent._check_extraction_sources()
     assert agent._extraction_ledger.output_errors
+
+
+def test_same_named_items_never_trade_values():
+    page = "we do march now. rest. then march again for ten"
+    a = field_entry(page, "we do march", {"name": "march", "reps": "not stated"})
+    b = field_entry(
+        page, "march now. rest. then march again", {"name": "march", "reps": "ten"}
+    )
+    entries, _ = merge_occurrences({}, {}, [(a, (0, 0)), (b, (1, 0))])
+    assert len(entries) == 2
+    assert not any(
+        e.anchor == a.anchor and dict(e.fields)["reps"] == "ten"
+        for e in entries.values()
+    )
+
+
+def test_a_trailing_period_on_the_name_still_locates_it():
+    page = "so march feet up, then march"
+    entry = field_entry(page, "so march feet up, then", {"name": "march."})
+    assert entry.anchor == (3, 8)
+
+
+def test_free_text_items_at_different_name_positions_stay_apart():
+    page = "next is plank then hold it and next is plank again"
+    first = Entry(8, 35, "plank", "plank then hold it and next")
+    second = Entry(14, 44, "plank", "then hold it and next is plank")
+    assert reconcile_occurrence(first, second) is None
+
+
+def test_label_drift_over_one_stretch_is_flagged(tmp_path):
+    page = "now march in place and keep marching with your arms"
+    items = [
+        {"quote": "now march in place", "fields": {"name": "march"}},
+        {
+            "quote": "march in place and keep marching",
+            "fields": {"name": "Seated marching"},
+        },
+    ]
+    state = ExtractionLedger("List every exercise in s.txt fields: name", str(tmp_path))
+    state.run(
+        "s.txt",
+        lambda p: page,
+        lambda *a: json.dumps({"complete": True, "items": items}),
+        lambda: None,
+    )
+    assert "(may repeat item 1)" in state.render()
+
+
+def test_invalid_unicode_is_a_retryable_reply_error():
+    raw = '{"complete": true, "items": [{"quote": "page", "text": "\\ud800"}]}'
+    with pytest.raises(ValueError, match="Unicode"):
+        parse_page(raw, "page", 0)

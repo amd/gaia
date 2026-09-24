@@ -1203,10 +1203,12 @@ when they sit at the same place (the same name span, or quotes sharing at least
 half their text) and their names match or nest ("march" and "march in place" at
 one spot keep the fuller name). Different names are different items, and
 differing descriptions of one item are both kept, joined with ` / `. Items from
-one reply are never merged, and when a quote names its item twice an omission
-pass takes the occurrence no earlier item claimed. Evidence too ambiguous to
+one reply are never merged. A quote that names its item twice takes an occurrence
+no earlier item claimed and is never merged, so its values cannot land on the
+wrong item. Evidence too ambiguous to
 merge keeps both entries, and the rendered inventory marks the later one
-"(may repeat item N)" for review. Only an unusable reply (not JSON, a quote not
+"(may repeat item N)" for review, including when its label shares words with an
+overlapping item's. Only an unusable reply (not JSON, a quote not
 in the page, an unfinished page) is retried once and then fails visibly.
 
 Each page call allows 16,384 output tokens. Cloud models are asked for low
