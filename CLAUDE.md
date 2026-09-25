@@ -552,7 +552,6 @@ gaia/
 │   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
 │   ├── scratchpad/     # Scratchpad tables backend
-│   ├── shell/          # Shell integration
 │   ├── sidecar/        # Shared building blocks for local agent sidecars
 │   ├── skills/         # Skill backend (gaia skill): loader, install, audit, signing
 │   ├── talk/           # Voice interaction SDK

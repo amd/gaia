@@ -4,7 +4,6 @@
 
 """GAIA RAG (Retrieval-Augmented Generation) Module"""
 
-from .app import main as rag_main
 from .sdk import (
     RAGSDK,
     CorruptedPDFError,
@@ -23,5 +22,4 @@ __all__ = [
     "RAGConfig",
     "RAGSDK",
     "quick_rag",
-    "rag_main",
 ]
