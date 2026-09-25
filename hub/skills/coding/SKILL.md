@@ -65,12 +65,26 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest`, so run it directly with `run_shell_command`:
+This skill grants `pytest`, so run it directly with `run_shell_command`. Prefer
+the `python -m` spelling — it puts the project's own directory on `sys.path`, so
+it works on a checkout that was never installed, where bare `pytest` fails to
+import the project:
 
 ```
-pytest -q tests/
-pytest -x -k discount tests/test_cart.py
+python -m pytest -q tests/
+python -m pytest -x -k discount tests/test_cart.py
 ```
+
+`python -m` adds the current directory to the import path, not `src/`. For a
+project whose package lives under `src/`, scope the path to that one command:
+
+```
+PYTHONPATH=src python -m pytest -q tests/
+```
+
+Where only `python3` exists, `python3 -m pytest` works the same way. Bare
+`pytest` carries the same grant and the same flag rules, so it is allowed too;
+reach for it only when the project is installed.
 
 The grant is narrow on purpose. `--pdb` would hang waiting for a debugger nobody
 can answer, `-p <plugin>` imports arbitrary code, and `--junitxml` writes outside

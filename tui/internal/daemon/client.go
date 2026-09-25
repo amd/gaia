@@ -45,6 +45,8 @@ type Options struct {
 	// StartCommand builds the command that starts the daemon. Defaults to
 	// `gaia daemon start`, which is preferred over invoking the module directly
 	// because it validates the required extras and produces better errors.
+	// The launcher MUST take the start lock (LockPath) itself: StartOrAttach
+	// releases it before spawning, since `gaia daemon start` waits on it.
 	// Overridden by tests.
 	StartCommand func(ctx context.Context) (*exec.Cmd, error)
 
@@ -190,7 +192,8 @@ func (c *Client) probe(ctx context.Context, inst *Instance) (StaleKind, error) {
 }
 
 // StartOrAttach returns the running daemon, starting one only if needed.
-// Single-instance is guaranteed by the exclusive start lock.
+// Single-instance is guaranteed by the exclusive start lock, which the launcher
+// takes itself — so it is released before the launcher runs.
 func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	inst, err := c.Attach(ctx)
 	if err == nil {
@@ -203,6 +206,16 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	}
 	c.opts.Logf("daemon: no attachable instance (%v); starting one", err)
 
+	inst, err = c.checkUnderLock(ctx)
+	if inst != nil || err != nil {
+		return inst, err
+	}
+	return c.spawnAndWait(ctx)
+}
+
+// checkUnderLock re-checks the registry under the start lock. It returns the
+// instance to attach to, an error to surface, or (nil, nil) when a start is due.
+func (c *Client) checkUnderLock(ctx context.Context) (*Instance, error) {
 	if _, derr := ensureHostDir(); derr != nil {
 		return nil, derr
 	}
@@ -217,7 +230,7 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	defer lock.release()
 
 	// Re-check under the lock: a concurrent caller may have just started it.
-	inst, err = c.Attach(ctx)
+	inst, err := c.Attach(ctx)
 	if err == nil {
 		return inst, nil
 	}
@@ -242,8 +255,7 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 					"Run `gaia daemon restart` to reclaim it", rec.PID, rec.Port)}
 		}
 	}
-
-	return c.spawnAndWait(ctx)
+	return nil, nil
 }
 
 // gaiaDaemonStart builds the default launcher command.

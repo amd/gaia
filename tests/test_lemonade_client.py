@@ -917,29 +917,6 @@ class TestLemonadeClientMock(unittest.TestCase):
             self.client.unload_model(embed_model, ignore_if_not_loaded=True)
 
     @responses.activate
-    def test_set_params(self):
-        """Test setting basic generation parameters."""
-        # Mock response
-        params_response = {
-            "status": "success",
-            "message": "Generation parameters set successfully",
-            "params": {
-                "temperature": 0.8,
-                "top_p": 0.9,
-                "top_k": 40,
-                "min_length": 0,
-                "max_length": 2048,
-                "do_sample": True,
-            },
-        }
-        responses.add(
-            responses.POST, f"{API_BASE}/params", json=params_response, status=200
-        )
-
-        result = self.client.set_params(temperature=0.8, top_p=0.9, top_k=40)
-        self.assertEqual(result, params_response)
-
-    @responses.activate
     def test_get_stats(self):
         """Test retrieving performance statistics."""
         # Mock response
@@ -2640,19 +2617,6 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             print(f"❌ Error during hybrid NPU validation: {error_str}")
             self.fail(f"Hybrid NPU validation failed: {error_str}")
 
-    @pytest.mark.skip(reason="Parameter setting API is still in development")
-    def test_integration_set_params(self):
-        """Integration test for setting generation parameters."""
-        # Set parameters
-        response = self.client.set_params(temperature=0.8, top_p=0.95, top_k=50)
-
-        # Verify response
-        self.assertIn("params", response)
-        params = response["params"]
-        self.assertEqual(params.get("temperature"), 0.8)
-        self.assertEqual(params.get("top_p"), 0.95)
-        self.assertEqual(params.get("top_k"), 50)
-
     def test_integration_get_stats(self):
         """Integration test for getting performance stats."""
         # First make a request to generate stats
@@ -2916,8 +2880,6 @@ class TestLemonadeClientIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     # Use pytest to run tests - either all tests or a specific test pattern
-    import pytest
-
     print("\n====================================================")
     print("========== RUNNING LEMONADE CLIENT TESTS ===========")
     print("====================================================")
