@@ -33,3 +33,7 @@ tests/fixtures/gaia/fake_gh/gh eol=lf
 # them — which silently sends the TUI to the last INSTALLED agent instead.
 scripts/dev/run-tui.sh text eol=lf
 scripts/dev/bin/gaia-agent text eol=lf
+
+# Generated from the Agent UI backend models; regenerate, never hand-edit.
+src/gaia/apps/webui/src/types/api.gen.ts linguist-generated=true
+src/gaia/apps/webui/src/types/api.schemas.json linguist-generated=true

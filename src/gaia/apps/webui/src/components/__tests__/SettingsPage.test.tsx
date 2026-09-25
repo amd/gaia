@@ -25,6 +25,7 @@ function makeSettings(overrides: Partial<Settings> = {}): Settings {
         context_size: null,
         dynamic_tools: false,
         dynamic_tools_locked: false,
+        agent_mode: 'goal_driven',
         ...overrides,
     };
 }
@@ -56,6 +57,7 @@ function makeSystemStatus(): SystemStatus {
         lemonade_url: null,
         expected_model_loaded: true,
         download_progress: null,
+        active_profile: 'chat',
     };
 }
 

@@ -43,6 +43,7 @@ function status(over: Partial<SystemStatus>): SystemStatus {
         lemonade_url: null,
         expected_model_loaded: false,
         download_progress: null,
+        active_profile: 'chat',
         ...over,
     };
 }

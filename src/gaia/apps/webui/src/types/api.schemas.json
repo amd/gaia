@@ -1,0 +1,3535 @@
+{
+  "ActivationRequest": {
+    "description": "Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.\n\nValid only for ``mcp_server`` connectors — see ``_require_mcp_server``.\n\n``scopes`` is optional: when present and no grant exists for the pair,\nit is used to auto-create the grant (one-click convenience). When the\npair already has a grant the body is ignored — see issue #1005.",
+    "properties": {
+      "scopes": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Scopes"
+      }
+    },
+    "title": "ActivationRequest",
+    "type": "object"
+  },
+  "AdminClearRequest": {
+    "description": "Request body for the eval-only :func:`admin_clear` endpoint.\n\n``scope`` selects which subset of memory to wipe.  Defaults to ``all``.",
+    "properties": {
+      "scope": {
+        "default": "all",
+        "title": "Scope",
+        "type": "string"
+      }
+    },
+    "title": "AdminClearRequest",
+    "type": "object"
+  },
+  "AdminSeedItem": {
+    "description": "One row for the eval-only :func:`admin_seed` endpoint.\n\nThe shape mirrors :class:`KnowledgeCreate` but adds ``confidence`` and\n``source`` because seeding is meant to plant *known* memory state, not\nuser-generated content.  Dedup is bypassed in :meth:`MemoryStore.seed_bulk`\nso two near-identical items become two rows — the whole point of seeding.",
+    "properties": {
+      "category": {
+        "default": "fact",
+        "title": "Category",
+        "type": "string"
+      },
+      "confidence": {
+        "default": 0.7,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "content": {
+        "title": "Content",
+        "type": "string"
+      },
+      "context": {
+        "default": "global",
+        "title": "Context",
+        "type": "string"
+      },
+      "domain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Domain"
+      },
+      "due_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Due At"
+      },
+      "entity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Entity"
+      },
+      "sensitive": {
+        "default": false,
+        "title": "Sensitive",
+        "type": "boolean"
+      },
+      "source": {
+        "default": "seed",
+        "title": "Source",
+        "type": "string"
+      }
+    },
+    "required": [
+      "content"
+    ],
+    "title": "AdminSeedItem",
+    "type": "object"
+  },
+  "AdminSeedRequest": {
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/AdminSeedItem"
+        },
+        "title": "Items",
+        "type": "array"
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "AdminSeedRequest",
+    "type": "object"
+  },
+  "AgentInfo": {
+    "description": "Information about a registered agent.",
+    "properties": {
+      "category": {
+        "default": "general",
+        "title": "Category",
+        "type": "string"
+      },
+      "consumes_mcp_servers": {
+        "default": false,
+        "title": "Consumes Mcp Servers",
+        "type": "boolean"
+      },
+      "conversation_starters": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Conversation Starters",
+        "type": "array"
+      },
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
+      "device_configs": {
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "title": "Device Configs",
+        "type": "array"
+      },
+      "icon": {
+        "default": "",
+        "title": "Icon",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "language": {
+        "default": "python",
+        "title": "Language",
+        "type": "string"
+      },
+      "min_memory_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Min Memory Gb"
+      },
+      "model_tiers": {
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "title": "Model Tiers",
+        "type": "array"
+      },
+      "models": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Models",
+        "type": "array"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "namespaced_agent_id": {
+        "default": "",
+        "title": "Namespaced Agent Id",
+        "type": "string"
+      },
+      "required_connections": {
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "title": "Required Connections",
+        "type": "array"
+      },
+      "source": {
+        "enum": [
+          "builtin",
+          "custom_python",
+          "native",
+          "installed"
+        ],
+        "title": "Source",
+        "type": "string"
+      },
+      "tags": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Tags",
+        "type": "array"
+      },
+      "tools_count": {
+        "default": 0,
+        "title": "Tools Count",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "description",
+      "source"
+    ],
+    "title": "AgentInfo",
+    "type": "object"
+  },
+  "AgentListResponse": {
+    "description": "List of registered agents.",
+    "properties": {
+      "agents": {
+        "items": {
+          "$ref": "#/components/schemas/AgentInfo"
+        },
+        "title": "Agents",
+        "type": "array"
+      },
+      "total": {
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "agents",
+      "total"
+    ],
+    "title": "AgentListResponse",
+    "type": "object"
+  },
+  "AgentStepResponse": {
+    "description": "A single step in the agent's execution (persisted).",
+    "properties": {
+      "active": {
+        "default": false,
+        "title": "Active",
+        "type": "boolean"
+      },
+      "commandOutput": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/CommandOutputResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "data": {
+        "anyOf": [
+          {},
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Data"
+      },
+      "decision": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Decision"
+      },
+      "detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Detail"
+      },
+      "fileList": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/FileListResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "id": {
+        "title": "Id",
+        "type": "integer"
+      },
+      "label": {
+        "title": "Label",
+        "type": "string"
+      },
+      "latencyMs": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Latencyms"
+      },
+      "mcpServer": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcpserver"
+      },
+      "planSteps": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Plansteps"
+      },
+      "policyVersion": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Policyversion"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "receiptId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Receiptid"
+      },
+      "render": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Render"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Result"
+      },
+      "ruleIds": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ruleids"
+      },
+      "success": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Success"
+      },
+      "timestamp": {
+        "default": 0,
+        "title": "Timestamp",
+        "type": "integer"
+      },
+      "tool": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Tool"
+      },
+      "type": {
+        "title": "Type",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "type",
+      "label"
+    ],
+    "title": "AgentStepResponse",
+    "type": "object"
+  },
+  "AttachDocumentRequest": {
+    "description": "Request to attach a document to a session.",
+    "properties": {
+      "document_id": {
+        "title": "Document Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "document_id"
+    ],
+    "title": "AttachDocumentRequest",
+    "type": "object"
+  },
+  "AuthorizeRequest": {
+    "properties": {
+      "grant_agents": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Grant Agents",
+        "type": "array"
+      },
+      "scopes": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Scopes",
+        "type": "array"
+      }
+    },
+    "title": "AuthorizeRequest",
+    "type": "object"
+  },
+  "Body_import_agents_api_agents_import_post": {
+    "properties": {
+      "bundle": {
+        "contentMediaType": "application/octet-stream",
+        "title": "Bundle",
+        "type": "string"
+      }
+    },
+    "required": [
+      "bundle"
+    ],
+    "title": "Body_import_agents_api_agents_import_post",
+    "type": "object"
+  },
+  "Body_upload_document_blob_api_documents_upload_post": {
+    "properties": {
+      "file": {
+        "contentMediaType": "application/octet-stream",
+        "title": "File",
+        "type": "string"
+      }
+    },
+    "required": [
+      "file"
+    ],
+    "title": "Body_upload_document_blob_api_documents_upload_post",
+    "type": "object"
+  },
+  "Body_upload_file_api_files_upload_post": {
+    "properties": {
+      "file": {
+        "contentMediaType": "application/octet-stream",
+        "title": "File",
+        "type": "string"
+      }
+    },
+    "required": [
+      "file"
+    ],
+    "title": "Body_upload_file_api_files_upload_post",
+    "type": "object"
+  },
+  "BrowseResponse": {
+    "description": "Response from the file/folder browse endpoint.",
+    "properties": {
+      "current_path": {
+        "title": "Current Path",
+        "type": "string"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/components/schemas/FileEntry"
+        },
+        "title": "Entries",
+        "type": "array"
+      },
+      "parent_path": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Parent Path"
+      },
+      "quick_links": {
+        "items": {
+          "$ref": "#/components/schemas/QuickLink"
+        },
+        "title": "Quick Links",
+        "type": "array"
+      }
+    },
+    "required": [
+      "current_path",
+      "entries"
+    ],
+    "title": "BrowseResponse",
+    "type": "object"
+  },
+  "CancelStreamRequest": {
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "title": "CancelStreamRequest",
+    "type": "object"
+  },
+  "ChatRequest": {
+    "description": "Request to send a chat message.",
+    "properties": {
+      "agent_type": {
+        "anyOf": [
+          {
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Agent Type"
+      },
+      "document_ids": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Document Ids"
+      },
+      "message": {
+        "maxLength": 100000,
+        "title": "Message",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "stream": {
+        "default": true,
+        "title": "Stream",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "session_id",
+      "message"
+    ],
+    "title": "ChatRequest",
+    "type": "object"
+  },
+  "CommandOutputResponse": {
+    "description": "Structured output from a shell command execution.",
+    "properties": {
+      "command": {
+        "default": "",
+        "title": "Command",
+        "type": "string"
+      },
+      "cwd": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cwd"
+      },
+      "duration_seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Duration Seconds"
+      },
+      "return_code": {
+        "default": 0,
+        "title": "Return Code",
+        "type": "integer"
+      },
+      "stderr": {
+        "default": "",
+        "title": "Stderr",
+        "type": "string"
+      },
+      "stdout": {
+        "default": "",
+        "title": "Stdout",
+        "type": "string"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "title": "CommandOutputResponse",
+    "type": "object"
+  },
+  "CompleteOnboardingRequest": {
+    "properties": {
+      "completed_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Completed At"
+      },
+      "skipped": {
+        "default": false,
+        "title": "Skipped",
+        "type": "boolean"
+      }
+    },
+    "title": "CompleteOnboardingRequest",
+    "type": "object"
+  },
+  "ConfigRequest": {
+    "description": "Body for ``POST /api/agents/{id}/config``.",
+    "properties": {
+      "config": {
+        "additionalProperties": true,
+        "title": "Config",
+        "type": "object"
+      },
+      "replace": {
+        "default": false,
+        "title": "Replace",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "config"
+    ],
+    "title": "ConfigRequest",
+    "type": "object"
+  },
+  "ConfigureRequest": {
+    "properties": {
+      "config": {
+        "additionalProperties": true,
+        "title": "Config",
+        "type": "object"
+      }
+    },
+    "title": "ConfigureRequest",
+    "type": "object"
+  },
+  "CreateScheduleRequest": {
+    "description": "Request to create a new scheduled task.",
+    "properties": {
+      "interval": {
+        "description": "Interval string, e.g. 'every 6h', 'every 30m', 'daily'",
+        "title": "Interval",
+        "type": "string"
+      },
+      "name": {
+        "description": "Unique name for the scheduled task",
+        "title": "Name",
+        "type": "string"
+      },
+      "prompt": {
+        "description": "The prompt to execute on each run",
+        "title": "Prompt",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "interval",
+      "prompt"
+    ],
+    "title": "CreateScheduleRequest",
+    "type": "object"
+  },
+  "CreateSessionRequest": {
+    "description": "Request to create a new chat session.",
+    "properties": {
+      "agent_type": {
+        "anyOf": [
+          {
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Agent Type"
+      },
+      "device": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      },
+      "document_ids": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Document Ids",
+        "type": "array"
+      },
+      "mail_provider": {
+        "anyOf": [
+          {
+            "pattern": "^(google|microsoft)$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mail Provider"
+      },
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "private": {
+        "default": false,
+        "title": "Private",
+        "type": "boolean"
+      },
+      "system_prompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "System Prompt"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Title"
+      }
+    },
+    "title": "CreateSessionRequest",
+    "type": "object"
+  },
+  "DiscoveryCommit": {
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/components/schemas/DiscoveryCommitItem"
+        },
+        "title": "Items",
+        "type": "array"
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "DiscoveryCommit",
+    "type": "object"
+  },
+  "DiscoveryCommitItem": {
+    "description": "One approved discovery finding; KnowledgeCreate caps its category.",
+    "properties": {
+      "category": {
+        "default": "profile",
+        "title": "Category",
+        "type": "string"
+      },
+      "confidence": {
+        "default": 0.6,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "content": {
+        "title": "Content",
+        "type": "string"
+      },
+      "context": {
+        "default": "global",
+        "title": "Context",
+        "type": "string"
+      },
+      "domain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Domain"
+      },
+      "due_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Due At"
+      },
+      "entity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Entity"
+      },
+      "sensitive": {
+        "default": false,
+        "title": "Sensitive",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "content"
+    ],
+    "title": "DiscoveryCommitItem",
+    "type": "object"
+  },
+  "DiskAgentInfo": {
+    "description": "Information about an agent present under ~/.gaia/agents.",
+    "properties": {
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "registered": {
+        "title": "Registered",
+        "type": "boolean"
+      },
+      "registered_agent_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Registered Agent Id"
+      },
+      "source": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Source"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "registered"
+    ],
+    "title": "DiskAgentInfo",
+    "type": "object"
+  },
+  "DiskAgentListResponse": {
+    "description": "List of custom agents found on disk.",
+    "properties": {
+      "agents": {
+        "items": {
+          "$ref": "#/components/schemas/DiskAgentInfo"
+        },
+        "title": "Agents",
+        "type": "array"
+      },
+      "total": {
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "agents",
+      "total"
+    ],
+    "title": "DiskAgentListResponse",
+    "type": "object"
+  },
+  "DocumentListResponse": {
+    "description": "List of documents.",
+    "properties": {
+      "documents": {
+        "items": {
+          "$ref": "#/components/schemas/DocumentResponse"
+        },
+        "title": "Documents",
+        "type": "array"
+      },
+      "total": {
+        "title": "Total",
+        "type": "integer"
+      },
+      "total_chunks": {
+        "title": "Total Chunks",
+        "type": "integer"
+      },
+      "total_size_bytes": {
+        "title": "Total Size Bytes",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "documents",
+      "total",
+      "total_size_bytes",
+      "total_chunks"
+    ],
+    "title": "DocumentListResponse",
+    "type": "object"
+  },
+  "DocumentResponse": {
+    "description": "A document in the library.",
+    "properties": {
+      "chunk_count": {
+        "title": "Chunk Count",
+        "type": "integer"
+      },
+      "file_size": {
+        "title": "File Size",
+        "type": "integer"
+      },
+      "filename": {
+        "title": "Filename",
+        "type": "string"
+      },
+      "filepath": {
+        "title": "Filepath",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "indexed_at": {
+        "title": "Indexed At",
+        "type": "string"
+      },
+      "indexing_status": {
+        "default": "complete",
+        "title": "Indexing Status",
+        "type": "string"
+      },
+      "last_accessed_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Accessed At"
+      },
+      "last_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Error"
+      },
+      "sessions_using": {
+        "default": 0,
+        "title": "Sessions Using",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "id",
+      "filename",
+      "filepath",
+      "file_size",
+      "chunk_count",
+      "indexed_at"
+    ],
+    "title": "DocumentResponse",
+    "type": "object"
+  },
+  "DocumentUploadRequest": {
+    "description": "Request to index a document by path.",
+    "properties": {
+      "filepath": {
+        "title": "Filepath",
+        "type": "string"
+      }
+    },
+    "required": [
+      "filepath"
+    ],
+    "title": "DocumentUploadRequest",
+    "type": "object"
+  },
+  "DownloadModelRequest": {
+    "properties": {
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
+      "model_name": {
+        "title": "Model Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_name"
+    ],
+    "title": "DownloadModelRequest",
+    "type": "object"
+  },
+  "DownloadProgress": {
+    "description": "Progress of an in-flight Lemonade model download.\n\nPopulated from Lemonade's ``POST /v1/pull`` SSE event stream\n(``event: progress``). The frontend polls this on /api/system/status\nso the download banner can show real progress instead of a bare spinner.\n\n``state`` values:\n  - ``starting``    — pull request issued, waiting for first byte\n  - ``downloading`` — at least one progress event received\n  - ``complete``    — all files done (transient — entry expires soon)\n  - ``error``       — Lemonade returned an error event or the stream broke",
+    "properties": {
+      "downloaded_bytes": {
+        "default": 0,
+        "title": "Downloaded Bytes",
+        "type": "integer"
+      },
+      "file": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "File"
+      },
+      "file_index": {
+        "default": 0,
+        "title": "File Index",
+        "type": "integer"
+      },
+      "message": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Message"
+      },
+      "model_name": {
+        "title": "Model Name",
+        "type": "string"
+      },
+      "percent": {
+        "default": 0,
+        "title": "Percent",
+        "type": "integer"
+      },
+      "state": {
+        "title": "State",
+        "type": "string"
+      },
+      "total_bytes": {
+        "default": 0,
+        "title": "Total Bytes",
+        "type": "integer"
+      },
+      "total_files": {
+        "default": 0,
+        "title": "Total Files",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "state",
+      "model_name"
+    ],
+    "title": "DownloadProgress",
+    "type": "object"
+  },
+  "FileEntry": {
+    "description": "A single file or folder entry in a directory listing.",
+    "properties": {
+      "extension": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Extension"
+      },
+      "modified": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Modified"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      },
+      "size": {
+        "default": 0,
+        "title": "Size",
+        "type": "integer"
+      },
+      "type": {
+        "description": "Either 'file' or 'folder'",
+        "title": "Type",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "path",
+      "type"
+    ],
+    "title": "FileEntry",
+    "type": "object"
+  },
+  "FileListResponse": {
+    "description": "Structured file list from file search tool results.",
+    "properties": {
+      "files": {
+        "default": [],
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "title": "Files",
+        "type": "array"
+      },
+      "total": {
+        "default": 0,
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "title": "FileListResponse",
+    "type": "object"
+  },
+  "FilePreviewResponse": {
+    "description": "Response with file content preview.",
+    "properties": {
+      "columns": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Columns"
+      },
+      "encoding": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Encoding"
+      },
+      "extension": {
+        "title": "Extension",
+        "type": "string"
+      },
+      "is_text": {
+        "title": "Is Text",
+        "type": "boolean"
+      },
+      "modified": {
+        "title": "Modified",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      },
+      "preview_lines": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Preview Lines",
+        "type": "array"
+      },
+      "row_count": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Row Count"
+      },
+      "size": {
+        "title": "Size",
+        "type": "integer"
+      },
+      "size_display": {
+        "title": "Size Display",
+        "type": "string"
+      },
+      "total_lines": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Total Lines"
+      }
+    },
+    "required": [
+      "path",
+      "name",
+      "size",
+      "size_display",
+      "extension",
+      "modified",
+      "is_text"
+    ],
+    "title": "FilePreviewResponse",
+    "type": "object"
+  },
+  "FileSearchResponse": {
+    "description": "Response from file search.",
+    "properties": {
+      "query": {
+        "title": "Query",
+        "type": "string"
+      },
+      "results": {
+        "items": {
+          "$ref": "#/components/schemas/FileSearchResult"
+        },
+        "title": "Results",
+        "type": "array"
+      },
+      "searched_locations": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Searched Locations",
+        "type": "array"
+      },
+      "total": {
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "results",
+      "total",
+      "query"
+    ],
+    "title": "FileSearchResponse",
+    "type": "object"
+  },
+  "FileSearchResult": {
+    "description": "A single file search result.",
+    "properties": {
+      "directory": {
+        "title": "Directory",
+        "type": "string"
+      },
+      "extension": {
+        "title": "Extension",
+        "type": "string"
+      },
+      "modified": {
+        "title": "Modified",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      },
+      "size": {
+        "title": "Size",
+        "type": "integer"
+      },
+      "size_display": {
+        "title": "Size Display",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "path",
+      "size",
+      "size_display",
+      "extension",
+      "modified",
+      "directory"
+    ],
+    "title": "FileSearchResult",
+    "type": "object"
+  },
+  "FileUploadResponse": {
+    "description": "Response from a file upload.",
+    "properties": {
+      "content_type": {
+        "title": "Content Type",
+        "type": "string"
+      },
+      "filename": {
+        "title": "Filename",
+        "type": "string"
+      },
+      "is_image": {
+        "title": "Is Image",
+        "type": "boolean"
+      },
+      "original_name": {
+        "title": "Original Name",
+        "type": "string"
+      },
+      "size": {
+        "title": "Size",
+        "type": "integer"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "filename",
+      "original_name",
+      "url",
+      "size",
+      "content_type",
+      "is_image"
+    ],
+    "title": "FileUploadResponse",
+    "type": "object"
+  },
+  "ForwardConnectionRequest": {
+    "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` is display-only in v1\n(the keyring slot is single-account per provider). ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
+    "properties": {
+      "account_email": {
+        "default": "",
+        "title": "Account Email",
+        "type": "string"
+      },
+      "client_id": {
+        "minLength": 1,
+        "title": "Client Id",
+        "type": "string"
+      },
+      "client_secret": {
+        "default": "",
+        "title": "Client Secret",
+        "type": "string"
+      },
+      "grant_agents": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Grant Agents",
+        "type": "array"
+      },
+      "refresh_token": {
+        "minLength": 1,
+        "title": "Refresh Token",
+        "type": "string"
+      },
+      "scopes": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Scopes",
+        "type": "array"
+      }
+    },
+    "required": [
+      "client_id",
+      "refresh_token"
+    ],
+    "title": "ForwardConnectionRequest",
+    "type": "object"
+  },
+  "GoalCreate": {
+    "properties": {
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
+      "mode_required": {
+        "default": "goal_driven",
+        "title": "Mode Required",
+        "type": "string"
+      },
+      "priority": {
+        "default": "medium",
+        "title": "Priority",
+        "type": "string"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "description"
+    ],
+    "title": "GoalCreate",
+    "type": "object"
+  },
+  "GoalStatusUpdate": {
+    "properties": {
+      "progress_notes": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Progress Notes"
+      },
+      "status": {
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status"
+    ],
+    "title": "GoalStatusUpdate",
+    "type": "object"
+  },
+  "GrantRequest": {
+    "properties": {
+      "scopes": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Scopes",
+        "type": "array"
+      }
+    },
+    "title": "GrantRequest",
+    "type": "object"
+  },
+  "HTTPValidationError": {
+    "properties": {
+      "detail": {
+        "items": {
+          "$ref": "#/components/schemas/ValidationError"
+        },
+        "title": "Detail",
+        "type": "array"
+      }
+    },
+    "title": "HTTPValidationError",
+    "type": "object"
+  },
+  "IndexFolderRequest": {
+    "description": "Request to index all supported documents in a folder.",
+    "properties": {
+      "folder_path": {
+        "title": "Folder Path",
+        "type": "string"
+      },
+      "recursive": {
+        "default": true,
+        "title": "Recursive",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "folder_path"
+    ],
+    "title": "IndexFolderRequest",
+    "type": "object"
+  },
+  "IndexFolderResponse": {
+    "description": "Response from folder indexing operation.",
+    "properties": {
+      "documents": {
+        "items": {
+          "$ref": "#/components/schemas/DocumentResponse"
+        },
+        "title": "Documents",
+        "type": "array"
+      },
+      "errors": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Errors",
+        "type": "array"
+      },
+      "failed": {
+        "default": 0,
+        "title": "Failed",
+        "type": "integer"
+      },
+      "indexed": {
+        "default": 0,
+        "title": "Indexed",
+        "type": "integer"
+      }
+    },
+    "title": "IndexFolderResponse",
+    "type": "object"
+  },
+  "InferenceCommit": {
+    "properties": {
+      "insights": {
+        "items": {
+          "$ref": "#/components/schemas/InferenceCommitItem"
+        },
+        "title": "Insights",
+        "type": "array"
+      }
+    },
+    "required": [
+      "insights"
+    ],
+    "title": "InferenceCommit",
+    "type": "object"
+  },
+  "InferenceCommitItem": {
+    "description": "One approved inference insight. Always stored as a global ``profile`` row.",
+    "properties": {
+      "category": {
+        "const": "profile",
+        "default": "profile",
+        "title": "Category",
+        "type": "string"
+      },
+      "confidence": {
+        "default": 0.7,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "content": {
+        "title": "Content",
+        "type": "string"
+      },
+      "context": {
+        "default": "global",
+        "title": "Context",
+        "type": "string"
+      },
+      "domain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": "general",
+        "title": "Domain"
+      },
+      "due_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Due At"
+      },
+      "entity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Entity"
+      },
+      "sensitive": {
+        "default": false,
+        "title": "Sensitive",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "content"
+    ],
+    "title": "InferenceCommitItem",
+    "type": "object"
+  },
+  "InferenceStatsResponse": {
+    "description": "LLM inference performance metrics for a message.",
+    "properties": {
+      "input_tokens": {
+        "default": 0,
+        "title": "Input Tokens",
+        "type": "integer"
+      },
+      "output_tokens": {
+        "default": 0,
+        "title": "Output Tokens",
+        "type": "integer"
+      },
+      "time_to_first_token": {
+        "default": 0,
+        "title": "Time To First Token",
+        "type": "number"
+      },
+      "tokens_per_second": {
+        "default": 0,
+        "title": "Tokens Per Second",
+        "type": "number"
+      }
+    },
+    "title": "InferenceStatsResponse",
+    "type": "object"
+  },
+  "InitTaskInfo": {
+    "description": "Summary of a boot-time initialization task (embedded in SystemStatus).",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "status": {
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "status"
+    ],
+    "title": "InitTaskInfo",
+    "type": "object"
+  },
+  "InstallRequest": {
+    "description": "Body for ``POST /api/agents/install``.",
+    "properties": {
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "trust_native": {
+        "default": false,
+        "title": "Trust Native",
+        "type": "boolean"
+      },
+      "version": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Version"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "title": "InstallRequest",
+    "type": "object"
+  },
+  "KnowledgeCreate": {
+    "properties": {
+      "category": {
+        "default": "fact",
+        "title": "Category",
+        "type": "string"
+      },
+      "content": {
+        "title": "Content",
+        "type": "string"
+      },
+      "context": {
+        "default": "global",
+        "title": "Context",
+        "type": "string"
+      },
+      "domain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Domain"
+      },
+      "due_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Due At"
+      },
+      "entity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Entity"
+      },
+      "sensitive": {
+        "default": false,
+        "title": "Sensitive",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "content"
+    ],
+    "title": "KnowledgeCreate",
+    "type": "object"
+  },
+  "KnowledgeUpdate": {
+    "properties": {
+      "category": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Category"
+      },
+      "content": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Content"
+      },
+      "context": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Context"
+      },
+      "domain": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Domain"
+      },
+      "due_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Due At"
+      },
+      "entity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Entity"
+      },
+      "reminded_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reminded At"
+      },
+      "sensitive": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Sensitive"
+      }
+    },
+    "title": "KnowledgeUpdate",
+    "type": "object"
+  },
+  "LoadModelRequest": {
+    "properties": {
+      "ctx_size": {
+        "anyOf": [
+          {
+            "exclusiveMinimum": 0.0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ctx Size"
+      },
+      "model_name": {
+        "title": "Model Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_name"
+    ],
+    "title": "LoadModelRequest",
+    "type": "object"
+  },
+  "MemorySettingsBody": {
+    "description": "Typed request body for PUT /api/memory/settings.",
+    "properties": {
+      "mcp_memory_enabled": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcp Memory Enabled"
+      },
+      "memory_enabled": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Memory Enabled"
+      },
+      "system_discovery_consent": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "System Discovery Consent"
+      }
+    },
+    "title": "MemorySettingsBody",
+    "type": "object"
+  },
+  "MessageListResponse": {
+    "description": "List of messages for a session.",
+    "properties": {
+      "messages": {
+        "items": {
+          "$ref": "#/components/schemas/MessageResponse"
+        },
+        "title": "Messages",
+        "type": "array"
+      },
+      "total": {
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "messages",
+      "total"
+    ],
+    "title": "MessageListResponse",
+    "type": "object"
+  },
+  "MessageResponse": {
+    "description": "A single message.",
+    "properties": {
+      "agent_steps": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/AgentStepResponse"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Agent Steps"
+      },
+      "content": {
+        "title": "Content",
+        "type": "string"
+      },
+      "created_at": {
+        "title": "Created At",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "integer"
+      },
+      "rag_sources": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/SourceInfo"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Rag Sources"
+      },
+      "role": {
+        "title": "Role",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "stats": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/InferenceStatsResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "session_id",
+      "role",
+      "content",
+      "created_at"
+    ],
+    "title": "MessageResponse",
+    "type": "object"
+  },
+  "ModelStatus": {
+    "description": "Status of a custom model on the Lemonade server.",
+    "properties": {
+      "downloaded": {
+        "default": false,
+        "title": "Downloaded",
+        "type": "boolean"
+      },
+      "found": {
+        "default": false,
+        "title": "Found",
+        "type": "boolean"
+      },
+      "loaded": {
+        "default": false,
+        "title": "Loaded",
+        "type": "boolean"
+      }
+    },
+    "title": "ModelStatus",
+    "type": "object"
+  },
+  "OnboardingStatus": {
+    "properties": {
+      "completed_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Completed At"
+      },
+      "initialized": {
+        "default": false,
+        "title": "Initialized",
+        "type": "boolean"
+      },
+      "skipped": {
+        "default": false,
+        "title": "Skipped",
+        "type": "boolean"
+      }
+    },
+    "title": "OnboardingStatus",
+    "type": "object"
+  },
+  "OpenFileRequest": {
+    "description": "Request to open a file or folder in the system file explorer.",
+    "properties": {
+      "path": {
+        "title": "Path",
+        "type": "string"
+      },
+      "reveal": {
+        "default": true,
+        "title": "Reveal",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "title": "OpenFileRequest",
+    "type": "object"
+  },
+  "ParseScheduleRequest": {
+    "description": "Request to parse a natural language schedule description.",
+    "properties": {
+      "input": {
+        "description": "Natural language schedule description",
+        "title": "Input",
+        "type": "string"
+      }
+    },
+    "required": [
+      "input"
+    ],
+    "title": "ParseScheduleRequest",
+    "type": "object"
+  },
+  "ParseScheduleResponse": {
+    "description": "Parsed schedule configuration.",
+    "properties": {
+      "days_of_week": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Days Of Week"
+      },
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
+      "end_hour": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "End Hour"
+      },
+      "interval_seconds": {
+        "title": "Interval Seconds",
+        "type": "integer"
+      },
+      "next_run_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Next Run At"
+      },
+      "start_hour": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Start Hour"
+      },
+      "time_of_day": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Time Of Day"
+      },
+      "valid": {
+        "title": "Valid",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "interval_seconds",
+      "description",
+      "valid"
+    ],
+    "title": "ParseScheduleResponse",
+    "type": "object"
+  },
+  "PreflightReport": {
+    "description": "Result of the first-run hardware scan.",
+    "properties": {
+      "blockers": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Blockers",
+        "type": "array"
+      },
+      "compatible": {
+        "default": true,
+        "title": "Compatible",
+        "type": "boolean"
+      },
+      "detected_platform": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Detected Platform"
+      },
+      "disk_free_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Disk Free Gb"
+      },
+      "gpu_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Gpu Name"
+      },
+      "gpu_vram_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Gpu Vram Gb"
+      },
+      "lemonade_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Error"
+      },
+      "lemonade_running": {
+        "default": false,
+        "title": "Lemonade Running",
+        "type": "boolean"
+      },
+      "npu_detected": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Npu Detected"
+      },
+      "os": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Os"
+      },
+      "ram_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ram Gb"
+      },
+      "recommended_model": {
+        "default": "Gemma-4-E4B-it-GGUF",
+        "title": "Recommended Model",
+        "type": "string"
+      },
+      "recommended_profile": {
+        "default": "chat",
+        "title": "Recommended Profile",
+        "type": "string"
+      },
+      "required_disk_gb": {
+        "default": 6.0,
+        "title": "Required Disk Gb",
+        "type": "number"
+      },
+      "required_memory_gb": {
+        "default": 8.0,
+        "title": "Required Memory Gb",
+        "type": "number"
+      },
+      "tier": {
+        "default": "unknown",
+        "title": "Tier",
+        "type": "string"
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Warnings",
+        "type": "array"
+      }
+    },
+    "title": "PreflightReport",
+    "type": "object"
+  },
+  "QuickLink": {
+    "description": "A quick-access link to a common filesystem location.",
+    "properties": {
+      "icon": {
+        "default": "folder",
+        "title": "Icon",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "path"
+    ],
+    "title": "QuickLink",
+    "type": "object"
+  },
+  "ScheduleListResponse": {
+    "description": "List of scheduled tasks.",
+    "properties": {
+      "schedules": {
+        "items": {},
+        "title": "Schedules",
+        "type": "array"
+      },
+      "total": {
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "schedules",
+      "total"
+    ],
+    "title": "ScheduleListResponse",
+    "type": "object"
+  },
+  "ScheduleResponse": {
+    "description": "A scheduled task.",
+    "properties": {
+      "created_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Created At"
+      },
+      "error_count": {
+        "default": 0,
+        "title": "Error Count",
+        "type": "integer"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "interval_seconds": {
+        "title": "Interval Seconds",
+        "type": "integer"
+      },
+      "last_result": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Result"
+      },
+      "last_run_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Last Run At"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "next_run_at": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Next Run At"
+      },
+      "prompt": {
+        "title": "Prompt",
+        "type": "string"
+      },
+      "run_count": {
+        "default": 0,
+        "title": "Run Count",
+        "type": "integer"
+      },
+      "schedule_config": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Schedule Config"
+      },
+      "session_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Session Id"
+      },
+      "status": {
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "interval_seconds",
+      "prompt",
+      "status"
+    ],
+    "title": "ScheduleResponse",
+    "type": "object"
+  },
+  "ScheduleResultsResponse": {
+    "description": "List of schedule execution results.",
+    "properties": {
+      "results": {
+        "items": {},
+        "title": "Results",
+        "type": "array"
+      },
+      "total": {
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "results",
+      "total"
+    ],
+    "title": "ScheduleResultsResponse",
+    "type": "object"
+  },
+  "SessionListResponse": {
+    "description": "List of sessions.",
+    "properties": {
+      "sessions": {
+        "items": {
+          "$ref": "#/components/schemas/SessionResponse"
+        },
+        "title": "Sessions",
+        "type": "array"
+      },
+      "total": {
+        "title": "Total",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "sessions",
+      "total"
+    ],
+    "title": "SessionListResponse",
+    "type": "object"
+  },
+  "SessionResponse": {
+    "description": "A chat session.",
+    "properties": {
+      "agent_type": {
+        "default": "chat",
+        "title": "Agent Type",
+        "type": "string"
+      },
+      "created_at": {
+        "title": "Created At",
+        "type": "string"
+      },
+      "device": {
+        "default": "gpu",
+        "title": "Device",
+        "type": "string"
+      },
+      "document_ids": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Document Ids",
+        "type": "array"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "mail_provider": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mail Provider"
+      },
+      "message_count": {
+        "default": 0,
+        "title": "Message Count",
+        "type": "integer"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "private": {
+        "default": false,
+        "title": "Private",
+        "type": "boolean"
+      },
+      "system_prompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "System Prompt"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      },
+      "title_is_custom": {
+        "default": false,
+        "title": "Title Is Custom",
+        "type": "boolean"
+      },
+      "updated_at": {
+        "title": "Updated At",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "title",
+      "created_at",
+      "updated_at",
+      "model"
+    ],
+    "title": "SessionResponse",
+    "type": "object"
+  },
+  "SettingsResponse": {
+    "description": "Current user settings.",
+    "properties": {
+      "agent_mode": {
+        "default": "goal_driven",
+        "title": "Agent Mode",
+        "type": "string"
+      },
+      "context_size": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Context Size"
+      },
+      "custom_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Custom Model"
+      },
+      "dynamic_tools": {
+        "default": false,
+        "title": "Dynamic Tools",
+        "type": "boolean"
+      },
+      "dynamic_tools_locked": {
+        "default": false,
+        "title": "Dynamic Tools Locked",
+        "type": "boolean"
+      },
+      "model_status": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ModelStatus"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "title": "SettingsResponse",
+    "type": "object"
+  },
+  "SettingsUpdateRequest": {
+    "description": "Request to update user settings.",
+    "properties": {
+      "agent_mode": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Agent operating mode. One of: 'manual' (request/response only), 'goal_driven' (execute approved goals). Default: 'goal_driven'. 'autonomous' (observe, infer, and execute own goals) is not implemented yet and is rejected (#2005).",
+        "title": "Agent Mode"
+      },
+      "context_size": {
+        "anyOf": [
+          {
+            "minimum": 32768.0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Context window size in tokens for model loading. Must be >= 32768 (the minimum required by GAIA Chat). Set to null to reset to the default (32768).",
+        "title": "Context Size"
+      },
+      "custom_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "HuggingFace model ID to use instead of the default model. Example: huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated. Set to empty string or null to clear the override.",
+        "title": "Custom Model"
+      },
+      "dynamic_tools": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Beta: enable the semantic dynamic tool loader (#1798), which trims each turn's tool prompt to a matched subset to cut first-turn TTFT. Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.",
+        "title": "Dynamic Tools"
+      }
+    },
+    "title": "SettingsUpdateRequest",
+    "type": "object"
+  },
+  "SetupRequest": {
+    "description": "Body for ``POST /api/agents/setup`` (progressive multi-agent install).",
+    "properties": {
+      "ids": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Ids",
+        "type": "array"
+      },
+      "max_parallel": {
+        "default": 2,
+        "title": "Max Parallel",
+        "type": "integer"
+      },
+      "resume": {
+        "default": true,
+        "title": "Resume",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ids"
+    ],
+    "title": "SetupRequest",
+    "type": "object"
+  },
+  "SourceInfo": {
+    "description": "RAG source citation.",
+    "properties": {
+      "chunk": {
+        "title": "Chunk",
+        "type": "string"
+      },
+      "document_id": {
+        "title": "Document Id",
+        "type": "string"
+      },
+      "filename": {
+        "title": "Filename",
+        "type": "string"
+      },
+      "page": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Page"
+      },
+      "score": {
+        "title": "Score",
+        "type": "number"
+      }
+    },
+    "required": [
+      "document_id",
+      "filename",
+      "chunk",
+      "score"
+    ],
+    "title": "SourceInfo",
+    "type": "object"
+  },
+  "StartAgentServerRequest": {
+    "properties": {
+      "backend_url": {
+        "default": "http://localhost:4200",
+        "title": "Backend Url",
+        "type": "string"
+      },
+      "port": {
+        "default": 8766,
+        "maximum": 65535.0,
+        "minimum": 1024.0,
+        "title": "Port",
+        "type": "integer"
+      }
+    },
+    "title": "StartAgentServerRequest",
+    "type": "object"
+  },
+  "SystemStatus": {
+    "description": "System readiness status.",
+    "properties": {
+      "active_profile": {
+        "default": "chat",
+        "title": "Active Profile",
+        "type": "string"
+      },
+      "context_size_sufficient": {
+        "default": true,
+        "title": "Context Size Sufficient",
+        "type": "boolean"
+      },
+      "default_model_name": {
+        "default": "Gemma-4-E4B-it-GGUF",
+        "title": "Default Model Name",
+        "type": "string"
+      },
+      "default_model_size_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Default Model Size Gb"
+      },
+      "detected_devices": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Detected Devices",
+        "type": "array"
+      },
+      "device_supported": {
+        "default": true,
+        "title": "Device Supported",
+        "type": "boolean"
+      },
+      "disk_space_gb": {
+        "default": 0.0,
+        "title": "Disk Space Gb",
+        "type": "number"
+      },
+      "download_progress": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/DownloadProgress"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "embedding_model_loaded": {
+        "default": false,
+        "title": "Embedding Model Loaded",
+        "type": "boolean"
+      },
+      "expected_model_loaded": {
+        "default": true,
+        "title": "Expected Model Loaded",
+        "type": "boolean"
+      },
+      "gpu_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Gpu Name"
+      },
+      "gpu_vram_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Gpu Vram Gb"
+      },
+      "init_state": {
+        "default": "ready",
+        "title": "Init State",
+        "type": "string"
+      },
+      "init_tasks": {
+        "items": {
+          "$ref": "#/components/schemas/InitTaskInfo"
+        },
+        "title": "Init Tasks",
+        "type": "array"
+      },
+      "initialized": {
+        "default": false,
+        "title": "Initialized",
+        "type": "boolean"
+      },
+      "lemonade_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Error"
+      },
+      "lemonade_running": {
+        "default": false,
+        "title": "Lemonade Running",
+        "type": "boolean"
+      },
+      "lemonade_url": {
+        "default": "http://localhost:13305",
+        "title": "Lemonade Url",
+        "type": "string"
+      },
+      "lemonade_version": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Version"
+      },
+      "memory_available_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Memory Available Gb"
+      },
+      "model_context_size": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Context Size"
+      },
+      "model_device": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Device"
+      },
+      "model_downloaded": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Downloaded"
+      },
+      "model_labels": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Labels"
+      },
+      "model_loaded": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Loaded"
+      },
+      "model_size_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Size Gb"
+      },
+      "processor_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Processor Name"
+      },
+      "start_command": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Start Command"
+      },
+      "start_instruction": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Start Instruction"
+      },
+      "time_to_first_token": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Time To First Token"
+      },
+      "tokens_per_second": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Tokens Per Second"
+      },
+      "version": {
+        "default": "0.24.1",
+        "title": "Version",
+        "type": "string"
+      }
+    },
+    "title": "SystemStatus",
+    "type": "object"
+  },
+  "TaskCreate": {
+    "properties": {
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
+      "order_index": {
+        "default": 0,
+        "title": "Order Index",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "description"
+    ],
+    "title": "TaskCreate",
+    "type": "object"
+  },
+  "TaskListResponse": {
+    "description": "List of background tasks.",
+    "properties": {
+      "tasks": {
+        "items": {
+          "$ref": "#/components/schemas/TaskResponse"
+        },
+        "title": "Tasks",
+        "type": "array"
+      }
+    },
+    "required": [
+      "tasks"
+    ],
+    "title": "TaskListResponse",
+    "type": "object"
+  },
+  "TaskResponse": {
+    "description": "A single background task visible to the frontend.",
+    "properties": {
+      "error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "status": {
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "status"
+    ],
+    "title": "TaskResponse",
+    "type": "object"
+  },
+  "TaskStatusUpdate": {
+    "properties": {
+      "result": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Result"
+      },
+      "status": {
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "status"
+    ],
+    "title": "TaskStatusUpdate",
+    "type": "object"
+  },
+  "ToolConfirmRequest": {
+    "description": "Request body for the tool confirmation endpoint.",
+    "properties": {
+      "approved": {
+        "title": "Approved",
+        "type": "boolean"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "approved"
+    ],
+    "title": "ToolConfirmRequest",
+    "type": "object"
+  },
+  "UpdateScheduleRequest": {
+    "description": "Request to update a scheduled task.",
+    "properties": {
+      "status": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "New status: 'paused', 'active', or 'cancelled'",
+        "title": "Status"
+      }
+    },
+    "title": "UpdateScheduleRequest",
+    "type": "object"
+  },
+  "UpdateSessionRequest": {
+    "description": "Request to update a session.",
+    "properties": {
+      "agent_type": {
+        "anyOf": [
+          {
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Agent Type"
+      },
+      "device": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      },
+      "document_ids": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Document Ids"
+      },
+      "mail_provider": {
+        "anyOf": [
+          {
+            "pattern": "^(google|microsoft)$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mail Provider"
+      },
+      "private": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Private"
+      },
+      "system_prompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "System Prompt"
+      },
+      "title": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Title"
+      },
+      "title_is_custom": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Title Is Custom"
+      }
+    },
+    "title": "UpdateSessionRequest",
+    "type": "object"
+  },
+  "UserInputRequest": {
+    "description": "Request body for answering a mid-run ``needs_input`` question.",
+    "properties": {
+      "request_id": {
+        "title": "Request Id",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "value": {
+        "title": "Value",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "request_id",
+      "value"
+    ],
+    "title": "UserInputRequest",
+    "type": "object"
+  },
+  "ValidationError": {
+    "properties": {
+      "ctx": {
+        "title": "Context",
+        "type": "object"
+      },
+      "input": {
+        "title": "Input"
+      },
+      "loc": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        "title": "Location",
+        "type": "array"
+      },
+      "msg": {
+        "title": "Message",
+        "type": "string"
+      },
+      "type": {
+        "title": "Error Type",
+        "type": "string"
+      }
+    },
+    "required": [
+      "loc",
+      "msg",
+      "type"
+    ],
+    "title": "ValidationError",
+    "type": "object"
+  }
+}

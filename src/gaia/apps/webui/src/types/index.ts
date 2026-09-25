@@ -20,7 +20,7 @@ export interface Session {
     /** Device used for this session (cpu / gpu / npu). */
     device?: string;
     /** Mail provider for email-triage sessions ("google" | "microsoft"). */
-    mail_provider?: string;
+    mail_provider?: string | null;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */
@@ -423,6 +423,8 @@ export interface Settings {
     dynamic_tools: boolean;
     /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */
     dynamic_tools_locked: boolean;
+    /** Background agent behaviour; a legacy stored "autonomous" is reported as "goal_driven". */
+    agent_mode: 'manual' | 'goal_driven';
 }
 
 /** Status of the GAIA Agent UI MCP server (exposes UI tools to Claude Code etc.). */
@@ -501,6 +503,8 @@ export interface SystemStatus {
     init_tasks?: Array<{ name: string; status: string }>;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
     detected_devices?: string[];
+    /** Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu"). */
+    active_profile: string;
 }
 
 /**
@@ -545,8 +549,8 @@ export interface FileEntry {
     path: string;
     type: 'file' | 'folder';
     size: number;
-    extension: string;
-    modified: string;
+    extension: string | null;
+    modified: string | null;
 }
 
 /** A quick-access link (Desktop, Documents, Downloads, etc.). */
@@ -605,6 +609,8 @@ export interface Schedule {
     run_count: number;
     error_count: number;
     session_id: string | null;
+    /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
+    schedule_config: string | null;
 }
 
 /** A single execution result for a scheduled task. */

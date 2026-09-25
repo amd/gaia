@@ -32,6 +32,7 @@ function status(overrides: Partial<SystemStatus> = {}): SystemStatus {
         lemonade_url: 'http://localhost:8000',
         expected_model_loaded: true,
         download_progress: null,
+        active_profile: 'chat',
         ...overrides,
     };
 }
