@@ -813,6 +813,16 @@ class ChatAgent(
             query, self._tools_registry, skill_tools=skill_tools
         )
 
+    def _admit_skill_tools(self, names: List[str]) -> None:
+        """Admit a just-loaded skill's tools into the loader (no-op when inactive).
+
+        Keeps the loader's loaded set and ``_active_tool_filter`` in step, so the
+        next turn's selection still carries them and calling one doesn't register
+        as an escape hatch.
+        """
+        if self.tool_loader is not None:
+            self.tool_loader.admit_tools(names, self._tools_registry)
+
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Record tool-use recency for the loader's LRU (no-op when inactive)."""
         if self.tool_loader is not None:

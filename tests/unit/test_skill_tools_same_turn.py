@@ -81,6 +81,75 @@ def test_no_tool_subset_stays_no_tool_subset(agent, manager):
     assert agent._active_tool_filter is None
 
 
+class TestTheOfferSurvivesTheTurnItWasMadeIn:
+    """The loader owns the turn's tool set, so it has to learn about the skill.
+
+    Widening ``_active_tool_filter`` alone lasts exactly one turn: the next
+    ``_refresh_active_tool_filter`` rebuilds the subset from the loader's own
+    loaded set, which never heard about the skill. The skill body still says
+    "use the shell tool" while the shell tool is gone — the same bug, one turn
+    later.
+    """
+
+    @pytest.fixture
+    def dyn_agent(self):
+        agent = build_doc_agent_skeleton(
+            profile="doc", deterministic=True, dynamic_tools=True
+        )
+        assert agent.tool_loader is not None
+        assert "run_shell_command" in agent._tools_registry
+        return agent
+
+    def test_the_next_turn_still_offers_the_skills_tool(self, dyn_agent, manager):
+        dyn_agent._refresh_active_tool_filter("do a thing")
+        assert "run_shell_command" not in (dyn_agent._active_tool_filter or [])
+
+        dyn_agent.load_skill("needs-shell", manager=manager)
+        assert "run_shell_command" in _offered(dyn_agent)
+
+        # Turn 2: the loader recomputes the subset from its own loaded set.
+        dyn_agent._refresh_active_tool_filter("now the next step")
+
+        assert "run_shell_command" in _offered(dyn_agent)
+
+    def test_the_tool_is_admitted_to_the_loader_not_just_the_filter(
+        self, dyn_agent, manager
+    ):
+        dyn_agent._refresh_active_tool_filter("do a thing")
+
+        dyn_agent.load_skill("needs-shell", manager=manager)
+
+        assert "run_shell_command" in dyn_agent.tool_loader._loaded
+
+    def test_running_the_skills_tool_is_not_an_escape_hatch(self, dyn_agent, manager):
+        """The intended happy path must not inflate the tau-tuning signal."""
+        dyn_agent._refresh_active_tool_filter("do a thing")
+        dyn_agent.load_skill("needs-shell", manager=manager)
+        before = dyn_agent.tool_loader._escape_hatch_count
+
+        dyn_agent._on_tool_invoked("run_shell_command")
+
+        assert dyn_agent.tool_loader._escape_hatch_count == before
+
+    def test_a_tool_this_agent_lacks_is_still_not_invented(self, dyn_agent, tmp_path):
+        root = tmp_path / "ghost"
+        write_skill_dir(
+            root,
+            "needs-ghost",
+            SKILL.replace("needs-shell", "needs-ghost").replace(
+                "run_shell_command\n---", "no_such_tool\n---"
+            ),
+        )
+        dyn_agent._refresh_active_tool_filter("do a thing")
+
+        dyn_agent.load_skill(
+            "needs-ghost", manager=isolated_manager(tmp_path, agent_skill_dirs=[root])
+        )
+
+        assert "no_such_tool" not in (dyn_agent._active_tool_filter or [])
+        assert "no_such_tool" not in dyn_agent.tool_loader._loaded
+
+
 def test_a_required_tool_this_agent_lacks_is_not_invented(agent, tmp_path):
     root = tmp_path / "other"
     write_skill_dir(

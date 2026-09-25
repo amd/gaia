@@ -502,6 +502,64 @@ class ToolLoader:
         )
         return sorted(self._loaded)
 
+    def admit_tools(self, names: Sequence[str], registry: Dict[str, dict]) -> List[str]:
+        """Admit exact *names* into the loaded set (the SKILL tier, mid-turn).
+
+        The loaded-skill counterpart to :meth:`load_bundle`: a skill's recipe
+        names exact tools, not a bundle, and a namespaced skill tool belongs to
+        no bundle at all, so ``load_bundle`` would raise ``KeyError`` on it.
+        Cap-aware exactly like :meth:`select`'s SKILL tier — under the cap via
+        :meth:`_admit`, at the cap by LRU-evicting a tool that is neither CORE
+        nor being admitted right now, else skipping.
+
+        Names absent from *registry* are dropped rather than raised, mirroring
+        the SKILL tier: a skill may name a tool this agent does not have, and
+        the loader must not invent capability.
+
+        Args:
+            names: Exact tool names from the skill's recipe.
+            registry: The live tool registry (same object passed to
+                :meth:`select`).
+
+        Returns:
+            The sorted loaded set after admission.
+        """
+        sel = _Selection()
+        admitted_this_turn: set[str] = set()
+        for name in names:
+            if name in self._loaded or name not in registry:
+                continue
+            sel.skill.append(name)
+            if len(self._loaded) < self._max_tools:
+                self._admit(name, sel)
+                admitted_this_turn.add(name)
+                continue
+            victim = self._pick_eviction_victim(admitted_this_turn)
+            if victim is None:
+                sel.skipped_at_cap.append(name)
+                continue
+            del self._loaded[victim]
+            sel.evicted.append(victim)
+            self._admit(name, sel)
+            admitted_this_turn.add(name)
+
+        if sel.skill:
+            logger.info(
+                "TOOL_LOADER %s",
+                json.dumps(
+                    {
+                        "turn": self._turn,
+                        "event": "admit_skill_tools",
+                        "skill": sorted(sel.skill),
+                        "admitted": sorted(sel.admitted),
+                        "evicted": sorted(sel.evicted),
+                        "skipped_at_cap": sorted(sel.skipped_at_cap),
+                        "loaded": sorted(self._loaded),
+                    }
+                ),
+            )
+        return sorted(self._loaded)
+
     # ── internals ────────────────────────────────────────────────────────
 
     def _resolve_bundle_members(self, bundle: str) -> tuple["FrozenSet[str]", str]:
