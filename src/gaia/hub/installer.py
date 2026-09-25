@@ -949,7 +949,14 @@ def register_installed_sidecars(registry: Any) -> None:
         if agent_id not in installed:
             continue
         registry.register_sidecar(
-            agent_id, spec.display_name, spec.required_connections
+            agent_id,
+            spec.display_name,
+            spec.required_connections,
+            description=spec.description,
+            conversation_starters=list(spec.conversation_starters),
+            category=spec.category,
+            tags=list(spec.tags),
+            icon=spec.icon,
         )
 
 

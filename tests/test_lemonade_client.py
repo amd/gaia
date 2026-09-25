@@ -917,29 +917,6 @@ class TestLemonadeClientMock(unittest.TestCase):
             self.client.unload_model(embed_model, ignore_if_not_loaded=True)
 
     @responses.activate
-    def test_set_params(self):
-        """Test setting basic generation parameters."""
-        # Mock response
-        params_response = {
-            "status": "success",
-            "message": "Generation parameters set successfully",
-            "params": {
-                "temperature": 0.8,
-                "top_p": 0.9,
-                "top_k": 40,
-                "min_length": 0,
-                "max_length": 2048,
-                "do_sample": True,
-            },
-        }
-        responses.add(
-            responses.POST, f"{API_BASE}/params", json=params_response, status=200
-        )
-
-        result = self.client.set_params(temperature=0.8, top_p=0.9, top_k=40)
-        self.assertEqual(result, params_response)
-
-    @responses.activate
     def test_get_stats(self):
         """Test retrieving performance statistics."""
         # Mock response
@@ -2516,6 +2493,7 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         # Collect the streamed chunks
         content = ""
         chunk_count = 0
+        usage = None
         print("Starting streaming chat completion test...")
 
         try:
@@ -2530,6 +2508,16 @@ class TestLemonadeClientIntegration(unittest.TestCase):
 
                 # Check chunk structure
                 self.assertIn("choices", chunk)
+
+                # The token accounting arrives in a final chunk that carries no
+                # choices — that is the OpenAI streaming shape when usage is
+                # requested, and the only place a streamed turn reports its
+                # tokens at all. Indexing choices[0] unconditionally crashes on
+                # it, which is how this was found.
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
+                if not chunk["choices"]:
+                    continue
 
                 # Extract and accumulate content
                 delta = chunk["choices"][0].get("delta", {})
@@ -2546,6 +2534,16 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             self.assertIn("1", content, "Response should include '1'")
             self.assertIn("2", content, "Response should include '2'")
             self.assertIn("3", content, "Response should include '3'")
+
+            # A streamed turn has to report its tokens. Without this the cost
+            # and tokens/sec readouts have nothing to sum, and the gap is
+            # invisible locally because /stats answers instead — only a real
+            # server proves it, which is why this assertion lives here.
+            self.assertIsNotNone(
+                usage, "streamed turn reported no usage — stream_options lost?"
+            )
+            self.assertGreater(usage.get("prompt_tokens", 0), 0)
+            self.assertGreater(usage.get("completion_tokens", 0), 0)
             print("✅ Streaming chat completion test passed")
 
         except LemonadeClientError as e:
@@ -2618,19 +2616,6 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             error_str = str(e)
             print(f"❌ Error during hybrid NPU validation: {error_str}")
             self.fail(f"Hybrid NPU validation failed: {error_str}")
-
-    @pytest.mark.skip(reason="Parameter setting API is still in development")
-    def test_integration_set_params(self):
-        """Integration test for setting generation parameters."""
-        # Set parameters
-        response = self.client.set_params(temperature=0.8, top_p=0.95, top_k=50)
-
-        # Verify response
-        self.assertIn("params", response)
-        params = response["params"]
-        self.assertEqual(params.get("temperature"), 0.8)
-        self.assertEqual(params.get("top_p"), 0.95)
-        self.assertEqual(params.get("top_k"), 50)
 
     def test_integration_get_stats(self):
         """Integration test for getting performance stats."""
@@ -2895,8 +2880,6 @@ class TestLemonadeClientIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     # Use pytest to run tests - either all tests or a specific test pattern
-    import pytest
-
     print("\n====================================================")
     print("========== RUNNING LEMONADE CLIENT TESTS ===========")
     print("====================================================")

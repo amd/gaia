@@ -4,6 +4,13 @@ description: "Foundational base class for all GAIA agents with reasoning loop, t
 icon: "robot"
 ---
 
+<Warning>
+The direct OpenAI and LiteLLM provider adapters have been removed. Any
+`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
+raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
+</Warning>
+
+
 <Note>
 🔧 **You are viewing:** API Specification - Complete technical reference for the Agent class
 
@@ -117,7 +124,7 @@ def __init__(
 
     Args:
         use_claude: Use Claude API instead of local LLM
-        use_chatgpt: Use ChatGPT/OpenAI API instead of local LLM
+        use_chatgpt: Removed; True raises migration guidance
         claude_model: Model to use when use_claude=True
         base_url: Local LLM server URL (default: from LEMONADE_BASE_URL or http://localhost:13305/api/v1)
         model_id: Model ID for local LLM (default: None — resolves to DEFAULT_MODEL_NAME, currently Gemma-4-E4B-it-GGUF)
@@ -132,7 +139,7 @@ def __init__(
         debug: Enable debug logging (default: False)
         output_handler: Custom output handler (default: creates AgentConsole or SilentConsole)
         max_plan_iterations: Max plan-execute-replan cycles (default: 3, 0=unlimited)
-        max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4)
+        max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
         min_context_size: Minimum context size required for this agent (default: 32768)
         skip_lemonade: Skip Lemonade server initialization (default: False). Use when connecting to a different OpenAI-compatible backend.
         device: Runtime device selector ('cpu', 'gpu', 'npu') validated against detected

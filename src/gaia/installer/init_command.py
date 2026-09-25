@@ -15,6 +15,7 @@ Main entry point for `gaia init` command that:
 import importlib.util
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 from gaia.ui.build import WebuiBuildStatus
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = logging.getLogger(__name__)
 
@@ -1026,13 +1027,8 @@ class InitCommand:
 
     @staticmethod
     def _parse_version(version: str) -> Optional[tuple]:
-        """Parse version string into tuple."""
-        try:
-            ver = version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
-            return None
+        """Parse version string into tuple. See :func:`gaia.version.parse_version`."""
+        return parse_version(version)
 
     def _check_version_compatibility(self, info: LemonadeInfo) -> bool:
         """
@@ -1236,9 +1232,7 @@ class InitCommand:
             if RICH_AVAILABLE and self.console:
                 self.console.print(f"   [bold]{label}[/bold]")
             else:
-                import re as _re
-
-                plain_label = _re.sub(r"\[.*?\]", "", label)
+                plain_label = re.sub(r"\[.*?\]", "", label)
                 self._print(f"   {plain_label}")
 
             # macOS installs run headless via `installer -pkg`; only the MSI pops a window.
@@ -1636,17 +1630,18 @@ class InitCommand:
             return True
 
         try:
-            from gaia.llm.lemonade_client import LemonadeClient
+            from gaia.llm.lemonade_client import LemonadeClient, split_backend_spec
 
             client = LemonadeClient(verbose=self.verbose)
 
+            spec_recipe, backend_key = split_backend_spec(backend_spec)
+
             # Check if already installed via recipe status
-            recipe_name = profile_config.get("recipe", backend_spec.split(":")[0])
+            recipe_name = profile_config.get("recipe", spec_recipe)
             recipe_status = client.get_recipe_status(recipe_name)
 
             if recipe_status:
                 backends = recipe_status.get("backends", {})
-                backend_key = backend_spec.split(":")[-1] if ":" in backend_spec else ""
                 backend_info = backends.get(backend_key, {})
 
                 if backend_info.get("state") == "installed":
@@ -1819,6 +1814,11 @@ class InitCommand:
             )
 
             if is_llm and min_ctx:
+                from gaia.llm.lemonade_client import resolve_ctx_size
+
+                min_ctx = resolve_ctx_size(
+                    model=model_id, device="npu" if self.profile == "npu" else "gpu"
+                )
                 # Force unload if already loaded to ensure recipe_options are saved
                 if client.check_model_loaded(model_id):
                     client.unload_model()
@@ -1959,7 +1959,12 @@ class InitCommand:
             profile_config = INIT_PROFILES[self.profile]
             min_ctx = profile_config.get("min_context_size")
             if min_ctx and not self.skip_chat_model:
+                from gaia.llm.lemonade_client import resolve_ctx_size
                 from gaia.llm.lemonade_manager import LemonadeManager
+
+                min_ctx = resolve_ctx_size(
+                    device="npu" if self.profile == "npu" else "gpu"
+                )
 
                 self.console.print()
                 self.console.print(

@@ -196,7 +196,10 @@ class TestInstalledSidecarAgentsMerge:
             data = client.get("/api/agents").json()
 
         assert [a["id"] for a in data["agents"]] == ["email"]
-        assert data["agents"][0]["name"] == "Email"  # spec.display_name
+        # Same name the catalog path gives above: the spec's display_name now
+        # matches gaia-agent.yaml, so the card no longer depends on whether a
+        # catalog happened to be cached (#4161).
+        assert data["agents"][0]["name"] == "Email Triage"  # spec.display_name
 
     def test_registry_entry_wins_over_sidecar(self):
         """A registered (wheel) email is not duplicated by the sidecar merge.

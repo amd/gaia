@@ -1,0 +1,16 @@
+[
+  {
+    "reason": "subscribed",
+    "repository": {"full_name": "acme-labs/widgetworks"},
+    "subject": {"title": "Crash on startup when config file is missing", "type": "Issue"},
+    "unread": true,
+    "updated_at": "2026-08-20T15:02:00Z"
+  },
+  {
+    "reason": "review_requested",
+    "repository": {"full_name": "acme-labs/widgetworks"},
+    "subject": {"title": "Fix flaky sync test in CI", "type": "PullRequest"},
+    "unread": true,
+    "updated_at": "2026-08-20T10:45:00Z"
+  }
+]
