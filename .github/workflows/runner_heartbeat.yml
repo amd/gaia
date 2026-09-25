@@ -27,9 +27,25 @@ jobs:
         # 2026-03-30 onward, so it made every run `cancelled` for ~4 months. Its
         # removal here is a bookkeeping fix, NOT a decision that the box is gone —
         # re-add the line if it is brought back.
+        #
+        # An entry is a LABEL, not necessarily a machine. `devlab-dispatch` is the
+        # shared ephemeral pool that carries the PR workload; its runner names end
+        # in a per-session suffix (ephemeral-devlab-...-106625606856) that changes,
+        # so a name-pinned entry would target a runner that no longer exists and
+        # sit queued until the 24h cancel — the sjlab-stx-2 failure, self-inflicted.
+        # The label is unique to that pool, so it proves at least one member is
+        # alive. It does NOT give per-machine coverage: one box can be dead for
+        # months and the other three will answer every beat. The per-host labels
+        # (host-x2-la01-*) would close that, but pinning to one re-creates exactly
+        # the queue-forever bug above the moment a host is retired.
+        #
+        # Keep this list dash-lines only — monitor_selfhosted_runners.yml parses it
+        # with awk and stops at the first line that is not `- `, so a comment
+        # between entries silently truncates the monitored set.
         runner:
           - sjlab-stx-1
           - sjlab-stx-3
+          - devlab-dispatch
       fail-fast: false  # Continue even if one runner fails
     runs-on: [self-hosted, "${{ matrix.runner }}"]
     # Caps execution only — GitHub starts this clock when a runner picks the job
@@ -37,43 +53,55 @@ jobs:
     # 24h queue limit; the `watchdog` job below is what makes that loud.
     timeout-minutes: 10
     steps:
+      # Named for the matrix entry, not `runner.name`: the monitor workflow looks
+      # up `heartbeat-<matrix entry>`, and for an ephemeral pool those differ —
+      # uploading under the session-suffixed name would leave the monitor finding
+      # nothing and paging every week on a healthy pool. Identical for the
+      # name-pinned entries, where the two are the same string. Which machine
+      # actually answered goes in the file body, since that is the part a label
+      # entry would otherwise lose.
       - name: Create heartbeat file (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssK"
-          $runner = "${{ runner.name }}"
-          "$timestamp" | Out-File -FilePath "heartbeat-$runner.txt" -Encoding utf8
+          "$timestamp ${{ runner.name }}" | Out-File -FilePath "heartbeat-${{ matrix.runner }}.txt" -Encoding utf8
 
       - name: Create heartbeat file (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           timestamp=$(date -Iseconds)
-          runner="${{ runner.name }}"
-          echo "$timestamp" > "heartbeat-$runner.txt"
+          echo "$timestamp ${{ runner.name }}" > "heartbeat-${{ matrix.runner }}.txt"
 
       - name: Upload heartbeat artifact
         uses: actions/upload-artifact@v7
         with:
-          name: heartbeat-${{ runner.name }}
-          path: heartbeat-${{ runner.name }}.txt
+          name: heartbeat-${{ matrix.runner }}
+          path: heartbeat-${{ matrix.runner }}.txt
           retention-days: 14
 
-  # Turns "no runner ever picked the job up" into a named failure in ~10 minutes
-  # instead of an unexplained `cancelled` 24h later. Runs on GitHub-hosted infra
-  # so it reports even when every self-hosted runner is down.
+  # Turns "no runner ever picked the job up" into a named failure well before the
+  # unexplained `cancelled` 24h later. Runs on GitHub-hosted infra so it reports
+  # even when every self-hosted runner is down.
   watchdog:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 100
     steps:
       - name: Fail if any heartbeat job never got a runner
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # A healthy runner claims its job in seconds; 10 min is pure headroom.
-          deadline=$(( $(date -u +%s) + 600 ))
+          # An idle name-pinned box claims its job in seconds, but the
+          # devlab-dispatch pool runs near capacity and queues legitimately —
+          # jobs on it were measured waiting 44 min at a weekday peak. The
+          # deadline is set by that slowest honest case, not by the idle boxes,
+          # because crying outage at 10 min on a busy pool is worse than no
+          # alert. Reporting later costs nothing here: this runs weekly, and the
+          # deadline exists only to name the failure before GitHub's 24h cancel
+          # buries it.
+          deadline=$(( $(date -u +%s) + 5400 ))
           stuck=""
 
           while :; do
@@ -92,18 +120,23 @@ jobs:
               break
             fi
             echo "still queued: $stuck"
-            sleep 30
+            sleep 60
           done
 
           if [ -n "$stuck" ]; then
             echo "::error::No self-hosted runner picked up: $stuck"
             echo "" >&2
-            echo "These heartbeat jobs sat queued for 10 minutes, which means no ONLINE" >&2
-            echo "runner carries the requested label. Left alone they stay queued until" >&2
-            echo "GitHub cancels them at the 24h limit, which is why this shows up as a" >&2
-            echo "bare \`cancelled\` run with no explanation." >&2
+            echo "These heartbeat jobs sat queued for 90 minutes, which usually means no" >&2
+            echo "ONLINE runner carries the requested label. Left alone they stay queued" >&2
+            echo "until GitHub cancels them at the 24h limit, which is why this shows up" >&2
+            echo "as a bare \`cancelled\` run with no explanation." >&2
             echo "" >&2
-            echo "This is a runner-box outage, not a workflow bug. To fix:" >&2
+            echo "For a shared-pool entry (devlab-dispatch) rule out saturation first:" >&2
+            echo "every member being busy for 90 minutes looks identical to an outage" >&2
+            echo "here. If the pool is merely oversubscribed, this is a capacity signal," >&2
+            echo "not a dead box." >&2
+            echo "" >&2
+            echo "Otherwise this is a runner-box outage, not a workflow bug. To fix:" >&2
             echo "  1. Confirm the outage — Settings > Actions > Runners, or:" >&2
             echo "       gh api repos/${{ github.repository }}/actions/runners \\" >&2
             echo "         --jq '.runners[] | \"\\(.name) \\(.status)\"'" >&2

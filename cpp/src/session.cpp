@@ -124,21 +124,40 @@ Message SessionStore::messageFromJson(const json& j) {
     }
     m.role = roleFromString(j["role"].get<std::string>());
 
-    // Content — accept string only (parts/array content not round-tripped)
+    // Preserve the wire representation, including ordered vision content parts.
     if (j.contains("content")) {
         if (j["content"].is_string()) {
             m.content = j["content"].get<std::string>();
         } else if (j["content"].is_array()) {
-            // Flatten array content to text-only for simplicity
-            std::string combined;
+            m.parts.emplace();
+            m.parts->reserve(j["content"].size());
             for (const auto& part : j["content"]) {
-                if (part.is_object() && part.value("type", "") == "text" &&
-                    part.contains("text") && part["text"].is_string()) {
-                    if (!combined.empty()) combined += "\n";
-                    combined += part["text"].get<std::string>();
+                if (!part.is_object() || !part.contains("type") ||
+                    !part["type"].is_string()) {
+                    throw std::runtime_error("Message content part missing 'type' string field");
+                }
+                const auto type = part["type"].get<std::string>();
+                if (type == "text") {
+                    if (!part.contains("text") || !part["text"].is_string()) {
+                        throw std::runtime_error("Text content part missing 'text' string field");
+                    }
+                    const auto text = part["text"].get<std::string>();
+                    m.parts->push_back(ContentPart::makeText(text));
+                    // Keep the existing text view for callers that read content.
+                    if (!m.content.empty()) m.content += "\n";
+                    m.content += text;
+                } else if (type == "image_url") {
+                    if (!part.contains("image_url") || !part["image_url"].is_object() ||
+                        !part["image_url"].contains("url") ||
+                        !part["image_url"]["url"].is_string()) {
+                        throw std::runtime_error("Image content part missing 'image_url.url' string field");
+                    }
+                    m.parts->push_back(ContentPart::makeImageUrl(
+                        part["image_url"]["url"].get<std::string>()));
+                } else {
+                    throw std::runtime_error("Unsupported message content part type: " + type);
                 }
             }
-            m.content = combined;
         }
     }
 

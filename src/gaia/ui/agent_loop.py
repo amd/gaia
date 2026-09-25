@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.ui.run_manager import run_manager
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,9 @@ _OBSERVE_MODEL = os.environ.get("GAIA_AUTO_OBSERVE_MODEL", "Qwen3-4B-GGUF")
 
 # Timeout (seconds) for a single autonomous tick execution
 _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
+
+# How long a user-message followup waits for the triggering turn to release the session
+_FOLLOWUP_GRACE_SECONDS = 10.0
 
 # Default agent mode. "autonomous" (observe → infer goals → execute, spec
 # docs/spec/autonomous-agent-mode.md §6.7) is not implemented yet (#2005), so
@@ -156,8 +160,10 @@ class AgentLoop:
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
                     pass
+                except Exception as exc:
+                    logger.warning("Agent loop task failed during shutdown: %s", exc)
         logger.info("AgentLoop stopped")
 
     # ── Public API (called from routers/chat) ────────────────────────────────
@@ -172,8 +178,8 @@ class AgentLoop:
             self._trigger_queue.put_nowait(
                 AgentTrigger("user_message_followup", session_id)
             )
-        except asyncio.QueueFull:
-            pass  # queue is unbounded; this should never happen
+        except asyncio.QueueFull as exc:
+            logger.error("Agent trigger queue unexpectedly full: %s", exc)
 
     # ── Internal: trigger consumer ────────────────────────────────────────────
 
@@ -210,8 +216,8 @@ class AgentLoop:
             if not self._stop_event.is_set():
                 try:
                     self._trigger_queue.put_nowait(AgentTrigger("idle_tick", None))
-                except Exception:
-                    pass
+                except asyncio.QueueFull as exc:
+                    logger.error("Agent tick queue unexpectedly full: %s", exc)
 
     # ── Internal: trigger processing ─────────────────────────────────────────
 
@@ -299,11 +305,40 @@ class AgentLoop:
         if not goals:
             return LoopDirective("idle")
 
-        # ── Execute tick ─────────────────────────────────────────────────
-        # Only a tick that reaches here spends hourly budget.
-        self._calls_this_hour += 1
-        directive = await self._execute_tick(session_id, session, goals)
-        return directive
+        # ── Session gate ─────────────────────────────────────────────────
+        # The tick drives the session's cached agent, so it takes the same
+        # session lock + chat semaphore a user turn does. Poll, never queue on
+        # the lock: a queued waiter would stall the user's next message.
+        session_lock = self._app_state.session_locks.setdefault(
+            session_id, asyncio.Lock()
+        )
+        chat_semaphore = self._app_state.chat_semaphore
+        # A followup is enqueued while its own turn still holds the session.
+        grace = (
+            _FOLLOWUP_GRACE_SECONDS if trigger.source == "user_message_followup" else 0
+        )
+        deadline = time.monotonic() + grace
+        while (
+            session_lock.locked()
+            or run_manager.is_running(session_id)
+            or chat_semaphore.locked()
+        ):
+            if time.monotonic() >= deadline:
+                logger.debug(
+                    "AgentLoop: session %s busy — skipping tick", session_id[:8]
+                )
+                return LoopDirective("idle", reason="session busy")
+            await asyncio.sleep(0.1)
+        # No await between the busy check and these acquires, so neither blocks.
+        await session_lock.acquire()
+        await chat_semaphore.acquire()
+        try:
+            # Only a tick that reaches here spends hourly budget.
+            self._calls_this_hour += 1
+            return await self._execute_tick(session_id, session, goals)
+        finally:
+            chat_semaphore.release()
+            session_lock.release()
 
     async def _get_active_session(self) -> Optional[str]:
         """Return the most recently updated non-private session, or None."""
@@ -364,19 +399,6 @@ class AgentLoop:
 
         def _run_agent() -> None:
             try:
-                # Run the heavier sync work inline (we're in a thread).
-                # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
-                try:
-                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
-                except ImportError as e:
-                    raise RuntimeError(
-                        agent_not_installed_message(
-                            "The chat agent is not installed",
-                            "gaia-agent-chat",
-                            next_step="Then restart the server.",
-                        )
-                    ) from e
-
                 import gaia.ui._chat_helpers as _helpers
 
                 # Reuse cached agent if available; build fresh if not.
@@ -384,17 +406,43 @@ class AgentLoop:
                 # yielding SSE events (nothing is consuming them in background mode).
                 # The SSEOutputHandler still captures events for the activity log.
 
+                # Resolve type + model as the chat path does; a mismatched
+                # lookup evicts the user's cached agent.
+                agent_type = session.get("agent_type") or "chat"
+                registry = _helpers._agent_registry
                 model_id = session.get("model")
                 custom_model = db.get_setting("custom_model")
                 if custom_model:
                     model_id = custom_model
+                elif registry and agent_type != "chat":
+                    model_id = registry.resolve_model(agent_type) or model_id
+                model_id, device_ctx = _helpers._apply_device_model(
+                    session, agent_type, model_id, custom_model, registry
+                )
 
-                cached_agent = _helpers._get_cached_agent(session_id, model_id)
+                cached_agent = _helpers._get_cached_agent(
+                    session_id, model_id, agent_type
+                )
                 if cached_agent is not None:
                     agent = cached_agent
+                    # A prior streaming turn leaves its fired cancel event behind.
+                    agent._cancel_event = None
                     agent.console = sse_handler
                     agent._register_tools()
                 else:
+                    # Run the heavier sync work inline (we're in a thread).
+                    # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+                    try:
+                        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                    except ImportError as e:
+                        raise RuntimeError(
+                            agent_not_installed_message(
+                                "The chat agent is not installed",
+                                "gaia-agent-chat",
+                                next_step="Then restart the server.",
+                            )
+                        ) from e
+
                     rag_paths, lib_paths = _helpers._resolve_rag_paths(
                         db, session.get("document_ids", [])
                     )
@@ -410,6 +458,8 @@ class AgentLoop:
                         streaming=False,
                         silent_mode=True,
                         debug=False,
+                        device=session.get("device"),
+                        min_context_size=device_ctx,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
                         dynamic_tools=dynamic_tools,
@@ -418,24 +468,14 @@ class AgentLoop:
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
 
-                # Inject conversation history (capped for autonomous ticks)
-                messages = db.get_recent_messages(session_id, limit=10)
-                history_pairs = _helpers._build_history_pairs(messages)
-                agent.conversation_history = []
-                for u, a in history_pairs[-3:]:  # 3-pair rolling window for ticks
-                    agent.conversation_history.append(
-                        {"role": "user", "content": u[:1000]}
-                    )
-                    agent.conversation_history.append(
-                        {"role": "assistant", "content": a[:1000]}
-                    )
+                _helpers._restore_model_history(agent, db, session_id, tick_prompt)
 
                 # Set incognito flag (respect private/memory settings)
                 if hasattr(agent, "_incognito"):
                     memory_off = db.get_setting("memory_enabled", "false") == "false"
                     agent._incognito = memory_off
 
-                agent.process_query(tick_prompt)
+                result_holder["result"] = agent.process_query(tick_prompt)
 
             except Exception as exc:
                 logger.error("AgentLoop tick execution failed: %s", exc, exc_info=True)
@@ -461,9 +501,10 @@ class AgentLoop:
                 session_id=session_id,
                 role="autonomous",
                 content=tick_prompt,
+                model_messages=result_holder.get("result", {}).get("model_messages"),
             )
-        except Exception:
-            pass  # Non-fatal — activity logging is best-effort
+        except Exception as exc:
+            logger.error("Could not persist autonomous turn: %s", exc, exc_info=True)
 
         # Read directive from SSE handler (set by set_loop_state tool)
         if sse_handler.loop_state_directive:

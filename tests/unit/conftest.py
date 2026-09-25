@@ -58,6 +58,47 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
+_DAEMON_SPAWN_MESSAGE = (
+    "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
+    "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
+    "gaia.ui.email_sidecar.daemon_client.acquire_handle or "
+    "gaia.daemon.client.start_or_attach. Real daemons belong in tests/integration/."
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_daemon_home(tmp_path_factory):
+    """Point the daemon's ``instance.json`` / ledger dir at a per-session tmp dir.
+
+    Against the real ``~/.gaia/host``, ``_block_network`` makes the developer's
+    live daemon fail its probe, so ``start_or_attach`` tree-kills it as hung.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GAIA_DAEMON_HOME", str(tmp_path_factory.mktemp("daemon-home")))
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _forbid_daemon_spawn(monkeypatch):
+    """Fail any unit test that reaches the real ``python -m gaia.daemon`` spawn.
+
+    Callers wrap spawn errors (the email router turns them into a 503), so the
+    attempt is also recorded and failed at teardown where nothing can swallow it.
+    """
+    from gaia.daemon import client
+
+    attempts = []
+
+    def _refuse(*_args, **_kwargs):
+        attempts.append(True)
+        raise RuntimeError(_DAEMON_SPAWN_MESSAGE)
+
+    monkeypatch.setattr(client, "_spawn_and_wait", _refuse)
+    yield
+    if attempts:
+        pytest.fail(_DAEMON_SPAWN_MESSAGE, pytrace=False)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "allow_network: opt out of the _block_network socket guard"
@@ -83,6 +124,19 @@ def _block_network(request, monkeypatch):
     def _blocked_connect_ex(*args, **kwargs):
         return 1
 
+    # Windows has no native socketpair(); asyncio builds its event-loop self
+    # pipe over a loopback TCP connect, which the guard would otherwise block.
+    real_connect = socket.socket.connect
+    real_socketpair = socket.socketpair
+
+    def _unguarded_socketpair(*args, **kwargs):
+        socket.socket.connect = real_connect
+        try:
+            return real_socketpair(*args, **kwargs)
+        finally:
+            socket.socket.connect = _blocked_connect
+
+    monkeypatch.setattr(socket, "socketpair", _unguarded_socketpair)
     monkeypatch.setattr(socket.socket, "connect", _blocked_connect)
     monkeypatch.setattr(socket.socket, "connect_ex", _blocked_connect_ex)
     yield
