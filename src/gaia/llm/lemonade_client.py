@@ -317,8 +317,6 @@ def is_llm_model_entry(model: Dict[str, Any]) -> bool:
 # bundled ChatAgent system prompt alone runs >7000 tokens before any user
 # message; running below this silently truncates prompts and yields empty
 # responses from llama.cpp. Consumed by:
-#   - ``_ensure_model_loaded`` (this module), as the fallback ctx_size when
-#     loading a model that isn't in the ``MODELS`` registry.
 #   - ``gaia.llm.lemonade_manager`` — re-exported as ``DEFAULT_CONTEXT_SIZE``.
 #   - ``gaia.ui.routers.system`` — drives the "context window too small"
 #     banner and the pre-flight load ctx requirement.
@@ -345,6 +343,55 @@ def profile_ctx_size(device: Optional[str]) -> int:
     fails the load outright.
     """
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
+
+def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) -> int:
+    """Resolve the requested local window for startup and subsequent reloads.
+
+    An explicit client ``ctx_size_override`` remains a separate exact pin.
+    GPU/CPU profile sizes are defaults, not model capability ceilings.
+    """
+    if device is None:
+        from gaia.config import GaiaConfig
+
+        device = GaiaConfig.load().default_device
+    if model and model.lower().endswith("-flm"):
+        device = "npu"
+    ctx = profile_ctx_size(device)
+    if model:
+        for requirement in MODELS.values():
+            if _model_ids_match(requirement.model_id, model):
+                ctx = requirement.min_ctx_size
+                break
+
+    override = os.environ.get("GAIA_CTX_SIZE", "").strip()
+    if override:
+        try:
+            ctx = int(override)
+        except ValueError as exc:
+            raise LemonadeClientError(
+                "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
+            ) from exc
+        if ctx <= 0:
+            raise LemonadeClientError(
+                "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
+            )
+
+    if (device or "").strip().lower() == "npu" and ctx > NPU_CTX_SIZE:
+        get_logger(__name__).warning(
+            "Requested context %d exceeds the NPU ceiling; using %d tokens.",
+            ctx,
+            NPU_CTX_SIZE,
+        )
+        ctx = NPU_CTX_SIZE
+    if override and ctx < DEFAULT_CONTEXT_SIZE:
+        get_logger(__name__).warning(
+            "GAIA_CTX_SIZE=%d is below the recommended %d tokens; agent prompts "
+            "may be truncated. Increase or unset GAIA_CTX_SIZE if replies are empty.",
+            ctx,
+            DEFAULT_CONTEXT_SIZE,
+        )
+    return ctx
 
 
 def active_profile_ctx_size() -> int:
@@ -1717,8 +1764,10 @@ class LemonadeClient:
             if hasattr(self, "_log_file") and self._log_file:
                 try:
                     self._log_file.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    get_logger(__name__).warning(
+                        "Could not close Lemonade log file: %s", exc
+                    )
                 self._log_file = None
 
             # Ensure port is free
@@ -3840,21 +3889,7 @@ class LemonadeClient:
             self._last_model_load_seconds = time.monotonic() - _pin_load_start
             return
 
-        # Determine the ctx_size GAIA expects for this model. This lookup
-        # happens BEFORE the "already loaded" check so we can detect a
-        # model that's loaded at the wrong window and reload it — pre-#1030
-        # follow-up the function returned early on any match, leaving
-        # Gemma 4 loaded at Lemonade's default 32K even after GAIA
-        # bumped MODELS[…].min_ctx_size to 65536. That's why
-        # ``summarize_document`` kept hitting LemonadeContextOverflowError
-        # at 35K-token sections.
-        expected_ctx: Optional[int] = None
-        for _key, _req in MODELS.items():
-            if _model_ids_match(_req.model_id, model):
-                expected_ctx = _req.min_ctx_size
-                break
-        if expected_ctx is None:
-            expected_ctx = DEFAULT_CONTEXT_SIZE
+        expected_ctx = resolve_ctx_size(model=model)
 
         # Best-effort pre-flight probe (#2053): skip a redundant /load when the
         # model is already loaded at a sufficient ctx. A probe failure here is
@@ -3977,18 +4012,6 @@ class LemonadeClient:
             else:
                 print(f"🔄 Loading model: {model}...")
 
-        # ``expected_ctx`` was resolved above (either from MODELS or the
-        # GAIA-wide default). Pass it explicitly to /load so Lemonade
-        # doesn't fall back to its own 4096-token default and silently
-        # truncate GAIA's larger prompts.
-        if expected_ctx == DEFAULT_CONTEXT_SIZE and not any(
-            _model_ids_match(req.model_id, model) for req in MODELS.values()
-        ):
-            self.log.info(
-                f"Model '{model}' not in MODELS registry; "
-                f"defaulting to ctx_size={expected_ctx} to fit agent prompts"
-            )
-
         # The actual load failure is the one this method must NOT swallow
         # (#2053): a model that is present but fails to load (bad recipe, OOM,
         # corrupt checkpoint) previously got hidden by a blanket
@@ -4023,8 +4046,10 @@ class LemonadeClient:
                 )
             else:
                 print(f"✅ Model loaded: {model}")
-        except Exception:
-            pass  # Ignore print errors
+        except Exception as exc:
+            get_logger(__name__).warning(
+                "Could not display model load confirmation: %s", exc
+            )
 
     def _consume_pull_stream(self, model_name: str, phase: str) -> bool:
         """Drive ``pull_model_stream`` to completion, logging progress at INFO.
@@ -4888,8 +4913,8 @@ class LemonadeClient:
                 # Also check for partial match
                 if model_id.lower() in model.get("id", "").lower():
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).warning("Could not query loaded models: %s", exc)
         return False
 
     def _check_lemonade_installed(self) -> bool:
@@ -4909,8 +4934,10 @@ class LemonadeClient:
             health = self.health_check()
             if health.get("status") == "ok":
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).debug(
+                "Lemonade health check failed before installation check: %s", exc
+            )
 
         # Health check failed - determine if we can auto-start
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
@@ -5160,8 +5187,10 @@ class LemonadeClient:
                         status = self.get_status()
                         status.running = True
                         return status
-                except Exception:
-                    pass
+                except Exception as exc:
+                    get_logger(__name__).debug(
+                        "Lemonade startup health probe failed: %s", exc
+                    )
                 time.sleep(2)
 
             if not quiet:

@@ -145,7 +145,10 @@ Edit a Python file by replacing content with validation.
 - `old_content` (str, required): Content to find and replace. Must match
   exactly one location — see [Edit semantics](#edit-semantics).
 - `new_content` (str, required): New content to insert
-- `backup` (bool, optional): Create backup (default: True)
+- `backup` (bool, optional): Create backup (default: True). The copy goes to
+  `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
+  beside the file. The backups directory is owner-only, and the five newest
+  backups of each file are kept.
 - `dry_run` (bool, optional): Only simulate (default: False)
 
 **Returns:**
@@ -307,7 +310,10 @@ module level, and the tool never renames or moves a definition.
   is an error naming the qualified alternatives, not a guess.
 - `new_implementation` (str, required): The complete new definition, including
   any decorator it should keep and the indentation of the definition it replaces
-- `backup` (bool, optional): Create backup (default: True)
+- `backup` (bool, optional): Create backup (default: True). The copy goes to
+  `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
+  beside the file. The backups directory is owner-only, and the five newest
+  backups of each file are kept.
 
 **Returns:**
 ```python
