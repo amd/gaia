@@ -9,26 +9,31 @@ The architectural inspiration for this layout is Lemonade Server's installer tre
 ```
 installer/
 ├── README.md      ← you are here
-├── scripts/       build + bootstrap scripts (PowerShell, bash, batch)
+├── scripts/       build + bootstrap scripts (PowerShell, sh, batch)
 ├── version/       version normalization and bump helpers (Node)
-├── nsis/          Windows NSIS installer scripts + assets
-├── debian/        Debian packaging metadata               (populated in Phase C/E)
-├── macos/         DMG layout, entitlements, Info.plist    (populated in Phase E)
-└── linux/         .desktop file + AppImage assets         (populated in Phase E)
+├── nsis/          Windows NSIS installer scripts + assets (Agent UI)
+├── debian/        Debian packaging metadata for the Agent UI (postinst, prerm, postrm)
+├── macos/         DMG layout, entitlements, icon for the Agent UI
+├── linux/         .desktop file + icon for the Agent UI
+└── tui/           native double-click installers for the terminal hub — see
+                   [`tui/README.md`](tui/README.md) (NSIS, macOS .pkg, DEB/RPM)
 ```
 
 `nsis/` holds two separate installers, plus the icon and sidebar they share:
 `gaia.nsi` is the standalone terminal installer (the shareable `.exe`), and
 `installer.nsh` is an include the electron-builder Agent UI installer pulls in.
 
-`debian/`, `macos/` and `linux/` are still placeholders kept via `.gitkeep`. They will be populated when Phases C and E of the [desktop installer plan](../docs/plans/desktop-installer.mdx) land.
+`debian/`, `macos/` and `linux/` back the Agent UI's Electron packaging.
+`tui/` is a separate, self-contained set of installers for the Go terminal
+hub (`gaia-tui`) and the flagship agent sidecar it bundles — see its own
+README for the per-platform builders and payload-staging steps.
 
 ## `scripts/` — bootstrap and build scripts
 
 | Script | Purpose |
 |---|---|
 | `install.ps1` | One-shot Windows installer pulled via `irm https://amd-gaia.ai/install.ps1 \| iex` |
-| `install.sh` | One-shot Linux/macOS installer pulled via `curl ... \| bash` |
+| `install.sh` | One-shot Linux/macOS installer pulled via `curl -fsSL https://amd-gaia.ai/install.sh \| sh`. POSIX `sh` only — the one-liner pipes into `sh`, which is `dash` on Debian/Ubuntu, so bash-only syntax breaks there. |
 | `build-gaia-installer.ps1` | Package the two GAIA binaries into a single shareable Windows `.exe` |
 | `build-ui-installer.ps1` / `.sh` | Build the Electron Agent UI installer locally |
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
@@ -83,12 +88,4 @@ node installer/version/bump-ui-version.mjs
 node installer/version/release-ui.mjs
 ```
 
-## Future content (tracked in the plan)
-
-- **`debian/`** — DEB control files and postinstall/postrm hooks (Phase C)
-- **`macos/`** — `Info.plist`, `entitlements.mac.plist`, `dmg-background.png`, `icon.icns` (Phase E)
-- **`linux/`** — `gaia-ui.desktop`, `gaia-ui.png` for AppImage/DEB (Phase E)
-- **`scripts/after-pack.cjs`** — `electron-builder` `afterPack` hook for locale pruning (Phase C)
-- **`version/normalize.mjs`** — 4-part → 3-part SemVer normalizer (Phase C)
-
-See [`docs/plans/desktop-installer.mdx`](../docs/plans/desktop-installer.mdx) §8 for the full file-by-file layout.
+See [`docs/plans/desktop-installer.mdx`](../docs/plans/desktop-installer.mdx) §8 for the full file-by-file layout and phase history.
