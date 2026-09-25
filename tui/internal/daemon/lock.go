@@ -9,10 +9,11 @@ import (
 // lockPoll is the retry interval while waiting for the start lock.
 const lockPoll = 100 * time.Millisecond
 
-// fileLock holds the exclusive daemon-start lock. Only ONE process may be in the
-// "decide + spawn" critical section at a time, so two concurrent StartOrAttach
-// callers yield exactly one daemon (the loser attaches to the winner's
-// instance.json).
+// fileLock holds the exclusive daemon-start lock, shared with the Python
+// launcher (src/gaia/daemon/lock.py). The TUI holds it only to decide whether a
+// start is due; `gaia daemon start` takes it again around the spawn, so two
+// concurrent StartOrAttach callers still yield exactly one daemon (the second
+// launcher re-checks under the lock and attaches to the first one's instance).
 //
 // An OS advisory lock is used rather than an O_EXCL create-lock because the OS
 // releases it when the holder dies — a create-lock would strand a stale lock
