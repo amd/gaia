@@ -1,0 +1,53 @@
+{
+  "_source": "The TUI <-> flagship agent stdio protocol. Hand-maintained; both sides are checked against it: hub/agents/gaia/python/tests/test_stdio_wire_contract.py (Python, gaia_agent/stdio.py) and tui/internal/client/wire_contract_test.go + tui/internal/event/wire_contract_test.go (Go). Rename a key or verb on one side and the other side's test fails. Human-readable spec: docs/spec/agent-ui-query-sse-contract.md section 10.",
+  "stdin": {
+    "query_key": "gaia_query",
+    "control_key": "gaia_control",
+    "control_verbs": {
+      "tool_decision": { "fields": ["decision", "confirm_id"], "sent_by_tui": true },
+      "bypass": { "fields": ["enabled"], "sent_by_tui": true },
+      "cancel": { "fields": [], "sent_by_tui": true },
+      "clear_history": { "fields": [], "sent_by_tui": false }
+    },
+    "decisions": ["allow", "deny", "always"],
+    "query_sentinels": {
+      "clear_conversation": { "query": "\u0000gaia:clear_conversation\u0000", "ack_answer": "conversation_cleared" },
+      "memory_dump": { "query": "\u0000gaia:memory_dump\u0000" }
+    }
+  },
+  "events": {
+    "status": {
+      "fields": ["message"],
+      "stdio_extension": [
+        "model_id",
+        "model_display",
+        "model_backend",
+        "model_remote",
+        "lemonade_reachable",
+        "lemonade_version",
+        "lemonade_base_url"
+      ]
+    },
+    "token": { "fields": ["delta"] },
+    "tool_call": { "fields": ["tool", "args", "narration"] },
+    "tool_result": { "fields": ["tool", "render", "data", "preview"], "not_sent_over_stdio": ["render"] },
+    "needs_confirmation": {
+      "fields": ["run_id", "action", "summary", "confirm_id", "always_scope", "confirm_url"],
+      "not_sent_over_stdio": ["confirm_url"]
+    },
+    "needs_input": {
+      "fields": [
+        "run_id",
+        "request_id",
+        "question",
+        "options",
+        "allow_free_text",
+        "sensitive",
+        "respond_url",
+        "timeout_seconds"
+      ]
+    },
+    "final": { "fields": ["answer", "usage"] },
+    "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] }
+  }
+}
