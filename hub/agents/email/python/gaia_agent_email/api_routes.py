@@ -381,17 +381,20 @@ def _resolve_email_model_id(base_url: Optional[str] = None) -> str:
 def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     """Parse a dotted version string into a comparable int tuple.
 
-    Same semantics as the version parsing ``gaia init`` uses (strip a leading
-    ``v``, take the first three dotted parts as ints). Kept LOCAL rather than
-    imported because the frozen sidecar does not bundle ``gaia.installer`` —
-    importing it at runtime would ``ModuleNotFound``
-    in the binary this endpoint exists to serve. Returns ``None`` when the
-    string is missing or unparseable.
+    Same semantics as :func:`gaia.version.parse_version`: strip a leading ``v``,
+    take the first three dotted parts as ints, keeping each part's leading digits
+    so CalVer development builds (``2026.39.0~12.abc1234``) still compare.
+    Returns ``None`` when the string is missing or unparseable.
+
+    Vendored rather than imported: ``gaia.version`` does an
+    ``importlib.metadata`` lookup at import time that a frozen binary cannot
+    satisfy. ``tests/unit/test_lemonade_calver.py`` holds it equivalent.
     """
     if not version:
         return None
     try:
-        return tuple(int(p) for p in version.lstrip("v").split(".")[:3])
+        parts = str(version).strip().lstrip("v").split(".")[:3]
+        return tuple(int(re.match(r"\s*(\d+)", p).group(1)) for p in parts)
     except (ValueError, IndexError, AttributeError):
         return None
 
