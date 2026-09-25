@@ -14,9 +14,11 @@ Two rules make the targeting safe, and both live here:
 
 1. Only a socket in the LISTENING state whose *local* port is exactly the
    requested one counts. Columns are parsed; nothing is substring-matched.
-2. The owning process must be GAIA's or Lemonade's. Same identity check
-   :meth:`gaia.llm.lemonade_embedded.LemonadeEmbedded._daemon_alive` makes
-   before trusting a recorded pid.
+2. The owning process must run under a name GAIA's own servers use. Same
+   identity check :meth:`gaia.llm.lemonade_embedded.LemonadeEmbedded._daemon_alive`
+   makes before trusting a recorded pid. It is interpreter-level, so it
+   excludes a native service but not another Python or Node server —
+   :func:`is_gaia_process` is the stricter check for callers that need one.
 """
 
 from __future__ import annotations
@@ -29,20 +31,26 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
-# Process image names a "stop what's on this port" command may terminate.
-# The check is interpreter-level, not process-level: GAIA's own servers run as
-# `python.exe` / `node`, so any Python or Node listener passes while a native
-# service (svchost, nginx, sshd, a database) does not.
-KILLABLE_PROCESS_NAMES = (
+# Names that positively identify a GAIA or Lemonade process.
+GAIA_PROCESS_NAMES = (
     "gaia",
     "lemonade",
     "lemond",
     "llama-server",
+)
+# Interpreters GAIA's own servers run as. Matching one is NOT an identification:
+# a user's own Python or Node server on the port matches these too.
+INTERPRETER_PROCESS_NAMES = (
     "python",
     "pythonw",
     "node",
     "electron",
 )
+# Process image names a "stop what's on this port" command may terminate.
+# The check is interpreter-level, not process-level, so a native service
+# (svchost, nginx, sshd, a database) is excluded but another Python server
+# is not.
+KILLABLE_PROCESS_NAMES = GAIA_PROCESS_NAMES + INTERPRETER_PROCESS_NAMES
 
 
 def address_port(address: str) -> str:
@@ -140,8 +148,24 @@ def process_image_name(pid: int) -> str:
         return ""
 
 
+def is_gaia_process(name: str) -> bool:
+    """Whether a process image name identifies GAIA or Lemonade itself.
+
+    Stricter than :func:`is_killable_process`: a bare ``python`` or ``node``
+    listener is not an identification, because the user's own server matches
+    those names too.
+    """
+    lowered = (name or "").lower()
+    return any(allowed in lowered for allowed in GAIA_PROCESS_NAMES)
+
+
 def is_killable_process(name: str) -> bool:
-    """Whether a process image name belongs to GAIA or Lemonade."""
+    """Whether a "stop what's on this port" command may terminate this process.
+
+    Interpreter-level, not process-level. A native service is excluded, but a
+    ``python``/``node`` listener passes whether or not it is GAIA's — use
+    :func:`is_gaia_process` when the caller needs a positive identification.
+    """
     lowered = (name or "").lower()
     return any(allowed in lowered for allowed in KILLABLE_PROCESS_NAMES)
 
