@@ -81,7 +81,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     cloud_model_provider,
 )
-from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
@@ -613,7 +613,7 @@ def _apply_local_switch(agent: Any, target: str) -> str:
             + (
                 ", ".join(available)
                 if available
-                else "(none — run `lemonade-server pull <model>` first)"
+                else f"(none — {describe_client_hint('pull', target).instruction.rstrip('.')})"
             )
             + "."
         )

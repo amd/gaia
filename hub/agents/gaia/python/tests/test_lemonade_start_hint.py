@@ -10,6 +10,8 @@ their machine does not have.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 pytest.importorskip("gaia_agent")
@@ -22,7 +24,9 @@ from gaia_agent import stdio as stdio_mod  # noqa: E402
 from gaia.llm.lemonade_launcher import StartHint  # noqa: E402
 
 _REMOVED_CLI = "lemonade-server serve"
+_REMOVED_PULL_CLI = "lemonade-server pull"
 _INSTRUCTION = "Run: lemond --port 13305"
+_PULL_INSTRUCTION = "Run: lemonade pull Gemma-4-E4B-it-GGUF"
 
 
 @pytest.fixture
@@ -85,6 +89,53 @@ def test_server_run_error_names_the_host_start_instruction(start_hint):
     assert _REMOVED_CLI not in detail
     assert f"{_INSTRUCTION}. See {server_mod._DOCS_URL}" in detail
     assert "Connection refused" in detail
+
+
+def _fake_agent():
+    """Enough agent for `_apply_local_switch` to reach its unknown-model raise."""
+    config = SimpleNamespace(base_url="http://127.0.0.1:13305/api/v1")
+    return SimpleNamespace(chat=SimpleNamespace(config=config))
+
+
+def test_unknown_model_error_names_the_host_pull_instruction(monkeypatch):
+    """`/model <unknown>` with nothing downloaded resolves the client, too.
+
+    The "no models" branch used to hard-code ``lemonade-server pull``, the
+    other half of the CLI Lemonade 10.7/10.8 removed.
+    """
+    monkeypatch.setattr(stdio_mod, "_lemonade_models", lambda base_url: [])
+    monkeypatch.setattr(
+        stdio_mod,
+        "describe_client_hint",
+        lambda action, model: StartHint(
+            instruction=f"Run: lemonade {action} {model}.",
+            command=f"lemonade {action} {model}",
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stdio_mod._apply_local_switch(_fake_agent(), "Gemma-4-E4B-it-GGUF")
+
+    detail = str(exc.value)
+    assert _REMOVED_PULL_CLI not in detail
+    assert f"(none — {_PULL_INSTRUCTION})." in detail
+
+
+def test_unknown_model_error_is_resolved_not_hard_coded(monkeypatch):
+    """Unpatched, the branch still goes through the resolver.
+
+    A legacy host legitimately resolves to ``lemonade-server pull``, so the
+    tell is not that command's absence — it is that the model name is
+    substituted. The hard-coded copy emitted a literal ``<model>``.
+    """
+    monkeypatch.setattr(stdio_mod, "_lemonade_models", lambda base_url: [])
+
+    with pytest.raises(RuntimeError) as exc:
+        stdio_mod._apply_local_switch(_fake_agent(), "Gemma-4-E4B-it-GGUF")
+
+    detail = str(exc.value)
+    assert "<model>" not in detail
+    assert detail.count("Gemma-4-E4B-it-GGUF") == 2  # the ask, and the fix
 
 
 def test_instruction_is_punctuated_once(monkeypatch):
