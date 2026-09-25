@@ -42,8 +42,8 @@
 # consistent grep. To bump every model: grep this file for `--model` (7 hits), plus
 # AUDIT_MODEL / WALKTHROUGH_*_MODEL in the audit + walkthrough workflows, the canary's
 # own default, and the pinned CLI model in claude-run.yml's evidence stage.
-# EVAL_MODEL in test_eval_agent_gemma_consolidation.yml is in that list but is NOT a
-# like-for-like bump: it is the JUDGE that scores eval runs, so moving it changes what a
+# EVAL_MODEL in eval_flagship.yml is in that list but is NOT a like-for-like
+# bump: it is the JUDGE that scores eval runs, so moving it changes what a
 # score means and the committed baselines (scored by Sonnet 4.6) stop being comparable.
 # It moved to Opus 5 here without regenerated baselines, so `--compare` now warns on the
 # judge mismatch instead of silently reading the shift as a regression — see
@@ -64,8 +64,8 @@
 # than they did under the old API key. A monthly canary (claude-auth-canary.yml) detects
 # token expiry, which would otherwise dark every Claude job silently.
 # NOTE: this covers only the claude-code-action jobs here. The Claude judge in the
-# scenario eval (test_eval_agent_gemma_consolidation.yml) still needs
-# `ANTHROPIC_API_KEY` as a fallback — OAuth tokens are scoped to Claude Code and
+# scenario eval (eval_flagship.yml) still needs `ANTHROPIC_API_KEY` as a
+# fallback — OAuth tokens are scoped to Claude Code and
 # cannot authenticate direct Anthropic API/SDK calls.
 #
 # Mode: All jobs run in AUTOMATION mode (via `prompt` input), not tag mode.

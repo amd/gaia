@@ -1,0 +1,61 @@
+{
+  "$comment": [
+    "Which scenario categories each CI lane runs. ONE source of truth: the eval",
+    "workflow builds its matrix from this file, and tests/unit/eval/test_ci_lanes.py",
+    "asserts every category directory under eval/scenarios/ is either claimed by a",
+    "lane or listed in `excluded` with a reason. A category that belongs to no lane",
+    "would otherwise just stop being measured, silently, with every lane still green.",
+    "",
+    "NEVER put `vision` or `web_system` in a lane. They read the runner's clipboard,",
+    "windows and screen into a scorecard that uploads as a PUBLIC artifact. They are",
+    "in `excluded` below and the workflow re-checks that at runtime.",
+    "",
+    "Lanes run on separate ephemeral machines, each with its own Lemonade, so they",
+    "are parallel without violating CLAUDE.md's serial rule (which is per-backend).",
+    "Rebalance by editing this file; the test keeps coverage honest."
+  ],
+  "lanes": [
+    {
+      "lane": "tools",
+      "categories": ["tool_selection", "mcp_reliability", "error_recovery"]
+    },
+    {
+      "lane": "retrieval",
+      "categories": ["rag_quality", "real_world", "captured"]
+    },
+    {
+      "lane": "memory",
+      "categories": ["memory"]
+    },
+    {
+      "lane": "conversation",
+      "categories": ["context_retention", "personality", "adversarial"]
+    },
+    {
+      "lane": "gaia-tasks",
+      "categories": ["gaia_skills_tasks", "gaia_tool_selection"]
+    },
+    {
+      "lane": "gaia-signal",
+      "categories": ["gaia_memory", "gaia_honesty", "gaia_web"]
+    },
+    {
+      "lane": "gaia-code",
+      "categories": ["gaia_core", "gaia_files", "gaia_code"]
+    },
+    {
+      "lane": "gaia-tools",
+      "categories": [
+        "gaia_rag",
+        "gaia_skills_lifecycle",
+        "gaia_shell",
+        "gaia_data",
+        "gaia_skills_capture"
+      ]
+    }
+  ],
+  "excluded": {
+    "vision": "Reads the runner's screen into a scorecard that uploads as a public artifact.",
+    "web_system": "Reads the runner's clipboard, windows and screen into a scorecard that uploads as a public artifact."
+  }
+}

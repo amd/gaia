@@ -40,7 +40,7 @@ REAL_WEEKLY_LIMIT_REJECTION = (
 )
 
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
-EVAL_WORKFLOW = WORKFLOWS / "test_eval_agent_gemma_consolidation.yml"
+EVAL_WORKFLOW = WORKFLOWS / "eval_flagship.yml"
 CANARY_WORKFLOW = WORKFLOWS / "claude-auth-canary.yml"
 
 

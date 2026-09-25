@@ -1,20 +1,46 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Agent eval gate for the Gemma-4-E4B consolidation.
+# The flagship agent's eval gate: every scenario category, scored against the
+# agent users actually meet.
 #
-# Every agent is moving onto `Gemma-4-E4B-it-GGUF`; agents that previously left
-# `model_id` unset fell back to `Qwen3.5-35B-A3B-GGUF`. That is an LLM-affecting
-# change, and CLAUDE.md requires `gaia eval agent` runs against the committed
-# baselines before such a change lands. Unit tests cover code paths, not model
-# behavior — this job is the only thing that catches a behavioral regression.
+# Unit tests cover code paths, not model behavior, so this is the only thing that
+# catches a behavioral regression — which is why CLAUDE.md requires a run against
+# the paths below before an LLM-affecting change lands.
 #
 # Runner-only by construction. `gaia eval agent` drives the real GAIA UI backend
 # against a real Lemonade Server on AMD hardware; a GitHub-hosted runner has
-# neither. Hence the self-hosted pool, and the same shared `lemonade-eval`
-# concurrency group as email_scorecard_refresh.yml / test_email_agent_eval.yml so
-# this queues BEHIND them instead of race-evicting their loaded model (CLAUDE.md:
-# at most one `gaia eval agent` process at a time, period).
+# neither. Hence the self-hosted pool.
+#
+# WHY THIS RUNS IN PARALLEL LANES
+# ------------------------------------------------------------------------------
+# 82 scenarios on one serial Lemonade slot is ~5.8 h expected and 9.2 h at the
+# observed ceiling, holding a shared single-slot pool for the whole time. That is
+# not a PR gate. The categories are split into independent LANES (eval/ci_lanes.json)
+# that run at the same time on the EPHEMERAL `devlab-dispatch` pool, where each job
+# gets its own machine and therefore its own Lemonade.
+#
+# This does not weaken CLAUDE.md's "run evals serially" rule. That rule exists
+# because two `gaia eval agent` processes sharing ONE Lemonade race-evict each
+# other's model out of the single slot — it is per-BACKEND, not global. Separate
+# machines have separate backends and cannot collide. Within a lane the categories
+# still run serially in one foreach, which is the part the rule actually governs.
+#
+# Do NOT give the lanes a shared concurrency group. `lemonade-eval` serialises by
+# group NAME regardless of which machine a job lands on, so a single shared group
+# would silently put the lanes back in a queue and undo all of this. Each lane
+# holds its own group; see the job-level `concurrency:` blocks below.
+#
+# WHAT GETS UPLOADED, AND WHY THAT CHANGED
+# ------------------------------------------------------------------------------
+# `devlab-dispatch` DESTROYS the machine when the job ends. Anything not uploaded
+# is gone permanently — so the old "transcripts and logs stay on the runner,
+# reproduce locally" posture would mean every failure this eval finds is
+# unreadable. Each lane uploads its scorecards, per-scenario traces (transcript,
+# judge reasoning, root cause), and the backend + Lemonade logs, on `always()`,
+# because a crashed lane is exactly when they matter. Everything bound for the
+# artifact is secret-scanned first: the artifact is PUBLIC and, unlike the job
+# log, not masked by GitHub.
 #
 # THIS POOL IS WINDOWS. Every inline `run:` step below is PowerShell, and Python
 # setup goes through ./.github/actions/setup-venv (uv, Windows-aware) — the
@@ -143,9 +169,17 @@
 # with instructions instead of running a judge-less eval that would produce a
 # meaningless scorecard.
 
-name: Agent Eval — Gemma-4-E4B consolidation
+name: Agent Eval — flagship
 
 on:
+  # Nightly against the default branch. PR runs are path-filtered, so environment
+  # drift — a Lemonade version bump, a model re-quantisation, a driver or runner
+  # image change — alters nothing in the repo and therefore triggers nothing. The
+  # nightly is the only thing that catches that class, and it files an issue when
+  # a lane does not pass so the regression lands in the tracker instead of dying
+  # as an annotation nobody reads.
+  schedule:
+    - cron: '17 8 * * *'
   workflow_dispatch:
     inputs:
       enforce:
@@ -184,14 +218,17 @@ on:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      # The consolidation itself.
+      # The surfaces that move flagship behavior.
       - 'src/gaia/agents/base/agent.py'
       - 'src/gaia/agents/registry.py'
       - 'src/gaia/llm/lemonade_client.py'
       - 'src/gaia/llm/factory.py'
       - 'hub/agents/*/python/**'
       - 'tests/fixtures/eval_baselines/**'
-      - '.github/workflows/test_eval_agent_gemma_consolidation.yml'
+      - '.github/workflows/eval_flagship.yml'
+      # The lane map decides which categories run at all, so an edit that orphans
+      # one has to be able to trigger the gate that would notice.
+      - 'eval/ci_lanes.json'
       # In-core agents that carry their own model_id, plus the prompt/tool
       # surfaces CLAUDE.md lists as eval-requiring — a tool docstring edit
       # changes the JSON tool schema and is exactly what tool_selection scores.
@@ -203,14 +240,16 @@ on:
       - 'src/gaia/eval/flagship_tasks.py'
       - 'eval/tasks/**'
 
-concurrency:
-  # Share the single Lemonade backend slot with the other self-hosted evals so two
-  # runs never race-evict each other's model (CLAUDE.md: evals run serially).
-  group: lemonade-eval
-  cancel-in-progress: false
-  # `queue: single` (the default) keeps only ONE pending run and cancels the
-  # previously-queued one — a phantom red X on the PR. `max` queues them FIFO.
-  queue: max
+# NO WORKFLOW-LEVEL CONCURRENCY, deliberately. A group declared here is held by
+# the whole run, so every lane would wait on the one the first lane took and the
+# split would buy nothing — the same shape as the phantom-job bug this repo has
+# already paid for once (a caller holding the group its callee needed; see
+# test_email_agent_eval.yml). Each lane declares its own group at job level,
+# where `matrix.lane` is in scope.
+#
+# `lemonade-eval` is gone from this file on purpose and must not come back. It
+# serialises by NAME across machines, which is right for the persistent pool the
+# email eval still runs on and wrong for the ephemeral one these lanes use.
 
 permissions:
   contents: read
@@ -224,14 +263,16 @@ env:
   # rather than reinterpreted. This path is where the first flagship baseline
   # goes, captured by a real run on this hardware.
   BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
-  # Every category the eval measures, in ONE place: four steps consume this and
-  # three of them had already drifted to different hardcoded lists.
+  # THE LANE MAP IS THE SOURCE OF TRUTH: eval/ci_lanes.json. The `lanes` job below
+  # reads it, checks it, and hands each lane its own category list as
+  # EVAL_CATEGORIES at job level — which is what the four steps downstream already
+  # consume, so they keep working unchanged and still read one list, not four.
   #
-  # NEVER ADD web_system OR vision: they read this runner's clipboard, windows
-  # and screen into a scorecard that uploads as a public artifact.
-  EVAL_CATEGORIES: >-
-    adversarial captured context_retention error_recovery mcp_reliability
-    memory personality rag_quality real_world tool_selection
+  # NEVER ADD web_system OR vision TO A LANE: they read the runner's clipboard,
+  # windows and screen into a scorecard that uploads as a PUBLIC artifact. They
+  # are in the map's `excluded` block, the `lanes` job re-checks it at runtime,
+  # and tests/unit/eval/test_ci_lanes.py fails the build if either appears.
+  EVAL_LANES_FILE: eval/ci_lanes.json
   # What still means something when the RAG embedder will not load (#3016).
   # Not the whole list above: for the categories left out, only a real run says
   # whether they stay interpretable without retrieval, and guessing would put
@@ -240,15 +281,16 @@ env:
   # is not what would stop them scoring, and leaving it out meant a degraded
   # run measured 2 scenarios out of 82.
   # Scenarios inside a listed category may still fail on their own - 3 of
-  # tool_selection's 5 do index documents, and the cross-session memory
-  # scenarios want the store GAIA_MEMORY_DISABLED turns off. That is the
-  # posture on purpose: run the category, let the scenario fail, do not call
-  # the whole category unmeasurable.
-  # BEFORE WIDENING FURTHER, do the timeout arithmetic. These two categories
-  # sum to a 579 min worst case against the eval step's 600 min cap (every one
-  # of the 30 scenarios hitting its own _compute_effective_timeout ceiling;
-  # the expected cost is ~131 min). There is no room for a third category
-  # without raising the cap.
+  # tool_selection's 5 do index documents. That is the posture on purpose: run
+  # the category, let the scenario fail, do not call the whole category
+  # unmeasurable.
+  # BEFORE WIDENING FURTHER, do the timeout arithmetic - but do it per LANE,
+  # not across this list. A degraded run only ever cuts a lane down to its own
+  # categories (the intersection in the run step), so the budget that can
+  # overflow is the lane's, and it is always smaller than the full run the job
+  # ceiling above was sized for. Widening is therefore free on time and costs
+  # only interpretability; what it must not do is add a category no run has
+  # shown to be measurable without retrieval.
   # Everything in EVAL_CATEGORIES but not here is reported NOT MEASURED.
   EVAL_CATEGORIES_NO_EMBEDDER: memory tool_selection
   BACKEND_URL: http://127.0.0.1:4200
@@ -295,12 +337,133 @@ env:
   # Connector resolution blocks on the OS keyring in a headless runner, which
   # hangs agent construction. Same guard as test_email_agent_eval.yml.
   PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-  # Persistent runner — keep long-term memory out of the loop so state cannot
-  # bleed between the three chained categories or across runs. Established
-  # convention (test_chat_agent.yml, test_email_agent_eval.yml).
+  # The default for every lane; the memory lane overrides all three at job level.
+  # Long-term memory surviving between categories makes a later category's score
+  # depend on an earlier one's run order (convention: test_chat_agent.yml,
+  # test_email_agent_eval.yml). The memory lane is the one place that state IS
+  # the subject, and it can opt back in safely because it is alone on a machine
+  # that is destroyed when the job ends.
+  #
+  # Do NOT flip these here. Workflow scope would re-enable memory for every lane
+  # and bring back the cross-category bleed this is guarding.
   GAIA_MEMORY_DISABLED: '1'
+  # Both gate the memory surface the scenarios verify through, and both are read
+  # from the environment only: nothing in src/gaia/ sets them, despite two code
+  # comments that say the eval runner does. ADMIN gates memory_clear / the admin
+  # REST endpoints the runner's own memory preflight probes; MCP_ALWAYS gates
+  # whether the Agent UI MCP server registers the memory READ tools at all.
+  # Without the second, a scenario's "VERIFY VIA MCP: memory_recall(...)" has no
+  # tool to call and the judge is left scoring the reply text alone.
+  GAIA_MEMORY_ADMIN: '0'
+  GAIA_MEMORY_MCP_ALWAYS: '0'
 
 jobs:
+  # Build the lane matrix, and refuse to build a bad one. Runs on a hosted runner
+  # in seconds, BEFORE anything reaches the scarce AMD pool, so a broken lane map
+  # costs nothing to discover.
+  #
+  # It checks the two things a matrix cannot check itself. A category that belongs
+  # to no lane is never passed to `--category`, so it simply stops being measured
+  # while every lane still reports green — an absence that looks exactly like a
+  # pass. And `vision` / `web_system` in a lane would publish the runner's screen
+  # and clipboard in a world-readable artifact. Both fail here rather than being
+  # left to a comment nobody re-reads.
+  lanes:
+    name: Resolve the lane matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate the lane map and emit the matrix
+        id: build
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib, sys
+
+          # Never measurable in CI: both read the runner's screen/clipboard into a
+          # scorecard that uploads as a public artifact.
+          SCREEN_READING = {"vision", "web_system"}
+
+          lanes_file = pathlib.Path(os.environ["EVAL_LANES_FILE"])
+          try:
+              doc = json.loads(lanes_file.read_text(encoding="utf-8"))
+          except (OSError, ValueError) as exc:
+              sys.exit(
+                  f"::error::Could not read the lane map at {lanes_file}: {exc}. "
+                  "Nothing downstream knows which categories to run, so the eval "
+                  "would measure nothing and pass. Fix the JSON."
+              )
+
+          lanes = doc.get("lanes") or []
+          excluded = doc.get("excluded") or {}
+          if not lanes:
+              sys.exit(
+                  f"::error::{lanes_file} defines no lanes, so no scenario would "
+                  "run and this gate would go green having measured nothing."
+              )
+
+          claimed = {c for lane in lanes for c in lane["categories"]}
+          leaked = sorted(SCREEN_READING & claimed)
+          if leaked:
+              sys.exit(
+                  f"::error::{leaked} is assigned to a CI lane. These read this "
+                  "runner's clipboard, windows and screen, and every lane uploads "
+                  "its scorecard and traces as a PUBLIC artifact. Move them back "
+                  f"to `excluded` in {lanes_file}."
+              )
+
+          on_disk = {
+              p.name
+              for p in pathlib.Path("eval/scenarios").iterdir()
+              if p.is_dir() and any(p.glob("*.yaml"))
+          }
+          orphans = sorted(on_disk - claimed - set(excluded))
+          if orphans:
+              sys.exit(
+                  f"::error::No lane runs {orphans}, and {lanes_file} gives no "
+                  "reason. These scenarios would stop being measured with every "
+                  "lane still green. Add each to a lane's `categories`, or to "
+                  "`excluded` with why it cannot run in CI."
+              )
+
+          missing = sorted(claimed - on_disk)
+          if missing:
+              sys.exit(
+                  f"::error::{lanes_file} names {missing}, which has no directory "
+                  "under eval/scenarios/. `gaia eval agent --category` on it "
+                  "measures nothing and reports success."
+              )
+
+          # The memory lane is the only one whose scenarios call remember/recall
+          # and verify through memory_recall, so it is the only one that runs with
+          # the store live. Derived from the categories rather than stored as a
+          # second field, so moving `memory` between lanes cannot leave the flag
+          # pointing at the wrong one. Emitted as the literal env values rather
+          # than a boolean the job turns into one: a GitHub expression of the
+          # form "flag and '0' or '1'" reads '0' as FALSY and falls through to
+          # '1', quietly handing the memory lane the disabled value.
+          include = [
+              {
+                  "lane": lane["lane"],
+                  "categories": " ".join(lane["categories"]),
+                  "memory_disabled": "0" if "memory" in lane["categories"] else "1",
+                  "memory_admin": "1" if "memory" in lane["categories"] else "0",
+                  "memory_mcp": "1" if "memory" in lane["categories"] else "0",
+              }
+              for lane in lanes
+          ]
+          print(f"matrix={json.dumps({'include': include})}")
+          print(
+              f"Lanes: {', '.join(l['lane'] for l in lanes)} "
+              f"covering {len(claimed)} categories; "
+              f"excluded: {', '.join(sorted(excluded)) or 'none'}",
+              file=sys.stderr,
+          )
+          PY
+
   # The flagship GaiaAgent on outcome-scored tasks (`gaia eval tasks`, docs:
   # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
   # with separate environments: the agent runs with no credentials (it runs
@@ -311,15 +474,21 @@ jobs:
   # missed expectation fails this job. A model with no committed expectations
   # is reported, not failed, and a task the backend could not serve is "not
   # measured", never a regression. Memory is off here, as for the whole workflow.
-  # agent-eval waits for this job, so the one runner does them in a fixed order.
+  #
+  # The fifth lane in everything but the matrix. It stays its own job because its
+  # steps are a different shape - embedded Lemonade, `gaia eval tasks` - not
+  # because it is ordered against the others; it runs alongside them.
   flagship-tasks:
-    name: Flagship agent tasks vs expectations
+    name: Scenario eval - outcomes
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
       contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
-    runs-on: [self-hosted, Windows, strix-halo, lemonade-eval]
+    concurrency:
+      group: ${{ github.workflow }}-outcomes-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
         # Windows PowerShell 5.1 and pure-ASCII run bodies, for the reasons
@@ -401,8 +570,15 @@ jobs:
         if: always()
         run: gaia lemonade embedded stop
 
-      # The artifact is public and, unlike the job log, not secret-masked. The
-      # file list here must match the upload step's `path:` below.
+      - name: Keep the embedded Lemonade log
+        if: always()
+        run: |
+          $log = "$HOME\.gaia\lemonade\lemond.log"
+          if (Test-Path $log) { Copy-Item $log "$env:TASKS_OUT\lemond.log" -Force }
+
+      # Scans EVERY file that uploads, not a hand-kept subset, so the two lists
+      # cannot drift apart. The artifact is public and, unlike the job log, not
+      # secret-masked.
       - name: Refuse to upload a credential
         if: always()
         env:
@@ -410,46 +586,66 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           $ErrorActionPreference = "Stop"
-          $files = @(Get-ChildItem $env:TASKS_OUT -File -Include scorecard.json, proposed-expectations.json -Recurse -ErrorAction SilentlyContinue)
-          $leaked = @()
+          $files = @(Get-ChildItem $env:TASKS_OUT -File -Recurse -ErrorAction SilentlyContinue)
+          $secrets = @()
           foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
             $value = [Environment]::GetEnvironmentVariable($name)
-            if (-not $value) { continue }
-            foreach ($file in $files) {
-              if ((Test-Path -LiteralPath $file.FullName) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $value -Quiet)) {
-                $leaked += $file.FullName
-                Remove-Item -LiteralPath $file.FullName -Force
-              }
+            if ($value) { $secrets += $value }
+          }
+          $leaked = @()
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file.FullName)) { continue }
+            $hit = $false
+            foreach ($value in $secrets) {
+              if (Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $value -Quiet) { $hit = $true }
             }
+            if (-not $hit) { continue }
+            $leaked += $file.FullName
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            foreach ($value in $secrets) { $text = $text.Replace($value, "***REDACTED***") }
+            [System.IO.File]::WriteAllText($file.FullName, $text, (New-Object System.Text.UTF8Encoding($false)))
           }
           if ($leaked.Count -gt 0) {
-            Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the public artifact. They were deleted, not uploaded: $($leaked -join ', ')"
+            Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the PUBLIC artifact: $($leaked -join ', '). They were redacted in place before upload, but a secret reaching a result file at all means something is printing it - find that and fix it, then rotate the credential."
             exit 1
           }
           if ($files.Count -eq 0) {
-            Write-Host "::warning::No scorecard under $env:TASKS_OUT - nothing was scanned, and nothing will upload."
+            Write-Host "::warning::No files under $env:TASKS_OUT - nothing was scanned, and nothing will upload."
           } else {
             Write-Host "Scanned $($files.Count) file(s): no credential found."
           }
 
-      # Scores only: transcripts and diffs stay on the runner; reproduce locally.
-      # Must match the scan step's -Include list above.
-      - name: Upload the scorecard
+      # This machine is destroyed when the job ends, so the per-task transcripts
+      # and the Lemonade log go with it unless they leave here.
+      - name: Upload the outcomes results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: flagship-tasks
-          path: |
-            eval-out/tasks/scorecard.json
-            eval-out/tasks/proposed-expectations.json
+          name: eval-outcomes
+          path: eval-out/tasks
           if-no-files-found: warn
           retention-days: 14
 
   agent-eval:
-    name: Scenario eval - flagship agent, all categories
-    # After flagship-tasks whatever its result (`!cancelled()` below): the two
-    # jobs share one runner, so the order is fixed rather than incidental.
-    needs: flagship-tasks
+    name: Scenario eval - ${{ matrix.lane }}
+    needs: lanes
+    strategy:
+      # One lane's failure must not cancel the others. They measure different
+      # categories on different machines, and a lane that dies is exactly when
+      # the other lanes' scorecards are most worth having.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.lanes.outputs.matrix) }}
+    # Per LANE, not per workflow. CLAUDE.md's "run evals serially" rule is about
+    # one Lemonade backend race-evicting its own model slot; lanes get separate
+    # machines and therefore separate backends, so they are free to run at once.
+    # Within a lane, categories still run one at a time.
+    #
+    # Must stay keyed on matrix.lane. A group shared across lanes would make the
+    # second lane wait for the first and undo the split; a group shared with a
+    # CALLER would deadlock outright (the phantom-job bug).
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.lane }}-${{ github.ref }}
+      cancel-in-progress: false
     # Fork PRs and drafts never reach the lab pool. A fork PR would schedule
     # untrusted code onto a self-hosted runner and could not pass anyway
     # (ANTHROPIC_API_KEY is not exposed to fork PRs, so the judge preflight
@@ -465,29 +661,30 @@ jobs:
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))) &&
-      !cancelled()
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
     # `Windows` is load-bearing, not decoration: self-hosted pool labels here also
     # match a Linux box (xsj-aimlab-stxp-04), and every step below is PowerShell +
     # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not
     # found'. Same guard as test_email_agent_eval.yml.
     #
     # `strix-halo` pins the SoC, and that is a correctness requirement, not a
-    # preference: the `stx` pool spans Strix Point boxes as well (sjlab-stx-1,
+    # preference: the pool spans Strix Point boxes as well (sjlab-stx-1,
     # sjlab-stx-3), which do not have the 128 GB of unified memory this eval's
     # model needs, and scores from two different SoCs are not comparable to each
     # other or to the committed baselines. Do NOT widen this to `stx` — an
     # earlier revision of this comment suggested exactly that, which would have
     # let a scorecard be produced on whichever machine happened to be free.
     #
-    # `lemonade-eval` is kept alongside it to say WHICH Halo box owns the long
-    # eval slot. It is redundant while exactly one runner carries both, and that
-    # is the point: if the label is ever moved to a non-Halo box this job finds
-    # no runner and queues visibly, rather than quietly measuring the wrong
-    # hardware. Serialisation still comes from the concurrency group, not either
-    # label. Same `Windows` guard as the sibling evals: the pool also matches a
-    # Linux box (xsj-aimlab-stxp-04) and every step here is PowerShell.
-    runs-on: [self-hosted, Windows, strix-halo, lemonade-eval]
+    # `devlab-dispatch` is the ephemeral pool: every lane gets its own freshly
+    # provisioned machine, which is what lets the lanes run at once — separate
+    # machines means separate Lemonade backends, and the serial rule is about one
+    # backend's model slot. The machine is DESTROYED when the job ends, which is
+    # why the upload step at the bottom takes traces and logs and not just scores.
+    #
+    # `lemonade-eval` is deliberately NOT here. It is the lock label for the one
+    # persistent Halo box, and holding it would put every lane back in a single
+    # queue. The email and publish workflows still use it; this one must not.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
         # Pinned to Windows PowerShell 5.1, not left to the runner default (pwsh
@@ -504,50 +701,99 @@ jobs:
         # "Missing argument in parameter list" 30 lines away from itself.) YAML
         # comments and step `name:` values are fine; they never reach the file.
         shell: powershell
-    # BUDGET DERIVATION — measured on this runner, not guessed.
-    #
-    # Sized from the [TIMING] lines of 19 complete runs (2026-09-17 .. 09-21) plus
-    # the per-scenario [DONE] timings inside 8 of them, which is what makes this a
+    # BUDGET DERIVATION — measured on this pool, not guessed. Sized from the
+    # [TIMING] lines of 19 complete runs (2026-09-17 .. 09-21) plus the
+    # per-scenario [DONE] timings inside 8 of them, which is what makes this a
     # per-SCENARIO rate rather than a per-category one:
     #
-    #   17 scenarios, 3 categories      46.3 min min / 58.5 mean / 69.6 max
-    #   120 healthy scenarios sampled   4.23 min mean, 6.73 max, 2.30 min
-    #   per-category overhead           none measurable — summing a category's
-    #                                   scenarios reproduces its [TIMING] to 0.1 min
+    #   140 healthy scenarios sampled   4.05 min mean, 6.73 max, 2.00 min
+    #   per-category overhead           none measurable — a category's [TIMING]
+    #                                   minus the sum of its scenarios: 0.04 min
+    #                                   mean, 0.10 max across 33 category-runs
     #
-    # So a category costs exactly what its scenarios cost, and capacity planning is
-    # one multiplication. At 82 scenarios across 10 categories:
+    # A category therefore costs exactly what its scenarios cost, so the lane
+    # budget is one multiplication. WHY SCENARIO COUNT IS THE BALANCING UNIT:
+    # category means span only 3.86-4.52 min (tool_selection / rag_quality /
+    # context_retention, the three CI has ever run), while scenarios INSIDE one
+    # category span 2.00-6.73. Scenario identity explains about twice the
+    # variance that category does, so minutes-per-category would move these lane
+    # boundaries by minutes, not tens of minutes.
     #
-    #   expected   82 x 4.23 =  347 min  (~5.8 h)
-    #   ceiling    82 x 6.73 =  552 min  -> eval step 600
-    #   setup (the Lemonade start step already carries its own 15-min cap) -> 20
-    #   collect + integrity + compare + upload                             -> 15
-    #   job: 600+20+15 = 635                                               -> 660
+    #   tools 18 -> 72 min    retrieval 29 -> 116    memory 25 -> 101
+    #   conversation 10 -> 42                        outcomes: its own job
     #
-    # The old 400/450 were sized off run 30869194618, which measured rag_quality at
-    # 124 min for 8 scenarios — 6x slower than anything this pool has produced
-    # since. Those ceilings looked generous against 17 scenarios and would have
-    # truncated 82: expected wall clock alone lands at 347, and one bad run at the
-    # observed 1.19x spread reaches ~413, past the old 400.
+    # The ceiling is sized for the LARGEST lane rather than per lane; a smaller
+    # lane finishing early costs nothing on a machine that is discarded anyway:
     #
-    # These are CEILINGS, not expectations. Sizing generously is close to free
-    # here: the pool is self-hosted (no per-minute billing, and the 6h job cap is a
-    # GitHub-HOSTED limit; self-hosted is 5 days), and the shared `lemonade-eval`
-    # concurrency group already serialises the pool, so a high ceiling cannot let
-    # this job trample another eval. It does mean this job HOLDS that shared slot
-    # for ~6 h per run — the real cost of the wider category set, and the number to
-    # revisit if the queue backs up.
+    #   retrieval, 29 scenarios    expected 116 min, ceiling 29 x 6.73 = 195
+    #   eval step                                                      -> 240
+    #   setup on a COLD machine (venv, npm, Lemonade install + model)  ->  45
+    #   collect + scrub + integrity + compare + upload                 ->  15
+    #   job: 240+45+15                                                 -> 300
+    #
+    # Serial, all 82 scenarios in one job, this was 347 min expected / 552 ceiling.
+    # The split trades that for four ~2 h lanes that finish together.
+    #
+    # Only 13 of the 82 are priced on a MEASURED category mean; the rest use the
+    # global one, because CI has never run their category. Watch `memory` as real
+    # numbers arrive: 25 scenarios at the highest turn count in the repo, and
+    # turns are the one structural driver that correlates with duration at all.
+    # Rebalance by editing eval/ci_lanes.json; the [TIMING] lines and each lane's
+    # lane-timing.json exist to supply the real number.
     #
     # The eval step carries its OWN timeout-minutes below so an overrun fails at a
     # NAMED step instead of a silent job-level `cancelled` — a job-level timeout
-    # skips the `!cancelled()` collect/integrity/compare steps, which is precisely
-    # how run 30869194618 threw away the 124 min of rag_quality data it had already
-    # produced. Re-tighten both once a few complete 82-scenario runs land; the
-    # per-category [TIMING] lines in the eval step exist to supply the real number.
-    timeout-minutes: 660
+    # skips the `!cancelled()` collect/integrity/compare steps AND the upload,
+    # which on an ephemeral machine destroys the partial results permanently.
+    # That is how run 30869194618 threw away 124 min of rag_quality data.
+    timeout-minutes: 300
+    env:
+      # The lane's categories, from eval/ci_lanes.json via the `lanes` job. Every
+      # step below reads this one list, so run / collect / gate / compare cannot
+      # disagree about what this lane was supposed to measure.
+      EVAL_CATEGORIES: ${{ matrix.categories }}
+      EVAL_LANE: ${{ matrix.lane }}
+      # Memory ON for the memory lane, OFF everywhere else. Job scope beats the
+      # workflow defaults, and everything that reads these is started from here:
+      # the backend inherits the job environment through Start-Process, and the
+      # MCP server inherits it from the backend. The values are decided in the
+      # `lanes` job and arrive as literal strings - see the comment there for why
+      # they are not computed in YAML.
+      GAIA_MEMORY_DISABLED: ${{ matrix.memory_disabled }}
+      GAIA_MEMORY_ADMIN: ${{ matrix.memory_admin }}
+      GAIA_MEMORY_MCP_ALWAYS: ${{ matrix.memory_mcp }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # A memory lane with memory switched off does not fail - it scores badly,
+      # and the scorecard reads as a quality regression rather than a setup
+      # fault. So re-derive what this lane needs from its own category list and
+      # refuse to start if the environment disagrees, before anything has run.
+      # Independent of the matrix wiring on purpose: the point is to catch that
+      # wiring going wrong, so it cannot be checked against itself.
+      - name: Check the memory environment matches this lane
+        run: |
+          $ErrorActionPreference = "Stop"
+          $needsMemory = ($env:EVAL_CATEGORIES -split '\s+') -contains 'memory'
+          if ($needsMemory) {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1' }
+            $why = "The memory scenarios call remember/recall and verify through memory_recall, so this lane must run with the store live and its admin and MCP read tools registered."
+          } else {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0' }
+            $why = "No category in this lane touches long-term memory, and leaving the store live lets state from one scenario change the next one's score."
+          }
+          $wrong = @()
+          foreach ($name in $want.Keys) {
+            $have = [Environment]::GetEnvironmentVariable($name)
+            if ($null -eq $have) { $have = '<unset>' }
+            if ($have -ne $want[$name]) { $wrong += "$name is '$have' but should be '$($want[$name])'" }
+          }
+          if ($wrong.Count -gt 0) {
+            Write-Host "::error::Lane '$env:EVAL_LANE' runs [$env:EVAL_CATEGORIES] but its memory environment is wrong: $($wrong -join '; '). $why Fix the per-lane overrides in the agent-eval job's env: block, which take their values from the lanes job in this same workflow - do NOT change the workflow-level defaults, that would re-enable memory for every lane."
+            exit 1
+          }
+          Write-Host "Lane '$env:EVAL_LANE' memory environment is correct (memory scenarios in this lane: $needsMemory)."
 
       - name: Setup Python Environment
         uses: ./.github/actions/setup-venv
@@ -561,9 +807,9 @@ jobs:
           # src/gaia/eval/config.py), which is not a builtin — it registers only
           # through the `gaia.agent` entry point in gaia-agent-gaia, and GaiaAgent
           # subclasses ChatAgent from gaia-agent-chat (#1102). Miss either and
-          # POST /api/sessions 422s for all 82 scenarios. The "backend default
-          # agent id" preflight below asserts this at runtime so the gap costs
-          # seconds, not a multi-hour slot. Core gaia stays editable so eval
+          # POST /api/sessions 422s for every scenario in this lane. The "default
+          # agent is registered" preflight below asserts this at runtime so the
+          # gap costs seconds, not a whole lane. Core gaia stays editable so eval
           # fixtures resolve in-repo.
           # `mcp` is not optional for this gate: every scenario is driven through
           # the Agent UI MCP server, and without the extra that server exits with
@@ -963,7 +1209,7 @@ jobs:
           # into the rungs below and ended at their terminal `exit 1`, which failed
           # the step, which skipped the eval step entirely - so tool_selection was
           # never measured either and the gate blocked PRs while reporting nothing
-          # (run 33286140041: 12 min of preflight, three categories skipped).
+          # (run 33286140041: 12 min of preflight, every category skipped).
           #
           # The annotation level tracks `enforce` for the same reason the integrity
           # gate's does: #3016 is an environment defect, so on a report-mode PR run
@@ -1042,13 +1288,17 @@ jobs:
             exit 1
           }
 
-      - name: Run the three eval categories serially
+      - name: Run this lane's categories serially
         # Own timeout so an overrun fails HERE, by name, with the collect /
         # integrity / compare / upload steps still running on the partial results.
         # A job-level timeout instead CANCELS, which skips every `!cancelled()`
         # step and discards the categories that did finish. See the budget
         # derivation on the job above. Same convention as email_scorecard_refresh.yml.
-        timeout-minutes: 600
+        #
+        # MUST stay below the job's timeout-minutes, or the job cancels first and
+        # this is dead code - the 60 min gap is the setup + collect + upload the
+        # budget table prices.
+        timeout-minutes: 240
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Blank when the OAuth token is present, deliberately: runner.py adds
@@ -1084,7 +1334,7 @@ jobs:
           # The GAIA UI backend must live in the SAME shell session as the evals:
           # a backgrounded child does not survive a step boundary, which is why
           # test_agent_behavior_e2e.yml starts its server and runs its harness in
-          # one session. Hence backend start + all three categories in one step.
+          # one session. Hence backend start + all this lane's categories in one step.
           # Start-Process resolves relative paths against the .NET process CWD,
           # which is not guaranteed to track the PowerShell location. Pin the
           # child's working directory AND give it absolute redirect targets, so
@@ -1136,9 +1386,12 @@ jobs:
             # Healthy is not the same as "can run these scenarios". The eval asks
             # the backend for DEFAULT_AGENT_TYPE on every scenario, and an agent
             # that ships as a hub package is simply absent when its editable
-            # install is missing: POST /api/sessions 422s, all 82 scenarios
-            # record INFRA_ERROR, and the eval still exits 0 because it produced a
-            # scorecard. Assert the id resolves BEFORE spending the slot.
+            # install is missing: POST /api/sessions 422s, every scenario in this
+            # lane records INFRA_ERROR, and the eval still exits 0 because it
+            # produced a scorecard. Assert the id resolves BEFORE spending the
+            # slot - the install line is one place to get wrong but four lanes
+            # build their own venv from it, so the check runs four times and a
+            # miss costs seconds rather than a whole lane each.
             # Deliberately not asserting a literal "gaia": the id is read from
             # gaia.eval.config so this check tracks the default instead of
             # becoming a second place to update.
@@ -1180,7 +1433,7 @@ jobs:
               }
             }
             $swTotal = [Diagnostics.Stopwatch]::StartNew()
-            Add-Summary "## Eval wall clock (sjlab-stx-halo-18)"
+            Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE`` on $env:COMPUTERNAME"
             Add-Summary ""
             Add-Summary "| category | minutes |"
             Add-Summary "| --- | ---: |"
@@ -1198,14 +1451,28 @@ jobs:
             # (gaia.eval.config.DEFAULT_AGENT_TYPE) and every scenario scores it,
             # so naming one here would only be a second place to drift.
             #
-            # Category list comes from EVAL_CATEGORIES at the top of this file -
-            # do not hardcode one here. That is what let four steps drift apart.
-            $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+            # Category list comes from this LANE's EVAL_CATEGORIES, handed down
+            # from eval/ci_lanes.json by the `lanes` job - do not hardcode one
+            # here. That is what let four steps drift apart.
+            $all = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+            $categories = $all
             if ($env:EMBEDDER_OK -eq 'false') {
-              $categories = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
-              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The run is cut to the categories listed in EVAL_CATEGORIES_NO_EMBEDDER; the rest are not run and the integrity gate below reports them as NOT MEASURED (and fails the job when enforce=true). Not every skipped category needs the embedder - the list is what this runner has been shown to measure without it, not a claim about the others."
+              # INTERSECT with this lane. The no-embedder list is workflow-wide, so
+              # taking it whole would make every lane run another lane's category.
+              $ok = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
+              $categories = @($all | Where-Object { $ok -contains $_ })
+              if ($categories.Count -eq 0) {
+                # Fatal regardless of `enforce`, unlike a PARTIAL lane below.
+                # `enforce` governs what a measurement is allowed to say, never
+                # whether the harness ran - and an empty foreach exits 0, so this
+                # lane's green would be the absence of a measurement dressed as one.
+                Add-Summary "| **NOTHING MEASURED** | - |"
+                Write-Host "::error::Lane '$env:EVAL_LANE' measured NOTHING. The RAG embedder will not load on this runner (#3016), the run is cut to EVAL_CATEGORIES_NO_EMBEDDER, and none of this lane's categories ($($all -join ', ')) are on that list. This lane's green/red says nothing about quality. Fix the embedder on the devlab-dispatch image, or re-dispatch once #3016 is resolved; the embedder ladder output is in the preflight step above."
+                exit 1
+              }
+              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The run is cut to the categories listed in EVAL_CATEGORIES_NO_EMBEDDER; the rest of this lane is not run and the integrity gate below reports it as NOT MEASURED (and fails the job when enforce=true). Not every skipped category needs the embedder - the list is what this runner has been shown to measure without it, not a claim about the others."
             }
-            Write-Host "Categories this run: $($categories -join ', ') ($($categories.Count) of $((($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }).Count))"
+            Write-Host "Lane '$env:EVAL_LANE' categories this run: $($categories -join ', ') ($($categories.Count) of $($all.Count))"
             foreach ($category in $categories) {
               Write-Host "=================================================================="
               Write-Host "  gaia eval agent --category $category"
@@ -1227,7 +1494,7 @@ jobs:
               $swCat.Stop()
 
               $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
-              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 600-min step budget)"
+              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 240-min step budget)"
               Add-Summary "| ``$category`` | $mins |"
 
               if ($code -ne 0) {
@@ -1241,8 +1508,14 @@ jobs:
 
             $swTotal.Stop()
             $totalMins = [math]::Round($swTotal.Elapsed.TotalMinutes, 1)
-            Write-Host "[TIMING] all $($categories.Count) categories: $totalMins min"
+            Write-Host "[TIMING] lane $env:EVAL_LANE, all $($categories.Count) categories: $totalMins min"
             Add-Summary "| **total** | **$totalMins** |"
+            # The aggregate job cannot time a lane it did not run, and the lane's
+            # own duration is the only number that tells you which lane to rebalance.
+            # BOM-less: PowerShell 5.1's -Encoding UTF8 writes one and json.loads
+            # chokes on it, which would blank this out with no error anywhere.
+            $timing = @{ lane = $env:EVAL_LANE; total_minutes = $totalMins; categories = $categories } | ConvertTo-Json -Compress
+            [System.IO.File]::WriteAllText("$PWD\eval-out\lane-timing.json", $timing, (New-Object System.Text.UTF8Encoding($false)))
           }
           finally {
             if ($backend -and -not $backend.HasExited) {
@@ -1268,8 +1541,12 @@ jobs:
           # A genuine harness crash still fails at the eval step itself.
           $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
 
-          $listVar = if ($env:EMBEDDER_OK -eq 'false') { $env:EVAL_CATEGORIES_NO_EMBEDDER } else { $env:EVAL_CATEGORIES }
-          $categories = ($listVar -split '\s+') | Where-Object { $_ }
+          $all = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+          $categories = $all
+          if ($env:EMBEDDER_OK -eq 'false') {
+            $ok = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
+            $categories = @($all | Where-Object { $ok -contains $_ })
+          }
           foreach ($category in $categories) {
             $log = "eval-out\$category.log"
             if (-not (Test-Path $log)) {
@@ -1290,12 +1567,28 @@ jobs:
             }
             New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
             Copy-Item $scorecard "eval-out\$category\scorecard.json"
-            # Traces and logs are not collected: the artifact is public and GitHub
-            # masks secrets only in logs. Reproduce a regression locally with the
-            # same `gaia eval agent --category` command to get the traces.
+            # Take the whole run directory, not just the score. This machine is
+            # destroyed when the job ends, so a trace left behind is gone for good
+            # - and the traces are the transcripts, judge rationales and failure
+            # analysis, i.e. everything you need to tell a real regression from a
+            # flaky judge. The scrub step below is what makes that safe to publish.
             $summary = Join-Path $runDir "summary.md"
             if (Test-Path $summary) { Copy-Item $summary "eval-out\$category\summary.md" }
+            $traces = Join-Path $runDir "traces"
+            if (Test-Path $traces) { Copy-Item $traces "eval-out\$category\traces" -Recurse -Force }
+            $junit = Join-Path $runDir "results.xml"
+            if (Test-Path $junit) { Copy-Item $junit "eval-out\$category\results.xml" }
             Write-Host "${category}: $runDir"
+          }
+
+          # Lemonade writes outside the workspace, so it is not swept up by the
+          # upload path. Without this the only record of a model that would not
+          # load dies with the machine.
+          $lemonadeLogs = "C:\ProgramData\GaiaLemonadeServer"
+          if (Test-Path $lemonadeLogs) {
+            New-Item -ItemType Directory -Force -Path "eval-out\lemonade" | Out-Null
+            Get-ChildItem -Path $lemonadeLogs -Filter "lemonade-task-*.log" -ErrorAction SilentlyContinue |
+              ForEach-Object { Copy-Item $_.FullName "eval-out\lemonade\$($_.Name)" -Force }
           }
 
       - name: Integrity gate — did we actually measure?
@@ -1335,7 +1628,8 @@ jobs:
           # to have produced a measurement. Only the "a baseline scenario went
           # missing" check goes dark, and it says so per category.
           $all = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
-          $measured = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
+          $ok = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
+          $measured = @($all | Where-Object { $ok -contains $_ })
           $gateArgs = @(
             "--baseline-dir", $env:BASELINE_DIR,
             "--results-dir", "eval-out"
@@ -1358,7 +1652,7 @@ jobs:
           python -m gaia.eval.integrity_gate @gateArgs
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE. The backend and Lemonade logs stay on the runner (eval-out\backend.*.log); reproduce locally with the same gaia eval agent command if you cannot reach it."
+            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE for lane '$env:EVAL_LANE'. Download this run's 'eval-$env:EVAL_LANE' artifact: it carries the traces, the backend log (backend.err.log) and the Lemonade task logs from this machine, which no longer exists."
             exit 1
           }
 
@@ -1374,16 +1668,20 @@ jobs:
           # whole gate exists to avoid. The preflight already hard-failed the
           # enforce=true case, so reaching here with no baseline means report mode.
           if (-not (Test-Path $env:BASELINE_DIR)) {
-            Write-Host "::warning::NO REGRESSION VERDICT: no baseline at $env:BASELINE_DIR, so nothing was compared. The scorecards this run produced are uploaded as the 'agent-eval-gemma-consolidation' artifact - they are the raw material for the first flagship baseline, not a pass."
+            Write-Host "::warning::NO REGRESSION VERDICT: no baseline at $env:BASELINE_DIR, so nothing was compared. The scorecards this lane produced are uploaded as the 'eval-$env:EVAL_LANE' artifact - they are the raw material for the first flagship baseline, not a pass."
             "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-            "### Regression check: NOT PERFORMED" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "### Regression check, lane ``$env:EVAL_LANE``: NOT PERFORMED" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             "No flagship baseline is committed at ``$env:BASELINE_DIR``, so this run measured quality but compared it to nothing. A green check here does NOT mean no regression." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             exit 0
           }
 
-          $listVar = if ($env:EMBEDDER_OK -eq 'false') { $env:EVAL_CATEGORIES_NO_EMBEDDER } else { $env:EVAL_CATEGORIES }
-          $categories = ($listVar -split '\s+') | Where-Object { $_ }
+          $all = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
+          $categories = $all
+          if ($env:EMBEDDER_OK -eq 'false') {
+            $ok = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
+            $categories = @($all | Where-Object { $ok -contains $_ })
+          }
           foreach ($category in $categories) {
             $current = "eval-out\$category\scorecard.json"
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
@@ -1427,16 +1725,17 @@ jobs:
             Write-Host "Regressed categories: none"
           }
           Write-Host "Baselines: $env:BASELINE_DIR"
-          Write-Host "Scorecards uploaded as the 'agent-eval-gemma-consolidation' artifact."
+          Write-Host "Scorecards, traces and logs uploaded as the 'eval-$env:EVAL_LANE' artifact."
           Write-Host ""
           Write-Host "Code-generation and data-analysis scenarios are EXPECTED to regress on"
           Write-Host "this consolidation (35B MoE -> ~4B dense) and that tradeoff is accepted."
           Write-Host "Read the per-scenario diff above before treating a regression as a bug."
           Write-Host ""
           Write-Host "TIME regressions (>2x per-scenario wall clock) count toward the same"
-          Write-Host "verdict. They are only meaningful against a baseline captured on THIS"
-          Write-Host "runner; a baseline recorded elsewhere makes every time verdict a"
-          Write-Host "hardware artifact rather than a signal."
+          Write-Host "verdict, and are the weakest signal here. Each lane runs on a freshly"
+          Write-Host "provisioned devlab-dispatch machine, so a baseline captured on a"
+          Write-Host "different box of the same SoC carries that box's noise. Read a time"
+          Write-Host "verdict as a prompt to look, not as a result."
           Write-Host "=================================================================="
 
           # A compare that exits with something other than 0 or 2 is the TOOL
@@ -1463,7 +1762,10 @@ jobs:
           # category regressed. Same guard as install-lemonade/action.yml.
           $global:LASTEXITCODE = 0
 
-      # The artifact is public and, unlike the job log, not secret-masked.
+      # Runs LAST of the run steps, and scans EVERY file under eval-out - the same
+      # tree the upload takes, so the two cannot drift into "scanned a subset of
+      # what we published". The artifact is public and, unlike the job log, not
+      # secret-masked.
       - name: Refuse to upload a credential
         if: always()
         env:
@@ -1472,31 +1774,184 @@ jobs:
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
-          $files = @(Get-ChildItem eval-out -Recurse -File -Include scorecard.json, summary.md -ErrorAction SilentlyContinue)
-          $leaked = @()
+          $files = @(Get-ChildItem eval-out -Recurse -File -ErrorAction SilentlyContinue)
+          $secrets = @()
           foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
             $value = [Environment]::GetEnvironmentVariable($name)
-            if (-not $value) { continue }
-            foreach ($file in $files) {
-              if ((Test-Path -LiteralPath $file.FullName) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $value -Quiet)) {
-                $leaked += $file.FullName
-                Remove-Item -LiteralPath $file.FullName -Force
-              }
+            if ($value) { $secrets += $value }
+          }
+          $leaked = @()
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file.FullName)) { continue }
+            $hit = $false
+            foreach ($value in $secrets) {
+              if (Select-String -LiteralPath $file.FullName -SimpleMatch -Pattern $value -Quiet) { $hit = $true }
             }
+            if (-not $hit) { continue }
+            $leaked += $file.FullName
+            # Redacted, not deleted. These files ARE the diagnostic - deleting the
+            # log that explains the failure defeats the reason it is uploaded - and
+            # the step still exits 1, so a real leak is never quiet.
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            foreach ($value in $secrets) { $text = $text.Replace($value, "***REDACTED***") }
+            [System.IO.File]::WriteAllText($file.FullName, $text, (New-Object System.Text.UTF8Encoding($false)))
           }
           if ($leaked.Count -gt 0) {
-            Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the public artifact. They were deleted, not uploaded: $($leaked -join ', ')"
+            Write-Host "::error::A credential appeared in $($leaked.Count) file(s) bound for the PUBLIC artifact: $($leaked -join ', '). They were redacted in place before upload, but a secret reaching a trace or log at all means something is printing it - find that and fix it, then rotate the credential."
             exit 1
           }
-          Write-Host "Scanned $($files.Count) file(s): no credential found."
+          Write-Host "Scanned $($files.Count) file(s) under eval-out: no credential found."
 
-      - name: Upload scorecards
+      # Last step, always, so the aggregate can tell "this lane failed" from "this
+      # lane never reported" even when everything above went wrong.
+      - name: Record how this lane ended
+        if: always()
+        run: |
+          # eval-out may not exist yet if the lane died before the eval step - this
+          # file is how the aggregate tells "died early" from "had nothing to say".
+          New-Item -ItemType Directory -Force -Path "eval-out" | Out-Null
+          $status = @{
+            lane = $env:EVAL_LANE
+            job_status = "${{ job.status }}"
+            embedder_ok = ($env:EMBEDDER_OK -ne 'false')
+            runner = $env:COMPUTERNAME
+            enforce = ($env:ENFORCE -eq 'true')
+            # Whether the agent under test could remember anything, recorded next
+            # to the scores so a memory result is never read without it.
+            memory_enabled = ($env:GAIA_MEMORY_DISABLED -ne '1')
+          } | ConvertTo-Json -Compress
+          [System.IO.File]::WriteAllText("$PWD\eval-out\lane-status.json", $status, (New-Object System.Text.UTF8Encoding($false)))
+
+      # Scores AND evidence, because this pool is ephemeral: the machine that
+      # produced them is destroyed when the job ends, so "reproduce it locally"
+      # is not advice anyone can follow for a lane that only fails in CI.
+      - name: Upload this lane's scorecards, traces and logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: agent-eval-gemma-consolidation
-          path: |
-            eval-out/*/scorecard.json
-            eval-out/*/summary.md
+          name: eval-${{ matrix.lane }}
+          path: eval-out
           if-no-files-found: warn
           retention-days: 14
+
+  # Nothing else sees the whole run. Each lane knows only its own categories, and
+  # a lane whose machine died reports nothing at all - which on the Actions page
+  # is a red X easy to read as "one flaky lane" rather than "those categories
+  # were never measured". This job is the one place the run is described as a
+  # whole.
+  #
+  # It REPORTS; it does not judge. Every lane already applied the enforce policy
+  # to its own result, and re-deciding here would make one regression read as two.
+  aggregate:
+    name: Scenario eval - all lanes
+    needs: [lanes, agent-eval, flagship-tasks]
+    # Not on a run where the lanes were deliberately skipped (fork PR, draft):
+    # a table of empty lanes reads as "nothing was measured" when the truth is
+    # "nothing was meant to be".
+    if: >-
+      always() && needs.lanes.result == 'success' &&
+      needs.agent-eval.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download every lane's artifact
+        uses: actions/download-artifact@v8
+        with:
+          pattern: eval-*
+          path: lane-artifacts
+        continue-on-error: true
+
+      - name: Summarise the run
+        env:
+          OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
+          LANES_RESULT: ${{ needs.agent-eval.result }}
+        run: |
+          set -euo pipefail
+          # Run as a file, not `-m gaia.eval.lane_summary`: this is a hosted runner
+          # with no gaia install, and the module is stdlib-only by design.
+          python src/gaia/eval/lane_summary.py \
+            --lanes-file eval/ci_lanes.json \
+            --artifacts-dir lane-artifacts \
+            --baseline-dir tests/fixtures/eval_baselines/gaia-flagship \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "| job | result |"
+            echo "| --- | --- |"
+            echo "| scenario lanes (matrix) | \`${LANES_RESULT}\` |"
+            echo "| outcomes (\`gaia eval tasks\`) | \`${OUTCOMES_RESULT}\` |"
+            echo ""
+            echo "Every lane uploads its transcripts, judge rationales and backend"
+            echo "and Lemonade logs. The machines are ephemeral, so those artifacts"
+            echo "are the only copy - download them before they expire (14 days)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Environment drift is the whole reason the nightly exists: PR runs are
+  # path-filtered, so a Lemonade version bump, a model re-quantisation, a driver
+  # or a runner-image change alters nothing in the repo and therefore triggers
+  # nothing. The nightly is the only thing that catches that class - and an
+  # annotation on a 3am scheduled run is an annotation nobody reads, so it lands
+  # in the issue tracker instead.
+  #
+  # Schedule-only on purpose. A PR author already sees their own red check; a
+  # failing PR does not need an issue filed about it.
+  #
+  # This job claims NO lane's concurrency group. A caller that holds the group
+  # its callee needs deadlocks the callee before a job record exists, so
+  # `needs.*.result` reads `failure` for a job that never ran and the issue filed
+  # describes nothing. The now-deleted weekly caller did exactly that, every run
+  # for ten days, filing issues about a job that never started.
+  nightly-escalation:
+    name: File an issue when the nightly does not pass
+    needs: [agent-eval, flagship-tasks, aggregate]
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (needs.agent-eval.result != 'success' || needs.flagship-tasks.result != 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: File (or update) the rolling nightly-eval issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LANES_RESULT: ${{ needs.agent-eval.result }}
+          OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
+        run: |
+          set -euo pipefail
+          # STABLE DEDUP KEY - do not reword. The lookup below searches this exact
+          # title; changing it orphans the open issue and files a duplicate.
+          TITLE="Nightly flagship eval did not pass"
+          gh label create eval-failure --color B60205 \
+            --description "Automated eval failure" --force
+          BODY="$(cat <<EOF
+          The nightly flagship eval on \`main\` did not pass.
+
+          - Run: ${RUN_URL}
+          - Scenario lanes: \`${LANES_RESULT}\`
+          - Outcomes (\`gaia eval tasks\`): \`${OUTCOMES_RESULT}\`
+
+          Start with the run's summary page: it names which lanes measured, which measured nothing, and
+          how long each took. Then download the failing lane's \`eval-<lane>\` artifact - it carries the
+          transcripts, judge rationales, backend log and Lemonade logs. Those machines are ephemeral and
+          already destroyed, so the artifact is the only copy, and it expires in 14 days.
+
+          A nightly failure with no PR behind it usually means the environment moved, not the code: a
+          Lemonade version bump, a re-quantised model, a driver or runner-image change. PR runs are
+          path-filtered and cannot see any of that, which is why this run exists.
+
+          \`cancelled\` rather than \`failure\` means no measurement happened at all - a manual cancel, or a
+          lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow.
+          EOF
+          )"
+          EXISTING="$(gh issue list --state open --label eval-failure \
+            --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body "${BODY}"
+            echo "commented on existing issue #${EXISTING}"
+          else
+            gh issue create --title "${TITLE}" --body "${BODY}" --label eval-failure
+          fi
