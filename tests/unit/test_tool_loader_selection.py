@@ -277,6 +277,23 @@ def test_skill_tool_admitted_ahead_of_semantic_at_cap():
     assert "hi" in payload["skipped_at_cap"]  # higher-scored semantic, skipped
 
 
+def test_over_cap_skill_request_settles_instead_of_rotating():
+    """A SKILL request larger than the free slots keeps the same tools every turn.
+
+    One slot, two requested tools. Without holding already-loaded requested
+    tools, turn 2 evicts ``t1`` for ``t2``, turn 3 swaps back — the prompt
+    changes every turn and neither tool stays. A semantic match cannot take a
+    still-requested tool's slot either (SKILL > SEMANTIC).
+    """
+    tools = ["t1", "t2", "hi"]
+    embed = _make_embed_fn(tools, {"q": {"t1": 0.0, "t2": 0.0, "hi": 0.9}})
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
+    turns = [
+        loader.select("q", _registry(tools), skill_tools=["t1", "t2"]) for _ in range(3)
+    ]
+    assert turns == [["t1"], ["t1"], ["t1"]]
+
+
 def test_skill_tool_avoids_escape_hatch_activation():
     """Pre-loading the recipe's tool keeps the escape-hatch counter at 0.
 
