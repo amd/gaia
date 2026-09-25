@@ -56,10 +56,15 @@ def _permission_state():
 
     Imported lazily, like :func:`build_session_agent`, so this module stays
     dependency-light until a session actually exists.
+
+    ``lifts_shell_gates=False`` because these sessions belong to the HTTP
+    transport: ``/sessions/{id}/bypass`` may stop asking for approval, but the
+    shell guardrails are a stdio affordance (#3373) — lifting them for a bound
+    socket is remote code execution, not a relaxed permission model.
     """
     from gaia_agent.stdio import PermissionState
 
-    return PermissionState()
+    return PermissionState(lifts_shell_gates=False)
 
 
 class SessionCapacityError(RuntimeError):
