@@ -31,6 +31,20 @@ class ArtifactStore:
             self._items[handle] = (now, text, size)
             return handle
 
+    def has(self, handle) -> bool:
+        """Whether ``handle`` names live output in this store."""
+        with self._lock:
+            item = self._items.get(handle) if isinstance(handle, str) else None
+            return item is not None and time.monotonic() - item[0] < self.ttl
+
+    def text(self, handle: str) -> str:
+        """The whole archived text, for indexing it; the model pages via ``read``."""
+        with self._lock:
+            item = self._items.get(handle)
+            if item is None or time.monotonic() - item[0] >= self.ttl:
+                raise ValueError(f"Unknown or expired output handle {handle}.")
+            return item[1]
+
     def read(self, handle: str, offset: int = 0, limit: int = 2000) -> dict:
         if (
             not isinstance(offset, int)

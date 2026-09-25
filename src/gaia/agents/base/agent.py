@@ -61,6 +61,7 @@ from gaia.agents.base.verification import (
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import (
+    CLOUD_TRUNCATION_BUDGET,
     DEFAULT_MODEL_NAME,
     budget_for_ctx,
     is_context_overflow_error,
@@ -1767,7 +1768,8 @@ Do NOT wrap conversational replies in JSON.
             Args:
                 artifact: Output handle returned by a truncated result.
                 offset: Zero-based character offset in the original output.
-                limit: Page size in characters, 1 to 8000.
+                limit: Page size in characters, 1 to 8000. An index entry's
+                    offset and length read exactly that part.
             """
             return store_for(self).read(artifact, offset, limit)
 
@@ -4762,11 +4764,10 @@ Do NOT wrap conversational replies in JSON.
                 if isinstance(backend, LemonadeClient)
                 else cloud_model_provider(model)
             )
-            # Gateway sessions do not depend on local hardware configuration.
-            # Preserve their conservative admission budget until metadata supplies
-            # a provider-specific window; do not guess one from the host profile.
-            if not cloud:
-                device = GaiaConfig.load().default_device
+            # A remote model is budgeted by re-send cost, not by local hardware.
+            if cloud:
+                return CLOUD_TRUNCATION_BUDGET
+            device = GaiaConfig.load().default_device
         return truncation_budget(device)
 
     #: Scalar annotations worth coercing, by name as well as by type: a module
@@ -4903,7 +4904,11 @@ Do NOT wrap conversational replies in JSON.
             The truncated result or original if within limits
         """
         truncated_result = tool_result
-        if isinstance(tool_result, (dict, list, str)):
+        # Its pages are bounded by the store; condensing one would archive it again.
+        if (
+            isinstance(tool_result, (dict, list, str))
+            and tool_name != "read_tool_output"
+        ):
             # Use custom encoder to handle bytes and other non-serializable types.
             # ensure_ascii=False: this text reaches the model as prose, not a
             # wire format re-parsed on the other end -- escaping would hand it
@@ -4919,55 +4924,9 @@ Do NOT wrap conversational replies in JSON.
             )
             threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
-                from gaia.agents.base.artifacts import store_for
-
-                if not hasattr(self, "_output_reader_entry"):
-                    self._register_output_reader()
-                handle = store_for(self).put(result_str)
-                metadata = {
-                    "artifact": handle,
-                    "continuation": "read_tool_output",
-                    "total_chars": len(result_str),
-                }
-                target -= len(json.dumps(metadata, ensure_ascii=False)) + 4
-                # Some tools hand back json.dumps(...) as a str (code search,
-                # index status). Eliding those mid-record leaves the model half
-                # an entry at each end, so parse first and let the structured
-                # path drop whole items instead.
-                structured = self._as_structured_payload(tool_result)
-                if structured is None:
-                    from gaia.agents.base.tool_output import elide_text
-
-                    truncated_result = elide_text(tool_result, target)
-                else:
-                    # Structured results must remain valid JSON for the model.
-                    truncated_str = self._truncate_large_content(
-                        structured, max_chars=target, as_json=True
-                    )
-                    truncated_result = json.loads(truncated_str)
-                    if isinstance(tool_result, str):
-                        # It arrived as text; hand text back so the tool's
-                        # declared result type does not change under the caller.
-                        truncated_result = json.dumps(
-                            truncated_result, ensure_ascii=False
-                        )
-                was_text = isinstance(truncated_result, str)
-                if was_text:
-                    truncated_result = json.loads(truncated_result)
-                if isinstance(truncated_result, dict):
-                    truncated_result.update(metadata)
-                elif (
-                    truncated_result
-                    and isinstance(truncated_result[-1], dict)
-                    and truncated_result[-1].get("truncated") is True
-                    and truncated_result != structured
-                ):
-                    truncated_result[-1].update(metadata)
-                else:
-                    # Whitespace-heavy JSON can fit after parsing, with no marker.
-                    truncated_result.append(metadata)
-                if was_text:
-                    truncated_result = json.dumps(truncated_result, ensure_ascii=False)
+                truncated_result = self._condense_tool_result(
+                    tool_name, tool_result, tool_args, target
+                )
                 # Notify user about truncation
                 self.console.print_info(
                     f"Note: Large result ({len(result_str)} chars) truncated for LLM context"
@@ -4995,6 +4954,138 @@ Do NOT wrap conversational replies in JSON.
             tool_entry["tool_args"] = tool_args
         conversation.append(tool_entry)
         return truncated_result
+
+    def _condense_tool_result(
+        self,
+        tool_name: str,
+        tool_result: Any,
+        tool_args: Optional[Dict[str, Any]],
+        target: int,
+    ) -> Any:
+        """Fit an over-budget result into ``target`` chars, archiving all of it.
+
+        Text is split along its own structure into ``shown`` + ``index``
+        (``chunk_index``). Records (a dict or list without one dominant text)
+        keep whole leading items and index the dropped ones. Text with no
+        structure to split -- a single long line -- is the one case left to a
+        head/tail excerpt.
+        """
+        from gaia.agents.base import chunk_index
+        from gaia.agents.base.artifacts import store_for
+
+        if not hasattr(self, "_output_reader_entry"):
+            self._register_output_reader()
+        store = store_for(self)
+
+        def serialize(value: Any) -> str:
+            return json.dumps(
+                value, default=self._json_serialize_fallback, ensure_ascii=False
+            )
+
+        # Some tools hand back json.dumps(...) as a str (code search, index
+        # status); those are records, so they take the record path below.
+        structured = self._as_structured_payload(tool_result)
+        if not (isinstance(tool_result, str) and structured is not None):
+            condensed = chunk_index.condense_result(
+                tool_name, tool_result, tool_args, target, store, serialize
+            )
+            if condensed is not None:
+                return condensed
+        if structured is None:
+            return self._elide_with_index(tool_result, target, store)
+        return self._drop_records_with_index(
+            tool_result, structured, target, store, serialize
+        )
+
+    @staticmethod
+    def _elide_with_index(text: str, target: int, store) -> Dict[str, Any]:
+        """Head and tail of structureless text; the index names the middle."""
+        from gaia.agents.base.tool_output import elide_text
+
+        metadata: Dict[str, Any] = {
+            "index": [
+                {
+                    "label": f"omitted middle ({len(text)} chars)",
+                    "offset": len(text),
+                    "length": len(text),
+                }
+            ],
+            "artifact": store.put(text),
+            "continuation": "read_tool_output",
+            "total_chars": len(text),
+        }
+        excerpt = elide_text(
+            text, target - len(json.dumps(metadata, ensure_ascii=False)) - 4
+        )
+        omitted = excerpt["omitted_chars"]
+        metadata["index"] = [
+            {
+                "label": f"omitted middle ({omitted} chars)",
+                "offset": len(excerpt["head"]),
+                "length": omitted,
+            }
+        ]
+        excerpt.update(metadata)
+        return excerpt
+
+    def _drop_records_with_index(
+        self,
+        tool_result: Any,
+        structured: Any,
+        target: int,
+        store,
+        serialize,
+    ) -> Any:
+        """Whole leading records, plus an index of the records left out."""
+        from gaia.agents.base import chunk_index
+
+        # One record per line, so each index entry starts on its own line; a
+        # str keeps its exact original bytes.
+        archived = (
+            tool_result
+            if isinstance(tool_result, str)
+            else json.dumps(
+                structured,
+                indent=1,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
+            )
+        )
+        chunks = chunk_index.split_oversized(archived, chunk_index.chunk_json(archived))
+        short = False
+        if chunks:
+            chunks, short = chunk_index.fit_index(chunks, target // 4)
+        metadata: Dict[str, Any] = {
+            "index": chunk_index.index_entries(chunks, short),
+            "artifact": store.put(archived),
+            "continuation": "read_tool_output",
+            "total_chars": len(archived),
+        }
+        budget = target - len(serialize(metadata)) - 4
+        # Structured results must remain valid JSON for the model.
+        shown = json.loads(
+            self._truncate_large_content(structured, max_chars=budget, as_json=True)
+        )
+        metadata["index"] = chunk_index.index_entries(
+            [c for c in chunks if not chunk_index.covered(c, structured, shown)], short
+        )
+        if isinstance(shown, dict):
+            shown.update(metadata)
+        elif (
+            shown
+            and isinstance(shown[-1], dict)
+            and shown[-1].get("truncated") is True
+            and shown != structured
+        ):
+            shown[-1].update(metadata)
+        else:
+            # Whitespace-heavy JSON can fit after parsing, with no marker.
+            shown.append(metadata)
+        if isinstance(tool_result, str):
+            # It arrived as text; hand text back so the tool's declared result
+            # type does not change under the caller.
+            return json.dumps(shown, ensure_ascii=False)
+        return shown
 
     def _progress_label(self) -> str:
         """Name the phase the loop is in, in the user's terms (#2804).
@@ -5205,17 +5296,21 @@ Do NOT wrap conversational replies in JSON.
                 a fresh uuid is synthesised for backward compatibility
                 with embedded-JSON paths that don't carry an id.
         """
-        if isinstance(tool_output, str):
+        if isinstance(tool_output, str) or tool_name == "read_tool_output":
+            # A read_tool_output page is bounded by the store and must stay exact.
             text_content = tool_output
         else:
             # Every call site hands this a result ``_handle_large_tool_result``
             # already fitted to the device budget, so this is a backstop, not
-            # the real gate -- it must not be tighter than the gate it backs.
-            _, target = self._truncation_budget()
+            # the real gate -- it must not be tighter than the gate it backs,
+            # which passes anything up to its threshold untouched.
+            threshold, _ = self._truncation_budget()
             # Prose call site: text_content is spliced into a message's text
             # field, never json.loads'd -- stays on the default prose path,
             # not the JSON-safe envelope (#2620, reflection C2).
-            text_content = self._truncate_large_content(tool_output, max_chars=target)
+            text_content = self._truncate_large_content(
+                tool_output, max_chars=threshold
+            )
 
         if not isinstance(text_content, str):
             text_content = json.dumps(
