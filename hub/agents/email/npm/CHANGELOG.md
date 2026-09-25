@@ -10,6 +10,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
   for Lemonade on its default port, so on a PC where `gaia init` set up GAIA's
   own server it reported the model server as missing, or its version as
   unknown. It now uses the same server as the rest of GAIA, with its key.
+
+- **Intel Macs can now install the agent.** Every release publishes an Intel
+  macOS binary, but the hub manifest didn't list Intel macOS as supported, so
+  `gaia hub install email` refused it before downloading anything.
+
 - **Asking a content question about your mail ("who signed this?", "what
   date was agreed?") now actually gets an answer when the answer is in the
   mailbox.** Search used to return only subjects and senders unless the

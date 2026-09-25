@@ -14,6 +14,8 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- `gaia hub install gaia` no longer refuses Intel Macs: the hub manifest now
+  lists `darwin-x64`, which the release already builds and the lock already ships.
 - The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
 - The readiness check (`GET /v1/gaia/init`) and the terminal session's health
   report name GAIA's own Lemonade Server instead of Lemonade's default port.
