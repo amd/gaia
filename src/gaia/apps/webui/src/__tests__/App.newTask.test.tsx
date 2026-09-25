@@ -67,6 +67,11 @@ beforeEach(() => {
     mocked.createSession.mockResolvedValue(session({ id: 'sess-new-0001', message_count: 0 }));
     mocked.getMessages.mockResolvedValue({ messages: [] } as never);
     mocked.listCatalog.mockResolvedValue({ agents: [], offline: false } as never);
+    // ChatView's mount effects call these and chain off the result. Auto-mocked
+    // they return undefined, and `undefined.then` throws out of the effect —
+    // which only loses the race when the machine is loaded enough to reorder it.
+    mocked.listDocuments.mockResolvedValue({ documents: [] } as never);
+    mocked.getMessageCount.mockResolvedValue({ count: 0 } as never);
 
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], activeAgentId: 'gaia',
