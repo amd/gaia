@@ -1124,7 +1124,8 @@ limited to 8,000 characters. Unicode offsets count characters, not bytes.
 The archived text is the original string, the field named by
 `archived_field`, or JSON (one record per line) for a structured result. Pass
 an `index` entry's `offset` and `length` as `offset` and `limit` to read exactly
-that part. Small results remain unchanged. Structured excerpts retain whole
+that part; an entry longer than a page returns `remaining` and continues at
+`next_offset`. Small results remain unchanged. Structured excerpts retain whole
 records.
 
 Shell, Python execution and browser excerpts retain omitted output before

@@ -440,12 +440,7 @@ def budget_for_ctx(ctx_size: int) -> Tuple[int, int]:
     return threshold, target
 
 
-#: (threshold, target) chars for a remote model reached through Lemonade.
-#: Its limit is cost, not context: every tool result is re-sent on every later
-#: step. On the TheRock benchmark (740 results, 2.7 MB) 46% of result bytes sat
-#: in results over 8,000 chars, which is where condensing them pays; 30,000 let
-#: whole 25-29 KB files and searches through untouched. The 6,000 target leaves
-#: an indexed file its outline plus ~2,000 chars of source.
+#: Remote-model (threshold, target): sized by re-send cost per step, not by context.
 CLOUD_TRUNCATION_BUDGET: Tuple[int, int] = (8000, 6000)
 
 

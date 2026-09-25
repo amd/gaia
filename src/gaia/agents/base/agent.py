@@ -1768,8 +1768,10 @@ Do NOT wrap conversational replies in JSON.
             Args:
                 artifact: Output handle returned by a truncated result.
                 offset: Zero-based character offset in the original output.
-                limit: Page size in characters, 1 to 8000. An index entry's
-                    offset and length read exactly that part.
+                limit: Characters wanted. Pass an index entry's offset and
+                    length to read exactly that part. A page is at most 8000
+                    characters; when ``remaining`` is set, call again at
+                    ``next_offset`` for the rest.
             """
             return store_for(self).read(artifact, offset, limit)
 

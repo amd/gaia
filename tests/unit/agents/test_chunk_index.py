@@ -717,3 +717,191 @@ def test_condense_result_raises_rather_than_exceed_its_target(monkeypatch):
             ArtifactStore(),
             json.dumps,
         )
+
+
+# ---------------------------------------------------------------------------
+# Any index entry reads back whole, however long
+# ---------------------------------------------------------------------------
+
+
+def read_entry(agent, result, entry):
+    """Follow ``next_offset`` until the entry's whole span is read."""
+    reader = agent._tools_registry["read_tool_output"]["function"]
+    parts, offset, wanted = [], entry["offset"], entry["length"]
+    while wanted:
+        page = reader(result["artifact"], offset, wanted)
+        assert len(page["content"]) <= 8000
+        parts.append(page["content"])
+        wanted -= len(page["content"])
+        assert page.get("remaining", 0) == wanted
+        offset = page["next_offset"]
+    return "".join(parts)
+
+
+def _assert_entries_read_back(agent, result, text):
+    assert len(json.dumps(result, ensure_ascii=False)) <= TARGET
+    for entry in result["index"]:
+        span = text[entry["offset"] : entry["offset"] + entry["length"]]
+        assert read_entry(agent, result, entry) == span
+    for segment in result["shown"]:
+        start = segment["offset"]
+        assert text[start : start + len(segment["text"])] == segment["text"]
+
+
+@pytest.mark.parametrize(
+    "classes,size", [(24, 100_000), (240, 1_000_000)], ids=["100KB", "1MB"]
+)
+def test_every_entry_of_a_huge_python_file_reads_back(classes, size):
+    source = python_module(n_classes=classes, methods=6, functions=10)
+    assert len(source) > size
+    agent = cloud_agent()
+    original = {"status": "success", "file_path": "/r/big.py", "file_type": "python"}
+    original["content"] = source
+
+    result = agent._handle_large_tool_result("read_file", original, [], {})
+
+    if size == 1_000_000:
+        assert any(e["length"] > 8000 for e in result["index"])
+    _assert_entries_read_back(agent, result, source)
+
+
+def test_a_single_50k_line_keeps_the_end_of_the_output_in_view():
+    agent = cloud_agent()
+    stdout = "header\n\n" + "x" * 50000 + "END-OF-RUN\n"
+    original = shell_result(stdout)
+
+    result = agent._handle_large_tool_result("run_shell_command", original, [], {})
+
+    shown = "".join(s["text"] for s in result["shown"])
+    assert shown.startswith("header") and "END-OF-RUN" in shown
+    assert result["check_result"] == CHECK
+    (middle,) = result["index"]
+    assert middle["length"] > 8000
+    _assert_entries_read_back(agent, result, stdout)
+
+
+def test_the_head_tail_middle_of_structureless_text_reads_back_whole():
+    agent = cloud_agent()
+    text = "HEAD " + "m" * 60000 + " TAIL"
+    result = agent._handle_large_tool_result("fetch_page", text, [], {})
+    (middle,) = result["index"]
+    assert (
+        read_entry(agent, result, middle)
+        == text[middle["offset"] : middle["offset"] + middle["length"]]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Search matches with missing fields
+# ---------------------------------------------------------------------------
+
+
+def test_search_matches_without_a_file_or_with_a_text_context_render():
+    matches = [
+        {"file": "", "line": 1, "content": "a"},
+        {"line": 2, "content": "b"},
+        {"file": "/r/x.py", "line": 3, "content": "c", "context": "one line"},
+        {"file": "/r/y.py", "line": 4, "content": "d", "context": ["p", "q"]},
+    ]
+    text, chunks = chunk_index.render_search(matches)
+    assert_tiles(text, chunks)
+    assert text.startswith("(no file) (2 matches)\n")
+    assert chunks[0].label.startswith("(no file): 2 matches")
+    assert "    | one line\n" in text and "    | o\n" not in text
+    assert "    | p\n    | q\n" in text
+
+
+# ---------------------------------------------------------------------------
+# A local model served by Lemonade keeps its device budget
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("profile", ["npu", "gpu"])
+def test_a_lemonade_served_local_model_keeps_the_device_budget(monkeypatch, profile):
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device=profile))
+    agent = make_agent(device=None, model_id=DEFAULT_MODEL_NAME)
+
+    assert agent._truncation_budget() == truncation_budget(profile)
+    assert agent._truncation_budget() != CLOUD_TRUNCATION_BUDGET
+
+
+# ---------------------------------------------------------------------------
+# Property: mixed text tiles exactly and condenses within the target
+# ---------------------------------------------------------------------------
+
+_MIXED = [
+    "",
+    "plain ünïcode — λ 漢字 🚀",
+    "# Heading",
+    "### Deep heading",
+    "```python",
+    "```",
+    "def f(x):",
+    "    return x",
+    "class K:",
+    "==== FAILURES ====",
+    "___ test_it ___",
+    "FAILED t.py::a - boom",
+    "Traceback (most recent call last):",
+    "src/a.py:3: hit",
+    "diff --git a/x b/x",
+    "@@ -1 +1 @@",
+    '{"k": [1, 2]}',
+    "x" * 900,
+]
+
+
+def _mixed_text(rng: random.Random) -> str:
+    out = []
+    for _ in range(rng.randint(20, 400)):
+        out.append(rng.choice(_MIXED))
+        out.append(rng.choice(["\n", "\n", "\n", "\r\n", "\r"]))
+    return "".join(out)
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_mixed_text_tiles_and_condenses_within_the_target(seed):
+    rng = random.Random(1000 + seed)
+    text = _mixed_text(rng)
+    for chunker in (
+        chunk_index.chunk_markdown,
+        chunk_index.chunk_output,
+        chunk_index.chunk_diff,
+        chunk_index.chunk_paragraphs,
+        chunk_index.chunk_lines,
+    ):
+        chunks = chunker(text)
+        if chunks:
+            assert_tiles(text, chunks)
+    for kind in ("python", "markdown", "json", "output", "diff", "text"):
+        chunks = chunk_index.chunk_text(text, kind)
+        if chunks:
+            assert_tiles(text, chunks)
+
+    store = ArtifactStore()
+    shapes = [
+        ("fetch_page", text),
+        ("run_shell_command", shell_result(text)),
+        (
+            "read_file",
+            {"file_path": "/r/a.md", "file_type": "markdown", "content": text},
+        ),
+        ("read_file", {"file_path": "/r/a.py", "file_type": "python", "content": text}),
+    ]
+    for name, result in shapes:
+        condensed = chunk_index.condense_result(
+            name, result, {}, TARGET, store, lambda v: json.dumps(v, ensure_ascii=False)
+        )
+        if condensed is None:
+            continue
+        assert len(json.dumps(condensed, ensure_ascii=False)) <= TARGET
+        archived = store.text(condensed["artifact"])
+        assert archived == text
+        for segment in condensed["shown"]:
+            start = segment["offset"]
+            assert archived[start : start + len(segment["text"])] == segment["text"]
+        for entry in condensed["index"]:
+            assert entry["offset"] + entry["length"] <= len(archived)

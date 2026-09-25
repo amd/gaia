@@ -6,6 +6,9 @@ import threading
 import time
 from uuid import uuid4
 
+#: Most characters one ``read`` returns; a longer span continues at ``next_offset``.
+PAGE_CHARS = 8000
+
 
 class ArtifactStore:
     """Retain exact text for one agent; never resolve another session's handle."""
@@ -52,10 +55,11 @@ class ArtifactStore:
             or offset < 0
             or not isinstance(limit, int)
             or isinstance(limit, bool)
-            or not 1 <= limit <= 8000
+            or limit < 1
         ):
             raise ValueError(
-                "offset must be a nonnegative character index; limit must be 1..8000"
+                "offset must be a nonnegative character index; limit must be a "
+                "positive character count"
             )
         with self._lock:
             item = self._items.get(handle)
@@ -71,14 +75,18 @@ class ArtifactStore:
                 )
             if offset > len(text):
                 raise ValueError(f"offset exceeds output length {len(text)}")
-            end = min(len(text), offset + limit)
-            return {
+            end = min(len(text), offset + min(limit, PAGE_CHARS))
+            page = {
                 "artifact": handle,
                 "content": text[offset:end],
                 "offset": offset,
                 "next_offset": end if end < len(text) else None,
                 "total_chars": len(text),
             }
+            span_end = min(len(text), offset + limit)
+            if end < span_end:
+                page["remaining"] = span_end - end
+            return page
 
 
 def store_for(owner) -> ArtifactStore:

@@ -592,7 +592,7 @@ def render_search(matches: List[Dict[str, Any]]) -> Tuple[str, List[Chunk]]:
     """
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for match in matches:
-        groups.setdefault(str(match.get("file", "")), []).append(match)
+        groups.setdefault(str(match.get("file") or ""), []).append(match)
     try:
         paths = [p for p in groups if p]
         root = (
@@ -605,7 +605,10 @@ def render_search(matches: List[Dict[str, Any]]) -> Tuple[str, List[Chunk]]:
 
     def block(match: Dict[str, Any]) -> str:
         out = f"  {match.get('line')}: {match.get('content', '')}\n"
-        out += "".join(f"    | {line}\n" for line in match.get("context") or [])
+        context = match.get("context") or []
+        if isinstance(context, str):
+            context = [context]
+        out += "".join(f"    | {line}\n" for line in context)
         extra = {
             k: v
             for k, v in match.items()
@@ -617,12 +620,17 @@ def render_search(matches: List[Dict[str, Any]]) -> Tuple[str, List[Chunk]]:
 
     pieces: List[Tuple[str, str, bool]] = []
     for path, found in groups.items():
-        name = os.path.relpath(path, root) if root else path
+        if not path:
+            name = "(no file)"
+        elif root:
+            name = os.path.relpath(path, root)
+        else:
+            name = path
         noun = "match" if len(found) == 1 else "matches"
         first = found[0]
         pieces.append(
             (
-                f"{path} ({len(found)} {noun})\n" + block(first),
+                f"{path or '(no file)'} ({len(found)} {noun})\n" + block(first),
                 f"{name}: {len(found)} {noun}, L{first.get('line')}: "
                 f"{first.get('content', '')}",
                 True,
@@ -678,15 +686,18 @@ def chunk_text(text: str, kind: str) -> List[Chunk]:
     return chunks if len(chunks) > 1 else []
 
 
+def _is_json(text: str) -> bool:
+    try:
+        json.loads(text)
+    except ValueError:
+        return False
+    return True
+
+
 def sniff_kind(text: str) -> str:
     """Structure of a text with no file type to go by."""
-    head = text.lstrip()[:1]
-    if head in ("{", "["):
-        try:
-            json.loads(text)
-            return "json"
-        except ValueError:
-            pass
+    if text.lstrip()[:1] in ("{", "[") and _is_json(text):
+        return "json"
     if text.startswith(("diff --git ", "--- ")):
         return "diff"
     if re.search(r"^(?:={3,} .* ={3,}|FAILED |Traceback )", text, re.MULTILINE):
@@ -829,6 +840,37 @@ def select(
             kept_order.pop()
             continue
         return shown, index_entries(entries, short)
+
+
+def head_and_tail(
+    text: str, room: int
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """``(shown, index)``: the text's start and end, the middle as one entry."""
+
+    def view(keep: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        head, tail = (keep + 1) // 2, keep // 2
+        shown = [{"offset": 0, "text": text[:head]}]
+        if tail:
+            shown.append({"offset": len(text) - tail, "text": text[-tail:]})
+        omitted = len(text) - keep
+        index = [
+            {
+                "label": f"omitted middle ({omitted} chars)",
+                "offset": head,
+                "length": omitted,
+            }
+        ]
+        return shown, index
+
+    low, high = 0, len(text) - 1
+    while low < high:
+        keep = (low + high + 1) // 2
+        shown, index = view(keep)
+        if _cost(shown) + _cost(index) <= room:
+            low = keep
+        else:
+            high = keep - 1
+    return view(low)
 
 
 def covered(chunk: Chunk, original: Any, shown: Any) -> bool:
@@ -1033,7 +1075,12 @@ def condense_result(
         for k, v in (tool_args or {}).items()
         if k in NAMING_ARGS and isinstance(v, str)
     ]
-    shown, index = select(body.text, chunks, room, named)
+    largest = max(c.length for c in chunks)
+    if largest > MAX_CHUNK_CHARS and largest * 2 > len(body.text):
+        # One line too long to split is most of the text: keep its end in view.
+        shown, index = head_and_tail(body.text, room)
+    else:
+        shown, index = select(body.text, chunks, room, named)
     if body.handle is None:
         metadata["artifact"] = store.put(body.text)
     condensed = render(shown, index)
