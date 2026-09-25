@@ -19,7 +19,7 @@ import logging
 import os
 import time
 import uuid
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Tuple
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -36,6 +36,7 @@ from .schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionResponseMessage,
+    ChatMessage,
     ModelListResponse,
     UsageInfo,
 )
@@ -64,7 +65,11 @@ def _log_header_summary(headers) -> None:
 
 
 def _log_message_summary(index: int, message) -> None:
-    content_length = len(message.content or "")
+    content = message.content or ""
+    if isinstance(content, list):
+        content_length = sum(len(part.text or "") for part in content)
+    else:
+        content_length = len(content)
     logger.debug("Message %d:", index)
     logger.debug("  Role: %s", message.role)
     logger.debug("  Content: %s (%d chars)", _REDACTED_LOG_VALUE, content_length)
@@ -79,6 +84,93 @@ def _log_request_parameter_summary(request: ChatCompletionRequest) -> None:
     for field_name in ("temperature", "max_tokens", "top_p"):
         value = getattr(request, field_name, None)
         logger.debug("  %s: %s", field_name, "set" if value is not None else "not set")
+
+
+def _message_text(message: ChatMessage) -> str:
+    """The message's text, with a content-part array joined into one string."""
+    content = message.content
+    if content is None or isinstance(content, str):
+        return content or ""
+    texts = []
+    for part in content:
+        if part.type != "text":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Content part type '{part.type}' is not supported: gaia api "
+                    "accepts text only. Send the content as text parts."
+                ),
+            )
+        if part.text is None:
+            raise HTTPException(
+                status_code=400, detail="A 'text' content part has no 'text' field."
+            )
+        texts.append(part.text)
+    return "\n".join(texts)
+
+
+def _split_conversation(messages: List[ChatMessage]) -> Tuple[str, list, str]:
+    """Split a request into (query, prior turns, caller system text).
+
+    The query is the final message, which must come from the user. Every
+    ``system`` / ``developer`` message becomes caller system text; everything
+    else before the query is history in the agent's message format.
+    """
+    system_texts = []
+    turns = []
+    for message in messages:
+        if message.role in ("system", "developer"):
+            text = _message_text(message)
+            if text:
+                system_texts.append(text)
+        else:
+            turns.append(message)
+
+    if not any(m.role == "user" for m in turns):
+        raise HTTPException(
+            status_code=400, detail="No user message found in messages array"
+        )
+    if turns[-1].role != "user":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The last message must be a user message, got '{turns[-1].role}'. "
+                "gaia api answers the final user turn."
+            ),
+        )
+    query = _message_text(turns[-1])
+    if not query:
+        raise HTTPException(status_code=400, detail="The last user message is empty")
+
+    history = []
+    for message in turns[:-1]:
+        entry = {"role": message.role, "content": _message_text(message)}
+        if message.tool_calls:
+            entry["tool_calls"] = message.tool_calls
+        if message.tool_call_id is not None:
+            entry["tool_call_id"] = message.tool_call_id
+        history.append(entry)
+    return query, history, "\n\n".join(system_texts)
+
+
+def _prepare_agent(
+    agent, request: ChatCompletionRequest, history: list, system_text: str
+) -> None:
+    """Load the caller's conversation and sampling settings into the agent."""
+    agent.conversation_history = history
+    if system_text:
+        agent.set_caller_system_prompt(system_text)
+    if history or system_text:
+        # Caller-supplied text, not the user typing this turn.
+        agent.mark_external_content()
+
+    config = agent.chat.config
+    if request.temperature is not None:
+        config.temperature = request.temperature
+    if request.top_p is not None:
+        config.top_p = request.top_p
+    if request.max_tokens is not None:
+        config.max_tokens = request.max_tokens
 
 
 def _prepend_tool_denials(agent, content: str) -> str:
@@ -202,7 +294,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     Raises:
         HTTPException 404: Model not found
-        HTTPException 400: No user message in request
+        HTTPException 400: No user message, the last message is not from the
+            user, or a content part is not text
 
     Example:
         Non-streaming:
@@ -248,15 +341,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             status_code=404, detail=f"Model '{request.model}' not found"
         )
 
-    # Extract user query from messages (get last user message)
-    user_message = next(
-        (m.content for m in reversed(request.messages) if m.role == "user"), None
-    )
-
-    if not user_message:
-        raise HTTPException(
-            status_code=400, detail="No user message found in messages array"
-        )
+    user_message, history, system_text = _split_conversation(request.messages)
 
     # Debug logging: show what we're passing to the agent
     if _api_debug_enabled():
@@ -273,6 +358,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
         agent = registry.get_agent(request.model)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+    _prepare_agent(agent, request, history, system_text)
 
     # Handle streaming vs non-streaming
     if request.stream:
@@ -335,11 +422,14 @@ async def create_chat_completion(request: ChatCompletionRequest):
         content = _prepend_tool_denials(agent, content)
 
         # Estimate tokens
+        prompt_text = "\n".join(
+            [system_text, *(m["content"] for m in history), user_message]
+        )
         if isinstance(agent, ApiAgent):
-            prompt_tokens = agent.estimate_tokens(user_message)
+            prompt_tokens = agent.estimate_tokens(prompt_text)
             completion_tokens = agent.estimate_tokens(content)
         else:
-            prompt_tokens = len(user_message) // 4
+            prompt_tokens = len(prompt_text) // 4
             completion_tokens = len(content) // 4
 
         return ChatCompletionResponse(

@@ -41,7 +41,10 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
 1. **POST /v1/chat/completions**
    - Non-streaming responses
    - SSE streaming responses
-   - Message history support
+   - Message history: prior turns are loaded into the agent's conversation,
+     and `system` / `developer` messages are added to its system prompt
+   - `temperature`, `top_p`, and `max_tokens` apply to every model call the
+     agent makes for the request
    - Tool calls support (future)
 
 2. **GET /v1/models**
@@ -69,9 +72,12 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
 #### Request Processing
 
 1. **Message Handling**
-   - OpenAI message format
-   - System/user/assistant roles
-   - Prompt formatting
+   - OpenAI message format; `content` is a string or an array of content parts
+   - Text parts are joined with newlines; any other part type (`image_url`,
+     `input_audio`, `file`) is rejected with 400
+   - `system` and `developer` messages are appended to the agent's system prompt
+   - The last message must be from the user (400 otherwise); earlier
+     user/assistant/tool messages become the agent's conversation history
 
 2. **Response Generation**
    - Agent process_query() integration
@@ -131,13 +137,19 @@ src/gaia/api/sse_handler.py      # SSE streaming
 ### Schemas (Pydantic Models)
 
 ```python
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Literal, Optional, Union
+from pydantic import BaseModel, ConfigDict, Field
+
+class ContentPart(BaseModel):
+    """One element of a content-part array. Only type "text" is served."""
+    model_config = ConfigDict(extra="allow")
+    type: str
+    text: Optional[str] = None
 
 class ChatMessage(BaseModel):
-    """Chat message in OpenAI format."""
-    role: Literal["system", "user", "assistant", "tool"]
-    content: Optional[str] = None
+    """Chat message in OpenAI format. "developer" is treated as "system"."""
+    role: Literal["system", "developer", "user", "assistant", "tool"]
+    content: Union[str, List[ContentPart], None] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
 
@@ -146,9 +158,11 @@ class ChatCompletionRequest(BaseModel):
     model: str = Field(..., description="Model ID — an id registered in AGENT_MODELS")
     messages: List[ChatMessage]
     stream: bool = Field(default=False, description="Enable SSE streaming")
-    temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
+    # Unset keeps the agent's own default. Set values apply to every model
+    # call the agent makes while answering (max_tokens is per call).
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
     max_tokens: Optional[int] = Field(default=None, gt=0)
-    top_p: Optional[float] = Field(default=1.0, ge=0, le=1)
+    top_p: Optional[float] = Field(default=None, ge=0, le=1)
 
 class ChatCompletionResponseMessage(BaseModel):
     """Response message from chat completion."""
@@ -500,17 +514,21 @@ async def stream_chat_completion(
 
 ```python
 async def create_chat_completion(request: ChatCompletionRequest):
-    # 1. Resolve the agent. `get_agent()` takes only model_id.
-    try:
-        agent = registry.get_agent(request.model)
-    except KeyError:
-        raise HTTPException(404, f"Model not found: {request.model}")
+    # 1. Split the request: the final user message is the query, system and
+    #    developer messages are caller system text, the rest is history.
+    #    Raises 400 on a non-text content part or a non-user last message.
+    user_message, history, system_text = _split_conversation(request.messages)
 
-    # 2. Extract user message
-    user_messages = [m for m in request.messages if m.role == "user"]
-    if not user_messages:
-        raise HTTPException(400, "No user message in request")
-    user_message = user_messages[-1].content
+    # 2. Resolve a fresh agent and load the conversation into it.
+    agent = registry.get_agent(request.model)
+    agent.conversation_history = history
+    if system_text:
+        agent.set_caller_system_prompt(system_text)
+    if history or system_text:
+        agent.mark_external_content()  # caller-supplied, not typed this turn
+    if request.temperature is not None:
+        agent.chat.config.temperature = request.temperature
+    # ...same for top_p and max_tokens
 
     # 3. Generate response
     if request.stream:

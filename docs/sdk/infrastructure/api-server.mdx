@@ -35,6 +35,22 @@ uvicorn.run(app, host="127.0.0.1", port=8080)
 # )
 ```
 
+### What a request delivers to the agent
+
+Each request gets a fresh agent, loaded with the conversation the client sent:
+
+- **History** — every message before the final one becomes the agent's
+  conversation history. The final message must be from the user, or the
+  request fails with 400.
+- **System instructions** — `system` and `developer` messages are added after
+  the agent's own system prompt; they don't replace it.
+- **Content parts** — `content` may be a string or an array of parts. Text
+  parts are joined with newlines. Other part types (`image_url`, `input_audio`,
+  `file`) fail with a 400 that names the type.
+- **Sampling** — `temperature`, `top_p`, and `max_tokens` apply to every model
+  call the agent makes while answering, so `max_tokens` caps each call, not
+  the whole answer. Omit them to keep the agent's defaults.
+
 ### CORS
 
 Browser (cross-origin) access is limited to `localhost` / `127.0.0.1` origins

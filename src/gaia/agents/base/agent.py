@@ -1278,6 +1278,8 @@ Do NOT wrap conversational replies in JSON.
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
         self._cancel_event: Optional[threading.Event] = None
+        # System text supplied by an API caller; see set_caller_system_prompt.
+        self._caller_system_prompt: Optional[str] = None
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         if base_url is None:
@@ -1495,6 +1497,10 @@ Do NOT wrap conversational replies in JSON.
         custom = self._get_system_prompt()
         if custom:
             parts.append(custom)
+
+        caller = getattr(self, "_caller_system_prompt", None)
+        if caller:
+            parts.append(caller)
 
         # Native tool_calls models receive the full JSON schemas via ``tools=``
         # (``_openai_tools``). Rendering the one-line text list as well restates
@@ -2023,6 +2029,17 @@ Do NOT wrap conversational replies in JSON.
         recipe. Empty for an agent with no manifest or no always-on entries.
         """
         return frozenset(ref.name for ref in self.skill_sets.always)
+
+    def set_caller_system_prompt(self, text: Optional[str]) -> None:
+        """Add a caller's own system instructions to this agent's system prompt.
+
+        For a front end that serves the agent to clients that send their own
+        system messages, such as the OpenAI-compatible ``gaia api``. The text is
+        placed after the agent's prompt, so it applies on top of the agent's
+        instructions rather than replacing them. ``None`` or ``""`` removes it.
+        """
+        self._caller_system_prompt = text or None
+        self.rebuild_system_prompt()
 
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
