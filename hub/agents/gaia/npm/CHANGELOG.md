@@ -27,6 +27,11 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **A shell command's `cd` now survives to the next one.** Every
+  `run_shell_command` call used to start from scratch, so `cd build` in one
+  call was invisible to the next. `get_shell_state` reads the session's
+  current directory, and `reset_shell_session` returns it to where the task
+  started.
 - **Approve a gated tool over HTTP.** `write_file`, `run_shell_command` and the
   seven other confirmation-gated tools can now run through `/v1/gaia/query`:
   the stream stays open on `needs_confirmation` and
@@ -107,7 +112,7 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 28 of its 81 tools on any one call — a
+  profile.** The model is sent at most 28 of its 83 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
   hatch the model calls mid-turn to pull in a bundle the selector missed.

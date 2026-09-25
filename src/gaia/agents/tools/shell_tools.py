@@ -17,10 +17,11 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.shell_session import ShellSession
 
 logger = logging.getLogger(__name__)
 
@@ -1267,6 +1268,46 @@ class ShellToolsMixin:
         self.max_commands_per_minute = 10
         self.max_commands_per_10_seconds = 3
 
+        # Created on first use: an agent that never runs a command should not
+        # pay for tracking a session it never needed.
+        self._shell_session: Optional[ShellSession] = None
+
+    def _session_cwd_guard(self) -> Callable[[str], bool]:
+        """The predicate the session asks before checkpointing a ``cd``.
+
+        Without it, persistence would be a way around the path policy: ``cd`` to
+        a forbidden directory, then read a file by bare name, and the per-argument
+        check never sees a path to reject. Reuses ``_path_allowed`` -- the same
+        check ``working_directory`` and every step's own path already go
+        through, so a directory the session remembers and one a fresh call
+        would accept can never disagree.
+        """
+        return self._path_allowed
+
+    @property
+    def shell_session(self) -> ShellSession:
+        """This agent's shell session, created on first use."""
+        session = getattr(self, "_shell_session", None)
+        if session is None or session.closed:
+            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            self._shell_session = session
+        return session
+
+    def reset_shell_session(self) -> ShellSession:
+        """Replace the session with a clean one and return it."""
+        previous = getattr(self, "_shell_session", None)
+        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        if previous is not None:
+            previous.close()
+        return self._shell_session
+
+    def close_shell_session(self) -> None:
+        """Tear the session down at task end. Safe to call more than once."""
+        session = getattr(self, "_shell_session", None)
+        if session is not None:
+            session.close()
+            self._shell_session = None
+
     def _validate_shell_command(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its steps.
 
@@ -2094,8 +2135,13 @@ class ShellToolsMixin:
                         }
 
                     cwd = str(Path(working_directory).resolve())
+                    session_scoped = False
                 else:
-                    cwd = str(Path.cwd())
+                    # An explicit working_directory is a one-shot override that
+                    # never touches the session; with none, resume where the
+                    # last call's cd left off.
+                    cwd = self.shell_session.cwd
+                    session_scoped = True
 
                 # Operators, syntax, and the per-command whitelist, for every
                 # segment of every pipeline on the line. Shared with the
@@ -2141,8 +2187,9 @@ class ShellToolsMixin:
                 last_code = 0
                 unhandled_failure = False
                 spawned = False
+                ran_cwd = cwd
 
-                for step, step_cwd in zip(steps, step_cwds):
+                for index, (step, step_cwd) in enumerate(zip(steps, step_cwds)):
                     if not _connector_runs(step.connector, last_code):
                         continue
                     # `||` is the line saying it expects the failure before it;
@@ -2155,6 +2202,12 @@ class ShellToolsMixin:
                         # already applied to the steps that follow it.
                         last_code = 0
                         ran.append({"command": step.text, "return_code": 0})
+                        # Only a cd that actually ran moves the session.
+                        ran_cwd = (
+                            step_cwds[index + 1]
+                            if index + 1 < len(step_cwds)
+                            else walk_cwd
+                        )
                         continue
                     try:
                         result = _run_step(
@@ -2209,6 +2262,15 @@ class ShellToolsMixin:
                     ran.append({"command": step.text, "return_code": last_code})
 
                 duration = time.monotonic() - start_time
+
+                # Checkpoint where the cd's that actually ran left off, so the
+                # NEXT separate call starts there. The pre-flight walk applies
+                # every cd on the line unconditionally, so it is not the answer
+                # here: a cd that `&&`/`||` skipped, or that a timeout cut the
+                # line before, never happened and must not move the session.
+                # A one-shot working_directory never touches it either way.
+                if session_scoped:
+                    self.shell_session.set_cwd(ran_cwd)
 
                 # One line is one model step, so it costs one slot however many
                 # commands it chains.
@@ -2267,3 +2329,38 @@ class ShellToolsMixin:
             except Exception as exc:
                 logger.error(f"Error executing shell command: {exc}")
                 return {"status": "error", "error": str(exc), "has_errors": True}
+
+        @tool(
+            atomic=True,
+            display_label="Shell state",
+        )
+        def get_shell_state() -> Dict[str, Any]:
+            """Report the shell session's current working directory.
+
+            Shell commands share one session, so a `cd` from an earlier command
+            (when it was not a one-shot `working_directory` override) is still
+            in effect. Call this to read that directory instead of guessing it.
+            """
+            return {
+                "status": "success",
+                "cwd": self.shell_session.cwd,
+                "has_errors": False,
+            }
+
+        @tool(
+            atomic=True,
+            display_label="Reset shell",
+        )
+        def reset_shell_session() -> Dict[str, Any]:
+            """Return the shell session to the directory it started in.
+
+            Use this when the session is in the wrong directory, or as a clean
+            slate at the start of an unrelated task.
+            """
+            session = self.reset_shell_session()
+            return {
+                "status": "success",
+                "message": "Shell session reset.",
+                "cwd": session.cwd,
+                "has_errors": False,
+            }
