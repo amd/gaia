@@ -105,6 +105,21 @@ class TestToolCalls:
         assert result.tool_calls_passed == len(cm.TOOL_CASES)
 
 
+class TestLooseComparison:
+    def test_a_number_sent_as_a_string_still_counts(self):
+        answers = _right_answers()
+        answers[1] = _tool_response(
+            "create_event",
+            {"title": "Design review", "date": "2026-10-02", "duration_minutes": "45"},
+        )
+        client = mock.Mock()
+        client.chat_completions.side_effect = answers
+        result = cm.ModelResult(model="m")
+        cm.check_tool_calls(client, "m", result)
+
+        assert result.tool_calls_passed == len(cm.TOOL_CASES)
+
+
 class TestFiller:
     def test_filler_is_never_a_cache_hit(self):
         assert cm._filler(1000).splitlines()[0] != cm._filler(1000).splitlines()[0]
@@ -176,6 +191,29 @@ class TestCompare:
         # A built-in: no registration fields, which Lemonade would 400.
         assert client.ensure_model_downloaded.call_args.kwargs == {"timeout": 7200 * 4}
 
+    def test_an_unknown_model_is_sized_from_lemonades_catalog(self, tmp_path):
+        client = _client(memory_gb=16.0)
+        client.list_models.return_value = {
+            "data": [{"id": "Qwen3-30B-A3B-Instruct-2507-HRX", "size": 18.6}]
+        }
+        with mock.patch.object(cm, "LemonadeClient", return_value=client):
+            results = cm.compare(
+                ["Qwen3-30B-A3B-Instruct-2507-HRX"], 65536, None, False, tmp_path
+            )
+
+        assert results[0].fits is False  # 18.6 GB does not fit 16 GB
+        client.ensure_model_downloaded.assert_not_called()
+
+    def test_a_model_of_unknown_size_is_never_downloaded(self, tmp_path):
+        client = _client()
+        client.list_models.return_value = {"data": []}
+        with mock.patch.object(cm, "LemonadeClient", return_value=client):
+            results = cm.compare(["Mystery-GGUF"], 65536, None, False, tmp_path)
+
+        assert results[0].fits is False
+        assert "unknown download size" in results[0].fit_reason
+        client.ensure_model_downloaded.assert_not_called()
+
     def test_unreachable_server_names_gaia_init(self, tmp_path):
         client = _client()
         client.health_check.side_effect = LemonadeClientError("refused")
@@ -195,6 +233,29 @@ class TestExitCode:
 
         assert code == 1
         assert "Compute error." in (tmp_path / "results.md").read_text(encoding="utf-8")
+
+    def test_errored_agent_tasks_fail_the_run(self, tmp_path):
+        client = _client()
+        summary = {"tasks": 4, "passed": 3, "errors": 1, "quality": 4.0}
+        with (
+            mock.patch.object(cm, "LemonadeClient", return_value=client),
+            mock.patch.object(cm, "run_tasks", return_value=summary),
+        ):
+            code = cm.main(
+                [
+                    "--models",
+                    cm.QWEN3_30B_MODEL_NAME,
+                    "--tasks",
+                    "core",
+                    "--out",
+                    str(tmp_path),
+                ]
+            )
+
+        assert code == 1
+        assert "3/4 (1 errored)" in (tmp_path / "results.md").read_text(
+            encoding="utf-8"
+        )
 
     def test_a_clean_run_passes(self, tmp_path):
         client = _client()

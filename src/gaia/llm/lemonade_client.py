@@ -233,8 +233,8 @@ DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # gaia.llm.model_fit says it fits, and records the pick as ``default_model``.
 LARGE_DEFAULT_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 
-# The faster big-PC candidate: a Lemonade built-in, 2-5x faster decode than
-# Flash on Strix Halo, but text-only. Supported and switchable; which one is the
+# The other big-PC candidate: a Lemonade built-in, reported 2-5x faster decode
+# than Flash on Strix Halo, but text-only. Supported and switchable; which one is the
 # default is settled by `util/compare_local_models.py` on real hardware.
 QWEN3_30B_MODEL_NAME = "Qwen3-30B-A3B-Instruct-2507-GGUF"
 
@@ -550,8 +550,10 @@ class ModelRequirement:
     mmproj: Optional[str] = None
     vision: bool = False
     reasoning: bool = False
-    # Download size in GB, for the fit check (gaia.llm.model_fit). Built-ins
-    # leave it None — Lemonade's catalog reports their size.
+    # Download size in GB, for the fit check (gaia.llm.model_fit). A built-in
+    # may leave it None, since Lemonade's catalog reports its size; set it to
+    # judge fit without a running server (the default ladder, the model
+    # comparison script).
     size_gb: Optional[float] = None
     # Oldest Lemonade whose bundled llama.cpp can load the model.
     min_lemonade_version: Optional[str] = None

@@ -28,7 +28,7 @@
       "id": "Qwen3-30B-A3B-Instruct-2507-GGUF",
       "provider": "local",
       "label": "Qwen3 30B A3B Instruct 2507",
-      "note": "faster than Flash on the same PCs, text only (~19 GB)"
+      "note": "reported faster than Flash on the same PCs, text only (~17 GB)"
     },
     {
       "id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",

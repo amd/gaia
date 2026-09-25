@@ -13,8 +13,9 @@ Lemonade Server:
 - agent quality (``--tasks SUITE``): the flagship agent's scored task suite,
   ``gaia eval tasks run``, graded by the Claude judge.
 
-A model that does not fit this PC, or that this Lemonade is too old to run, is
-reported and skipped, never downloaded.
+A model that does not fit this PC, that this Lemonade is too old to run, or
+whose size neither GAIA nor Lemonade's catalog knows, is reported and skipped,
+never downloaded.
 
 Usage::
 
@@ -219,7 +220,25 @@ def measure_speed(client: LemonadeClient, model: str, label: str, tokens: int):
 
 
 def _loose(value: Any) -> Any:
-    return value.strip().lower() if isinstance(value, str) else value
+    """Compare as a tool layer would: case- and space-blind, "45" == 45."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lstrip("-").isdigit():
+            return int(stripped)
+        return stripped.lower()
+    return value
+
+
+def _catalog_size(client: LemonadeClient, model: str) -> Optional[float]:
+    """The download size Lemonade's own catalog lists for *model*, if any."""
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    for entry in client.list_models(show_all=True).get("data", []):
+        if isinstance(entry, dict) and _model_ids_match(entry.get("id"), model):
+            size = entry.get("size")
+            if isinstance(size, (int, float)) and size > 0:
+                return float(size)
+    return None
 
 
 def check_tool_calls(client: LemonadeClient, model: str, result: ModelResult):
@@ -315,13 +334,22 @@ def compare(models, ctx: int, suite: Optional[str], judge: bool, out: Path):
         result = ModelResult(model=model)
         results.append(result)
         mr = find_model_requirement(model)
-        size = mr.size_gb if mr else None
-        if size:
-            verdict = check_fit(size, capacity)
-            result.fits, result.fit_reason = verdict.fits, verdict.reason
-            if not verdict.fits:
-                print(f"\n== {model}: skipped, {verdict.reason}")
-                continue
+        try:
+            size = (mr.size_gb if mr else None) or _catalog_size(client, model)
+        except LemonadeClientError as e:
+            result.error = f"could not read Lemonade's model catalog: {e}"
+            print(f"\n== {model}: {result.error}")
+            continue
+        if not size:
+            result.fits = False
+            result.fit_reason = "unknown download size; not downloading it blind"
+            print(f"\n== {model}: skipped, {result.fit_reason}")
+            continue
+        verdict = check_fit(size, capacity)
+        result.fits, result.fit_reason = verdict.fits, verdict.reason
+        if not verdict.fits:
+            print(f"\n== {model}: skipped, {verdict.reason}")
+            continue
         supported = check_server_supports(
             mr.min_lemonade_version if mr else None, server_version
         )
@@ -385,6 +413,7 @@ def report(results: List[ModelResult], ctx: int) -> str:
         tasks = r.tasks or {}
         passed = (
             f"{tasks['passed']}/{tasks['tasks']}"
+            + (f" ({tasks['errors']} errored)" if tasks.get("errors") else "")
             if "passed" in tasks
             else tasks.get("error", "—")
         )
@@ -442,6 +471,7 @@ def main(argv=None) -> int:
         or any(s.error for s in r.speed)
         or any("request failed" in f for f in r.tool_failures)
         or (r.tasks or {}).get("error")
+        or (r.tasks or {}).get("errors")
     ]
     if broken:
         print(f"Incomplete: requests failed for {', '.join(broken)} (see above).")
