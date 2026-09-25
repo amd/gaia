@@ -2021,11 +2021,9 @@ class ShellToolsMixin:
         """True once either cancel channel has fired.
 
         Two of them: the user's Stop (``_wait_interrupt_signal``) and the agent
-        loop giving up on this tool call (``tools.tool_cancelled``). Either one
+        loop giving up on this tool call (``tool_cancelled``). Either one
         means nobody is waiting for the output any more.
         """
-        from gaia.agents.base.tools import tool_cancelled
-
         return self._wait_interrupt_signal().is_set() or tool_cancelled()
 
     def _sleep_unless_cancelled(self, seconds: float) -> bool:

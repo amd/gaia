@@ -1255,6 +1255,8 @@ class InitCommand:
 
             if result.success:
                 self._print_success(f"Installed Lemonade v{result.version}")
+                if result.restart_required:
+                    self._print_warning(result.message)
 
                 # Refresh PATH so current session can find lemonade-server
                 if self.verbose:
