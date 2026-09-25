@@ -125,8 +125,10 @@ DOC_BUNDLES = [
     ),
     ToolBundle(
         name="shell",
-        members=frozenset({"run_shell_command", "get_system_info"}),
-        description="Run shell commands and query the system.",
+        members=frozenset(
+            {"run_shell_command", "wait_for_condition", "get_system_info"}
+        ),
+        description="Run shell commands, wait on a condition, and query the system.",
     ),
     ToolBundle(
         name="clipboard",
@@ -373,12 +375,16 @@ FULL_BUNDLES = [
         members=frozenset(
             {
                 "run_shell_command",
+                "wait_for_condition",
                 "execute_python_file",
                 "run_python",
                 "get_system_info",
             }
         ),
-        description="Run shell commands, Python scripts and snippets, and query the system.",
+        description=(
+            "Run shell commands and Python scripts, wait on a condition, and "
+            "query the system."
+        ),
     ),
     ToolBundle(
         name="clipboard",

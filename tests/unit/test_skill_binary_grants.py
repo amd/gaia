@@ -1411,24 +1411,32 @@ def _run_capturing_subprocess(host, command):
     import gaia.agents.tools.shell_tools as shell_module
 
     seen = {}
-    real_run = shell_module.subprocess.run
+    # Two seams, because a step takes one of two paths: a lone segment is
+    # spawned directly, a pipeline is chained by _run_pipeline.
+    real_popen = shell_module.subprocess.Popen
     real_pipeline = shell_module._run_pipeline
 
-    def fake_run(args, **kwargs):
+    class _FakeProcess:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+    def fake_popen(args, **kwargs):
         seen["args"] = args
         seen["shell"] = kwargs.get("shell", False)
-        return subprocess_module.CompletedProcess(args, 0, "", "")
+        return _FakeProcess()
 
-    def fake_pipeline(segments, modes, envs, cwd, timeout):
+    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None):
         seen["pipeline"] = segments
         return subprocess_module.CompletedProcess(segments, 0, "", "")
 
-    shell_module.subprocess.run = fake_run
+    shell_module.subprocess.Popen = fake_popen
     shell_module._run_pipeline = fake_pipeline
     try:
         _captured_shell_tool(host)(command=command)
     finally:
-        shell_module.subprocess.run = real_run
+        shell_module.subprocess.Popen = real_popen
         shell_module._run_pipeline = real_pipeline
     return seen
 
