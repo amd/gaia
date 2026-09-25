@@ -242,7 +242,9 @@ class TestMisfires:
         store = _store_with(tmp_path, _make_schedule("morning-brief"))
         scheduler = daemon.build_scheduler(store)
         due = datetime(2026, 1, 1, 7, 0, tzinfo=timezone.utc)
-        event = JobSubmissionEvent(EVENT_JOB_MAX_INSTANCES, "morning-brief", None, [due])
+        event = JobSubmissionEvent(
+            EVENT_JOB_MAX_INSTANCES, "morning-brief", None, [due]
+        )
 
         with caplog.at_level("WARNING", logger=daemon.log.name):
             scheduler._dispatch_event(event)
