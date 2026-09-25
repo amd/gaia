@@ -813,7 +813,7 @@ class TestNonStreamingEmailFailsLoud:
         # Pinned exact string — a future rewording must update this test
         # deliberately, not slip through unnoticed.
         assert exc_info.value.detail == (
-            "Email chat requires streaming (stream=true); "
+            "The email agent requires streaming (stream=true); "
             "non-streaming email chat is not supported."
         )
 
@@ -861,10 +861,10 @@ class TestNonStreamingEmailFailsLoud:
 
 
 class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
-    """Source-shape regression (#2109): the streaming email branch in
-    ``_run_agent`` (the second ``elif agent_type == "email":`` in this
+    """Source-shape regression (#2109): the streaming sidecar branch in
+    ``_run_agent`` (the second ``elif _should_relay_to_sidecar(...)`` in this
     module — the first is the non-streaming ``_do_chat()`` HTTPException
-    branch tested above) must relay via ``_dispatch_email_query`` and then
+    branch tested above) must relay via ``_dispatch_sidecar_query`` and then
     ``return`` immediately.
 
     It must never fall through into the shared agent trunk that follows the
@@ -883,10 +883,11 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
             _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
         ).read_text(encoding="utf-8")
 
-        matches = list(re.finditer(r'elif agent_type == "email":', src))
+        matches = list(re.finditer(r"elif _should_relay_to_sidecar\(agent_type, ", src))
         assert len(matches) == 2, (
-            'Expected exactly 2 occurrences of `elif agent_type == "email":` '
-            "in _chat_helpers.py (the non-streaming _do_chat HTTPException "
+            "Expected exactly 2 occurrences of "
+            "`elif _should_relay_to_sidecar(agent_type, ...)` in "
+            "_chat_helpers.py (the non-streaming _do_chat HTTPException "
             f"branch, and the streaming _run_agent dispatch branch). Found "
             f"{len(matches)} — did the source structure change? Update this "
             "test's assumptions."
@@ -904,9 +905,9 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
         )
         block = src[second_start : second_start + next_branch.start()]
 
-        assert "_dispatch_email_query(" in block, (
-            "Streaming email branch must call _dispatch_email_query(...) — "
-            'see the second `elif agent_type == "email":` in '
+        assert "_dispatch_sidecar_query(" in block, (
+            "Streaming sidecar branch must call _dispatch_sidecar_query(...) "
+            "— see the second `elif _should_relay_to_sidecar(...)` in "
             "src/gaia/ui/_chat_helpers.py (_run_agent)."
         )
 
@@ -916,8 +917,8 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
         # the whole if/elif chain and assumes a constructed in-process agent.
         lines = [ln for ln in block.splitlines() if ln.strip()]
         assert lines[-1].strip() == "return", (
-            "Streaming email branch must end with a bare `return` "
-            "immediately after _dispatch_email_query(...) — falling "
+            "Streaming sidecar branch must end with a bare `return` "
+            "immediately after _dispatch_sidecar_query(...) — falling "
             "through into the shared agent trunk would call "
             "agent.process_query on a non-existent in-process agent. "
             f"Last line was: {lines[-1]!r}"

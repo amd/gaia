@@ -434,6 +434,8 @@ RRF score = 0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)
 
 - AND semantics by default. If zero results, automatic OR fallback.
 - Query sanitized via `_sanitize_fts5_query()` to strip FTS5 special characters.
+  Each remaining word is quoted, so operator words (`AND`, `OR`, `NOT`, `NEAR`)
+  match literally instead of being parsed as FTS5 syntax.
 - Input capped at 500 chars before regex processing.
 
 ### Cross-Encoder Reranking

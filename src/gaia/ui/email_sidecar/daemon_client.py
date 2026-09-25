@@ -56,12 +56,23 @@ class SidecarHandle:
     agent_version: Optional[str]
     mode: Optional[str]
     pid: Optional[int]
+    #: Which sidecar this handle is for. Defaults to email so every
+    #: pre-#4161 construction (tests, the email REST router) is unchanged.
+    agent_id: str = "email"
 
     def proxy(self, **kwargs):
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+        """Build the request proxy for THIS handle's agent.
+
+        Email gets its mailbox/calendar subclass; every other sidecar gets the
+        agent-agnostic transport, so a flagship proxy cannot offer a mailbox
+        route it would only 404 on.
+        """
+        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy, SidecarProxy
 
         kwargs.setdefault("auth_token", self.token)
-        return EmailSidecarProxy(self.base_url, **kwargs)
+        if self.agent_id == "email":
+            return EmailSidecarProxy(self.base_url, **kwargs)
+        return SidecarProxy(self.base_url, agent_id=self.agent_id, **kwargs)
 
 
 def _wrap_daemon_error(e: DaemonError) -> SidecarError:
@@ -134,6 +145,7 @@ def acquire_handle(agent_id: str = "email") -> SidecarHandle:
     # Never log this body — it carries the sidecar bearer token.
     body = r.json()
     return SidecarHandle(
+        agent_id=agent_id,
         base_url=body["base_url"],
         token=body["token"],
         api_version=body.get("api_version"),

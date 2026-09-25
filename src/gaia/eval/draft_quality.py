@@ -45,6 +45,7 @@ from typing import Any, Callable, Mapping
 
 from gaia.agents.install_hints import agent_not_installed_message
 from gaia.eval.fixture_paths import resolve_repo_fixture
+from gaia.eval.judge_outage import judge_completion_text
 
 # ---------------------------------------------------------------------------
 # Corpus loading (offline)
@@ -272,6 +273,11 @@ def make_claude_judge(model: str | None = None) -> Callable[[str], str]:
     Lazy import so the module stays importable (and unit-testable) without
     the ``[eval]`` extras; ``ClaudeClient`` itself fails loud when the judge
     credential is absent.
+
+    An API failure that means the judge is *unreachable* (out of credit, key
+    rejected) is re-raised as :class:`~gaia.eval.judge_outage.JudgeOutageError`
+    so it reads as an outage rather than a bad score. Anything else propagates
+    untouched — a real bug must not be relabelled as a billing problem.
     """
     from gaia.eval.claude import ClaudeClient
 
@@ -279,12 +285,7 @@ def make_claude_judge(model: str | None = None) -> Callable[[str], str]:
     client = ClaudeClient(model=model)
 
     def judge(prompt: str) -> str:
-        content = client.get_completion(prompt)
-        # Anthropic returns a list of content blocks; the verdict is text.
-        parts = [
-            getattr(block, "text", "") for block in content if hasattr(block, "text")
-        ]
-        return "".join(parts)
+        return judge_completion_text(client, prompt)
 
     return judge
 
@@ -515,6 +516,11 @@ def judge_drafts(
     no draft stays ``ERRORED`` with its generation error; a judge reply that
     cannot be parsed becomes ``ERRORED`` with the parse error — visible in the
     scorecard, never a silent pass or fail.
+
+    Scored only — the ``ValueError`` catch below must never widen to cover a
+    :class:`~gaia.eval.judge_outage.JudgeOutageError`. An unreachable judge
+    scored nothing, so recording it as ``ERRORED`` rows would publish an
+    outage as a quality regression; it aborts the run instead.
     """
     cases = corpus_cases(corpus)
     results: list[dict[str, Any]] = []

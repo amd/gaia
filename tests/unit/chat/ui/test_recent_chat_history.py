@@ -179,7 +179,7 @@ async def test_switching_to_email_preserves_prior_pairs(transcript):
     db, session = transcript
     captured = []
 
-    def dispatch(handler, request, history, model):
+    def dispatch(handler, request, history, model, agent_type, session_id=None):
         captured.extend(history)
         handler._emit({"type": "agent_done"})
 
@@ -188,7 +188,7 @@ async def test_switching_to_email_preserves_prior_pairs(transcript):
     )
     with (
         patch.object(helpers, "_get_cached_agent", return_value=None),
-        patch.object(helpers, "_dispatch_email_query", side_effect=dispatch),
+        patch.object(helpers, "_dispatch_sidecar_query", side_effect=dispatch),
         patch.object(helpers, "_maybe_update_session_title", new_callable=AsyncMock),
     ):
         async for _ in helpers._stream_chat_impl(

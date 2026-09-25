@@ -30,6 +30,12 @@ from gaia.agents.install_hints import agent_not_installed_message
 from gaia.daemon.broker_client import BrokerUnavailableError
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
+from gaia.ui.email_sidecar.profiles import (
+    _NO_PROFILE,
+    SIDECAR_AGENT_IDS,
+    api_version_supported,
+    profile_for,
+)
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -118,18 +124,65 @@ def get_agent_registry():
 # branch below. Since #2408, an installed sidecar IS registry-loadable (the
 # installer bridge registers it for the connectors grant flow), but its
 # factory always raises — chat dispatch must still go through the branch
-# below, never registry.create_agent().
-_SIDECAR_AGENT_TYPES = frozenset({"email"})
+# below, never registry.create_agent(). Derived from the relay profiles so a
+# new sidecar cannot be half-wired: #4161 shipped the flagship as a binary
+# sidecar and left this set at {"email"}, which sent every flagship turn into
+# registry.create_agent() and surfaced the stub factory's RuntimeError.
+_SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
+
+
+def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
+    """Whether *agent_type* must be served by its daemon sidecar this turn.
+
+    The same agent id can run either way, and which one you have depends on
+    how it was installed, not on its name:
+
+    * a Hub **binary** install ships no importable wheel, so the registry
+      holds only the stand-in whose factory raises — it MUST relay;
+    * a **wheel**/dev install registers a real factory and runs in-process,
+      which is the path ``gaia eval agent`` and a source checkout use.
+
+    Email is the exception and says so on its profile: its in-process loop was
+    retired in #2109, so it relays even when the wheel is importable.
+
+    The "no registration" branches below are defence in depth, not a live
+    path: ``_agent_type_unknown`` already rejects a non-always-relay sidecar
+    that does not resolve, so chat never reaches them today. They keep this
+    function correct on its own terms — a missing registration relays, unless
+    the registry recorded an import failure, in which case that recorded
+    reason is the answer the user needs and relaying would bury it.
+    """
+    profile = profile_for(agent_type)
+    if profile is None:
+        return False
+    if profile.always_relay:
+        return True
+    if registry is None:
+        return True
+    reg = registry.get(agent_type)
+    if reg is not None:
+        # Read the field, never getattr-with-a-default: defaulting a
+        # registration that somehow lacks it to "in-process" would silently
+        # restore the very failure this routing exists to prevent.
+        return bool(reg.is_sidecar)
+    return not registry.get_load_error(agent_type)
 
 
 def _agent_type_unknown(agent_type: str, registry) -> bool:
     """True when *agent_type* must be rejected as unknown before dispatch.
 
-    ``chat`` is the built-in default and sidecar types have their own dispatch
-    branch — neither goes through the registry. Everything else must resolve
-    in the registry or the caller returns the unavailable-agent error.
+    ``chat`` is the built-in default and never goes through the registry.
+    Email is exempt too: its relay does not need a registration to work.
+
+    Every other agent — the flagship included — must resolve in the registry.
+    An agent that was never installed is worth saying so about: "install it
+    from the Hub" beats asking the daemon to start a sidecar that isn't there
+    and surfacing whatever it says about the failure.
     """
-    if agent_type == "chat" or agent_type in _SIDECAR_AGENT_TYPES:
+    if agent_type == "chat":
+        return False
+    profile = profile_for(agent_type)
+    if profile is not None and profile.always_relay:
         return False
     return bool(registry) and not registry.get(agent_type)
 
@@ -1006,24 +1059,12 @@ def _session_mail_provider(session: dict) -> str | None:
     return session.get("mail_provider") or None
 
 
-# Minimum sidecar contract version the /query relay requires (#2109). The
-# daemon's own version gate only pins MAJOR (the spec's expected_api_major),
-# so a pre-2.4 Hub binary passes that handshake and then 404s every /query
-# call — this finer MAJOR.MINOR check catches it before the first POST.
-_EMAIL_QUERY_MIN_API_VERSION = (2, 4)
-
-
-def _email_query_version_supported(api_version: str | None) -> bool:
-    """True when ``api_version`` is at least the /query relay's floor (2.4)."""
-    if not api_version:
-        return False
-    parts = str(api_version).split(".")
-    try:
-        major = int(parts[0])
-        minor = int(parts[1]) if len(parts) > 1 else 0
-    except (ValueError, IndexError):
-        return False
-    return (major, minor) >= _EMAIL_QUERY_MIN_API_VERSION
+# The per-agent /query contract floor and its upgrade copy live on the relay
+# profile (``gaia.ui.email_sidecar.profiles``); ``api_version_supported``
+# applies it. The daemon's own gate only pins MAJOR (the spec's
+# expected_api_major), so a too-old Hub binary passes that handshake and then
+# 404s every /query call — the profile's finer MAJOR.MINOR check catches it
+# before the first POST.
 
 
 def _query_context_from_history(history_pairs: list) -> list[dict]:
@@ -1065,13 +1106,47 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
     agent.conversation_history = select_history(turns, history_budget(agent, query))
 
 
-def _dispatch_email_query(
+def _probe_is_only_unreachable(init_body: dict | None) -> bool:
+    """True when the sidecar's ``/init`` 503 is ONLY "cannot reach Lemonade".
+
+    That is the one cause worth continuing past: the probe reports it against
+    an auth-protected Lemonade whose ``/query`` answers normally. The other
+    two causes it reports — the model is not downloaded, the server is below
+    the required version — are not false negatives, and a turn that proceeds
+    past them fails deeper with a worse message than the hint already gives.
+    """
+    lemonade = (init_body or {}).get("lemonade") or {}
+    if lemonade.get("reachable") is not False:
+        return False
+    # Unreachable is the ONLY complaint: nothing can be known about the model
+    # or the version until the server answers, so those are not evidence.
+    return True
+
+
+def _host_corrected_hint(hint: str | None) -> str | None:
+    """Replace a sidecar hint that names a command this host does not have.
+
+    An agent package ships its own copy of the "start Lemonade" advice, and an
+    older one still names ``lemonade-server serve`` — a CLI that Lemonade
+    10.7 removed. The host knows what is actually installed, so it substitutes
+    its own answer rather than relaying one the user cannot act on.
+    """
+    if not hint or "lemonade-server serve" not in hint:
+        return hint
+    from gaia.llm.lemonade_launcher import describe_start_hint
+
+    return describe_start_hint().instruction
+
+
+def _dispatch_sidecar_query(
     sse_handler,
     request: ChatRequest,
     history_pairs: list,
     model_id: str | None,
+    agent_type: str,
+    session_id: str | None = None,
 ) -> None:
-    """Handle ``agent_type == "email"`` for the streaming chat producer (#2109).
+    """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1090,52 +1165,81 @@ def _dispatch_email_query(
     """
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
-    from gaia.ui.email_sidecar.relay import (
-        EMAIL_QUERY_VERSION_UPGRADE_MESSAGE,
-        relay_query,
-    )
+    from gaia.ui.email_sidecar.relay import relay_query
+
+    profile = profile_for(agent_type)
+    if profile is None:
+        # Unreachable via the dispatch branches (both gate on
+        # _SIDECAR_AGENT_TYPES, which IS the profile registry) — loud rather
+        # than a silent no-answer turn if a future caller bypasses them.
+        raise ValueError(
+            f"'{agent_type}' has no sidecar relay profile; it cannot be "
+            f"relayed. Known sidecars: {sorted(SIDECAR_AGENT_IDS)}."
+        )
 
     try:
-        handle = daemon_client.acquire_handle()
+        handle = daemon_client.acquire_handle(agent_type)
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
 
-    if not _email_query_version_supported(handle.api_version):
+    if not api_version_supported(profile, handle.api_version):
         sse_handler._emit(
-            {"type": "agent_error", "content": EMAIL_QUERY_VERSION_UPGRADE_MESSAGE}
+            {"type": "agent_error", "content": profile.version_upgrade_message}
         )
         return
 
     proxy = handle.proxy()
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
-    # /v1/email/init is contract ("not ready yet"), not a transport failure.
+    # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
     try:
         status_code, init_body = proxy.init()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
     if status_code != 200:
-        hint = (init_body or {}).get("hint")
-        msg = (
-            "The email agent isn't ready yet"
-            + (f": {hint}." if hint else ".")
-            + " Finish setup from the Email agent card, then retry."
+        hint = _host_corrected_hint((init_body or {}).get("hint"))
+        if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
+            msg = (
+                f"The {profile.display_name} agent isn't ready yet"
+                + (f": {hint}." if hint else ".")
+                + f" Finish setup from the {profile.display_name} agent card, "
+                "then retry."
+            )
+            sse_handler._emit({"type": "agent_error", "content": msg})
+            return
+        # Advisory only: the probe is documented as unreliable (see
+        # RelayProfile.readiness_is_blocking), so it is recorded and framed as
+        # a probe result rather than stated as fact, and the run continues.
+        logger.info(
+            "chat: %s sidecar reported not ready (continuing): %s",
+            agent_type,
+            hint or "no hint given",
         )
-        sse_handler._emit({"type": "agent_error", "content": msg})
-        return
+        if hint:
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "message": f"Readiness check reported: {hint} — continuing.",
+                }
+            )
 
     if sse_handler.cancelled.is_set():
         return
 
     context = _query_context_from_history(history_pairs)
+    # Known gap: session-attached documents do not cross this hop. The body
+    # carries the transcript, not rag_file_paths, so a relayed agent cannot
+    # see a file the user attached in this session (#4166).
     relay_query(
         sse_handler,
         proxy,
         query=request.message,
         context=context,
         model_id=model_id,
+        profile=profile,
+        session_id=session_id,
     )
 
 
@@ -1549,19 +1653,20 @@ async def _get_chat_response(
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
             _register_agent_memory_ops(agent)
-        elif agent_type == "email":
-            # #2109: email chat is served exclusively by the sidecar's
-            # canonical /query loop, which is a streaming-only SSE contract
-            # (see the streaming branch in _stream_chat_impl). There is no
+        elif _should_relay_to_sidecar(agent_type, _agent_registry):
+            # #2109: a sidecar agent is served exclusively by its canonical
+            # /query loop, which is a streaming-only SSE contract (see the
+            # streaming branch in _stream_chat_impl). There is no
             # non-streaming shape to relay, and zero verified callers exist
             # today (the frontend hardcodes stream=true; ChatRequest.stream
             # defaults True). Fail loud rather than ship a speculative,
             # untested drained-response path.
+            named = (profile_for(agent_type) or _NO_PROFILE).display_name
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Email chat requires streaming (stream=true); "
-                    "non-streaming email chat is not supported."
+                    f"The {named} agent requires streaming (stream=true); "
+                    f"non-streaming {named} chat is not supported."
                 ),
             )
         else:
@@ -2055,23 +2160,26 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         }
                     )
 
-                elif agent_type == "email":
-                    # #2109: email chat is a SELF-CONTAINED early-exit path —
-                    # it relays the sidecar's canonical /query loop and
+                elif _should_relay_to_sidecar(agent_type, _agent_registry):
+                    # #2109: a sidecar turn is a SELF-CONTAINED early-exit
+                    # path — it relays the sidecar's canonical /query loop and
                     # returns HERE, before the shared trunk below (which
                     # assumes a constructed in-process `agent` and calls
                     # `agent.process_query`/`_maybe_load_expected_model`).
                     # The sidecar owns its own model lifecycle; nothing below
-                    # this branch may run for an email turn.
+                    # this branch may run for a sidecar turn.
                     logger.info(
-                        "chat: relaying email query (sidecar) for session %s",
+                        "chat: relaying %s query (sidecar) for session %s",
+                        agent_type,
                         session_id[:8],
                     )
-                    _dispatch_email_query(
+                    _dispatch_sidecar_query(
                         sse_handler,
                         request,
                         history_pairs,
                         model_id,
+                        agent_type,
+                        session_id=session_id,
                     )
                     return
 

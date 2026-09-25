@@ -478,6 +478,11 @@ class AgentRegistration:
     # Agent Hub metadata — used by the Agent UI to render rich discovery cards.
     # Hardcoded for builtins (lazy-import factories must not instantiate agents);
     # custom agents declare via class attributes (AGENT_CATEGORY, etc.).
+    #: True only for the stand-in a binary (frozen-sidecar) install registers.
+    #: Its ``factory`` raises by design — the agent runs out-of-process — so
+    #: this is how a caller tells "instantiate it here" from "relay to the
+    #: daemon" without keeping a second list of agent ids (#4161).
+    is_sidecar: bool = False
     category: str = "general"
     tags: List[str] = field(default_factory=list)
     icon: str = ""  # lucide icon name (e.g. "message-circle", "zap")
@@ -1269,6 +1274,12 @@ class AgentRegistry:
         agent_id: str,
         display_name: str,
         required_connections: List[ConnectorRequirement],
+        *,
+        description: str = "",
+        conversation_starters: Optional[List[str]] = None,
+        category: str = "",
+        tags: Optional[List[str]] = None,
+        icon: str = "",
     ) -> None:
         """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
 
@@ -1280,6 +1291,12 @@ class AgentRegistry:
         a factory that fails loudly rather than importing or instantiating
         the out-of-process agent — the UI backend never imports the hub
         wheel (server.py:621-629).
+
+        The card fields (*description*, *conversation_starters*, *category*,
+        *tags*, *icon*) come from the daemon spec, which transcribes them from
+        the package's own registration. Without them the UI renders a
+        generated "<Name> agent" line and falls back to its generic starter
+        prompts — what a hub-installed flagship showed before #4161.
 
         Idempotent: a no-op if *agent_id* (the BARE id, not the namespaced
         one) is already registered — protects a real wheel/custom-agent
@@ -1301,15 +1318,19 @@ class AgentRegistry:
             AgentRegistration(
                 id=agent_id,
                 name=display_name,
-                description=f"{display_name} agent",
+                description=description or f"{display_name} agent",
                 source="installed",
-                conversation_starters=[],
+                conversation_starters=list(conversation_starters or []),
                 factory=_sidecar_factory,
                 agent_dir=None,
                 models=[],
                 hidden=False,
                 required_connections=list(required_connections),
                 namespaced_agent_id=f"installed:{agent_id}",
+                is_sidecar=True,
+                category=category or "general",
+                tags=list(tags or []),
+                icon=icon,
             )
         )
         logger.info(

@@ -439,7 +439,7 @@ On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tr
 </Note>
 
 <Note>
-`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. Both stop paths for the API server — `gaia api stop` and `python -m gaia.api.app stop` — use the same targeting.
+`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. Port-listing and forceful termination commands time out after five seconds and report inspection failures. If only some listeners are terminated, the command reports the killed, refused, and failed processes and exits 1. An empty port exits 0 because the requested stopped state already holds. `--lemonade` propagates failures from its port-based stop path. Both stop paths for the API server — `gaia api stop` and `python -m gaia.api.app stop` — use the same targeting.
 </Note>
 
 ### Agent Command
@@ -1028,6 +1028,39 @@ gaia telegram stop
 | `status` | `--health-port` | 8768 | Health server port. |
 
 [→ Telegram Adapter Guide](/guides/telegram-adapter)
+
+---
+
+### Slack Command
+
+<Card title="Slack" icon="slack" href="/guides/slack">
+  Drive the flagship GAIA agent from a Slack direct message, over Socket Mode.
+</Card>
+
+```bash
+gaia slack setup
+gaia slack start --allowed-users U024BE7LH
+gaia slack status
+gaia slack stop
+```
+
+**Subcommands & options:**
+
+| Subcommand | Option | Default | Description |
+|-----------|--------|---------|-------------|
+| `setup` | `--no-browser` | false | Print the pre-filled create-app URL instead of opening a browser. |
+| `setup` | `--print-url` | false | Print only the create-app URL and exit, for a caller running its own prompts (the TUI's setup panel). |
+| `start` | `--allowed-users` (required) | – | The one Slack member ID allowed to use the agent. Starting with none, or with more than one, is refused. |
+| `start` | `--agent-command` | `gaia-agent` | Command that starts the agent child. |
+| `start` | `--deny-gated-tools` | false | Refuse every tool that would ask for approval, instead of offering buttons. |
+| `start` | `--upload-root` | your home directory | Directory a written file may be uploaded from. Repeatable. |
+| `start` | `--background` | false | Record a PID file so `gaia slack stop` can find the process. |
+| `stop` | – | – | Stop a bridge started with `--background`; clears a stale PID file. |
+| `status` | `--json` | false | Emit detection, configuration, and liveness as JSON. |
+| `connect` | – | – | Store a pair of tokens read from stdin — app-level token first, bot token second. Tokens never go in argv, where `ps` would show them. |
+| `decline` | `--never` | false | Record that you don't want Slack set up; `--never` stops the TUI offering it again. |
+
+[→ Slack Guide](/guides/slack)
 
 ---
 
@@ -1816,10 +1849,11 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 
 ### Flagship Agent Tasks
 
-Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, quality, honesty, tokens, steps and runtime, against main's committed results.
+Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, tested changes, quality, honesty, tokens, steps and runtime, against main's committed results.
 
 ```bash
 gaia eval tasks run --suite core                   # Run the core tasks, then judge them
+gaia eval tasks run --suite adversarial            # Only the trap tasks (red suite, flaky test, hang, ...)
 gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
 gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
 gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
@@ -2450,6 +2484,8 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 ## Schedule
 
 Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
+
+The running daemon reloads schedules every second, so adding, pausing, resuming, removing, or editing a schedule does not require a restart. Pausing or removing a schedule prevents future runs; it does not interrupt a run already in progress.
 
 ```bash
 gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
@@ -3194,7 +3230,7 @@ gaia kill --port 13305
 This command will:
 - Find the process ID (PID) bound to the specified port
 - Forcefully terminate that process
-- Provide feedback about success or failure
+- Report killed, refused, and failed listeners; exit 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and forceful termination commands each have a five-second timeout.
 
 ---
 

@@ -15,8 +15,11 @@ This module contains shared configuration constants used across the evaluation f
 # judge change out explicitly, rather than reading a shifted score as a regression.
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 
-# Claude API pricing (per million tokens) - based on https://www.anthropic.com/pricing
-# Last updated: 2026-08-04
+# Per-million-token pricing for cloud models. An absent model costs 0.0 (local), so
+# every reachable cloud model must be listed or its spend reads as free.
+# ``cached_per_mtok`` absent = cached input bills at the input rate; 0 = free.
+# Claude: https://www.anthropic.com/pricing (read 2026-08-04)
+# Fireworks: https://docs.fireworks.ai/serverless/pricing (read 2026-09-13)
 MODEL_PRICING = {
     # Claude 5 family
     "claude-opus-5": {"input_per_mtok": 5.00, "output_per_mtok": 25.00},
@@ -49,4 +52,30 @@ MODEL_PRICING = {
     "claude-3-haiku-20240307": {"input_per_mtok": 0.25, "output_per_mtok": 1.25},
     # Default fallback for unknown models (using Sonnet pricing)
     "default": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
+    # Fireworks serverless via Lemonade cloud routing. 5.3 cached input costs ~2x 5.2's.
+    "fireworks.glm-5p2": {
+        "input_per_mtok": 1.40,
+        "output_per_mtok": 4.40,
+        "cached_per_mtok": 0.14,
+    },
+    "fireworks.accounts/fireworks/routers/glm-5p2-fast": {
+        "input_per_mtok": 2.10,
+        "output_per_mtok": 6.60,
+        "cached_per_mtok": 0.21,
+    },
+    "fireworks.glm-5p3": {
+        "input_per_mtok": 1.40,
+        "output_per_mtok": 4.40,
+        "cached_per_mtok": 0.26,
+    },
+    "fireworks.glm-5p3-flash": {
+        "input_per_mtok": 0.15,
+        "output_per_mtok": 0.50,
+        "cached_per_mtok": 0.03,
+    },
+    "fireworks.accounts/fireworks/routers/glm-5p3-fast": {
+        "input_per_mtok": 2.10,
+        "output_per_mtok": 6.60,
+        "cached_per_mtok": 0.39,
+    },
 }

@@ -18,10 +18,12 @@ Usage::
 """
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from gaia.factory.harvest.report import (
     coverage_note,
@@ -113,25 +115,134 @@ def _requests(path: Path) -> List[int]:
     return [v for v in seen.values() if v > 0]
 
 
+SNAPSHOT = "requests.json"
+
+# Key under which a snapshot records the corpus it was measured against.
+CORPUS_KEY = "corpus"
+
+
+def corpus_digest(traces: Path) -> str:
+    """Content fingerprint of ``traces.jsonl``."""
+
+    h = hashlib.sha256()
+    with traces.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _recorded_corpus(frozen: Path) -> Optional[str]:
+    """The digest a snapshot recorded, or ``None`` if it predates the key."""
+
+    try:
+        blob = json.loads(frozen.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"{frozen} is not valid JSON ({e}). Delete it and re-run with "
+            "--refresh to re-measure the snapshot."
+        ) from e
+    value = blob.get(CORPUS_KEY)
+    return value if isinstance(value, str) else None
+
+
+def _staleness(cache: Path) -> Tuple[Optional[bool], bool]:
+    """``(is the snapshot stale, was that decided on content)``."""
+
+    frozen = cache / SNAPSHOT
+    traces = cache / "traces.jsonl"
+    if not frozen.exists():
+        return None, False
+    if not traces.exists():
+        return False, False
+    recorded = _recorded_corpus(frozen)
+    if recorded is not None:
+        return recorded != corpus_digest(traces), True
+    return traces.stat().st_mtime > frozen.stat().st_mtime, False
+
+
+def snapshot_is_stale(cache: Path) -> Optional[bool]:
+    """Has the corpus changed under the frozen snapshot?
+
+    ``None`` when there is no snapshot yet.  Otherwise True past the point
+    where every figure derived here describes a corpus that no longer matches
+    the one ``report`` renders.
+
+    Keyed on the *content* of ``traces.jsonl``, not its mtime: ``scan``
+    rewrites that file whole on every run, so its mtime advances even when the
+    rescan found nothing new.  Snapshots frozen before the fingerprint existed
+    carry no digest and fall back to mtime.
+    """
+
+    return _staleness(cache)[0]
+
+
+def snapshot_stamp(cache: Path) -> str:
+    """One line naming which snapshot the figures below were measured on."""
+
+    frozen = cache / SNAPSHOT
+    if not frozen.exists():
+        return ""
+    taken = datetime.fromtimestamp(frozen.stat().st_mtime, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
+    return (
+        f"_Measured on the request snapshot frozen at {taken} "
+        f"(`{SNAPSHOT}`). Re-run with `--refresh` to re-measure._"
+    )
+
+
+def require_fresh_snapshot(cache: Path, refresh: bool, frozen_ok: bool) -> None:
+    """Refuse to narrate a snapshot that no longer matches ``traces.jsonl``.
+
+    Freezing keeps published figures reproducible, so it stays the default —
+    but serving a stale snapshot without saying so puts two different corpora
+    in one report.  Make the caller choose.
+    """
+
+    stale, on_content = _staleness(cache)
+    if refresh or frozen_ok or stale is not True:
+        return
+    frozen, traces = cache / SNAPSHOT, cache / "traces.jsonl"
+    if on_content:
+        problem = (
+            f"{frozen} no longer matches {traces}: the corpus has changed under "
+            "it, so these figures no longer describe the sessions report renders"
+        )
+    else:
+        problem = (
+            f"{frozen} predates the corpus fingerprint and {traces} has been "
+            "rewritten since it was taken, so these figures may disagree with "
+            "the tables report renders"
+        )
+    raise SystemExit(
+        f"{problem}. Pass --refresh to re-measure against the current corpus, "
+        "or --frozen to keep the existing snapshot on purpose."
+    )
+
+
 def collect(
-    cache: Path, projects_root: Path, freeze: bool = True
+    cache: Path,
+    projects_root: Path,
+    freeze: bool = True,
+    refresh: bool = False,
 ) -> Tuple[List[dict], List[int]]:
     """Per-session request sizes, plus the flat list across the whole corpus.
 
     The result is frozen into ``requests.json`` on first run and re-read
     thereafter.  Without that, every figure derived here drifts between runs:
     the raw transcripts are live and grow while the analysis is running, so a
-    published median would not reproduce.  Delete the file to re-measure.
+    published median would not reproduce.  ``refresh`` re-measures instead.
     """
 
-    frozen = cache / "requests.json"
-    if freeze and frozen.exists():
+    frozen = cache / SNAPSHOT
+    if freeze and not refresh and frozen.exists():
         blob = json.loads(frozen.read_text(encoding="utf-8"))
         return blob["sessions"], blob["requests"]
 
     sessions: List[dict] = []
     everything: List[int] = []
-    with (cache / "traces.jsonl").open(encoding="utf-8") as fh:
+    traces = cache / "traces.jsonl"
+    with traces.open(encoding="utf-8") as fh:
         for line in fh:
             t = json.loads(line)
             root = projects_root / t["project"]
@@ -165,7 +276,15 @@ def collect(
             everything.extend(reqs)
     if freeze:
         frozen.write_text(
-            json.dumps({"sessions": sessions, "requests": everything}),
+            json.dumps(
+                {
+                    "sessions": sessions,
+                    "requests": everything,
+                    # Fingerprint the corpus, not its mtime: scan rewrites
+                    # traces.jsonl whole even when the rescan found nothing.
+                    CORPUS_KEY: corpus_digest(traces),
+                }
+            ),
             encoding="utf-8",
         )
     return sessions, everything
@@ -262,9 +381,21 @@ def main() -> None:
         help="Root of the raw Claude Code transcripts.",
     )
     ap.add_argument("--labels", type=Path, default=None)
+    snapshot = ap.add_mutually_exclusive_group()
+    snapshot.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-measure the request snapshot instead of reusing requests.json.",
+    )
+    snapshot.add_argument(
+        "--frozen",
+        action="store_true",
+        help="Use the existing snapshot even if scan has since seen new sessions.",
+    )
     args = ap.parse_args()
 
-    sessions, reqs = collect(args.cache, args.projects)
+    require_fresh_snapshot(args.cache, args.refresh, args.frozen)
+    sessions, reqs = collect(args.cache, args.projects, refresh=args.refresh)
     if not reqs:
         raise SystemExit(
             f"No requests found. Checked {args.projects} for the sessions in "
@@ -273,6 +404,9 @@ def main() -> None:
         )
 
     print("## Prompt size per request\n")
+    stamp = snapshot_stamp(args.cache)
+    if stamp:
+        print(f"{stamp}\n")
     print(distribution_table(reqs))
     print("\n## KV-cache memory these prompts require locally\n")
     print(kv_table(reqs))

@@ -529,6 +529,31 @@ def _sum_conversation_tokens(
     return total_input, total_output
 
 
+def _sum_cached_tokens(conversation: List[Dict[str, Any]]) -> int:
+    """Prompt tokens the backend served from its own cache this turn.
+
+    Reported by a cloud-routed step (Fireworks puts it in
+    ``prompt_tokens_details.cached_tokens``); a local llama.cpp run reports
+    nothing and sums to 0, which is the truth there rather than a gap — the
+    prompt genuinely was not served from a provider-side cache.
+
+    Worth its own total because it is the one token class that is billed
+    differently, and because a turn whose prompt is mostly cache is a very
+    different cost from one that is not.
+    """
+    total = 0
+    for entry in conversation:
+        if entry.get("role") != "system" or not isinstance(entry.get("content"), dict):
+            continue
+        content = entry["content"]
+        if content.get("type") != "stats" or "performance_stats" not in content:
+            continue
+        stats = content["performance_stats"]
+        if isinstance(stats, dict):
+            total += _safe_number(stats.get("cached_tokens"))
+    return total
+
+
 def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
     """Turn's generation rate, from the backend's OWN per-call measurement.
 
@@ -989,16 +1014,11 @@ class Agent(abc.ABC):
     #: skill name -> ids of the deltas currently applied to it.
     _overlaid_skills: Optional[Dict[str, List[str]]] = None
 
-    #: Proactive skill discovery: matches the user's turn against skills that
-    #: are INSTALLED BUT NOT LOADED and activates the winner, so a user never
-    #: has to know a skill's name. ``None`` (the default) leaves every existing
-    #: agent's behavior and composed prompt byte-identical; GaiaAgent builds one.
-    #: See :mod:`gaia.agents.base.skill_discovery`.
-    _skill_discovery: Optional[Any] = None
-
-    #: This turn's discovery note, rendered by
-    #: ``get_skill_discovery_system_prompt``. Cleared and recomputed per turn.
-    _skill_discovery_result: Optional[Any] = None
+    #: List every installed skill in the system prompt so the model can load one
+    #: when the work fits. ``False`` (the default) keeps every other agent's
+    #: composed prompt byte-identical; GaiaAgent turns it on.
+    #: See :mod:`gaia.agents.base.skill_catalog`.
+    _skill_catalog_enabled: bool = False
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -1174,7 +1194,7 @@ Do NOT wrap conversational replies in JSON.
 
         Args:
             use_claude: If True, uses Claude API (default: False)
-            use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
+            use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
@@ -1190,7 +1210,7 @@ Do NOT wrap conversational replies in JSON.
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
-            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
             min_context_size: Minimum context size required; unset uses the model/device resolver.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
@@ -1205,8 +1225,12 @@ Do NOT wrap conversational replies in JSON.
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
 
-        Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
+        Note: Uses local LLM server by default unless use_claude is True.
         """
+        if use_chatgpt:
+            from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+            raise ValueError(REMOVED_PROVIDER_MESSAGE)
         self.device = device
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -1233,6 +1257,12 @@ Do NOT wrap conversational replies in JSON.
         self.debug = debug
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
+        if max_consecutive_repeats < 2:
+            raise ValueError(
+                f"max_consecutive_repeats must be at least 2, got "
+                f"{max_consecutive_repeats}: the guard counts the call being made, "
+                "so below 2 every tool call is a repeat of itself and none runs."
+            )
         self.max_consecutive_repeats = max_consecutive_repeats
         self._current_query: Optional[str] = (
             None  # Store current query for error context
@@ -1257,7 +1287,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
-        if not (use_claude or use_chatgpt or skip_lemonade):
+        if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
                 cloud_model_provider,
@@ -1361,7 +1391,6 @@ Do NOT wrap conversational replies in JSON.
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
-            use_chatgpt=use_chatgpt,
             claude_model=claude_model,
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking
@@ -1897,89 +1926,25 @@ Do NOT wrap conversational replies in JSON.
         """
         return None
 
-    def _discover_skills_for_turn(self, user_input: str) -> None:
-        """Match this turn against installed-but-unloaded skills and act on it.
+    def get_skill_catalog_system_prompt(self) -> str:
+        """Sourcing rule + one line per installed skill, for agents that opt in.
 
-        No-op unless a subclass built a
-        :class:`~gaia.agents.base.skill_discovery.SkillDiscovery` — every other
-        agent's composed prompt stays byte-identical.
-
-        Runs BEFORE :meth:`_refresh_active_tool_filter` so tools the loaded skill
-        registers are visible on the same turn, and BEFORE
-        :meth:`_refresh_active_skill_filter` so the skill is in ``loaded_skills``
-        when the body filter is computed. Pinned via :meth:`_pin_skill_body` so
-        that filter cannot immediately hide the body of the skill it just decided
-        the turn was about.
+        Auto-discovered by :meth:`_get_mixin_prompts`. It depends only on what is
+        installed, so it stays in the static, cached head of the prompt.
         """
-        discovery = self._skill_discovery
-        if discovery is None:
-            return
-
-        previous = self._skill_discovery_result
-        query = self._build_skill_discovery_query(user_input)
-        result = discovery.run(
-            query, loaded=self.loaded_skills, load_fn=self.load_skill
-        )
-        self._skill_discovery_result = result
-        if result.loaded:
-            self._pin_skill_body(result.loaded)
-
-        # Rebuild whenever the note changed, INCLUDING after a successful load.
-        # ``load_skill`` rebuilds too, but it runs before the line above, so the
-        # prompt it composed still carries the *previous* turn's note — the
-        # "SKILL ACTIVATED" line would be missing on exactly the turns that
-        # earned it. The later ``_refresh_active_skill_filter`` only recomposes
-        # when the body filter changes, so it cannot be relied on to fix this.
-        before = previous.prompt_fragment() if previous is not None else ""
-        if result.prompt_fragment() != before:
-            self.rebuild_system_prompt()
-
-    def _build_skill_discovery_query(self, user_input: str) -> str:
-        """The text discovery matches on — previous + current user message.
-
-        Reuses ChatAgent's tool-selection query when the agent has one, so a
-        follow-up ("and the one before that?") still carries the prior turn's
-        subject instead of matching on four pronouns.
-
-        ``user_input`` may already carry ``MemoryMixin``'s per-turn dynamic
-        context (current time, upcoming/overdue items) prepended to it —
-        ``process_query`` augments the message before this ever runs. That
-        preamble is real content to the LLM but pure noise to a lexical BM25
-        matcher: "Current time: 2026-09-18T00:14 (Friday)" dilutes a genuine
-        match enough to drop it below the auto-load floor on turn 1 of every
-        session (measured: a workout-video request scored 0.61 clean, 0.27
-        augmented — the difference between auto-loading and merely being
-        shortlisted). ``self._original_user_input`` is the clean text
-        ``MemoryMixin.process_query`` saved before augmenting; prefer it here
-        so discovery scores what the user actually said.
-        """
-        clean = getattr(self, "_original_user_input", None) or user_input
-        builder = getattr(self, "_build_tool_selection_query", None)
-        if callable(builder):
-            return builder(clean)
-        return clean
-
-    def get_skill_discovery_system_prompt(self) -> str:
-        """Sourcing rule + this turn's discovery note.
-
-        Auto-discovered by :meth:`_get_mixin_prompts`. Returns "" for any agent
-        without discovery enabled, so no existing prompt changes.
-        """
-        if self._skill_discovery is None:
+        if not self._skill_catalog_enabled:
             return ""
-        from gaia.agents.base.skill_discovery import GROUNDING_RULE
+        from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        result = self._skill_discovery_result
-        note = result.prompt_fragment() if result is not None else ""
-        return f"{GROUNDING_RULE}\n\n{note}" if note else GROUNDING_RULE
+        catalog = render_catalog(self.skill_manager.discover())
+        return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
         """Keep *name*'s body rendered for the next few filter refreshes.
 
-        Unlike :meth:`_note_skill_active` this works before any filter exists —
-        proactive discovery runs before the first refresh of a session, and
-        without the pin the very next selection could hide the body of the skill
-        that was just loaded *because* this turn needed it.
+        Unlike :meth:`_note_skill_active` this works before any filter exists,
+        so the next selection cannot hide the body of a skill that was just
+        loaded *because* this turn needed it.
         """
         # getattr throughout: test stubs copy these methods onto a plain class
         # without inheriting the class attributes they read.
@@ -5589,12 +5554,6 @@ Do NOT wrap conversational replies in JSON.
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
 
-        # Proactive skill discovery: a skill the user never named can become
-        # loaded here, registering its tools — so it must run BEFORE the tool
-        # filter, or those tools are invisible on the very turn that loaded the
-        # skill, and before the body filter for the same reason.
-        self._discover_skills_for_turn(user_input)
-
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
@@ -5632,6 +5591,8 @@ Do NOT wrap conversational replies in JSON.
         cancelled_by_console = False
         error_count = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
+        # Repeated calls already sent one correction; the next repeat ends the turn.
+        loop_corrected_calls: set = set()
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
@@ -6853,8 +6814,21 @@ Do NOT wrap conversational replies in JSON.
                         # ``result`` field so the helper sees actual tool
                         # results, not the wrapper dicts.
                         recent_results = [o.get("result") for o in previous_outputs]
+                        if current_call not in loop_corrected_calls:
+                            loop_corrected_calls.add(current_call)
+                            # Sent as this call's result so tool_call_id pairing holds.
+                            messages.append(
+                                self._create_tool_message(
+                                    tool_name,
+                                    self._loop_correction_result(
+                                        tool_name, consecutive_count - 1, recent_results
+                                    ),
+                                    tool_call_id=tool_call_id,
+                                )
+                            )
+                            continue
                         final_answer = self._build_loop_break_summary(
-                            tool_name, consecutive_count, recent_results
+                            tool_name, consecutive_count - 2, recent_results
                         )
                         self.console.print_repeated_tool_warning()
                         fanout_repeat_break = True
@@ -6863,6 +6837,11 @@ Do NOT wrap conversational replies in JSON.
                     # Execute
                     tool_result = self._execute_tool_timed(tool_name, tool_args)
                     self.console.stop_progress()
+                    if self._is_throttled_result(tool_result):
+                        # Never ran, so not a repeat. Bounded: the shell
+                        # limiter's windows drain within a few capped waits.
+                        tool_call_history.pop()
+                        self._wait_out_rate_limit(tool_result)
 
                     # Result-based dedup for query family tools
                     _QUERY_TOOLS = (
@@ -7073,11 +7052,25 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
+                    # Not ``step_results``: error recovery clears it before each retry.
+                    recent_results = [o.get("result") for o in previous_outputs]
+                    if current_call not in loop_corrected_calls:
+                        loop_corrected_calls.add(current_call)
+                        messages.append(
+                            self._create_tool_message(
+                                tool_name,
+                                self._loop_correction_result(
+                                    tool_name, consecutive_count - 1, recent_results
+                                ),
+                            )
+                        )
+                        continue
+
                     # Force a final answer if the same tool is called repeatedly.
                     # Branches on whether the recent calls were errors so we
                     # never claim success on a loop of failures.
                     final_answer = self._build_loop_break_summary(
-                        tool_name, consecutive_count, step_results
+                        tool_name, consecutive_count - 2, recent_results
                     )
 
                     self.console.print_repeated_tool_warning()
@@ -7088,6 +7081,11 @@ Do NOT wrap conversational replies in JSON.
 
                 # Stop progress indicator
                 self.console.stop_progress()
+                if self._is_throttled_result(tool_result):
+                    # Never ran, so not a repeat. Bounded: the shell limiter's
+                    # windows drain within a few capped waits.
+                    tool_call_history.pop()
+                    self._wait_out_rate_limit(tool_result)
 
                 # Issue #1023: record success/failure of capability tools so
                 # the verbose-failure override downstream fires only when the
@@ -7802,6 +7800,8 @@ Do NOT wrap conversational replies in JSON.
                     final_answer,
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
+                    input_tokens=_pre_input_tokens,
+                    cached_tokens=_sum_cached_tokens(conversation),
                     ttft_seconds=_query_ttft_seconds(conversation),
                     tok_per_s=_query_tok_per_s(conversation),
                 )
@@ -7970,30 +7970,133 @@ Do NOT wrap conversational replies in JSON.
             or result.get("return_code", 0) != 0
         )
 
+    _RATE_LIMIT_WAIT_CAP_S = 15.0
+    _LOOP_CONNECTION_RE = re.compile(
+        r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
+        r"|unreachable|could not connect|failed to establish|max retries exceeded"
+        r"|name or service not known|getaddrinfo|connect(?:ion)? timed out"
+        # Windows words a refused connection as "no connection could be made
+        # because the target machine actively refused it" (WinError 10061) —
+        # without these a dead service reads as a permissions problem.
+        r"|no connection could be made|actively refused|connection attempt failed"
+        r"|winerror 1006\d",
+        re.IGNORECASE,
+    )
+    _LOOP_NOT_PERMITTED_RE = re.compile(
+        r"not allowed|not permitted|not in (?:the )?allowed|access denied"
+        # "blocked" only as a verdict, not as a word in unrelated output
+        # ("unblocked", "blocked ports", "IO blocked").
+        r"|permission denied|\bblocked by\b|\b(?:is|are|was|were|been) blocked\b"
+        r"|\bedit blocked\b|refused (?:by|to)"
+        r"|refus(?:ed|es) (?:the )?(?:request|access|operation)",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _is_throttled_result(result: Any) -> bool:
+        """True when the tool refused the call for rate limiting — it never ran."""
+        return isinstance(result, dict) and result.get("rate_limited") is True
+
+    def _wait_out_rate_limit(self, result: Dict[str, Any]) -> None:
+        """Sleep the throttle's reported wait (capped) so the retry can run."""
+        try:
+            seconds = float(result.get("wait_time_seconds") or 0.0)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Rate-limited result has a non-numeric wait_time_seconds: %r",
+                result.get("wait_time_seconds"),
+            )
+            return
+        seconds = min(max(seconds, 0.0), self._RATE_LIMIT_WAIT_CAP_S)
+        if seconds <= 0:
+            return
+        logger.info("Tool call was rate-limited; waiting %.1fs", seconds)
+        cancel = getattr(self, "_cancel_event", None)
+        if cancel is not None:
+            cancel.wait(seconds)
+        else:
+            time.sleep(seconds)
+
+    @staticmethod
+    def _loop_error_brief(result: Any) -> str:
+        """The error a failed result reports: ``error``, else last stderr line."""
+        if isinstance(result, dict):
+            err = result.get("error")
+            if err:
+                return str(err).strip()
+            stderr = result.get("stderr")
+            if isinstance(stderr, str):
+                lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+                if lines:
+                    return lines[-1]
+            return_code = result.get("return_code")
+            if return_code not in (None, 0):
+                return f"it exited with return code {return_code}"
+        return "the tool returned an error"
+
+    def _loop_correction_result(
+        self, tool_name: str, executed_count: int, recent_results: list
+    ) -> Dict[str, Any]:
+        """The tool result sent in place of a repeated call, asking for a new approach."""
+        last = recent_results[-1] if recent_results else None
+        if Agent._is_error_result(last):
+            brief = " ".join(self._loop_error_brief(last).split())
+            if len(brief) > 200:
+                brief = brief[:197] + "..."
+            outcome = f"the same error ({brief})"
+        else:
+            outcome = "no new progress"
+        correction = (
+            f"You have called {tool_name} {executed_count} times with the same "
+            f"arguments and it returned {outcome}. Do not repeat it — try a "
+            "different approach, or give your final answer."
+        )
+        logger.warning("Loop guard correction: %s", correction)
+        return {**NOT_EXECUTED, "status": "error", "error": correction}
+
     def _build_loop_break_summary(
         self,
         tool_name: str,
-        consecutive_count: int,
-        step_results: list,
+        executed_count: int,
+        recent_results: list,
     ) -> str:
-        """Final-answer text when the loop breaks on repeats; honest on errors."""
-        last = step_results[-1] if step_results else None
-        if Agent._is_error_result(last):
-            err = (last or {}).get("error") or "the tool returned an error"
+        """Final-answer text when the loop breaks on repeats; names the real cause."""
+        last = recent_results[-1] if recent_results else None
+        denied = isinstance(last, dict) and last.get("status") == "denied"
+        if not (denied or Agent._is_error_result(last)):
+            # A loop break is evidence of neither outcome: the work may be done
+            # (the model kept re-verifying it) or never started (it had no tool
+            # for the job). Say which is unknown instead of claiming either,
+            # which is what "Task completed with ..." used to do here (#3750).
             return (
-                f"I tried calling `{tool_name}` {consecutive_count} times "
-                f"and it kept failing: {err}\n\n"
+                f"I stopped after calling `{tool_name}` {executed_count} "
+                "times in a row without making progress, so I can't confirm "
+                "the task is finished. Please check the result before relying "
+                "on it, or rephrase the request."
+            )
+        err = self._loop_error_brief(last)
+        attempts = f"I tried calling `{tool_name}` {executed_count} times"
+        if self._is_throttled_result(last):
+            return (
+                f"{attempts}, but it was rate-limited and did not run: {err}\n\n"
+                "Wait a moment and ask again, or ask for a different approach."
+            )
+        if self._LOOP_CONNECTION_RE.search(err):
+            return (
+                f"{attempts} and it kept failing: {err}\n\n"
                 "I couldn't recover from this — please rephrase the request "
                 "or check that the underlying service is running."
             )
-        # A loop break is evidence of neither outcome: the work may be done
-        # (the model kept re-verifying it) or never started (it had no tool for
-        # the job). Say which is unknown instead of claiming either (#3750).
+        if denied or self._LOOP_NOT_PERMITTED_RE.search(err):
+            return (
+                f"{attempts}, but it is not permitted here: {err}\n\n"
+                "Try a different approach — for example, split it into separate "
+                "steps or use another tool."
+            )
         return (
-            f"I stopped after calling `{tool_name}` {consecutive_count} times "
-            "in a row without making progress, so I can't confirm the task is "
-            "finished. Please check the result before relying on it, or "
-            "rephrase the request."
+            f"{attempts} and it kept failing: {err}\n\n"
+            "I couldn't recover from this — please rephrase the request "
+            "or try a different approach."
         )
 
     def _dedup_mutation_call(

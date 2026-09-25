@@ -99,6 +99,81 @@ class TestBuildScheduler:
         scheduler = daemon.build_scheduler(store)
         assert {job.id for job in scheduler.get_jobs()} == {"a", "b"}
 
+    def test_refresh_tracks_add_pause_resume_and_remove(self, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        scheduler = daemon.build_scheduler(store)
+        store.set_enabled("a", False)
+        store.add(_make_schedule("b"))
+        daemon.refresh_schedules(scheduler, store)
+        assert {job.id for job in scheduler.get_jobs()} == {"b"}
+
+        store.set_enabled("a", True)
+        store.remove("b")
+        daemon.refresh_schedules(scheduler, store)
+        assert {job.id for job in scheduler.get_jobs()} == {"a"}
+
+    def test_refresh_updates_cron_without_resetting_unchanged_jobs(self, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            original_fire = scheduler.get_job("a").next_run_time
+            daemon.refresh_schedules(scheduler, store)
+            assert scheduler.get_job("a").next_run_time == original_fire
+
+            schedules = store.load()
+            schedules["a"].cron = "0 17 * * *"
+            store.save(schedules)
+            daemon.refresh_schedules(scheduler, store)
+            assert scheduler.get_job("a").next_run_time.hour == 17
+            assert scheduler.get_job("a").args[0].cron == "0 17 * * *"
+        finally:
+            scheduler.shutdown()
+
+    def test_reload_tick_survives_an_unparseable_store(self, tmp_path, caplog):
+        """An unparseable cron on disk must not take the daemon down (#4143)."""
+        store = _store_with(tmp_path, _make_schedule("a"))
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            original_fire = scheduler.get_job("a").next_run_time
+
+            schedules = store.load()
+            schedules["a"].cron = "every day"  # not a valid crontab
+            store.save(schedules)
+
+            import logging
+
+            with caplog.at_level(logging.ERROR):
+                daemon._reload_or_keep_armed(scheduler, store)
+
+            assert scheduler.get_job("a") is not None
+            assert scheduler.get_job("a").next_run_time == original_fire
+            assert "could not reload" in caplog.text
+        finally:
+            scheduler.shutdown()
+
+    def test_reload_tick_survives_a_truncated_store_file(self, tmp_path, caplog):
+        """A hand-edit caught mid-save must not take the daemon down (#4143)."""
+        store = _store_with(tmp_path, _make_schedule("a"))
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            original_fire = scheduler.get_job("a").next_run_time
+
+            store.path.write_text("[schedules.a\n")  # torn write
+
+            import logging
+
+            with caplog.at_level(logging.ERROR):
+                daemon._reload_or_keep_armed(scheduler, store)
+
+            assert scheduler.get_job("a") is not None
+            assert scheduler.get_job("a").next_run_time == original_fire
+            assert "could not reload" in caplog.text
+        finally:
+            scheduler.shutdown()
+
 
 # ===========================================================================
 # 3. _job — success and failure paths
@@ -106,6 +181,50 @@ class TestBuildScheduler:
 
 
 class TestJob:
+
+    @pytest.mark.parametrize("change", ["pause", "remove"])
+    def test_does_not_fire_after_pause_or_remove(
+        self, mocker, tmp_path, change, caplog
+    ):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        job = daemon.build_scheduler(store).get_job("a")
+        if change == "pause":
+            store.set_enabled("a", False)
+        else:
+            store.remove("a")
+        fire = mocker.patch.object(runner, "fire")
+
+        with caplog.at_level("DEBUG", logger=daemon.log.name):
+            job.func(*job.args)
+
+        fire.assert_not_called()
+        # A skipped fire must leave a trace -- otherwise "my schedule didn't
+        # run" has no diagnostic (#4143 nit).
+        assert "skipping" in caplog.text and "a" in caplog.text
+
+    def test_fires_current_prompt_after_store_edit(self, mocker, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        job = daemon.build_scheduler(store).get_job("a")
+        schedules = store.load()
+        schedules["a"].prompt = "updated prompt"
+        store.save(schedules)
+        fire = mocker.patch.object(runner, "fire")
+
+        job.func(*job.args)
+
+        assert fire.call_args.args[0].prompt == "updated prompt"
+
+    def test_does_not_fire_old_cron_before_refresh(self, mocker, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"))
+        job = daemon.build_scheduler(store).get_job("a")
+        schedules = store.load()
+        schedules["a"].cron = "0 17 * * *"
+        store.save(schedules)
+        fire = mocker.patch.object(runner, "fire")
+
+        job.func(*job.args)
+
+        fire.assert_not_called()
 
     def test_success_marks_run(self, mocker, tmp_path):
         store = _store_with(tmp_path, _make_schedule("a"))

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,7 +36,7 @@ def parse_args():
     parser.add_argument(
         "--use-chatgpt",
         action="store_true",
-        help="Use ChatGPT/OpenAI API instead of local LLM",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--claude-model",
@@ -122,7 +123,12 @@ def parse_args():
         "--list-tools", action="store_true", help="List available tools and exit"
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.use_chatgpt:
+        from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+        parser.error(REMOVED_PROVIDER_MESSAGE)
+    return args
 
 
 def interactive_mode(agent: ChatAgent):
@@ -985,7 +991,6 @@ def main():
         # Create agent config
         config = ChatAgentConfig(
             use_claude=args.use_claude,
-            use_chatgpt=args.use_chatgpt,
             claude_model=args.claude_model,
             model_id=args.model_id,
             max_steps=args.max_steps,

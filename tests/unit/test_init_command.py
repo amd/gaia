@@ -1620,6 +1620,87 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertEqual(result.version, "10.3.0")
         self.assertNotEqual(result.version, installer.target_version)
 
+    # Log text below is copied verbatim from the GAIA CLI Tests (Linux) runs that
+    # went red during the 2026-09-21 Launchpad outage.
+    APT_UPDATE_503 = (
+        "Get:1 http://azure.archive.ubuntu.com/ubuntu noble InRelease [256 kB]\n"
+        "Err:8 https://ppa.launchpadcontent.net/lemonade-team/stable/ubuntu "
+        "noble InRelease\n"
+        "  503  Service Unavailable [IP: 185.125.189.187 443]\n"
+        "Reading package lists...\n"
+        "W: Failed to fetch https://ppa.launchpadcontent.net/lemonade-team/stable/"
+        "ubuntu/dists/noble/InRelease  503  Service Unavailable "
+        "[IP: 185.125.189.187 443]\n"
+        "W: Some index files failed to download. They have been ignored, "
+        "or old ones used instead.\n"
+    )
+
+    ADD_APT_GPG_500 = (
+        "Traceback (most recent call last):\n"
+        '  File "/usr/bin/add-apt-repository", line 367, in <module>\n'
+        "    sys.exit(0 if addaptrepo.main() else 1)\n"
+        "urllib.error.HTTPError: HTTP Error 500: Internal Server Error\n"
+        "ERROR: b'GPGKeyTemporarilyNotFoundError'\n"
+    )
+
+    # create=True: os.geteuid does not exist on Windows dev machines.
+    @patch("os.geteuid", create=True, return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_launchpad_index_outage_is_named(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """A 503 on the PPA index stops the install and blames Launchpad, not apt."""
+        installer = self._make_linux_installer()
+
+        # apt-get update exits 0 when only *some* indexes fail -- that is the trap.
+        update = self._ok_run()
+        update.stdout = self.APT_UPDATE_503
+        mock_run.side_effect = [self._ok_run(), update]
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertFalse(result.success)
+        self.assertIn("Launchpad", result.error)
+        self.assertIn("503", result.error)
+        # The old message sent users to repair a dpkg state that was never broken.
+        self.assertNotIn("dpkg --configure", result.error)
+        # Negative control: without the check, apt-get install would have run and
+        # failed with "Unable to locate package lemonade-server".
+        self.assertEqual(mock_run.call_count, 2)
+
+    # create=True: os.geteuid does not exist on Windows dev machines.
+    @patch("os.geteuid", create=True, return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_launchpad_key_outage_is_named(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """A failed signing-key fetch reports the outage, not a raw Python traceback."""
+        installer = self._make_linux_installer()
+        mock_run.side_effect = [self._fail_run(stderr=self.ADD_APT_GPG_500)]
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertFalse(result.success)
+        self.assertIn("Launchpad", result.error)
+        self.assertIn("signing key", result.error)
+        self.assertNotIn("Traceback", result.error)
+
+    def test_diagnose_launchpad_outage_ignores_unrelated_repositories(self):
+        """Another PPA failing must not be blamed on Launchpad's Lemonade archive."""
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        unrelated = (
+            "W: Failed to fetch https://ppa.launchpadcontent.net/deadsnakes/ppa/"
+            "ubuntu/dists/noble/InRelease  404  Not Found\n"
+        )
+        self.assertIsNone(diagnose_launchpad_outage(unrelated))
+        self.assertIsNone(diagnose_launchpad_outage("Reading package lists... Done\n"))
+        self.assertIsNotNone(diagnose_launchpad_outage(self.APT_UPDATE_503))
+
     @patch("platform.system", return_value="Linux")
     def test_install_dispatches_to_ppa_on_linux(self, mock_system):
         """install() on Linux calls _install_via_ppa without requiring installer_path."""
