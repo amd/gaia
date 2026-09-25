@@ -24,7 +24,7 @@ from gaia.messaging import telegram
 #: Tool names whose reachability from a remote message would be the bug.
 #: Derived, not copied — a rename or addition in ``tool_grants`` lands here
 #: automatically instead of silently shrinking what this file checks.
-DANGEROUS_TOOLS = frozenset(tool_grants._SHELL_TOOLS | tool_grants._PATH_TOOLS)
+DANGEROUS_TOOLS = frozenset(tool_grants._SHELL_TOOLS | tool_grants.PATH_TOOLS)
 
 
 @pytest.fixture(autouse=True)

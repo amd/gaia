@@ -29,3 +29,11 @@ through the registry, so both are unaffected by the hidden flag.
 pip install -e ".[test]"
 pytest hub/agents/chat/python/tests/ -x
 ```
+
+## Provider migration
+
+The direct OpenAI and LiteLLM adapters are removed. `--use-chatgpt` and
+`use_chatgpt=True` remain only to report an actionable migration error before
+startup. Configure your model in Lemonade, then select its catalog ID and the
+Lemonade server URL. The local Lemonade and Claude routes are unchanged.
+See [gateway migration](https://amd-gaia.ai/docs/sdk/sdks/llm#gateway-migration).

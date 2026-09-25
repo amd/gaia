@@ -218,6 +218,8 @@ class SSEOutputHandler(OutputHandler):
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
         tok_per_s: Optional[float] = None,
+        input_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ):  # pylint: disable=unused-argument
         """Print final answer/result.
 

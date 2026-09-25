@@ -108,6 +108,15 @@ func NewQuestionModel(requestID, question string, options []QuestionOption, allo
 // RequestID identifies which question this is, so a stale answer is rejectable.
 func (m QuestionModel) RequestID() string { return m.requestID }
 
+// Sensitive reports whether typed input is masked. Exposed so a host that puts
+// a secret behind this component can PROVE it is masked — a token echoed into a
+// scrollback the user later screen-shares is the failure, and an assertion is
+// the only thing that keeps it from regressing quietly.
+func (m QuestionModel) Sensitive() bool { return m.sensitive }
+
+// Prompt is the question text, for a host that needs to assert on what it asked.
+func (m QuestionModel) Prompt() string { return m.question }
+
 // SetWidth fits the panel to the terminal.
 func (m *QuestionModel) SetWidth(w int) {
 	if w < 24 {
