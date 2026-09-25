@@ -33,10 +33,45 @@ const DEFAULT_CONFIG = {
     startMinimized: false,
     startOnLogin: false,
   },
+  agents: {},
 };
+
+const AGENT_LOG_LEVELS = ["debug", "info", "warn", "error"];
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Validate an `agents` section (id → AgentConfig), dropping unknown keys. */
+function validateAgents(agents, where) {
+  if (!isPlainObject(agents)) {
+    throw new TypeError(`${where}: agents must be an object`);
+  }
+  const out = {};
+  for (const [id, cfg] of Object.entries(agents)) {
+    if (id.trim() === "") {
+      throw new TypeError(`${where}: agent id must be a non-empty string`);
+    }
+    if (!isPlainObject(cfg)) {
+      throw new TypeError(`${where}: agents.${id} must be an object`);
+    }
+    for (const key of ["autoStart", "restartOnCrash"]) {
+      if (typeof cfg[key] !== "boolean") {
+        throw new TypeError(`${where}: agents.${id}.${key} must be a boolean`);
+      }
+    }
+    if (!AGENT_LOG_LEVELS.includes(cfg.logLevel)) {
+      throw new TypeError(
+        `${where}: agents.${id}.logLevel must be one of ${AGENT_LOG_LEVELS.join(", ")}`
+      );
+    }
+    out[id] = {
+      autoStart: cfg.autoStart,
+      restartOnCrash: cfg.restartOnCrash,
+      logLevel: cfg.logLevel,
+    };
+  }
+  return out;
 }
 
 // ── TrayManager ──────────────────────────────────────────────────────────
@@ -239,6 +274,7 @@ class TrayManager {
           ...DEFAULT_CONFIG,
           ...loaded,
           tray: { ...DEFAULT_CONFIG.tray, ...(loaded.tray || {}) },
+          agents: validateAgents(loaded.agents ?? {}, CONFIG_PATH),
         };
       }
     } catch (err) {
@@ -247,16 +283,17 @@ class TrayManager {
     return { ...DEFAULT_CONFIG };
   }
 
-  _saveConfig() {
+  _saveConfig(config) {
     try {
-      if (!fs.existsSync(GAIA_DIR)) {
-        fs.mkdirSync(GAIA_DIR, { recursive: true });
-      }
-      fs.writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2), "utf8");
-      console.log("[tray] Config saved to", CONFIG_PATH);
+      fs.mkdirSync(GAIA_DIR, { recursive: true });
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
     } catch (err) {
-      console.error("[tray] Could not save tray config:", err.message);
+      throw new Error(
+        `Could not save settings to ${CONFIG_PATH}: ${err.message}. ` +
+          "Check that the file and its folder are writable."
+      );
     }
+    console.log("[tray] Config saved to", CONFIG_PATH);
   }
 
   // ── Private: IPC handlers ────────────────────────────────────────────
@@ -270,26 +307,38 @@ class TrayManager {
       if (!isPlainObject(cfg)) {
         throw new TypeError("tray:set-config expects an object payload");
       }
-      if (cfg.tray === undefined) {
-        return this.config;
-      }
-      if (!isPlainObject(cfg.tray)) {
+      if (cfg.tray !== undefined && !isPlainObject(cfg.tray)) {
         throw new TypeError("tray:set-config: tray must be an object");
       }
+      const agents =
+        cfg.agents === undefined
+          ? null
+          : validateAgents(cfg.agents, "tray:set-config");
 
-      const tray = {};
-      for (const key of Object.keys(DEFAULT_CONFIG.tray)) {
-        const value = key in cfg.tray ? cfg.tray[key] : this.config.tray[key];
-        if (typeof value !== "boolean") {
-          throw new TypeError(`tray:set-config: tray.${key} must be a boolean`);
+      let tray = null;
+      if (cfg.tray !== undefined) {
+        tray = {};
+        for (const key of Object.keys(DEFAULT_CONFIG.tray)) {
+          const value = key in cfg.tray ? cfg.tray[key] : this.config.tray[key];
+          if (typeof value !== "boolean") {
+            throw new TypeError(`tray:set-config: tray.${key} must be a boolean`);
+          }
+          tray[key] = value;
         }
-        tray[key] = value;
       }
-      this.config.tray = tray;
 
-      this._saveConfig();
+      if (tray === null && agents === null) {
+        return this.config;
+      }
+      const next = {
+        ...this.config,
+        tray: tray ?? this.config.tray,
+        agents: agents ? { ...this.config.agents, ...agents } : this.config.agents,
+      };
+      this._saveConfig(next);
+      this.config = next;
 
-      if ("startOnLogin" in cfg.tray) {
+      if (tray !== null && "startOnLogin" in cfg.tray) {
         this._applyLoginItemSetting(tray.startOnLogin);
       }
 
