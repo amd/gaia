@@ -6,6 +6,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **The email agent now finds GAIA's own Lemonade Server.** It used to look
+  for Lemonade on its default port, so on a PC where `gaia init` set up GAIA's
+  own server it reported the model server as missing, or its version as
+  unknown. It now uses the same server as the rest of GAIA, with its key.
 - **Asking a content question about your mail ("who signed this?", "what
   date was agreed?") now actually gets an answer when the answer is in the
   mailbox.** Search used to return only subjects and senders unless the

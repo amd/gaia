@@ -8,7 +8,6 @@ import importlib
 import importlib.metadata
 import importlib.util
 import inspect
-import os
 import platform
 import re
 import sys
@@ -1449,7 +1448,9 @@ class AgentRegistry:
         ):
             return []
 
-        base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+        from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+        base_url = resolve_lemonade_base_url()
         models = get_lemonade_models(base_url)
         if models is not None:
             self._lemonade_models = models

@@ -25,6 +25,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     _get_lemonade_config,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
@@ -665,7 +666,7 @@ async def async_main(action, **kwargs):
                 claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
                 base_url=kwargs.get(
                     "base_url",
-                    os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+                    resolve_lemonade_base_url(),
                 ),
                 model_id=explicit_model,
                 device=effective_device,
@@ -920,7 +921,7 @@ def _launch_interactive_cli(log=None):
             ) from e
 
         config = ChatAgentConfig(
-            base_url=base_url or os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+            base_url=base_url or resolve_lemonade_base_url(),
             silent_mode=True,
         )
         agent = ChatAgent(config)

@@ -7,7 +7,6 @@ Provides singleton initialization shared by CLI and SDK flows.
 Operates at the LLM level (not agent level) for flexibility with community agents.
 """
 
-import os
 import sys
 import threading
 import time
@@ -24,6 +23,7 @@ from gaia.llm.lemonade_client import (
     is_llm_model_entry,
     resolve_ctx_size,
     resolve_effective_ctx_size,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
@@ -386,7 +386,7 @@ class LemonadeManager:
                     file=sys.stderr,
                 )
                 print("", file=sys.stderr)
-            base_url = os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1")
+            base_url = resolve_lemonade_base_url()
             print(
                 f"The server should be accessible at {base_url}/health",
                 file=sys.stderr,

@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import urllib.error
@@ -893,7 +892,9 @@ def main(argv=None) -> int:
     # Resolve lemonade_version: flag wins, then live query.
     lemonade_version: Optional[str] = args.lemonade_version
     if not lemonade_version:
-        base_url = os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305")
+        from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+        base_url = resolve_lemonade_base_url()
         try:
             lemonade_version = _query_lemonade_version(base_url)
         except RuntimeError as exc:

@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The agent finds GAIA's own Lemonade Server.** The default base URL, the
+  readiness probe and the model pull now go through core's resolver, and the
+  `/health` probe sends the API key, so GAIA's embedded server no longer reads
+  as unreachable or version-unknown.
 - **Received-invite grounding now recognizes Google events with omitted
   organizer flags (#2787).** Calendar tools preserve the provider's explicit
   organizer signal and treat the authenticated attendee as externally invited
