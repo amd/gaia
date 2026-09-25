@@ -17,8 +17,11 @@ the terminal UI meant building it from source.
 - `/v1/gaia/query` now honours `provider` on an existing session. It used to
   matter only when the session was created, so `provider: "lemonade"` could keep
   sending a Claude session's conversation to Anthropic, and `provider: "claude"`
-  could run locally. A different provider now switches the session in place, and
-  a `model` from the other provider is a 400 on new and existing sessions.
+  could run locally. A different provider now switches the session in place.
+  Naming a `model` that belongs to the other provider is a 400, on new and
+  existing sessions alike. Omitting `provider` and naming a Claude `model` now
+  starts a Claude session, the way it already switched an existing one — it used
+  to point the local backend at an id it cannot serve.
 - Conversation state is saved under `~/.gaia/sessions` instead of the directory
   the agent was started from. A `session_id` must be 1–128 characters from
   `A-Z a-z 0-9 . _ -`; any other value is a 400 on `/query` and

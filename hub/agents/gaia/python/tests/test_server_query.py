@@ -750,7 +750,10 @@ def test_a_claude_session_asked_for_lemonade_switches_to_local(built, switched_b
 
 def test_a_local_session_asked_for_claude_switches_to_claude(built, switched_backend):
     """Naming only the provider used to leave the turn running locally."""
-    from gaia_agent_chat.agent import ChatAgentConfig
+    # The symbol `_default_model_for` actually reads. Identical to
+    # ChatAgentConfig's today by inheritance, but naming that one instead would
+    # fail confusingly the day the flagship overrides the default.
+    from gaia_agent.agent import GaiaAgentConfig
 
     client, _ = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
@@ -758,7 +761,7 @@ def test_a_local_session_asked_for_claude_switches_to_claude(built, switched_bac
     r = client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="claude"))
 
     assert r.status_code == 200, r.text
-    assert switched_backend == [(ChatAgentConfig.claude_model,)]
+    assert switched_backend == [(GaiaAgentConfig.claude_model,)]
     assert sr.registry.get("s-1").provider == "claude"
 
 
@@ -836,6 +839,79 @@ def test_a_model_from_the_other_provider_is_refused_on_a_live_session(
     assert sr.registry.get("s-1").provider == before
     again = client.post("/v1/gaia/query", json=_body(session_id="s-1"))
     assert again.status_code == 200, "a refused turn must not hold the run lock"
+
+
+# `provider` is optional, so an absent one is decided by the model. A retained
+# session already resolved it that way (`switch_model` reads the id); a new one
+# did not, and put a Claude id straight into the local client's `model_id`.
+
+
+def test_a_claude_model_without_a_provider_builds_a_claude_agent(built):
+    """The gap the refusals above leave open.
+
+    ``{"model": "claude-opus-5"}`` never reached ``_check_model_matches_provider``
+    (nothing to disagree with) and fell to the local branch, so the request built
+    a LOCAL agent pointed at an id Lemonade cannot serve — the exact failure
+    ``_check_model_matches_provider`` exists to prevent, one branch over.
+    """
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5"))
+
+    assert r.status_code == 200, r.text
+    assert len(agents) == 1
+    built_with = agents[0].kwargs
+    assert built_with.get("use_claude") is True
+    assert built_with.get("claude_model") == "claude-opus-5"
+    assert "model_id" not in built_with, "a Claude id must not reach the local client"
+
+
+def test_a_claude_model_without_a_provider_agrees_on_new_and_live_sessions(
+    built, switched_backend
+):
+    """A bare Claude ``model`` switched a LIVE session to Anthropic but broke a
+    new one. Whichever answer is right, the two paths must not disagree."""
+    client, agents = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5"))
+
+    assert r.status_code == 200, r.text
+    assert switched_backend == [("claude-opus-5",)]
+    assert sr.registry.get("s-1").provider == "claude"
+
+
+def test_a_one_shot_claude_model_without_a_provider_builds_a_claude_agent(built):
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(model="claude-opus-5"))
+
+    assert r.status_code == 200, r.text
+    assert agents[0].kwargs.get("use_claude") is True
+    assert "model_id" not in agents[0].kwargs
+
+
+def test_an_ordinary_turn_never_drags_a_claude_session_back_to_local(
+    built, switched_backend
+):
+    """Resolving the default provider up front would do exactly that.
+
+    An absent ``provider`` means "leave this session where it is", not
+    ``lemonade`` — otherwise every follow-up turn on a Claude session, which
+    sends neither field, silently switches it back.
+    """
+    client, _ = built
+    client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+    switched_backend.clear()
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+
+    assert r.status_code == 200, r.text
+    assert switched_backend == [], "an ordinary turn must not switch backends"
+    assert sr.registry.get("s-1").provider == "claude"
 
 
 # ---------------------------------------------------------------------------

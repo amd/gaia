@@ -6,7 +6,7 @@ icon: "sparkles"
 
 # GAIA — the flagship agent
 
-GAIA is the agent a new user meets first. One agent handles the everyday work you'd otherwise spread across four: talking things through, answering questions about your own documents, poking at a spreadsheet, and reading the web. It remembers across sessions, and every inference runs **locally** on your machine through Lemonade.
+GAIA is the agent a new user meets first. One agent handles the everyday work you'd otherwise spread across four: talking things through, answering questions about your own documents, poking at a spreadsheet, and reading the web. It remembers across sessions, and inference runs **locally** on your machine through Lemonade by default.
 
 <Note>
   GAIA is built on top of the [Chat agent](/guides/chat) — same document Q&A prompt, same
@@ -39,7 +39,7 @@ Install Lemonade, download the model, and start the server:
 gaia init
 ```
 
-Inference runs locally by default. The sidecar's `/query` endpoint accepts `provider: "lemonade"` (the default) or `provider: "claude"`, which sends the conversation to Anthropic's API. Any other provider, or a `model` that belongs to the other provider, is rejected with **HTTP 400**.
+Inference runs locally by default. The sidecar's `/query` endpoint accepts `provider: "lemonade"` (the default) or `provider: "claude"`, which sends the conversation to Anthropic's API. Any other provider is rejected with **HTTP 400**, as is naming a `provider` together with a `model` that belongs to the other one. Omit `provider` and the `model` decides: a `claude-*` id goes to Anthropic, anything else runs locally.
 
 ## Install and launch
 

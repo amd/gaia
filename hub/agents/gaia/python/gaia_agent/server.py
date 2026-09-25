@@ -660,6 +660,28 @@ def _check_model_matches_provider(provider: str, model: str) -> None:
     )
 
 
+def _effective_provider(request: "QueryRequest") -> str:
+    """The backend a request targets when it does not name one.
+
+    ``provider`` is optional, so an absent one is decided by the model: a Claude
+    id means Anthropic. That is already how a RETAINED session resolves it —
+    ``switch_model`` reads the id and sets the session's provider from it — but a
+    NEW session put the id straight into ``model_id`` and pointed the local
+    client at something it cannot serve.
+
+    Note this answers "which backend", not "did the caller ask to move". A
+    retained session is left where it is unless the turn says otherwise, so
+    ``_switch_target`` deliberately reads ``request.provider`` raw instead.
+    """
+    from gaia_agent.stdio import is_claude_model
+
+    if request.provider is not None:
+        return request.provider
+    if request.model and is_claude_model(request.model):
+        return PROVIDER_CLAUDE
+    return PROVIDER_LOCAL
+
+
 def _default_model_for(provider: str) -> str:
     """The model a new session on *provider* gets when the request names none."""
     if provider == PROVIDER_CLAUDE:
@@ -672,7 +694,13 @@ def _default_model_for(provider: str) -> str:
 
 
 def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
-    """The model a retained session must move to this turn, or ``None``."""
+    """The model a retained session must move to this turn, or ``None``.
+
+    An absent ``provider`` means "leave this session where it is", NOT the
+    default backend — resolving it here would drag a Claude session back to
+    Lemonade on every ordinary follow-up turn. A bare ``model`` still moves the
+    session, and ``switch_model`` sets the provider from the id it is given.
+    """
     if request.provider is not None and request.provider != session.provider:
         return request.model or _default_model_for(request.provider)
     if request.model and request.model != session.model_id:
@@ -726,7 +754,7 @@ async def query(request: QueryRequest):
 
     try:
         kwargs: Dict[str, Any] = {}
-        if request.provider == _CLAUDE_PROVIDER:
+        if _effective_provider(request) == _CLAUDE_PROVIDER:
             # ``model`` names a CLAUDE model here, not a Lemonade one — putting
             # it in model_id would point the local client at an id it cannot
             # serve, which fails much later and much less clearly.
