@@ -291,8 +291,11 @@ paths call the same `build_memory_dump()` and return the identical shape.
 whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
 agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
-threads them together. Omitting it is a valid, explicit one-shot: nothing
-persists past that single turn, and the agent is not told otherwise.
+threads them together. A `session_id` must be 1–128 characters from
+`A-Z a-z 0-9 . _ -`, not only dots (a UUID works); any other value is a **400**
+naming the allowed characters, on `/query` and on `/sessions/{session_id}/bypass`.
+Omitting it is a valid, explicit one-shot: nothing persists past that single
+turn, and the agent is not told otherwise.
 
 Internal explicit deletion follows the same idle-only rule as eviction: it returns
 `False` for an absent or busy session and preserves a running agent. Successful

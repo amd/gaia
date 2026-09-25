@@ -131,6 +131,13 @@ CHUNK_TRUNCATION_SIZE = 2500
 # for multi-file generation) override it explicitly in their own config.
 DEFAULT_MAX_STEPS = 50
 
+# Per-reply output caps. A local model's 32K ctx must also hold a ~7.7K-token
+# system prompt plus history, so 8K is the most output it can spare.
+LOCAL_MAX_OUTPUT_TOKENS = 8192
+# A cloud reasoning model spends output tokens on thinking too; its window is
+# the provider's, not local hardware's.
+CLOUD_MAX_OUTPUT_TOKENS = 32768
+
 
 def effective_skill_body(agent, skill) -> str:
     """*skill*'s authored body with *agent*'s approved learned changes applied.
@@ -1201,6 +1208,7 @@ Do NOT wrap conversational replies in JSON.
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
+        max_output_tokens: Optional[int] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -1237,6 +1245,10 @@ Do NOT wrap conversational replies in JSON.
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
+            max_output_tokens: Output-token cap for each LLM reply, thinking
+                          included. None (default) picks per model:
+                          CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
+                          LOCAL_MAX_OUTPUT_TOKENS otherwise.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
@@ -1244,6 +1256,16 @@ Do NOT wrap conversational replies in JSON.
             from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
 
             raise ValueError(REMOVED_PROVIDER_MESSAGE)
+        if max_output_tokens is not None and (
+            isinstance(max_output_tokens, bool)
+            or not isinstance(max_output_tokens, int)
+            or max_output_tokens <= 0
+        ):
+            raise ValueError(
+                f"max_output_tokens must be a positive integer or None, got "
+                f"{max_output_tokens!r}."
+            )
+        self.max_output_tokens = max_output_tokens
         self.device = device
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -1412,6 +1434,8 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent shares DEFAULT_MODEL_NAME so switching agents never evicts
         # and cold-reloads the resident model.
+        from gaia.llm.lemonade_client import cloud_model_provider
+
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
@@ -1419,12 +1443,15 @@ Do NOT wrap conversational replies in JSON.
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking
             max_history_length=20,  # Keep more history for agent conversations
-            # Output token cap. With our 32K ctx_size and a ~7.7K-token system
-            # prompt + history, leaving 8K for output gives plenty of headroom
-            # for both prose answers and long tool-call arg blobs (the eval
-            # surfaced 4K cutting off mid-tool-call on Qwen 4B). Going much
-            # higher would steal from the input-history budget.
-            max_tokens=8192,
+            max_tokens=(
+                max_output_tokens
+                if max_output_tokens is not None
+                else (
+                    CLOUD_MAX_OUTPUT_TOKENS
+                    if not use_claude and cloud_model_provider(model_id)
+                    else LOCAL_MAX_OUTPUT_TOKENS
+                )
+            ),
         )
         self.chat = AgentSDK(chat_config)
         # ``self.model_id`` was set earlier (before ``_register_tools``) so the
@@ -1440,6 +1467,20 @@ Do NOT wrap conversational replies in JSON.
 
         if self.show_prompts:
             self.console.print_prompt(self.system_prompt, "Initial System Prompt")
+
+    def _max_output_tokens(self) -> int:
+        """Output-token cap for the next LLM call, re-read per call so a model
+        switch mid-session takes effect."""
+        if self.max_output_tokens is not None:
+            return self.max_output_tokens
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
+        if isinstance(backend, LemonadeClient) and backend.cloud_model_provider(
+            self.chat.effective_model
+        ):
+            return CLOUD_MAX_OUTPUT_TOKENS
+        return LOCAL_MAX_OUTPUT_TOKENS
 
     def _get_mixin_prompts(self) -> list[str]:
         """
@@ -2276,6 +2317,13 @@ Do NOT wrap conversational replies in JSON.
         """
         return frozenset(ref.name for ref in self.skill_sets.always)
 
+    def _active_skill_names(self) -> Optional[FrozenSet[str]]:
+        """Loaded skills whose body renders this turn; ``None`` means all of them."""
+        active_filter = getattr(self, "_active_skill_filter", None)
+        if active_filter is None:
+            return None
+        return frozenset(active_filter) | self._always_on_skill_names
+
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
 
@@ -2363,6 +2411,41 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_loaded_skills", None) is None:
             self._loaded_skills = {}
         return self._loaded_skills
+
+    #: The tool a ``shell:execute:<binary>`` grant is exercised through.
+    _SKILL_SHELL_TOOL: ClassVar[str] = "run_shell_command"
+
+    def _loaded_skill_tools(self) -> List[str]:
+        """Tools this turn's active skills need in the prompt, deduped, in load order.
+
+        Each active skill's ``tools_required``, plus the shell tool when it holds
+        a ``shell:execute:<binary>`` grant — a granted binary is useless without
+        the tool that runs it. Tools a skill *provides* through its own
+        ``tools.py`` are not included; they still reach the prompt by semantic
+        match. Only skills whose body renders this turn count (see
+        :meth:`_active_skill_names`), so a loaded skill the turn is not about
+        holds no tool slots. Feeds the tool loader's SKILL signal, so an active
+        skill's tools arrive without a separate ``load_tools`` round trip.
+        """
+        skills = getattr(self, "_loaded_skills", None)
+        if not skills:
+            return []
+        active = self._active_skill_names()
+        grant_holders = self.granted_binaries.holders()
+
+        tools: List[str] = []
+        seen: set = set()
+        for skill in skills.values():
+            if active is not None and skill.name not in active:
+                continue
+            names = list(skill.gaia.tools_required)
+            if skill.name in grant_holders:
+                names.append(self._SKILL_SHELL_TOOL)
+            for name in names:
+                if name not in seen:
+                    seen.add(name)
+                    tools.append(name)
+        return tools
 
     @property
     def granted_binaries(self) -> "BinaryGrants":
@@ -2997,7 +3080,7 @@ Do NOT wrap conversational replies in JSON.
                 return ""
             return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
 
-        active = set(active_filter) | self._always_on_skill_names
+        active = self._active_skill_names()
         body_sections = []
         menu_lines = []
         for skill in sorted(skills.values(), key=lambda s: s.name):
@@ -3763,14 +3846,15 @@ Do NOT wrap conversational replies in JSON.
                 # context window — those are separate limits and conflating
                 # them led to misleading error messages telling users to
                 # raise ``--ctx-size`` when their ctx was already 32K. The
-                # actual fix is bumping the output budget in
-                # ``AgentConfig.max_tokens`` (or, for one-off long tool calls,
+                # actual fix is bumping the output budget via the agent's
+                # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
                 raise ValueError(
                     f"Tool call truncated mid-arguments (finish_reason=length). "
                     f"Model {self.model_id} ran out of output tokens before "
-                    f"finishing the call — increase AgentConfig.max_tokens."
+                    f"finishing the call ({self._max_output_tokens()} max) — "
+                    f"pass a larger max_output_tokens to the agent."
                 )
             if not raw_tool_calls:
                 raise ValueError(
@@ -5928,14 +6012,15 @@ Do NOT wrap conversational replies in JSON.
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
 
+        # Lazy skill-body activation (#2848 follow-up): re-selected every turn,
+        # so a stale skill match never survives into a turn that no longer
+        # needs it. Before the tool filter, which admits active skills' tools.
+        self._refresh_active_skill_filter(user_input)
+
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
 
-        # Lazy skill-body activation (#2848 follow-up): same per-turn timing
-        # as the tool filter above, so a stale skill match never survives
-        # into a turn that no longer needs it.
-        self._refresh_active_skill_filter(user_input)
         self._extraction_ledger.activate_skill(
             self._extraction_skill_instructions(user_input)
         )
@@ -6479,6 +6564,7 @@ Do NOT wrap conversational replies in JSON.
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -6657,6 +6743,7 @@ Do NOT wrap conversational replies in JSON.
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -6949,6 +7036,7 @@ Do NOT wrap conversational replies in JSON.
                         messages=messages,
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
                     )
 
                     for chunk_response in stream_gen:
@@ -6991,6 +7079,7 @@ Do NOT wrap conversational replies in JSON.
                         messages=messages,
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
                     self.console.stop_progress()
