@@ -548,7 +548,7 @@ Extend the agent by adding domain-specific tools.
 
   <Tab title="Trade-offs">
     **`use_llm_chunking`:**
-    - `True` - Semantic boundaries, more accurate, slower
+    - `True` - Semantic boundaries, more accurate, slower; indexing fails with an error if the LLM is unreachable or can't produce split points
     - `False` - Structural boundaries (paragraphs), faster
 
     **`chunk_size`:**
