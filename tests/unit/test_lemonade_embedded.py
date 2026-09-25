@@ -145,10 +145,9 @@ class TestArchiveSafety:
         "installs from the .zip asset, never the tarball",
     )
     def test_a_symlink_cannot_redirect_a_later_member_out_of_the_tree(self, tmp_path):
-        # Every member name here resolves inside dest while dest is empty, so
-        # a name-only check waves them through. Once 'hop' exists as a symlink,
-        # the kernel resolves 'hop/../..' through it and the third member lands
-        # a directory above dest.
+        # Every member name here resolves inside dest while dest is empty. Once
+        # 'hop' existed as a symlink, 'hop/../..' would resolve through it and
+        # land a directory above dest; any '..' segment is refused outright.
         archive = tmp_path / "evil.tar.gz"
         with tarfile.open(archive, "w:gz") as tf:
             holder = tarfile.TarInfo("d")
@@ -166,9 +165,10 @@ class TestArchiveSafety:
             tf.addfile(through, io.BytesIO(payload))
 
         dest = tmp_path / "dest"
-        _extract(archive, dest)
+        with pytest.raises(EmbeddedLemonadeError, match="escapes"):
+            _extract(archive, dest)
         assert not (tmp_path / "pwned.txt").exists()
-        assert (dest / "pwned.txt").read_text(encoding="utf-8") == "owned"
+        assert not (dest / "pwned.txt").exists()
 
     def test_rejects_a_hard_link_pointing_out_of_the_tree(self, tmp_path):
         archive = tmp_path / "evil.tar.gz"

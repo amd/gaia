@@ -36,17 +36,16 @@ import signal
 import socket
 import stat
 import subprocess
-import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.request
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
 from gaia.logger import get_logger
+from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.version import LEMONADE_VERSION
 
 log = get_logger(__name__)
@@ -214,155 +213,33 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _reject(entry: str, detail: str) -> "EmbeddedLemonadeError":
-    """Build the refusal raised for an archive member GAIA will not unpack.
-
-    Args:
-        entry: Name of the offending member.
-        detail: What is wrong with it.
-
-    Returns:
-        The error to raise.
-    """
-    return EmbeddedLemonadeError(
-        f"Refusing to unpack embedded Lemonade: archive entry '{entry}' "
-        f"{detail}. The download is corrupt or tampered with -- delete it and "
-        f"retry, and report it at {RELEASES_PAGE}."
-    )
-
-
-def _destination_for(name: str, dest: Path) -> Path:
-    """Resolve where *name* may be written under *dest*.
-
-    Absolute names, drive letters and ``..`` segments all resolve to somewhere
-    outside *dest* and are refused by the containment check.
-
-    Args:
-        name: Archive member name.
-        dest: Already-resolved directory the archive unpacks into.
-
-    Returns:
-        The absolute path the member is allowed to occupy.
-
-    Raises:
-        EmbeddedLemonadeError: The member escapes *dest*.
-    """
-    target = (dest / name).resolve()
-    if target != dest and dest not in target.parents:
-        raise _reject(name, f"escapes {dest}")
-    return target
-
-
-def _write_link(member: tarfile.TarInfo, target: Path, dest: Path) -> None:
-    """Recreate a symlink or hard link, refusing one that points out of *dest*.
-
-    Args:
-        member: The link member.
-        target: Validated path the link itself occupies.
-        dest: Already-resolved directory the archive unpacks into.
-
-    Raises:
-        EmbeddedLemonadeError: The link points outside *dest*.
-    """
-    # A symlink's target is read relative to the directory holding it; a hard
-    # link names another member, relative to the archive root.
-    anchor = target.parent if member.issym() else dest
-    pointee = (anchor / member.linkname).resolve()
-    if pointee != dest and dest not in pointee.parents:
-        raise _reject(member.name, f"links to '{member.linkname}', outside {dest}")
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if member.issym():
-        os.symlink(member.linkname, target)
-    else:
-        os.link(pointee, target)
-
-
-def _extract_tar(archive: Path, dest: Path) -> None:
-    """Unpack a ``.tar.gz`` into *dest*, one validated member at a time.
-
-    Every member is materialised explicitly rather than through
-    ``extractall``: tar carries symlinks, hard links and device nodes, and the
-    bulk API's safety depends on a ``filter`` argument that only exists from
-    Python 3.10.12 on. Writing each member ourselves is the same guarantee on
-    every interpreter GAIA supports.
-
-    Args:
-        archive: The ``.tar.gz`` file.
-        dest: Already-resolved directory to unpack into.
-
-    Raises:
-        EmbeddedLemonadeError: A member escapes *dest* or is a special file.
-    """
-    with tarfile.open(archive, "r:gz") as handle:
-        links = []
-        for member in handle.getmembers():
-            target = _destination_for(member.name, dest)
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-            elif member.isfile():
-                source = handle.extractfile(member)
-                if source is None:
-                    raise _reject(member.name, "is an unreadable file entry")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with source, open(target, "wb") as sink:
-                    shutil.copyfileobj(source, sink)
-                # & 0o777 drops setuid, setgid and sticky; nothing in the
-                # published artifact needs them.
-                target.chmod(member.mode & 0o777)
-            elif member.issym() or member.islnk():
-                links.append((member, target))
-            else:
-                raise _reject(member.name, "is a device or special file")
-
-        # Links go last. Created inline, one could become a path component a
-        # later member is written through -- the write would follow it out of
-        # dest even though the member's own name resolved inside.
-        for member, target in links:
-            _write_link(member, target, dest)
-
-
-def _extract_zip(archive: Path, dest: Path) -> None:
-    """Unpack a ``.zip`` into *dest*, one validated member at a time.
-
-    ``zipfile`` silently rewrites a traversing member name to a harmless one.
-    Checking first turns that into the loud failure a tampered artifact
-    deserves.
-
-    Args:
-        archive: The ``.zip`` file.
-        dest: Already-resolved directory to unpack into.
-
-    Raises:
-        EmbeddedLemonadeError: A member escapes *dest*.
-    """
-    with zipfile.ZipFile(archive) as handle:
-        for name in handle.namelist():
-            _destination_for(name, dest)
-            handle.extract(name, dest)
-
-
 def _extract(archive: Path, dest: Path) -> None:
-    """Unpack *archive* into *dest*, validating every member path.
+    """Unpack *archive* into *dest*, validating every member.
 
     Args:
         archive: ``.zip`` or ``.tar.gz`` file.
         dest: Empty directory to unpack into.
 
     Raises:
-        EmbeddedLemonadeError: Unknown suffix or an unsafe member path.
+        EmbeddedLemonadeError: Unknown suffix or an unsafe member.
     """
-    dest.mkdir(parents=True, exist_ok=True)
-    resolved = dest.resolve()
     if archive.name.endswith(".zip"):
-        _extract_zip(archive, resolved)
+        kind = "zip"
     elif archive.name.endswith((".tar.gz", ".tgz")):
-        _extract_tar(archive, resolved)
+        kind = "tar"
     else:
         raise EmbeddedLemonadeError(
             f"Cannot unpack '{archive.name}': expected a .zip or .tar.gz "
             f"embedded Lemonade asset. Delete {archive} and retry."
         )
+    try:
+        safe_extract(archive, dest, allow_links=True, kind=kind)
+    except ArchiveError as e:
+        raise EmbeddedLemonadeError(
+            f"Refusing to unpack embedded Lemonade: {e}. The download is corrupt "
+            f"or tampered with -- delete it and retry, and report it at "
+            f"{RELEASES_PAGE}."
+        ) from e
 
 
 def _flatten_single_root(unpacked: Path) -> Path:
