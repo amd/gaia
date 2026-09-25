@@ -2376,13 +2376,16 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Upcoming/overdue items — only at session start or after a long pause,
         # and never one this session already raised.
         if self._reminder_window_open(time.time()):
-            upcoming = [
-                item
-                for item in store.get_upcoming(
-                    within_days=7, context=self._read_scope()
-                )
-                if item["id"] not in self._reminders_surfaced
-            ][:10]
+            # Redacted like the other prompt sections: this text reaches the model.
+            upcoming = self._redact_credentials(
+                [
+                    item
+                    for item in store.get_upcoming(
+                        within_days=7, context=self._read_scope()
+                    )
+                    if item["id"] not in self._reminders_surfaced
+                ][:10]
+            )
         else:
             upcoming = []
 

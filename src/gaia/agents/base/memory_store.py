@@ -1473,12 +1473,17 @@ class MemoryStore:
         include_overdue: bool = True,
         context: str | None = None,
         limit: int = 10,
+        include_sensitive: bool = False,
     ) -> List[Dict]:
         """Get time-sensitive items due within N days (or overdue).
 
         Returns items where:
         - due_at is within the window (or overdue if include_overdue=True)
         - Either never reminded, or reminded before the due date (needs follow-up)
+        - Not marked sensitive, unless include_sensitive=True
+
+        Sensitive rows are filtered in SQL rather than by the caller so they
+        cannot consume ``limit`` and leave the visible list empty.
         """
         now_iso = _now_iso()
         future_iso = (
@@ -1505,6 +1510,9 @@ class MemoryStore:
         if context is not None:
             conditions.append("context = ?")
             params.append(context)
+
+        if not include_sensitive:
+            conditions.append("sensitive = 0")
 
         where = "WHERE " + " AND ".join(conditions)
 

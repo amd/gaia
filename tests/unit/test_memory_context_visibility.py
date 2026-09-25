@@ -112,6 +112,65 @@ class TestADefaultSessionSeesEveryContext:
             second.close()
 
 
+class TestSensitiveRemindersStayOutOfTheTurn:
+    """Widening the read scope must not widen what ``sensitive`` keeps back.
+
+    The per-turn reminder list only ever showed default-scope rows, so the
+    missing sensitivity check was unreachable. Reading every context makes a
+    reminder the user marked private reachable by the prompt — and for a cloud
+    model that means it leaves the machine.
+    """
+
+    @staticmethod
+    def _store_reminder(db_path: Path, content: str, **kwargs) -> None:
+        session = _Session(db_path)
+        due = (datetime.now().astimezone() + timedelta(days=1)).isoformat()
+        session._memory_store.store(
+            category="reminder", content=content, due_at=due, **kwargs
+        )
+        session.close()
+
+    def test_a_sensitive_reminder_never_reaches_the_turn(self, db_path):
+        self._store_reminder(
+            db_path, "Therapy session", context="personal", sensitive=True
+        )
+
+        session = _Session(db_path)
+        try:
+            assert "Therapy session" not in session.get_memory_dynamic_context()
+        finally:
+            session.close()
+
+    def test_a_sensitive_reminder_does_not_crowd_out_a_visible_one(self, db_path):
+        """Filtering in SQL, not after: 10 private rows must not empty the list."""
+        for i in range(10):
+            self._store_reminder(
+                db_path, f"Private matter {i}", context="personal", sensitive=True
+            )
+        self._store_reminder(db_path, "Dentist appointment", context="personal")
+
+        session = _Session(db_path)
+        try:
+            ctx = session.get_memory_dynamic_context()
+        finally:
+            session.close()
+
+        assert "] Dentist appointment" in ctx
+        assert "Private matter" not in ctx
+
+    def test_a_credential_shaped_reminder_is_masked(self, db_path):
+        """The other memory sections redact; this one skipped the step."""
+        self._store_reminder(db_path, "Rotate password: hunter2-SECRET-token")
+
+        session = _Session(db_path)
+        try:
+            ctx = session.get_memory_dynamic_context()
+        finally:
+            session.close()
+
+        assert "hunter2-SECRET-token" not in ctx
+
+
 class TestAScopedAgentKeepsItsScope:
     def test_email_sees_its_own_and_global_rows_only(self, db_path):
         _save_as_the_model_did_on_main(db_path, context="work")
