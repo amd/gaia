@@ -27,6 +27,31 @@ def _turn(index):
     ]
 
 
+def _tool_turn(index):
+    call_id = f"call-{index}"
+    return [
+        {"role": "user", "content": f"read fact {index}"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "read_fact", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "name": "read_fact",
+            "content": f"fact-{index}",
+        },
+        {"role": "assistant", "content": f"The fact is fact-{index}."},
+    ]
+
+
 def test_history_keeps_more_than_five_complete_turns():
     turns = [_turn(i) for i in range(30)]
     assert select_history(turns, 10000) == sum(turns, [])
@@ -56,6 +81,22 @@ def test_newest_oversized_turn_keeps_the_earlier_turns(caplog):
     with patch("gaia.agents.base.history.count_tokens", side_effect=costs):
         assert select_history(turns, 100) == sum(turns[:5], [])
     assert "1 turn(s) larger than the whole history budget" in caplog.text
+
+
+def test_eviction_never_separates_a_tool_call_from_its_result():
+    turns = [_tool_turn(i) for i in range(12)]
+    whole = sum(len(turn) for turn in turns)
+    overflowed = 0
+    # Only some budgets land the cut between a call and its result, so sweep.
+    for budget in range(200, 1200, 10):
+        window = select_history(turns, budget)
+        if not 0 < len(window) < whole:
+            continue
+        overflowed += 1
+        requested = {call["id"] for m in window for call in m.get("tool_calls") or []}
+        answered = {m["tool_call_id"] for m in window if m.get("role") == "tool"}
+        assert requested == answered, budget
+    assert overflowed > 50
 
 
 @pytest.mark.parametrize("budget", [0, -100])
