@@ -5998,6 +5998,34 @@ Do NOT wrap conversational replies in JSON.
             return statement
         return f"{body.rstrip()}\n\n{statement}"
 
+    def _gate_unsealed_answer(
+        self, answer: Optional[str]
+    ) -> Tuple[Optional[str], List[str]]:
+        """Judge an answer that never passed the loop's own completion gate.
+
+        Every exit that ends a turn early — error, context overflow, the step
+        cap — lands here, so an unverified save or an unfinished extraction is
+        reported as incomplete on those paths too. ``None`` stays ``None`` when
+        nothing is unverified: the caller's max-steps fallback owns that text.
+        """
+        self._check_extraction_sources()
+        gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
+        gaps.extend(self._extraction_ledger.gaps())
+        unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
+        if unsupported:
+            gaps.append(unsupported[1] + ".")
+        if gaps:
+            report = incomplete_answer(gaps)
+            # Keep the error that ended the turn; add what stays unverified.
+            answer = (
+                f"{answer}\n\n{report}" if answer and self.error_history else report
+            )
+        # Items already extracted stay visible when the turn runs out.
+        inventory = self._extraction_ledger.render()
+        if inventory and answer:
+            answer += "\n\n" + inventory
+        return answer, gaps
+
     def process_query(
         self,
         user_input: str,
@@ -8504,9 +8532,13 @@ Do NOT wrap conversational replies in JSON.
                 if cap_answer is None:
                     cancelled_by_console = True
                 else:
-                    final_answer = self._with_verification_scope(
+                    # Same gate an ordinary answer passes: running out of steps
+                    # mid-extraction still reports incomplete, it does not
+                    # promote the closing reply to a verified one.
+                    gated, completion_gaps = self._gate_unsealed_answer(
                         self.finalize_answer(cap_answer, conversation)
                     )
+                    final_answer = self._with_verification_scope(gated)
                     verification_scope_applied = True
                     _cap_input_tokens, cap_output_tokens = _sum_conversation_tokens(
                         conversation, self._tool_reported_usage
@@ -8559,28 +8591,7 @@ Do NOT wrap conversational replies in JSON.
         )
 
         if not verification_scope_applied and not account_refused:
-            self._check_extraction_sources()
-            completion_gaps = self._completion_evidence.gaps(
-                final_answer or "", _claims_file_write
-            )
-            completion_gaps.extend(self._extraction_ledger.gaps())
-            unsupported = unsupported_test_claim(
-                final_answer or "", self._turn_tool_executions
-            )
-            if unsupported:
-                completion_gaps.append(unsupported[1] + ".")
-            if completion_gaps:
-                report = incomplete_answer(completion_gaps)
-                # Keep the error that ended the turn; add what stays unverified.
-                final_answer = (
-                    f"{final_answer}\n\n{report}"
-                    if final_answer and self.error_history
-                    else report
-                )
-                # Items already extracted stay visible when the turn runs out.
-                inventory = self._extraction_ledger.render()
-                if inventory:
-                    final_answer += "\n\n" + inventory
+            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context

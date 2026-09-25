@@ -1197,6 +1197,23 @@ def test_running_out_of_steps_keeps_the_extracted_inventory(agent, tmp_path):
     assert "Exercise ALPHA" in result["result"] and "Exercise BETA" in result["result"]
 
 
+def test_the_closing_answer_at_the_step_limit_is_checked_too(agent, tmp_path):
+    """The last-step summary is an answer, not an exemption from the gate."""
+    (tmp_path / "source.txt").write_text("Exercise ALPHA\nExercise BETA")
+    script(
+        agent,
+        {"tool": "extract_document_items", "tool_args": {"file_path": "source.txt"}},
+        {"answer": "Saved every exercise to report.txt."},
+    )
+    result = agent.process_query(
+        "List every exercise in source.txt. Save to report.txt.", max_steps=1
+    )
+    assert result["status"] == "incomplete"
+    assert result["completion_gaps"]
+    assert "Saved every exercise to report.txt." not in result["result"]
+    assert "Exercise ALPHA" in result["result"] and "Exercise BETA" in result["result"]
+
+
 def test_a_finished_extraction_survives_the_step_limit(agent, tmp_path):
     (tmp_path / "source.txt").write_text("Exercise ALPHA\nExercise BETA")
     script(

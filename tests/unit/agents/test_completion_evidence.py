@@ -241,6 +241,9 @@ def agent(tmp_path, monkeypatch):
     agent.streaming = False
     agent._tool_requires_confirmation = lambda *a, **kw: False
     agent.console = MagicMock()
+    # A real console either has no Stop event or an unset one; a bare mock
+    # answers "cancelled" to every check.
+    agent.console.cancelled = None
     yield agent
     _TOOL_REGISTRY.clear()
     _TOOL_REGISTRY.update(snapshot)
