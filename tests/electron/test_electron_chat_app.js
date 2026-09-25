@@ -21,6 +21,11 @@ const fs = require('fs');
 const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
 const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 
+// Every theme write goes through this one module, so the callers below are
+// checked for the delegation and this file for the DOM write itself.
+const themeWriter = () =>
+  fs.readFileSync(path.join(CHAT_APP_PATH, 'src/utils/theme.ts'), 'utf8');
+
 describe('Chat App Integration', () => {
 
   // ── App Configuration ──────────────────────────────────────────────
@@ -408,7 +413,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should support dark theme via data-theme attribute', () => {
-      expect(storeContent).toContain('data-theme');
+      expect(storeContent).toMatch(/applyTheme\(/);
+      expect(themeWriter()).toContain('data-theme');
     });
 
     it('should persist theme to localStorage', () => {
@@ -581,7 +587,8 @@ describe('Chat App Integration', () => {
 
     it('should apply saved theme on load', () => {
       expect(mainContent).toContain('gaia-chat-theme');
-      expect(mainContent).toContain('data-theme');
+      expect(mainContent).toMatch(/applyTheme\(/);
+      expect(themeWriter()).toContain('data-theme');
     });
 
     it('should have copyright header', () => {
