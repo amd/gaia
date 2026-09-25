@@ -11,7 +11,7 @@ from typing import Optional, Tuple
 __version__ = "0.24.1"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "11.8.1"
+LEMONADE_VERSION = "2026.39.1"
 
 # Oldest Lemonade Server GAIA runs against. LEMONADE_VERSION is what we install;
 # this is the floor below which we refuse. Profiles may require newer

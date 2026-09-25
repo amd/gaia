@@ -1231,8 +1231,8 @@ def build_parser() -> "argparse.ArgumentParser":
         "without asking, the shell-only operators (>, >>, <, &, `, $(), "
         "newline) parse and run, the "
         "read-only binary policy is replaced by the developer set (node, npm, "
-        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh) and the "
-        "shell rate limit is lifted. This is arbitrary code execution. Off "
+        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh, git) and "
+        "the shell rate limit is lifted. This is arbitrary code execution. Off "
         "unless passed, and the host can toggle it at any time over the "
         "control channel. Every shell command run this way is audit-logged.",
     )

@@ -106,9 +106,10 @@ the terminal UI meant building it from source.
   / `;` / `|` already worked by default — the
   read-only allowlist is replaced by a developer set (`node`, `npm`, `make`,
   `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`, `timeout`, `export`,
-  `cp`, `mv`, plus `python` / `python3` / `pytest` / `gh`), and the shell rate
-  limit is dropped. Off by default and byte-identical to before when off. `rm`
-  stays excluded. Every command run this way is audit-logged with its full
+  `cp`, `mv`, plus `python` / `python3` / `pytest` / `gh` / `git`), and the
+  shell rate limit is dropped. Off by default and byte-identical to before when
+  off. `git` in that set means its policy's outright refusals — push, reset,
+  rebase — also stop applying under bypass. `rm` stays excluded. Every command run this way is audit-logged with its full
   arguments. Stdio only — an HTTP session's `/bypass` stops its approval prompts
   but never lifts the shell gates, and the request body cannot ask for it.
   Redirection has one exception: a command that

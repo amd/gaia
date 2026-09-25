@@ -430,8 +430,10 @@ tool's own guardrails for the session: the shell-only operators — redirection
 newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
 default, the read-only binary allowlist is replaced by a developer set
 (`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
-`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`, which
-already had their own paths), and the shell rate limit is dropped. That is
+`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
+which already had their own paths), and the shell rate limit is dropped. `git`
+being in that set means its policy's outright refusals — push, reset, rebase —
+also stop applying under bypass. That is
 arbitrary code execution in the working directory, which is why it exists only
 on this transport: one local parent process on a private pipe. It is **not**
 reachable over HTTP, and the request body cannot ask for it —

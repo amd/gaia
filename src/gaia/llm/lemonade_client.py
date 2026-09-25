@@ -11,7 +11,6 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
-import shutil
 import signal
 import socket
 import subprocess
@@ -1256,46 +1255,31 @@ def _prompt_user_for_delete(model_name: str) -> bool:
                 print("Please enter 'y' or 'n'")
 
 
-def _check_disk_space(size_gb: float, path: Optional[str] = None) -> bool:
+def _check_disk_space(size_gb: float, free_bytes: int, path: str) -> bool:
     """
-    Check if there's enough disk space for download.
+    Check that the server's model cache has room for a download.
 
     Args:
-        size_gb: Required space in GB
-        path: Path to check. If None (default), checks current working directory.
-              This is cross-platform compatible (works on Windows and Unix).
+        size_gb: Download size in GB
+        free_bytes: Free bytes in the model cache, from ``/system-info``
+        path: Model cache path, named in the error
 
     Returns:
         True if enough space available
 
     Raises:
         InsufficientDiskSpaceError: If not enough space
-
-    Note:
-        The default checks the current working directory's drive/partition.
-        Ideally, this should check the actual model storage location, but that
-        requires server API support to report the storage path.
     """
-    try:
-        # Use current working directory if no path specified (cross-platform)
-        check_path = path if path is not None else os.getcwd()
-        stat = shutil.disk_usage(check_path)
-        free_gb = stat.free / (1024**3)
-        required_gb = size_gb * 1.5  # Need 50% buffer for extraction/temp files
+    free_gb = free_bytes / (1024**3)
+    required_gb = size_gb * 1.5  # Need 50% buffer for extraction/temp files
 
-        if free_gb < required_gb:
-            raise InsufficientDiskSpaceError(
-                f"Insufficient disk space: need {required_gb:.1f}GB, "
-                f"have {free_gb:.1f}GB free"
-            )
-        return True
-    except InsufficientDiskSpaceError:
-        raise
-    except Exception as e:
-        # If we can't check disk space, log warning but continue
-        logger = logging.getLogger(__name__)
-        logger.warning(f"Could not check disk space: {e}")
-        return True
+    if free_gb < required_gb:
+        raise InsufficientDiskSpaceError(
+            f"Insufficient disk space in Lemonade's model cache ({path}): "
+            f"need {required_gb:.1f}GB, have {free_gb:.1f}GB free. "
+            f"Free up space on that drive and retry."
+        )
+    return True
 
 
 class LemonadeClient:
@@ -1651,41 +1635,52 @@ class LemonadeClient:
 
     def get_model_info(self, model_name: str) -> Dict[str, Any]:
         """
-        Get information about a model from the server.
+        Get a model's download size and status from the server's catalog.
 
         Args:
             model_name: Name of the model
 
         Returns:
-            Dict with model info including size_gb estimate
-        """
-        try:
-            models_response = self.list_models()
-            for model in models_response.get("data", []):
-                if model.get("id", "").lower() == model_name.lower():
-                    # Estimate size based on model name if not provided
-                    size_gb = model.get(
-                        "size_gb", self._estimate_model_size(model_name)
-                    )
-                    return {
-                        "id": model.get("id"),
-                        "size_gb": size_gb,
-                        "downloaded": model.get("downloaded", False),
-                    }
+            Dict with ``id``, ``downloaded``, and ``size_gb`` — the catalog's
+            ``size``, or a name-based estimate when the catalog lacks one
 
-            # Model not found in list, provide estimate
-            return {
-                "id": model_name,
-                "size_gb": self._estimate_model_size(model_name),
-                "downloaded": False,
-            }
-        except Exception:
-            # If we can't get info, provide conservative estimate
-            return {
-                "id": model_name,
-                "size_gb": self._estimate_model_size(model_name),
-                "downloaded": False,
-            }
+        Raises:
+            LemonadeClientError: If the catalog can't be fetched
+        """
+        # Without show_all, /models omits every model that isn't downloaded yet.
+        for model in self.list_models(show_all=True).get("data", []):
+            if _model_ids_match(model.get("id"), model_name):
+                size = model.get("size")
+                return {
+                    "id": model.get("id"),
+                    "size_gb": (
+                        float(size) if size else self._estimate_model_size(model_name)
+                    ),
+                    "downloaded": bool(model.get("downloaded", False)),
+                }
+
+        return {
+            "id": model_name,
+            "size_gb": self._estimate_model_size(model_name),
+            "downloaded": False,
+        }
+
+    def _model_storage_free_bytes(self) -> Tuple[int, str]:
+        """Free bytes and path of the server's model cache, from ``/system-info``.
+
+        Raises:
+            LemonadeClientError: If the server doesn't report ``model_storage``
+        """
+        storage = self.get_system_info().get("model_storage") or {}
+        free_bytes = storage.get("free_bytes")
+        if not isinstance(free_bytes, (int, float)):
+            raise LemonadeClientError(
+                f"Lemonade at {self.base_url} did not report "
+                f"model_storage.free_bytes in /system-info, so GAIA can't check "
+                f"that the model cache has room for a download. Update Lemonade "
+                f"Server (run `gaia init`) and retry."
+            )
+        return int(free_bytes), storage.get("path") or "path not reported"
 
     def _estimate_model_size(self, model_name: str) -> float:
         """
@@ -3823,13 +3818,12 @@ class LemonadeClient:
                 self.log.debug(f"Could not pre-check model status: {e}")
 
         # Distinguish "needs download" from "needs memory-map" so the user
-        # sees an honest expectation. ``list_models`` returns per-model
-        # ``downloaded: bool`` flags. If we can't tell, fall through to
-        # the generic loading message — the load_model call below still
-        # auto-downloads when needed.
+        # sees an honest expectation. Only ``show_all`` lists undownloaded
+        # models. If we can't tell, fall through to the generic loading
+        # message — the load_model call below still auto-downloads when needed.
         is_downloaded: Optional[bool] = None
         try:
-            models_data = self.list_models()
+            models_data = self.list_models(show_all=True)
             for _m in models_data.get("data", []):
                 if _model_ids_match(_m.get("id"), model):
                     is_downloaded = bool(_m.get("downloaded", False))
@@ -4194,8 +4188,8 @@ class LemonadeClient:
                     f"   {_emoji('⏱️', '[ETA]')} Estimated time: ~{estimated_minutes} minutes"
                 )
 
-            # Validate disk space
-            _check_disk_space(size_gb)
+            free_bytes, storage_path = self._model_storage_free_bytes()
+            _check_disk_space(size_gb, free_bytes, storage_path)
 
             # Create and track download task
             download_task = DownloadTask(model_name=model_name, size_gb=size_gb)
@@ -4366,6 +4360,8 @@ class LemonadeClient:
               - amd_igpu: AMD integrated GPU name, VRAM, driver version, availability
               - amd_dgpu: AMD discrete GPU list
               - amd_npu: AMD NPU name, driver version, power mode, availability
+            - model_storage: the model cache's ``path``, ``free_bytes``,
+              ``total_bytes``, and ``used_bytes``
 
         Examples:
             # Check available devices
@@ -4703,25 +4699,19 @@ class LemonadeClient:
 
     def check_model_loaded(self, model_id: str) -> bool:
         """
-        Check if a specific model is loaded.
+        Check if a specific model is loaded in memory (not merely downloaded).
 
         Args:
             model_id: Model ID to check
 
         Returns:
-            True if model is loaded, False otherwise
+            True if ``/health`` lists the model as loaded, False otherwise
+
+        Raises:
+            LemonadeClientError: If the health check fails
         """
-        try:
-            models_response = self.list_models()
-            for model in models_response.get("data", []):
-                if _model_ids_match(model.get("id"), model_id):
-                    return True
-                # Also check for partial match
-                if model_id.lower() in model.get("id", "").lower():
-                    return True
-        except Exception as exc:
-            get_logger(__name__).warning("Could not query loaded models: %s", exc)
-        return False
+        loaded = self.health_check().get("all_models_loaded", [])
+        return any(_model_ids_match(m.get("model_name"), model_id) for m in loaded)
 
     def _check_lemonade_installed(self) -> bool:
         """

@@ -325,15 +325,21 @@ class ToolLoader:
         # Self-heals each turn: recall re-runs, so an idle recipe tool LRU-evicts.
         seen_skill: set[str] = set()
         for name in skill_tools or ():
-            if (
-                name in self._core
-                or name in self._loaded
-                or name not in registry
-                or name in seen_skill
-            ):
+            if name in self._core or name not in registry or name in seen_skill:
                 continue
             seen_skill.add(name)
             sel.skill.append(name)
+            if name in self._loaded:
+                # Named by the signal this turn, so protect it for this turn the
+                # same as a fresh admission. Skipping it here instead let the
+                # tier decay: a tool the signal names every turn was admitted on
+                # the first turn only, and from the second on it was an
+                # uncalled, unprotected row that the LRU picks first — so the
+                # recipe's tools evicted while the recipe was still being
+                # followed. Recency still governs: a tool the signal stops
+                # naming loses the protection on the next turn.
+                admitted_this_turn.add(name)
+                continue
             if len(self._loaded) < self._max_tools:
                 self._admit(name, sel)
                 admitted_this_turn.add(name)

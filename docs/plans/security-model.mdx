@@ -253,12 +253,19 @@ performs the redirect as usual.
 
 **Blast radius: arbitrary code execution.** The developer set adds `node`,
 `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`, `timeout`,
-`export`, `cp` and `mv`. It also names `python`, `python3`, `pytest` and `gh`,
-which are **consolidation rather than new reach** — those already have paths
-today (`execute_python_file` for the `generic_file_ops` profiles, a
-`shell:execute:<binary>` skill grant for `pytest` and `gh`). Listing them here
-means bypass has one answer to "may this binary run" instead of three. The
+`export`, `cp` and `mv`. It also names `python`, `python3`, `pytest`, `gh` and
+`git`, which are **consolidation rather than new reach** — those already have
+paths today (`execute_python_file` for the `generic_file_ops` profiles, a
+`shell:execute:<binary>` skill grant for `pytest`, `gh` and `git`). Listing them
+here means bypass has one answer to "may this binary run" instead of three. The
 per-skill grant path is untouched and still works with bypass off.
+
+Naming `git` means its policy's outright refusals — push, reset, rebase, the
+ones a grant cannot approve — come off under bypass with everything else. Same
+reasoning as `rm` below, inverted: that refusal is a tripwire rather than a
+boundary, since `python` and `make` in this same set reach git by shelling out.
+Omitting it would have left bypass *stricter* than the default tier, where git's
+read-only floor still answers `git status`.
 
 `rm` is deliberately excluded. This is not a security boundary — anything in the
 set can delete a file — it is a tripwire against an accidental recursive delete.

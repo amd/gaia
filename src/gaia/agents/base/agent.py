@@ -332,6 +332,9 @@ class ToolExecutionTimeout(Exception):
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
+    # Re-runs a shell command until it succeeds; gated for the same reason as
+    # the command it polls with.
+    "wait_for_condition",
     # Runs a .py file in a subprocess — arbitrary code execution, and unlike
     # run_shell_command there is no read-only allowlist behind it.
     "execute_python_file",
@@ -2161,11 +2164,17 @@ Do NOT wrap conversational replies in JSON.
         Raises:
             SkillNotFoundError: no discovery root contains that skill.
             SkillValidationError: the manifest is invalid or contradicts
-                ``tools.py``. Nothing is registered.
+                ``tools.py``, or ``~/.gaia/skills/skill-lock.json`` is unreadable
+                — an unreadable lock cannot tell an attested skill from a local
+                one, so no user-root skill loads until it is fixed or deleted.
+                Nothing is registered.
             SkillPermissionError: the skill declares a local-capability
                 permission (``filesystem``/``shell``/``database``/``desktop``/
                 ``env``), which this phase refuses rather than loading
                 unenforced.
+            SkillDriftError: the skill was installed from the hub at
+                ``community`` / ``verified`` and its files no longer match
+                ``skill-lock.json`` — the signature covered different bytes.
 
         Example:
             class WebAgent(Agent):
