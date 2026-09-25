@@ -697,8 +697,16 @@ def run_model_command(agent: Any, query: str, out) -> None:
 
     logger.info("switched model to %s (%s)", arg, display)
     _write(_model_state_event(agent), out)
+    # Pass the live client's classifier, as the system prompt does — the id
+    # prefix knows only two providers, so a runtime-discovered one would be
+    # called local here while the prompt calls it cloud.
+    lookup = getattr(
+        getattr(agent.chat, "llm_client", None), "cloud_model_provider", None
+    )
     location = resolve_inference_location(
-        agent.chat.effective_model, use_claude=bool(agent._use_claude)
+        agent.chat.effective_model,
+        use_claude=bool(agent._use_claude),
+        cloud_provider_lookup=lookup if callable(lookup) else None,
     )
     _write(
         {
