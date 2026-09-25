@@ -544,7 +544,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.23.1+**: an older core's daemon starts fine but
+  comes up. It must also be **0.24.1+**: an older core's daemon starts fine but
   has no sidecar entry for this agent, which reads as a UI with a dead agent
   rather than as a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
