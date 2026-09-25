@@ -357,6 +357,10 @@
     cursor: pointer;
 }
 
+.activity-filter-select:focus-visible {
+    border-color: var(--accent);
+}
+
 /* MCP server badge */
 .flow-tool-mcp-server {
     font-family: var(--font-mono);

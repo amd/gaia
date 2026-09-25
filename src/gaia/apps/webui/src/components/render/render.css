@@ -192,7 +192,7 @@
 .render-diff__body {
     margin: 0;
     overflow-x: auto;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
 }
 
 .render-diff__line {
@@ -200,11 +200,11 @@
 }
 
 .render-diff__line--added {
-    background: var(--accent-green-dim, color-mix(in srgb, var(--accent-green) 15%, transparent));
+    background: var(--accent-green-dim);
 }
 
 .render-diff__line--removed {
-    background: var(--danger-dim, color-mix(in srgb, var(--danger) 15%, transparent));
+    background: var(--danger-dim);
 }
 
 .render-diff__line--hunk {
@@ -232,7 +232,7 @@
 }
 
 .render-confirmation__badge {
-    background: var(--accent-yellow-dim, color-mix(in srgb, var(--accent-yellow) 15%, transparent));
+    background: var(--accent-yellow-dim);
     color: var(--accent-yellow);
     border-radius: 4px;
     padding: 2px 8px;
@@ -251,7 +251,7 @@
 /* Machine action name — code-derived truth, visually distinct from the
  * (attacker-influenced) summary block below. */
 .render-confirmation__action {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: 12px;
     color: var(--text-secondary);
     background: var(--bg-secondary);
@@ -322,7 +322,7 @@
 }
 
 .render-needs-input__badge {
-    background: var(--accent-blue-dim, color-mix(in srgb, var(--accent-blue) 15%, transparent));
+    background: var(--accent-blue-dim);
     color: var(--accent-blue);
     border-radius: 4px;
     padding: 2px 8px;
@@ -333,7 +333,7 @@
 }
 
 .render-needs-input__sensitive-badge {
-    background: var(--accent-yellow-dim, color-mix(in srgb, var(--accent-yellow) 15%, transparent));
+    background: var(--accent-yellow-dim);
     color: var(--accent-yellow);
     border-radius: 4px;
     padding: 2px 8px;
@@ -368,7 +368,7 @@
 }
 
 .render-needs-input__option:hover:not(:disabled) {
-    background: var(--accent-blue-dim, color-mix(in srgb, var(--accent-blue) 15%, transparent));
+    background: var(--accent-blue-dim);
 }
 
 .render-needs-input__option:disabled {

@@ -134,6 +134,24 @@ var colourCtor = map[string]map[string]bool{
 	"colorful": {"Hex": true, "Color": true},
 }
 
+// colourType is every type in those packages whose values ARE colours — the
+// same set plus the ones you cannot call. This is what makes the sweep
+// type-directed instead of spelling-directed, and it is the difference between
+// catching a colour and catching one way of writing a colour: lipgloss.Color is
+// a STRING type, so `var c lipgloss.Color = "81"` mints a hardcoded cyan with
+// no constructor, no hex, and no field named …Color anywhere in it.
+var colourType = map[string]map[string]bool{
+	"lipgloss": {
+		"Color": true, "ANSIColor": true, "AdaptiveColor": true,
+		"CompleteColor": true, "CompleteAdaptiveColor": true,
+		"TerminalColor": true,
+	},
+	"termenv": {
+		"RGBColor": true, "ANSIColor": true, "ANSI256Color": true, "Color": true,
+	},
+	"colorful": {"Color": true},
+}
+
 var majorVersionSeg = regexp.MustCompile(`^v[0-9]+$`)
 
 // colourPkg maps an import path to its colourCtor key, "" for anything else.
@@ -161,7 +179,66 @@ func colourPkg(path string) string {
 // `Color: strPtr("81")` — an ANSI-256 index, exactly what the markdown
 // renderer used to paint headings with — is a colour no other rule here sees.
 // Anything ending in Color is one: Color, BackgroundColor, CenterColor.
-func isColourField(name string) bool { return strings.HasSuffix(name, "Color") }
+//
+// The suffix is the SUPPLEMENT, for sinks whose declared type is a plain
+// string. `declared` carries the primary rule: every field name in the module
+// whose type really is a colour, so `fg lipgloss.Color` — how a Go programmer
+// would actually spell it — is covered without being named after its type.
+func isColourField(name string, declared map[string]bool) bool {
+	return strings.HasSuffix(name, "Color") || declared[name]
+}
+
+// isColourTypeExpr reports whether a type EXPRESSION denotes a colour, given
+// how this file spells the colour packages. Pointers and parentheses are
+// transparent; a container is not (its ELEMENT type is what holds the colour,
+// which compositeSinks below handles).
+func isColourTypeExpr(pkgs map[string]string, e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return isColourTypeExpr(pkgs, e.X)
+	case *ast.StarExpr:
+		return isColourTypeExpr(pkgs, e.X)
+	case *ast.SelectorExpr:
+		pkg, name, ok := qualified(e)
+		return ok && colourType[pkgs[pkg]][name]
+	}
+	return false
+}
+
+// colourConst folds e to the constant a slot would receive, or reports false
+// for anything computed at run time. Only literals fold — a call is not a
+// constant, so `pickPair("accent")` is left alone rather than reported for the
+// string inside it. Concatenation folds too, which is what closes the
+// `"#" + "3FB950"` spelling: the hex rule below reads whole string literals, so
+// it sees two halves and neither is a colour.
+func colourConst(e ast.Expr) (string, bool) {
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return colourConst(e.X)
+	case *ast.BasicLit:
+		switch e.Kind {
+		case gotoken.STRING:
+			s, err := strconv.Unquote(e.Value)
+			if err != nil {
+				return e.Value, true
+			}
+			return s, true
+		case gotoken.INT:
+			return e.Value, true
+		}
+	case *ast.BinaryExpr:
+		if e.Op != gotoken.ADD {
+			return "", false
+		}
+		l, lok := colourConst(e.X)
+		r, rok := colourConst(e.Y)
+		if !lok || !rok {
+			return "", false
+		}
+		return l + r, true
+	}
+	return "", false
+}
 
 // fieldName is the field being assigned or keyed, if that is what this is.
 func fieldName(e ast.Expr) string {
@@ -240,16 +317,47 @@ func declName(d ast.Decl) string {
 	return ""
 }
 
-func specName(s ast.Spec) string {
-	if vs, ok := s.(*ast.ValueSpec); ok && len(vs.Names) > 0 {
-		return vs.Names[0].Name
+// specNames is every name a spec declares. All of them, not the first: an
+// entry naming `a` must not quietly excuse `b` in `var a, b = …, …`, which is
+// an allowlist widening the staleness check cannot see.
+func specNames(s ast.Spec) []string {
+	vs, ok := s.(*ast.ValueSpec)
+	if !ok {
+		return nil
 	}
-	return ""
+	out := make([]string, 0, len(vs.Names))
+	for _, n := range vs.Names {
+		out = append(out, n.Name)
+	}
+	return out
 }
 
 func excused(list []exemption, file, decl string) bool {
 	for _, e := range list {
 		if e.file == file && e.decl == decl {
+			return true
+		}
+	}
+	return false
+}
+
+// excusedAll excuses a spec only when EVERY name it declares is named in the
+// allowlist. An empty list is not an excuse.
+func excusedAll(list []exemption, file string, decls []string) bool {
+	if len(decls) == 0 {
+		return false
+	}
+	for _, d := range decls {
+		if !excused(list, file, d) {
+			return false
+		}
+	}
+	return true
+}
+
+func namesContain(names []string, want string) bool {
+	for _, n := range names {
+		if n == want {
 			return true
 		}
 	}
@@ -270,7 +378,7 @@ func (h hit) String() string { return fmt.Sprintf("%s:%d  %s", h.file, h.line, h
 // check (reading .Light/.Dark off a role) instead of the literal sweep. The
 // allowlist is passed in rather than read from the package, so the staleness
 // check can re-run the same sweep with the exemptions switched off.
-func findings(t *testing.T, file, src string, modeReach bool, list []exemption) []hit {
+func findings(t *testing.T, file, src string, modeReach bool, list []exemption, declaredFields map[string]bool) []hit {
 	t.Helper()
 	fset := gotoken.NewFileSet()
 	f, err := parser.ParseFile(fset, file, src, 0)
@@ -285,7 +393,131 @@ func findings(t *testing.T, file, src string, modeReach bool, list []exemption) 
 	}
 
 	// How THIS file spells each colour package, alias included.
-	colourPkgs := map[string]string{}
+	colourPkgs := colourPkgsOf(t, file, f)
+	if !modeReach {
+		for _, im := range f.Imports {
+			path, err := strconv.Unquote(im.Path.Value)
+			if err != nil || colourPkg(path) == "" || im.Name == nil || im.Name.Name != "." {
+				continue
+			}
+			report(im.Pos(), "dot-imports "+path+", so its colour constructors are callable unqualified")
+		}
+	}
+
+	// Colour-typed field names this file declares, on top of whatever the
+	// caller found module-wide, so a synthetic source with no module behind it
+	// still gets the type-directed rule.
+	fields := map[string]bool{}
+	for k := range declaredFields {
+		fields[k] = true
+	}
+	for k := range colourFieldsOf(colourPkgs, f) {
+		fields[k] = true
+	}
+
+	// A concatenation is read as one constant, so the halves must not also be
+	// reported as two literals that happen to say nothing on their own.
+	folded := map[ast.Node]bool{}
+
+	inspect := func(n ast.Node) {
+		ast.Inspect(n, func(n ast.Node) bool {
+			if modeReach {
+				sel, ok := n.(*ast.SelectorExpr)
+				if ok && (sel.Sel.Name == "Light" || sel.Sel.Name == "Dark") {
+					report(sel.Pos(), "reads ."+sel.Sel.Name+" off a colour instead of letting the role adapt")
+				}
+				return true
+			}
+			switch n := n.(type) {
+			case *ast.BasicLit:
+				if n.Kind != gotoken.STRING || folded[n] {
+					return true
+				}
+				v, err := strconv.Unquote(n.Value)
+				if err != nil {
+					v = n.Value
+				}
+				if m := hexColour.FindString(v); m != "" {
+					report(n.Pos(), "hex colour literal "+m)
+				} else if hasSGRColour(v) {
+					report(n.Pos(), "hand-written SGR colour escape")
+				}
+			case *ast.BinaryExpr:
+				if folded[n] {
+					return true
+				}
+				s, ok := colourConst(n)
+				if !ok {
+					return true
+				}
+				var msg string
+				if m := hexColour.FindString(s); m != "" {
+					msg = "hex colour literal " + m + ", spelled as a concatenation"
+				} else if hasSGRColour(s) {
+					msg = "hand-written SGR colour escape, spelled as a concatenation"
+				}
+				if msg == "" {
+					return true
+				}
+				report(n.Pos(), msg)
+				ast.Inspect(n, func(k ast.Node) bool { folded[k] = true; return true })
+			case *ast.CallExpr:
+				if pkg, name, ok := qualified(n.Fun); ok && colourCtor[colourPkgs[pkg]][name] {
+					report(n.Pos(), "builds a colour with "+pkg+"."+name)
+				}
+			case *ast.CompositeLit:
+				if pkg, name, ok := qualified(n.Type); ok && colourCtor[colourPkgs[pkg]][name] {
+					report(n.Pos(), "builds a colour with "+pkg+"."+name)
+				}
+				reportColourSlots(report, colourPkgs, n)
+			case *ast.ValueSpec:
+				// `var c lipgloss.Color = "81"` — the declared type is the
+				// only thing that says this string is a colour.
+				if !isColourTypeExpr(colourPkgs, n.Type) {
+					return true
+				}
+				for _, v := range n.Values {
+					reportColourConst(report, "declares a colour", v)
+				}
+			case *ast.AssignStmt:
+				for i, lhs := range n.Lhs {
+					if isColourField(fieldName(lhs), fields) && i < len(n.Rhs) {
+						reportPlainColour(report, fieldName(lhs), n.Rhs[i])
+					}
+				}
+			case *ast.KeyValueExpr:
+				if isColourField(fieldName(n.Key), fields) {
+					reportPlainColour(report, fieldName(n.Key), n.Value)
+				}
+			}
+			return true
+		})
+	}
+
+	for _, d := range f.Decls {
+		if gd, ok := d.(*ast.GenDecl); ok {
+			for _, spec := range gd.Specs {
+				if excusedAll(list, file, specNames(spec)) {
+					continue
+				}
+				inspect(spec)
+			}
+			continue
+		}
+		if excused(list, file, declName(d)) {
+			continue
+		}
+		inspect(d)
+	}
+	return found
+}
+
+// colourPkgsOf maps how THIS file spells each colour package to the key
+// colourCtor and colourType are indexed by. Dot- and blank-imports are left
+// out: neither gives a name anything can be qualified with.
+func colourPkgsOf(t *testing.T, file string, f *ast.File) map[string]string {
+	t.Helper()
+	out := map[string]string{}
 	for _, im := range f.Imports {
 		path, err := strconv.Unquote(im.Path.Value)
 		if err != nil {
@@ -299,79 +531,73 @@ func findings(t *testing.T, file, src string, modeReach bool, list []exemption) 
 		if im.Name != nil {
 			name = im.Name.Name
 		}
-		switch name {
-		case "_": // imported for effect only, so nothing can be called on it
-		case ".":
-			if !modeReach {
-				report(im.Pos(), "dot-imports "+path+", so its colour constructors are callable unqualified")
-			}
-		default:
-			colourPkgs[name] = key
+		if name == "_" || name == "." {
+			continue
 		}
+		out[name] = key
 	}
+	return out
+}
 
-	inspect := func(n ast.Node) {
-		ast.Inspect(n, func(n ast.Node) bool {
-			if modeReach {
-				sel, ok := n.(*ast.SelectorExpr)
-				if ok && (sel.Sel.Name == "Light" || sel.Sel.Name == "Dark") {
-					report(sel.Pos(), "reads ."+sel.Sel.Name+" off a colour instead of letting the role adapt")
-				}
-				return true
-			}
-			switch n := n.(type) {
-			case *ast.BasicLit:
-				if n.Kind != gotoken.STRING {
-					return true
-				}
-				v, err := strconv.Unquote(n.Value)
-				if err != nil {
-					v = n.Value
-				}
-				if m := hexColour.FindString(v); m != "" {
-					report(n.Pos(), "hex colour literal "+m)
-				} else if hasSGRColour(v) {
-					report(n.Pos(), "hand-written SGR colour escape")
-				}
-			case *ast.CallExpr:
-				if pkg, name, ok := qualified(n.Fun); ok && colourCtor[colourPkgs[pkg]][name] {
-					report(n.Pos(), "builds a colour with "+pkg+"."+name)
-				}
-			case *ast.CompositeLit:
-				if pkg, name, ok := qualified(n.Type); ok && colourCtor[colourPkgs[pkg]][name] {
-					report(n.Pos(), "builds a colour with "+pkg+"."+name)
-				}
-			case *ast.AssignStmt:
-				for i, lhs := range n.Lhs {
-					if isColourField(fieldName(lhs)) && i < len(n.Rhs) {
-						reportPlainColour(report, fieldName(lhs), n.Rhs[i])
-					}
-				}
-			case *ast.KeyValueExpr:
-				if isColourField(fieldName(n.Key)) {
-					reportPlainColour(report, fieldName(n.Key), n.Value)
-				}
-			}
+// colourFieldsOf returns every struct field name in f whose declared type is a
+// colour. Name-keyed rather than type-keyed on purpose: resolving which struct
+// a composite literal means needs the whole package, and a guard that
+// over-reports is a five-second fix while one that under-reports ships the
+// colour.
+func colourFieldsOf(pkgs map[string]string, f *ast.File) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		st, ok := n.(*ast.StructType)
+		if !ok || st.Fields == nil {
 			return true
-		})
-	}
-
-	for _, d := range f.Decls {
-		if gd, ok := d.(*ast.GenDecl); ok {
-			for _, spec := range gd.Specs {
-				if excused(list, file, specName(spec)) {
-					continue
-				}
-				inspect(spec)
+		}
+		for _, fld := range st.Fields.List {
+			if !isColourTypeExpr(pkgs, fld.Type) {
+				continue
 			}
-			continue
+			for _, nm := range fld.Names {
+				out[nm.Name] = true
+			}
 		}
-		if excused(list, file, declName(d)) {
-			continue
-		}
-		inspect(d)
+		return true
+	})
+	return out
+}
+
+// reportColourSlots flags a constant written into a container whose ELEMENT
+// type is a colour — `map[string]lipgloss.Color{"heading": "81"}`, where the
+// key says nothing and the value is a bare ANSI index.
+func reportColourSlots(report func(gotoken.Pos, string), pkgs map[string]string, cl *ast.CompositeLit) {
+	var elem ast.Expr
+	switch t := cl.Type.(type) {
+	case *ast.MapType:
+		elem = t.Value
+	case *ast.ArrayType:
+		elem = t.Elt
+	default:
+		return
 	}
-	return found
+	if !isColourTypeExpr(pkgs, elem) {
+		return
+	}
+	for _, el := range cl.Elts {
+		v := el
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			v = kv.Value
+		}
+		reportColourConst(report, "fills a colour slot", v)
+	}
+}
+
+// reportColourConst flags a literal that lands somewhere whose TYPE is a
+// colour. Where the hex rule names the value it found, this one names the
+// slot: "81" is a colour only because of where it is written.
+func reportColourConst(report func(gotoken.Pos, string), where string, v ast.Expr) {
+	s, ok := colourConst(v)
+	if !ok || s == "" {
+		return
+	}
+	report(v.Pos(), where+" with the literal "+strconv.Quote(s))
 }
 
 // reportPlainColour flags a colour written as a bare string into a colour
@@ -481,7 +707,62 @@ var x = lipgloss.Color(81)
 `, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := findings(t, tc.name+".go", tc.src, false, nil)
+			got := findings(t, tc.name+".go", tc.src, false, nil, nil)
+			if (len(got) > 0) != tc.want {
+				t.Errorf("want a finding: %v; got %v", tc.want, got)
+			}
+		})
+	}
+}
+
+// A colour is a colour however it is spelled. Every case below was written
+// against the tree, compiled, and shipped a hardcoded colour past this sweep
+// with green CI — the sweep read the shape of the expression (a call, a
+// composite literal, a field named …Color) rather than the type of the slot the
+// value lands in, and none of these has that shape. The last three are the
+// controls: a guard that fires on everything is no guard.
+func TestAColourIsCaughtHoweverItIsSpelled(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"a plain var, because lipgloss.Color is a string type", `package p
+import "github.com/charmbracelet/lipgloss"
+var x lipgloss.Color = "81"
+`, true},
+		{"a map whose KEY says nothing and whose value type says everything", `package p
+import "github.com/charmbracelet/lipgloss"
+var x = map[string]lipgloss.Color{"heading": "81"}
+`, true},
+		{"a struct field named for its job, not for its type", `package p
+import "github.com/charmbracelet/lipgloss"
+type pal struct{ fg lipgloss.Color }
+var x = pal{fg: "46"}
+`, true},
+		{"a hex split across a concatenation", `package p
+import "github.com/charmbracelet/lipgloss"
+var x lipgloss.Color = "#" + "3FB950"
+`, true},
+		{"a slice of colours", `package p
+import "github.com/charmbracelet/lipgloss"
+var x = []lipgloss.Color{"81", "46"}
+`, true},
+		{"a role passed through, which is the whole point of the package", `package p
+import "github.com/amd/gaia/tui/internal/ui/theme"
+var x = theme.Accent
+`, false},
+		{"a colour-typed var built at run time", `package p
+import "github.com/charmbracelet/lipgloss"
+func pick(name string) lipgloss.Color
+var x lipgloss.Color = pick("accent")
+`, false},
+		{"a concatenation that is not a colour", `package p
+var msg = "see issue " + "in the tracker"
+`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := findings(t, tc.name+".go", tc.src, false, nil, nil)
 			if (len(got) > 0) != tc.want {
 				t.Errorf("want a finding: %v; got %v", tc.want, got)
 			}
@@ -495,20 +776,203 @@ func TestOnlyOnePlaceFlattensARoleToOneMode(t *testing.T) {
 	}
 }
 
+// adaptiveColourType is the subset of colourType that carries BOTH modes.
+// Everything the package measures — the contrast floors, the hue families, the
+// mode-parity sweep — works by walking All() and checking a Light against a
+// Dark, so a value with only one side in it is a value no guard can see.
+var adaptiveColourType = map[string]map[string]bool{
+	"lipgloss": {"AdaptiveColor": true, "CompleteAdaptiveColor": true},
+}
+
+// TestThemeExportsRolesNotColours closes the one door the sweep above leaves
+// open. theme.go is exempt from both sweeps — it is the one file allowed to
+// write hex and to name a mode — and that exemption is load-bearing, so it
+// stays. But it means anything theme.go hands out is unexamined by definition,
+// and an exported `func Pick(c lipgloss.AdaptiveColor) lipgloss.Color` would
+// launder the exemption to every caller: the component that calls it has a
+// single-mode colour with no literal, no ctor and no `.Light` for the sweeps to
+// find, and the contrast tests never learn the value exists.
+//
+// So: theme.go exports ROLES. Returning an AdaptiveColor is fine, a container
+// of them is fine (All() does exactly that), and a Style is fine because a
+// style still resolves per-mode at render time. A bare colour is not.
+//
+// Unexported helpers are left alone on purpose — flattening inside a function
+// body is how Init() has to work, and a component cannot reach it. The bypass
+// is specifically a reachable exported escape hatch. theme.go is also the whole
+// non-test package today, so scoping to the file and scoping to the package are
+// the same scope.
+func TestThemeExportsRolesNotColours(t *testing.T) {
+	src := goSources(t)
+	body, ok := src[themeFile]
+	if !ok {
+		t.Fatalf("%s not found in the module sources", themeFile)
+	}
+	for _, o := range flatExports(t, themeFile, body) {
+		t.Errorf("%s\n\tReturn lipgloss.AdaptiveColor, or move the flattening into the component.", o)
+	}
+}
+
+// flatExports returns one message per exported function or method in the file
+// whose results can hand a caller a single-mode colour.
+func flatExports(t *testing.T, file, src string) []string {
+	t.Helper()
+	fset := gotoken.NewFileSet()
+	f, err := parser.ParseFile(fset, file, src, 0)
+	if err != nil {
+		t.Fatalf("cannot parse %s: %v", file, err)
+	}
+	pkgs := colourPkgsOf(t, file, f)
+
+	var out []string
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || !fn.Name.IsExported() || fn.Type.Results == nil {
+			continue
+		}
+		for _, res := range fn.Type.Results.List {
+			bare := bareColourIn(pkgs, res.Type)
+			if bare == "" {
+				continue
+			}
+			out = append(out, fmt.Sprintf("%s:%d: theme.%s returns %s — %s may only export "+
+				"adaptive roles, because the contrast and parity guards measure "+
+				"AdaptiveColor pairs.",
+				file, fset.Position(fn.Pos()).Line, fnName(fn), bare, filepath.Base(file)))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// The real theme.go exports three functions today, so the rule has almost no
+// surface to prove itself on. These are the shapes it has to get right, each
+// one a mutation that was run against the live file and killed — kept here so
+// the next person to touch bareColourIn finds out immediately, rather than the
+// next time somebody adds an escape hatch.
+func TestARoleIsNotAColourHoweverItIsWrapped(t *testing.T) {
+	const head = "package theme\n\nimport lg \"github.com/charmbracelet/lipgloss\"\n\n"
+	for _, tc := range []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"the bypass itself", `func Pick(c lg.AdaptiveColor) lg.Color { return lg.Color(c.Dark) }`, true},
+		{"as a method, so the receiver carries it", `type Palette struct{ Tint lg.AdaptiveColor }
+func (p Palette) Flat() lg.Color { return lg.Color(p.Tint.Dark) }`, true},
+		{"as a pointer method", `type Palette struct{ Tint lg.AdaptiveColor }
+func (p *Palette) Flat() lg.Color { return lg.Color(p.Tint.Dark) }`, true},
+		{"hidden in a map value", `func Flat() map[string]lg.Color { return nil }`, true},
+		{"hidden in a slice", `func Ramp() []lg.Color { return nil }`, true},
+		{"the interface, which erases the pair from the type", `func Any() lg.TerminalColor { return nil }`, true},
+		{"alongside a result that is fine", `func Named() (string, lg.Color) { return "", "" }`, true},
+
+		{"a role", `func Brand() lg.AdaptiveColor { return lg.AdaptiveColor{} }`, false},
+		{"a container of roles, which is what All() is", `func All() map[string]lg.AdaptiveColor { return nil }`, false},
+		{"the complete form, still both modes", `func C() lg.CompleteAdaptiveColor { return lg.CompleteAdaptiveColor{} }`, false},
+		{"a style, which resolves per-mode at render", `func Emphasis() lg.Style { return lg.NewStyle() }`, false},
+		{"unexported, so no component can reach it", `func pick(c lg.AdaptiveColor) lg.Color { return lg.Color(c.Dark) }`, false},
+		{"no results at all", `func Init() {}`, false},
+		{"a result that is not a colour", `func IsDark() bool { return true }`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := flatExports(t, "synthetic.go", head+tc.src+"\n")
+			if (len(got) > 0) != tc.want {
+				t.Errorf("flagged=%v, want %v\n%s", len(got) > 0, tc.want, strings.Join(got, "\n"))
+			}
+		})
+	}
+}
+
+// bareColourIn returns the first single-mode colour type reachable in e, or ""
+// when there is none. It recurses through containers because `map[string]
+// lipgloss.Color` hands out colours just as surely as returning one does, and
+// stops at an adaptive type because a container of roles is what All() is.
+func bareColourIn(pkgs map[string]string, e ast.Expr) string {
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return bareColourIn(pkgs, e.X)
+	case *ast.StarExpr:
+		return bareColourIn(pkgs, e.X)
+	case *ast.ArrayType:
+		return bareColourIn(pkgs, e.Elt)
+	case *ast.ChanType:
+		return bareColourIn(pkgs, e.Value)
+	case *ast.MapType:
+		if k := bareColourIn(pkgs, e.Key); k != "" {
+			return k
+		}
+		return bareColourIn(pkgs, e.Value)
+	case *ast.SelectorExpr:
+		id, ok := e.X.(*ast.Ident)
+		if !ok {
+			return ""
+		}
+		pkg := pkgs[id.Name]
+		if adaptiveColourType[pkg][e.Sel.Name] {
+			return "" // a role: both modes present, every guard can see it
+		}
+		if colourType[pkg][e.Sel.Name] {
+			return id.Name + "." + e.Sel.Name
+		}
+	}
+	return ""
+}
+
+func fnName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	return recvTypeName(fn.Recv.List[0].Type) + "." + fn.Name.Name
+}
+
+func recvTypeName(e ast.Expr) string {
+	switch e := e.(type) {
+	case *ast.StarExpr:
+		return recvTypeName(e.X)
+	case *ast.Ident:
+		return e.Name
+	case *ast.IndexExpr: // a generic receiver, Palette[T]
+		return recvTypeName(e.X)
+	}
+	return "?"
+}
+
 // sweep runs one check over the whole module, theme.go excepted.
 func sweep(t *testing.T, modeReach bool, list []exemption) []string {
 	t.Helper()
+	src := goSources(t)
+	fields := moduleColourFields(t, src)
 	var offenders []string
-	for path, src := range goSources(t) {
+	for path, body := range src {
 		if path == themeFile {
 			continue
 		}
-		for _, h := range findings(t, path, src, modeReach, list) {
+		for _, h := range findings(t, path, body, modeReach, list, fields) {
 			offenders = append(offenders, h.String())
 		}
 	}
 	sort.Strings(offenders)
 	return offenders
+}
+
+// moduleColourFields unions the colour-typed field names of every file,
+// theme.go included: the struct a literal fills does not have to be declared
+// in the file that fills it.
+func moduleColourFields(t *testing.T, src map[string]string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for path, body := range src {
+		fset := gotoken.NewFileSet()
+		f, err := parser.ParseFile(fset, path, body, 0)
+		if err != nil {
+			t.Fatalf("cannot parse %s: %v", path, err)
+		}
+		for k := range colourFieldsOf(colourPkgsOf(t, path, f), f) {
+			out[k] = true
+		}
+	}
+	return out
 }
 
 // An exemption that no longer excuses anything is an exemption that will
@@ -566,7 +1030,7 @@ func declaresName(t *testing.T, file, src, name string) bool {
 		}
 		if gd, ok := d.(*ast.GenDecl); ok {
 			for _, spec := range gd.Specs {
-				if specName(spec) == name {
+				if namesContain(specNames(spec), name) {
 					return true
 				}
 			}
@@ -583,7 +1047,7 @@ func findingsFor(t *testing.T, file, src, decl string, modeReach bool) []hit {
 	// declaration actually spans.
 	lo, hi := declLines(t, file, src, decl)
 	var in []hit
-	for _, h := range findings(t, file, src, modeReach, nil) {
+	for _, h := range findings(t, file, src, modeReach, nil, nil) {
 		if h.line >= lo && h.line <= hi {
 			in = append(in, h)
 		}
@@ -607,7 +1071,7 @@ func declLines(t *testing.T, file, src, decl string) (lo, hi int) {
 		}
 		if gd, ok := d.(*ast.GenDecl); ok {
 			for _, spec := range gd.Specs {
-				if specName(spec) == decl {
+				if namesContain(specNames(spec), decl) {
 					return span(spec)
 				}
 			}

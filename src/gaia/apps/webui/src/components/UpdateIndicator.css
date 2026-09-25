@@ -64,7 +64,6 @@
 .update-chip__action:hover,
 .update-chip__action:focus-visible {
     color: var(--accent);
-    outline: none;
 }
 
 .update-chip__dismiss {
@@ -85,7 +84,6 @@
 .update-chip__dismiss:focus-visible {
     opacity: 1;
     background: color-mix(in srgb, var(--text-primary) 8%, transparent);
-    outline: none;
 }
 
 /* Status variants ------------------------------------------------------- */

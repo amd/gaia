@@ -6,6 +6,8 @@ import (
 	"go/parser"
 	gotoken "go/token"
 	"math"
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -154,8 +156,8 @@ var fillForegrounds = map[string]bool{"OnFill": true, "OnSurface": true}
 // floors cannot see a value that clears its contrast target but rounds into a
 // DIFFERENT family once a 256-colour terminal degrades it — a Success green
 // landing on the teal between green and Info's blue, a copper landing on
-// Warning's amber. hueFamily and TestDegradationPreservesHue below exist to
-// catch exactly that.
+// Warning's amber. hueFamily and TestEveryValueStaysInItsHueFamily below exist
+// to catch exactly that.
 type hueFamily int
 
 const (
@@ -212,6 +214,23 @@ var hueArcs = map[hueFamily][2]float64{
 // ceiling — so nothing saturated can slip through.
 const neutralChromaMax = 0.16
 
+// neutralHueSlack is how far outside its family's arc a FADED value may sit —
+// low chroma buys tolerance, not immunity.
+//
+// Chroma alone cannot do this job. #875F5F (Accent.Light degraded — a warm
+// grey, 12.0° from copper's arc) and #5F875F (a sage green, 94.0° from it) both
+// measure chroma 0.157, so a ceiling that admits the first admits the second,
+// and a green motif installs cleanly into the palette whose one hard rule is
+// that the motif is not green. Hue distance separates them; chroma does not.
+//
+// 30° is picked from the measured palette: the widest distance any legitimate
+// low-chroma value sits from its own arc is 12.0° (every copper that fades —
+// Accent, AccentBright, AccentFillBG, ArtBody, ArtDetail), and the nearest
+// proven leak is the sage green at 94.0°, with a blue-violet accent at 132.0°.
+// That leaves 18° of headroom above the real values and 64° below the first
+// false pass.
+const neutralHueSlack = 30
+
 // family declares the intended hue family for every token All() returns, next
 // to the palette table above so the intent is readable in one place.
 // TestEveryTokenHasAHueFamily enforces that nothing is missing, the same
@@ -220,7 +239,7 @@ var family = map[string]hueFamily{
 	"Text": hueNeutral, "Dim": hueNeutral, "Faint": hueNeutral,
 	"Accent": hueCopper, "AccentBright": hueCopper, "Success": hueGreen,
 	"Warning": hueAmber, "Danger": hueRed, "Info": hueBlue, "Highlight": hueMagenta,
-	"Selected":  hueAmber,
+	"Selected":  hueCopper,
 	"Divider":   hueNeutral,
 	"ArtBright": hueCopper, "ArtBody": hueCopper, "ArtMid": hueCopper, "ArtDetail": hueCopper,
 	"ArtShadow": hueNeutral, "ArtEye": hueCyan,
@@ -255,25 +274,166 @@ func hueChroma(hex string) (hue, chroma float64) {
 	return hue, chroma
 }
 
-// inFamily reports whether hex's hue lands in f's arc. A neutral family
-// requires low chroma; a colour family accepts either its arc OR a chroma so
-// low the hue carries no real information (faded-to-grey is not the "wrong
-// colour" defect this test targets — a wrong SATURATED hue, like teal for
-// green, is).
+// hueArcDistance is how many degrees hue sits outside arc, and 0 when it is
+// inside. Hue is circular and hueRed's arc deliberately runs past 360, so the
+// distance is measured at hue−360, hue and hue+360 and the nearest wins — a 2°
+// red and a 358° red both score 0 without any caller needing to know which
+// arcs wrap.
+func hueArcDistance(hue float64, arc [2]float64) float64 {
+	best := math.Inf(1)
+	for _, h := range []float64{hue - 360, hue, hue + 360} {
+		d := 0.0
+		switch {
+		case h < arc[0]:
+			d = arc[0] - h
+		case h > arc[1]:
+			d = h - arc[1]
+		}
+		best = math.Min(best, d)
+	}
+	return best
+}
+
+// inFamily reports whether hex belongs to f. Three tiers, because "how much
+// colour is left" and "which colour it is" are separate questions:
+//
+//	chroma 0             a true grey — hue does not exist, so every family takes it
+//	chroma ≤ the ceiling faded — hue still points somewhere, and it must point
+//	                     within neutralHueSlack of the family's arc
+//	chroma above it      saturated — it must land inside the arc outright
+//
+// The middle tier is the load-bearing one. Treating low chroma as an unqualified
+// pass, which is what this did before, makes every hue assertion in the file
+// vacuous for any washed-out value: a sage green in the copper motif measures
+// chroma 0.157 and sails straight through.
 func inFamily(hex string, f hueFamily) (ok bool, hue, chroma float64) {
 	hue, chroma = hueChroma(hex)
 	if f == hueNeutral {
 		return chroma <= neutralChromaMax, hue, chroma
 	}
-	if chroma <= neutralChromaMax {
+	if chroma == 0 {
 		return true, hue, chroma
 	}
-	arc := hueArcs[f]
-	h := hue
-	if arc[1] > 360 && h < arc[1]-360 {
-		h += 360 // let the wraparound (red) arc compare on one axis
+	d := hueArcDistance(hue, hueArcs[f])
+	if chroma <= neutralChromaMax {
+		return d <= neutralHueSlack, hue, chroma
 	}
-	return h >= arc[0] && h <= arc[1], hue, chroma
+	return d == 0, hue, chroma
+}
+
+// TestFadedColoursKeepTheirHue pins the rule the palette test depends on but
+// cannot state: how much a value is allowed to drift once it fades. Every hex
+// here is a real 256-colour cube entry, and the first two are the whole
+// argument — identical chroma, 94° apart, and only one of them is a copper.
+func TestFadedColoursKeepTheirHue(t *testing.T) {
+	for _, c := range []struct {
+		hex  string
+		f    hueFamily
+		want bool
+		why  string
+	}{
+		{"#875F5F", hueCopper, true, "faded copper, 12° out: inside the slack"},
+		{"#5F875F", hueCopper, false, "faded sage green, 94° out: same chroma, wrong colour"},
+		{"#5F5F87", hueCopper, false, "faded blue-violet, 132° out"},
+		{"#5F5F5F", hueCopper, true, "chroma 0: no hue exists to be wrong about"},
+		{"#D7875F", hueCopper, true, "saturated copper, inside the arc"},
+		{"#AF0000", hueCopper, false, "saturated and 12° out: slack is for faded values only"},
+		{"#AF0000", hueRed, true, "hue 0 matches red's 350–370 arc across the wrap"},
+		{"#FFAFAF", hueRed, true, "the other end of red, also across the wrap"},
+		{"#875F5F", hueNeutral, true, "faded enough to pass as grey"},
+		{"#D7875F", hueNeutral, false, "too much colour left to be a neutral"},
+	} {
+		if got, hue, chroma := inFamily(c.hex, c.f); got != c.want {
+			t.Errorf("inFamily(%s, %s) = %v, want %v — %s (hue %.1f, chroma %.3f)",
+				c.hex, c.f, got, c.want, c.why, hue, chroma)
+		}
+	}
+}
+
+// sharedFamily is the exhaustive list of hue families more than one token is
+// allowed to sit in, and why. It enforces rule 4 of the design language — never
+// let two roles share a hue family — the only way a rule with real exceptions
+// can be enforced: by naming every exception rather than by not checking.
+//
+// Membership is compared for EQUALITY, not containment, so the entry is a
+// decision and not a wildcard: adding a token to a listed family fails this
+// test until someone writes down what the shared hue is for, and removing the
+// last extra member fails it too rather than leaving a stale excuse behind.
+// Families with one token need no entry.
+var sharedFamily = map[hueFamily]struct {
+	members []string
+	why     string
+}{
+	hueNeutral: {
+		members: []string{"Text", "Dim", "Faint", "Divider", "ArtShadow", "SurfaceBG", "OnSurface", "OnFill"},
+		why: "Greys are the absence of a role, not a role. Rule 4 is about not " +
+			"making two MEANINGS look alike, and none of these means anything by hue.",
+	},
+	hueCopper: {
+		members: []string{"Accent", "AccentBright", "Selected", "AccentFillBG", "ArtBright", "ArtBody", "ArtMid", "ArtDetail"},
+		why: "One brand hue, deliberately: the accent, its emphasis, the row you are " +
+			"on, the surface it fills, and the mascot are all the same idea, and the " +
+			"design language asks for exactly one brand colour rather than a family of them.",
+	},
+	hueAmber: {
+		members: []string{"Warning", "WarnFillBG"},
+		why: "Warning and the surface that carries it are one meaning in two positions. " +
+			"They share the light literal #8A5300 outright because it is the only " +
+			"saturated warm value in the ANSI-256 cube dark enough to hold 4.5:1 on " +
+			"every light terminal background this file measures.",
+	},
+	hueRed: {
+		members: []string{"Danger", "DangerFillBG"},
+		why: "Danger and the surface that carries it are one meaning in two " +
+			"positions, not two roles competing for the same hue.",
+	},
+	hueBlue: {
+		members: []string{"Info", "InfoFillBG"},
+		why: "Info and the surface that carries it are one meaning in two " +
+			"positions, not two roles competing for the same hue.",
+	},
+}
+
+func TestNoTwoRolesShareAHueFamily(t *testing.T) {
+	got := map[hueFamily][]string{}
+	for name := range All() {
+		f, ok := family[name]
+		if !ok {
+			continue // covered by TestEveryTokenHasAHueFamily
+		}
+		got[f] = append(got[f], name)
+	}
+	for f, names := range got {
+		allowed, listed := sharedFamily[f]
+		if len(names) < 2 {
+			if listed {
+				t.Errorf("sharedFamily lists %s, but only %v is in it now — delete the entry",
+					f, names)
+			}
+			continue
+		}
+		sort.Strings(names)
+		want := append([]string(nil), allowed.members...)
+		sort.Strings(want)
+		if !listed {
+			t.Errorf("%v all sit in the %s family: two roles that look alike are two "+
+				"roles the reader cannot tell apart. Give one its own hue, or add %s "+
+				"to sharedFamily with a reason.", names, f, f)
+			continue
+		}
+		if !reflect.DeepEqual(names, want) {
+			t.Errorf("%s family holds %v but sharedFamily excuses %v — reconcile the two, "+
+				"and say why any newcomer belongs", f, names, want)
+		}
+		if len(allowed.why) < 40 {
+			t.Errorf("sharedFamily[%s] needs a reason, not a label: %q", f, allowed.why)
+		}
+	}
+	for f := range sharedFamily {
+		if len(got[f]) == 0 {
+			t.Errorf("sharedFamily excuses %s, which no token is in any more", f)
+		}
+	}
 }
 
 func TestEveryTokenHasAHueFamily(t *testing.T) {
@@ -284,13 +444,17 @@ func TestEveryTokenHasAHueFamily(t *testing.T) {
 	}
 }
 
-// TestDegradationPreservesHue is the regression test for the class of bug
-// where a value clears its contrast floor but a 256-colour terminal rounds it
-// into a different semantic colour's territory. The other tests in this file
-// are luminance-only and structurally cannot see that — hue is the only thing
-// that can, which is exactly why the teal-for-green regression shipped past
-// them.
-func TestDegradationPreservesHue(t *testing.T) {
+// TestEveryValueStaysInItsHueFamily is the regression test for the class of bug
+// where a value clears its contrast floor but is the wrong colour — either
+// wrong as written, or wrong only after a 256-colour terminal rounds it into a
+// different semantic colour's territory. The other tests in this file are
+// luminance-only and structurally cannot see that, which is exactly why the
+// teal-for-green regression shipped past them.
+//
+// Both the value and its degradation are checked, because either alone has a
+// blind spot: #4A6B4A is a visibly green motif colour that degrades to the pure
+// grey #5F5F5F, so a degraded-only check reads it as a harmless neutral.
+func TestEveryValueStaysInItsHueFamily(t *testing.T) {
 	for name, f := range family {
 		c, ok := All()[name]
 		if !ok {
@@ -300,10 +464,13 @@ func TestDegradationPreservesHue(t *testing.T) {
 			mode string
 			hex  string
 		}{{"light", c.Light}, {"dark", c.Dark}} {
-			deg := degradeTo256(side.hex)
-			if ok, hue, chroma := inFamily(deg, f); !ok {
-				t.Errorf("%s.%s: %s degrades to %s, hue %.1f (chroma %.3f) is outside the %s family",
-					name, side.mode, side.hex, deg, hue, chroma, f)
+			for _, v := range []struct {
+				how, hex string
+			}{{"is", side.hex}, {"degrades to", degradeTo256(side.hex)}} {
+				if ok, hue, chroma := inFamily(v.hex, f); !ok {
+					t.Errorf("%s.%s (%s) %s %s, hue %.1f (chroma %.3f) is outside the %s family",
+						name, side.mode, side.hex, v.how, v.hex, hue, chroma, f)
+				}
 			}
 		}
 	}
@@ -360,9 +527,9 @@ func TestForegroundTokensAdapt(t *testing.T) {
 	}
 }
 
-// TestAllIsComplete parses theme.go and fails when it declares an AdaptiveColor
-// that All() does not return. All() is what the render tests check screens
-// against, so a colour missing from it is a colour nothing can police.
+// TestAllIsComplete parses theme.go and fails when it declares a colour that
+// All() does not return. All() is what the render tests check screens against,
+// so a colour missing from it is a colour nothing can police.
 func TestAllIsComplete(t *testing.T) {
 	all := All()
 	fset := gotoken.NewFileSet()
@@ -370,21 +537,148 @@ func TestAllIsComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot parse theme.go: %v", err)
 	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		vs, ok := n.(*ast.ValueSpec)
-		if !ok {
-			return true
+	r := newColourDecls(colourPkgsOf(t, "theme.go", f), f)
+	for _, name := range r.order {
+		if !r.isColour(name) {
+			continue
 		}
-		for i, name := range vs.Names {
-			if i >= len(vs.Values) || !isAdaptiveColor(vs.Values[i]) {
-				continue
+		if _, ok := all[name]; !ok {
+			t.Errorf("theme.%s is declared but All() does not return it", name)
+		}
+	}
+}
+
+// TestColourDeclsResolvesByType is the guard on the guard: every spelling below
+// declares a colour, and only the first was visible to the shape-matching
+// version of this check, so the rest could be added to theme.go and go
+// unmeasured with green CI. The last three are the controls — a resolver that
+// says yes to everything cannot catch anything.
+func TestColourDeclsResolvesByType(t *testing.T) {
+	const src = `package theme
+
+import "github.com/charmbracelet/lipgloss"
+
+func pair(l, d string) lipgloss.AdaptiveColor { return lipgloss.AdaptiveColor{Light: l, Dark: d} }
+func name() string                            { return "accent" }
+
+var literal = lipgloss.AdaptiveColor{Light: "#0B6E2D", Dark: "#3FD98A"}
+var alias = literal
+var twoHops = alias
+var fromHelper = pair("#0B6E2D", "#3FD98A")
+var converted = lipgloss.Color("#3FB950")
+var annotated lipgloss.AdaptiveColor
+var loopA = loopB
+var loopB = loopA
+
+var label = name()
+var count = 3
+`
+	fset := gotoken.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", src, 0)
+	if err != nil {
+		t.Fatalf("cannot parse synthetic source: %v", err)
+	}
+	r := newColourDecls(colourPkgsOf(t, "synthetic.go", f), f)
+	for name, want := range map[string]bool{
+		"literal":    true,
+		"alias":      true,
+		"twoHops":    true,
+		"fromHelper": true,
+		"converted":  true,
+		"annotated":  true,
+		"loopA":      false, // must answer, not recurse forever
+		"label":      false,
+		"count":      false,
+	} {
+		if got := r.isColour(name); got != want {
+			t.Errorf("isColour(%s) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// colourDecls answers "is this package-level name a colour" by the TYPE it
+// resolves to rather than the shape it is written in. Requiring a composite
+// literal — which is what this did before — is a test of punctuation, not of
+// meaning: `var BrandTint = Accent` and `var BrandTint = pair("#0B6E2D",
+// "#3FD98A")` are both perfectly good colours and neither is a composite
+// literal, so both used to declare a token that All() never returned and no
+// test in this package ever measured.
+type colourDecls struct {
+	pkgs  map[string]string
+	typ   map[string]ast.Expr // name -> its declared type, when written
+	val   map[string]ast.Expr // name -> its initialiser
+	fnRes map[string]ast.Expr // func name -> its single result type
+	order []string
+	memo  map[string]bool
+	busy  map[string]bool
+}
+
+func newColourDecls(pkgs map[string]string, f *ast.File) *colourDecls {
+	r := &colourDecls{
+		pkgs: pkgs, typ: map[string]ast.Expr{}, val: map[string]ast.Expr{},
+		fnRes: map[string]ast.Expr{}, memo: map[string]bool{}, busy: map[string]bool{},
+	}
+	for _, d := range f.Decls {
+		switch d := d.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil && d.Type.Results != nil && len(d.Type.Results.List) == 1 {
+				r.fnRes[d.Name.Name] = d.Type.Results.List[0].Type
 			}
-			if _, ok := all[name.Name]; !ok {
-				t.Errorf("theme.%s is declared but All() does not return it", name.Name)
+		case *ast.GenDecl:
+			for _, s := range d.Specs {
+				vs, ok := s.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, n := range vs.Names {
+					r.order = append(r.order, n.Name)
+					r.typ[n.Name] = vs.Type
+					if i < len(vs.Values) {
+						r.val[n.Name] = vs.Values[i]
+					}
+				}
 			}
 		}
-		return true
-	})
+	}
+	return r
+}
+
+func (r *colourDecls) isColour(name string) bool {
+	if got, ok := r.memo[name]; ok {
+		return got
+	}
+	if r.busy[name] {
+		return false // `var a = b; var b = a` is not a colour, and must not hang
+	}
+	r.busy[name] = true
+	defer func() { r.busy[name] = false }()
+	got := false
+	if t := r.typ[name]; t != nil {
+		got = isColourTypeExpr(r.pkgs, t) // an explicit type settles it
+	} else if v := r.val[name]; v != nil {
+		got = r.exprIsColour(v)
+	}
+	r.memo[name] = got
+	return got
+}
+
+func (r *colourDecls) exprIsColour(e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return r.exprIsColour(e.X)
+	case *ast.CompositeLit:
+		return isColourTypeExpr(r.pkgs, e.Type)
+	case *ast.Ident:
+		return r.isColour(e.Name) // an alias of a colour is a colour
+	case *ast.CallExpr:
+		if isColourTypeExpr(r.pkgs, e.Fun) {
+			return true // a conversion, lipgloss.Color("…")
+		}
+		if id, ok := e.Fun.(*ast.Ident); ok {
+			return isColourTypeExpr(r.pkgs, r.fnRes[id.Name])
+		}
+	}
+	return false
 }
 
 // TestEveryTokenHasAFloor makes sure no palette entry escapes measurement.
@@ -401,15 +695,6 @@ func TestEveryTokenHasAFloor(t *testing.T) {
 			t.Errorf("theme.%s has no contrast floor in this file", name)
 		}
 	}
-}
-
-func isAdaptiveColor(e ast.Expr) bool {
-	cl, ok := e.(*ast.CompositeLit)
-	if !ok {
-		return false
-	}
-	sel, ok := cl.Type.(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "AdaptiveColor"
 }
 
 // --- WCAG 2.1 relative luminance and contrast ------------------------------

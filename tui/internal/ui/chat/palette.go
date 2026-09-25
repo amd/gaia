@@ -335,10 +335,8 @@ var (
 	paletteDescStyle = lipgloss.NewStyle().
 				Foreground(theme.Dim)
 
-	// The selected row is marked by a caret and colour alone — bold
-	// AccentBright text, no filled background — matching the rest of the
-	// TUI's move away from background-tinted rows (see the code-block and
-	// status-bar fixes this pairs with).
+	// Marked by a caret and colour alone — no filled background — matching the
+	// rest of the TUI's move away from background-tinted rows.
 	paletteSelectedNameStyle = lipgloss.NewStyle().
 					Bold(true).
 					Foreground(theme.Selected)

@@ -111,6 +111,10 @@
     min-width: 110px;
 }
 
+.fb-type-filter:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
 .fb-search-btn {
     padding: 8px 14px;
     border-radius: var(--radius-md);

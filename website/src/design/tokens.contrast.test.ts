@@ -274,20 +274,20 @@ describe.each(THEMES)('%s theme: filled buttons carry their text', (themeName, v
   });
 });
 
-describe('the palette is the one the design language pins', () => {
-  // docs/spec/gaia-design-language.mdx — graphite / ivory / copper. These are
-  // shared verbatim with the Agent UI and the TUI, so a "small tweak" here
-  // silently desynchronises three surfaces.
-  const PINNED: Array<[string, string, string]> = [
-    // token, light, dark
-    ['--g-bg', '#f5f2ec', '#17161c'],
-    ['--g-bg2', '#eae5dc', '#222128'],
-    ['--g-text', '#242129', '#f0ede7'],
-    ['--g-muted', '#645d6a', '#aaa5b0'],
-    ['--g-accent', '#9a4930', '#eba474'],
-    ['--g-focus', '#9a4930', '#eba474'],
-  ];
+// docs/spec/gaia-design-language.mdx — graphite / ivory / copper. These are
+// shared verbatim with the Agent UI and the TUI, so a "small tweak" here
+// silently desynchronises three surfaces.
+const PINNED: Array<[string, string, string]> = [
+  // token, light, dark
+  ['--g-bg', '#f5f2ec', '#17161c'],
+  ['--g-bg2', '#eae5dc', '#222128'],
+  ['--g-text', '#242129', '#f0ede7'],
+  ['--g-muted', '#645d6a', '#aaa5b0'],
+  ['--g-accent', '#9a4930', '#eba474'],
+  ['--g-focus', '#9a4930', '#eba474'],
+];
 
+describe('the palette is the one the design language pins', () => {
   it.each(PINNED)('%s', (token, expectLight, expectDark) => {
     expect(hex(asPaint(light.get(token)!)!.rgb)).toBe(expectLight);
     expect(hex(asPaint(dark.get(token)!)!.rgb)).toBe(expectDark);
@@ -337,5 +337,77 @@ describe('the palette is the one the design language pins', () => {
         );
       }
     }
+  });
+});
+
+// The spec calls itself the source of truth and then quotes four ratios in
+// prose. Retune a neutral and the page states a number that is no longer true,
+// with nothing to notice. These recompute them from the tokens.
+describe('the design language quotes the ratios these tokens actually hold', () => {
+  const SPEC_PATH = 'docs/spec/gaia-design-language.mdx';
+  const spec = readFileSync(
+    new URL('../../../docs/spec/gaia-design-language.mdx', import.meta.url),
+    'utf8',
+  );
+
+  const grounds = ['--g-bg', '--g-bg2'];
+  const roles = PINNED.map(([token]) => token).filter((token) => !grounds.includes(token));
+
+  /** Lowest ratio any pinned role holds against either ground, as the spec rounds it. */
+  const measuredMinimum = (vars: Map<string, string>): number => {
+    const ratios = roles.flatMap((token) =>
+      grounds.map((ground) =>
+        contrast(asPaint(vars.get(token)!)!.rgb, asPaint(vars.get(ground)!)!.rgb),
+      ),
+    );
+    return Number(Math.min(...ratios).toFixed(2));
+  };
+
+  const headline = /\*\*([\d.]+):1 dark, ([\d.]+):1 light\*\*/.exec(spec);
+  const onFill = /carries white at ([\d.]+):1/.exec(spec);
+  const band =
+    /pale stone measures \*\*([\d.]+):1\*\*[\s\S]{0,60}?warm slate \*\*([\d.]+):1\*\*/.exec(spec);
+
+  it('still states the sentences this suite checks', () => {
+    // Reworded prose must fail loudly rather than skip the cases below.
+    expect(headline, `${SPEC_PATH} no longer says "N:1 dark, N:1 light"`).not.toBeNull();
+    expect(onFill, `${SPEC_PATH} no longer says "carries white at N:1"`).not.toBeNull();
+    expect(band, `${SPEC_PATH} no longer measures pale stone and warm slate`).not.toBeNull();
+  });
+
+  it.each([
+    ['dark', dark, 1],
+    ['light', light, 2],
+  ] as const)('the %s measured minimum', (themeName, vars, group) => {
+    const actual = measuredMinimum(vars);
+    expect(
+      Number(headline![group]),
+      `${SPEC_PATH} says ${headline![group]}:1 ${themeName}; the tokens now measure ` +
+        `${actual}:1 — update the "Measured minimums" sentence under "Contrast floors"`,
+    ).toBe(actual);
+  });
+
+  it('white on the accent fill', () => {
+    const actual = Number(
+      contrast([255, 255, 255], asPaint(light.get('--g-accent-fill')!)!.rgb).toFixed(2),
+    );
+    expect(
+      Number(onFill![1]),
+      `${SPEC_PATH} says ${onFill![1]}:1; the fill now carries white at ${actual}:1`,
+    ).toBe(actual);
+  });
+
+  // The raised surface is unusable as the TUI's status band because it vanishes
+  // against a plain terminal; the spec cites the two ratios that prove it.
+  it.each([
+    ['pale stone on a white terminal', light, [255, 255, 255] as RGB, 1],
+    ['warm slate on a black terminal', dark, [0, 0, 0] as RGB, 2],
+  ] as const)('%s', (label, vars, terminal, group) => {
+    const actual = Number(contrast(asPaint(vars.get('--g-bg2')!)!.rgb, terminal).toFixed(2));
+    expect(
+      Number(band![group]),
+      `${SPEC_PATH} says ${band![group]}:1 for ${label}; --g-bg2 now measures ${actual}:1 — ` +
+        'update "The terminal has no canvas, and its status band is not the raised surface"',
+    ).toBe(actual);
   });
 });

@@ -18,7 +18,16 @@ const CANVAS: Record<Theme, string> = {
 /** Single writer for the theme, so the frame can never disagree with the app. */
 export function applyTheme(theme: Theme): void {
     document.documentElement.setAttribute('data-theme', theme);
-    document
-        .querySelector('meta[name="theme-color"]')
-        ?.setAttribute('content', CANVAS[theme]);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) {
+        // Not thrown: the app is already themed by the line above, and blanking
+        // it over a frame colour is the worse failure.
+        console.error(
+            'applyTheme: index.html declares no <meta name="theme-color">, so the ' +
+                'browser frame keeps its default colour instead of the app canvas. ' +
+                'Restore the tag in src/gaia/apps/webui/index.html.',
+        );
+        return;
+    }
+    meta.setAttribute('content', CANVAS[theme]);
 }

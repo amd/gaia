@@ -133,13 +133,13 @@ var (
 	OnFill       = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}
 )
 
-// Selected is the gold marking the row you are ON in a list — a palette, a menu,
-// a set of answers. Deliberately NOT the brand accent: the accent already means
-// "a command you can run" everywhere else in this UI, so using it for "the one
-// under your cursor" made the two indistinguishable. Gold and copper are near
-// neighbours, which is why contrast_test.go's hue arcs keep them provably
-// apart on a 256-colour terminal as well as a truecolor one.
-var Selected = lipgloss.AdaptiveColor{Light: "#8A5300", Dark: "#FFC65C"}
+// Selected marks the row you are ON in a list — a palette, a menu, a set of
+// answers. It IS AccentBright: components/question.go already paints its
+// selected answer with AccentBright directly, so a separate gold only made two
+// lists disagree about the same job, and cost the palette a second hue family
+// for one token. Rows around it are Text/Dim, so the copper still reads as the
+// mark, and the caret carries it where colour cannot.
+var Selected = AccentBright
 
 // SurfaceBG is the quiet band — the status bar, an unselected button. Unlike a
 // badge it does follow the mode, and it has to stay visible against BOTH ends of
@@ -162,7 +162,7 @@ var Selected = lipgloss.AdaptiveColor{Light: "#8A5300", Dark: "#FFC65C"}
 // That is also why SurfaceBG is NOT the design language's raised surface
 // (#EAE5DC / #222128). Those are cards on a KNOWN canvas; this band sits on
 // whatever background the user chose, and both fail the first floor outright —
-// #EAE5DC is 1.22:1 on a white terminal, #222128 is 1.31:1 on a black one, so
+// #EAE5DC is 1.25:1 on a white terminal, #222128 is 1.32:1 on a black one, so
 // the bar would simply disappear. What carries over instead is the cast: warm
 // stone on light, violet graphite on dark. Both still degrade to an exact
 // ANSI-256 cube grey (#AFAFAF, #5F5F5F), so the tint is a truecolor bonus and

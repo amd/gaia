@@ -109,7 +109,7 @@
 
 .trust-gate-tier-verified {
     color: var(--accent);
-    background: var(--accent-dim, color-mix(in srgb, var(--accent-green) 12%, transparent));
+    background: var(--accent-dim);
 }
 
 .trust-gate-tier-community,

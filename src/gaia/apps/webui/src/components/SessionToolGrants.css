@@ -5,7 +5,7 @@
   margin: 0 0 14px;
   padding: 12px 14px;
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
 }
 .perm-session-grants-head {
@@ -56,7 +56,7 @@
   margin-left: auto;
   padding: 3px 10px;
   font-size: 12px;
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--radius-xs);
   border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
   background: var(--danger-dim2);
   color: var(--danger);
@@ -70,7 +70,7 @@
   font-family: var(--font-mono);
   font-size: 12px;
   padding: 1px 6px;
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }

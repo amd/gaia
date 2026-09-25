@@ -143,7 +143,7 @@
     font-weight: 600;
     font-size: 14px;
     min-width: 70px;
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
 }
 
 .vp-date {
@@ -161,13 +161,13 @@
 }
 
 .vp-badge-current {
-    background: var(--accent-green-dim, color-mix(in srgb, var(--accent-green) 15%, transparent));
+    background: var(--accent-green-dim);
     color: var(--accent-green);
     border: 1px solid var(--accent-green);
 }
 
 .vp-badge-pinned {
-    background: var(--accent-dim, color-mix(in srgb, var(--accent) 12%, transparent));
+    background: var(--accent-dim);
     color: var(--accent);
     border: 1px solid var(--accent);
 }

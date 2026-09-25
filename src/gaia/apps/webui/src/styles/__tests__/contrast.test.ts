@@ -143,15 +143,33 @@ const ON_SURFACES = [
     '--danger',
 ];
 
+/**
+ * Every opaque surface that carries body text. `--bg-active` is deliberately
+ * absent: it is the darkest light surface, and `--accent` is pinned to #9A4930
+ * across all three surfaces (`website/src/design/cross-surface.test.ts`), which
+ * reads 4.15:1 on it. Nothing can fix that pair -- the copper is fixed, and the
+ * bg would have to go *lighter* than `--bg-hover` to clear the floor, inverting
+ * the depth ramp. Every rule that paints on `--bg-active` today pairs it with
+ * `--text-primary` (10.55:1); the guard below catches it if one stops.
+ */
+const SURFACES = ['--bg-primary', '--bg-card', '--bg-tertiary', '--bg-hover', '--bg-recessed'];
+
+/** A tinted chip paints its own hue as text on a wash of itself. */
+const TINTS: Array<[string, string]> = [
+    ['--accent', '--accent-dim'],
+    ['--accent', '--accent-dim2'],
+    ['--accent-green', '--accent-green-dim'],
+    ['--accent-yellow', '--accent-yellow-dim'],
+    ['--accent-blue', '--accent-blue-dim'],
+    ['--danger', '--danger-dim'],
+    ['--danger', '--danger-dim2'],
+];
+
 const CASES: Case[] = [
-    ...ON_SURFACES.flatMap<Case>((t) => [
-        [t, '--bg-primary', 'text'],
-        [t, '--bg-card', 'text'],
-    ]),
+    ...ON_SURFACES.flatMap<Case>((t) => SURFACES.map<Case>((s) => [t, s, 'text'])),
 
     // Deliberately recessive: always duplicates something on the same row.
-    ['--text-muted', '--bg-primary', 'recessive'],
-    ['--text-muted', '--bg-card', 'recessive'],
+    ...SURFACES.map<Case>((s) => ['--text-muted', s, 'recessive']),
 
     // A code pane is its own canvas in both themes, so it is judged against
     // itself rather than against the page behind it.
@@ -201,6 +219,33 @@ describe.each(['light', 'dark'] as const)('%s theme contrast floors', (theme) =>
             Number(ratio.toFixed(2)),
             `${theme}: ${fg} on ${bg} is ${ratio.toFixed(2)}:1, floor ${FLOOR[kind]}:1`,
         ).toBeGreaterThanOrEqual(FLOOR[kind]);
+    });
+});
+
+/**
+ * The tint chip -- a hue as text on a thin wash of itself -- is the one idiom
+ * the pairs guard below cannot see: it filters to opaque backgrounds, so every
+ * translucent `-dim` fill is exempt by construction. That is how the whole
+ * family shipped at 4.02-4.23:1 in light while the matrix above read green on
+ * the same card at 4.70:1.
+ */
+describe.each(['light', 'dark'] as const)('%s theme tint chips', (theme) => {
+    it.each(TINTS)('%s on %s clears the text floor', (fg, dim) => {
+        // Judged on the raised surface: it is the darkest one a chip lands on,
+        // so clearing it clears the canvas too.
+        const back = resolve(theme, dim, resolve(theme, '--bg-card'));
+        const ratio = contrast(resolve(theme, fg, back), back);
+        expect(
+            Number(ratio.toFixed(2)),
+            `${theme}: ${fg} on ${dim} over --bg-card is ${ratio.toFixed(2)}:1, floor ${FLOOR.text}:1`,
+        ).toBeGreaterThanOrEqual(FLOOR.text);
+    });
+
+    it('measures a wash that is actually translucent', () => {
+        // An opaque `-dim` would make every case above a plain pair and the
+        // blend untested -- the alpha is the whole point of the idiom.
+        const opaque = TINTS.filter(([, dim]) => !/^rgba\(/.test({ ...LIGHT, ...DARK }[dim] ?? ''));
+        expect(opaque.map(([, d]) => d), 'not a tint -- drop it from TINTS').toEqual([]);
     });
 });
 
@@ -256,18 +301,40 @@ describe('token declarations', () => {
         for (const text of Object.values(TS_SOURCES))
             for (const m of text.matchAll(/['"](--[A-Za-z0-9-]+)['"]\s*:/g)) declared.add(m[1]);
 
+        // A fallback used to excuse a token from this check, on the reading
+        // that it was a deliberate "may not exist". It is not: the fallback
+        // silences the typo, so the rule paints the wrong role forever and
+        // nothing says so -- `--text-tertiary` is how that was found.
         const undeclared = new Set<string>();
         for (const text of [...Object.values(CSS_SOURCES), ...Object.values(TS_SOURCES)])
-            // The trailing group separates `var(--x)` from `var(--x, fallback)`.
-            // A fallback is a deliberate "may not exist", so only the bare form
-            // is a missing declaration.
-            for (const m of text.matchAll(/var\(\s*(--[A-Za-z0-9-]+)\s*([,)])/g))
-                if (m[2] === ')' && !declared.has(m[1])) undeclared.add(m[1]);
+            for (const m of text.matchAll(/var\(\s*(--[A-Za-z0-9-]+)\s*[,)]/g))
+                if (!declared.has(m[1])) undeclared.add(m[1]);
 
         expect(
             [...undeclared].sort(),
-            'consumed with no fallback and declared nowhere -- resolves to nothing',
+            'declared nowhere -- a fallback hides this rather than fixing it',
         ).toEqual([]);
+    });
+
+    /**
+     * The other half: a fallback on a token that *is* declared can never fire,
+     * so it is a second value nobody reads and the palette drifts past it. The
+     * one real exception is annotated at its site.
+     */
+    it('carries no fallback that can never fire', () => {
+        const CONDITIONAL = new Set(['--filter-color']);
+        const declared = new Set<string>();
+        for (const text of Object.values(CSS_SOURCES))
+            for (const m of text.matchAll(/^\s*(--[A-Za-z0-9-]+)\s*:/gm)) declared.add(m[1]);
+
+        const dead: string[] = [];
+        for (const [path, source] of Object.entries(CSS_SOURCES))
+            source.split(/\r?\n/).forEach((line: string, i: number) => {
+                for (const m of line.matchAll(/var\(\s*(--[A-Za-z0-9-]+)\s*,/g))
+                    if (declared.has(m[1]) && !CONDITIONAL.has(m[1]))
+                        dead.push(`${path}:${i + 1}  ${m[1]}`);
+            });
+        expect(dead, 'the token is declared, so this fallback is dead -- drop it').toEqual([]);
     });
 
     // Shadows carry the theme the way colours do -- the dark palette needs a
@@ -287,11 +354,152 @@ describe('token declarations', () => {
     });
 });
 
+/**
+ * Keyboard focus is the one affordance with no visual fallback: lose the ring
+ * and a keyboard user cannot tell where they are, with nothing on screen to
+ * hint at it. Both rules are checked because they do different jobs -- the bare
+ * one covers links, tabs and anything with `tabindex`, and the element list
+ * re-states it for the form controls, which carry a UA outline that otherwise
+ * wins.
+ */
+describe('keyboard focus stays visible', () => {
+    const RING = String.raw`outline:\s*2px\s+solid\s+var\(--accent\)`;
+
+    it.each([
+        [':focus-visible', String.raw`(?:^|\})\s*:focus-visible\s*\{[^}]*${RING}`],
+        [
+            'form controls',
+            String.raw`button:focus-visible\s*,\s*input:focus-visible\s*,\s*textarea:focus-visible\s*\{[^}]*${RING}`,
+        ],
+    ])('%s paints an accent ring', (_label, pattern) => {
+        expect(
+            new RegExp(pattern, 'm').test(INDEX_CSS),
+            'the focus ring is gone -- keyboard users lose their place with no visual cue',
+        ).toBe(true);
+    });
+
+    /**
+     * A focus rule may drop the UA outline, but only if it paints something in
+     * its place. Most do it with a border or a box-shadow in the same rule; one
+     * moves the cue to a wrapper, which is out of reach of a per-rule check and
+     * so is named here with where it went.
+     */
+    const RING_ELSEWHERE: Record<string, { ring: string; why: string }> = {
+        '.msg-input': { ring: '.input-box:focus-within', why: 'rings the whole composer' },
+        '.msg-input:focus-visible': { ring: '.input-box:focus-within', why: 'rings the whole composer' },
+        '.agent-hub-search input': { ring: '.agent-hub-search:focus-within', why: 'rings the search box' },
+    };
+
+    const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
+    const DROPS_OUTLINE = /outline[^:;]*:\s*(?:none|0)\s*(?:;|$)/;
+    const OUTLINE = /outline(?:-color|-width|-style)?/;
+    const OTHER_CUE = /border(?:-color|-bottom|-top|-left|-right)?|box-shadow|background(?:-color)?/;
+
+    // Values are pulled out and read, never matched in place: `\s*` before a
+    // negative lookahead backtracks to zero width, so `box-shadow: none`
+    // satisfies "sets a box-shadow that is not none" and the guard passes
+    // on a rule it was written to catch.
+    const paints = (body: string, property: RegExp) =>
+        [...body.matchAll(new RegExp(String.raw`(?:^|[;{])\s*(${property.source})\s*:([^;}]*)`, 'g'))]
+            .some((m) => !/^\s*(?:none|0)\s*$/.test(m[2]));
+
+    const cues = (body: string) => paints(body, OUTLINE) || paints(body, OTHER_CUE);
+
+    it('never removes the outline without painting something in its place', () => {
+        const offenders: string[] = [];
+        for (const { path, selector, body } of RULES) {
+            if (!/focus/.test(selector)) continue;
+            if (!DROPS_OUTLINE.test(body)) continue;
+            if (cues(body)) continue;
+            if (flat(selector) in RING_ELSEWHERE) continue;
+            offenders.push(`${path}  ${flat(selector)}`);
+        }
+        expect(
+            offenders,
+            'this focus rule leaves no cue at all -- add a border, ring or fill',
+        ).toEqual([]);
+    });
+
+    /**
+     * The quieter half of the same bug: `outline: none` on the *base* selector
+     * silently cancels the global `:focus-visible` ring for every state of that
+     * element, so the control is unreachable by eye even though no focus rule
+     * ever mentions it.
+     */
+    it('never lets a base rule cancel the global ring with no focus cue of its own', () => {
+        const focusRules = RULES.filter((r) => /focus/.test(r.selector) && cues(r.body));
+        const covered = (path: string, part: string) =>
+            focusRules.some(
+                (r) => r.path === path && r.selector.split(',').some((s) => flat(s).startsWith(part)),
+            );
+
+        const offenders: string[] = [];
+        for (const { path, selector, body } of RULES) {
+            if (/focus/.test(selector) || !DROPS_OUTLINE.test(body)) continue;
+            if (flat(selector) in RING_ELSEWHERE) continue;
+            const bare = selector.split(',').map(flat).filter((p) => !covered(path, p));
+            if (bare.length) offenders.push(`${path}  ${bare.join(', ')}`);
+        }
+        expect(
+            offenders,
+            'this element kills the global focus ring and never replaces it',
+        ).toEqual([]);
+    });
+
+    it('keeps the moved-ring list honest -- every entry still drops its outline', () => {
+        const stale = Object.keys(RING_ELSEWHERE).filter(
+            (s) =>
+                !RULES.some(
+                    (r) =>
+                        r.selector.replace(/\s+/g, ' ').trim() === s &&
+                        /outline\s*:\s*(?:none|0)\b/.test(r.body),
+                ),
+        );
+        expect(stale, 'no such rule -- drop the entry').toEqual([]);
+    });
+
+    // Excusing a rule is only safe while the ring it points at is still there:
+    // delete the wrapper and the exemption keeps the element silently bare.
+    it('keeps the moved-ring list honest -- every ring it points at still paints', () => {
+        const gone = Object.entries(RING_ELSEWHERE)
+            .filter(
+                ([, { ring }]) =>
+                    !RULES.some(
+                        (r) => r.selector.split(',').some((s) => flat(s) === ring) && cues(r.body),
+                    ),
+            )
+            .map(([excused, { ring, why }]) => `${excused} -> ${ring} (${why})`);
+        expect(gone, 'the ring this entry points at is gone or paints nothing').toEqual([]);
+    });
+});
+
 describe('component stylesheets route colour through tokens', () => {
     // Pure-black shadow alphas are not a colour role -- a shadow is the same
     // black everywhere, and the token file owns the per-theme opacities.
     const SHADOW_ONLY =/rgba\(\s*0\s*,\s*0\s*,\s*0\s*,/;
     const LITERAL = /#[0-9a-fA-F]{3,8}\b|rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+/;
+
+    /**
+     * `white` paints exactly what `#ffffff` paints, and the hex-only sweep
+     * above waved it straight through -- one toggle knob shipped a fixed white
+     * while its two siblings rode `--switch-knob`, which is #F0EDE7 in dark.
+     *
+     * `transparent` and `currentColor` are absent on purpose: neither names a
+     * colour, so neither can disagree with a theme.
+     */
+    const NAMED_COLOUR =
+        /(?<![-\w])(?:white|black|red|green|blue|yellow|orange|purple|gray|grey|cyan|magenta|pink|brown|silver|gold|navy|teal|lime|olive|maroon|aqua|fuchsia)(?![-\w])/i;
+
+    /**
+     * Only the declaration value, so a property (`white-space`), a class
+     * (`.badge.green`) and a token name (`--accent-blue`) cannot be mistaken
+     * for a colour being painted.
+     */
+    const valueOf = (line: string) => (line.includes(':') ? line.slice(line.indexOf(':') + 1) : '');
+
+    // A gradient in `mask-image` is an alpha ramp, not paint: its `black` stop
+    // means "fully opaque here". Same exemption the gradient guard carries.
+    const MASK_IMAGE = /(?:^|[;{\s])(?:-webkit-)?mask(?:-image)?\s*:/;
 
     it('has no colour literal outside index.css', () => {
         const offenders: string[] = [];
@@ -301,8 +509,10 @@ describe('component stylesheets route colour through tokens', () => {
                 .replace(/\/\*[\s\S]*?\*\//g, '')
                 .split(/\r?\n/)
                 .forEach((line: string, i: number) => {
-                    if (!LITERAL.test(line)) return;
-                    if (SHADOW_ONLY.test(line) && !/(background|^\s*color)\s*:/.test(line)) return;
+                    const named = !MASK_IMAGE.test(line) && NAMED_COLOUR.test(valueOf(line));
+                    if (!named && !LITERAL.test(line)) return;
+                    if (!named && SHADOW_ONLY.test(line) && !/(background|^\s*color)\s*:/.test(line))
+                        return;
                     offenders.push(`${path}:${i + 1}  ${line.trim()}`);
                 });
         }
@@ -378,6 +588,8 @@ describe('the Electron windows mirror the dark theme rather than inventing one',
     /** A `--token: #hex;` line inside one of the mirrored `:root` blocks. */
     const DECLARATION = /^\s*(--[A-Za-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;/;
     const HEX = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/g;
+    const NAMED_IN_CJS =
+        /(?<![-\w])(?:white|black|red|green|blue|yellow|orange|purple|gray|grey|cyan|magenta|pink|navy|teal|lime|olive|maroon|aqua|fuchsia)(?![-\w])/i;
 
     /**
      * A literal that cannot be a `var()`. Each entry names the token it copies,
@@ -428,7 +640,10 @@ describe('the Electron windows mirror the dark theme rather than inventing one',
                     if (DECLARATION.test(line)) return;
                     let probe = line;
                     for (const literal of exempt) probe = probe.split(literal).join('');
-                    if (probe.match(HEX) || /\brgba?\(\s*\d/.test(probe))
+                    // `white` is as fixed as `#ffffff`, and these windows are
+                    // the one place with no stylesheet to correct it.
+                    const named = probe.includes(':') && NAMED_IN_CJS.test(probe.slice(probe.indexOf(':') + 1));
+                    if (probe.match(HEX) || /\brgba?\(\s*\d/.test(probe) || named)
                         offenders.push(`${path}:${i + 1}  ${line.trim()}`);
                 });
         }
@@ -549,6 +764,14 @@ describe('code surfaces stay on the code roles', () => {
         (r) => CODE_SURFACES.some((p) => r.selector.includes(p)) && !(r.selector in EXEMPT),
     );
 
+    /**
+     * Modules that paint into such a pane from JS rather than a stylesheet.
+     * The terminal hands each line its colour as an inline style prop, so the
+     * rule sweep above never sees it -- which is how `stdout` shipped on
+     * `--text-secondary`, a role that flips to near-black on `--bg-code`.
+     */
+    const CODE_SURFACE_MODULES = ['/src/components/AgentTerminal.tsx'];
+
     it('keeps the exemptions honest -- every one still names a rule', () => {
         const stale = Object.keys(EXEMPT).filter(
             (s) => !RULES.some((r) => r.selector === s),
@@ -574,38 +797,111 @@ describe('code surfaces stay on the code roles', () => {
         );
         expect(stale, 'renamed or deleted -- drop the prefix').toEqual([]);
     });
+
+    it('reads a colour out of every module it claims to police', () => {
+        // A renamed or moved module would leave the check below sweeping an
+        // empty string and passing on nothing at all.
+        for (const path of CODE_SURFACE_MODULES) {
+            const source = TS_SOURCES[path];
+            expect(source, `${path}: no longer in the /src glob`).toBeTruthy();
+            expect(
+                [...source.matchAll(/['"]var\(\s*(--[\w-]+)\s*\)['"]/g)].length,
+                `${path}: names no token -- it no longer paints from JS`,
+            ).toBeGreaterThan(0);
+        }
+    });
+
+    it('uses no page-theme colour from a module that paints into one', () => {
+        const offenders: string[] = [];
+        for (const path of CODE_SURFACE_MODULES)
+            for (const m of (TS_SOURCES[path] ?? '').matchAll(/['"]var\(\s*(--[\w-]+)\s*\)['"]/g))
+                if (FLIPPING.has(m[1])) offenders.push(`${path} -> ${m[1]}`);
+        expect(
+            [...new Set(offenders)],
+            'use the --*-code / --code-* roles: these flip to near-black on --bg-code',
+        ).toEqual([]);
+    });
 });
 
 /**
  * The cases above measure the pairings the palette *intends*. This measures the
- * ones components actually ship: wherever one rule sets both a colour and the
- * surface under it, that exact pair has to clear its floor. It is what catches a
- * token that is fine on the canvas and marginal on a chip -- `--accent-green` on
- * `--bg-tertiary` is 4.32:1, below the floor the same token clears everywhere else.
+ * ones components actually ship, and it is what catches a token that is fine on
+ * the canvas and marginal on a chip -- `--accent-green` on `--bg-tertiary` was
+ * 4.32:1, below the floor the same token cleared everywhere else.
+ *
+ * Most rules do not set the surface they land on: a chip modifier picks up the
+ * fill from its base class, and a child element sits on its parent's. Matching
+ * only rules that set both halves saw 54 pairs and missed ten real ones, all in
+ * the second shape.
  */
-describe('component rules that set their own background', () => {
+describe('component rules, on the surface they actually land on', () => {
     /** Recessive by role: always duplicates something on the same row. */
     const RECESSIVE = new Set(['--text-muted', '--text-code-dim']);
 
+    const FG_TOKEN = /(?:^|[;\s])color\s*:\s*var\(\s*(--[A-Za-z0-9-]+)\s*\)/;
+    const BG_TOKEN = /background(?:-color)?\s*:\s*var\(\s*(--[A-Za-z0-9-]+)\s*\)/;
+    /** Any fill at all, including `transparent`, a literal, or a gradient. */
+    const DECLARES_BG = /(?:^|[;\s])background(?:-color)?\s*:/;
+
+    const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+    // A rule whose fill is `transparent` or a gradient is indexed as null on
+    // purpose: it has to shadow the var() one further up its selector, or the
+    // walk below steps over it and measures a surface nothing paints.
+    const OWN_BG = new Map<string, string | null>();
+    for (const { path, selector, body } of RULES)
+        if (DECLARES_BG.test(body))
+            OWN_BG.set(`${path}|${flat(selector)}`, BG_TOKEN.exec(body)?.[1] ?? null);
+
+    /**
+     * The surface a rule inherits: the longest selector in the same file that
+     * is a prefix of this one -- `.chip` for `.chip.running`, `.card` for
+     * `.card .title`. A prefix walk rather than a cascade implementation; it is
+     * wrong for a sibling combinator, and right for the modifier and
+     * descendant spellings that make up every pair in the tree.
+     */
+    function inheritedBg(path: string, selector: string): string | null {
+        let best: [string, string | null] | null = null;
+        for (const [key, token] of OWN_BG) {
+            const at = key.indexOf('|');
+            if (key.slice(0, at) !== path) continue;
+            const base = key.slice(at + 1);
+            if (base === selector || !selector.startsWith(base)) continue;
+            if (!best || base.length > best[0].length) best = [base, token];
+        }
+        return best?.[1] ?? null;
+    }
+
     const pairs = RULES.flatMap(({ path, selector, body }) => {
-        const fg = /(?:^|[;\s])color\s*:\s*var\(\s*(--[A-Za-z0-9-]+)\s*\)/.exec(body);
-        const bg = /background(?:-color)?\s*:\s*var\(\s*(--[A-Za-z0-9-]+)\s*\)/.exec(body);
+        const fg = FG_TOKEN.exec(body)?.[1];
+        if (!fg) return [];
+        const own = BG_TOKEN.exec(body)?.[1];
+        const bg = own ?? (DECLARES_BG.test(body) ? null : inheritedBg(path, flat(selector)));
         // A translucent or color-mix() fill has no single colour to measure
         // here -- what sits behind it lives in another rule.
-        return fg && bg && /^#/.test(LIGHT[bg[1]] ?? '') ? [{ path, selector, fg: fg[1], bg: bg[1] }] : [];
+        if (!bg || !/^#/.test(LIGHT[bg] ?? '')) return [];
+        return [{ path, selector: flat(selector), fg, bg, via: own ? 'sets' : 'inherits' }];
     });
 
-    it('finds pairs to measure', () => expect(pairs.length).toBeGreaterThan(20));
+    it('finds pairs to measure', () => {
+        expect(pairs.length).toBeGreaterThan(20);
+        // Without this the resolver could quietly stop resolving -- the suite
+        // would stay green on the half of the pairs it was already seeing.
+        expect(
+            pairs.filter((p) => p.via === 'inherits').length,
+            'the inherited-surface walk resolved nothing',
+        ).toBeGreaterThan(20);
+    });
 
     it.each(['light', 'dark'] as const)('%s theme: every pair clears its floor', (theme) => {
         const offenders: string[] = [];
-        for (const { path, selector, fg, bg } of pairs) {
+        for (const { path, selector, fg, bg, via } of pairs) {
             const back = resolve(theme, bg);
             const ratio = contrast(resolve(theme, fg, back), back);
             const floor = RECESSIVE.has(fg) ? FLOOR.recessive : FLOOR.text;
             if (ratio < floor)
                 offenders.push(
-                    `${path}  ${selector}: ${fg} on ${bg} is ${ratio.toFixed(2)}:1, floor ${floor}:1`,
+                    `${path}  ${selector} (${via} ${bg}): ${fg} is ${ratio.toFixed(2)}:1, floor ${floor}:1`,
                 );
         }
         expect([...new Set(offenders)]).toEqual([]);
@@ -724,7 +1020,13 @@ describe('the design language forbids these outright', () => {
                 .replace(/\/\*[\s\S]*?\*\//g, '')
                 .split(/\r?\n/)
                 .forEach((line: string, i: number) => {
-                    if (/(^|[;{])\s*color\s*:\s*(white|#fff(?:fff)?)\b/i.test(line))
+                    // `color` is not the only property that paints a glyph:
+                    // -webkit-text-fill-color wins over it where both are set.
+                    if (
+                        /(^|[;{])\s*(?:-webkit-text-fill-|text-decoration-|caret-)?color\s*:\s*(white|#fff(?:fff)?)\b/i.test(
+                            line,
+                        )
+                    )
                         offenders.push(`${path}:${i + 1}  ${line.trim()}`);
                 });
         }
@@ -737,10 +1039,16 @@ describe('the design language forbids these outright', () => {
     // A sub-pixel blur (`0 0 0.4px`) cannot halo -- that spelling is the
     // faux-bold trick, thickening a label without reflowing the row.
     const BLUR = String.raw`[1-9]`;
-    const GLOW_LAYER = new RegExp(String.raw`^\s*(?:inset\s+)?0\s+0\s+${BLUR}`);
+    // A zero offset is spellable with a unit, and CSS treats the two as the
+    // same length -- matching only the bare `0` let `0px 0px 12px` through.
+    const ZERO = String.raw`0(?:\.0+)?(?:px|r?em|%)?`;
+    const GLOW_LAYER = new RegExp(String.raw`^\s*(?:inset\s+)?${ZERO}\s+${ZERO}\s+${BLUR}`);
     // drop-shadow() keeps its blur inside the function, where the layer split
     // below cannot see it -- the welcome wordmark's glow was written this way.
-    const DROP_SHADOW_GLOW = new RegExp(String.raw`drop-shadow\(\s*0\s+0\s+${BLUR}`, 'i');
+    const DROP_SHADOW_GLOW = new RegExp(
+        String.raw`drop-shadow\(\s*${ZERO}\s+${ZERO}\s+${BLUR}`,
+        'i',
+    );
 
     it('leaves no glow behind', () => {
         const offenders: string[] = [];
@@ -775,9 +1083,19 @@ describe('the design language forbids these outright', () => {
     // website guard carries the same exemption for the same reason.
     const MASK = /(?:^|[;{\s])(?:-webkit-)?mask(?:-image)?\s*:/;
 
+    // A gradient is as easy to write in a `style={{…}}` prop as in a rule, and
+    // the stylesheet sweep never looks there. Tests are excluded: a guard's own
+    // fixture is not something the app paints.
+    const PAINTED_AND_INLINE: Record<string, string> = {
+        ...PAINTED,
+        ...Object.fromEntries(
+            Object.entries(TS_SOURCES).filter(([path]) => !/\/__tests__\//.test(path)),
+        ),
+    };
+
     it('fills no panel with a gradient', () => {
         const offenders: string[] = [];
-        for (const [path, source] of Object.entries(PAINTED)) {
+        for (const [path, source] of Object.entries(PAINTED_AND_INLINE)) {
             source
                 .replace(/\/\*[\s\S]*?\*\//g, '')
                 .split(/\r?\n/)

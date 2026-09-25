@@ -364,7 +364,7 @@
   padding: 8px 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-  background: var(--bg-input, var(--bg-primary));
+  background: var(--bg-input);
   color: var(--text-primary);
   font-size: 13px;
   font-family: var(--font-sans);

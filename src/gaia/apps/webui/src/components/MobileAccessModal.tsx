@@ -22,6 +22,7 @@ interface MobileAccessModalProps {
 export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAccessModalProps) {
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [copied, setCopied] = useState(false);
+    const [qrError, setQrError] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     // Fetch current tunnel status using centralized API client
@@ -63,12 +64,14 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
 
         // Load QRCode dynamically if not loaded
         const generateQR = async () => {
+            setQrError(null);
             if (!QRCodeLib) {
                 try {
                     const mod = await import('qrcode');
                     QRCodeLib = mod.default || mod;
                 } catch {
                     log.system.error('QR code library not available - install with: npm install qrcode');
+                    setQrError('QR code unavailable on this build. Use the link below instead.');
                     return;
                 }
             }
@@ -84,6 +87,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     'QR code skipped: --text-primary/--bg-primary did not resolve. ' +
                         'styles/index.css must be loaded before this modal renders.',
                 );
+                setQrError('QR code unavailable — the theme did not load. Use the link below instead.');
                 return;
             }
 
@@ -96,6 +100,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                 });
             } catch (err) {
                 log.system.error('QR code generation failed', err);
+                setQrError('QR code could not be drawn. Use the link below instead.');
             }
         };
 
@@ -168,7 +173,11 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     {/* QR Code */}
                     <div className="qr-code-area">
                         {status?.active ? (
-                            <canvas ref={canvasRef} />
+                            <>
+                                {/* Stays mounted while errored so a later retry still has its ref. */}
+                                <canvas ref={canvasRef} hidden={!!qrError} />
+                                {qrError && <div className="qr-placeholder error">{qrError}</div>}
+                            </>
                         ) : error ? (
                             <div className="qr-placeholder error">
                                 Failed to connect
@@ -214,7 +223,11 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     {/* Instructions */}
                     <div className="mobile-instructions">
                         <ol>
-                            <li>Scan the QR code with your phone&apos;s camera</li>
+                            <li>
+                                {qrError
+                                    ? 'Open the mobile URL above on your phone'
+                                    : "Scan the QR code with your phone's camera"}
+                            </li>
                             {status?.url && !status.url.includes('ngrok-free.app') && (
                                 <li>Enter the tunnel password shown above when prompted</li>
                             )}

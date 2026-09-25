@@ -215,7 +215,7 @@
   display: block;
   margin-top: 2px;
   font-size: 11px;
-  color: var(--text-tertiary, var(--text-secondary));
+  color: var(--text-secondary);
 }
 .permission-remember code {
   font-family: var(--font-mono);

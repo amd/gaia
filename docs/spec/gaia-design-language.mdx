@@ -29,8 +29,32 @@ rather than inline hexes.
 | Accent / focus | Copper `#EBA474` | Burnished copper `#9A4930` | The `>` prompt, focus ring, selection, the one primary action |
 | Accent fill | Burnished copper `#9A4930` | Burnished copper `#9A4930` | A filled primary button; carries white text |
 
-Most of the screen is neutral. Colour marks the prompt, focus, selection, and the
-single primary action — nothing else. Ordinary answers stay uncoloured.
+Most of the screen is neutral. Colour marks the prompt, focus, selection, the one
+primary action — and, in rendered markdown, headings and inline code. Nothing
+else; ordinary prose stays uncoloured.
+
+Headings and code spans are structure, not emphasis. A reader scans for them
+rather than reading them, there are few per screen, and the accent is what makes
+them findable at a glance. Emphasis inside a sentence is the opposite: accent on
+every bold word turns running prose into the speckle the palette reserves for the
+prompt and the one primary action. That is why the TUI's markdown renderer paints
+`strong` in primary text and leaves the accent to the two structural marks
+(`tui/internal/ui/components/markdown_style.go`).
+
+### The terminal has no canvas, and its status band is not the raised surface
+
+The first two rows are the two web surfaces only. A terminal's background belongs
+to the user's emulator, so the TUI sets none — it paints foregrounds onto
+whatever the reader already chose.
+
+The status band is the one place the TUI fills a background, and it uses its own
+pair (`#C2B8A8` light, `#615D69` dark) rather than the raised surface above. The
+raised-surface values would vanish there: pale stone measures **1.25:1** on a
+white terminal and warm slate **1.32:1** on a black one, both under the 1.5:1
+chrome floor a band has to clear to be seen at all. Those two values are cards on
+a canvas GAIA controls; the band sits on a background it does not. What carries
+across is the cast — warm stone on light, violet graphite on dark — not the
+literal. See `SurfaceBG` in `tui/internal/ui/theme/theme.go`.
 
 ### Why copper is two different values, and one of them is not the obvious one
 

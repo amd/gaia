@@ -50,8 +50,11 @@
      * single primary action. Nothing else on the screen is copper. */
     --accent: #9A4930;
     --accent-light: #B25E3C;         /* chrome only: borders, hover emphasis */
-    --accent-dim: rgba(154, 73, 48, 0.12);
-    --accent-dim2: rgba(154, 73, 48, 0.06);
+    /* A tint chip carries its own hue as text, so the wash has to stay thin
+     * enough to leave 4.5:1 against it -- 0.12 here read 4.22:1 on --bg-card.
+     * The light alphas are lower than the dark ones for that reason alone. */
+    --accent-dim: rgba(154, 73, 48, 0.07);
+    --accent-dim2: rgba(154, 73, 48, 0.035);
     --accent-selection: rgba(154, 73, 48, 0.20);
 
     /* Accent as a filled button. One literal in both themes, carrying white
@@ -63,20 +66,26 @@
 
     /* Semantic status. The brand motif moved off green; status did not.
      * Success stays green, warning amber, danger red, information blue —
-     * a failed check painted copper to stay on-brand is a worse UI. */
-    --accent-green: #2B7234;
-    --accent-green-dim: rgba(43, 114, 52, 0.12);
-    --accent-yellow: #8A5A00;
-    --accent-yellow-dim: rgba(138, 90, 0, 0.12);
-    --accent-blue: #1B62C4;
-    --accent-blue-dim: rgba(27, 98, 196, 0.12);
-    --accent-cyan: #0E6E86;
+     * a failed check painted copper to stay on-brand is a worse UI.
+     *
+     * Each one is a shade darker than the hue it started from: the status
+     * roles also label badges and pills on --bg-tertiary, where the lighter
+     * originals read 4.29-4.34:1. --accent cannot follow them down -- it is
+     * pinned to #9A4930 across all three surfaces -- which is why
+     * --bg-active is absent from the contrast matrix. */
+    --accent-green: #296D32;
+    --accent-green-dim: rgba(41, 109, 50, 0.07);
+    --accent-yellow: #845600;
+    --accent-yellow-dim: rgba(132, 86, 0, 0.07);
+    --accent-blue: #1A5DBA;
+    --accent-blue-dim: rgba(26, 93, 186, 0.07);
+    --accent-cyan: #0D677E;
     --accent-purple: #6B3FBF;
 
     --danger: #B4292E;
     --danger-dark: #8E1F23;
-    --danger-dim: rgba(180, 41, 46, 0.12);
-    --danger-dim2: rgba(180, 41, 46, 0.06);
+    --danger-dim: rgba(180, 41, 46, 0.07);
+    --danger-dim2: rgba(180, 41, 46, 0.035);
 
     /* Code surfaces stay dark in both themes — a code block is its own
      * canvas, so its text is judged against it, not against the page. */

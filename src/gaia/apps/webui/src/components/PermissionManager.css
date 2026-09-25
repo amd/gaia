@@ -160,6 +160,9 @@
 }
 
 .perm-filter-btn.active {
+    /* The "All" chip is active without a tier, so it never gets the inline
+       --filter-color the tier chips set -- this fallback is the only one in
+       the tree that fires. */
     color: var(--filter-color, var(--text-primary));
     background: var(--bg-primary);
     box-shadow: var(--shadow-sm);

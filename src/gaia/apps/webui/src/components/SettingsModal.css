@@ -386,8 +386,8 @@
     color: var(--text-primary);
 }
 .btn-ctx-preset.active {
-    background: var(--accent-dim, var(--bg-secondary));
-    border-color: var(--accent, var(--text-primary));
+    background: var(--accent-dim);
+    border-color: var(--accent);
     color: var(--text-primary);
 }
 .btn-ctx-preset:disabled {

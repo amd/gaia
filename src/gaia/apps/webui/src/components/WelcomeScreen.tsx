@@ -53,13 +53,14 @@ const DEFAULT_SUGGESTIONS = [
 export function WelcomeScreen({ onNewTask, onSendPrompt, onStartAgentTask, onCreateAgent }: WelcomeScreenProps) {
     const { systemStatus, agents, activeAgentId, setActiveAgentId } = useChatStore();
 
-    // A chip runs on the agent it came from. `starterOf` is null for the
-    // generic list, which belongs to no agent and so goes to the flagship.
-    const { suggestions, starterOf } = useMemo(() => {
+    // A chip runs on the agent the picker is showing, starters or not --
+    // routing the generic list to the flagship contradicts that selection.
+    // Null only when no known agent is selected, which is the flagship's case.
+    const { suggestions, runOn } = useMemo(() => {
         const active = agents.find((a) => a.id === activeAgentId);
         if (active?.conversation_starters?.length)
-            return { suggestions: active.conversation_starters, starterOf: active.id };
-        return { suggestions: DEFAULT_SUGGESTIONS, starterOf: null as string | null };
+            return { suggestions: active.conversation_starters, runOn: active.id };
+        return { suggestions: DEFAULT_SUGGESTIONS, runOn: (active?.id ?? null) as string | null };
     }, [agents, activeAgentId]);
     const [displayedText, setDisplayedText] = useState('');
     const [typingComplete, setTypingComplete] = useState(false);
@@ -138,7 +139,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onStartAgentTask, onCre
     return (
         <main className="welcome">
             <div className={`welcome-inner ${showContent ? 'content-revealed' : ''}`}>
-                <h1 className={`welcome-title${typingComplete ? ' typing-done' : ''}`}>
+                <h1 className="welcome-title">
                     {displayedText.length >= 4 ? (
                         <><span>{displayedText.slice(0, 4)}</span><span>{displayedText.slice(4)}</span></>
                     ) : displayedText}
@@ -221,7 +222,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onStartAgentTask, onCre
                             <button
                                 key={s}
                                 className="chip"
-                                onClick={() => (starterOf ? onStartAgentTask(starterOf, s) : onSendPrompt(s))}
+                                onClick={() => (runOn ? onStartAgentTask(runOn, s) : onSendPrompt(s))}
                                 disabled={isInitializing}
                             >
                                 {s}

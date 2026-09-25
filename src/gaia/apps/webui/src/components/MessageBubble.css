@@ -756,7 +756,7 @@
 
 /* Thinking indicator — inline next to GAIA name in header */
 .thinking-indicator {
-    font-family: var(--font-mono, 'JetBrains Mono', 'SF Mono', monospace);
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-muted);
     white-space: nowrap;
@@ -774,10 +774,10 @@
     gap: 10px;
     margin-top: 6px;
     padding-top: 5px;
-    border-top: 1px solid var(--border, color-mix(in srgb, var(--text-muted) 12%, transparent));
+    border-top: 1px solid var(--border);
     font-size: 10.5px;
     color: var(--text-muted);
-    font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+    font-family: var(--font-mono);
     opacity: 0;
     transition: opacity 180ms var(--ease);
     pointer-events: none;

@@ -326,10 +326,6 @@
   vertical-align: middle;
 }
 
-.agent-card-meta .meta-sep {
-  color: var(--border);
-}
-
 .agent-card-meta .meta-pid {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -567,7 +563,7 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: white;
+  background: var(--switch-knob);
   transition: transform var(--duration) var(--ease);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }

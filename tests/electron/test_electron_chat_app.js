@@ -631,8 +631,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should have dark theme as default', () => {
-      // Store defaults to 'dark' theme (via localStorage or fallback)
-      expect(storeContent).toContain("|| 'dark'");
+      // Pinned to the fallback argument itself -- a looser line-level match
+      // also hits the `'light' | 'dark'` annotation and passes on any default.
+      expect(storeContent).toMatch(/['"]gaia-chat-theme['"]\s*,\s*['"]dark['"]/);
     });
 
     it('should have setShowDocLibrary and setShowSettings actions', () => {
