@@ -11,6 +11,18 @@ behind any entry — API shapes, endpoints, and version semantics — see
   own server it reported the model server as missing, or its version as
   unknown. It now uses the same server as the rest of GAIA, with its key.
 
+- **Starting the sidecar when port 8131 is already taken now fails with a clear
+  error instead of pretending it worked.** If an earlier `agent-email
+  playground` or another server held the port, `startSidecar` handed back a
+  "started" sidecar it didn't own: every call then failed with 401, and
+  `shutdown()` couldn't stop it. It now throws `PortInUseError` without spawning
+  anything (use `connectSidecar` to reuse a running server), or
+  `SidecarExitedError` if the port is taken mid-start. A sidecar that crashes
+  at startup now fails straight away instead of after the full 30 s wait.
+  A sidecar that becomes healthy and *then* crashes says so, instead of
+  blaming a port conflict and sending you to hunt for a process that was
+  never there.
+
 - **Intel Macs can now install the agent.** Every release publishes an Intel
   macOS binary, but the hub manifest didn't list Intel macOS as supported, so
   `gaia hub install email` refused it before downloading anything.
