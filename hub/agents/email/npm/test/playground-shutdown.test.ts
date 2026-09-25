@@ -6,6 +6,8 @@
  * unexplained.
  */
 
+import { EventEmitter } from "node:events";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const SHUTDOWN_ERROR = "taskkill failed for pid 4242";
@@ -23,22 +25,25 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.doUnmock("../src/fetch.js");
   vi.doUnmock("../src/lifecycle.js");
 });
 
-/** Wait for `playground` to install its SIGINT handler, then call it as a Ctrl+C would. */
-async function pressCtrlC(before: Function[]): Promise<void> {
+/** Wait for `playground` to install its SIGINT handler(s). */
+async function sigintHandlers(before: Function[]): Promise<(() => void)[]> {
   for (let i = 0; i < 200; i++) {
     const added = process.listeners("SIGINT").filter((l) => !before.includes(l));
-    if (added.length > 0) {
-      for (const l of added) (l as () => void)();
-      return;
-    }
+    if (added.length > 0) return added as (() => void)[];
     await new Promise((r) => setTimeout(r, 5));
   }
   throw new Error("playground never installed a SIGINT handler");
+}
+
+/** Call the SIGINT handler as a Ctrl+C would. */
+async function pressCtrlC(before: Function[]): Promise<void> {
+  for (const l of await sigintHandlers(before)) l();
 }
 
 async function runPlayground(shutdownImpl: () => Promise<void>): Promise<number> {
@@ -75,4 +80,42 @@ describe("agent-email playground on Ctrl+C", () => {
   it("exits 0 when the sidecar stops cleanly", async () => {
     expect(await runPlayground(async () => undefined)).toBe(0);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "exits 1 naming the pid when the real shutdown can't stop the sidecar",
+    async () => {
+      vi.spyOn(process, "kill").mockImplementation((() => true) as typeof process.kill);
+      const child = Object.assign(new EventEmitter(), {
+        pid: 4243, // never emits "exit", even after SIGKILL
+        exitCode: null,
+        signalCode: null,
+        kill: vi.fn(),
+      });
+      vi.doMock("../src/fetch.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../src/fetch.js")>()),
+        fetchBinary: vi.fn(async () => ({ binaryPath: "/fake/email-agent", cached: true })),
+      }));
+      vi.doMock("../src/lifecycle.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../src/lifecycle.js")>()),
+        startSidecar: vi.fn(async () => ({
+          child,
+          host: "127.0.0.1",
+          port: 8131,
+          baseUrl: "http://127.0.0.1:8131",
+        })),
+      }));
+      const { main } = await import("../src/cli.js");
+      const before = process.listeners("SIGINT").slice();
+      const running = main(["playground", "--no-open"]);
+      const handlers = await sigintHandlers(before);
+
+      vi.useFakeTimers();
+      for (const l of handlers) l();
+      await vi.advanceTimersByTimeAsync(10_000); // SIGTERM wait + post-SIGKILL wait
+
+      expect(await running).toBe(1);
+      expect(stderr.join("")).toContain("pid 4243");
+      expect(stderr.join("")).toContain("kill -9 -4243");
+    },
+  );
 });
