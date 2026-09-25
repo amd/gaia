@@ -88,10 +88,11 @@ icon: "wrench"
 
     Or download directly from the [Lemonade v2026.39.1 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v2026.39.1).
 
-    After installation, restart your terminal and start the server:
-    ```powershell
-    lemonade-server serve
-    ```
+    How the server starts depends on the install, and there is no
+    cross-platform `serve` command — Lemonade removed the `lemonade-server`
+    CLI in 10.7. Windows starts `LemonadeServer.exe` from the tray icon or the
+    Start menu; Linux runs the `lemond` systemd unit; macOS installs a
+    LaunchDaemon.
 
     <Note>
       **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a cloud endpoint. See the [Integration Guide](/cpp/integration#using-alternative-llm-backends) for configuration examples.
@@ -178,9 +179,9 @@ icon: "wrench"
 
     Or browse all platform options on the [Lemonade v2026.39.1 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v2026.39.1).
 
-    After installation, start the server:
+    After installation, start the `lemond` systemd unit:
     ```bash
-    lemonade-server serve
+    systemctl --user start lemond
     ```
 
     <Note>
@@ -219,7 +220,7 @@ icon: "wrench"
 | C++ Compiler | C++17 support (MSVC 2019+ or GCC 9+) | `cl` (Windows) or `g++ --version` (Linux) |
 | CMake | 3.14+ | `cmake --version` |
 | Git | any | `git --version` |
-| [Lemonade Server](https://lemonade-server.ai) | 2026.39.1 | `lemonade-server --version` |
+| [Lemonade Server](https://lemonade-server.ai) | 2026.39.1 | `lemonade --version` |
 | uvx | any (optional) | `uvx --version` |
 
 <Note>

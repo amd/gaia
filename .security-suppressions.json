@@ -2,6 +2,16 @@
   "_comment": "Approved security suppressions. Every '# noqa: S<n>' (flake8-bandit) and '# nosec' (bandit) comment in src/ or hub/ MUST be listed here with a justification, or CI fails (util/check_security_gates.py, run by util/lint.py). Adding an entry requires PR review \u2014 this is the gate that would have caught the GAIA hub tar-slip (CWE-22), where a '# noqa: S202 - hub artifacts are trusted' silenced an unvalidated tarfile.extractall. Keyed by (path, rule), not line number. See SECURITY.md.",
   "suppressions": [
     {
+      "path": "src/gaia/agents/tools/command_timeouts.py",
+      "rule": "B603",
+      "justification": "taskkill's argv is fixed; the only variable is a PID from a Popen this process started. No user-supplied text reaches it and it never goes through a shell."
+    },
+    {
+      "path": "src/gaia/agents/tools/command_timeouts.py",
+      "rule": "B607",
+      "justification": "'taskkill' is resolved from PATH as a Windows system binary; it is how a timed-out cmd.exe's children are killed, without which the read blocks on pipes the grandchild still holds."
+    },
+    {
       "path": "src/gaia/agents/tools/shell_tools.py",
       "rule": "B602",
       "justification": "Sandboxed shell tool. Every command (and each pipeline segment) is validated against a whitelist via _validate_command before execution; shell=True is enabled ONLY on Windows so cmd.exe can resolve built-ins (dir/cd/type) and pipes that Git-for-Windows tools rely on. Converting to args-list would break piped/whitelisted commands the tool exists to run."
