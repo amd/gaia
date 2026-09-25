@@ -1037,18 +1037,23 @@ class InitCommand:
         if not backend_spec:
             return True
 
-        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+        from gaia.llm.lemonade_client import (
+            LemonadeClient,
+            LemonadeClientError,
+            split_backend_spec,
+        )
 
         try:
             client = LemonadeClient(verbose=self.verbose)
 
+            spec_recipe, backend_key = split_backend_spec(backend_spec)
+
             # Check if already installed via recipe status
-            recipe_name = profile_config.get("recipe", backend_spec.split(":")[0])
+            recipe_name = profile_config.get("recipe", spec_recipe)
             recipe_status = client.get_recipe_status(recipe_name)
 
             if recipe_status:
                 backends = recipe_status.get("backends", {})
-                backend_key = backend_spec.split(":")[-1] if ":" in backend_spec else ""
                 backend_info = backends.get(backend_key, {})
 
                 if backend_info.get("state") == "installed":
