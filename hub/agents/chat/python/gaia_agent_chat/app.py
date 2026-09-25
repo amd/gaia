@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,7 +36,7 @@ def parse_args():
     parser.add_argument(
         "--use-chatgpt",
         action="store_true",
-        help="Use ChatGPT/OpenAI API instead of local LLM",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--claude-model",
@@ -122,7 +123,12 @@ def parse_args():
         "--list-tools", action="store_true", help="List available tools and exit"
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.use_chatgpt:
+        from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+        parser.error(REMOVED_PROVIDER_MESSAGE)
+    return args
 
 
 def interactive_mode(agent: ChatAgent):
@@ -894,28 +900,25 @@ def interactive_mode(agent: ChatAgent):
                     response = input("\nAre you sure? (yes/no): ").strip().lower()
 
                     if response == "yes":
-                        import shutil
+                        try:
+                            agent.rag.clear_cache()
+                        except ValueError as e:
+                            print(f"\n❌ {e}")
+                            continue
+                        print(f"\n✅ Cache cleared: {agent.rag.config.cache_dir}")
 
-                        cache_dir = agent.rag.config.cache_dir
-                        if os.path.exists(cache_dir):
-                            shutil.rmtree(cache_dir)
-                            os.makedirs(cache_dir, exist_ok=True)
-                            print(f"\n✅ Cache cleared: {cache_dir}")
+                        # Clear in-memory state as well
+                        agent.rag.indexed_files.clear()
+                        agent.rag.chunks.clear()
+                        agent.rag.chunk_to_file.clear()
+                        agent.rag.file_to_chunk_indices.clear()
+                        agent.rag.file_metadata.clear()
+                        agent.rag.index = None
+                        agent.indexed_files.clear()
 
-                            # Clear in-memory state as well
-                            agent.rag.indexed_files.clear()
-                            agent.rag.chunks.clear()
-                            agent.rag.chunk_to_file.clear()
-                            agent.rag.file_to_chunk_indices.clear()
-                            agent.rag.file_metadata.clear()
-                            agent.rag.index = None
-                            agent.indexed_files.clear()
-
-                            print(
-                                "\nAll documents will be re-indexed from scratch on next access."
-                            )
-                        else:
-                            print(f"\nℹ️  Cache directory doesn't exist: {cache_dir}")
+                        print(
+                            "\nAll documents will be re-indexed from scratch on next access."
+                        )
                     else:
                         print("\n❌ Cache clear cancelled")
 
@@ -985,7 +988,6 @@ def main():
         # Create agent config
         config = ChatAgentConfig(
             use_claude=args.use_claude,
-            use_chatgpt=args.use_chatgpt,
             claude_model=args.claude_model,
             model_id=args.model_id,
             max_steps=args.max_steps,

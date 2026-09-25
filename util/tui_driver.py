@@ -22,7 +22,13 @@ import sys
 import time
 
 # --- point this at YOUR GAIA_TUI_HOME ---------------------------------------
-CJ = r"C:/Users/kovtchar/AppData/Local/Temp/gaia-tui-solo/control.json"
+# GAIA_TUI_CONTROL_JSON overrides so a driver session never edits this file.
+import os as _os
+
+CJ = _os.environ.get(
+    "GAIA_TUI_CONTROL_JSON",
+    r"C:/Users/kovtchar/AppData/Local/Temp/gaia-tui-solo/control.json",
+)
 
 _conn = None
 _HDRS = {}

@@ -57,8 +57,9 @@ Two more MCP servers ship in the catalog and work now. Neither needs an
 API key, so there's no dedicated setup page — enable them per agent from
 Settings → Connections or the CLI:
 
-- **Git** — `mcp-git`: `log`, `diff`, `status`, and `blame` for a local
-  repository.
+- **Git** — `mcp-git`: `status`, `diff`, `log`, `show`, branch, and commit
+  tools for a local repository. It runs through `uvx`, so install
+  [uv](https://docs.astral.sh/uv/) and make sure `uvx` is on your `PATH`.
 - **Memory** — `mcp-memory`: a knowledge-graph scratchpad agents can
   persist to across a conversation.
 

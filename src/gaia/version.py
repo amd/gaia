@@ -3,13 +3,15 @@
 
 import logging
 import os
+import re
 import subprocess
 from importlib.metadata import version as get_package_version_metadata
+from typing import Optional, Tuple
 
 __version__ = "0.24.1"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "11.8.1"
+LEMONADE_VERSION = "2026.39.1"
 
 # Oldest Lemonade Server GAIA runs against. LEMONADE_VERSION is what we install;
 # this is the floor below which we refuse. Profiles may require newer
@@ -20,6 +22,24 @@ LEMONADE_MIN_VERSION = "10.2.0"
 # Only the LLM-gateway path requires it, so it is checked there rather than
 # raising LEMONADE_MIN_VERSION for every user.
 LEMONADE_GATEWAY_MIN_VERSION = "11.8.0"
+
+
+def parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
+    """Parse a dotted version into a comparable int tuple, or None.
+
+    Keeps each component's leading digits so Lemonade's CalVer development
+    builds (``2026.39.0~12.abc1234``) compare instead of reading as unknown.
+
+    The frozen sidecars vendor their own copy — they cannot import this — and
+    ``tests/unit/test_lemonade_calver.py`` holds them to it.
+    """
+    if not version:
+        return None
+    try:
+        parts = str(version).strip().lstrip("v").split(".")[:3]
+        return tuple(int(re.match(r"\s*(\d+)", p).group(1)) for p in parts)
+    except (ValueError, IndexError, AttributeError):
+        return None
 
 
 def get_package_version() -> str:

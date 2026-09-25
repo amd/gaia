@@ -13,14 +13,22 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from gaia.agents.base.checks import attach_check, check_from_command
-from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
+from gaia.agents.tools.command_timeouts import (
+    MAX_COMMAND_TIMEOUT,
+    TIMEOUT_CLASSES,
+    resolve_timeout,
+    terminate_process_tree,
+)
+from gaia.tool_cancellation import tool_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +59,22 @@ SHELL_KEYWORDS = frozenset(
     }
 )
 
+#: ``wait_for_condition`` bounds. The maximum wait is a ceiling, not a default:
+#: a wait that could run unbounded is the spinning the primitive replaces.
+WAIT_DEFAULT_TIMEOUT = 120
+WAIT_MAX_TIMEOUT = 600
+WAIT_DEFAULT_POLL_INTERVAL = 5
+#: Poll floor. At 5s the probe rate stays near the 10-commands-per-minute shell
+#: rate limit the wait is exempt from (it counts as one command, not one per poll).
+WAIT_MIN_POLL_INTERVAL = 5
+WAIT_MAX_POLL_INTERVAL = 60
+#: A predicate is a quick check, not the work. Each probe is capped here, and by
+#: whatever is left of the deadline.
+WAIT_PROBE_TIMEOUT = 30
+
+#: How often a running command is checked against the cancel signal. Short
+#: enough that Stop feels immediate, long enough to cost nothing over 30 minutes.
+CANCEL_POLL_SECONDS = 0.5
 
 # Security: WHITELIST approach - only allow explicitly safe commands
 # This is much safer than a blacklist which always misses dangerous commands
@@ -117,8 +141,10 @@ ALLOWED_COMMANDS = {
     "ps",
     "top",
     "jobs",
-    # Git commands (mostly safe, read-only operations)
-    "git",  # Individual git subcommands checked separately
+    # `git` is deliberately NOT here. It has a full three-tier policy in
+    # gaia.skills.binaries instead, and that policy carries its own
+    # ungranted read-only floor (`BinaryPolicy.ungranted`) — the same
+    # subcommands this list used to allow. One table describes the binary.
 }
 
 # Actions/predicates that turn otherwise read-only commands into a write,
@@ -141,20 +167,116 @@ DANGEROUS_FIND_ACTIONS = {
     "-fls",
 }
 
-# Safe read-only git subcommands
-SAFE_GIT_COMMANDS = {
-    "status",
-    "log",
-    "show",
-    "diff",
-    "branch",
-    "remote",
-    "ls-files",
-    "ls-tree",
-    "describe",
-    "rev-parse",
-    "help",
+# Global git options that sit BEFORE the subcommand. They have to be stepped
+# over to find what the command actually is, and each one is classified here —
+# an unlisted option is refused rather than skipped, so a future git release
+# cannot slip a value-taking flag past the walk and shift the subcommand index
+# (CWE-184).
+
+# Take a value, either as `--opt=value` or as the following token.
+GIT_GLOBAL_FLAGS_WITH_VALUE = {
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
 }
+
+# Standalone switches that change nothing about what gets run.
+GIT_GLOBAL_FLAGS_NO_VALUE = {
+    "-P",
+    "--no-pager",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+}
+
+# Options that ARE the whole command — there is no subcommand after them.
+GIT_TERMINAL_FLAGS = {
+    "--version",
+    "--help",
+    "-h",
+    "--html-path",
+    "--man-path",
+    "--info-path",
+}
+
+# Global options that hand git arbitrary code or configuration, so they stay
+# refused no matter how read-only the subcommand behind them looks.
+GIT_FORBIDDEN_GLOBAL_FLAGS = {
+    "-c": "it sets arbitrary git config for the run (e.g. core.pager, alias.*), which can execute a command",
+    "--config-env": "it sets arbitrary git config from the environment, which can execute a command",
+    "--exec-path": "it changes where git looks for its subcommands, which can execute an arbitrary binary",
+}
+
+
+def _unrecognized_git_option_error(name: str) -> str:
+    """Why *name* stopped the walk, phrased so the caller can act on it.
+
+    Git lets a short option carry its value attached (``-C/tmp``), but the walk
+    matches whole tokens, so the plain "not recognized" text named a flag the
+    caller never wrote and left nothing to change. The attached form stays
+    refused — teaching the `-C` sandbox check a second way to split a token is
+    how that sandbox springs a leak.
+    """
+    prefix = name[:2]
+    if prefix in GIT_FORBIDDEN_GLOBAL_FLAGS:
+        return (
+            f"Git global option '{prefix}' is not allowed: "
+            f"{GIT_FORBIDDEN_GLOBAL_FLAGS[prefix]}."
+        )
+    if prefix in GIT_GLOBAL_FLAGS_WITH_VALUE:
+        return (
+            f"Git global option '{prefix}' needs its value as a separate word: "
+            f"write '{prefix} {name[2:]}', not '{name}'."
+        )
+    return (
+        f"Git global option '{name}' is not recognized, so the subcommand "
+        "behind it cannot be identified."
+    )
+
+
+def _git_policy_argv(cmd_parts: list) -> tuple:
+    """``git -C <path> branch`` as the policy table judges it: ``git branch``.
+
+    Git's global options sit before the subcommand, so a table reading
+    ``cmd_parts[1]`` sees ``-C`` and refuses a plain read. Each option is
+    classified rather than skipped — an unlisted one is refused, so a future
+    git release cannot slip a value-taking flag past the walk and shift the
+    subcommand index (CWE-184).
+
+    Returns:
+        ``(argv, error_message)`` — exactly one is non-None. The paths those
+        options name are sandbox-checked separately by ``_git_path_refusal``.
+    """
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            break
+
+        name = token.split("=", 1)[0]
+        if name in GIT_TERMINAL_FLAGS:
+            break
+        if name in GIT_FORBIDDEN_GLOBAL_FLAGS:
+            return None, (
+                f"Git global option '{name}' is not allowed: "
+                f"{GIT_FORBIDDEN_GLOBAL_FLAGS[name]}."
+            )
+        if name in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            # `--opt=value` carries its value; `--opt value` consumes the next token.
+            index += 1 if "=" in token else 2
+            continue
+        if name in GIT_GLOBAL_FLAGS_NO_VALUE:
+            index += 1
+            continue
+        return None, _unrecognized_git_option_error(name)
+
+    return [cmd_parts[0], *cmd_parts[index:]], None
+
 
 # Safe PowerShell cmdlet prefixes (read-only operations)
 SAFE_PS_CMDLET_PREFIXES = (
@@ -452,6 +574,23 @@ def _rewrites_in_place(cmd_base: str, cmd_parts: list) -> bool:
 #: only one a ``shell:execute`` grant may exempt from confirmation.
 _POLICY_GATED_SHELL_TOOL = "run_shell_command"
 
+#: Runs its predicate through ``run_shell_command``, so the same guardrails
+#: apply and a refused predicate is refused before anyone is prompted. It is
+#: NOT grant-exempt: consent for a binary is not consent to poll with it.
+_WAIT_TOOL = "wait_for_condition"
+
+
+#: Output past this many characters is cut before it reaches the model.
+MAX_OUTPUT_CHARS = 10_000
+
+
+def _truncate(text: Optional[str], stream: str) -> str:
+    """*text* capped at ``MAX_OUTPUT_CHARS``, saying so when it was cut."""
+    text = text or ""
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text
+    return text[:MAX_OUTPUT_CHARS] + f"\n...output truncated ({stream})..."
+
 
 def skill_granted_binaries(host: Any) -> frozenset:
     """CLIs *host*'s loaded skills granted via ``shell:execute:<binary>``.
@@ -463,6 +602,15 @@ def skill_granted_binaries(host: Any) -> frozenset:
     """
     grants = getattr(host, "_granted_binaries", None)
     return grants.binaries() if grants is not None else frozenset()
+
+
+def _is_granted_binary(token: str, granted: frozenset) -> bool:
+    """True when *token* names a CLI this agent's skills granted."""
+    if not granted:
+        return False
+    from gaia.skills.binaries import normalize_binary
+
+    return normalize_binary(token) in granted
 
 
 def _is_granted_segment(segment: list, granted: frozenset) -> bool:
@@ -577,6 +725,50 @@ def _as_cmd_redirections(text: str) -> str:
     return "".join(out)
 
 
+def _skips_path_scan(token: str, granted: frozenset) -> bool:
+    """True when this segment's operands are remote ids, so there is no path.
+
+    Narrower than :func:`_is_granted_binary` on purpose, and the difference is
+    the point: granting a LOCAL cli must not switch off the path check.
+    ``gh issue view 42`` names an issue; ``git diff --no-index /etc/passwd``
+    and ``python ../../x.py`` name files, and both are granted CLIs.
+    """
+    if not _is_granted_binary(token, granted):
+        return False
+    from gaia.skills.binaries import BINARY_POLICIES, normalize_binary
+
+    policy = BINARY_POLICIES.get(normalize_binary(token))
+    return policy is not None and policy.remote_operands
+
+
+def _grant_route(binary: str, skill_manager: Any) -> str:
+    """How to actually get *binary* granted, naming the skill where one exists.
+
+    "Load a skill that declares it" left models no route to follow.
+    """
+    from gaia.agents.base.skill_catalog import skills_granting
+
+    granting = (
+        skills_granting(skill_manager.discover(), binary)
+        if skill_manager is not None
+        else []
+    )
+    if granting:
+        return (
+            f"Call load_skill with {' or '.join(repr(n) for n in granting)}, "
+            "then run the command again."
+        )
+    if skill_manager is not None:
+        return (
+            f"No installed skill declares 'shell:execute:{binary}'; "
+            "search_skill_hub can find one."
+        )
+    return (
+        f"No skill that grants 'shell:execute:{binary}' could be looked up here; "
+        "list_skills or search_skill_hub can find one."
+    )
+
+
 def _operator_check_text(command: str) -> str:
     """The part of *command* the operator blocklist applies to.
 
@@ -620,6 +812,44 @@ def _split_pipeline(cmd_parts: list) -> list:
     if current:
         segments.append(current)
     return segments
+
+
+#: Git global options whose value is a filesystem path git will operate in.
+_GIT_PATH_FLAGS = ("-C", "--git-dir", "--work-tree")
+
+
+def _git_path_flag_values(cmd_parts: list, cwd: str) -> list:
+    """``(flag, resolved_path)`` for every path-taking git global option.
+
+    Resolved the way git does: ``-C`` is relative to the directory before it,
+    and ``--git-dir``/``--work-tree`` are relative to the last ``-C``. Without
+    this check ``-C`` would be a way around the ``working_directory`` sandbox.
+    """
+    values: list = []
+    base = Path(cwd)
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            break
+        name, has_inline, inline = token.partition("=")
+        if name not in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            index += 1
+            continue
+        if has_inline:
+            value = inline
+            index += 1
+        elif index + 1 < len(cmd_parts):
+            value = cmd_parts[index + 1]
+            index += 2
+        else:
+            break
+        if name in _GIT_PATH_FLAGS:
+            resolved = base.joinpath(value).resolve()
+            values.append((name, str(resolved)))
+            if name == "-C":
+                base = resolved
+    return values
 
 
 #: The connectors that chain one line's pipelines. Longest first, so ``||`` is
@@ -874,8 +1104,32 @@ def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
     return {**os.environ, **assignments}
 
 
+class _CommandCancelled(Exception):
+    """Stop landed while the step was running; it was killed part-way.
+
+    Carries what the command had printed before the kill, so the caller can
+    report the partial work rather than an empty result.
+    """
+
+    def __init__(self, stdout: str = "", stderr: str = ""):
+        super().__init__("command cancelled")
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _wait_plain(process: "subprocess.Popen", timeout: float) -> Tuple[Any, Any, bool]:
+    """Wait the whole deadline in one call, for callers with no cancel channel."""
+    stdout, stderr = process.communicate(timeout=timeout)
+    return stdout, stderr, False
+
+
 def _run_pipeline(
-    segments: list, modes: tuple, envs: tuple, cwd: str, timeout: float
+    segments: list,
+    modes: tuple,
+    envs: tuple,
+    cwd: str,
+    timeout: float,
+    waiter: Optional[Callable] = None,
 ) -> subprocess.CompletedProcess:
     """Run validated ``a | b | c`` segments as chained processes, no shell.
 
@@ -911,6 +1165,9 @@ def _run_pipeline(
                     stdout=subprocess.PIPE,
                     stderr=err_target,
                     env=_segment_env(envs[index] if index < len(envs) else {}),
+                    # Its own process group, so a kill reaches descendants and
+                    # never the agent's own group.
+                    start_new_session=os.name != "nt",
                 )
             )
             if upstream is not None:
@@ -919,7 +1176,13 @@ def _run_pipeline(
                 upstream.close()
             upstream = procs[-1].stdout
         try:
-            out, _ = procs[-1].communicate(timeout=max(deadline - time.monotonic(), 0))
+            out, _, cancelled = (waiter or _wait_plain)(
+                procs[-1], max(deadline - time.monotonic(), 0)
+            )
+            if cancelled:
+                # The last stage is already dead; the handler below takes the
+                # rest of the chain with it.
+                raise _CommandCancelled(_as_text(out), _read_all(errs))
             for proc in procs[:-1]:
                 proc.wait(timeout=max(deadline - time.monotonic(), 0))
         except subprocess.TimeoutExpired as exc:
@@ -971,11 +1234,16 @@ _UNIX_TO_WIN = {
 
 
 def _run_step(
-    step: _Step, cwd: str, timeout: float, granted: frozenset
+    step: _Step,
+    cwd: str,
+    timeout: float,
+    granted: frozenset,
+    waiter: Optional[Callable] = None,
 ) -> subprocess.CompletedProcess:
     """Run one validated pipeline in *cwd*, and return what it produced.
 
-    Raises ``subprocess.TimeoutExpired`` with whatever it had produced by then.
+    Raises ``subprocess.TimeoutExpired`` with whatever it had produced by then,
+    or ``_CommandCancelled`` if *waiter* reports a Stop while it was running.
 
     On Windows a step goes through cmd.exe as its own string — never the whole
     line, whose connectors cmd.exe would act on without any of the per-segment
@@ -1030,7 +1298,9 @@ def _run_step(
                 exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
 
     if len(segments) > 1 and not use_shell:
-        return _run_pipeline(segments, step.stderr_modes, step.envs, cwd, timeout)
+        return _run_pipeline(
+            segments, step.stderr_modes, step.envs, cwd, timeout, waiter
+        )
 
     # A shell step's redirection is already in the string cmd.exe was handed.
     mode = "" if use_shell or not step.stderr_modes else step.stderr_modes[0]
@@ -1047,7 +1317,14 @@ def _run_step(
     # reported an empty backlog it had never actually read. Any tool emitting
     # UTF-8 (git, gh, npm, docker) hits it. errors="replace" keeps a stray
     # undecodable byte from costing the whole output.
-    return subprocess.run(
+    #
+    # Popen rather than subprocess.run for two reasons: run() blocks for the
+    # whole deadline, so a Stop during a 30-minute build would be honoured 30
+    # minutes late; and on expiry it kills only the process it launched, then
+    # re-enters communicate() with NO timeout, so a surviving grandchild holding
+    # the pipes hangs the call for as long as it lives. terminate_process_tree
+    # below kills the whole tree first, so the deadline means what it says.
+    process = subprocess.Popen(  # pylint: disable=consider-using-with
         exec_cmd,
         cwd=cwd,
         stdout=subprocess.PIPE,
@@ -1072,10 +1349,32 @@ def _run_step(
         stdin=subprocess.DEVNULL,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout,
-        check=False,
         env=_segment_env(step.envs[0] if step.envs else {}),
+        # POSIX: its own session, so the kill reaches every descendant — and
+        # never the agent's own process group. Windows gets that reach from
+        # taskkill /T instead.
+        start_new_session=os.name != "nt",
         shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
+    )
+    try:
+        stdout, stderr, cancelled = (waiter or _wait_plain)(process, timeout)
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = terminate_process_tree(process)
+        raise subprocess.TimeoutExpired(
+            exc.cmd, timeout, output=stdout, stderr=stderr
+        ) from exc
+    except BaseException:
+        # Ctrl-C, or anything the waiter itself threw: the child must not
+        # outlive the call that started it.
+        terminate_process_tree(process)
+        raise
+    if cancelled:
+        raise _CommandCancelled(_as_text(stdout), _as_text(stderr))
+    return subprocess.CompletedProcess(
+        args=exec_cmd,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -1103,10 +1402,12 @@ class ShellToolsMixin:
 
     Tools provided:
     - run_shell_command: Execute terminal commands with timeout and safety checks
+    - wait_for_condition: Poll a command until it succeeds, or hit a deadline
 
     Rate Limiting:
     - Max 10 commands per minute to prevent DOS
     - Max 3 commands per 10 seconds for burst prevention
+    - A wait_for_condition call is one command; its probes are not metered again
     - A command over either limit waits for the window (up to
       ``max_rate_limit_wait_seconds``) instead of being refused
     """
@@ -1161,6 +1462,7 @@ class ShellToolsMixin:
                     segment,
                     step.text if len(step.segments) == 1 else " ".join(segment),
                     granted_binaries=granted,
+                    skill_manager=getattr(self, "skill_manager", None),
                 )
                 if error:
                     return error, []
@@ -1186,7 +1488,7 @@ class ShellToolsMixin:
         Duck-typed rather than an override — ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
-        if tool_name != _POLICY_GATED_SHELL_TOOL:
+        if tool_name not in (_POLICY_GATED_SHELL_TOOL, _WAIT_TOOL):
             return None
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
@@ -1272,6 +1574,10 @@ class ShellToolsMixin:
         )
         return True
 
+    #: Slice length for the pacing wait. Short enough that a Stop lands
+    #: promptly, long enough not to spin.
+    _PACE_POLL_SECONDS = 0.25
+
     def _pace_rate_limit(self) -> tuple:
         """Wait out the rate limit rather than refuse, up to a cap.
 
@@ -1286,8 +1592,17 @@ class ShellToolsMixin:
             allowed, reason, wait_time = self._check_rate_limit()
             if allowed or waited + wait_time > cap:
                 return allowed, reason, wait_time, waited
-            time.sleep(wait_time)
-            waited += wait_time
+            # Sliced, not one long sleep: this runs inside _call_tool_bounded's
+            # window, so a wait that ignored the flag would keep the worker
+            # alive past a Stop and past its own timeout (#2600).
+            remaining = wait_time
+            while remaining > 0:
+                if tool_cancelled():
+                    return False, "Rate limit wait cancelled", remaining, waited
+                slice_s = min(self._PACE_POLL_SECONDS, remaining)
+                time.sleep(slice_s)
+                remaining -= slice_s
+                waited += slice_s
 
     def _path_allowed(self, path: str) -> bool:
         """Whether *path* is inside this agent's allowed paths.
@@ -1340,7 +1655,9 @@ class ShellToolsMixin:
 
         This prevents "cat ../secret.txt" even if "cat" is allowed. Exempt per
         SEGMENT, never per line: a granted CLI's operands are remote ids, but
-        'gh … | cat ../secret' must still be checked.
+        'gh … | cat ../secret' must still be checked. And only for a CLI whose
+        operands really are remote — a granted 'git'/'python' still gets
+        scanned.
 
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
@@ -1349,8 +1666,14 @@ class ShellToolsMixin:
         if not hasattr(self, "path_validator"):
             return None
 
+        from gaia.skills.binaries import policy_argv
+
         segments = step.segments
-        scanned = [seg for seg in segments if not _is_granted_segment(seg, granted)]
+        scanned = [
+            seg
+            for seg in segments
+            if not _skips_path_scan(policy_argv(seg)[0], granted)
+        ]
         candidates = [("Argument", a) for seg in scanned for a in seg[1:]]
         candidates += [
             (f"'{name}='", entry)
@@ -1423,6 +1746,12 @@ class ShellToolsMixin:
             self.max_commands_per_minute = 10
             self.max_commands_per_10_seconds = 3
 
+        # A wait's probes are one command's worth of budget, charged once when
+        # the wait starts. Metering each poll separately would trip the burst
+        # limit on the second probe and turn the primitive into an error.
+        if getattr(self, "_shell_polling", False):
+            return True, "", 0.0
+
         current_time = time.time()
 
         # Remove old timestamps outside the window
@@ -1463,9 +1792,113 @@ class ShellToolsMixin:
 
         return True, "", 0.0
 
+    def _wait_interrupt_signal(self) -> threading.Event:
+        """The event the shell tools sleep on while something is running.
+
+        Waiting on the agent's cancel signal rather than sleeping blind is what
+        makes Stop take effect during a wait or a long command; without it the
+        user's click is honoured only once the deadline runs out — up to half an
+        hour later for a build. Falls back to a never-set event for consumers
+        that have no cancel channel (plain CLI runs), where the deadline is the
+        only exit.
+        """
+        for source in (
+            getattr(self, "_cancel_event", None),
+            getattr(getattr(self, "console", None), "cancelled", None),
+        ):
+            if isinstance(source, threading.Event):
+                return source
+        return threading.Event()
+
+    def _cancel_requested(self) -> bool:
+        """True once either cancel channel has fired.
+
+        Two of them: the user's Stop (``_wait_interrupt_signal``) and the agent
+        loop giving up on this tool call (``tools.tool_cancelled``). Either one
+        means nobody is waiting for the output any more.
+        """
+        from gaia.agents.base.tools import tool_cancelled
+
+        return self._wait_interrupt_signal().is_set() or tool_cancelled()
+
+    def _sleep_unless_cancelled(self, seconds: float) -> bool:
+        """Sleep up to *seconds*; True if a cancel landed instead.
+
+        Both channels are watched, not just the user's Stop: a wait the agent
+        loop has already abandoned would otherwise keep sleeping out a full
+        poll interval — a minute at the top of the range — before noticing.
+        """
+        interrupt = self._wait_interrupt_signal()
+        deadline = time.monotonic() + seconds
+        while not self._cancel_requested():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            interrupt.wait(min(CANCEL_POLL_SECONDS, remaining))
+        return True
+
+    def _communicate_or_cancel(
+        self, process: "subprocess.Popen", timeout: int
+    ) -> Tuple[str, str, bool]:
+        """Wait for *process*, checking for Stop while it runs.
+
+        ``communicate(timeout=...)`` blocks for the whole class default, so a
+        Stop during a 30-minute build would be honoured 30 minutes late. Waiting
+        in short slices costs nothing (the call still blocks in select/reader
+        threads) and lets the kill fire while the command is still running.
+
+        Returns:
+            ``(stdout, stderr, cancelled)``.
+
+        Raises:
+            subprocess.TimeoutExpired: the deadline passed; the caller kills the
+                tree and reports the timeout.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if self._cancel_requested():
+                stdout, stderr = terminate_process_tree(process)
+                return stdout, stderr, True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=min(CANCEL_POLL_SECONDS, remaining)
+                )
+                return stdout, stderr, False
+            except subprocess.TimeoutExpired:
+                continue  # slice expired, not the command's own deadline
+
     def _record_command_execution(self):
         """Record command execution timestamp for rate limiting."""
+        if getattr(self, "_shell_polling", False):
+            return  # already charged once, when the wait started
         self.shell_command_times.append(time.time())
+
+    def _git_path_refusal(self, segments: list, cwd: str) -> Optional[Dict[str, Any]]:
+        """Refuse a git ``-C``/``--git-dir``/``--work-tree`` outside allowed paths.
+
+        The same allowed-paths check ``working_directory`` gets.
+        """
+        for segment in segments:
+            if segment[0].lower() != "git":
+                continue
+            for flag, path in _git_path_flag_values(segment, cwd):
+                if hasattr(self, "path_validator"):
+                    allowed = self.path_validator.is_path_allowed(path)
+                elif hasattr(self, "_is_path_allowed"):
+                    allowed = self._is_path_allowed(path)
+                else:
+                    continue
+                if not allowed:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": f"Access denied: git {flag} {path} is not in allowed paths",
+                        "has_errors": True,
+                    }
+        return None
 
     @staticmethod
     def _validate_command(
@@ -1473,6 +1906,7 @@ class ShellToolsMixin:
         cmd_parts: list,
         command: str,
         granted_binaries: frozenset = frozenset(),
+        skill_manager: Any = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -1481,6 +1915,8 @@ class ShellToolsMixin:
             cmd_base: The lowercased command name.
             cmd_parts: The shlex-split command.
             command: The raw command string.
+            skill_manager: The host's skill manager, so refusing an ungranted CLI
+                can name the installed skill that grants it. Optional.
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
@@ -1494,67 +1930,24 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
-        # Skill-granted CLIs are gated by their own policy table instead of
-        # ALLOWED_COMMANDS; anything ungranted is still refused.
-        # Imported here — gaia.skills pulls in the connector stack.
-        from gaia.skills.binaries import (
-            BINARY_POLICIES,
-            REFUSE,
-            classify_invocation,
-            normalize_binary,
-            policy_argv,
-        )
-
-        policy_parts = policy_argv(cmd_parts)
-        binary = normalize_binary(policy_parts[0])
-        policy = BINARY_POLICIES.get(binary)
-        if policy is not None:
-            if binary not in granted_binaries:
+        # Git's global options sit before the subcommand, so every check below
+        # has to read the call with them stepped over. The options that hand git
+        # arbitrary code are refused here rather than stepped over.
+        if cmd_base == "git" and len(cmd_parts) > 1:
+            cmd_parts, resolve_error = _git_policy_argv(cmd_parts)
+            if resolve_error is not None:
                 return {
                     "status": "error",
-                    "error": (
-                        f"Command '{binary}' is not available to this agent. It is "
-                        "granted only to a skill that declares "
-                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
-                        "first."
-                    ),
+                    "error": resolve_error,
                     "has_errors": True,
-                    "hint": f"{policy.summary} {policy.install_hint}",
                 }
-            decision = classify_invocation(policy, policy_parts)
-            if decision.outcome == REFUSE:
-                return {
-                    "status": "error",
-                    "error": decision.message,
-                    "has_errors": True,
-                    "hint": (
-                        f"This one is refused outright, not gated — the '{binary}' "
-                        "grant will not run it even with the user's approval. "
-                        "Use an allowed command, or tell the user what you would "
-                        "have run and why it is blocked."
-                    ),
-                }
-            return None
 
-        # Special handling for git - only allow read-only operations
-        if cmd_base == "git":
-            if len(cmd_parts) > 1:
-                git_subcmd = cmd_parts[1].lower()
-                if git_subcmd not in SAFE_GIT_COMMANDS:
-                    return {
-                        "status": "error",
-                        "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
-                        "has_errors": True,
-                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
-                    }
-            # A read-only subcommand still writes a caller-chosen path when it
-            # is handed an output flag, and the subcommand check never sees it.
+        # A read subcommand still writes a caller-chosen path when it is handed
+        # an output flag, and no policy table judges the destination. Checked
+        # ahead of the grant so the widest git grant cannot reopen it.
+        if cmd_base == "git" and len(cmd_parts) > 1:
             for part in cmd_parts[1:]:
-                if (
-                    len(cmd_parts) > 1
-                    and cmd_parts[1].lower() == "ls-files"
-                    and part == "-o"
-                ):
+                if cmd_parts[1].lower() == "ls-files" and part == "-o":
                     continue
                 if _is_file_write_flag(part):
                     return {
@@ -1566,8 +1959,54 @@ class ShellToolsMixin:
                         "has_errors": True,
                         "hint": "Drop the output flag and read git's result from stdout.",
                     }
+
+        # Skill-granted CLIs are gated by their own policy table instead of
+        # ALLOWED_COMMANDS; anything ungranted is still refused.
+        # Imported here — gaia.skills pulls in the connector stack.
+        from gaia.skills.binaries import (
+            BINARY_POLICIES,
+            REFUSE,
+            classify_invocation,
+            classify_ungranted_invocation,
+            normalize_binary,
+            policy_argv,
+        )
+
+        policy_parts = policy_argv(cmd_parts)
+        binary = normalize_binary(policy_parts[0])
+        policy = BINARY_POLICIES.get(binary)
+        if policy is not None:
+            granted = binary in granted_binaries
+            classify = classify_invocation if granted else classify_ungranted_invocation
+            decision = classify(policy, policy_parts)
+            if decision.outcome != REFUSE:
+                return None
+            if granted:
+                message = decision.message
+                hint = (
+                    f"This one is refused outright, not gated — the '{binary}' "
+                    "grant will not run it even with the user's approval. "
+                    "Use an allowed command, or tell the user what you would "
+                    "have run and why it is blocked."
+                )
+            else:
+                # Name the skill: "a skill that declares it" left models no route.
+                message = f"{decision.message} {_grant_route(binary, skill_manager)}"
+                hint = (
+                    f"{policy.summary} To go beyond that, load a skill "
+                    f"declaring 'shell:execute:{binary}' — the grant is what "
+                    "widens this, not a different spelling of the command. If "
+                    f"{binary} itself is missing: {policy.install_hint}"
+                )
+            return {
+                "status": "error",
+                "error": message,
+                "has_errors": True,
+                "hint": hint,
+            }
+
         # Special handling for wmic - only allow read-only queries
-        elif cmd_base == "wmic":
+        if cmd_base == "wmic":
             for part in cmd_parts[1:]:
                 if _is_file_write_flag(part):
                     return {
@@ -1806,7 +2245,7 @@ class ShellToolsMixin:
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
                 "hint": "Only read-only, informational commands are allowed",
-                "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
+                "examples": "ls, cat, grep, find, systeminfo, powershell -Command 'Get-WmiObject ...'",
             }
 
         return None  # Command is allowed
@@ -1817,12 +2256,26 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
+            # The agent-level guard must outlast the longest command class, or a
+            # build would be abandoned by the loop while the subprocess is still
+            # inside its own (correct) timeout.
+            timeout=MAX_COMMAND_TIMEOUT + 60,
         )
         def run_shell_command(
-            command: str, working_directory: Optional[str] = None, timeout: int = 30
+            command: str,
+            working_directory: Optional[str] = None,
+            # Annotated int, not Optional[int]: the registry infers the JSON
+            # schema type from this annotation and renders anything it cannot
+            # read as a string, so Optional[int] would tell a tool-calling model
+            # to send "60". None still means "use the class default".
+            timeout: int = None,
         ) -> Dict[str, Any]:
-            """
-            Execute a shell command and return its output.
+            """Execute a shell command. Leave timeout unset: it defaults to what the command needs — 900s for test runners, 1800s for builds and installs, 300s for git/network calls, 30s for everything else.
+
+            The class table leads because the prompt renders a tool by the FIRST
+            LINE of its docstring; anything below is seen only by models using
+            native tool calls. ``test_the_docstring_states_every_class`` keeps
+            that line honest when the table changes.
 
             Chain on one line: 'a && b' on success, 'a || b' on failure,
             'a; b' always, 'a | b' pipes, 'cd <dir> && b' runs b there. Each
@@ -1834,13 +2287,29 @@ class ShellToolsMixin:
             Args:
                 command: Shell command to execute
                 working_directory: Directory to run command in
-                timeout: Max execution time in seconds, for the whole line
+                timeout: Maximum execution time in seconds, for the whole
+                    line. Omit it for the class default above. Above the 3600s
+                    ceiling it is refused, not clamped.
 
             Returns:
                 Dictionary with status, combined output, the last command's
-                exit code, and 'steps' (each command with its own code)
+                exit code, and 'steps' (each command with its own code). The
+                applied timeout and the class it came from are in ``timeout``
+                and ``timeout_class``; a command killed at the limit carries
+                ``timed_out`` plus whatever it printed first.
             """
             try:
+                try:
+                    timeout, timeout_class = resolve_timeout(command, timeout)
+                except ValueError as exc:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": str(exc),
+                        "command": command,
+                        "has_errors": True,
+                    }
+
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time, waited = self._pace_rate_limit()
                 if not allowed:
@@ -1873,10 +2342,15 @@ class ShellToolsMixin:
                         }
 
                     if not self._path_allowed(working_directory):
+                        hint = (
+                            self.path_validator.scratch_hint(working_directory)
+                            if hasattr(self, "path_validator")
+                            else ""
+                        )
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Access denied: {working_directory} is not in allowed paths",
+                            "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
                             "has_errors": True,
                         }
 
@@ -1912,10 +2386,28 @@ class ShellToolsMixin:
                     error = self._path_traversal_refusal(step, step_cwd, granted)
                     if error:
                         return error
+                    error = self._git_path_refusal(step.segments, step_cwd)
+                    if error:
+                        return error
 
                 # Log command execution (debug mode)
                 if hasattr(self, "debug") and self.debug:
                     logger.info(f"Executing command: {command} in {cwd}")
+
+                # Stop can land before anything is spawned, and a command
+                # that never ran must say so rather than report an empty run.
+                if self._cancel_requested():
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": (
+                            f"Stopped before running, so nothing was changed: {command}"
+                        ),
+                        "command": command,
+                        "has_errors": True,
+                        "cancelled": True,
+                        "cwd": cwd,
+                    }
 
                 start_time = time.monotonic()
                 deadline = start_time + timeout
@@ -1946,32 +2438,77 @@ class ShellToolsMixin:
                             step_cwd,
                             max(deadline - time.monotonic(), 0),
                             granted,
+                            # Waiting in short slices is what lets a Stop kill
+                            # the command while it is still running, rather
+                            # than half an hour later when its budget expires.
+                            self._communicate_or_cancel,
                         )
                     except subprocess.TimeoutExpired as exc:
+                        # Truncated here too: a command killed at 30 minutes has
+                        # printed far more than one killed at 30 seconds, and
+                        # all of it would otherwise go into the model's context.
                         stdout_parts.append(_as_text(exc.stdout))
                         stderr_parts.append(_as_text(exc.stderr))
+                        stdout = _truncate("".join(stdout_parts), "stdout")
+                        stderr = _truncate("".join(stderr_parts), "stderr")
                         return attach_check(
                             {
                                 "status": "error",
-                                "error": f"Command timed out after {timeout} seconds",
+                                "error": (
+                                    f"Command timed out after {timeout} seconds and "
+                                    f"was killed, so its work is incomplete: {command}"
+                                ),
                                 "command": command,
-                                "stdout": "".join(stdout_parts),
-                                "stderr": "".join(stderr_parts),
+                                "stdout": stdout,
+                                "stderr": stderr,
                                 "has_errors": True,
                                 "timed_out": True,
                                 "timeout": timeout,
+                                "timeout_class": timeout_class,
                                 "duration_seconds": time.monotonic() - start_time,
                                 "cwd": cwd,
                                 "steps": ran,
+                                "hint": (
+                                    f"It ran as a '{timeout_class}' command "
+                                    f"({TIMEOUT_CLASSES[timeout_class].summary}, "
+                                    f"{TIMEOUT_CLASSES[timeout_class].seconds}s by "
+                                    "default). Whatever it printed before the kill is "
+                                    "in 'stdout'/'stderr' above. Either narrow the "
+                                    "command (one test file rather than the whole "
+                                    "suite) or re-run it with a larger timeout, up to "
+                                    f"{MAX_COMMAND_TIMEOUT}s."
+                                ),
                             },
                             check_from_command(
                                 command,
                                 [seg for st in steps for seg in st.segments],
                                 None,
-                                "".join(stdout_parts),
-                                "".join(stderr_parts),
+                                stdout,
+                                stderr,
                             ),
                         )
+                    except _CommandCancelled as exc:
+                        stdout_parts.append(exc.stdout)
+                        stderr_parts.append(exc.stderr)
+                        duration = time.monotonic() - start_time
+                        self._record_command_execution()
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"Command was stopped after {duration:.1f}s and "
+                                f"killed, so its work is incomplete: {command}"
+                            ),
+                            "command": command,
+                            "stdout": _truncate("".join(stdout_parts), "stdout"),
+                            "stderr": _truncate("".join(stderr_parts), "stderr"),
+                            "has_errors": True,
+                            "cancelled": True,
+                            "timeout": timeout,
+                            "timeout_class": timeout_class,
+                            "duration_seconds": duration,
+                            "cwd": cwd,
+                            "steps": ran,
+                        }
                     except FileNotFoundError as exc:
                         # Mid-line, the outer handler's "nothing ran" answer
                         # would disown the commands that did; report it the way
@@ -2000,7 +2537,7 @@ class ShellToolsMixin:
 
                 stdout = "".join(stdout_parts)
                 stderr = "".join(stderr_parts)
-                max_output = 10_000
+                max_output = MAX_OUTPUT_CHARS
 
                 from gaia.agents.base.artifacts import retain_excerpt
 
@@ -2023,6 +2560,7 @@ class ShellToolsMixin:
                     "has_errors": last_code != 0 or unhandled_failure,
                     "duration_seconds": duration,
                     "timeout": timeout,
+                    "timeout_class": timeout_class,
                     "cwd": cwd,
                     "output_truncated": truncated,
                     "steps": ran,
@@ -2051,3 +2589,197 @@ class ShellToolsMixin:
             except Exception as exc:
                 logger.error(f"Error executing shell command: {exc}")
                 return {"status": "error", "error": str(exc), "has_errors": True}
+
+        @tool(
+            atomic=True,
+            # Outlast the longest wait the tool itself permits, so the agent
+            # loop never abandons a wait that is still inside its deadline.
+            timeout=WAIT_MAX_TIMEOUT + 60,
+        )
+        def wait_for_condition(
+            command: str,
+            working_directory: Optional[str] = None,
+            timeout: int = WAIT_DEFAULT_TIMEOUT,
+            poll_interval: int = WAIT_DEFAULT_POLL_INTERVAL,
+        ) -> Dict[str, Any]:
+            """Wait until a shell command succeeds, instead of sleeping and re-checking: give it a command that exits 0 once the thing you are waiting for is ready (a file written, a server answering, a run finished) and it polls every 5s until then, giving up at 120s by default and 600s at most.
+
+            One agent step covers the whole wait. The polling happens inside
+            this call against a monotonic deadline, so the loop's step budget is
+            spent on work rather than on re-asking whether the thing is ready.
+
+            Args:
+                command: The predicate — exits 0 once the condition holds,
+                    non-zero until then. Same allowlist as run_shell_command.
+                working_directory: Directory to run the predicate in
+                timeout: Give up after this many seconds (max 600)
+                poll_interval: Seconds between checks (5-60)
+
+            Returns:
+                A result dict carrying ``condition_met``, how many probes ran and
+                the last probe's output. Deadline expiry is an error, not a
+                quiet False.
+            """
+            try:
+                timeout = int(timeout)
+                poll_interval = int(poll_interval)
+            except (TypeError, ValueError):
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"timeout and poll_interval must be whole seconds, got "
+                        f"timeout={timeout!r}, poll_interval={poll_interval!r}."
+                    ),
+                    "has_errors": True,
+                }
+
+            if not 0 < timeout <= WAIT_MAX_TIMEOUT:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"timeout must be between 1 and {WAIT_MAX_TIMEOUT} seconds, "
+                        f"got {timeout}. A longer wait than {WAIT_MAX_TIMEOUT}s is the "
+                        f"agent hanging, not waiting — report progress to the user and "
+                        f"wait again if the condition is still worth waiting for."
+                    ),
+                    "has_errors": True,
+                }
+            if not WAIT_MIN_POLL_INTERVAL <= poll_interval <= WAIT_MAX_POLL_INTERVAL:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"poll_interval must be between {WAIT_MIN_POLL_INTERVAL} and "
+                        f"{WAIT_MAX_POLL_INTERVAL} seconds, got {poll_interval}. The "
+                        f"floor keeps a wait from hammering the machine with probes."
+                    ),
+                    "has_errors": True,
+                }
+
+            # The wait is charged as one command up front; its probes are then
+            # exempt (see _check_rate_limit) rather than each tripping the limit.
+            allowed, reason, wait_time = self._check_rate_limit()
+            if not allowed:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
+                    "has_errors": True,
+                    "rate_limited": True,
+                    "wait_time_seconds": wait_time,
+                }
+            self._record_command_execution()
+
+            start = time.monotonic()
+            deadline = start + timeout
+            polls = 0
+            last: Dict[str, Any] = {}
+
+            def _cancelled(probes: int) -> Dict[str, Any]:
+                """The one shape a stopped wait returns, wherever Stop landed.
+
+                ``executed: False`` is claimed only when no probe ever reached a
+                process — a Stop that landed before the first spawn. Once one
+                has run, saying the predicate never executed is the same false
+                statement as calling an unrun check passed (#3677). Reaching a
+                second probe proves the first one ran; a single probe says so
+                itself.
+                """
+                ran = probes > 1 or bool(last.get(EXECUTED_KEY, True))
+                result = {
+                    "status": "error",
+                    "error": (
+                        f"Wait for '{command}' was stopped after {probes} "
+                        f"check(s); the condition was never met."
+                    ),
+                    "condition_met": False,
+                    "cancelled": True,
+                    "command": command,
+                    "polls": probes,
+                    "timeout": timeout,
+                    "elapsed_seconds": time.monotonic() - start,
+                    "has_errors": True,
+                }
+                return result if ran else {**NOT_EXECUTED, **result}
+
+            while True:
+                remaining = deadline - time.monotonic()
+                probe_timeout = max(1, min(int(remaining), WAIT_PROBE_TIMEOUT))
+                self._shell_polling = True
+                try:
+                    last = run_shell_command(command, working_directory, probe_timeout)
+                finally:
+                    self._shell_polling = False
+                polls += 1
+
+                # Stop landed while the probe itself was running.
+                if last.get("cancelled"):
+                    return _cancelled(polls)
+
+                # No return_code means the predicate never ran — refused by the
+                # guardrails, bad working directory, unparseable. Polling a
+                # command that cannot run just burns the deadline, so stop now
+                # and hand back the reason it was refused.
+                if "return_code" not in last and not last.get("timed_out"):
+                    return {
+                        **last,
+                        "condition_met": False,
+                        "command": command,
+                        "polls": polls,
+                        "hint": (
+                            "The predicate itself could not run, so the wait stopped "
+                            "immediately. Fix the command above, then wait again."
+                        ),
+                    }
+
+                if last.get("return_code") == 0:
+                    elapsed = time.monotonic() - start
+                    return {
+                        "status": "success",
+                        "condition_met": True,
+                        "command": command,
+                        "elapsed_seconds": elapsed,
+                        "polls": polls,
+                        "poll_interval_seconds": poll_interval,
+                        "timeout": timeout,
+                        "stdout": last.get("stdout", ""),
+                        "stderr": last.get("stderr", ""),
+                        "cwd": last.get("cwd"),
+                        "has_errors": False,
+                    }
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if self._sleep_unless_cancelled(min(poll_interval, remaining)):
+                    return _cancelled(polls)
+
+            elapsed = time.monotonic() - start
+            return {
+                "status": "error",
+                "error": (
+                    f"Condition '{command}' was still not true {elapsed:.0f}s later "
+                    f"(deadline {timeout}s, checked {polls} time(s) every "
+                    f"{poll_interval}s). Last exit code: {last.get('return_code')}."
+                ),
+                "condition_met": False,
+                "timed_out": True,
+                "has_errors": True,
+                "command": command,
+                "elapsed_seconds": elapsed,
+                "polls": polls,
+                "poll_interval_seconds": poll_interval,
+                "timeout": timeout,
+                "last_return_code": last.get("return_code"),
+                "stdout": last.get("stdout", ""),
+                "stderr": last.get("stderr", ""),
+                "cwd": last.get("cwd"),
+                "hint": (
+                    "The last check's output is above — read it before waiting again. "
+                    "Whatever you are waiting for is slow, stuck, or never going to "
+                    f"happen; tell the user which. A single wait is capped at "
+                    f"{WAIT_MAX_TIMEOUT}s."
+                ),
+            }
