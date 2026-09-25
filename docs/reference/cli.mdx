@@ -1849,7 +1849,7 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 
 ### Flagship Agent Tasks
 
-Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, tested changes, quality, honesty, tokens, steps and runtime, against main's committed results.
+Run an agent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, tested changes, quality, honesty, tokens, steps and runtime, against main's committed results.
 
 ```bash
 gaia eval tasks run --suite core                   # Run the core tasks, then judge them
@@ -1859,7 +1859,31 @@ gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's qual
 gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
 ```
 
-[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks)
+**Harness × model comparison.** The same tasks, fixtures, time limit and judge, against more than one agent — so a difference in the table is a difference between the agents, not between their conditions:
+
+```bash
+gaia eval tasks run --suite everyday --model fireworks.glm-5p3-flash --repeats 3 --meter fireworks --out runs/gaia-glm
+gaia eval tasks run --suite everyday --harness claude-code --model claude-opus-5 --out runs/cc-opus
+gaia eval tasks run --suite therock --harness claude-code --model fireworks.glm-5p3-flash --out runs/cc-therock
+gaia eval tasks report runs/cc-opus runs/gaia-glm --out runs/report
+gaia eval tasks controls                           # Check the judge on planted attempts
+gaia eval tasks gateway --port 8788                # One model gateway for a whole matrix
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--harness` | `gaia` | `gaia` (the flagship) or `claude-code` (`claude -p`) |
+| `--repeats` | `1` | Run the suite N times, into `<out>/r1`, `<out>/r2`… |
+| `--tasks` | all | Comma-separated task ids to run from the suite |
+| `--run-timeout` | `1800` | Wall-clock cap per task, the same for every harness |
+| `--work-root` | temp dir | Where task workdirs live while running |
+| `--gateway-url` | started per run | A model gateway already running |
+| `--fence` | off | Fence the agent off the answer keys (macOS only) |
+| `--full-access` | off | Give GAIA the reach Claude Code has with permissions skipped |
+| `--meter` | none | `fireworks`: read real cost from the provider's billing meter |
+| `--therock-url` | `https://github.com/ROCm/TheRock` | Source for the `therock` suite |
+
+[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks) · [→ Comparing harnesses and models](/reference/eval#comparing-harnesses-and-models)
 
 ---
 

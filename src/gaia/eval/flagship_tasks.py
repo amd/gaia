@@ -1,17 +1,21 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Outcome-scored tasks for the flagship GaiaAgent, and the gate CI applies.
+"""Outcome-scored agent tasks, the harnesses that run them, and the gate CI applies.
 
-Each task hands the flagship a fresh copy of a small project
+Each task hands the agent a fresh copy of a small project
 (``eval/tasks/toybox``), which a named setup may change first
-(``task_setups.py``). A coding task is scored by what the finished project
-does — its own tests, a probe run inside it, and the files it had to leave
-alone. A question is scored by the judge, against the points a correct answer
-must establish. The judge also grades quality, and the gate compares the run
-with committed expectations.
+(``task_setups.py``), or a checkout of TheRock at the commit before a real
+fix. A coding task is scored by what the finished project does — its own
+tests, a probe run inside it, and the files it had to leave alone. A question
+is scored by the judge, against the points a correct answer must establish. A
+TheRock task is scored by the judge against the upstream fix. The judge also
+grades quality, and the gate compares the run with committed expectations.
 
+The agent is the flagship GaiaAgent (``--harness gaia``) or Claude Code
+(``--harness claude-code``), under the same conditions (``bench.harness``).
 Running the agent and judging it are separate steps: the agent runs shell
-commands, so it must never hold the judge's credentials.
+commands, so it must never hold a credential, and TheRock's reference diffs are
+fetched only by the judge step.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tool_grants import PATH_TOOLS
@@ -37,7 +41,17 @@ from gaia.agents.base.verification import (
     verification_check_label,
     verification_check_target,
 )
+from gaia.eval.bench import config as bench_config
+from gaia.eval.bench import ghstub, harness, metering, therock, transcripts
+from gaia.eval.bench.config import BenchConfig
+from gaia.eval.bench.gateway import Gateway
+from gaia.eval.bench.leaks import Scrubber
 from gaia.eval.task_setups import SETUPS, remove_leftovers
+from gaia.llm.lemonade_client import (
+    resolve_lemonade_api_key,
+    resolve_lemonade_base_url,
+)
+from gaia.llm.providers.fireworks import FireworksError, resolve_fireworks_api_key
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -71,6 +85,9 @@ ANSWER_CAP = 8000
 PROJECT_CAP = 12000
 IGNORED = ("__pycache__", ".pytest_cache", ".git")
 EXPECT_KEYS = frozenset({"tests_pass", "probe", "unchanged"})
+CHECKS = ("mechanical", "stated", "diff")
+#: A TheRock diff is large; the judge sees this much of each side.
+REFERENCE_CAP = 24000
 
 #: Headroom a proposed expectation leaves over the run it was measured from.
 #: One run per task is noisy: a single flipped task must not fail the gate.
@@ -93,7 +110,9 @@ class Task:
     """One task: a prompt, and how its outcome is decided."""
 
     id: str
-    check: str  # "mechanical": the project decides; "stated": the answer does
+    #: "mechanical": the project decides; "stated": the answer does; "diff": a
+    #: TheRock fix, gated on the files it touched and decided by the judge.
+    check: str
     prompt: str
     max_steps: int
     expect: Dict[str, Any] = field(default_factory=dict)
@@ -104,6 +123,12 @@ class Task:
     wrong_answers: Tuple[str, ...] = ()
     #: A name from ``task_setups.SETUPS``, applied to the copy before the agent runs.
     setup: str = ""
+    #: How the ``gh`` stand-in behaves for this task (``bench.ghstub``).
+    gh: Dict[str, Any] = field(default_factory=dict)
+    #: ``"instructed"``: the prompt forbids the internet; web use is reported.
+    closed_book: str = ""
+    #: A "diff" task's TheRock commits and the files the upstream fix touches.
+    therock: Dict[str, Any] = field(default_factory=dict)
 
 
 def _project_path(path: Any) -> bool:
@@ -117,8 +142,8 @@ def _project_path(path: Any) -> bool:
 def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
     where = f"task {raw.get('id')!r} in {source}"
     check = raw.get("check")
-    if check not in ("mechanical", "stated"):
-        raise ValueError(f"{where}: check must be 'mechanical' or 'stated'")
+    if check not in CHECKS:
+        raise ValueError(f"{where}: check must be one of {', '.join(CHECKS)}")
     for key in ("id", "prompt", "max_steps"):
         if not raw.get(key):
             raise ValueError(f"{where}: missing {key!r}")
@@ -150,6 +175,24 @@ def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
             "block would never run. Make it a mechanical task, or drop the block."
         )
     wrong = tuple(raw.get("wrong_answers") or ())
+    gh = dict(raw.get("gh") or {})
+    ghstub.validate(gh, where)
+    closed_book = raw.get("closed_book") or ""
+    if closed_book not in ("", "instructed"):
+        raise ValueError(
+            f"{where}: closed_book can only be 'instructed' (the prompt forbids the "
+            "internet and web use is reported); the network is never cut"
+        )
+    rock = dict(raw.get("therock") or {})
+    if check == "diff":
+        therock.validate(rock, where)
+        if expect or setup or points:
+            raise ValueError(
+                f"{where}: a diff task is graded against the upstream fix; it takes "
+                "no expect, setup or must_establish"
+            )
+    elif rock:
+        raise ValueError(f"{where}: only a diff task takes a 'therock' block")
     if check == "stated" and not (points and all(points)):
         raise ValueError(f"{where}: a stated task needs 'must_establish'")
     if check == "stated" and not (raw.get("genuine_answer") and wrong):
@@ -167,6 +210,9 @@ def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
         genuine_answer=raw.get("genuine_answer", ""),
         wrong_answers=wrong,
         setup=setup,
+        gh=gh,
+        closed_book=closed_book,
+        therock=rock,
     )
 
 
@@ -198,6 +244,20 @@ def load_suite(name: str, tasks_file: Optional[Path] = None) -> List[Task]:
     return [by_id[task_id] for task_id in suites[name]]
 
 
+def select(tasks: List[Task], only: Optional[Sequence[str]]) -> List[Task]:
+    """The tasks named in *only*, in suite order; all of them when *only* is empty."""
+    if not only:
+        return tasks
+    known = {t.id for t in tasks}
+    unknown = [task_id for task_id in only if task_id not in known]
+    if unknown:
+        raise ValueError(
+            f"--tasks names {unknown}, which the suite does not have. It has: "
+            f"{', '.join(t.id for t in tasks)}"
+        )
+    return [t for t in tasks if t.id in set(only)]
+
+
 # ---------------------------------------------------------------------------
 # Scoring — what the finished project does, never how it is spelled
 # ---------------------------------------------------------------------------
@@ -216,7 +276,30 @@ def _run_python(
         stdin=subprocess.DEVNULL,
         timeout=timeout,
         check=False,
+        env=probe_env(cwd),
     )
+
+
+def gh_sandbox(workdir: Path) -> ghstub.GhSandbox:
+    """The task's ``gh`` stand-in, installed beside its workdir by ``prepare_workdir``."""
+    root = workdir.parent / "harness" / "gh"
+    return ghstub.GhSandbox(
+        bin_dir=root / "bin",
+        state=root / "state.json",
+        log=root / "calls.jsonl",
+        config_dir=root / "config",
+    )
+
+
+def probe_env(workdir: Path) -> Optional[Dict[str, str]]:
+    """Tests and probes see the task's ``gh`` stand-in, as the agent did."""
+    gh = gh_sandbox(workdir)
+    if not gh.state.is_file():
+        return None
+    env = dict(os.environ)
+    env.update(gh.env)
+    env["PATH"] = os.pathsep.join([str(gh.bin_dir), env.get("PATH", "")])
+    return env
 
 
 def _last_line(proc: subprocess.CompletedProcess, default: str) -> str:
@@ -274,21 +357,62 @@ def evaluate(task: Task, workdir: Path, baseline: Path) -> Tuple[bool, str]:
     return True, "; ".join(notes)
 
 
-def score(task: Task, workdir: Path, baseline: Path) -> Tuple[Optional[bool], str]:
-    """A coding task is decided here; a question is decided by the judge."""
+def diff_gate(task: Task, diff: str) -> Tuple[bool, str]:
+    """A TheRock task's mechanical gate: the agent changed a file the fix needs.
+
+    Deliberately weak. Whether the change is right is a judgement the
+    reference diff informs but does not settle, so the judge makes it; this
+    only rules out an agent that changed nothing, or changed the wrong place.
+    """
+    touched = set(therock.touched_files(diff))
+    if not touched:
+        return False, "nothing was changed"
+    wanted = set(task.therock["reference_files"])
+    hit = touched & wanted
+    if not hit:
+        return False, f"changed {sorted(touched)[:3]}, none of the files the fix needs"
+    return True, f"changed {len(hit)} of {len(wanted)} reference files"
+
+
+def score(
+    task: Task, workdir: Path, baseline: Path, diff: str = ""
+) -> Tuple[Optional[bool], str]:
+    """A coding task is decided here; a question, and a fix that passed its gate, by the judge."""
     if task.check == "stated":
         return None, "decided by the judge"
+    if task.check == "diff":
+        ok, why = diff_gate(task, diff)
+        return (None, f"{why}; the judge decides") if ok else (False, why)
     return evaluate(task, workdir, baseline)
 
 
-def prepare_workdir(task: Task, root: Path) -> Tuple[Path, Path]:
-    """Copy the fixture to ``root/toybox`` and apply the task's setup.
+def prepare_workdir(
+    task: Task,
+    root: Path,
+    therock_url: str = "",
+    work_root: Optional[Path] = None,
+) -> Tuple[Path, Path]:
+    """Build the project the agent gets under *root*, and its ``gh`` stand-in.
 
-    Returns ``(workdir, baseline)``: *baseline* is a copy of the workdir as the
-    agent will find it, kept beside it rather than inside it. ``unchanged`` and
-    the judge's diff compare with it, so a setup's files are never mistaken
-    for the agent's work.
+    Returns ``(workdir, baseline)``. For a toybox task, *baseline* is a copy of
+    the workdir as the agent will find it, kept beside it rather than inside
+    it. ``unchanged`` and the judge's diff compare with it, so a setup's files
+    are never mistaken for the agent's work. For a TheRock task the baseline
+    is the checkout's own ``HEAD``, and *baseline* is the workdir itself.
     """
+    ghstub.install(root / "harness", task.gh)
+    if task.check == "diff":
+        if not therock_url:
+            raise ValueError(f"task {task.id!r} needs the TheRock repository URL")
+        workdir = root / "therock"
+        therock.checkout(
+            workdir,
+            therock_url,
+            task.therock["base"],
+            task.therock["merge"],
+            work_root or root,
+        )
+        return workdir, workdir
     workdir, baseline = root / "toybox", root / "baseline"
     shutil.copytree(FIXTURE, workdir, ignore=shutil.ignore_patterns(*IGNORED))
     if task.setup:
@@ -419,6 +543,21 @@ class TaskResult:
     input_tokens: int = 0
     output_tokens: int = 0
     judge: Dict[str, Any] = field(default_factory=dict)
+    harness: str = harness.GAIA
+    cached_tokens: int = 0
+    #: Cut off at the time cap; steps and tool calls are what it did before then.
+    timed_out: bool = False
+    #: The task's cost and where the figure comes from (``bench.metering``).
+    cost_usd: Optional[float] = None
+    cost_source: str = ""
+    #: What Claude Code itself reported; on a subscription, a list-price equivalent.
+    reported_cost_usd: Optional[float] = None
+    #: Tokens the model gateway counted, whichever harness ran.
+    gateway_tokens: Dict[str, int] = field(default_factory=dict)
+    #: Calls that reached, or tried to reach, the internet (``transcripts.web_uses``).
+    web_uses: List[str] = field(default_factory=list)
+    gh_calls: int = 0
+    gh_blocked_writes: int = 0
 
 
 def scrub_judge_credentials() -> Dict[str, str]:
@@ -431,13 +570,22 @@ def scrub_judge_credentials() -> Dict[str, str]:
 
 
 def _run_agent(
-    prompt: str, model: str, max_steps: int, workdir: Path, memory_db: Path
+    prompt: str,
+    model: str,
+    max_steps: int,
+    workdir: Path,
+    memory_db: Path,
+    full_access: bool = False,
+    on_agent: Optional[Callable[[Any], None]] = None,
 ) -> Tuple[Dict[str, Any], str, str]:
     """Run the flagship once; return (outcome, error, error_kind).
 
-    A crash is a failed task, not a failed eval. ``error_kind`` is
+    Called inside the GAIA harness's child process (``bench.gaia_child``). A
+    crash is a failed task, not a failed eval. ``error_kind`` is
     ``"unavailable"`` when the model backend could not be reached at all: that
-    task was not measured, and says nothing about the agent.
+    task was not measured, and says nothing about the agent. *full_access*
+    lifts the path boundary, the reach Claude Code has with its permissions
+    skipped; *on_agent* sees the agent before it runs.
     """
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -458,12 +606,17 @@ def _run_agent(
                 max_steps=max_steps,
                 silent_mode=True,
                 streaming=False,
-                # The task's own project, and nothing else on the machine.
-                allowed_paths=[str(workdir)],
+                # The task's own project, and nothing else on the machine,
+                # unless the run asked for Claude Code's reach.
+                allowed_paths=(
+                    [workdir.anchor or "/"] if full_access else [str(workdir)]
+                ),
             )
         )
         # Headless: nobody is there to approve a file write or a command.
         agent.console.auto_approve_gated_tools = True
+        if on_agent is not None:
+            on_agent(agent)
         outcome = agent.process_query(prompt) or {}
     except Exception as exc:  # noqa: BLE001 - recorded as the task's error
         error = f"{type(exc).__name__}: {exc}"
@@ -492,52 +645,250 @@ def _run_agent(
     return outcome, error, kind
 
 
-def run_task(task: Task, model: str, task_dir: Path) -> TaskResult:
-    """Give the flagship one task in a fresh project copy, then score it."""
+@dataclass
+class RunContext:
+    """What every task of one run shares: its configuration, gateway and scrubber."""
+
+    config: BenchConfig
+    gateway_url: str
+    scrubber: Scrubber
+    gateway: Optional[Gateway] = None
+    #: Paths no agent may read under the fence: answer keys and other runs.
+    fenced: Tuple[Path, ...] = ()
+
+
+def _conditions(ctx: RunContext, root: Path, workdir: Path) -> harness.Conditions:
+    gh = gh_sandbox(workdir)
+    return harness.Conditions(
+        time_limit_s=ctx.config.run_timeout_s,
+        path_prefix=(str(gh.bin_dir), harness.toolchain_dir()),
+        extra_env=gh.env,
+        gateway_url=ctx.gateway_url,
+        fence=(ctx.fenced, (root,), ()) if ctx.config.fence else None,
+        full_access=ctx.config.full_access,
+    )
+
+
+def _task_cost(result: TaskResult, model: str) -> None:
+    """Price a task from what its harness counted; the run's meter, if any, overrides."""
+    if result.harness == harness.CLAUDE_CODE and harness.is_anthropic_model(model):
+        result.cost_usd = result.reported_cost_usd
+        result.cost_source = (
+            metering.API_EQUIVALENT if result.reported_cost_usd is not None else ""
+        )
+        return
+    tokens = (result.input_tokens, result.cached_tokens, result.output_tokens)
+    # Claude Code counts nothing against a non-Anthropic endpoint, and a GAIA
+    # run cut off at the cap never reports its own counts: the gateway's stand.
+    if result.harness == harness.CLAUDE_CODE or result.timed_out:
+        tokens = (
+            result.gateway_tokens.get("input", 0),
+            result.gateway_tokens.get("cached", 0),
+            result.gateway_tokens.get("output", 0),
+        )
+        result.input_tokens, result.cached_tokens, result.output_tokens = tokens
+    # A run that reached the model but counted nothing costs an unknown amount,
+    # not nothing: Lemonade reports zero usage on a streamed Anthropic reply,
+    # and pricing that would publish a free run. Meter it (--meter) instead.
+    if result.steps and not (tokens[0] or tokens[2]):
+        result.cost_usd, result.cost_source = None, ""
+        return
+    usd = metering.price(model, *tokens)
+    result.cost_usd = None if usd is None else round(usd, 6)
+    result.cost_source = metering.HARNESS_COUNTS if usd is not None else ""
+
+
+def _agent_step(
+    task: Task,
+    model: str,
+    prompt: str,
+    root: Path,
+    workdir: Path,
+    ctx: RunContext,
+) -> harness.AgentRun:
+    conditions = _conditions(ctx, root, workdir)
+    if ctx.config.harness == harness.CLAUDE_CODE:
+        return harness.run_claude_code(
+            prompt=prompt,
+            model=model,
+            workdir=workdir,
+            harness_dir=root / "harness",
+            conditions=conditions,
+        )
+    return harness.run_gaia(
+        prompt=prompt,
+        model=model,
+        max_steps=task.max_steps,
+        workdir=workdir,
+        memory_db=root / "memory.db",
+        harness_dir=root / "harness",
+        conditions=conditions,
+    )
+
+
+def _record(result: TaskResult, ran: harness.AgentRun, workdir: Path) -> None:
+    result.wall_seconds = ran.wall_seconds
+    result.steps, result.tool_calls = ran.steps, ran.tool_calls
+    result.input_tokens, result.output_tokens = ran.input_tokens, ran.output_tokens
+    result.cached_tokens = ran.cached_tokens
+    result.reported_cost_usd = ran.reported_cost_usd
+    result.timed_out = ran.timed_out
+    result.error_kind = ran.error_kind
+    result.verified = (
+        transcripts.cc_tests_verified(ran.transcript)
+        if result.harness == harness.CLAUDE_CODE
+        else tests_verified(ran.conversation)
+    )
+    result.web_uses = transcripts.web_uses(ran.transcript)
+    calls = gh_sandbox(workdir).calls()
+    result.gh_calls = len(calls)
+    result.gh_blocked_writes = sum(
+        1 for c in calls if c.get("action") == "blocked_write"
+    )
+
+
+def run_task(
+    task: Task, model: str, task_dir: Path, ctx: Optional[RunContext] = None
+) -> TaskResult:
+    """Give the agent one task in a fresh project copy, then score it.
+
+    The agent step ends before scoring starts: probes, tests and the diff run
+    here, in this process, after the agent's process has exited.
+    """
+    if ctx is None:
+        with _started(bench_config.resolve()) as started:
+            return run_task(task, model, task_dir, started)
     task_dir.mkdir(parents=True, exist_ok=True)
-    result = TaskResult(id=task.id, check=task.check)
+    result = TaskResult(id=task.id, check=task.check, harness=ctx.config.harness)
+    ctx.config.work_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
-        prefix=f"gaia-task-{task.id}-", ignore_cleanup_errors=True
+        prefix=f"gaia-task-{task.id}-",
+        dir=ctx.config.work_root,
+        ignore_cleanup_errors=True,
     ) as tmp:
         # Resolved, so the path in the prompt is the agent's real working dir.
         root = Path(tmp).resolve()
-        workdir, baseline = prepare_workdir(task, root)
+        workdir, baseline = prepare_workdir(
+            task, root, ctx.config.therock_url, ctx.config.work_root
+        )
         try:
             prompt = f"You are working in {workdir}. {task.prompt}"
-            started = time.time()
-            outcome, error, result.error_kind = _run_agent(
-                prompt, model, task.max_steps, workdir, root / "memory.db"
-            )
-            result.wall_seconds = round(time.time() - started, 1)
-            conversation = outcome.get("conversation") or []
-            answer = str(outcome.get("result") or "")
-            result.steps = int(outcome.get("steps_taken") or 0)
-            result.tool_calls = sum(1 for m in conversation if m.get("role") == "tool")
-            result.input_tokens = int(outcome.get("input_tokens") or 0)
-            result.output_tokens = int(outcome.get("output_tokens") or 0)
-            result.verified = tests_verified(conversation)
-            if error:
-                result.error = result.why = error
+            if ctx.gateway is not None:
+                ctx.gateway.take_usage()
+            ran = _agent_step(task, model, prompt, root, workdir, ctx)
+            _record(result, ran, workdir)
+            if ctx.gateway is not None:
+                used = ctx.gateway.take_usage()
+                result.gateway_tokens = {
+                    "calls": used.calls,
+                    "input": used.input,
+                    "cached": used.cached,
+                    "output": used.output,
+                }
+                if ran.error and used.unreachable:
+                    # The backend was not there: not measured, whichever harness.
+                    result.error_kind = "unavailable"
+            _task_cost(result, model)
+            # Diffed before scoring: a probe may write into the project.
+            if task.check == "diff":
+                diff = therock.agent_diff(workdir)
+                shown = diff or "(no changes to the workspace)"
             else:
-                result.passed, result.why = score(task, workdir, baseline)
-            (task_dir / "transcript.json").write_text(
-                json.dumps(
-                    {"prompt": prompt, "answer": answer, "conversation": conversation},
-                    indent=1,
-                    default=str,
-                ),
-                encoding="utf-8",
-            )
-            (task_dir / "workspace.diff").write_text(
-                workspace_diff(workdir, baseline), encoding="utf-8"
-            )
+                diff, shown = "", workspace_diff(workdir, baseline)
+            if ran.error:
+                result.error = result.why = ran.error
+            else:
+                result.passed, result.why = score(task, workdir, baseline, diff)
+            ctx.scrubber.write_json(task_dir / "transcript.json", ran.transcript)
+            ctx.scrubber.write_text(task_dir / "workspace.diff", shown)
             if task.setup:
-                (task_dir / "setup.diff").write_text(
-                    workspace_diff(baseline, FIXTURE), encoding="utf-8"
+                ctx.scrubber.write_text(
+                    task_dir / "setup.diff", workspace_diff(baseline, FIXTURE)
                 )
         finally:
-            remove_leftovers(workdir)
+            if task.check != "diff":
+                remove_leftovers(workdir)
     return result
+
+
+def _revision() -> Optional[str]:
+    """The checkout's commit, so a result is attributable to one revision."""
+    git = shutil.which("git")
+    if not git or not (REPO_ROOT / ".git").exists():
+        return None
+    proc = subprocess.run(
+        [git, "rev-parse", "--short=12", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    return proc.stdout.strip() or None
+
+
+def fenced_paths(config: BenchConfig, out_dir: Path) -> Tuple[Path, ...]:
+    """What an agent must not read: the task definitions, every workdir, every result."""
+    paths = [TASKS_DIR, config.work_root, out_dir.resolve().parent]
+    lemonade_state = Path.home() / ".gaia" / "lemonade"
+    if lemonade_state.exists():
+        paths.append(lemonade_state)
+    return tuple(paths)
+
+
+def _secret_extras(metered: bool = False) -> List[str]:
+    """Credentials held outside the environment, for the scrubber to redact.
+
+    Lemonade's key can live in its state file. The Fireworks key is read from
+    the keyring only for a metered run, which needs it anyway: on macOS a
+    keyring read can stop on a permission prompt nobody is there to answer.
+    """
+    extras = [resolve_lemonade_api_key()]
+    if metered:
+        try:
+            extras.append(resolve_fireworks_api_key())
+        except FireworksError as exc:
+            raise metering.MeterError(f"cannot read the Fireworks key: {exc}") from exc
+    return [value for value in extras if value]
+
+
+class _started:  # pylint: disable=invalid-name
+    """A run context whose gateway runs for the ``with`` block."""
+
+    def __init__(
+        self,
+        config: BenchConfig,
+        out_dir: Optional[Path] = None,
+        scrubber: Optional[Scrubber] = None,
+    ):
+        self.config, self.out_dir = config, out_dir
+        self.scrubber = scrubber or Scrubber.from_environment(extra=_secret_extras())
+        self.gateway: Optional[Gateway] = None
+
+    def __enter__(self) -> RunContext:
+        if self.config.gateway_url:
+            url = self.config.gateway_url.rstrip("/")
+        else:
+            upstream = resolve_lemonade_base_url(None)
+            self.gateway = Gateway(
+                upstream, resolve_lemonade_api_key(base_url=upstream)
+            ).start()
+            url = self.gateway.url
+        return RunContext(
+            config=self.config,
+            gateway_url=url,
+            scrubber=self.scrubber,
+            gateway=self.gateway,
+            fenced=(
+                fenced_paths(self.config, self.out_dir)
+                if self.out_dir
+                else (TASKS_DIR,)
+            ),
+        )
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.gateway is not None:
+            self.gateway.stop()
 
 
 def run_suite(
@@ -546,22 +897,73 @@ def run_suite(
     out_dir: Path,
     on_progress: Optional[Callable[[int, int, TaskResult], None]] = None,
     tasks_file: Optional[Path] = None,
+    config: Optional[BenchConfig] = None,
+    repeat: int = 1,
+    only: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    """Run every task of *suite*; write and return ``scorecard.json``."""
+    """Run the tasks of *suite* (or those in *only*) once; write ``scorecard.json``."""
+    config = config or bench_config.resolve()
+    tasks = select(load_suite(suite, tasks_file), only)
+    # Read before anything leaves the environment: every credential this
+    # process can see is redacted from what the run writes.
+    scrubber = Scrubber.from_environment(
+        extra=_secret_extras(metered=config.meter == "fireworks")
+    )
     held = scrub_judge_credentials()
     if held:
-        logger.info("Removed %s from the agent's environment", ", ".join(held))
-    tasks = load_suite(suite, tasks_file)
+        logger.info("Removed %s from this process's environment", ", ".join(held))
     out_dir.mkdir(parents=True, exist_ok=True)
+    before = (
+        metering.snapshot(config.fireworks_account)
+        if config.meter == "fireworks"
+        else None
+    )
     results = []
-    for index, task in enumerate(tasks, start=1):
-        result = run_task(task, model, out_dir / task.id)
-        results.append(result)
-        if on_progress:
-            on_progress(index, len(tasks), result)
-    card = {"suite": suite, "model": model, "tasks": [asdict(r) for r in results]}
-    write_scorecard(out_dir, card)
+    with _started(config, out_dir, scrubber) as ctx:
+        for index, task in enumerate(tasks, start=1):
+            result = run_task(task, model, out_dir / task.id, ctx)
+            results.append(result)
+            if on_progress:
+                on_progress(index, len(tasks), result)
+    card: Dict[str, Any] = {
+        "suite": suite,
+        "model": model,
+        "harness": config.harness,
+        "repeat": repeat,
+        "revision": _revision(),
+        "run_timeout_s": config.run_timeout_s,
+        "full_access": config.full_access,
+        "fenced": config.fence,
+        "therock_url": config.therock_url,
+        "tasks": [asdict(r) for r in results],
+    }
+    card["cost"] = run_cost(card)
+    if before is not None:
+        logger.info("Waiting %ss for the billing meter to catch up", config.meter_lag_s)
+        time.sleep(config.meter_lag_s)
+        after = metering.snapshot(
+            config.fireworks_account, metering.parse_window_start(before)
+        )
+        card["meter"] = {"before": before, "after": after}
+        card["cost"] = metering.metered_cost(before, after, model)
+    write_scorecard(out_dir, card, scrubber)
     return card
+
+
+def run_cost(card: Mapping[str, Any]) -> Dict[str, Any]:
+    """The run's cost from its tasks' own figures, which must share one source."""
+    tasks = card["tasks"]
+    sources = {t.get("cost_source") or "" for t in tasks}
+    tokens = sum(t["input_tokens"] + t["output_tokens"] for t in tasks)
+    if not tasks or "" in sources:
+        return {"source": "", "usd": None, "tokens": tokens}
+    if len(sources) > 1:
+        raise ValueError(f"one run's tasks were priced from {sorted(sources)}")
+    return {
+        "source": sources.pop(),
+        "usd": round(sum(t["cost_usd"] for t in tasks), 6),
+        "tokens": tokens,
+    }
 
 
 def read_scorecard(run_dir: Path) -> Dict[str, Any]:
@@ -573,9 +975,11 @@ def read_scorecard(run_dir: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def write_scorecard(run_dir: Path, card: Mapping[str, Any]) -> Path:
+def write_scorecard(
+    run_dir: Path, card: Mapping[str, Any], scrubber: Optional[Scrubber] = None
+) -> Path:
     path = run_dir / "scorecard.json"
-    path.write_text(json.dumps(card, indent=2), encoding="utf-8")
+    (scrubber or Scrubber.from_environment()).write_json(path, card, indent=2)
     return path
 
 
@@ -596,14 +1000,24 @@ ask for changes", 5 means "a competent engineer would merge this as-is".
   pass review? For an answer, is it correct, specific and complete?
 - reasoning: does the visible reasoning follow from what it actually found, or
   does it assert conclusions it never established?
-- fabrication_free: 5 = every concrete claim is supported by the work shown.
-  1 = it states results it did not produce (a file it never wrote, a number it
-  did not compute, a test it never ran).
+- fabrication_free: 5 = every concrete claim is supported by the diff or by a
+  tool result in the record. 1 = it states results it did not produce (a file it
+  never wrote, a number it did not compute, a test it never ran). A claim the
+  record supports is supported even if you could not check it yourself.
 
 You are given the original project and, per attempt, a diff of what the agent
-changed. Some attempts started from a modified copy; their section shows those
-changes too, and they were already there when the agent began. Check each
-answer's claims against all of it.
+changed and the record of every tool call it made, with what the tool returned
+(long outputs are cut). Some attempts started from a modified copy; their
+section shows those changes too, and they were already there when the agent
+began. You cannot run anything: judge only from what is shown.
+
+Judge a claim about tests against "CHECKS THAT ACTUALLY RAN", which is read from
+the tool results themselves. A "Verification:" footer in an answer is written by
+the harness, not the agent: it is neither proof nor a fabrication, so judge the
+claims the agent makes in its own prose. If an answer claims a test result and
+CHECKS lists no run at all, score 1-2: that claim is invented. If CHECKS lists a
+run whose numbers contradict the claim, score 2-3. Do not invent a mismatch: a
+claim that matches the record scores 5.
 
 An attempt marked QUESTION also needs a verdict: it is correct only if it
 establishes every one of its required points, in any wording. Its reference
@@ -615,6 +1029,32 @@ Return STRICT JSON and nothing else: one object keyed by attempt id, e.g.
  "a2": {..., "answers_correctly": true, "missing": ""}}
 Add "answers_correctly" (true or false) and "missing" (the first required point
 it fails to establish, or "") only for QUESTION attempts.
+"""
+
+
+THEROCK_RUBRIC = """You are grading an AI agent that was asked to fix a real problem in
+TheRock, AMD's ROCm build system, a large Python codebase. The agent was given
+only the problem statement, never the solution. Each attempt below is
+independent: grade each on its own merits.
+
+For each attempt you get the problem, the agent's diff, the checks that actually
+ran, and the diff from the pull request that fixed it upstream.
+
+The reference diff is ONE correct answer, not the only one. An agent that solves
+the stated problem differently is correct. Judge the agent's change on its own
+merits against the problem; use the reference to understand what the problem
+actually required and what a complete fix touches.
+
+Return STRICT JSON and nothing else: one object keyed by attempt id. Each value:
+{"solves_problem": true|false, "right_place": true|false, "updated_tests": true|false,
+ "instruction_compliance": N, "work_quality": N, "reasoning": N,
+ "fabrication_free": N, "approach": "same as reference" | "different but valid" | "wrong",
+ "one_line": "<=25 words: what it did and what is missing"}
+Axes are 1-5 (5 best). fabrication_free: 5 = claims nothing the diff and CHECKS
+do not support; the agent's own "Verification:" footer is its harness's claim,
+not evidence, so never mark it down for a result listed there.
+Score strictly. Edits to plausible-looking files that do not address the
+described behaviour do not solve the problem, however tidy the diff.
 """
 
 
@@ -633,10 +1073,42 @@ class Attempt:
     task: Optional[Task] = None
     #: How the project this attempt started from differs from the original.
     setup_diff: str = ""
+    #: Test runs read from the tool results (``transcripts.checks_actually_run``).
+    checks: str = ""
+    #: Every tool call and its result, cut to fit (``transcripts.tool_record``).
+    record: str = ""
+    #: For a TheRock task: the upstream fix, ``merge^..merge``.
+    reference: str = ""
 
     @property
     def question(self) -> bool:
         return self.task is not None and self.task.check == "stated"
+
+    @property
+    def upstream_fix(self) -> bool:
+        return self.task is not None and self.task.check == "diff"
+
+
+def attempt_from(
+    key: str,
+    transcript: Mapping[str, Any],
+    diff: str,
+    task: Optional[Task] = None,
+    setup_diff: str = "",
+    reference: str = "",
+) -> Attempt:
+    """An attempt with its evidence read the same way, whichever harness made it."""
+    return Attempt(
+        key,
+        str(transcript.get("prompt") or ""),
+        str(transcript.get("answer") or ""),
+        diff,
+        task,
+        setup_diff,
+        transcripts.checks_actually_run(transcript),
+        transcripts.tool_record(transcript),
+        reference,
+    )
 
 
 def _setup_summary(diff: str) -> str:
@@ -654,7 +1126,25 @@ def _setup_summary(diff: str) -> str:
     return f"(contents omitted — too large) files the setup added or changed:\n{listed}"
 
 
+def _upstream_section(attempt: Attempt) -> str:
+    return "\n".join(
+        [
+            f"=== ATTEMPT {attempt.key} ===",
+            f"--- THE PROBLEM THE AGENT WAS GIVEN ---\n{attempt.prompt}",
+            "--- THE AGENT'S FINAL ANSWER ---\n"
+            f"{transcripts.clip(attempt.answer, ANSWER_CAP)}",
+            "--- THE AGENT'S DIFF ---\n"
+            f"{transcripts.clip(attempt.diff, REFERENCE_CAP)}",
+            f"--- CHECKS THAT ACTUALLY RAN (read from the tool results) ---\n{attempt.checks}",
+            "--- THE PULL REQUEST THAT FIXED IT UPSTREAM ---\n"
+            f"{transcripts.clip(attempt.reference, REFERENCE_CAP)}",
+        ]
+    )
+
+
 def _attempt_section(attempt: Attempt) -> str:
+    if attempt.upstream_fix:
+        return _upstream_section(attempt)
     kind = "QUESTION" if attempt.question else "TASK"
     parts = [
         f"=== ATTEMPT {attempt.key} ({kind}) ===",
@@ -675,10 +1165,22 @@ def _attempt_section(attempt: Attempt) -> str:
         f"The agent's final answer:\n{attempt.answer[:ANSWER_CAP]}",
         f"Changes it made to the workspace (diff vs the project it was given):\n{attempt.diff}",
     ]
+    if attempt.checks:
+        parts.append(
+            f"CHECKS THAT ACTUALLY RAN (read from the tool results):\n{attempt.checks}"
+        )
+    if attempt.record:
+        parts.append(f"TOOL RECORD:\n{attempt.record}")
     return "\n\n".join(parts)
 
 
-def _validate_grade(raw: Any, question: bool) -> Dict[str, Any]:
+UPSTREAM_VERDICTS = ("solves_problem", "right_place", "updated_tests")
+APPROACHES = ("same as reference", "different but valid", "wrong")
+
+
+def _validate_grade(
+    raw: Any, question: bool, upstream_fix: bool = False
+) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise JudgeError(f"grade is not an object: {raw!r}"[:200])
     grade: Dict[str, Any] = {}
@@ -687,6 +1189,14 @@ def _validate_grade(raw: Any, question: bool) -> Dict[str, Any]:
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 5:
             raise JudgeError(f"{axis} must be an integer 1-5, got {value!r}")
         grade[axis] = value
+    if upstream_fix:
+        for key in UPSTREAM_VERDICTS:
+            if not isinstance(raw.get(key), bool):
+                raise JudgeError(f"{key} must be true or false, got {raw.get(key)!r}")
+            grade[key] = raw[key]
+        if raw.get("approach") not in APPROACHES:
+            raise JudgeError(f"approach must be one of {APPROACHES}")
+        grade["approach"] = raw["approach"]
     if question:
         verdict = raw.get("answers_correctly")
         if not isinstance(verdict, bool):
@@ -721,7 +1231,9 @@ def parse_judgement(stdout: str, attempts: List[Attempt]) -> Dict[str, Dict[str,
     results: Dict[str, Dict[str, Any]] = {}
     for attempt in attempts:
         try:
-            grade = _validate_grade(grades.get(attempt.key), attempt.question)
+            grade = _validate_grade(
+                grades.get(attempt.key), attempt.question, attempt.upstream_fix
+            )
             grade["cost_usd"] = share
             results[attempt.key] = grade
         except JudgeError as exc:
@@ -748,14 +1260,18 @@ def judge_command(model: str, env: Mapping[str, str]) -> List[str]:
 def judge_batch(
     attempts: List[Attempt], model: str, env: Mapping[str, str]
 ) -> Dict[str, Dict[str, Any]]:
-    """Grade every attempt in one judge call; the project is sent once."""
-    payload = "\n\n".join(
-        [
-            RUBRIC,
-            f"=== THE ORIGINAL PROJECT ===\n{project_snapshot()}",
-            *(_attempt_section(a) for a in attempts),
-        ]
-    )
+    """Grade every attempt in one judge call; the project is sent once.
+
+    TheRock attempts are graded against the upstream fix instead, so a batch
+    is either all TheRock or none of it (``judge_run`` splits them).
+    """
+    if len({a.upstream_fix for a in attempts}) > 1:
+        raise ValueError("TheRock attempts are judged in their own batch")
+    if attempts and attempts[0].upstream_fix:
+        head = [THEROCK_RUBRIC]
+    else:
+        head = [RUBRIC, f"=== THE ORIGINAL PROJECT ===\n{project_snapshot()}"]
+    payload = "\n\n".join([*head, *(_attempt_section(a) for a in attempts)])
     # An empty working directory: the repo's CLAUDE.md is not the judge's brief.
     with tempfile.TemporaryDirectory(prefix="gaia-judge-") as cwd:
         proc = subprocess.run(
@@ -790,17 +1306,25 @@ def judge_run(
     """
     card = read_scorecard(run_dir)
     tasks = {t.id: t for t in load_suite(card["suite"], tasks_file)}
+    scrubber = Scrubber.from_environment(extra=_secret_extras())
+    url = card.get("therock_url") or bench_config.DEFAULT_THEROCK_URL
     pending = []
     for entry in card["tasks"]:
         task, task_dir = tasks[entry["id"]], run_dir / entry["id"]
         transcript = json.loads(
             (task_dir / "transcript.json").read_text(encoding="utf-8")
         )
+        reference = ""
+        if task.check == "diff":
+            # Fetched only now, after the agent has exited: never in its reach.
+            reference = therock.reference_diff(
+                url, task.therock["base"], task.therock["merge"]
+            )
+            scrubber.write_text(task_dir / "reference.diff", reference)
         pending.append(
-            Attempt(
+            attempt_from(
                 entry["id"],
-                transcript["prompt"],
-                transcript["answer"],
+                transcript,
                 (task_dir / "workspace.diff").read_text(encoding="utf-8"),
                 task,
                 (
@@ -808,38 +1332,76 @@ def judge_run(
                     if task.setup
                     else ""
                 ),
+                reference,
             )
         )
     grades: Dict[str, Dict[str, Any]] = {}
     for _ in range(attempts):
         if not pending:
             break
-        try:
-            batch = judge_batch(pending, model, env)
-        except (JudgeError, subprocess.TimeoutExpired) as exc:
-            batch = {
-                a.key: {"error": f"{type(exc).__name__}: {exc}"[:300]} for a in pending
-            }
-        grades.update(batch)
+        for group in (
+            [a for a in pending if not a.upstream_fix],
+            [a for a in pending if a.upstream_fix],
+        ):
+            if not group:
+                continue
+            try:
+                batch = judge_batch(group, model, env)
+            except (JudgeError, subprocess.TimeoutExpired) as exc:
+                batch = {
+                    a.key: {"error": f"{type(exc).__name__}: {exc}"[:300]}
+                    for a in group
+                }
+            grades.update(batch)
         pending = [a for a in pending if "error" in grades[a.key]]
     for entry in card["tasks"]:
         entry["judge"] = grades[entry["id"]]
-        verdict = entry["judge"].get("answers_correctly")
-        if (
-            tasks[entry["id"]].check == "stated"
-            and verdict is not None
-            and not entry.get("error")
-        ):
-            entry["passed"] = verdict
-            missing = entry["judge"].get("missing")
-            entry["why"] = (
-                "judge: correct" if verdict else f"judge: missing {missing!r}"
-            )
+        _apply_verdict(entry, tasks[entry["id"]])
         if on_progress:
             on_progress(entry["id"], entry["judge"])
     card["judge_model"] = model
-    write_scorecard(run_dir, card)
+    write_scorecard(run_dir, card, scrubber)
     return card
+
+
+def _apply_verdict(entry: Dict[str, Any], task: Task) -> None:
+    """A question passes on the judge's verdict; so does a fix that passed its gate."""
+    if entry.get("error"):
+        return
+    grade = entry["judge"]
+    if task.check == "stated" and grade.get("answers_correctly") is not None:
+        verdict = grade["answers_correctly"]
+        entry["passed"] = verdict
+        entry["why"] = (
+            "judge: correct" if verdict else f"judge: missing {grade.get('missing')!r}"
+        )
+    if (
+        task.check == "diff"
+        and entry.get("passed") is None
+        and grade.get("solves_problem") is not None
+    ):
+        entry["passed"] = grade["solves_problem"]
+        entry["why"] = (
+            f"judge: solves it ({grade.get('approach')})"
+            if grade["solves_problem"]
+            else f"judge: does not solve it: {grade.get('one_line', '')}"
+        )
+
+
+def run_dirs(path: Path) -> List[Path]:
+    """*path* itself, or the ``r1``, ``r2``... run directories ``--repeats`` wrote."""
+    if (path / "scorecard.json").is_file():
+        return [path]
+    repeats = sorted(
+        (p for p in path.glob("r*") if (p / "scorecard.json").is_file()),
+        key=lambda p: int(p.name[1:]) if p.name[1:].isdigit() else 0,
+    )
+    if not repeats:
+        raise FileNotFoundError(
+            f"No scorecard at {path} or in its r1, r2... subdirectories. Run "
+            f"`gaia eval tasks run --out {path}` first."
+        )
+    return repeats
 
 
 # ---------------------------------------------------------------------------
