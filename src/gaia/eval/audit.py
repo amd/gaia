@@ -83,8 +83,8 @@ def audit_tool_results_in_history(chat_helpers_path: Optional[Path] = None) -> b
 def run_audit() -> dict:
     """Run the full architecture audit and return results."""
     constants = audit_chat_helpers()
-    history_pairs = constants.get("_MAX_HISTORY_PAIRS", "unknown")
-    max_msg_chars = constants.get("_MAX_MSG_CHARS", "unknown")
+    history_pairs = constants.get("_MAX_PAIRS", "unknown")
+    max_msg_chars = constants.get("_MAX_CHARS", "unknown")
     tool_results_in_history = audit_tool_results_in_history()
     agent_persistence = audit_agent_persistence()
 
@@ -97,7 +97,7 @@ def run_audit() -> dict:
                 "id": "increase_history_pairs",
                 "impact": "high",
                 "file": "src/gaia/ui/_chat_helpers.py",
-                "description": f"_MAX_HISTORY_PAIRS={history_pairs} limits multi-turn context. Increase to 10+.",
+                "description": f"_MAX_PAIRS={history_pairs} limits multi-turn context. Increase to 10+.",
             }
         )
 
@@ -107,7 +107,7 @@ def run_audit() -> dict:
                 "id": "increase_truncation",
                 "impact": "high",
                 "file": "src/gaia/ui/_chat_helpers.py",
-                "description": f"_MAX_MSG_CHARS={max_msg_chars} truncates messages. Increase to 2000+.",
+                "description": f"_MAX_CHARS={max_msg_chars} truncates messages. Increase to 2000+.",
             }
         )
         blocked_scenarios.append(
