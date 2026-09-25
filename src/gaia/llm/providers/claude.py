@@ -56,6 +56,9 @@ _MIN_MAX_TOKENS = 8192
 #: keeps that segment readable whenever the tools themselves are unchanged.
 _CACHE_CONTROL = {"type": "ephemeral"}
 
+#: OpenAI ``tool_choice`` strings with a direct Anthropic equivalent.
+_TOOL_CHOICE_MAP = {"none": {"type": "none"}, "auto": {"type": "auto"}}
+
 _FINISH_REASON_MAP = {
     "tool_use": "tool_calls",
     "end_turn": "stop",
@@ -193,7 +196,6 @@ class ClaudeProvider(LLMClient):
         self._system_prompt = system_prompt
         self._last_usage: Optional[dict] = None
         # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
-        self._tool_name_map: Dict[str, str] = {}
 
     @property
     def provider_name(self) -> str:
@@ -219,32 +221,39 @@ class ClaudeProvider(LLMClient):
             return name
         return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:128]
 
-    def _restore_tool_name(self, api_name: str) -> str:
-        if api_name not in self._tool_name_map:
+    @staticmethod
+    def _restore_tool_name(name_map: Dict[str, str], api_name: str) -> str:
+        if api_name not in name_map:
             # Every outbound name is registered, so a miss means request and
             # response were shaped against different tool sets. The message
             # reaches the user verbatim, so the diagnostic detail goes to the
             # log rather than into the exception.
             logger.error(
-                "Tool %r is not in the outbound name map. The map is rebuilt "
-                "per request in _to_anthropic_tools, so a miss means this "
+                "Tool %r is not in this request's outbound name map, so the "
                 "response was parsed against a different tool set than the one "
-                "sent — e.g. an overlapping chat() call on this provider "
-                "instance. Registered: %s",
+                "sent. Registered: %s",
                 api_name,
-                sorted(self._tool_name_map),
+                sorted(name_map),
             )
             raise RuntimeError(
                 f"Claude returned tool {api_name!r}, which was not in the tool "
                 "set sent with this request."
             )
-        return self._tool_name_map[api_name]
+        return name_map[api_name]
 
-    def _to_anthropic_tools(self, tools: Optional[List[dict]]) -> Optional[List[dict]]:
-        """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape."""
-        self._tool_name_map = {}
+    def _to_anthropic_tools(
+        self, tools: Optional[List[dict]]
+    ) -> tuple[Optional[List[dict]], Dict[str, str]]:
+        """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape.
+
+        Returns the converted tools *and* the restore map. The map belongs to
+        the call, not the provider: one instance can serve two requests with
+        different tool sets, and a map on ``self`` lets the second overwrite the
+        first's names mid-flight.
+        """
+        name_map: Dict[str, str] = {}
         if not tools:
-            return None
+            return None, name_map
         converted = []
         for tool in tools:
             fn = tool.get("function") if tool.get("type") == "function" else None
@@ -271,17 +280,17 @@ class ClaudeProvider(LLMClient):
             api_name = self._api_tool_name(original)
             # Register identity names too: `write/file` sanitizes onto the
             # builtin `write_file`, and only a full map can see that clash.
-            if api_name in self._tool_name_map:
-                clash = self._tool_name_map[api_name]
+            if api_name in name_map:
+                clash = name_map[api_name]
                 raise ValueError(
                     f"Tool names {clash!r} and {original!r} both map to "
                     f"{api_name!r} for the Anthropic API — the model's call "
                     "could not be routed back unambiguously. Rename one."
                 )
-            self._tool_name_map[api_name] = original
+            name_map[api_name] = original
             entry["name"] = api_name
             converted.append(entry)
-        return converted
+        return converted, name_map
 
     def _split_system(self, messages: List[dict]) -> tuple:
         """Hoist system text and translate OpenAI tool history for Anthropic."""
@@ -416,7 +425,8 @@ class ClaudeProvider(LLMClient):
         messages: List[dict],
         tools: Optional[List[dict]],
         kwargs: dict,
-    ) -> dict:
+        tool_choice: Optional[str] = None,
+    ) -> tuple[dict, Dict[str, str]]:
         system, cleaned = self._split_system(messages)
         if not cleaned:
             raise ValueError(
@@ -435,12 +445,25 @@ class ClaudeProvider(LLMClient):
             if k in kwargs and kwargs[k] is not None:
                 params[k] = kwargs[k]
         params["max_tokens"] = max(int(params.get("max_tokens") or 0), _MIN_MAX_TOKENS)
-        anthropic_tools = self._to_anthropic_tools(tools)
+        anthropic_tools, name_map = self._to_anthropic_tools(tools)
         if anthropic_tools:
             params["tools"] = _cache_last_tool(anthropic_tools)
+        if tool_choice is not None:
+            if not isinstance(tool_choice, str) or tool_choice not in _TOOL_CHOICE_MAP:
+                raise ValueError(
+                    f"The Claude provider does not support tool_choice="
+                    f"{tool_choice!r}. Use one of: {', '.join(_TOOL_CHOICE_MAP)}."
+                )
+            if not anthropic_tools:
+                raise ValueError(
+                    f"tool_choice={tool_choice!r} was passed without tools; it "
+                    "only applies to a request that offers tools. Pass tools= "
+                    "as well, or drop tool_choice."
+                )
+            params["tool_choice"] = dict(_TOOL_CHOICE_MAP[tool_choice])
         if system:
             params["system"] = _cached_system(system)
-        return params
+        return params, name_map
 
     # ── error translation ───────────────────────────────────────────────
 
@@ -496,13 +519,16 @@ class ClaudeProvider(LLMClient):
         model: str | None = None,
         stream: bool = False,
         tools: Optional[List[dict]] = None,
+        tool_choice: Optional[str] = None,
         **kwargs,
     ) -> Union[str, Iterator[str]]:
         self._last_usage = None
-        params = self._build_params(self._resolve_model(model), messages, tools, kwargs)
+        params, name_map = self._build_params(
+            self._resolve_model(model), messages, tools, kwargs, tool_choice
+        )
 
         if stream:
-            return self._stream_chat(params)
+            return self._stream_chat(params, name_map)
 
         start = time.monotonic()
         try:
@@ -510,9 +536,11 @@ class ClaudeProvider(LLMClient):
         except Exception as exc:  # translated to actionable errors below
             self._raise_actionable(exc)
             raise  # unreachable — _raise_actionable always raises
-        return self._parse_response(response, time.monotonic() - start)
+        return self._parse_response(response, time.monotonic() - start, name_map)
 
-    def _parse_response(self, response, elapsed: float) -> str:
+    def _parse_response(
+        self, response, elapsed: float, name_map: Dict[str, str]
+    ) -> str:
         text_parts: List[str] = []
         tool_calls: List[dict] = []
         for block in response.content:
@@ -524,7 +552,7 @@ class ClaudeProvider(LLMClient):
                         "id": block.id,
                         "type": "function",
                         "function": {
-                            "name": self._restore_tool_name(block.name),
+                            "name": self._restore_tool_name(name_map, block.name),
                             "arguments": json.dumps(block.input or {}),
                         },
                     }
@@ -550,7 +578,7 @@ class ClaudeProvider(LLMClient):
             )
         return "".join(text_parts)
 
-    def _stream_chat(self, params: dict) -> Iterator[str]:
+    def _stream_chat(self, params: dict, name_map: Dict[str, str]) -> Iterator[str]:
         start = time.monotonic()
         try:
             events = self._client.messages.create(**params, stream=True)
@@ -576,7 +604,7 @@ class ClaudeProvider(LLMClient):
                             "id": block.id,
                             "type": "function",
                             "function": {
-                                "name": self._restore_tool_name(block.name),
+                                "name": self._restore_tool_name(name_map, block.name),
                                 "arguments": "",
                             },
                         }

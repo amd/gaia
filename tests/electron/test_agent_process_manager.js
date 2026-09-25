@@ -1412,30 +1412,193 @@ describe("AgentProcessManager", () => {
   // ── 10. IPC handlers ──────────────────────────────────────────────────
 
   describe("IPC handlers", () => {
-    it("should register agent:start handler that calls startAgent", async () => {
+    it("agent:start spawns the manifest binary and returns its pid", async () => {
       const { manager } = createManager();
-      const spy = jest.spyOn(manager, "startAgent").mockResolvedValue({ pid: 1234 });
+      const mockChild = mockCreateChildProcess();
+      mockSpawnHolder.returnValue = mockChild;
 
       const result = await ipcMain.simulateInvoke("agent:start", "test-agent");
-      expect(spy).toHaveBeenCalledWith("test-agent");
-      expect(result).toEqual({ pid: 1234 });
+
+      expect(result).toEqual({ pid: mockChild.pid });
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const [binary, args] = spawn.mock.calls[0];
+      expect(binary).toBe(
+        path.join("/mock/home", ".gaia", "agents", "test-agent",
+          SAMPLE_MANIFEST.agents[0].binaries[process.platform])
+      );
+      expect(args).toEqual(["--stdio"]);
+      expect(manager.getAgentStatus("test-agent").running).toBe(true);
     });
 
-    it("should register agent:stop handler that calls stopAgent", async () => {
+    it("agent:stop sends shutdown to a running agent and clears it", async () => {
       const { manager } = createManager();
-      const spy = jest.spyOn(manager, "stopAgent").mockResolvedValue(undefined);
+      const { mockChild } = await startMockAgent(manager);
+      mockChild.stdin.write.mockImplementation(() => {
+        mockChild.exitCode = 0;
+        setImmediate(() => mockChild.emit("exit", 0, null));
+      });
 
       await ipcMain.simulateInvoke("agent:stop", "test-agent");
-      expect(spy).toHaveBeenCalledWith("test-agent");
+
+      const sent = JSON.parse(mockChild.stdin.write.mock.calls[0][0].trim());
+      expect(sent.method).toBe("shutdown");
+      expect(manager.getAgentStatus("test-agent").running).toBe(false);
     });
 
-    it("should register agent:restart handler that calls restartAgent", async () => {
-      const { manager } = createManager();
-      const spy = jest.spyOn(manager, "restartAgent").mockResolvedValue({ pid: 5678 });
+    describe("rejects bad input from the renderer", () => {
+      it.each([
+        ["an unknown id", "no-such-agent"],
+        ["a path-traversal id", "../test-agent"],
+        ["an empty id", ""],
+        ["null", null],
+        ["a number", 42],
+        ["an object", { id: "test-agent" }],
+      ])("agent:start with %s rejects without spawning", async (_label, agentId) => {
+        createManager();
 
-      const result = await ipcMain.simulateInvoke("agent:restart", "test-agent");
-      expect(spy).toHaveBeenCalledWith("test-agent");
-      expect(result).toEqual({ pid: 5678 });
+        await expect(ipcMain.simulateInvoke("agent:start", agentId)).rejects.toThrow(
+          /not found in manifest/
+        );
+        expect(spawn).not.toHaveBeenCalled();
+      });
+
+      it("agent:start rejects without spawning when the binary is missing", async () => {
+        createManager();
+        mockFsImpl.existsSync.mockImplementation(
+          (p) => typeof p === "string" && !p.includes(path.join("agents", "test-agent"))
+        );
+
+        await expect(ipcMain.simulateInvoke("agent:start", "test-agent")).rejects.toThrow(
+          /Agent binary not found/
+        );
+        expect(spawn).not.toHaveBeenCalled();
+      });
+
+      it("agent:restart of an unknown id rejects without spawning", async () => {
+        createManager();
+
+        await expect(
+          ipcMain.simulateInvoke("agent:restart", "no-such-agent")
+        ).rejects.toThrow(/not found in manifest/);
+        expect(spawn).not.toHaveBeenCalled();
+      });
+
+      it("agent:stop of an agent that is not running is a no-op", async () => {
+        const { manager } = createManager();
+        const { mockChild } = await startMockAgent(manager, "second-agent");
+
+        await expect(
+          ipcMain.simulateInvoke("agent:stop", "test-agent")
+        ).resolves.toBeUndefined();
+        expect(mockChild.stdin.write).not.toHaveBeenCalled();
+        expect(manager.getAgentStatus("second-agent").running).toBe(true);
+      });
+
+      it("agent:status of an unknown id reports not installed and not running", async () => {
+        createManager();
+
+        const result = await ipcMain.simulateInvoke("agent:status", "no-such-agent");
+        expect(result).toEqual({ installed: false, running: false });
+      });
+
+      it("agent:send-rpc to an agent that is not running rejects", async () => {
+        createManager();
+
+        await expect(
+          ipcMain.simulateInvoke("agent:send-rpc", "test-agent", "ping", {})
+        ).rejects.toThrow(/is not running/);
+      });
+
+      it.each([[""], ["   "], [null], [undefined], [42]])(
+        "agent:install with id %p rejects before contacting the backend",
+        async (agentId) => {
+          ipcMain._handlers.clear();
+          _activeManagers.push(
+            new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
+          );
+          global.fetch = jest.fn();
+
+          await expect(
+            ipcMain.simulateInvoke("agent:install", agentId)
+          ).rejects.toThrow(/requires a non-empty agent id/);
+          expect(global.fetch).not.toHaveBeenCalled();
+
+          delete global.fetch;
+        }
+      );
+
+      it.each([[""], ["   "], [null], [undefined], [42]])(
+        "agent:uninstall with id %p rejects before contacting the backend",
+        async (agentId) => {
+          ipcMain._handlers.clear();
+          _activeManagers.push(
+            new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
+          );
+          global.fetch = jest.fn();
+
+          await expect(
+            ipcMain.simulateInvoke("agent:uninstall", agentId)
+          ).rejects.toThrow(/requires a non-empty agent id/);
+          expect(global.fetch).not.toHaveBeenCalled();
+
+          delete global.fetch;
+        }
+      );
+
+      it("agent:uninstall encodes the id so it cannot escape the agent route", async () => {
+        ipcMain._handlers.clear();
+        _activeManagers.push(
+          new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
+        );
+        global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+
+        await ipcMain.simulateInvoke("agent:uninstall", "../sessions/x");
+
+        expect(global.fetch.mock.calls[0][0]).toBe(
+          "http://127.0.0.1:4321/api/agents/..%2Fsessions%2Fx"
+        );
+
+        delete global.fetch;
+      });
+
+      it.each([
+        [404, /"ghost" is not installed/],
+        [400, /Cannot uninstall "ghost": builtin agents cannot be removed/],
+        [500, /Uninstall of "ghost" failed \(HTTP 500\)/],
+      ])("agent:uninstall surfaces a backend %i as a rejection", async (status, err) => {
+        ipcMain._handlers.clear();
+        _activeManagers.push(
+          new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
+        );
+        global.fetch = jest.fn(async () => ({
+          ok: false,
+          status,
+          json: async () => ({ detail: "builtin agents cannot be removed" }),
+        }));
+
+        await expect(ipcMain.simulateInvoke("agent:uninstall", "ghost")).rejects.toThrow(err);
+
+        delete global.fetch;
+      });
+
+      it("agent:install surfaces a concurrent install (409) as a rejection", async () => {
+        ipcMain._handlers.clear();
+        _activeManagers.push(
+          new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
+        );
+        global.fetch = jest.fn(async () => ({
+          ok: false,
+          status: 409,
+          json: async () => ({ detail: "busy" }),
+        }));
+
+        await expect(ipcMain.simulateInvoke("agent:install", "test-agent")).rejects.toThrow(
+          /already in progress/
+        );
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+
+        delete global.fetch;
+      });
     });
 
     it("should register agent:status handler that calls getAgentStatus", async () => {
