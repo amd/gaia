@@ -315,3 +315,6 @@ docs/plans/flagship-architecture-findings.md
 .venv-freeze/
 hub/agents/*/python/packaging/dist/
 hub/agents/*/python/packaging/build/
+
+# Playwright CLI browser profile/cache (playwright-cli skill)
+.playwright*
