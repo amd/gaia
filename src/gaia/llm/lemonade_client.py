@@ -45,6 +45,8 @@ from gaia.version import parse_version
 # Load environment variables from .env file
 load_dotenv()
 
+log = get_logger(__name__)
+
 # =========================================================================
 # Server Configuration Defaults
 # =========================================================================
@@ -79,8 +81,38 @@ def _embedded_lemonade_url() -> str:
     return DEFAULT_LEMONADE_URL
 
 
+def _embedded_lemonade_alive(pid: Any) -> bool:
+    """Whether the state file's recorded process is still a live ``lemond``.
+
+    Identity is checked by image name, not mere existence, so a recycled pid
+    belonging to an unrelated program never passes — the same rule
+    :meth:`gaia.llm.lemonade_embedded.EmbeddedLemonade._daemon_alive` applies.
+    It is reimplemented on ``psutil`` rather than reused because this runs on
+    the base-URL resolution path, which every client construction and UI health
+    poll crosses; spawning ``ps``/``tasklist`` there would cost a subprocess
+    per request.
+
+    Fails closed: a pid that cannot be identified counts as gone, so an
+    unverifiable state file loses to ``DEFAULT_LEMONADE_URL`` instead of
+    redirecting every client to a port with nothing on it.
+    """
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        return "lemond" in psutil.Process(pid).name().lower()
+    except (psutil.Error, OSError, ValueError):
+        return False
+
+
 def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
-    """Read the selected GAIA home's embedded server, without crossing homes."""
+    """Read the selected GAIA home's embedded server, without crossing homes.
+
+    Only a state file whose recorded process is still alive is honoured. A
+    ``lemond`` that was killed, crashed, or lost to a reboot cannot clear its
+    own file, and the port it names is then almost certainly bound by nothing —
+    so trusting the file unconditionally pointed every client at a dead port
+    while a healthy server answered on :data:`DEFAULT_PORT`.
+    """
     gaia_home = os.getenv("GAIA_HOME", "").strip()
     state_path = (
         Path(os.path.expandvars(gaia_home)).expanduser() / "lemonade" / "state.json"
@@ -96,7 +128,34 @@ def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
     port = state.get("port")
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         return None
+    pid = state.get("pid")
+    if not _embedded_lemonade_alive(pid):
+        _warn_stale_embedded_state(state_path, pid, port)
+        return None
     return state
+
+
+#: Stale state files already reported, so the hot resolution path warns once.
+_WARNED_STALE_EMBEDDED_STATE = set()
+
+
+def _warn_stale_embedded_state(state_path: Path, pid: Any, port: int) -> None:
+    """Name the leftover state file once, so the fallback is never silent."""
+    # repr, not the value: a malformed state file can hold an unhashable pid.
+    seen = (str(state_path), repr(pid))
+    if seen in _WARNED_STALE_EMBEDDED_STATE:
+        return
+    _WARNED_STALE_EMBEDDED_STATE.add(seen)
+    log.warning(
+        "Ignoring %s: embedded Lemonade is recorded on port %s under pid %r, "
+        "which is not a running lemonade process. Falling back to "
+        "LEMONADE_BASE_URL or %s. Run `gaia lemonade embedded start` to bring "
+        "the embedded server back, or delete that file to stop it being read.",
+        state_path,
+        port,
+        pid,
+        DEFAULT_LEMONADE_URL,
+    )
 
 
 def _get_lemonade_config() -> tuple:
