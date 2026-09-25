@@ -102,6 +102,10 @@ var modeReachAllowed = []exemption{
 
 // #rgb, #rgba, #rrggbb, #rrggbbaa — anywhere inside a string literal, so a URL
 // fragment or an SVG template carrying one is caught too.
+//
+// The 3-and-4 branch also matches an all-digit run, so a string holding an
+// issue ref like "#4186" trips this. That over-match is deliberate: excluding
+// digit-only runs would stop policing #008 and #0088, which are real colours.
 var hexColour = regexp.MustCompile(`#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b`)
 
 // A raw SGR sequence that sets a colour: 30-37, 38, 39, 40-47, 48, 49, 90-97,
@@ -116,6 +120,9 @@ var (
 // Constructions that turn a value into a colour. A bare type reference
 // (`func (k PanelKind) fill() lipgloss.AdaptiveColor`) is not one of these —
 // only a call or a composite literal actually mints a colour.
+//
+// Keyed on the package an import PATH resolves to, never on the identifier a
+// file spells — see colourPkg.
 var colourCtor = map[string]map[string]bool{
 	"lipgloss": {
 		"Color": true, "ANSIColor": true, "AdaptiveColor": true,
@@ -125,6 +132,28 @@ var colourCtor = map[string]map[string]bool{
 		"RGBColor": true, "ANSIColor": true, "ANSI256Color": true,
 	},
 	"colorful": {"Hex": true, "Color": true},
+}
+
+var majorVersionSeg = regexp.MustCompile(`^v[0-9]+$`)
+
+// colourPkg maps an import path to its colourCtor key, "" for anything else.
+// Resolving the path is what closes the alias bypass: `import lg ".../lipgloss"`
+// then `lg.ANSIColor(81)` is a hardcoded cyan with no string in it for the hex
+// sweep to see, so a rule keyed on the word "lipgloss" would report green on it.
+// Matching on the trailing selector name alone would close it too, but would
+// then flag every unrelated `foo.Color(...)` in the tree.
+func colourPkg(path string) string {
+	seg := path[strings.LastIndex(path, "/")+1:]
+	if majorVersionSeg.MatchString(seg) {
+		rest := strings.TrimSuffix(path, "/"+seg)
+		seg = rest[strings.LastIndex(rest, "/")+1:]
+	}
+	// go-colorful's directory carries the go- prefix; its package does not.
+	seg = strings.TrimPrefix(seg, "go-")
+	if colourCtor[seg] == nil {
+		return ""
+	}
+	return seg
 }
 
 // A field that takes a colour. Not every colour sink is a lipgloss
@@ -255,6 +284,32 @@ func findings(t *testing.T, file, src string, modeReach bool, list []exemption) 
 		found = append(found, hit{file: file, line: fset.Position(pos).Line, msg: what})
 	}
 
+	// How THIS file spells each colour package, alias included.
+	colourPkgs := map[string]string{}
+	for _, im := range f.Imports {
+		path, err := strconv.Unquote(im.Path.Value)
+		if err != nil {
+			t.Fatalf("%s: unreadable import path %s: %v", file, im.Path.Value, err)
+		}
+		key := colourPkg(path)
+		if key == "" {
+			continue
+		}
+		name := key // unaliased, so the package name is the key
+		if im.Name != nil {
+			name = im.Name.Name
+		}
+		switch name {
+		case "_": // imported for effect only, so nothing can be called on it
+		case ".":
+			if !modeReach {
+				report(im.Pos(), "dot-imports "+path+", so its colour constructors are callable unqualified")
+			}
+		default:
+			colourPkgs[name] = key
+		}
+	}
+
 	inspect := func(n ast.Node) {
 		ast.Inspect(n, func(n ast.Node) bool {
 			if modeReach {
@@ -279,11 +334,11 @@ func findings(t *testing.T, file, src string, modeReach bool, list []exemption) 
 					report(n.Pos(), "hand-written SGR colour escape")
 				}
 			case *ast.CallExpr:
-				if pkg, name, ok := qualified(n.Fun); ok && colourCtor[pkg][name] {
+				if pkg, name, ok := qualified(n.Fun); ok && colourCtor[colourPkgs[pkg]][name] {
 					report(n.Pos(), "builds a colour with "+pkg+"."+name)
 				}
 			case *ast.CompositeLit:
-				if pkg, name, ok := qualified(n.Type); ok && colourCtor[pkg][name] {
+				if pkg, name, ok := qualified(n.Type); ok && colourCtor[colourPkgs[pkg]][name] {
 					report(n.Pos(), "builds a colour with "+pkg+"."+name)
 				}
 			case *ast.AssignStmt:
@@ -389,6 +444,48 @@ func TestColourReachesTheTerminalThroughARoleNeverALiteral(t *testing.T) {
 	for _, o := range sweep(t, false, allowed) {
 		t.Errorf("%s\n\tadd a role to %s and use it, or add the declaration to `allowed` with a reason",
 			o, themeFile)
+	}
+}
+
+// The alias rule has to be proved on synthetic source: nothing in tui/ aliases
+// a colour package today, so the sweep over the real tree cannot show it bites.
+func TestHowAFileSpellsAColourPackageDoesNotChangeWhatIsPoliced(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"alias, and no string for the hex sweep to read", `package p
+import lg "github.com/charmbracelet/lipgloss"
+var x = lg.ANSIColor(81)
+`, true},
+		{"alias on a composite literal", `package p
+import tv "github.com/muesli/termenv"
+var x = tv.RGBColor("")
+`, true},
+		{"alias on a versioned module path", `package p
+import lg "github.com/charmbracelet/lipgloss/v2"
+var x = lg.ANSIColor(81)
+`, true},
+		{"the directory carries go-, the package does not", `package p
+import cf "github.com/lucasb-eyer/go-colorful"
+var x = cf.Color{}
+`, true},
+		{"dot import puts the constructors in scope unqualified", `package p
+import . "github.com/charmbracelet/lipgloss"
+var x = ANSIColor(81)
+`, true},
+		{"an unrelated package that happens to be spelled lipgloss", `package p
+import lipgloss "example.com/not/a/palette"
+var x = lipgloss.Color(81)
+`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := findings(t, tc.name+".go", tc.src, false, nil)
+			if (len(got) > 0) != tc.want {
+				t.Errorf("want a finding: %v; got %v", tc.want, got)
+			}
+		})
 	}
 }
 

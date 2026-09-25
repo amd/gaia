@@ -80,6 +80,11 @@ leaves no palette to give each tool or file type its own colour — so those sta
 neutral and are told apart by their icon. The alternative is a green badge beside
 a red failure icon in the same row.
 
+One recognised exception: **a link stays blue.** That convention is older than
+this palette and readers arrive already knowing it, so the blue is carrying
+meaning rather than decorating — which is why the TUI's markdown links resolve to
+the information role rather than to neutral text.
+
 ## Contrast floors
 
 Each surface enforces these in its own test suite; the floors are the same
@@ -106,7 +111,7 @@ colour that clears its floor in truecolor can drop below it once rounded. See
 |---|---|---|---|
 | Website | `website/src/design/tokens.css` (`--g-*`, RGB triplets for Tailwind alpha) | `html[data-theme]`, `localStorage` key `gaia-theme` | `npm test` and `npm run build` in `website/` |
 | Agent UI / Electron | `src/gaia/apps/webui/src/styles/index.css` | `html[data-theme]`, `localStorage` key `gaia-chat-theme` | `npm test` in `src/gaia/apps/webui/` |
-| TUI | `tui/internal/ui/theme/theme.go` (`lipgloss.AdaptiveColor`) | terminal background query, `GAIA_TUI_THEME` override | `go test ./internal/ui/theme/...` in `tui/` |
+| TUI | `tui/internal/ui/theme/theme.go` (`lipgloss.AdaptiveColor`) | terminal background query, `GAIA_TUI_THEME` override | `go test ./internal/ui/...` in `tui/` |
 
 Both web surfaces keep their own `localStorage` key on purpose — the website and
 the app are independently themeable, and sharing a key would make changing one
@@ -150,9 +155,10 @@ gradient-filled panels" are enforced by a test on both web surfaces
 the site); the rest are held by review. Where each gap is scheduled in the
 [redesign plan](/plans/gaia-ui-redesign):
 
-- The welcome screen types its headline on a randomised per-character delay and
-  leaves the cursor blinking afterwards — simulated typing, with nothing
-  streaming. Milestone 2 replaces that screen.
+- The welcome screen types its headline on a randomised per-character delay —
+  simulated typing, with nothing streaming. Its cursors no longer outlive the
+  text they were writing (`WelcomeScreen.cursor.test.tsx`); the fake typing
+  itself goes when Milestone 2 replaces that screen.
 - Neither web surface follows the OS appearance. An unset preference stays dark
   by design, and the stored theme has no `system` value to hold. Milestone 4.
 - `outline: none` appears in most component stylesheets. Most sit on a `:focus`
