@@ -45,6 +45,7 @@ from gaia.eval.judge_client import (
     MISSING_CREDENTIAL_ERROR,
     judge_credential_present,
 )
+from gaia.eval.judge_outage import run_with_outage_guard
 
 CORPUS_PATH = "tests/fixtures/email/briefing_ground_truth.json"
 
@@ -168,4 +169,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_with_outage_guard(main))

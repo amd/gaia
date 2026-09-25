@@ -109,6 +109,46 @@ def test_missing_baseline_scenario_blocks_only_under_enforce(workspace):
     assert main(_argv(baseline_dir, results_dir, "--enforce")) == 1
 
 
+def test_absent_baseline_still_checks_for_a_measurement(workspace, capsys):
+    """No baseline disables ONE check, not the gate.
+
+    Until the first flagship baseline lands there is nothing to diff against, and
+    an early return here would report a category as clean while a run full of
+    INFRA_ERRORs sailed through.
+    """
+    baseline_dir, results_dir, write = workspace
+    (baseline_dir / "scorecard_tool_selection.json").unlink()
+    write(
+        "current",
+        [
+            _result("known_path_read", "PASS"),
+            _result("multi_step_plan", "INFRA_ERROR", 0.0),
+        ],
+    )
+
+    assert main(_argv(baseline_dir, results_dir)) == 0
+    out = capsys.readouterr().out
+    assert "no baseline" in out
+    assert "without a measurement" in out, "the unmeasured check must still run"
+
+    assert main(_argv(baseline_dir, results_dir, "--enforce")) == 1
+
+
+def test_absent_baseline_alone_is_reported(workspace, capsys):
+    """A clean run with no baseline is still not a regression verdict."""
+    baseline_dir, results_dir, write = workspace
+    (baseline_dir / "scorecard_tool_selection.json").unlink()
+    write(
+        "current",
+        [_result("known_path_read", "PASS"), _result("multi_step_plan", "PASS")],
+    )
+
+    assert main(_argv(baseline_dir, results_dir)) == 0
+    assert "cannot be detected" in capsys.readouterr().out
+    # Enforcing with nothing to enforce against is the pass-by-default trap.
+    assert main(_argv(baseline_dir, results_dir, "--enforce")) == 1
+
+
 def test_missing_scorecard_blocks_only_under_enforce(workspace, capsys):
     baseline_dir, results_dir, _ = workspace  # never write a current scorecard
 

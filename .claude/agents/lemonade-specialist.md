@@ -23,7 +23,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 - Creating a new GAIA agent → `gaia-agent-builder`
 - Lemonade Server internal bugs (report upstream) — check https://github.com/lemonade-sdk/lemonade
-- ChatGPT/Claude API routing → `src/gaia/llm/providers/{openai_provider,claude}.py` (use `python-developer`)
+- ChatGPT/Claude API routing → `src/gaia/llm/providers/claude.py` (use `python-developer`)
 
 ## Key files
 
