@@ -322,7 +322,7 @@ class SessionResponse(BaseModel):
     message_count: int = 0
     document_ids: List[str] = Field(default_factory=list)
     private: bool = False
-    agent_type: str = "chat"
+    agent_type: str = "gaia"
     device: str = "gpu"
     # Mailbox FILTER (#1596): None = every connected mailbox (no pick).
     mail_provider: Optional[str] = None

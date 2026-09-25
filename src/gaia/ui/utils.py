@@ -142,7 +142,7 @@ def session_to_response(session: dict) -> SessionResponse:
         message_count=session.get("message_count", 0),
         document_ids=session.get("document_ids", []),
         private=bool(session.get("private", 0)),
-        agent_type=session.get("agent_type") or "chat",
+        agent_type=session.get("agent_type") or "gaia",
         device=session.get("device") or "gpu",
         # Filter semantics (#1596): null = "every connected mailbox" — must
         # reach the frontend as null so the selector shows no phantom pick.

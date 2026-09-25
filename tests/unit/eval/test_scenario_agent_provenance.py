@@ -169,21 +169,23 @@ def test_no_agent_requested_checks_nothing():
 
 
 # ---------------------------------------------------------------------------
-# The two layers that launder a dropped kwarg into the string "chat".
+# The two layers that launder a dropped kwarg into the string "gaia".
 # Pinning them is what stops a naive `observed is None` test being written —
-# over HTTP the dropped kwarg is never None.
+# over HTTP the dropped kwarg is never None. `chat`/`doc`/`file` stopped being
+# selectable agents (#4108), so a dropped kwarg now lands on the flagship
+# rather than the retired default.
 # ---------------------------------------------------------------------------
 
 
-def test_database_stores_a_dropped_agent_type_as_chat(tmp_path):
+def test_database_stores_a_dropped_agent_type_as_gaia(tmp_path):
     from gaia.ui.database import ChatDatabase
 
     db = ChatDatabase(db_path=str(tmp_path / "chat.db"))
     session = db.create_session(title="t", agent_type=None)
-    assert db.get_session(session["id"])["agent_type"] == "chat"
+    assert db.get_session(session["id"])["agent_type"] == "gaia"
 
 
-def test_session_response_serialises_a_missing_agent_type_as_chat():
+def test_session_response_serialises_a_missing_agent_type_as_gaia():
     from gaia.ui.models import SessionResponse
 
     response = SessionResponse(
@@ -193,7 +195,7 @@ def test_session_response_serialises_a_missing_agent_type_as_chat():
         updated_at="2026-01-01T00:00:00Z",
         model="m",
     )
-    assert response.agent_type == "chat"
+    assert response.agent_type == "gaia"
 
 
 def test_a_chat_scenario_cannot_distinguish_a_drop_from_a_request():
