@@ -3437,7 +3437,13 @@ def _handle_schedule(args):
         return
 
     if action == "daemon":
-        schedule_daemon.run_daemon()
+        from gaia.schedule.lock import ScheduleLockError
+
+        try:
+            schedule_daemon.run_daemon()
+        except ScheduleLockError as exc:
+            print(f"❌ {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     print(

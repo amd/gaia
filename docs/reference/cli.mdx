@@ -2489,6 +2489,8 @@ The running daemon reloads schedules every second, so adding, pausing, resuming,
 
 A run that comes due while the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name.
 
+Only one `gaia schedule daemon` can run per schedule store. A second one exits immediately with an error instead of firing every schedule twice. The daemon holds `~/.gaia/schedules.lock` while it runs; the OS releases it when the process exits, even after a crash.
+
 ```bash
 gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 ```
