@@ -884,8 +884,20 @@ def _refused(os_error: str) -> requests.exceptions.ConnectionError:
                 ),
             )
         ),
+        # The bare inner message, as it reads once a wrapper keeps only
+        # str(exc). urllib3 puts the host BETWEEN "Connection" and "timed
+        # out", so the wrapped case above matches on "max retries exceeded"
+        # alone and cannot prove the connect-timeout wording is recognised.
+        RuntimeError("Connection to remote timed out. (connect timeout=5)"),
     ],
-    ids=["windows", "macos", "linux", "windows-bare", "connect-timeout"],
+    ids=[
+        "windows",
+        "macos",
+        "linux",
+        "windows-bare",
+        "connect-timeout",
+        "connect-timeout-bare",
+    ],
 )
 def test_unreachable_server_classifies_as_network_error(exc: Exception) -> None:
     classified = classify_lemonade_exception(exc)
@@ -899,6 +911,44 @@ def test_read_timeout_still_classifies_as_upstream_timeout() -> None:
         ReadTimeoutError(_POOL, _URL, "Read timed out. (read timeout=600)")
     )
     assert isinstance(classify_lemonade_exception(exc), LemonadeUpstreamTimeoutError)
+
+
+def test_read_timeout_wrapped_in_max_retries_is_still_upstream_timeout() -> None:
+    """ "max retries exceeded" must not turn a slow model into a dead server.
+
+    A pool with read retries on wraps a read timeout in ``MaxRetryError``,
+    whose wording is in the connection-failure set. Bytes were exchanged, so
+    the server is by definition reachable — getting this backwards marks the
+    error retryable and sends the chat layer's retry back at a hung backend
+    (#1030).
+    """
+    exc = requests.exceptions.ConnectionError(
+        MaxRetryError(
+            _POOL,
+            _URL,
+            ReadTimeoutError(_POOL, _URL, "Read timed out. (read timeout=600)"),
+        )
+    )
+    classified = classify_lemonade_exception(exc)
+    assert isinstance(classified, LemonadeUpstreamTimeoutError)
+    assert not classified.retryable
+
+
+def test_read_timeout_payload_is_not_reported_as_unreachable() -> None:
+    """The same guard on the response-payload classifier."""
+    payload = {
+        "error": {
+            "type": "backend_error",
+            "message": (
+                "Max retries exceeded with url: /v1/chat/completions "
+                '(Caused by ReadTimeoutError("Read timed out."))'
+            ),
+        }
+    }
+    err, recognised = _classify_lemonade_response(payload)
+    assert recognised
+    assert isinstance(err, LemonadeUpstreamTimeoutError)
+    assert not isinstance(err, LemonadeNetworkError)
 
 
 def test_windows_refusal_payload_classifies_as_network_error() -> None:

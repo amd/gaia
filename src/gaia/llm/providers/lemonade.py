@@ -35,13 +35,21 @@ CONNECTION_FAILURE_RE = re.compile(
     r"|unreachable|could not connect|couldn't connect|failed to establish"
     r"|max retries exceeded|name or service not known|getaddrinfo"
     r"|could not resolve host|no route to host"
-    r"|connect(?:ion)? timed out|connecttimeouterror"
+    # urllib3 puts the host in the middle: "Connection to <host> timed out.
+    # (connect timeout=5)", so the two words are never adjacent.
+    r"|connect(?:ion)?(?: to \S+)? timed out|connecttimeouterror"
     # Windows: "No connection could be made because the target machine
     # actively refused it" (WinError 10061).
     r"|no connection could be made|actively refused|connection attempt failed"
     r"|winerror 1006\d",
     re.IGNORECASE,
 )
+
+#: A read timeout means bytes were already exchanged — the server is up and the
+#: model is slow, which is the #1030 distinction. It can still arrive wrapped in
+#: a ``MaxRetryError``, whose "max retries exceeded" wording is a connection
+#: failure above, so it has to win over that.
+READ_TIMEOUT_RE = re.compile(r"read timed out|readtimeouterror", re.IGNORECASE)
 
 
 def _accumulate_tool_calls(acc: dict, deltas: Optional[List[dict]]) -> None:
@@ -307,7 +315,9 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         or "timed out" in msg_blob
         or "operation_timeout" in type_blob
     )
-    is_unreachable = bool(CONNECTION_FAILURE_RE.search(msg_blob))
+    is_unreachable = bool(CONNECTION_FAILURE_RE.search(msg_blob)) and not (
+        READ_TIMEOUT_RE.search(msg_blob)
+    )
 
     if is_timeout and not is_unreachable:
         return LemonadeUpstreamTimeoutError(payload=response), True
@@ -397,7 +407,9 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         or "timed out" in text
         or "operation_timeout" in text
     )
-    is_unreachable = bool(CONNECTION_FAILURE_RE.search(text))
+    is_unreachable = bool(CONNECTION_FAILURE_RE.search(text)) and not (
+        READ_TIMEOUT_RE.search(text)
+    )
     # Lemonade HTTP 5xx — typical when llama-server is mid-swap between models
     # or hit an internal recovery state. Treat them as the network-flavour
     # transient so the chat layer's reload-and-retry path gets a chance.
