@@ -306,7 +306,7 @@ def test_delete_nonexistent_returns_404(client):
 
 
 @pytest.fixture
-def failed_doc(client, managed_docs_sandbox):
+def failed_doc(client, mock_index_document, managed_docs_sandbox):
     """Upload a document and force its status to 'failed' with a last_error."""
     # Upload a real file so the DB row has a valid filepath
     r = client.post(
@@ -376,7 +376,9 @@ def test_reindex_failure_sets_failed_with_last_error(
     assert doc.get("last_error") is not None
 
 
-def test_list_documents_includes_last_error(client, managed_docs_sandbox):
+def test_list_documents_includes_last_error(
+    client, mock_index_document, managed_docs_sandbox
+):
     """GET /api/documents must include last_error in the serialised response."""
     # Upload, then fail it
     r = client.post(

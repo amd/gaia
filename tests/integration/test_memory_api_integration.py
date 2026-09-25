@@ -676,11 +676,34 @@ class TestMaintenanceEndpoints:
         results = memory_store.search("GAIA")
         assert len(results) >= 1
 
-    def test_consolidation_endpoint(self, api_client, memory_store):
-        """POST /api/memory/consolidate returns response (501 if not implemented)."""
+    def test_consolidation_without_agent_session_is_503(
+        self, api_client, memory_store, monkeypatch
+    ):
+        """No chat session has registered a consolidator yet: refuse loudly."""
+        from gaia.ui.routers import memory as memory_mod
+
+        monkeypatch.setattr(memory_mod, "_consolidate_fn", None)
         resp = api_client.post("/api/memory/consolidate")
-        # Accept either 200 (implemented) or 501 (not yet implemented)
-        assert resp.status_code in (200, 501)
+        assert resp.status_code == 503
+        assert "active agent session" in resp.json()["detail"]
+
+    def test_consolidation_runs_the_registered_consolidator(
+        self, api_client, memory_store, monkeypatch
+    ):
+        """With a session's consolidator registered, the endpoint returns its result."""
+        from gaia.ui.routers import memory as memory_mod
+
+        calls = []
+
+        def _consolidate(max_sessions):
+            calls.append(max_sessions)
+            return {"consolidated": 2, "extracted_items": 3}
+
+        monkeypatch.setattr(memory_mod, "_consolidate_fn", _consolidate)
+        resp = api_client.post("/api/memory/consolidate?max_sessions=7")
+        assert resp.status_code == 200
+        assert resp.json() == {"consolidated": 2, "extracted_items": 3}
+        assert calls == [7]
 
     def test_rebuild_embeddings_endpoint(self, api_client, memory_store):
         """POST /api/memory/rebuild-embeddings returns response (501 if not implemented)."""

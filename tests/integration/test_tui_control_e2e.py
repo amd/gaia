@@ -99,7 +99,10 @@ def tui_binary(tmp_path_factory):
 @pytest.fixture
 def live_tui(tui_binary, tmp_path, monkeypatch):
     """Start the real TUI under a pty and wait until it is discoverable."""
+    import fcntl
     import pty
+    import struct
+    import termios
 
     home = tmp_path / "tui-home"
     home.mkdir()
@@ -108,8 +111,12 @@ def live_tui(tui_binary, tmp_path, monkeypatch):
     # A pty: Bubble Tea needs a terminal on stdin/stdout, and this keeps the
     # test's own output clean of alt-screen escapes.
     controller, follower = pty.openpty()
+    # The control API won't resize past the real terminal, and a fresh pty is 0x0.
+    fcntl.ioctl(follower, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
     env = dict(os.environ)
     env[tui_mcp.ENV_TUI_HOME] = str(home)
+    # Like a real terminal; CI runners leave TERM unset, so the TUI would render no color.
+    env["TERM"] = "xterm-256color"
 
     proc = subprocess.Popen(
         [str(tui_binary), "--control", "--debug"],
