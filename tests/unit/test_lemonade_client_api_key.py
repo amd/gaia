@@ -3,6 +3,7 @@
 """Resolving the Lemonade credential, including the embedded server's own."""
 
 import json
+import os
 
 import pytest
 import responses
@@ -48,7 +49,7 @@ class TestResolveLemonadeApiKey:
         Nothing exports it, so resolving from the environment alone produced
         401s that the readiness screen reported as "Lemonade not running".
         """
-        embedded_state({"pid": 1, "port": 13305, "api_key": "from-state"})
+        embedded_state({"pid": os.getpid(), "port": 13305, "api_key": "from-state"})
         monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
         assert lc.resolve_lemonade_api_key() == "from-state"
 
@@ -63,7 +64,7 @@ class TestResolveLemonadeApiKey:
     ):
         """A shell that sourced GAIA's env file keeps a key that dies with the
         server; the restarted server's key must win."""
-        embedded_state({"pid": 1, "port": 51000, "api_key": "live-key"})
+        embedded_state({"pid": os.getpid(), "port": 51000, "api_key": "live-key"})
         monkeypatch.setenv("LEMONADE_API_KEY", "stale-key")
         monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:50601/api/v1")
         monkeypatch.setenv("GAIA_LEMONADE_EMBEDDED", "1")
@@ -76,6 +77,17 @@ class TestResolveLemonadeApiKey:
         monkeypatch.setenv("LEMONADE_BASE_URL", " http://gpu-box:13305 ")
         monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
         assert lc.configured_lemonade_url() == "http://gpu-box:13305"
+
+    def test_a_record_left_by_a_dead_server_is_ignored(
+        self, embedded_state, monkeypatch
+    ):
+        """A CI job that ends without `stop` leaves the record behind."""
+        embedded_state({"pid": 2**22 + 12345, "port": 50908, "api_key": "dead"})
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+
+        assert lc.resolve_lemonade_base_url() == lc.DEFAULT_LEMONADE_URL
+        assert lc.resolve_lemonade_api_key() is None
 
     def test_no_state_and_no_env_is_unauthenticated(self, embedded_state, monkeypatch):
         monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
@@ -101,7 +113,7 @@ class TestEmbeddedBaseURL:
         `gaia lemonade embedded` came up on 63207 holding every model, while
         the readiness screen reported the language model as not downloaded.
         """
-        embedded_state({"pid": 1, "port": 63207, "api_key": "k"})
+        embedded_state({"pid": os.getpid(), "port": 63207, "api_key": "k"})
         monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
         _, port, base = lc._get_lemonade_config()
         assert port == 63207
