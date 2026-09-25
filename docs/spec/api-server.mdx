@@ -92,6 +92,11 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
    - Delta content format
    - Finish reason reporting
    - Proper SSE formatting (data: prefix)
+   - A client disconnect stops the agent (its cancel event and the SSE
+     handler's `cancelled` flag are set), so it stops running tools and
+     generating
+   - If the agent raises mid-stream, the stream ends with an
+     `{"error": {...}}` chunk followed by `data: [DONE]`
 
 ### Non-Functional Requirements
 
@@ -497,6 +502,7 @@ async def stream_chat_completion(
         yield "data: [DONE]\n\n"
 
     except Exception as e:
+        # Headers are already sent, so report the failure in-band.
         error_chunk = {
             "error": {
                 "message": str(e),
@@ -504,6 +510,7 @@ async def stream_chat_completion(
             }
         }
         yield f"data: {json.dumps(error_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
 ```
 
 ---

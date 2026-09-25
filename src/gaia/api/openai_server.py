@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from typing import AsyncGenerator, List, Tuple
@@ -462,6 +463,9 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
     This function processes the agent query in a thread pool (to avoid blocking)
     and streams agent progress events in real-time via the SSEOutputHandler.
 
+    If the client disconnects, the agent is told to stop. If the agent raises,
+    the stream ends with an ``{"error": ...}`` chunk and ``data: [DONE]``.
+
     Args:
         agent: Agent instance (with SSEOutputHandler)
         query: User query string
@@ -511,6 +515,11 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
     output_handler = getattr(agent, "output_handler", None) or getattr(
         agent, "console", None
     )
+
+    cancel_event = threading.Event()
+    agent._cancel_event = cancel_event
+    task = None
+    failure = None
 
     try:
         # Start processing in background
@@ -629,10 +638,30 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
             )
             logger.debug("=" * 80)
 
-    except Exception as e:
-        # Log and re-raise errors
+    except Exception as e:  # noqa: BLE001 - reported to the client in-band below
         logger.error(f"❌ Agent query processing failed: {e}", exc_info=True)
-        raise
+        failure = e
+    finally:
+        # A client disconnect cancels this generator; the worker thread keeps
+        # running unless told to stop.
+        if task is not None and not task.done():
+            logger.info("Stream %s ended early; stopping the agent", completion_id)
+            cancel_event.set()
+            handler_cancelled = getattr(output_handler, "cancelled", None)
+            if handler_cancelled is not None:
+                handler_cancelled.set()
+
+    if failure is not None:
+        # Headers are already sent, so the status can't change; say it in-band.
+        error_chunk = {
+            "error": {
+                "message": str(failure) or type(failure).__name__,
+                "type": "server_error",
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
     # Final chunk with finish_reason
     final_chunk = {
