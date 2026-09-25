@@ -139,6 +139,40 @@ class EmbeddedStatus:
     unresponsive_pid: Optional[int] = None
 
 
+def pid_exists(pid: int) -> bool:
+    """Whether a process with *pid* is running. Standard library only.
+
+    Cheap enough for every URL resolution, unlike the image-name check in
+    :meth:`EmbeddedLemonade._daemon_alive`, so it can be wrong only for a
+    recycled pid -- which then fails to connect, as before.
+    """
+    if pid <= 0:
+        return False
+    if platform.system() == "Windows":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong(0)
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def gaia_home() -> Path:
     """Return GAIA's state directory.
 

@@ -95,6 +95,14 @@ def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
     port = state.get("port")
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         return None
+    pid = state.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        from gaia.llm.lemonade_embedded import pid_exists
+
+        # A server killed without `stop` (a CI job ending, a crash) leaves its
+        # record behind; following it would send every client to a dead port.
+        if not pid_exists(pid):
+            return None
     return state
 
 
