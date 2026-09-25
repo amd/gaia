@@ -636,7 +636,15 @@ class TestStringResults:
 
         assert set(result) >= {"head", "tail", "omitted_chars"}
 
-    @pytest.mark.parametrize("text", ["", "normal output", "λ" * 30000, '"' * 30000])
+    @pytest.mark.parametrize(
+        "text",
+        ["", "normal output", "λ" * 30000, '"' * 30000],
+        # Explicit short ids: pytest otherwise derives the node id from the
+        # raw parameter repr, and PYTEST_CURRENT_TEST embeds that id -- a
+        # 30,000-char id blows past Windows's 32,767-char env var limit
+        # (POSIX has no such ceiling, so this only ever failed there).
+        ids=["empty", "short", "unicode_30000", "quotes_30000"],
+    )
     def test_under_threshold_strings_are_byte_identical(self, text):
         agent = make_agent(device="npu")
         result = agent._handle_large_tool_result("read_file", text, [])

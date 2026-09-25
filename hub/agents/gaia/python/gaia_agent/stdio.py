@@ -74,6 +74,7 @@ from typing import Any, Dict, List, Optional
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
 from gaia.llm import create_client
+from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
     DEFAULT_LEMONADE_URL,
     LemonadeClient,
@@ -173,20 +174,38 @@ class PermissionState:
     while the turn thread is swapping ``handler`` around it.
     """
 
-    def __init__(self, bypass: bool = False) -> None:
+    def __init__(self, bypass: bool = False, *, lifts_shell_gates: bool = True) -> None:
         self._lock = threading.Lock()
         self._bypass = bypass
+        self._lifts_shell_gates = lifts_shell_gates
         self._grants: set = set()
         self._handler: Any = None
         if bypass:
             # Starting unattended is the same security event as toggling it on
             # mid-session, and it never went through set_bypass.
-            audit.warning("Bypass permissions ENABLED at launch")
+            audit.warning(
+                "Bypass permissions ENABLED at launch (shell gates %s)",
+                "off" if lifts_shell_gates else "still on",
+            )
 
     @property
     def bypass(self) -> bool:
         with self._lock:
             return self._bypass
+
+    def _apply(self, handler: Any, enabled: bool) -> None:
+        """Write this session's bypass decision onto one handler.
+
+        Two attributes, because they are two different grants that happen to be
+        turned on together. ``auto_approve_gated_tools`` skips the confirmation
+        prompt; ``bypass_permissions`` additionally lifts the shell guardrails —
+        the operator block, the read-only binary policy and the rate limit
+        (#3373, #3374). An unattended harness that only pre-approves prompts
+        sets the first and must not inherit the second, which is what
+        ``lifts_shell_gates=False`` buys the HTTP transport.
+        """
+        handler.auto_approve_gated_tools = enabled
+        handler.bypass_permissions = enabled and self._lifts_shell_gates
 
     def set_bypass(self, enabled: bool) -> None:
         """Turn bypass on or off, taking effect on the very next gated tool.
@@ -197,13 +216,17 @@ class PermissionState:
         with self._lock:
             self._bypass = enabled
             if self._handler is not None:
-                self._handler.auto_approve_gated_tools = enabled
-        audit.warning("Bypass permissions %s", "ENABLED" if enabled else "disabled")
+                self._apply(self._handler, enabled)
+        audit.warning(
+            "Bypass permissions %s (shell gates %s)",
+            "ENABLED" if enabled else "disabled",
+            ("off" if enabled else "on") if self._lifts_shell_gates else "still on",
+        )
 
     def attach(self, handler: Any) -> None:
         """Hand a turn's handler the session's accumulated permission state."""
         with self._lock:
-            handler.auto_approve_gated_tools = self._bypass
+            self._apply(handler, self._bypass)
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution. The
@@ -705,23 +728,14 @@ def run_model_command(agent: Any, query: str, out) -> None:
 
     logger.info("switched model to %s (%s)", arg, display)
     _write(_model_state_event(agent), out)
-    where = (
-        "Claude API — this conversation is sent to Anthropic"
-        if agent._use_claude
-        else "the local Lemonade backend"
+    location = resolve_inference_location(
+        agent.chat.effective_model, use_claude=bool(agent._use_claude)
     )
-    cloud_provider = cloud_model_provider(agent.chat.effective_model)
-    if cloud_provider and not agent._use_claude:
-        provider_name = {
-            "fireworks": "Fireworks AI",
-            "amd": "AMD LLM Gateway",
-        }.get(cloud_provider, cloud_provider)
-        where = (
-            f"{provider_name} via Lemonade — this conversation is sent to "
-            f"{provider_name}; embeddings stay on Lemonade"
-        )
     _write(
-        {"type": "final", "answer": f"Switched to **{display}**, running on {where}."},
+        {
+            "type": "final",
+            "answer": f"Switched to **{display}**. {location.describe()}",
+        },
         out,
     )
 
@@ -819,42 +833,29 @@ def _write(event: Dict[str, Any], out) -> None:
 LOG_PATH_ENV = "GAIA_AGENT_LOG"
 
 
-#: Turns (user+assistant pairs) carried into the next prompt — this trim is
-#: the ONLY cap on ``conversation_history`` for this transport (the base
-#: agent applies none). 12 pairs covers far more back-reference than anyone
-#: types while keeping the prompt bounded.
-MAX_HISTORY_TURNS = 12
+def _record_turn(agent: Any, query: str, answer: str, result=None) -> None:
+    """Save the completed worker's full tool trail before admitting the next turn."""
+    from gaia.agents.base.history import SessionHistory
 
-
-def _record_turn(agent: Any, query: str, answer: str) -> None:
-    """Append this turn to the history the next prompt is built from.
-
-    Without this the flagship is amnesiac over stdio. ``Agent`` composes each
-    request as ``[system, *conversation_history, user]`` (see
-    ``_build_messages``) and nothing in the base class ever appends to
-    ``conversation_history``, so a turn this transport does not record reaches
-    the model as system + the current question and nothing else.
-
-    Only the question and the final answer are kept. Tool calls and their
-    results belong to the turn that made them and the agent already threads
-    those through its own loop; replaying them here would re-feed stale tool
-    output into every later prompt.
-    """
     if not query or not str(query).strip():
         return
     history = getattr(agent, "conversation_history", None)
     if history is None:
-        logger.debug("[history] agent has no conversation_history attribute")
         return
-    history.append({"role": "user", "content": str(query)})
-    history.append({"role": "assistant", "content": str(answer or "")})
-    # Trim in pairs so the window never opens on an assistant reply whose
-    # question has been dropped — a dangling answer reads as the model
-    # asserting something unprompted.
-    excess = len(history) - MAX_HISTORY_TURNS * 2
-    if excess > 0:
-        del history[:excess]
-    logger.debug("[history] recorded turn; %d message(s) carried", len(history))
+    if not isinstance(history, SessionHistory):
+        previous = list(history)
+        history = SessionHistory()
+        if previous:
+            history.record(previous)
+        agent.conversation_history = history
+    messages = result.get("model_messages") if isinstance(result, dict) else None
+    if messages is None:
+        messages = [
+            {"role": "user", "content": str(query)},
+            {"role": "assistant", "content": str(answer or "")},
+        ]
+    history.record(messages)
+    history.prepare(agent, "")
 
 
 def log_path() -> "Path":
@@ -1027,7 +1028,11 @@ def run_turn(
     permission slate and no way to answer — the safe default, not a convenient
     one: no grant is ever inherited by accident.
     """
+    from gaia.agents.base.history import SessionHistory
     from gaia.ui.sse_handler import SSEOutputHandler
+
+    if isinstance(getattr(agent, "conversation_history", None), SessionHistory):
+        agent.conversation_history.prepare(agent, query)
 
     handler = SSEOutputHandler()
     previous_console = getattr(agent, "console", None)
@@ -1051,6 +1056,7 @@ def run_turn(
 
     try:
         terminated = False
+        terminal_event = None
         # The answer as it went out on the wire. Captured here because this is
         # the path a normal turn takes: the translator emits the terminal event
         # and the function returns below, never reaching the fallback that
@@ -1077,7 +1083,10 @@ def run_turn(
                 # mutating it.
                 if terminated:
                     continue
-                _write(canonical, out)
+                if canonical.get("type") not in TERMINAL_TYPES:
+                    _write(canonical, out)
+                else:
+                    terminal_event = canonical
                 if canonical.get("type") == "final":
                     streamed_answer = str(canonical.get("answer") or "")
                 if canonical.get("type") in TERMINAL_TYPES:
@@ -1091,7 +1100,10 @@ def run_turn(
 
         if not terminated:
             for canonical in translator.flush():
-                _write(canonical, out)
+                if canonical.get("type") not in TERMINAL_TYPES:
+                    _write(canonical, out)
+                else:
+                    terminal_event = canonical
                 if canonical.get("type") == "final":
                     streamed_answer = str(canonical.get("answer") or "")
                 if canonical.get("type") in TERMINAL_TYPES:
@@ -1100,14 +1112,20 @@ def run_turn(
         worker.join(timeout=5.0)
 
         if terminated:
-            # The normal exit. A turn that ended in an error event is not
-            # recorded — replaying a failure as if it were an answer teaches
-            # the model that the failure is what it said. An EMPTY final is
-            # recorded (with its empty answer): dropping it would also drop
-            # the user's question, and "try answering my last question
-            # again" must not reach a model with no record it was asked.
-            if streamed_answer is not None:
-                _record_turn(agent, query, streamed_answer)
+            # Commit before the terminal frame: persistence errors must not leak
+            # a second terminal response into the following turn's pipe.
+            value = result.get("value")
+            has_trace = (
+                isinstance(value, dict) and value.get("model_messages") is not None
+            )
+            if streamed_answer is not None or has_trace:
+                try:
+                    _record_turn(agent, query, streamed_answer or "", value)
+                except Exception as exc:
+                    logger.exception("Failed to preserve turn history")
+                    _write(_terminal_error(exc), out)
+                    return
+            _write(terminal_event, out)
             return
         if "error" in result:
             _write(_terminal_error(result["error"]), out)
@@ -1127,7 +1145,12 @@ def run_turn(
             answer = value
         # Recorded even when empty — same reasoning as the streamed branch:
         # the question half of the pair must survive.
-        _record_turn(agent, query, answer)
+        try:
+            _record_turn(agent, query, answer, result.get("value"))
+        except Exception as exc:
+            logger.exception("Failed to preserve turn history")
+            _write(_terminal_error(exc), out)
+            return
         _write({"type": "final", "answer": answer}, out)
     finally:
         # Every exit path, including the early returns above: leaving a dead
@@ -1184,6 +1207,11 @@ def build_parser() -> "argparse.ArgumentParser":
     )
     parser.add_argument("--model", default=None, help="model id override")
     parser.add_argument(
+        "--history-file",
+        default=os.environ.get("GAIA_HISTORY_FILE"),
+        help="Session transcript SQLite path; reuse the path to resume tool history.",
+    )
+    parser.add_argument(
         "--use-claude",
         action="store_true",
         help="Chat via the Anthropic API instead of local Lemonade (needs "
@@ -1209,9 +1237,14 @@ def build_parser() -> "argparse.ArgumentParser":
     parser.add_argument(
         "--bypass-permissions",
         action="store_true",
-        help="Start with confirmation prompts OFF: every gated tool runs "
-        "without asking. Off unless passed, and the host can toggle it at any "
-        "time over the control channel.",
+        help="Start with the permission gates OFF: every gated tool runs "
+        "without asking, the shell-only operators (>, >>, <, &, `, $(), "
+        "newline) parse and run, the "
+        "read-only binary policy is replaced by the developer set (node, npm, "
+        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh, git) and "
+        "the shell rate limit is lifted. This is arbitrary code execution. Off "
+        "unless passed, and the host can toggle it at any time over the "
+        "control channel. Every shell command run this way is audit-logged.",
     )
     return parser
 
@@ -1243,6 +1276,18 @@ def main(argv: Optional[list] = None) -> int:
             if args.claude_model:
                 config_kwargs["claude_model"] = args.claude_model
         agent = GaiaAgent(config=GaiaAgentConfig(**config_kwargs))
+        from pathlib import Path
+        from uuid import uuid4
+
+        from gaia.agents.base.history import SessionHistory
+
+        history_path = args.history_file or str(
+            Path(os.environ.get("GAIA_TUI_HOME", str(Path.home() / ".gaia" / "tui")))
+            / "history"
+            / f"{uuid4().hex}.sqlite3"
+        )
+        agent.conversation_history = SessionHistory(history_path)
+        logger.info("Session transcript: %s", history_path)
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
         _write_if_wire_alive(_terminal_error(exc), out)

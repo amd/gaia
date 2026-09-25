@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -137,10 +137,8 @@ def initialize_lemonade_for_agent(
         if not success:
             sys.exit(1)
     """
-    from gaia.llm.lemonade_client import profile_ctx_size
+    from gaia.llm.lemonade_client import resolve_ctx_size
     from gaia.llm.lemonade_manager import LemonadeManager
-
-    log = get_logger(__name__)
 
     # Use provided base_url, or host/port, or get from env var, or use defaults
     env_host, env_port, env_base_url = _get_lemonade_config()
@@ -160,39 +158,12 @@ def initialize_lemonade_for_agent(
     if skip_if_external and use_claude:
         return True, base_url or env_base_url
 
-    # One context size per device profile, never a per-agent literal: every
-    # agent asking for the same window is what keeps a single
-    # (model, ctx_size) pair resident, so switching agents never reloads.
-    # Keyed on device, not agent, because the NPU's FLM build caps below the
-    # GPU window and would fail to load at it.
-    # Users on tight RAM can override with the ``GAIA_CTX_SIZE`` env var.
-    required_ctx = profile_ctx_size(_configured_device())
-
-    # Env-var override: lets users on lower-memory hardware dial back
-    # (or, in advanced cases, push higher up to the model's 128K max).
-    # Honors any positive integer; values lower than the requested ctx
-    # still load — the user is explicitly taking the trade-off.
-    _ctx_override = os.environ.get("GAIA_CTX_SIZE", "").strip()
-    if _ctx_override:
-        try:
-            _ctx_int = int(_ctx_override)
-            if _ctx_int > 0:
-                log.info(
-                    "GAIA_CTX_SIZE=%d overriding agent '%s' default of %d",
-                    _ctx_int,
-                    agent,
-                    required_ctx,
-                )
-                required_ctx = _ctx_int
-        except ValueError:
-            log.warning(
-                "GAIA_CTX_SIZE=%r is not a positive integer; ignoring",
-                _ctx_override,
-            )
-
-    # LemonadeManager handles all validation and error printing
-    # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
+    # Resolve inside the error boundary so invalid overrides exit cleanly.
     try:
+        required_ctx = resolve_ctx_size(device=_configured_device())
+        get_logger(__name__).debug(
+            "Initializing %s with context size %d", agent, required_ctx
+        )
         if base_url:
             success = LemonadeManager.ensure_ready(
                 min_context_size=required_ctx,
@@ -777,8 +748,10 @@ async def async_main(action, **kwargs):
             try:
                 if "agent" in locals():
                     agent.stop_watching()
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except Exception as exc:
+                get_logger(__name__).warning(
+                    "Could not stop agent file watcher: %s", exc
+                )
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
@@ -2099,13 +2072,14 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--agent-type",
-        default=None,
+        default=DEFAULT_AGENT_TYPE,
         metavar="AGENT_ID",
         help=(
-            "Agent registration ID to target (e.g. 'gaia-lite'). When set, "
-            "the eval runner instructs the simulator to create sessions with "
-            "this agent_type so scenarios run against the chosen agent. Omit "
-            "to use the backend default."
+            f"Agent registration ID to score (default: {DEFAULT_AGENT_TYPE}, the "
+            "flagship). Every scenario runs against this one agent, so a "
+            "scorecard names a single agent and two scorecards are comparable. "
+            "Override only to measure a different agent, and never compare the "
+            "result to a scorecard captured under another agent."
         ),
     )
     agent_eval_parser.add_argument(
@@ -3359,6 +3333,19 @@ def _handle_schedule(args):
                 file=sys.stderr,
             )
             sys.exit(1)
+        # Reject a bad cron here, at the prompt -- not a second later in the
+        # daemon's reload loop, which only finds out once this is already on
+        # disk (#4143).
+        from apscheduler.triggers.cron import CronTrigger
+
+        try:
+            CronTrigger.from_crontab(args.cron)
+        except ValueError as exc:
+            print(
+                f"❌ '{args.cron}' is not a valid cron expression: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         sink_args = {}
         if getattr(args, "to", None):
             sink_args["to"] = args.to
@@ -4256,7 +4243,7 @@ Let me know your answer!
                 model=eval_model,
                 budget_per_scenario=args.budget,
                 timeout_per_scenario=args.timeout,
-                agent_type=getattr(args, "agent_type", None),
+                agent_type=getattr(args, "agent_type", DEFAULT_AGENT_TYPE),
                 extra_scenario_dirs=getattr(args, "scenario_dir", None),
                 extra_corpus_dirs=getattr(args, "corpus_dir", None),
                 tags=getattr(args, "tag", None),
@@ -4742,6 +4729,8 @@ Let me know your answer!
                         print(f"✅ Installed Lemonade Server v{verify_info.version}")
                     else:
                         print(f"✅ Installed Lemonade Server v{result.version}")
+                    if result.restart_required:
+                        print(f"⚠️  {result.message}")
                     sys.exit(0)
                 else:
                     print(f"❌ Installation failed: {result.error}")
@@ -5485,8 +5474,8 @@ def _handle_memory_status():
         by_source = {}
         try:
             by_source = store.get_source_counts()
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).warning("Could not read memory source counts: %s", exc)
 
         # --- Format output ---
         print("\n=== GAIA Agent Memory ===\n")

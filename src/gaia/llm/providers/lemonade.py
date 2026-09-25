@@ -454,6 +454,17 @@ class LemonadeProvider(LLMClient):
     def provider_name(self) -> str:
         return "Lemonade"
 
+    def cloud_model_provider(self, model: Optional[str] = None) -> Optional[str]:
+        """Cloud provider serving *model* (default: the live one), or None.
+
+        Goes through the backend, which carries the catalog metadata, so a
+        provider discovered at runtime is recognised as well as the two whose
+        id prefixes are known up front.
+        """
+        return self._backend.cloud_model_provider(
+            model or self._last_model or self._model or DEFAULT_MODEL_NAME
+        )
+
     def generate(
         self,
         prompt: str,
@@ -475,6 +486,7 @@ class LemonadeProvider(LLMClient):
         model: str | None = None,
         stream: bool = False,
         tools: Optional[List[dict]] = None,
+        tool_choice: Optional[Union[str, dict]] = None,
         **kwargs,
     ) -> Union[str, dict, Iterator[str]]:
         # Reset from any previous call — usage is per-call, not cumulative,
@@ -496,27 +508,15 @@ class LemonadeProvider(LLMClient):
         # Default to low temperature for deterministic responses (matches old LLMClient behavior)
         kwargs.setdefault("temperature", 0.1)
 
-        # Repetition prevention: penalise recently-generated tokens so the
-        # model doesn't get stuck in a loop repeating tables, paragraphs, etc.
-        #
-        # We use TWO layers of protection:
-        #   1. OpenAI-standard params (frequency_penalty, presence_penalty) –
-        #      work in both streaming (OpenAI client) and non-streaming paths.
-        #   2. llama.cpp-native params (repeat_penalty, repeat_last_n) –
-        #      passed via extra_body for the streaming OpenAI client path,
-        #      and directly in kwargs for the non-streaming requests.post path.
-        #
-        # frequency_penalty: additive penalty proportional to token frequency
-        #                    in generated text so far (0.0 = off, 0.0–2.0 range)
-        # presence_penalty:  flat penalty if token appeared at all in output
-        #                    (0.0 = off, 0.0–2.0 range)
-        # repeat_penalty:    llama.cpp multiplicative penalty on tokens in the
-        #                    last repeat_last_n window (1.0 = off, 1.1–1.3 typical)
-        # repeat_last_n:     how far back to look (default 64; 256 covers tables)
-        kwargs.setdefault("frequency_penalty", 0.3)
-        kwargs.setdefault("presence_penalty", 0.1)
-        kwargs.setdefault("repeat_penalty", 1.1)
-        kwargs.setdefault("repeat_last_n", 256)
+        # Stops local models looping on tables and paragraphs. Cloud models get
+        # none: the penalties hit their reasoning tokens and the thinking runs away.
+        # repeat_penalty / repeat_last_n are llama.cpp-native (sent via extra_body
+        # when streaming).
+        if not self._backend.cloud_model_provider(effective_model):
+            kwargs.setdefault("frequency_penalty", 0.3)
+            kwargs.setdefault("presence_penalty", 0.1)
+            kwargs.setdefault("repeat_penalty", 1.1)
+            kwargs.setdefault("repeat_last_n", 256)
 
         # Tools no longer force non-streaming: ``_handle_stream`` reassembles the
         # tool_call delta frames and emits the same sentinel envelope the
@@ -525,6 +525,16 @@ class LemonadeProvider(LLMClient):
         # because it always sends a tools array.
         effective_stream = stream
         effective_tools = tools if tool_capable else None
+        if tool_choice is not None:
+            if not tools:
+                raise ValueError(
+                    f"tool_choice={tool_choice!r} was passed without tools; it "
+                    "only applies to a request that offers tools. Pass tools= "
+                    "as well, or drop tool_choice."
+                )
+            # Governs the tools, so it is withheld along with them.
+            if effective_tools:
+                kwargs["tool_choice"] = tool_choice
 
         response = self._backend.chat_completions(
             model=effective_model,
