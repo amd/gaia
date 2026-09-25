@@ -424,6 +424,18 @@ class TestAnalyzeFileWithUsageBinaryTemperature:
 
 
 class TestJudgeFactoryTemperature:
+    @pytest.fixture(autouse=True)
+    def _sdk_transport(self, monkeypatch):
+        """Pin the SDK transport, whatever the machine's own credentials are.
+
+        The factories route through ``gaia.eval.judge_client``, which reads the
+        environment to choose a transport. Setting the key selects the SDK path
+        these tests spy on; clearing the token stops a developer's subscription
+        credential from silently sending them down the CLI path instead.
+        """
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
     def test_action_item_quality_sends_no_temperature(self, monkeypatch):
         spy = MagicMock()
         monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)

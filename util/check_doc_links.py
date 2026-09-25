@@ -57,6 +57,7 @@ SKIP_DOMAINS = {
     "your-domain",
     "grafana.internal",
     "marketplace.visualstudio.com",  # Blocks automated requests with 404
+    "code.visualstudio.com",  # Same anti-scraping 404 as marketplace.visualstudio.com
     "dl.acm.org",  # Blocks automated requests with CAPTCHAs
     "platform.openai.com",  # Rate-limits CI bots
     "www.npmjs.com",  # Returns 403 to automated requests

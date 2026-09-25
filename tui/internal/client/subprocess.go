@@ -596,16 +596,17 @@ func describeAgentExit(code int) string {
 			"Your next message will start it again.", code)
 }
 
-// controlKey marks a stdin line as a control message rather than a query. Must
-// match gaia_agent.stdio.CONTROL_KEY — the agent only treats a line as control
-// if it parses as a JSON object carrying exactly this key, so a question that
-// merely looks like JSON is still a question.
+// controlKey marks a stdin line as a control message rather than a query.
+// Pinned, with the verbs below, by tests/fixtures/stdio/gaia_stdio_wire.json —
+// the agent only treats a line as control if it parses as a JSON object
+// carrying exactly this key, so a question that merely looks like JSON is still
+// a question.
 const controlKey = "gaia_control"
 
-// queryKey wraps a user's question so its newlines survive the trip. Must match
-// gaia_agent.stdio.QUERY_KEY. The agent still accepts a bare line as a query, so
-// an older child paired with this build keeps working — it just cannot carry a
-// multi-line question.
+// queryKey wraps a user's question so its newlines survive the trip. Pinned by
+// tests/fixtures/stdio/gaia_stdio_wire.json. The agent still accepts a bare
+// line as a query, so an older child paired with this build keeps working — it
+// just cannot carry a multi-line question.
 const queryKey = "gaia_query"
 
 // writeControl sends one control message to the child's stdin.
