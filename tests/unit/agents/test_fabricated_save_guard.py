@@ -234,9 +234,10 @@ def test_unbacked_save_claim_is_reprompted(agent):
 
     assert len(sent) == 2
     correction = sent[1][-1]["content"]
-    assert "no file-writing tool ran in this turn" in correction
+    assert "No successful write" in correction
     assert "`write_file`" in correction
-    assert _final_text(result) == "Nothing was written — tell me the path to use."
+    assert result["status"] == "incomplete"
+    assert "no recorded successful write" in result["result"]
 
 
 def test_reprompt_is_bounded_per_turn(agent):
@@ -245,7 +246,8 @@ def test_reprompt_is_bounded_per_turn(agent):
     result = agent.process_query("Extract the routine and save it", max_steps=20)
 
     assert len(sent) == _MAX_FILE_WRITE_CLAIM_REPROMPTS + 1
-    assert _final_text(result) == CLAIM
+    assert result["status"] == "incomplete"
+    assert CLAIM not in result["result"]
 
 
 def test_no_reprompt_when_agent_has_no_write_tool(agent):
@@ -255,7 +257,8 @@ def test_no_reprompt_when_agent_has_no_write_tool(agent):
     result = agent.process_query("Extract the routine and save it", max_steps=10)
 
     assert len(sent) == 1
-    assert _final_text(result) == CLAIM
+    assert result["status"] == "incomplete"
+    assert CLAIM not in result["result"]
 
 
 def test_no_reprompt_on_last_step(agent):
@@ -264,7 +267,8 @@ def test_no_reprompt_on_last_step(agent):
     result = agent.process_query("Extract the routine and save it", max_steps=1)
 
     assert len(sent) == 1
-    assert _final_text(result) == CLAIM
+    assert result["status"] == "incomplete"
+    assert CLAIM not in result["result"]
 
 
 @pytest.fixture
@@ -277,7 +281,7 @@ def clear_tool_registry():
     _TOOL_REGISTRY.update(snapshot)
 
 
-def test_claim_backed_by_a_write_tool_call_is_accepted(clear_tool_registry):
+def test_claim_backed_by_a_write_without_readback_is_incomplete(clear_tool_registry):
     writes = []
 
     class _WritingAgent(_DummyAgent):
@@ -317,7 +321,8 @@ def test_claim_backed_by_a_write_tool_call_is_accepted(clear_tool_registry):
     result = agent.process_query("Extract the routine and save it", max_steps=10)
 
     assert writes == ["notes/routine.md"]
-    assert _final_text(result) == CLAIM
+    assert result["status"] == "incomplete"
+    assert CLAIM not in result["result"]
 
 
 def _run_turn_with_other_tool(
@@ -386,18 +391,21 @@ def _run_turn_with_other_tool(
 # here: its read-only allowlist and blocked redirection operators mean the real
 # tool cannot perform a save, so a test asserting one would be fiction.
 @pytest.mark.parametrize("exec_tool", ["run_python", "execute_python_file"])
-def test_claim_backed_by_an_exec_tool_call_is_accepted(clear_tool_registry, exec_tool):
-    """A save done by running Python is a real save."""
+def test_executor_without_concrete_file_evidence_is_incomplete(
+    clear_tool_registry, exec_tool
+):
+    """A successful Python call without output evidence cannot prove a save."""
     sent, result = _run_turn_with_other_tool(
         exec_tool, command="open('notes/routine.md', 'w').write(steps)"
     )
 
-    assert len(sent) == 2, "the guard re-prompted a save that the exec tool performed"
-    assert _final_text(result) == CLAIM
+    assert len(sent) == 3, "an executor call alone does not prove a save"
+    assert result["status"] == "incomplete"
+    assert CLAIM not in result["result"]
 
 
 @pytest.mark.parametrize("writer", ["take_screenshot", "transcribe_media"])
-def test_claim_backed_by_a_side_effect_writer_is_accepted(clear_tool_registry, writer):
+def test_unrelated_side_effect_writer_does_not_back_claim(clear_tool_registry, writer):
     """Tools that write a file as a side effect are saves too.
 
     They are cheap and safe, so they never enter the confirmation set that the
@@ -405,8 +413,9 @@ def test_claim_backed_by_a_side_effect_writer_is_accepted(clear_tool_registry, w
     """
     sent, result = _run_turn_with_other_tool(writer)
 
-    assert len(sent) == 2, "the guard re-prompted a save that the tool performed"
-    assert _final_text(result) == CLAIM
+    assert len(sent) == 3, "an unrelated side-effect write must not prove this save"
+    assert result["status"] == "incomplete"
+    assert CLAIM not in result["result"]
 
 
 @pytest.mark.parametrize(
@@ -429,7 +438,7 @@ def test_write_that_did_not_succeed_does_not_suppress_the_guard(
     )
 
     assert len(sent) == 3
-    assert "no file-writing tool ran in this turn" in sent[2][-1]["content"]
+    assert "No successful write" in sent[2][-1]["content"]
 
 
 @pytest.mark.parametrize(
@@ -442,7 +451,7 @@ def test_tool_that_writes_no_file_does_not_suppress_the_guard(
     sent, _ = _run_turn_with_other_tool(other_tool)
 
     assert len(sent) == 3
-    assert "no file-writing tool ran in this turn" in sent[2][-1]["content"]
+    assert "No successful write" in sent[2][-1]["content"]
 
 
 def test_read_only_mcp_call_does_not_suppress_the_guard(clear_tool_registry):
@@ -450,14 +459,15 @@ def test_read_only_mcp_call_does_not_suppress_the_guard(clear_tool_registry):
     sent, _ = _run_turn_with_other_tool("mcp_search_issues")
 
     assert len(sent) == 3
-    assert "no file-writing tool ran in this turn" in sent[2][-1]["content"]
+    assert "No successful write" in sent[2][-1]["content"]
 
 
-def test_mcp_tool_that_declares_confirmation_is_believed(clear_tool_registry):
-    """A third-party tool that flags itself consequential can have written."""
+def test_confirmation_flag_is_not_file_evidence(clear_tool_registry):
+    """A permission flag says nothing about a concrete output path."""
     sent, result = _run_turn_with_other_tool(
         "mcp_write_remote_file", mark_requires_confirmation=True
     )
 
-    assert len(sent) == 2
-    assert _final_text(result) == CLAIM
+    assert len(sent) == 3
+    assert result["status"] == "incomplete"
+    assert CLAIM not in result["result"]

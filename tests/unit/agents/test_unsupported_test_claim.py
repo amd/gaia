@@ -535,21 +535,23 @@ def test_an_answer_without_a_claim_is_never_corrected(agent):
     assert _final_text(result) == HONEST
 
 
-def test_a_second_unsupported_answer_goes_out(agent):
+def test_a_second_unsupported_answer_is_suppressed(agent):
     repeats = [_answer(FABRICATED)] * (_MAX_TEST_CLAIM_CORRECTIONS + 2)
     sent = _stub_chat(agent, *repeats)
 
     result = agent.process_query("Fix the matrix lookup", max_steps=10)
 
     assert len(sent) == _MAX_TEST_CLAIM_CORRECTIONS + 1
-    assert _final_text(result) == FABRICATED
+    assert FABRICATED not in result["result"]
+    assert result["status"] == "incomplete"
 
 
-def test_no_step_left_emits_the_claim_beside_the_footer(agent):
+def test_no_step_left_returns_incomplete_without_the_claim(agent):
     sent = _stub_chat(agent, _answer(FABRICATED))
 
     result = agent.process_query("Fix the matrix lookup", max_steps=1)
 
     assert len(sent) == 1
-    assert _final_text(result) == FABRICATED
+    assert FABRICATED not in result["result"]
+    assert result["status"] == "incomplete"
     assert "unverified" in result["result"]

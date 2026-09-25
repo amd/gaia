@@ -939,15 +939,64 @@ summary. Other unrecognized runners remain `unverified`.
 
 Before the answer goes out, the loop also checks it against the same record. An
 answer that reports a test outcome (`111 passed`, "all tests pass") when no test
-run passed after the last file edit gets one correction naming the gap; the
-second answer is emitted as written, with the footer beside it. A turn on its
-last step gets no correction.
+run passed after the last file edit gets one correction naming the gap. If the
+claim remains unsupported, or no correction step remains, the framework replaces
+it with an explicit incomplete result. Unsupported claims never become successful
+results merely because the correction budget ran out.
 
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix reads `verified`; one that passed
 and then failed after an edit reads `ran and did not pass`. Only a rerun of the
 same command replaces an earlier run: if `pytest tests/` failed and
 `pytest tests/test_cart.py` then passed, the line still reports the failure.
+
+### Saved output and cleanup evidence
+
+File completion is checked separately from the test/lint/build footer. A save
+claim must name an output backed by this turn's successful write to that path;
+a transcript or screenshot written elsewhere cannot satisfy it. A save request
+that names a file, folder or disk is checked even when the answer silently omits
+the save; a pathless "save it" is checked through the answer's own save claim.
+Negated instructions, how-to questions, idioms ("save me some time") and topics
+("write a guide to Node.js") do not create save obligations, and a reference to
+a save from an earlier session is not a claim about this turn. "Create",
+"make" or "generate" names an output through its direct object (`notes.md`, not
+"a Node.js app"); a file after "in" may be a source, so it is checked only
+through the answer's claim. An answer's save claim makes the turn
+incomplete when the user asked for a save, a file-writing tool ran, or "I" or
+"we" is the one saving. Any other save claim gets one correction and then
+stands, so "downloads are saved to ~/Downloads" stays an answer.
+
+Requested and claimed text outputs must be read back after their latest
+mutation; an ordinary edit the user did not ask to save does not need readback. A read before
+a rewrite, a file listing, a binary metadata summary, or only the last page is
+insufficient. `read_file` pages and archived `read_tool_output` continuations
+must cover the complete output. Source-code edits without a save instruction
+or claim retain the existing test-verification policy. Binary outputs require
+path-specific write evidence but are not forced through a text reader.
+
+For Python and shell executors, the loop compares file metadata before and after
+the call for requested and previously tracked targets, plus literal Python path
+candidates. These probes respect the read boundary and never read file contents.
+A successful executor call alone is not proof of a save; a failed call that
+changed an output invalidates earlier evidence. A file last modified during a
+successful executor call, such as `ls > listing.txt`, counts as written once it
+is read back; one touched by a failed call does not, and such a file proves only
+its own path, never a pathless "saved it to a file" claim. Cached transcripts are
+not new writes.
+Cleanup claims likewise need concrete paths observed disappearing during the
+turn; a general statement that everything was cleaned up is not proof. A claimed
+path that is absent and untouched already agrees with the claim, and removal from
+an index or list is not a file deletion.
+
+The loop offers one bounded correction for missing artifact evidence. If work or
+readback remains missing, the emitted answer names the gaps and `process_query`
+returns `status: "incomplete"` with `completion_gaps`. When the turn ended on an
+error, such as an unreachable server, the error message and `failed` status are
+kept and the gaps are listed beneath it. A blocked save cannot be
+reported as success on the last step or after a repeated unsupported answer.
+Readback establishes observed output; it does **not** measure semantic correctness
+or recall when extracting every item from a long document.
 
 The statement rides in the emitted answer, so it reaches every surface — the
 CLI console, the SSE `answer` event, and `process_query`'s return value — and
@@ -1112,3 +1161,97 @@ and share a 64 MiB archive quota. Unknown, expired, cross-session handles and
 quota exhaustion return explicit errors. Restarting an agent invalidates its
 output handles; rerun the source tool if the session has ended. A continuation
 reads captured output rather than re-executing a potentially state-changing tool.
+
+### Exhaustive document extraction
+
+For explicit requests to list every item in a text document, the agent offers
+`extract_document_items(file_path, fields=None)`. It reads a permission-checked
+snapshot and processes 4,000-character pages sequentially, each widened by up to
+600 characters of overlap on either side, with an additional omission check per
+page. Each call has isolated context and no tools. Requested fields, written in
+the request as `fields: name, reps, cue` or passed as the `fields` list, must
+appear on every extracted entry; missing source facts are marked as not stated.
+A `fields` list that differs from the request's is rejected rather than merged.
+
+The framework retains entries with exact source quotations and character spans,
+checks the source fingerprint again before completion, and appends the accumulated
+inventory to the final answer. A final model summary cannot drop retained entries.
+Ambiguous evidence keeps both entries and marks the possible repeat rather than
+dropping one. Reading every page without extracting an inventory is insufficient.
+
+`save_extracted_items(file_path)` exports the retained inventory as JSON, CSV, or
+readable text, using the existing write permission gate. JSON records carry each
+requested field under `fields`, and CSV gives each field its own column (prefixed
+`field:` if it collides with a built-in column; cells that would open as formulas
+are escaped). Before completion the framework reads each saved inventory back in
+full and requires an exact match with the retained entries, so the model need
+not page through it; hand edits to a file it wrote this turn are refused. Every requested source
+must finish; a failed page, cancellation, source change, or exceeded budget yields
+an incomplete result. Limits are 256,000 source characters, 512 entries, 40,000
+characters per extraction prompt, and 100,000 characters of retained item text and
+quotes, with a 30-minute extraction deadline (the enclosing tool timeout adds 60 seconds).
+These bounds fail visibly rather than silently dropping data.
+
+This verifies source coverage and preserves the extracted set; it does not prove
+semantic recall of every implicit item. Recall must be measured against known
+source items. General summaries, advice about extraction, negated enumeration
+requests, analysis of code files ("find all bugs in `main.py`"), binary documents
+such as PDFs, and agents without a file permission validator do not activate this
+path. Active extraction skills can activate it. Sources are existing files a
+request reads from; a path after "to" or "into" is an output, and a name that is
+not a file ("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are
+left to code tools.
+
+Existing memory hooks record extraction actions and compact provenance (source
+fingerprint, page coverage and item count), while conversation history retains the
+rendered inventory as one bounded record, bypassing the ordinary 4,000-character
+turn cap only for extraction answers (maximum 256,000 characters; a longer answer
+is not stored, and an error is logged). Follow-ups can retrieve those observations through existing
+conversation search. Private mode suppresses persistence. A remembered summary
+never substitutes for reading and validating the current source; no separate
+memory database or cloud sync is introduced.
+
+The default `gaia-voice` skill supplies a short routing rule; the detailed
+`document-extract` procedure is loaded for the task. The implementation uses
+schema-constrained page responses and an omission check per page. Overlap keeps
+source text visible and aligns pages to whole lines, sentences, or (for unpunctuated
+captions) words. Quotes are matched ignoring case and spacing (captions use
+non-breaking and doubled spaces), but only on whole words, and the stored quote is
+always the source's own text at its exact offsets.
+
+An item's identity value is a field named for a `name`, `id` or `title` (such
+as `exercise_name`), else the first requested field. When that value is copied
+from the quote, its source span locates the item; when the model composes a label
+instead ("Big circles (arms)"), the quote locates the item, and a label sharing no
+words with its quote is kept but marked "(label not in quote)". Descriptions may
+paraphrase; the verbatim quote is their evidence. An entry that states no field
+carries nothing and is ignored.
+
+Merging never fails a run and never drops an item. Two extractions are one item
+when they sit at the same place (the same name span, or quotes sharing at least
+half their text) and their names match or nest ("march" and "march in place" at
+one spot keep the fuller name). Different names are different items, and
+differing descriptions of one item are both kept, joined with ` / `. Items from
+one reply are never merged. A quote that names its item twice takes an occurrence
+no earlier item claimed and is never merged, so its values cannot land on the
+wrong item. Evidence too ambiguous to
+merge keeps both entries, and the rendered inventory marks the later one
+"(may repeat item N)" for review, including when its label shares words with an
+overlapping item's. Only an unusable reply (not JSON, a quote not
+in the page, an unfinished page) is retried once and then fails visibly.
+
+Each page call allows 16,384 output tokens. Cloud models are asked for low
+reasoning effort, and a page that still spends the whole budget reasoning is
+retried once with reasoning off; local models get no anti-repetition penalties,
+which work against verbatim copying.
+
+Run the explicit live regression with either backend:
+
+```bash
+python scripts/dev/validate_document_extraction.py MODEL /path/to/new-results-directory
+```
+
+It creates an approximately 80,000-character synthetic transcript with 40 known exercises,
+checks every name, repetition count and cue in both the inventory and saved JSON,
+and asks a follow-up through the existing conversation-memory search tool. It
+uses isolated test memory and real inference; no external judge is required.
