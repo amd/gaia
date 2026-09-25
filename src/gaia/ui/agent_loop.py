@@ -27,6 +27,7 @@ Design notes:
 import asyncio
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -393,6 +394,8 @@ class AgentLoop:
         )
 
         result_holder: Dict[str, Any] = {"error": None}
+        # Set on timeout so the agent loop stops at its next step boundary.
+        cancel_event = threading.Event()
         db = self._db
 
         def _run_agent() -> None:
@@ -436,8 +439,6 @@ class AgentLoop:
                 )
                 if cached_agent is not None:
                     agent = cached_agent
-                    # A prior streaming turn leaves its fired cancel event behind.
-                    agent._cancel_event = None
                     agent.console = sse_handler
                     agent._register_tools()
                 else:
@@ -483,6 +484,8 @@ class AgentLoop:
                     memory_off = db.get_setting("memory_enabled", "false") == "false"
                     agent._incognito = memory_off
 
+                # Also replaces a prior streaming turn's fired cancel event.
+                agent._cancel_event = cancel_event
                 agent.process_query(tick_prompt)
 
             except Exception as exc:
@@ -492,15 +495,17 @@ class AgentLoop:
                 sse_handler.signal_done()
 
         # Run synchronous agent in a thread pool so we don't block the event loop
-        loop = asyncio.get_event_loop()
+        worker = asyncio.get_running_loop().run_in_executor(None, _run_agent)
         try:
-            await asyncio.wait_for(
-                loop.run_in_executor(None, _run_agent),
-                timeout=_TICK_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
-            sse_handler.cancelled.set()
+            done, _ = await asyncio.wait({worker}, timeout=_TICK_TIMEOUT)
+            if not done:
+                logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
+        finally:
+            if not worker.done():
+                cancel_event.set()
+                sse_handler.cancelled.set()
+                # The session lock held by _run_step must outlive the worker thread.
+                await asyncio.wait({worker})
 
         # Save the autonomous tick as a message in the session DB
         # (stored as role="autonomous" — hidden from the UI by default)

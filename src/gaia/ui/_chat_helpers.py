@@ -204,6 +204,9 @@ _agent_cache: dict[str, dict] = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
+# Non-streaming turns are cut off after this long (seconds).
+_CHAT_TIMEOUT_SECONDS = 600.0
+
 # Alias so call-sites read naturally; the canonical value lives in database.py.
 _DB_DEFAULT_MODEL = SESSION_DEFAULT_MODEL
 
@@ -1500,6 +1503,8 @@ async def _get_chat_response(
     Runs the synchronous agent in a thread pool executor
     to avoid blocking the async event loop.
     """
+    # Set on timeout so the agent loop stops at its next step boundary.
+    cancel_event = threading.Event()
 
     def _do_chat():
         # Build conversation history from database
@@ -1586,8 +1591,7 @@ async def _get_chat_response(
             from gaia.agents.base.console import SilentConsole
 
             agent = cached_agent
-            # A prior streaming turn leaves its fired cancel event and dead SSE console.
-            agent._cancel_event = None
+            # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
             agent._register_tools()
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
@@ -1760,6 +1764,8 @@ async def _get_chat_response(
         effective = _effective_model(agent, model_id)
         _maybe_load_expected_model(effective)
 
+        agent._cancel_event = cancel_event
+
         # One automatic retry on transient Lemonade failures (model
         # evicted between turns, network blip).  Mirror of the streaming
         # path's retry logic so non-streaming clients get the same
@@ -1803,15 +1809,22 @@ async def _get_chat_response(
         return _clean_answer_json(result_str)
 
     try:
-        loop = asyncio.get_running_loop()
-        # Apply a 600-second timeout to prevent indefinite hangs when the
-        # LLM gets stuck in a tool loop or Lemonade becomes unresponsive
-        return await asyncio.wait_for(
-            loop.run_in_executor(None, _do_chat),
-            timeout=600.0,
-        )
+        worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
+        try:
+            done, _ = await asyncio.wait({worker}, timeout=_CHAT_TIMEOUT_SECONDS)
+        finally:
+            if not worker.done():
+                cancel_event.set()
+                # The caller's session lock must outlive the worker thread.
+                await asyncio.wait({worker})
+        if not done:
+            late_error = worker.exception()
+            if late_error is not None:
+                logger.warning("Timed-out chat worker then failed: %s", late_error)
+            raise asyncio.TimeoutError
+        return worker.result()
     except asyncio.TimeoutError:
-        logger.error("Chat response timed out after 600 seconds")
+        logger.error("Chat response timed out after %s seconds", _CHAT_TIMEOUT_SECONDS)
         return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
     except HTTPException:
         # A deliberate, actionable rejection (e.g. the email non-streaming
@@ -1864,7 +1877,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     # and the producer thread is actually reaped (see agent._cancel_event).
     cancel_event = threading.Event()
 
-    def _cleanup_stream():
+    async def _cleanup_stream():
         nonlocal cleanup_done
         if cleanup_done:
             return
@@ -1877,9 +1890,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             sse_handler.close_active_relay_response()
         _active_sse_handlers.pop(session_id, None)
         if producer is not None:
-            producer.join(timeout=5.0)
+            await asyncio.to_thread(producer.join, 5.0)
             if producer.is_alive():
-                logger.warning("Producer thread still running after stream ended")
+                logger.warning(
+                    "Producer thread still running after stream ended; "
+                    "holding the session until it exits"
+                )
+                # The run (and so the session lock) must outlive the producer.
+                await asyncio.to_thread(producer.join)
 
     try:
         # Create SSE handler for streaming events
@@ -2677,7 +2695,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         turn_cancelled = sse_handler.cancelled.is_set()
 
         # Signal cancellation (handles client disconnect) then wait for producer.
-        _cleanup_stream()
+        await _cleanup_stream()
 
         # Finalize all captured steps (mark as inactive)
         for s in captured_steps:
@@ -2899,7 +2917,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
-        _cleanup_stream()
+        await _cleanup_stream()
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg)
@@ -2908,7 +2926,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
     finally:
-        _cleanup_stream()
+        await _cleanup_stream()
 
 
 async def _run_chat_lifecycle(
