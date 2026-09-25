@@ -40,6 +40,7 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 from gaia.logger import get_logger
+from gaia.version import parse_version
 
 # Load environment variables from .env file
 load_dotenv()
@@ -4790,7 +4791,10 @@ class LemonadeClient:
         try:
 
             def _version_tuple(v: str) -> tuple:
-                return tuple(int(p) for p in v.lstrip("v").split(".")[:3])
+                parsed = parse_version(v)
+                if parsed is None:
+                    raise ValueError(f"unparseable version {v!r}")
+                return parsed
 
             actual_tuple = _version_tuple(actual_version)
             min_tuple = _version_tuple(LEMONADE_MIN_VERSION)

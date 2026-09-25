@@ -15,6 +15,7 @@ Main entry point for `gaia init` command that:
 import importlib.util
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 from gaia.ui.build import WebuiBuildStatus
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = logging.getLogger(__name__)
 
@@ -1026,13 +1027,8 @@ class InitCommand:
 
     @staticmethod
     def _parse_version(version: str) -> Optional[tuple]:
-        """Parse version string into tuple."""
-        try:
-            ver = version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
-            return None
+        """Parse version string into tuple. See :func:`gaia.version.parse_version`."""
+        return parse_version(version)
 
     def _check_version_compatibility(self, info: LemonadeInfo) -> bool:
         """
@@ -1236,9 +1232,7 @@ class InitCommand:
             if RICH_AVAILABLE and self.console:
                 self.console.print(f"   [bold]{label}[/bold]")
             else:
-                import re as _re
-
-                plain_label = _re.sub(r"\[.*?\]", "", label)
+                plain_label = re.sub(r"\[.*?\]", "", label)
                 self._print(f"   {plain_label}")
 
             # macOS installs run headless via `installer -pkg`; only the MSI pops a window.

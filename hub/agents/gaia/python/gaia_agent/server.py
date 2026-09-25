@@ -32,6 +32,7 @@ import contextlib
 import json
 import os
 import queue
+import re
 import threading
 import time
 import uuid
@@ -447,7 +448,12 @@ def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
     if not version:
         return None
     try:
-        got = tuple(int(p) for p in str(version).strip().lstrip("v").split(".")[:3])
+        # Leading digits per part: this reads /api/v1/health verbatim, and
+        # Lemonade's CalVer dev builds look like "2026.39.0~12.abc1234".
+        got = tuple(
+            int(re.match(r"\s*(\d+)", p).group(1))
+            for p in str(version).strip().lstrip("v").split(".")[:3]
+        )
         want = tuple(int(p) for p in minimum.split(".")[:3])
     except (ValueError, AttributeError):
         return None

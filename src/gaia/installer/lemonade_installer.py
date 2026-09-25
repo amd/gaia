@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from gaia.llm.lemonade_launcher import get_installed_version, resolve_lemonade
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = logging.getLogger(__name__)
 
@@ -123,16 +123,14 @@ class LemonadeInfo:
 
     @property
     def version_tuple(self) -> Optional[tuple]:
-        """Parse version string into tuple for comparison."""
-        if not self.version:
-            return None
-        try:
-            # Handle versions like "9.1.4" or "v9.1.4"
-            ver = self.version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
-            return None
+        """Comparable tuple for the INSTALLED version, or None.
+
+        ``check_installation`` fills ``version`` from ``get_installed_version``,
+        which already strips a CalVer dev suffix — but that invariant lives two
+        files away and callers build ``LemonadeInfo`` directly, so this does not
+        lean on it.
+        """
+        return parse_version(self.version)
 
 
 @dataclass
@@ -294,13 +292,8 @@ class LemonadeInstaller:
         return current < target
 
     def _parse_version(self, version: str) -> Optional[tuple]:
-        """Parse version string into tuple."""
-        try:
-            ver = version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
-            return None
+        """Parse version string into tuple. See :func:`gaia.version.parse_version`."""
+        return parse_version(version)
 
     @property
     def release_page_url(self) -> str:
