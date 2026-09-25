@@ -145,7 +145,7 @@ def _select_builder_model(base_url: str) -> str:
         err = LemonadeError(
             user_message=(
                 "No usable model is installed for the agent builder. Install "
-                f"one of: {candidates}. For example: {pull.rstrip('.')}. Or run "
+                f"one of: {candidates}. {pull.rstrip('.')}. Or run "
                 "`gaia init` to set up a profile, then try again."
             )
         )

@@ -70,8 +70,11 @@ def _is_test_file(path: Path) -> bool:
     )
 
 
-def _is_comment(line: str) -> bool:
-    return line.lstrip().startswith(("#", "//", "*", "/*"))
+def _is_comment(line: str, suffix: str) -> bool:
+    # In markdown `#` and `*` open a heading or a bullet, not a comment — a
+    # bullet naming the removed CLI is exactly what the guard is looking for.
+    markers = ("//", "/*") if suffix in {".md", ".html"} else ("#", "//", "*", "/*")
+    return line.lstrip().startswith(markers)
 
 
 def _runtime_files():
@@ -98,7 +101,7 @@ def test_no_runtime_string_names_the_removed_lemonade_cli():
         except UnicodeDecodeError:
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _REMOVED_CLI.search(line) and not _is_comment(line):
+            if _REMOVED_CLI.search(line) and not _is_comment(line, path.suffix):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
 
     assert not offenders, (
@@ -112,7 +115,8 @@ def test_no_runtime_string_names_the_removed_lemonade_cli():
 def test_pending_entries_still_need_their_fix():
     """Once a pending file is fixed, its entry must go, or it hides a regression."""
     for rel in _PENDING:
-        text = (_REPO / rel).read_text(encoding="utf-8")
+        path = _REPO / rel
+        assert path.exists(), f"{rel} no longer exists — remove it from _PENDING."
         assert _REMOVED_CLI.search(
-            text
+            path.read_text(encoding="utf-8")
         ), f"{rel} no longer names the removed CLI — remove it from _PENDING."

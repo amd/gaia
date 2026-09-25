@@ -128,8 +128,10 @@ The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
 1. Lemonade **10.2.0 or newer**, running (`lemonade-server serve`).
-2. The default model downloaded (`gaia download Gemma-4-E4B-it-GGUF`, or
-   `gaia init`).
+2. The default model downloaded (`gaia init`). `gaia download` takes **no**
+   model argument — naming one makes it exit 2. To pull a single model instead,
+   repeat the command `GET /v1/gaia/init` gives you: it names the Lemonade
+   client this machine actually has. Do not invent one.
 
 Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 (it never pulls or loads) that probes Lemonade, compares its version to the

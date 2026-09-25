@@ -230,10 +230,10 @@ The model server isn't running. Run `gaia init` to install and start it, or poin
 ### "The model … is not downloaded"
 
 ```bash
-gaia download Gemma-4-E4B-it-GGUF
+gaia init
 ```
 
-Then re-run the readiness check.
+The hint `GET /v1/gaia/init` returns also names the pull command for whichever Lemonade client this machine has, if you'd rather pull just that one model. Then re-run the readiness check.
 
 ### "Access denied to path"
 

@@ -231,6 +231,36 @@ def test_missing_model_remedy_without_a_model_id_names_no_dead_command():
         _assert_parses(command)
 
 
+@pytest.mark.parametrize("tooling", [MODERN_LINUX, LEGACY, NOT_FOUND])
+def test_flagship_readiness_hint_pulls_with_the_resolved_client(mocker, tooling):
+    """The hub agent's readiness hint reaches the TUI's preflight screen, so a
+    dead command there is as user-visible as one from the CLI."""
+    import asyncio
+
+    server = pytest.importorskip("gaia_agent.server")
+
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch("gaia.llm.lemonade_launcher.resolve_lemonade", return_value=tooling)
+    mocker.patch.object(
+        server,
+        "_probe_lemonade",
+        return_value={
+            "base_url": "http://localhost:13305/api/v1",
+            "reachable": True,
+            "version": "999.0.0",
+            "present": False,
+            "ctx_size": None,
+            "model_id": "Gemma-4-E4B-it-GGUF",
+        },
+    )
+
+    hint = asyncio.run(server.init()).body.decode()
+
+    assert "gaia download Gemma" not in hint
+    for command in _gaia_commands(hint):
+        _assert_parses(command)
+
+
 def test_builder_no_model_remedy_pulls_with_the_resolved_client(mocker):
     from gaia.agents.builder import agent as builder_agent
     from gaia.llm.providers.lemonade import LemonadeError
@@ -258,20 +288,41 @@ def test_builder_no_model_remedy_pulls_with_the_resolved_client(mocker):
 
 _DEAD_DOWNLOAD = re.compile(r"gaia download\s+(?!-)[\w.{<]")
 
+_REPO = Path(__file__).resolve().parents[2]
+# Every root a user-facing string can ship from. Scanning only src/gaia let the
+# hub agent's readiness hint and its SKILL.md keep the dead command (#4216).
+_SCAN_ROOTS = ("src/gaia", "hub", "tui", "docs")
+_SCAN_EXTENSIONS = {".py", ".go", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".md", ".mdx"}
+_SKIP_DIRS = {"node_modules", "dist", "build", ".turbo", "tests", "test", "__tests__"}
+
+
+def _user_facing_files():
+    for root in _SCAN_ROOTS:
+        for path in sorted((_REPO / root).rglob("*")):
+            if not path.is_file() or path.suffix not in _SCAN_EXTENSIONS:
+                continue
+            if any(part in _SKIP_DIRS for part in path.relative_to(_REPO).parts):
+                continue
+            # Changelogs record history, including what older releases said.
+            if path.name.startswith("test_") or path.name == "CHANGELOG.md":
+                continue
+            yield path
+
 
 def test_no_new_gaia_download_with_a_positional_model():
     """`gaia download <model>` is rejected by argparse (see the contract test
     above). This has now shipped three times in three PRs, so fail on a
     fourth rather than waiting for a user to hit it."""
-    src_root = Path(__file__).resolve().parents[2] / "src" / "gaia"
     offenders = []
 
-    for path in sorted(src_root.rglob("*.py")):
-        rel = path.relative_to(src_root).as_posix()
-        for lineno, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            if line.lstrip().startswith("#"):
+    for path in _user_facing_files():
+        rel = path.relative_to(_REPO).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith(("#", "//")):
                 continue  # a comment explaining the bug is not the bug
             if _DEAD_DOWNLOAD.search(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
@@ -281,6 +332,21 @@ def test_no_new_gaia_download_with_a_positional_model():
         "rejected by argparse. Use describe_client_hint('pull', model) "
         "instead:\n" + "\n".join(offenders)
     )
+
+
+def test_the_download_guard_actually_reaches_the_hub_and_the_docs():
+    """A guard that scans the wrong roots passes while the bug ships.
+
+    `src/gaia` alone is what let the hub agent's readiness hint keep the dead
+    command through the PR that was meant to remove it.
+    """
+    scanned = {p.relative_to(_REPO).as_posix() for p in _user_facing_files()}
+    for rel in (
+        "hub/agents/gaia/python/gaia_agent/server.py",
+        "hub/agents/gaia/npm/SKILL.md",
+        "docs/guides/gaia.mdx",
+    ):
+        assert rel in scanned, f"{rel} is outside the guard's reach"
 
 
 if __name__ == "__main__":
