@@ -68,6 +68,8 @@ export {
   HealthTimeoutError,
   VersionMismatchError,
   BinaryNotFoundError,
+  PortInUseError,
+  SidecarExitedError,
   QueryStreamError,
 } from "./errors.js";
 

@@ -61,6 +61,9 @@ await shutdown(sidecar); // graceful stop — auto-cleanup also reaps on exit
   to run once.
 - `startSidecar` throws if the binary can't start, never becomes healthy, or the
   contract MAJOR version mismatches — and cleans up so a failed start leaks nothing.
+  If the port is already taken (e.g. a `playground` still running) it throws
+  `PortInUseError` without spawning; to reuse a running server, use
+  `connectSidecar({ baseUrl })` instead.
 - The sidecar is auto-reaped when your process exits, crashes, or is signalled
   (default `autoCleanup`), so a missed `shutdown` won't orphan the frozen binary's
   child. `shutdown(sidecar)` is the graceful, awaited stop; `autoCleanup: false` opts out.

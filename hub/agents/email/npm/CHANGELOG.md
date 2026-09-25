@@ -6,6 +6,15 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Starting the sidecar when port 8131 is already taken now fails with a clear
+  error instead of pretending it worked.** If an earlier `agent-email
+  playground` or another server held the port, `startSidecar` handed back a
+  "started" sidecar it didn't own: every call then failed with 401, and
+  `shutdown()` couldn't stop it. It now throws `PortInUseError` without spawning
+  anything (use `connectSidecar` to reuse a running server), or
+  `SidecarExitedError` if the port is taken mid-start. A sidecar that crashes
+  at startup now fails straight away instead of after the full 30 s wait.
+
 - **Asking a content question about your mail ("who signed this?", "what
   date was agreed?") now actually gets an answer when the answer is in the
   mailbox.** Search used to return only subjects and senders unless the

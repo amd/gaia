@@ -523,8 +523,13 @@ for (const m of messages) console.log(m.subject, "—", m.from);
 ## Lifecycle helpers
 
 `startSidecar(opts)` does spawn → `waitForHealth` → `checkVersion` in one call and
-shuts down on any failure so a failed start never leaks a process. For finer
-control, the steps are exported individually:
+shuts down on any failure so a failed start never leaks a process. It refuses to
+attach to a server it did not start: if something already listens on the port it
+throws `PortInUseError` before spawning (use `connectSidecar` to reuse a running
+server), and if its own child exits while another process answers the port it
+throws `SidecarExitedError`. A child that dies during startup ends the health wait
+at once instead of running out the timeout. For finer control, the steps are
+exported individually:
 
 - `fetchBinary(opts)` → download + verify + install; returns `{ binaryPath, sha256, cached, ... }`.
 - `resolveBinaryPath({ resourcesDir })` → locate a fetched binary (throws `BinaryNotFoundError` if absent).
