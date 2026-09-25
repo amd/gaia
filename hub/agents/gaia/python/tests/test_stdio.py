@@ -1027,6 +1027,49 @@ def test_cloud_model_switch_preserves_session_and_reports_remote(
     assert agent._use_claude is False
 
 
+def test_switch_message_classifies_from_the_client_not_the_id_prefix(
+    monkeypatch, stub_lemonade
+):
+    """A cloud model whose id prefix is not a known provider must not be
+    announced as local.
+
+    The switchable-model filter calls ``cloud_model_provider(id, metadata)``,
+    which honours the catalog's own ``cloud_provider`` field — so a model can
+    be switchable under any prefix. The switch message called the one-argument
+    form, which knows only the ``fireworks.``/``amd.`` prefixes and returns
+    None for anything else, so this model was described with the LOCAL
+    sentence: an affirmative "not sending this conversation to any cloud
+    provider" about a cloud model, contradicting the system prompt, which does
+    consult the client.
+    """
+    model = "custom.gemma-4-31b-it"
+    stub_lemonade.catalog = {
+        "data": [
+            {
+                "id": model,
+                "recipe": "cloud",
+                "cloud_provider": "fireworks",
+                "downloaded": False,
+            }
+        ]
+    }
+
+    class _CatalogAwareClient:
+        """What create_client really returns — a LemonadeClient, which carries
+        cloud_model_provider and reads the catalog metadata."""
+
+        def cloud_model_provider(self, model_id):
+            return "fireworks" if model_id == model else None
+
+    monkeypatch.setattr(stdio, "create_client", lambda **kwargs: _CatalogAwareClient())
+
+    answer = _events(_model_run(_ModelSwitchAgent(), f"/model {model}"))[-1]["answer"]
+
+    assert "Fireworks AI" in answer
+    assert "a cloud provider" in answer
+    assert "not sending this conversation to any cloud provider" not in answer
+
+
 def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
     stub_lemonade.catalog = {
         "data": [
