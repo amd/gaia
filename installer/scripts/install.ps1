@@ -402,8 +402,8 @@ function Show-NextSteps {
         Write-Host "  3. Talk to the agent: " -ForegroundColor White -NoNewline
         Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
         Write-Host "     (it opens the GAIA agent; type " -ForegroundColor White -NoNewline
-        Write-Host "/hub" -ForegroundColor $COLOR_GREEN -NoNewline
-        Write-Host " for the agent hub)" -ForegroundColor White
+        Write-Host "/agents" -ForegroundColor $COLOR_GREEN -NoNewline
+        Write-Host " to list installed agents)" -ForegroundColor White
     } else {
         Write-Host "  3. Open the terminal hub: " -ForegroundColor White -NoNewline
         Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
