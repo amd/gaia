@@ -27,6 +27,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Say something while the agent is still working.** `POST
+  /v1/gaia/query/{run_id}/followup` hands a live run a message the user typed
+  after it started (contract **2.15**). The run is not interrupted and no
+  second turn starts — the agent folds the text into the turn already running
+  at its next step boundary, so a correction during a five-minute task changes
+  that task instead of arriving after it finished. Unknown run → `404`, an
+  agent that cannot take one → `409`; both loud, because the caller has already
+  taken the message from the user. See SPEC §5.6 and SKILL §7.
 - **Approve a gated tool over HTTP.** `write_file`, `run_shell_command` and the
   seven other confirmation-gated tools can now run through `/v1/gaia/query`:
   the stream stays open on `needs_confirmation` and
@@ -295,9 +303,9 @@ the terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI 0.23.1+ on `PATH` for the daemon the TUI
-  starts. 0.23.1 is the first core whose daemon knows how to supervise this
-  agent; on 0.23.0 the UI starts with nothing behind it.
+  inference, and the `gaia` Python CLI 0.24.1+ on `PATH` for the daemon the TUI
+  starts. 0.24.1 is the first core whose daemon knows how to supervise this
+  agent; on an earlier core the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.
