@@ -11,7 +11,6 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
-import re
 import shutil
 import signal
 import socket
@@ -41,6 +40,7 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 from gaia.logger import get_logger
+from gaia.version import parse_version
 
 # Load environment variables from .env file
 load_dotenv()
@@ -4446,47 +4446,6 @@ class LemonadeClient:
         self.log.info(f"Model unloaded successfully: {response}")
         return response
 
-    def set_params(
-        self,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
-        do_sample: Optional[bool] = None,
-    ) -> Dict[str, Any]:
-        """
-        Set generation parameters for text completion.
-
-        Args:
-            temperature: Controls randomness (higher = more random)
-            top_p: Controls diversity via nucleus sampling
-            top_k: Controls diversity by limiting to k most likely tokens
-            min_length: Minimum length of generated text in tokens
-            max_length: Maximum length of generated text in tokens
-            do_sample: Whether to use sampling or greedy decoding
-
-        Returns:
-            Dict containing the status and updated parameters
-        """
-        request_data = {}
-
-        if temperature is not None:
-            request_data["temperature"] = temperature
-        if top_p is not None:
-            request_data["top_p"] = top_p
-        if top_k is not None:
-            request_data["top_k"] = top_k
-        if min_length is not None:
-            request_data["min_length"] = min_length
-        if max_length is not None:
-            request_data["max_length"] = max_length
-        if do_sample is not None:
-            request_data["do_sample"] = do_sample
-
-        url = f"{self.base_url}/params"
-        return self._send_request("post", url, request_data)
-
     def health_check(self) -> Dict[str, Any]:
         """
         Check server health.
@@ -4987,10 +4946,10 @@ class LemonadeClient:
         try:
 
             def _version_tuple(v: str) -> tuple:
-                # Leading digits per part: Lemonade's CalVer dev builds look
-                # like "2026.39.0~12.abc1234".
-                parts = v.lstrip("v").split(".")[:3]
-                return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
+                parsed = parse_version(v)
+                if parsed is None:
+                    raise ValueError(f"unparseable version {v!r}")
+                return parsed
 
             actual_tuple = _version_tuple(actual_version)
             min_tuple = _version_tuple(LEMONADE_MIN_VERSION)

@@ -6,12 +6,13 @@ Lemonade v2026.39.1 changed the version format from ``X.Y.Z`` to ``YYYY.WW.N``
 (dev builds: ``YYYY.WW.0~<count>.<hash>``) and called out in its release notes
 that anything parsing or comparing version strings has to be updated.
 
-GAIA compares Lemonade versions in seven independent places — the base agent
-readiness probe, the Lemonade client's compatibility gate, both installers,
-``LemonadeInfo.version_tuple``, the flagship GAIA agent's readiness server, and
-the frozen email sidecar (the last two keep their own copies because neither can
-import ``gaia.installer``). Each turns a version into an int tuple. Two failure
-modes matter and neither raises:
+GAIA compares Lemonade versions through one core implementation,
+:func:`gaia.version.parse_version`, plus two vendored copies: the flagship GAIA
+agent's readiness server and the frozen email sidecar. Those two stay vendored
+because ``freeze.py`` bundles only what is statically reachable and importing
+``gaia.version`` would run an ``importlib.metadata`` lookup a frozen binary
+cannot satisfy — so they are read out of their own source here instead, and
+cannot drift. Two failure modes matter and neither raises:
 
 * a release CalVer that parses wrong would compare wrong, and
 * a dev CalVer that fails to parse makes the gate return "can't tell", so it
@@ -19,11 +20,11 @@ modes matter and neither raises:
 
 These tests pin the real strings the server reports (verified against a live
 v2026.39.1 ``/api/v1/health``), so a future parser "simplification" that drops
-CalVer support fails here instead of in the field. Every copy is covered — the
-tuple parsers by parametrization, the two that compare instead of returning a
-tuple (the Lemonade client's gate and the flagship agent's) by their own cases —
-so fixing only some of them still fails here. The flagship agent's copy was
-missed on the first pass of exactly this change.
+CalVer support fails here instead of in the field. Every entry point is covered
+— the tuple parsers by parametrization, the two that compare instead of
+returning a tuple (the Lemonade client's gate and the flagship agent's) by their
+own cases. The flagship agent's copy was missed on the first pass of exactly
+this change, which is why the core copies were collapsed onto one.
 """
 
 import ast
@@ -249,3 +250,89 @@ def test_client_gate_rejects_an_old_dev_build():
 
 def test_client_gate_still_rejects_old_releases():
     assert _client_gate("9.1.4") is False
+
+
+# -- the AST loader's blind spot --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "hub/agents/email/python/gaia_agent_email/api_routes.py",
+        "hub/agents/gaia/python/gaia_agent/server.py",
+    ],
+)
+def test_the_vendored_copies_import_re_themselves(path):
+    """``_load_function_from_source`` supplies ``re``; the real modules must not rely on that.
+
+    The synthesized module always imports ``re``, so deleting the real
+    ``import re`` leaves every test above green while the running server raises
+    ``NameError`` on the first version check. Assert the import exists.
+    """
+    source = (REPO_ROOT / path).read_text(encoding="utf-8")
+    assert "\nimport re\n" in source, (
+        f"{path} no longer imports re at module scope — the parser there uses "
+        f"re.match, and the AST-loaded copy in these tests would hide it."
+    )
+
+
+def test_the_core_parsers_are_one_implementation():
+    """All in-core entry points delegate, so a format change is a one-line fix."""
+    from gaia.version import parse_version as canonical
+
+    probe = "2026.39.0~12.abc1234"
+    expected = canonical(probe)
+    for parser in (
+        parse_version,
+        InitCommand._parse_version,
+        _installer_parse,
+        _info_parse,
+    ):
+        assert parser(probe) == expected
+
+
+# -- the vendored copies really do match the shared one ---------------------
+
+
+# Deliberately wider than the hand-written cases above: the claim being tested is
+# equivalence with the core parser, not agreement on a handful of strings.
+DRIFT_CORPUS = [
+    "2026.39.1",
+    "2026.39.0~12.abc1234",
+    "2026.40.0",
+    "11.9.0",
+    "11.8.1",
+    "10.2.0",
+    "9.1.4",
+    "v2026.39.1",
+    " 2026.39.1",
+    # Whitespace INSIDE a component. The leading-space case cannot tell the
+    # parsers apart — str().strip() handles that before the regex sees it — so
+    # without these the equivalence claim goes untested for the exact character
+    # class that differs.
+    "2026. 39.1",
+    "2026.39. 1",
+    "2026.39.1.4",
+    "1.2",
+    "not-a-version",
+    "",
+    None,
+]
+
+
+@pytest.mark.parametrize("version", DRIFT_CORPUS)
+def test_the_email_sidecar_copy_matches_the_core_parser(version):
+    from gaia.version import parse_version as canonical
+
+    assert _email_parse(version) == canonical(version)
+
+
+@pytest.mark.parametrize("version", DRIFT_CORPUS)
+def test_the_flagship_copy_agrees_with_the_core_parser(version):
+    """It compares rather than returning a tuple, so check the verdict it reaches."""
+    from gaia.version import parse_version as canonical
+
+    floor = LEMONADE_MIN_VERSION
+    parsed = canonical(version)
+    expected = None if parsed is None else parsed >= canonical(floor)
+    assert _gaia_server_meets_min(version, floor) == expected

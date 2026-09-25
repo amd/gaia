@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from gaia.llm.lemonade_launcher import get_installed_version, resolve_lemonade
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = logging.getLogger(__name__)
 
@@ -123,21 +123,14 @@ class LemonadeInfo:
 
     @property
     def version_tuple(self) -> Optional[tuple]:
-        """Parse version string into tuple for comparison.
+        """Comparable tuple for the INSTALLED version, or None.
 
-        Handles "9.1.4", "v9.1.4" and Lemonade's CalVer dev suffix
-        ("2026.39.0~12.abc1234"). ``check_installation`` fills ``version``
-        from ``get_installed_version``, which already strips the suffix — but
-        that is an invariant two files away, and callers construct
-        ``LemonadeInfo`` directly, so do not rely on it here.
+        ``check_installation`` fills ``version`` from ``get_installed_version``,
+        which already strips a CalVer dev suffix — but that invariant lives two
+        files away and callers build ``LemonadeInfo`` directly, so this does not
+        lean on it.
         """
-        if not self.version:
-            return None
-        try:
-            parts = self.version.lstrip("v").split(".")[:3]
-            return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
-        except (ValueError, IndexError, AttributeError):
-            return None
+        return parse_version(self.version)
 
 
 @dataclass
@@ -299,15 +292,8 @@ class LemonadeInstaller:
         return current < target
 
     def _parse_version(self, version: str) -> Optional[tuple]:
-        """Parse version string into tuple.
-
-        Tolerates Lemonade's CalVer dev suffix (``2026.39.0~12.abc1234``).
-        """
-        try:
-            parts = version.lstrip("v").split(".")[:3]
-            return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
-        except (ValueError, IndexError, AttributeError):
-            return None
+        """Parse version string into tuple. See :func:`gaia.version.parse_version`."""
+        return parse_version(version)
 
     @property
     def release_page_url(self) -> str:

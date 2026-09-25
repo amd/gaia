@@ -53,21 +53,6 @@ class FitVerdict:
     reason: str = ""
 
 
-def version_tuple(version: str) -> Tuple[int, ...]:
-    """``"2026.39.1"`` or ``"v11.8.1"`` as comparable ints.
-
-    Leading digits per part, so a CalVer dev build (``2026.39.0~12.abc1234``)
-    still compares; CalVer's year sorts above every old semver major.
-    """
-    parts = []
-    for part in str(version).strip().lstrip("v").split(".")[:3]:
-        match = re.match(r"\d+", part)
-        if not match:
-            break
-        parts.append(int(match.group(0)))
-    return tuple(parts)
-
-
 def check_server_supports(
     min_version: Optional[str], server_version: Optional[str]
 ) -> FitVerdict:
@@ -78,7 +63,10 @@ def check_server_supports(
     """
     if not min_version:
         return FitVerdict(True)
-    if server_version and version_tuple(server_version) >= version_tuple(min_version):
+    from gaia.version import parse_version
+
+    found, wanted = parse_version(server_version), parse_version(min_version)
+    if found is not None and wanted is not None and found >= wanted:
         return FitVerdict(True)
     running = (
         f"this server is v{server_version}"

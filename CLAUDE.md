@@ -625,7 +625,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
 | **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG; the flagship's base class — hub (`chat/`) |
-| **EmailTriageAgent** | Email triage for Gmail (local inference; needs the Google connector) — hub (`email/`) |
+| **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
 | **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
@@ -680,7 +680,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
 - `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
-- `gaia email` - Email triage for Gmail (local inference; needs the Google connector)
+- `gaia email` - Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector)
 
 **Servers & infrastructure:**
 - `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
