@@ -2549,7 +2549,7 @@ gaia schedule daemon
 
 ### Sinks
 
-A sink decides where each scheduled run's output goes. Set it with `--sink` on `add` (default `stdout`):
+A sink decides where each scheduled run's output goes. Set it with `--sink` on `add` (default `stdout`). `add` rejects a sink that could never deliver (an unknown name, `telegram` without `--to`, bare `file` without a path, or `notification` on Windows) and stores nothing. The Telegram bot token is only checked when a run delivers, because the daemon reads it from its own environment.
 
 | Sink | Description |
 |------|-------------|

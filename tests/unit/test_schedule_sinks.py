@@ -23,6 +23,51 @@ _PLATFORM_SYSTEM = "gaia.schedule.sinks.platform.system"
 _SUBPROCESS_RUN = "gaia.schedule.sinks.subprocess.run"
 
 
+class TestValidate:
+    """``validate`` rejects a sink that could never deliver (#4228)."""
+
+    @pytest.mark.parametrize(
+        "sink, sink_args",
+        [
+            ("stdout", {}),
+            ("file:/tmp/log.md", {}),
+            ("file", {"path": "/tmp/log.md"}),
+            ("telegram", {"to": "123"}),
+        ],
+    )
+    def test_deliverable_sinks_pass(self, sink, sink_args):
+        sinks.validate(sink, sink_args)
+
+    def test_telegram_token_is_not_required_at_validate_time(self, monkeypatch):
+        # The daemon may have GAIA_TELEGRAM_TOKEN when the add shell does not.
+        monkeypatch.delenv("GAIA_TELEGRAM_TOKEN", raising=False)
+        sinks.validate("telegram", {"to": "123"})
+
+    @pytest.mark.parametrize(
+        "sink, sink_args, match",
+        [
+            ("telegram", {}, "--to"),
+            ("carrier-pigeon", {}, "unknown sink"),
+            ("stdout ", {}, "unknown sink"),
+            ("file", {}, "file sink requires a path"),
+            ("file:", {}, "file sink requires a path"),
+        ],
+    )
+    def test_undeliverable_sinks_raise(self, sink, sink_args, match):
+        with pytest.raises(ValueError, match=match):
+            sinks.validate(sink, sink_args)
+
+    @pytest.mark.parametrize("system", ["Darwin", "Linux"])
+    def test_notification_passes_where_supported(self, mocker, system):
+        mocker.patch(_PLATFORM_SYSTEM, return_value=system)
+        sinks.validate("notification", {})
+
+    def test_notification_rejected_on_windows(self, mocker):
+        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")
+        with pytest.raises(NotImplementedError, match="Windows"):
+            sinks.validate("notification", {})
+
+
 # ===========================================================================
 # 1. dispatch routing table
 # ===========================================================================

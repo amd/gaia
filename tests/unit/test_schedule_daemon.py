@@ -405,6 +405,17 @@ class TestRunnerFire:
 
         mock_dispatch.assert_called_once_with("file", {"path": "/tmp/x.md"}, "out")
 
+    def test_fire_rejects_bad_sink_before_calling_the_agent(self, mocker):
+        # A store written before add-time validation must not burn an LLM run.
+        mock_sdk_cls = mocker.patch(_AGENT_SDK)
+        mocker.patch(_AGENT_CONFIG)
+
+        sched = _make_schedule("a", prompt="p", sink="telegram", sink_args={})
+        with pytest.raises(ValueError, match="--to"):
+            runner.fire(sched)
+
+        mock_sdk_cls.return_value.send.assert_not_called()
+
     def test_fire_skill_only_raises_not_implemented(self, mocker):
         # The scheduler cannot run skills yet; fire must fail loudly, never
         # reach the agent or the sink.

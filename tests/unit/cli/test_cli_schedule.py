@@ -138,6 +138,44 @@ def test_add_default_sink_without_to_has_empty_sink_args(parser, mock_store):
     assert "to" not in constructed.sink_args
 
 
+@pytest.mark.parametrize(
+    "sink_argv, reason",
+    [
+        (["--sink", "telegram"], "--to"),
+        (["--sink", "telegarm", "--to", "1"], "unknown sink"),
+        (["--sink", "file"], "requires a path"),
+    ],
+)
+def test_add_rejects_undeliverable_sink(parser, mock_store, capsys, sink_argv, reason):
+    """A sink that can't deliver must fail at add, not after every LLM run (#4228)."""
+    args = _parse(
+        parser,
+        ["add", "--name", "n", "--cron", "* * * * *", "--prompt", "hi", *sink_argv],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(args)
+
+    assert excinfo.value.code == 1
+    mock_store.add.assert_not_called()
+    assert reason in capsys.readouterr().err
+
+
+def test_add_rejects_notification_sink_on_windows(parser, mock_store, mocker, capsys):
+    mocker.patch("gaia.schedule.sinks.platform.system", return_value="Windows")
+    args = _parse(
+        parser,
+        ["add", "--name", "n", "--cron", "* * * * *", "--prompt", "hi"]
+        + ["--sink", "notification"],
+    )
+
+    with pytest.raises(SystemExit):
+        _handle_schedule(args)
+
+    mock_store.add.assert_not_called()
+    assert "Windows" in capsys.readouterr().err
+
+
 def test_add_requires_name_and_cron(parser):
     with pytest.raises(SystemExit) as excinfo:
         _parse(parser, ["add", "--prompt", "hi"])

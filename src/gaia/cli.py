@@ -3376,6 +3376,13 @@ def _handle_schedule(args):
         sink_args = {}
         if getattr(args, "to", None):
             sink_args["to"] = args.to
+        from gaia.schedule import sinks as schedule_sinks
+
+        try:
+            schedule_sinks.validate(args.sink, sink_args)
+        except (ValueError, NotImplementedError) as exc:
+            print(f"❌ Cannot add schedule {args.name!r}: {exc}", file=sys.stderr)
+            sys.exit(1)
         schedule = Schedule(
             name=args.name,
             cron=args.cron,

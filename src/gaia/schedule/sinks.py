@@ -16,6 +16,44 @@ from typing import Any, Dict
 import requests
 
 TELEGRAM_API = "https://api.telegram.org"
+_NOTIFICATION_SYSTEMS = ("Darwin", "Linux")
+
+
+def validate(sink: str, sink_args: Dict[str, Any]) -> None:
+    """Raise if ``sink`` could never deliver: unknown name, missing args, or OS.
+
+    Called when a schedule is added and before each run's LLM call. The
+    telegram token is not checked: it is read from the daemon's environment
+    at delivery time, which may differ from the shell that ran ``add``.
+    """
+    if sink == "stdout":
+        return
+    if sink == "notification":
+        system = platform.system()
+        if system not in _NOTIFICATION_SYSTEMS:
+            raise NotImplementedError(
+                f"notification sink is not implemented for {system!r}; "
+                f"use --sink stdout, file:<path>, or telegram instead"
+            )
+        return
+    if sink == "telegram":
+        if not sink_args.get("to"):
+            raise ValueError(
+                "telegram sink needs a recipient: pass --to <user_id> "
+                "(stored as sink_args.to)"
+            )
+        return
+    if sink == "file" or sink.startswith("file:"):
+        if not _file_path(sink, sink_args):
+            raise ValueError(
+                "file sink requires a path: use --sink file:/path/to/log.md "
+                "or pass sink_args.path in schedules.toml"
+            )
+        return
+    raise ValueError(
+        f"unknown sink {sink!r}; valid sinks are: stdout, file:<path>, "
+        f"notification, telegram"
+    )
 
 
 def dispatch(sink: str, sink_args: Dict[str, Any], output: str) -> None:
@@ -24,27 +62,21 @@ def dispatch(sink: str, sink_args: Dict[str, Any], output: str) -> None:
     Raises on any delivery failure with a message naming what failed, what the
     caller should do, and where to look.
     """
+    validate(sink, sink_args)
     if sink == "stdout":
         _to_stdout(output)
     elif sink == "notification":
         _to_notification(output, sink_args)
     elif sink == "telegram":
         _to_telegram(output, sink_args)
-    elif sink.startswith("file:"):
-        _to_file(sink[len("file:") :], output)
-    elif sink == "file":
-        path = sink_args.get("path")
-        if not path:
-            raise ValueError(
-                "file sink requires a path: use --sink file:/path/to/log.md "
-                "or pass sink_args.path in schedules.toml"
-            )
-        _to_file(path, output)
     else:
-        raise ValueError(
-            f"unknown sink {sink!r}; valid sinks are: stdout, file:<path>, "
-            f"notification, telegram"
-        )
+        _to_file(_file_path(sink, sink_args), output)
+
+
+def _file_path(sink: str, sink_args: Dict[str, Any]) -> str:
+    if sink.startswith("file:"):
+        return sink[len("file:") :]
+    return sink_args.get("path") or ""
 
 
 def _to_stdout(output: str) -> None:
