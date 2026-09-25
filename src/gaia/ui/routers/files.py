@@ -11,9 +11,11 @@ Provides filesystem access for the document picker UI:
 """
 
 import asyncio
+import concurrent.futures
 import datetime
 import logging
 import platform
+import threading
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -49,6 +51,12 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 
 # All extensions allowed for upload (document types + image types)
 UPLOAD_ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS
+
+# File search bounds: a search must never walk an entire home directory.
+SEARCH_MAX_ENTRIES = 20_000
+SEARCH_TIME_BUDGET_SEC = 10.0
+# Extra wait for a walk stuck inside one blocking read (e.g. a cloud mount).
+SEARCH_STALL_GRACE_SEC = 1.0
 
 # Directory where uploaded files are stored
 UPLOADS_DIR = Path.home() / ".gaia" / "chat" / "uploads"
@@ -370,6 +378,11 @@ async def search_files(
     then expands to deeper search if needed. Results sorted by
     modification date (most recent first).
 
+    The walk stops once ``max_results`` matches are found, after
+    ``SEARCH_MAX_ENTRIES`` directory entries, or after
+    ``SEARCH_TIME_BUDGET_SEC`` seconds. ``truncated`` is true when one of
+    the last two bounds cut the walk short, so more matches may exist.
+
     Args:
         query: File name pattern to search for (partial matches supported).
         file_types: Comma-separated extensions to filter (e.g., 'csv,xlsx').
@@ -394,12 +407,22 @@ async def search_files(
             f".{ext.strip().lower()}" for ext in file_types.split(",") if ext.strip()
         }
 
-    def _do_search() -> tuple:
-        """Blocking filesystem scan -- runs in a thread."""
-        matching_files: list = []
+    matching_files: list = []
+    searched_locations: list = []
+
+    def _do_search() -> bool:
+        """Blocking filesystem scan -- runs in a thread. Returns ``truncated``."""
         seen_paths: set = set()
-        searched_locations: list = []
         start_time = _time.monotonic()
+        deadline = start_time + SEARCH_TIME_BUDGET_SEC
+        visited = 0
+        truncated = False
+
+        def _out_of_budget() -> bool:
+            nonlocal truncated
+            if visited >= SEARCH_MAX_ENTRIES or _time.monotonic() >= deadline:
+                truncated = True
+            return truncated
 
         def _matches(file_path: Path) -> bool:
             name_match = query_lower in file_path.name.lower()
@@ -409,18 +432,26 @@ async def search_files(
                 return file_path.suffix.lower() in extensions
             return True
 
-        def _scan(directory: Path, max_depth: int = 5, depth: int = 0):
+        def _scan(
+            directory: Path, max_depth: int = 5, depth: int = 0, skip=frozenset()
+        ):
+            nonlocal visited
             if depth > max_depth or len(matching_files) >= max_results:
                 return
             if not directory.exists() or not directory.is_dir():
+                return
+            if _out_of_budget():
                 return
 
             searched_locations.append(str(directory))
 
             try:
                 for item in directory.iterdir():
-                    if len(matching_files) >= max_results:
+                    if len(matching_files) >= max_results or _out_of_budget():
                         return
+                    visited += 1
+                    if item in skip:
+                        continue
                     if item.name.startswith((".", "$", "__")):
                         continue
                     if item.name in (
@@ -457,48 +488,77 @@ async def search_files(
                                 }
                             )
                         elif item.is_dir() and depth < max_depth:
-                            _scan(item, max_depth, depth + 1)
+                            _scan(item, max_depth, depth + 1, skip)
                     except (PermissionError, OSError):
                         continue
-            except (PermissionError, OSError):
-                pass
+            except OSError as exc:
+                logger.debug("File search skipped unreadable %s: %s", directory, exc)
 
         home = Path.home()
-        for loc in [
+        priority_dirs = [
             home / "Documents",
             home / "Downloads",
             home / "Desktop",
             home / "OneDrive",
-        ]:
+        ]
+        for loc in priority_dirs:
             if len(matching_files) >= max_results:
                 break
             _scan(loc, max_depth=4)
 
         if len(matching_files) < max_results:
-            _scan(home, max_depth=3)
-
-        matching_files.sort(key=lambda f: f["modified"], reverse=True)
-        matching_files = matching_files[:max_results]
+            # Already walked deeper above; don't spend the budget twice.
+            _scan(home, max_depth=3, skip=frozenset(priority_dirs))
 
         elapsed_sec = _time.monotonic() - start_time
         logger.info(
-            "File search for '%s': %d results in %.2fs (%d locations)",
+            "File search for '%s': %d results in %.2fs (%d locations, "
+            "%d entries, truncated=%s)",
             query,
             len(matching_files),
             elapsed_sec,
             len(searched_locations),
+            visited,
+            truncated,
         )
-        return matching_files, searched_locations
+        return truncated
 
-    # Run blocking scan in a thread to avoid blocking the event loop
-    loop = asyncio.get_running_loop()
-    matching_files, searched_locations = await loop.run_in_executor(None, _do_search)
+    walk: concurrent.futures.Future = concurrent.futures.Future()
+
+    def _run_walk() -> None:
+        if not walk.set_running_or_notify_cancel():
+            return
+        try:
+            walk.set_result(_do_search())
+        except BaseException as exc:
+            walk.set_exception(exc)
+
+    # Own daemon thread, not the shared executor: a stalled walk must not
+    # occupy an executor slot or block loop shutdown.
+    threading.Thread(target=_run_walk, name="gaia-file-search", daemon=True).start()
+    try:
+        truncated = await asyncio.wait_for(
+            asyncio.wrap_future(walk),
+            timeout=SEARCH_TIME_BUDGET_SEC + SEARCH_STALL_GRACE_SEC,
+        )
+    except asyncio.TimeoutError:
+        truncated = True
+        logger.warning(
+            "File search for '%s' stalled reading %s; returning %d partial results",
+            query,
+            searched_locations[-1] if searched_locations else "(no location yet)",
+            len(matching_files),
+        )
+
+    results = sorted(list(matching_files), key=lambda f: f["modified"], reverse=True)
+    results = results[:max_results]
 
     return FileSearchResponse(
-        results=[FileSearchResult(**f) for f in matching_files],
-        total=len(matching_files),
+        results=[FileSearchResult(**f) for f in results],
+        total=len(results),
         query=query,
         searched_locations=searched_locations[:10],
+        truncated=truncated,
     )
 
 

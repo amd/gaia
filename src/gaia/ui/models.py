@@ -574,6 +574,7 @@ class FileSearchResponse(BaseModel):
     total: int
     query: str
     searched_locations: List[str] = Field(default_factory=list)
+    truncated: bool = False
 
 
 class OpenFileRequest(BaseModel):
