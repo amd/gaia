@@ -1762,7 +1762,7 @@ gaia eval agent [OPTIONS]
 | `--scenario` | string | all | Run a specific scenario by ID |
 | `--category` | string | all | Run all scenarios in a category |
 | `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
-| `--agent-type` | string | backend default | Agent registration ID to target (e.g. `gaia-lite`); scenarios run against this agent |
+| `--agent-type` | string | `gaia` | Agent registration ID to score. Every scenario runs against this one agent, so a scorecard names a single agent and two scorecards are comparable. Override only to measure a different agent — and never compare the result to a scorecard captured under another one |
 | `--model` | string | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
 | `--iterations` | integer | `1` | Run each scenario N times for reliability measurement |
 | `--keep-sessions` | flag | false | Don't delete Agent UI sessions after eval — leave them for manual inspection |

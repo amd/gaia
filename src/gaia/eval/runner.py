@@ -34,6 +34,8 @@ from typing import Optional
 
 import yaml
 
+from gaia.eval.config import DEFAULT_AGENT_TYPE
+
 logger = logging.getLogger(__name__)
 
 # fcntl is POSIX-only — on Windows the eval lock degrades to a no-op (the
@@ -296,11 +298,6 @@ _STARTUP_OVERHEAD_S = (
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
 
-def _resolve_scenario_agent_type(scenario_data: dict, cli_agent_type):
-    """Return the agent a scenario asks for: its own ``agent_type:`` wins."""
-    return scenario_data.get("agent_type") or cli_agent_type
-
-
 def _canonical_agent_type(value):
     """Resolve legacy aliases so ``doc-lite`` and ``doc`` compare equal.
 
@@ -360,7 +357,7 @@ def _stamp_agent_provenance(
     every other status intact. Nothing is checked when no agent was requested —
     the backend default is the right answer by definition.
     """
-    requested = _resolve_scenario_agent_type(scenario_data, cli_agent_type)
+    requested = cli_agent_type
     result["agent_type_requested"] = requested
     result.setdefault("agent_type_observed", None)
 
@@ -431,6 +428,15 @@ def validate_scenario(path: Path, data: dict) -> None:
     for field in ("id", "category", "setup", "turns", "persona"):
         if field not in data:
             errors.append(f"missing top-level field '{field}'")
+
+    # Rejected at load, not ignored: a pin used to beat --agent-type, so a run
+    # scored one agent while its scorecard recorded another.
+    if "agent_type" in data:
+        errors.append(
+            "'agent_type' is not honoured — one run scores one agent, set by "
+            f"--agent-type (default '{DEFAULT_AGENT_TYPE}'). Delete the key; to "
+            "measure a different agent pass --agent-type for the whole run."
+        )
 
     if "setup" in data and "index_documents" not in data.get("setup", {}):
         errors.append("setup.index_documents is missing (use empty list [] if none)")
@@ -2111,7 +2117,9 @@ class AgentEvalRunner:
         tags=None,
         exclude_tags=None,
         output_format=None,
-        agent_type=None,
+        # Not None: _stamp_agent_provenance skips a scenario that requested no
+        # agent, so a null default would silently disarm the provenance check.
+        agent_type=DEFAULT_AGENT_TYPE,
         iterations=1,
     ):
         self.backend_url = backend_url
@@ -2275,9 +2283,7 @@ class AgentEvalRunner:
                 result = {
                     "scenario_id": sid,
                     "category": scenario_data.get("category", "unknown"),
-                    "agent_type_requested": _resolve_scenario_agent_type(
-                        scenario_data, self.agent_type
-                    ),
+                    "agent_type_requested": self.agent_type,
                     "agent_type_observed": None,
                     "status": "SKIPPED_NO_DOCUMENT",
                     "overall_score": None,
@@ -2299,9 +2305,6 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
-            scenario_agent_type = _resolve_scenario_agent_type(
-                scenario_data, self.agent_type
-            )
             # Repeat the scenario N times so a flaky result is distinguishable
             # from a hard failure — at N=1 they are indistinguishable.
             attempts = []
@@ -2324,7 +2327,9 @@ class AgentEvalRunner:
                         extra_corpus_dirs=(
                             self.extra_corpus_dirs if self.extra_corpus_dirs else None
                         ),
-                        agent_type=scenario_agent_type,
+                        # One run scores one agent (#4096) -- a scenario's own
+                        # agent_type is rejected at load time, never honoured.
+                        agent_type=self.agent_type,
                         attempt=(attempt_idx if self.iterations > 1 else None),
                     )
                 )
@@ -2417,9 +2422,6 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
-                scenario_agent_type = _resolve_scenario_agent_type(
-                    scenario_data, self.agent_type
-                )
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
@@ -2432,7 +2434,7 @@ class AgentEvalRunner:
                     extra_corpus_dirs=(
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
-                    agent_type=scenario_agent_type,
+                    agent_type=self.agent_type,
                 )
                 rerun_results.append(result)
 

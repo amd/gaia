@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -2099,13 +2099,14 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--agent-type",
-        default=None,
+        default=DEFAULT_AGENT_TYPE,
         metavar="AGENT_ID",
         help=(
-            "Agent registration ID to target (e.g. 'gaia-lite'). When set, "
-            "the eval runner instructs the simulator to create sessions with "
-            "this agent_type so scenarios run against the chosen agent. Omit "
-            "to use the backend default."
+            f"Agent registration ID to score (default: {DEFAULT_AGENT_TYPE}, the "
+            "flagship). Every scenario runs against this one agent, so a "
+            "scorecard names a single agent and two scorecards are comparable. "
+            "Override only to measure a different agent, and never compare the "
+            "result to a scorecard captured under another agent."
         ),
     )
     agent_eval_parser.add_argument(
@@ -4269,7 +4270,7 @@ Let me know your answer!
                 model=eval_model,
                 budget_per_scenario=args.budget,
                 timeout_per_scenario=args.timeout,
-                agent_type=getattr(args, "agent_type", None),
+                agent_type=getattr(args, "agent_type", DEFAULT_AGENT_TYPE),
                 extra_scenario_dirs=getattr(args, "scenario_dir", None),
                 extra_corpus_dirs=getattr(args, "corpus_dir", None),
                 tags=getattr(args, "tag", None),

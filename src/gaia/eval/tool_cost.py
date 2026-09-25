@@ -844,7 +844,7 @@ def _ttft_section(scorecard_path: Optional[str]) -> str:
             "",
             "```bash",
             "python -m gaia.ui.server --port 4200 --host 127.0.0.1   # gemma-4-e4b",
-            "gaia eval agent --category tool_selection --agent-type doc",
+            "gaia eval agent --category tool_selection",
             "#   -> eval/results/<run-id>/scorecard.json",
             "python -m gaia.eval.tool_cost --profile doc \\",
             "    --scorecard eval/results/<run-id>/scorecard.json",
