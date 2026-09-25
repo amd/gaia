@@ -268,14 +268,20 @@ set can delete a file — it is a tripwire against an accidental recursive delet
 so the read-only tier keeps claiming exactly what it claims and #2768's
 hardening of it never has to reason about these entries.
 
-**Stdio transport only.** Bypass exists on the sidecar's stdio transport, which
-is one local parent process on a private pipe. It is not reachable on the HTTP
-transport (`hub/agents/gaia/python/gaia_agent/server.py`): that is a bound
-socket, and an unguarded shell reachable over it is remote code execution rather
-than a relaxed permission model. The HTTP handler pins `bypass_permissions =
-False`, the request model forbids unknown fields so a client cannot ask for it,
-and there is no HTTP equivalent of the `gaia_control` bypass verb. Token auth
-and `HostOriginMiddleware` (`caller_auth.py`) continue to guard that surface for
+**Stdio transport only.** The shell-guardrail lift exists on the sidecar's stdio
+transport, which is one local parent process on a private pipe. It is not
+reachable on the HTTP transport
+(`hub/agents/gaia/python/gaia_agent/server.py`): that is a bound socket, and an
+unguarded shell reachable over it is remote code execution rather than a relaxed
+permission model. The HTTP handler pins `bypass_permissions = False`, and the
+request model forbids unknown fields so a client cannot ask for it.
+
+HTTP *does* have `POST /v1/gaia/sessions/{id}/bypass`, but it grants only the
+other half of bypass — running gated tools unasked. Both halves ride one
+`PermissionState`, so that class takes `lifts_shell_gates`, false for every HTTP
+session: without it, `attach` would write the session's bypass onto each turn's
+fresh handler and silently undo the pin above. Token auth and
+`HostOriginMiddleware` (`caller_auth.py`) continue to guard that surface for
 everything else.
 
 **It still audits.** Skipping the confirmation *prompt* does not skip the

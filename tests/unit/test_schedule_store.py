@@ -249,6 +249,25 @@ class TestTomlScheduleStore:
         assert set(loaded) == {"a", "b"}
         assert loaded["b"].skill == "sk"
 
+    def test_save_keeps_complete_previous_file_visible_until_replace(
+        self, tmp_path, mocker
+    ):
+        store = _store(tmp_path)
+        store.add(_make_schedule("before"))
+
+        def read_during_write(doc, handle):
+            handle.write(b"[schedules.")
+            handle.flush()
+            assert set(store.load()) == {"before"}
+            raise OSError("interrupted write")
+
+        mocker.patch("gaia.schedule.store.tomli_w.dump", side_effect=read_during_write)
+        with pytest.raises(OSError, match="interrupted write"):
+            store.save({"after": _make_schedule("after")})
+
+        assert set(store.load()) == {"before"}
+        assert list(tmp_path.iterdir()) == [store.path]
+
 
 # ===========================================================================
 # 4. TomlScheduleStore.mark_run

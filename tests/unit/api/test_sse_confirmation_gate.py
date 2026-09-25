@@ -246,9 +246,8 @@ class TestRegistryWiring:
         installs is the one the agent actually consults — ``silent_mode=True``
         in ``AGENT_MODELS`` must not win over ``output_handler``.
 
-        AGENT_MODELS holds the flagship, not the agent this probe stubs, so
-        it used to expose are gone — so a fake entry is patched in here to
-        exercise the get_agent() wiring this test actually targets.
+        AGENT_MODELS holds only the flagship, so a fake entry is patched in to
+        exercise the get_agent() wiring without building the real agent.
         """
         from unittest.mock import patch
 

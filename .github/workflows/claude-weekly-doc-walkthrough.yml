@@ -73,7 +73,7 @@
 #   `path_to_claude_code_executable`.
 # - Run 32764106980: npm wasn't on PATH either (same story as bash and python);
 #   fixed with actions/setup-node, matching what
-#   test_eval_agent_gemma_consolidation.yml already does on this runner pool.
+#   eval_flagship.yml already does on this runner pool.
 # - Run 32767640853: executor finished cleanly (is_error=false, 52 turns) and the
 #   judge wrote findings, yet the status step called it a crash -- it parsed
 #   execution_file line-by-line, but that file is a pretty-printed JSON array.
@@ -241,8 +241,8 @@ jobs:
       # support Windows) and hand the action the binary via
       # `path_to_claude_code_executable`, its documented skip-the-install escape hatch.
       # npm is not on PATH on this runner either (same story as bash and python).
-      # test_eval_agent_gemma_consolidation.yml sets Node up the same way on the
-      # same runner pool before its own `npm install -g @anthropic-ai/claude-code`.
+      # eval_flagship.yml sets Node up the same way on the same runner pool
+      # before its own `npm install -g @anthropic-ai/claude-code`.
       - name: Set up Node (provides npm for the Claude Code install below)
         uses: actions/setup-node@v7
         with:
