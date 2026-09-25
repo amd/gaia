@@ -39,7 +39,7 @@ Install Lemonade, download the model, and start the server:
 gaia init
 ```
 
-The agent runs local inference only: the sidecar's `/query` endpoint rejects any request naming a provider other than `lemonade` with **HTTP 400**.
+Inference runs locally by default. The sidecar's `/query` endpoint accepts `provider: "lemonade"` (the default) or `provider: "claude"`, which sends the conversation to Anthropic's API. Any other provider, or a `model` that belongs to the other provider, is rejected with **HTTP 400**.
 
 ## Install and launch
 

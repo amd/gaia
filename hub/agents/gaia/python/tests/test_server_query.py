@@ -606,6 +606,134 @@ def test_a_second_turn_on_the_same_claude_model_does_not_re_switch(built, switch
     assert switched == []
 
 
+@pytest.fixture
+def switched_backend(monkeypatch):
+    """Records live switches below the session, so its own bookkeeping runs.
+
+    ``switched`` replaces ``_AgentSession.switch_model`` wholesale, which also
+    skips the provider it records — the thing the tests below are about.
+    """
+    from gaia_agent import stdio
+
+    calls: list = []
+
+    def fake_switch(agent, target):
+        calls.append((target,))
+        return target
+
+    monkeypatch.setattr(stdio, "switch_model", fake_switch)
+    return calls
+
+
+def test_a_claude_session_asked_for_lemonade_switches_to_local(built, switched_backend):
+    """Naming only the provider used to leave the turn going to Anthropic."""
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    client, agents = built
+    client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="lemonade"))
+
+    assert r.status_code == 200, r.text
+    assert switched_backend == [(DEFAULT_MODEL_NAME,)]
+    session = sr.registry.get("s-1")
+    assert session.provider == "lemonade"
+    assert len(agents) == 1, "the conversation must survive the switch"
+
+
+def test_a_local_session_asked_for_claude_switches_to_claude(built, switched_backend):
+    """Naming only the provider used to leave the turn running locally."""
+    from gaia_agent_chat.agent import ChatAgentConfig
+
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="claude"))
+
+    assert r.status_code == 200, r.text
+    assert switched_backend == [(ChatAgentConfig.claude_model,)]
+    assert sr.registry.get("s-1").provider == "claude"
+
+
+def test_a_provider_switch_is_not_repeated_on_the_next_turn(built, switched_backend):
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="claude"))
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="claude"))
+
+    assert len(switched_backend) == 1
+
+
+@pytest.mark.parametrize(
+    "provider, model",
+    [("lemonade", "claude-sonnet-5"), ("claude", "Gemma-4-E4B-it-GGUF")],
+)
+def test_a_model_from_the_other_provider_is_refused_on_a_new_session(
+    built, provider, model
+):
+    """Accepted before, then failed deep in the wrong backend, or ran there."""
+    client, agents = built
+
+    r = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model=model, provider=provider),
+    )
+
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert model in detail and provider in detail
+    assert agents == [], "nothing may be built for a contradictory request"
+
+
+@pytest.mark.parametrize(
+    "provider, model",
+    [("lemonade", "claude-sonnet-5"), ("claude", "Gemma-4-E4B-it-GGUF")],
+)
+def test_a_model_from_the_other_provider_is_refused_on_a_one_shot(
+    built, provider, model
+):
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(model=model, provider=provider))
+
+    assert r.status_code == 400, r.text
+    assert agents == []
+
+
+@pytest.mark.parametrize(
+    "start, provider, model",
+    [
+        (dict(model="model-a"), "lemonade", "claude-sonnet-5"),
+        (
+            dict(model="claude-opus-5", provider="claude"),
+            "claude",
+            "Gemma-4-E4B-it-GGUF",
+        ),
+    ],
+)
+def test_a_model_from_the_other_provider_is_refused_on_a_live_session(
+    built, switched_backend, start, provider, model
+):
+    """``lemonade`` + a Claude id used to switch the session TO Claude."""
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", **start))
+    before = sr.registry.get("s-1").provider
+
+    r = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model=model, provider=provider),
+    )
+
+    assert r.status_code == 400, r.text
+    assert switched_backend == []
+    assert sr.registry.get("s-1").provider == before
+    again = client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    assert again.status_code == 200, "a refused turn must not hold the run lock"
+
+
 # ---------------------------------------------------------------------------
 # Tool confirmations over HTTP
 # ---------------------------------------------------------------------------

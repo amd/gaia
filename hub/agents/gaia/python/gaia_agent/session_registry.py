@@ -31,6 +31,10 @@ logger = get_logger(__name__)
 #: Human label used in the cap-exhausted error below.
 AGENT_LABEL = "GAIA"
 
+#: Inference backends, spelled as ``/query``'s ``provider`` field spells them.
+PROVIDER_LOCAL = "lemonade"
+PROVIDER_CLAUDE = "claude"
+
 #: Distinguishes "id was in _evicted_ids" from "id mapped to None" — dict.pop's
 #: default can't do that since the dict's values are always None already.
 _SENTINEL = object()
@@ -73,7 +77,13 @@ class _AgentSession:
     second turn cannot corrupt the cached agent's conversation state.
     """
 
-    def __init__(self, session_id: str, agent: Any, model_id: Any = None) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        agent: Any,
+        model_id: Any = None,
+        provider: str = PROVIDER_LOCAL,
+    ) -> None:
         self.session_id = session_id
         self.agent = agent
         #: The ``model_id`` this session's agent was BUILT with (``None`` = the
@@ -81,6 +91,9 @@ class _AgentSession:
         #: asking for a different one cannot be honoured — the server compares
         #: against this and refuses rather than running the old model silently.
         self.model_id = model_id
+        #: The backend the agent is on now — ``PROVIDER_LOCAL`` or
+        #: ``PROVIDER_CLAUDE`` — so a turn naming another one is a switch.
+        self.provider = provider
         self.run_lock = threading.Lock()
         #: True exactly once, on the session built to replace one this
         #: registry involuntarily evicted (LRU cap or idle timeout) — never
@@ -117,10 +130,12 @@ class _AgentSession:
         Returns the friendly display name. Raises ``RuntimeError`` with an
         actionable message on failure, having left the agent untouched.
         """
+        from gaia_agent.stdio import is_claude_model
         from gaia_agent.stdio import switch_model as _switch
 
         display = _switch(self.agent, target)
         self.model_id = target
+        self.provider = PROVIDER_CLAUDE if is_claude_model(target) else PROVIDER_LOCAL
         return display
 
     def is_running(self) -> bool:
@@ -269,6 +284,11 @@ class _SessionRegistry:
                 # had just been built with exactly what it asked for.
                 model_id=config_kwargs.get("model_id")
                 or config_kwargs.get("claude_model"),
+                provider=(
+                    PROVIDER_CLAUDE
+                    if config_kwargs.get("use_claude")
+                    else PROVIDER_LOCAL
+                ),
             )
             session.reclaimed_after_eviction = reclaimed
             self._sessions[session_id] = session

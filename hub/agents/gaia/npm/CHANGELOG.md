@@ -14,6 +14,11 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- `/v1/gaia/query` now honours `provider` on an existing session. It used to
+  matter only when the session was created, so `provider: "lemonade"` could keep
+  sending a Claude session's conversation to Anthropic, and `provider: "claude"`
+  could run locally. A different provider now switches the session in place, and
+  a `model` from the other provider is a 400 on new and existing sessions.
 - The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.

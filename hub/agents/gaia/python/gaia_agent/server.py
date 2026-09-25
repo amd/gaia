@@ -41,7 +41,12 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
-from gaia_agent.session_registry import SessionCapacityError, close_agent
+from gaia_agent.session_registry import (
+    PROVIDER_CLAUDE,
+    PROVIDER_LOCAL,
+    SessionCapacityError,
+    close_agent,
+)
 from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
@@ -71,10 +76,10 @@ _HEARTBEAT_SECONDS = 10.0
 #: made the daemon transport a downgrade rather than a move (see
 #: docs/plans/daemon-convergence.mdx §3.2). Anything outside this set is still
 #: refused loudly rather than quietly falling back to the default.
-_ALLOWED_PROVIDERS = frozenset({"lemonade", "claude"})
+_ALLOWED_PROVIDERS = frozenset({PROVIDER_LOCAL, PROVIDER_CLAUDE})
 
 #: Provider value that means "not local".
-_CLAUDE_PROVIDER = "claude"
+_CLAUDE_PROVIDER = PROVIDER_CLAUDE
 
 _DOCS_URL = "https://amd-gaia.ai/docs/guides/gaia"
 
@@ -596,6 +601,48 @@ async def memory() -> Dict[str, Any]:
             close_agent(agent)
 
 
+def _check_model_matches_provider(provider: str, model: str) -> None:
+    """400 when *model* belongs to the other backend than *provider* names.
+
+    Either reading of such a request is wrong: honouring ``model`` sends a
+    conversation the caller asked to keep local to Anthropic, and honouring
+    ``provider`` points a backend at an id it cannot serve.
+    """
+    from gaia_agent.stdio import is_claude_model
+
+    if is_claude_model(model) == (provider == PROVIDER_CLAUDE):
+        return
+    owner = PROVIDER_CLAUDE if is_claude_model(model) else PROVIDER_LOCAL
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"model {model!r} is a {owner} model, but provider is {provider!r}. "
+            f"Send provider {owner!r} with this model, or a {provider} model "
+            f"id with provider {provider!r}."
+        ),
+    )
+
+
+def _default_model_for(provider: str) -> str:
+    """The model a new session on *provider* gets when the request names none."""
+    if provider == PROVIDER_CLAUDE:
+        from gaia_agent.agent import GaiaAgentConfig
+
+        return GaiaAgentConfig.claude_model
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return DEFAULT_MODEL_NAME
+
+
+def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
+    """The model a retained session must move to this turn, or ``None``."""
+    if request.provider is not None and request.provider != session.provider:
+        return request.model or _default_model_for(request.provider)
+    if request.model and request.model != session.model_id:
+        return request.model
+    return None
+
+
 @router.post("/query")
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
@@ -609,6 +656,8 @@ async def query(request: QueryRequest):
                 f"{AGENT_ID} agent. Allowed: {sorted(_ALLOWED_PROVIDERS)}."
             ),
         )
+    if request.provider is not None and request.model:
+        _check_model_matches_provider(request.provider, request.model)
 
     handler = SSEOutputHandler()
     session = None
@@ -659,14 +708,15 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
-            if request.model and request.model != session.model_id:
+            target = _switch_target(session, request)
+            if target is not None:
                 # Switched in place rather than refused. Rebuilding the agent
                 # (or making the caller start a new session_id, which is what
                 # this used to say) throws away the conversation and every
                 # loaded skill — the two things a retained session exists to
                 # keep. run_lock is held here, so no turn is mid-inference.
                 try:
-                    display = session.switch_model(request.model)
+                    display = session.switch_model(target)
                 except RuntimeError as exc:
                     # The switch is all-or-nothing: the session is still on its
                     # previous model, so this is a failed request, not a broken
@@ -675,7 +725,7 @@ async def query(request: QueryRequest):
                         status_code=409,
                         detail=(
                             f"could not switch session {request.session_id} to "
-                            f"{request.model!r}: {exc}. The session is still "
+                            f"{target!r}: {exc}. The session is still "
                             f"running {session.model_id or 'its previous model'}."
                         ),
                     ) from exc

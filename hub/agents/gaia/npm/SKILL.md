@@ -239,7 +239,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
-| `provider` | no | `"lemonade"` (default) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. Under `"claude"`, `model` names a Claude model. |
+| `provider` | no | `"lemonade"` (default) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. Under `"claude"`, `model` must be a Claude model (`claude-*`); under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model. |
 | `max_steps` | no | ≥ 1. |
 
 ```ts

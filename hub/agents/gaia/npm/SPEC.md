@@ -343,7 +343,12 @@ that differs from the one its `session_id` was built with **switches the retaine
 agent in place** (≥ 2.14), so the conversation and any loaded skills survive the
 change; the same machinery the stdio transport's `/model` uses. A switch that
 fails — a missing Claude credential, an unknown local model — is a `409` naming
-the reason, and leaves the session on its previous model.
+the reason, and leaves the session on its previous model. The session records its
+`provider` too: a turn naming a different `provider` switches it the same way,
+onto that turn's `model` or, if it names none, the provider's default model. A
+`model` from the other provider than the one named (a `claude-*` id with
+`"lemonade"`, or a non-Claude id with `"claude"`) is a `400` on a new session and
+an existing one alike, before anything is built or switched.
 
 ### 5.3 Version gate
 

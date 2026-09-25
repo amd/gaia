@@ -608,6 +608,11 @@ def _apply_local_switch(agent: Any, target: str) -> str:
     return target
 
 
+def is_claude_model(model_id: str) -> bool:
+    """Whether *model_id* names a Claude model, i.e. goes to Anthropic."""
+    return model_id.startswith("claude-")
+
+
 def switch_model(agent: Any, target: str) -> str:
     """Swap the agent's live LLM client to *target*.
 
@@ -624,7 +629,7 @@ def switch_model(agent: Any, target: str) -> str:
     machinery it depends on already is — moving 200 working lines to improve a
     filename is not worth the risk.
     """
-    if target.startswith("claude-"):
+    if is_claude_model(target):
         return _apply_claude_switch(agent, target)
     return _apply_local_switch(agent, target)
 
