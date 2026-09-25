@@ -269,6 +269,7 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "execute_python_file": "Running script",
     "run_python": "Running Python",
     "run_shell_command": "Running a shell command",
+    "wait_for_condition": "Waiting for a condition",
     "get_file_info": "Inspecting file",
     "list_recent_files": "Listing recent files",
     "search_file": "Searching files",
