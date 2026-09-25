@@ -1103,7 +1103,7 @@ def test_zero_result_query_is_broadened_until_it_hits(harness_factory):
     assert out["broadened"] is True
     assert out["query_used"] == "argument cameras"
     assert seen[0] == "the argument over cameras police use"  # full query tried first
-    assert seen[-1] == "argument cameras"
+    assert "argument cameras" in seen
 
 
 def test_broadened_result_names_the_query_that_produced_it(harness_factory):
@@ -1120,9 +1120,12 @@ def test_broadened_result_names_the_query_that_produced_it(harness_factory):
         "please sign off on the contract counter-signature schedule"
     )
     assert out["query_used"] == "contract counter-signature"
-    assert [a["count"] for a in out["attempts"]] == [0, 0, 1]
+    assert [a["count"] for a in out["attempts"]][:3] == [0, 0, 1]
+    # A hit on rung three is not a reason to stop looking for better ones.
+    assert len(out["attempts"]) > 3
     # The model must not present a looser match as an exact one.
-    assert "approximate" in out["note"]
+    assert out["exact_match"] is False
+    assert out["unverified"] is True
 
 
 def test_absent_message_still_reports_zero_after_broadening(harness_factory):
@@ -1141,7 +1144,12 @@ def test_absent_message_still_reports_zero_after_broadening(harness_factory):
     assert "No message matched" in out["note"]
 
 
-def test_short_query_that_hits_is_not_broadened(harness_factory):
+def test_a_query_that_hits_as_sent_keeps_its_own_results(harness_factory):
+    """Broader rungs may still run, but they never displace an exact hit.
+
+    The sweep buys candidates for the case the exact hit is the wrong mail;
+    it must not cost precision when the exact hit is the right mail.
+    """
     handler, seen = _mailbox_matching("flock newsletter")
     h = harness_factory(handler)
 
@@ -1149,8 +1157,10 @@ def test_short_query_that_hits_is_not_broadened(harness_factory):
 
     assert out["count"] == 1
     assert out["broadened"] is False
+    assert out["exact_match"] is True
     assert out["query_used"] == "flock newsletter"
-    assert seen == ["flock newsletter"]  # one round trip, no wasted retry
+    assert seen[0] == "flock newsletter"
+    assert "alternatives" not in out  # no looser rung matched anything
 
 
 def test_empty_query_still_fails_loudly(harness_factory):
@@ -1256,7 +1266,7 @@ def test_surrounding_whitespace_is_not_a_broadening(harness_factory):
     assert out["count"] == 1
     assert out["broadened"] is False
     assert "note" not in out  # nothing to hedge about
-    assert seen == ["Acme invoice"]
+    assert seen[0] == "Acme invoice"  # the query as sent is tried first
 
 
 def test_mid_ladder_backend_failure_is_reported_not_swallowed(harness_factory):
@@ -1296,3 +1306,262 @@ def test_limit_is_clamped_on_every_broadened_rung(harness_factory):
 
     assert len(tops) >= 3  # the ladder really did run several rungs
     assert set(tops) == {_MAX_LIMIT}
+
+
+# --------------------------------------------------------------------------
+# recollection search — a non-empty result is not evidence of a correct one
+# --------------------------------------------------------------------------
+
+
+def _graph_message(mid, *, thread=None, subject="Subject"):
+    msg = dict(GRAPH_MESSAGE)
+    msg["id"] = mid
+    msg["conversationId"] = thread or mid
+    msg["subject"] = subject
+    return msg
+
+
+FIELDSTONE = _graph_message(
+    "AAMk-fieldstone",
+    thread="conv-fieldstone",
+    subject="Re: Fieldstone MSA - counter-signature needed before Friday",
+)
+WRONG_ONE = _graph_message(
+    "AAMk-wrong1", thread="conv-wrong1", subject="Contract schedule v2"
+)
+WRONG_TWO = _graph_message(
+    "AAMk-wrong2", thread="conv-wrong2", subject="Schedule of contract exhibits"
+)
+
+
+LURE = _graph_message(
+    "AAMk-lure",
+    thread="conv-lure",
+    subject="Verify your account now - click the link to avoid suspension",
+)
+
+
+def _mailbox_by_term(index):
+    """A Graph handler whose ``$search`` term maps to a fixed hit list.
+
+    Honours ``$top`` the way Graph does, so an over-fetch a real mailbox would
+    truncate is truncated here too.
+    """
+    seen = []
+
+    def handler(request):
+        term = (request.url.params.get("$search") or "").strip('"')
+        seen.append(term)
+        top = int(request.url.params.get("$top") or 25)
+        return json_response({"value": index.get(term.lower(), [])[:top]})
+
+    return handler, seen
+
+
+def test_a_non_empty_first_rung_is_not_the_end_of_the_search(harness_factory):
+    """The bug: 2-3 plausible-but-wrong hits look like success and end the search.
+
+    The user's own words match mail they did not mean, so the ladder never
+    runs and the model answers confidently from the wrong thread.
+    """
+    handler, _ = _mailbox_by_term(
+        {
+            "contract schedule": [WRONG_ONE, WRONG_TWO],
+            "contract": [WRONG_ONE, FIELDSTONE],
+            "schedule": [WRONG_TWO],
+        }
+    )
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="contract schedule"))
+
+    assert len(out["attempts"]) > 1
+    assert [m["subject"] for m in out["messages"]] == [
+        "Contract schedule v2",
+        "Schedule of contract exhibits",
+    ]
+    assert any("Fieldstone" in m["subject"] for m in out["alternatives"])
+
+
+def test_the_docstrings_unverified_promise_holds_on_every_broadened_hit(
+    harness_factory,
+):
+    """The model acts on the docstring, so the payload must match it.
+
+    `unverified` is promised on the hit, not only on the payload — and the
+    fallback path (an exact hit plus alternatives) is where it was missing.
+    """
+    handler, _ = _mailbox_by_term(
+        {"contract schedule": [WRONG_ONE], "contract": [FIELDSTONE]}
+    )
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="contract schedule"))
+
+    assert out["exact_match"] is True
+    assert "unverified" not in out["messages"][0]
+    for candidate in out["alternatives"]:
+        assert candidate["unverified"] is True
+        assert candidate["matched_query"]
+
+
+def test_an_alternative_is_trimmed_to_what_identifies_a_thread(harness_factory):
+    """Fallback candidates ride along on every broadened search; keep them cheap."""
+    handler, _ = _mailbox_by_term(
+        {"contract schedule": [WRONG_ONE], "contract": [FIELDSTONE]}
+    )
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="contract schedule"))
+
+    candidate = out["alternatives"][0]
+    assert candidate["subject"] and candidate["id"] and candidate["thread_id"]
+    assert candidate["preview"] == out["messages"][0]["preview"]
+    for dropped in ("to", "cc", "categories", "unread", "flagged"):
+        assert dropped not in candidate
+    # The primary result set keeps every field it always had.
+    assert "to" in out["messages"][0] and "unread" in out["messages"][0]
+
+
+def test_broadening_does_not_stop_at_the_first_non_empty_rung(harness_factory):
+    """A rung that returns *something* is not a rung that returns the message."""
+    handler, _ = _mailbox_by_term(
+        {
+            "contract schedule": [WRONG_ONE, WRONG_TWO],
+            "contract": [FIELDSTONE],
+        }
+    )
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="sign off on a contract schedule before the end of the week"
+        )
+    )
+
+    assert any("Fieldstone" in m["subject"] for m in out["messages"])
+    assert out["unverified"] is True
+
+
+def test_results_are_one_hit_per_thread(harness_factory):
+    """One conversation must not spend every result slot."""
+    one_thread = [
+        _graph_message(f"AAMk-t{i}", thread="conv-one", subject="Re: counter-signature")
+        for i in range(5)
+    ]
+    others = [
+        _graph_message(f"AAMk-o{i}", thread=f"conv-o{i}", subject=f"Other {i}")
+        for i in range(4)
+    ]
+    handler, _ = _mailbox_by_term({"counter-signature": one_thread + others})
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="counter-signature", limit=5))
+
+    threads = [m["thread_id"] for m in out["messages"]]
+    assert len(threads) == len(set(threads)) == 5
+    assert out["messages"][0]["thread_message_matches"] == 5
+
+
+def test_a_message_found_by_two_rungs_is_counted_once(harness_factory):
+    """Rungs overlap; re-finding one message is not a second message."""
+    handler, _ = _mailbox_by_term({"acme invoice": [WRONG_ONE], "invoice": [WRONG_ONE]})
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="Acme invoice"))
+
+    assert out["count"] == 1
+    assert "thread_message_matches" not in out["messages"][0]
+    assert "alternatives" not in out
+
+
+def test_results_the_query_never_matched_are_marked_unverified(harness_factory):
+    """A set the tool cannot vouch for says so, and says what to do instead."""
+    handler, _ = _mailbox_by_term({"contract": [WRONG_ONE]})
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="sign off on a contract schedule before the end of the week"
+        )
+    )
+
+    assert out["unverified"] is True
+    assert out["exact_match"] is False
+    assert out["messages"][0]["matched_query"] == "contract"
+    note = out["note"].lower()
+    assert "ask the user" in note
+    # The lexical gap this bug lives in closes only if the model re-queries
+    # with the sender's vocabulary, so the note has to ask for exactly that.
+    assert "search again" in note
+
+
+def test_a_healthy_exact_result_costs_one_round_trip(harness_factory):
+    """The sweep is for thin results; a full first rung must not pay for it."""
+    plenty = [
+        _graph_message(f"AAMk-p{i}", thread=f"conv-p{i}", subject=f"Invoice {i}")
+        for i in range(6)
+    ]
+    handler, seen = _mailbox_by_term({"acme invoice": plenty})
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="Acme invoice"))
+
+    assert out["count"] == 6
+    assert seen == ["Acme invoice"]
+
+
+def test_a_lure_reached_only_by_broadening_is_still_screened(harness_factory):
+    """Broadened hits are returned to the model, so they are screened too.
+
+    Neither half of this behaviour covers it alone: the screen ran on the one
+    result list that used to exist, and broadening invented a second one.
+    """
+    handler, _ = _mailbox_by_term({"contract": [LURE]})
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="sign off on a contract schedule before the end of the week"
+        )
+    )
+
+    assert out["unverified"] is True
+    assert out["messages"][0]["suspicious"] is True
+    assert out["messages"][0]["suspicious_reasons"]
+    assert out["suspicious_count"] == 1
+    assert "suspicious_guidance" in out
+
+
+def test_a_flagged_hit_is_never_a_source_of_search_vocabulary(harness_factory):
+    """The re-query instruction must not point at attacker-written text.
+
+    A mixed set is the realistic shape: a guard that only fires when every hit
+    is flagged would pass a test built from lures alone and fail here.
+    """
+    handler, _ = _mailbox_by_term({"contract": [WRONG_ONE, LURE]})
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="sign off on a contract schedule before the end of the week"
+        )
+    )
+
+    assert out["suspicious_count"] == 1
+    assert "suspicious" not in out["messages"][0]
+    assert out["messages"][1]["suspicious"] is True
+    note = out["note"]
+    assert "search again with the words the sender would have written" in note
+    assert "only from hits NOT marked `suspicious`" in note
+
+
+def test_an_exact_hit_is_never_labelled_unverified(harness_factory):
+    handler, _ = _mailbox_by_term({"flock newsletter": [FIELDSTONE]})
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="flock newsletter"))
+
+    assert out["exact_match"] is True
+    assert out["broadened"] is False
+    assert "unverified" not in out
