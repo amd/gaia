@@ -267,6 +267,28 @@ def test_starter_skill_tools_required_are_real_tools(
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_with_a_shell_grant_declares_run_shell_command(skill_dir: Path):
+    """A ``shell:execute:*`` grant is only usable through ``run_shell_command``.
+
+    Loading a skill brings the tools it declares, so a shell grant without the
+    one tool that consumes it leaves the model unable to run the command.
+    """
+    skill = parse_skill_file(skill_dir)
+    shell_grants = [
+        str(p)
+        for p in skill.parsed_permissions()
+        if p.domain == "shell" and not p.grants_nothing
+    ]
+    if not shell_grants:
+        return
+
+    assert "run_shell_command" in skill.gaia.tools_required, (
+        f"{skill.name} grants {', '.join(shell_grants)} but does not declare "
+        "run_shell_command in tools_required"
+    )
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
 def test_starter_skill_body_mentions_the_tools_it_declares(skill_dir: Path):
     """A declared tool the procedure never uses is a stale manifest."""
     skill = parse_skill_file(skill_dir)

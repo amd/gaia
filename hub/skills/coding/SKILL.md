@@ -14,6 +14,7 @@ metadata:
       - search_file_content
       - search_code_index
       - run_python
+      - run_shell_command
     provenance:
       source: starter-pack
 ---
@@ -64,7 +65,7 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest`, so run it directly:
+This skill grants `pytest`, so run it directly with `run_shell_command`:
 
 ```
 pytest -q tests/
