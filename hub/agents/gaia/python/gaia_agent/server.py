@@ -44,6 +44,7 @@ from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
 from gaia_agent.session_registry import SessionCapacityError, close_agent
 from gaia_agent.session_registry import registry as session_registry
+from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
@@ -625,6 +626,14 @@ async def memory() -> Dict[str, Any]:
             close_agent(agent)
 
 
+def _require_valid_session_id(session_id: str) -> None:
+    """Reject a session_id the agent could not persist, as the caller's error."""
+    try:
+        validate_session_id(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/query")
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
@@ -638,8 +647,17 @@ async def query(request: QueryRequest):
                 f"{AGENT_ID} agent. Allowed: {sorted(_ALLOWED_PROVIDERS)}."
             ),
         )
+    if request.session_id:
+        _require_valid_session_id(request.session_id)
 
     handler = SSEOutputHandler()
+    # Bypass permissions are a stdio-transport affordance and must stay one
+    # (#3373). The stdio parent is one local process on a private pipe; this
+    # endpoint is a bound socket, and an unguarded shell reachable over it is
+    # remote code execution rather than a relaxed permission model. There is no
+    # request field that could ask for it — this pins that, so adding one
+    # without also revisiting the reasoning fails a test instead of shipping.
+    handler.bypass_permissions = False
     session = None
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
@@ -1063,6 +1081,7 @@ async def set_bypass(session_id: str, body: BypassRequest):
     agent as a side effect of a settings toggle, and would silently succeed
     against a typo'd session id.
     """
+    _require_valid_session_id(session_id)
     session = session_registry.get(session_id)
     if session is None:
         raise HTTPException(

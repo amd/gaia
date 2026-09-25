@@ -167,20 +167,38 @@ class PermissionState:
     while the turn thread is swapping ``handler`` around it.
     """
 
-    def __init__(self, bypass: bool = False) -> None:
+    def __init__(self, bypass: bool = False, *, lifts_shell_gates: bool = True) -> None:
         self._lock = threading.Lock()
         self._bypass = bypass
+        self._lifts_shell_gates = lifts_shell_gates
         self._grants: set = set()
         self._handler: Any = None
         if bypass:
             # Starting unattended is the same security event as toggling it on
             # mid-session, and it never went through set_bypass.
-            audit.warning("Bypass permissions ENABLED at launch")
+            audit.warning(
+                "Bypass permissions ENABLED at launch (shell gates %s)",
+                "off" if lifts_shell_gates else "still on",
+            )
 
     @property
     def bypass(self) -> bool:
         with self._lock:
             return self._bypass
+
+    def _apply(self, handler: Any, enabled: bool) -> None:
+        """Write this session's bypass decision onto one handler.
+
+        Two attributes, because they are two different grants that happen to be
+        turned on together. ``auto_approve_gated_tools`` skips the confirmation
+        prompt; ``bypass_permissions`` additionally lifts the shell guardrails —
+        the operator block, the read-only binary policy and the rate limit
+        (#3373, #3374). An unattended harness that only pre-approves prompts
+        sets the first and must not inherit the second, which is what
+        ``lifts_shell_gates=False`` buys the HTTP transport.
+        """
+        handler.auto_approve_gated_tools = enabled
+        handler.bypass_permissions = enabled and self._lifts_shell_gates
 
     def set_bypass(self, enabled: bool) -> None:
         """Turn bypass on or off, taking effect on the very next gated tool.
@@ -191,13 +209,17 @@ class PermissionState:
         with self._lock:
             self._bypass = enabled
             if self._handler is not None:
-                self._handler.auto_approve_gated_tools = enabled
-        audit.warning("Bypass permissions %s", "ENABLED" if enabled else "disabled")
+                self._apply(self._handler, enabled)
+        audit.warning(
+            "Bypass permissions %s (shell gates %s)",
+            "ENABLED" if enabled else "disabled",
+            ("off" if enabled else "on") if self._lifts_shell_gates else "still on",
+        )
 
     def attach(self, handler: Any) -> None:
         """Hand a turn's handler the session's accumulated permission state."""
         with self._lock:
-            handler.auto_approve_gated_tools = self._bypass
+            self._apply(handler, self._bypass)
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution. The
@@ -1207,9 +1229,14 @@ def build_parser() -> "argparse.ArgumentParser":
     parser.add_argument(
         "--bypass-permissions",
         action="store_true",
-        help="Start with confirmation prompts OFF: every gated tool runs "
-        "without asking. Off unless passed, and the host can toggle it at any "
-        "time over the control channel.",
+        help="Start with the permission gates OFF: every gated tool runs "
+        "without asking, the shell-only operators (>, >>, <, &, `, $(), "
+        "newline) parse and run, the "
+        "read-only binary policy is replaced by the developer set (node, npm, "
+        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh, git) and "
+        "the shell rate limit is lifted. This is arbitrary code execution. Off "
+        "unless passed, and the host can toggle it at any time over the "
+        "control channel. Every shell command run this way is audit-logged.",
     )
     return parser
 
