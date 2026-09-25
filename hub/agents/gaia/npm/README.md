@@ -182,7 +182,8 @@ await shutdown(proc);
 **Reuse the same `session_id` for every turn in a conversation.** It is what
 lets a document you had it index, or a skill you had it load, survive to the
 next question — drop it (or mint a new one per call) and the agent still
-answers, but it forgets everything from the previous turn. See
+answers, but it forgets everything from the previous turn. An id must be 1–128
+characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 [`SPEC.md` §5.2](./SPEC.md#52-session_id-and-agent-retention) for the retry
 and eviction behavior.
 
