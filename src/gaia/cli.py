@@ -3169,8 +3169,9 @@ Examples:
         "--check",
         action="store_true",
         help="Report whether this profile is already set up and exit — no "
-        "install, no download, no side effects. Exit code 0 means ready, "
-        "1 means `gaia init` still has work to do.",
+        "install, no download. A stopped GAIA Lemonade Server is started, as "
+        "any GAIA command would. Exit code 0 means ready, 1 means `gaia init` "
+        "still has work to do.",
     )
 
     # Install command (install specific components)

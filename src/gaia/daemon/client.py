@@ -43,10 +43,14 @@ _START_TIMEOUT = 30.0
 # but would 404 every agents/relay route — fail loudly instead. A stale daemon
 # surviving an app auto-update is the EXPECTED path, not an edge case.
 _REQUIRED_AGENTS_MINOR = 1
+# The MINOR that added /daemon/v1/lemonade/ensure.
+_REQUIRED_LEMONADE_MINOR = 2
 
 # Ensure: connect fast; read generously — a first-run ensure may lazily fetch the
 # sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
 _ENSURE_TIMEOUT = (5.0, 900.0)
+# Covers stopping a stalled server (20s) plus a cold start's health wait (60s).
+_LEMONADE_ENSURE_TIMEOUT = (5.0, 120.0)
 
 UPGRADE_CORE_GUIDANCE = (
     "Upgrade the installed GAIA core so it matches this app: "
@@ -166,14 +170,17 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
     )
 
 
-def _check_agents_floor(inst: DaemonInstance) -> None:
-    """Fail loudly if the running daemon predates the agents/relay control plane."""
+def _minor(inst: DaemonInstance) -> int:
     parts = str(inst.api_version).split(".")
     try:
-        minor = int(parts[1]) if len(parts) > 1 else 0
+        return int(parts[1]) if len(parts) > 1 else 0
     except ValueError:
-        minor = 0
-    if minor < _REQUIRED_AGENTS_MINOR:
+        return 0
+
+
+def _check_agents_floor(inst: DaemonInstance) -> None:
+    """Fail loudly if the running daemon predates the agents/relay control plane."""
+    if _minor(inst) < _REQUIRED_AGENTS_MINOR:
         raise DaemonVersionError(
             f"the running daemon (host API v{inst.api_version}) predates the "
             "sidecar control plane + relay (needs v1.1+) — it would 404 every "
@@ -239,6 +246,47 @@ def ensure_agent(
     # Deliberately DO NOT read/return the response body — it carries the sidecar
     # bearer token, which a thin client must never learn or hold.
     return inst
+
+
+def ensure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> dict:
+    """Start-or-attach the daemon and have it start GAIA's embedded Lemonade.
+
+    Returns the daemon's answer: ``base_url``, ``port``, ``version`` and
+    whether this call ``started`` the server. Blocking -- a cold start waits for
+    the server's health check -- so call it off any event loop.
+
+    Raises:
+        DaemonError: The daemon is unreachable, has nothing to start (another
+            server is configured, or GAIA's own is not installed), or the
+            server would not start. The message names the remedy.
+    """
+    import requests
+
+    inst = start_or_attach()
+    if _minor(inst) < _REQUIRED_LEMONADE_MINOR:
+        raise DaemonVersionError(
+            f"the running daemon (host API v{inst.api_version}) predates GAIA "
+            "starting its own Lemonade Server. Restart it with `gaia daemon "
+            "restart` so the current version takes over."
+        )
+    url = f"{inst.base_url}{API_PREFIX}/lemonade/ensure"
+    try:
+        r = requests.post(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} to start Lemonade "
+            f"Server: {e}. Check `gaia daemon status` and the daemon log at "
+            f"{paths.log_path()}."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(
+            f"the daemon could not start Lemonade Server: {_error_detail(r)}"
+        )
+    return r.json()
 
 
 def request_shutdown(inst: DaemonInstance, timeout: float = 5.0) -> bool:

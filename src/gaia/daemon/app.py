@@ -84,6 +84,7 @@ def create_app(
     custody_auth=None,
     custody_store=None,
     clock=None,
+    lemonade_owner=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -112,6 +113,10 @@ def create_app(
     reports its running state, last poll time, and pending/failed job counts
     on ``GET /daemon/v1/status`` (#2379); ``None`` (the default) leaves the
     response exactly as it was before the clock existed.
+
+    *lemonade_owner* (a :class:`gaia.daemon.lemonade.EmbeddedLemonadeOwner`)
+    mounts ``POST /daemon/v1/lemonade/ensure``, which starts GAIA's embedded
+    Lemonade Server if it is stopped and returns where it listens.
     """
     from fastapi import Depends, FastAPI, HTTPException
 
@@ -174,6 +179,19 @@ def create_app(
             )
         server.should_exit = True
         return {"service": SERVICE_ID, "status": "stopping", "pid": pid}
+
+    if lemonade_owner is not None:
+        from gaia.daemon.lemonade import LemonadeNotManaged
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        @app.post(f"{API_PREFIX}/lemonade/ensure")
+        def ensure_lemonade(_: None = Depends(require_token)) -> dict:
+            try:
+                return lemonade_owner.ensure().to_dict()
+            except LemonadeNotManaged as e:
+                raise HTTPException(status_code=409, detail=str(e)) from e
+            except EmbeddedLemonadeError as e:
+                raise HTTPException(status_code=503, detail=str(e)) from e
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router

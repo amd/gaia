@@ -891,6 +891,34 @@ class TestCheckSetupStatus(unittest.TestCase):
         import os
 
         os.environ.pop("LEMONADE_BASE_URL", None)
+        # The daemon boundary: a real call would start a real daemon and server.
+        start = patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.start_embedded_if_stopped",
+            return_value=False,
+        )
+        self.start_embedded = start.start()
+        self.addCleanup(start.stop)
+
+    def test_stopped_server_is_started_through_the_daemon_first(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with self._embedded(self._status(installed=False)):
+            check_setup_status(profile="chat")
+
+        self.start_embedded.assert_called_once()
+
+    def test_daemon_start_failure_is_the_reason(self):
+        from gaia.daemon.errors import DaemonError
+        from gaia.installer.init_command import check_setup_status
+
+        self.start_embedded.side_effect = DaemonError("port taken")
+        with self._embedded(self._status()):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(
+            status.reasons,
+            ["GAIA's Lemonade Server could not be started: port taken"],
+        )
 
     @staticmethod
     def _embedded(status):

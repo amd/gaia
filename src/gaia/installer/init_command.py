@@ -239,9 +239,11 @@ def check_setup_status(
 ) -> SetupStatus:
     """Check whether `gaia init --profile <profile>` still has work to do.
 
-    Read-only: never installs, starts a server, prompts, or downloads
-    anything. Checks the SAME real state `run()` itself acts on (GAIA's
-    Lemonade Server installed + running, required models present) so this can never
+    Never installs, prompts, or downloads anything. A stopped GAIA Lemonade
+    Server is started through the daemon, which every entry point does anyway,
+    so a reboot does not read as "needs setup". Checks the SAME real state
+    `run()` itself acts on (GAIA's Lemonade Server installed + running,
+    required models present) so this can never
     disagree with what `gaia init` would actually do — the alternative, a
     marker file recording "setup ran once", goes stale the moment a model is
     deleted or Lemonade is uninstalled without GAIA's knowledge.
@@ -276,12 +278,19 @@ def check_setup_status(
     if configured:
         base_url = resolve_lemonade_base_url(configured)
     else:
+        from gaia.daemon.errors import DaemonError
         from gaia.llm.lemonade_embedded import EmbeddedLemonade
+        from gaia.llm.lemonade_manager import LemonadeManager
 
         embedded = EmbeddedLemonade()
+        try:
+            LemonadeManager.start_embedded_if_stopped()
+        except DaemonError as e:
+            return SetupStatus(
+                ready=False,
+                reasons=[f"GAIA's Lemonade Server could not be started: {e}"],
+            )
         status = embedded.status()
-        # Model availability can't be probed without a running server, so a
-        # stopped one is the only thing this check can report.
         if status.unresponsive_pid:
             return SetupStatus(
                 ready=False,
