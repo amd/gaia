@@ -22,7 +22,10 @@ workflow still runs and still goes green — it just stops auditing anything.
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -405,3 +408,194 @@ def test_a_lens_that_stops_early_says_why(path: Path):
     run = str(steps[0].get("run", ""))
     assert "error_max_turns" in run
     assert "classify_claude_probe.py" in run
+
+
+# ----------------------------------------------------------------------
+# The stop-reason step and the completeness gate, run for real
+#
+# Both shipped as inline Python inside a `run:` block, which no test could
+# reach. These extract the snippet the workflow actually runs and execute it,
+# so a regression fails here rather than at 3am in a nightly run.
+# ----------------------------------------------------------------------
+
+#: The `python3 -c '<code>' "$EXECUTION_FILE" "$RUNNER_TEMP/..."` call in the
+#: stop-reason step, which reduces a transcript to its terminal result. The
+#: snippet is shell-single-quoted, so it cannot itself contain a `'`.
+_RESULT_EXTRACTOR = re.compile(
+    r"python3 -c '(?P<code>[^']*)' \"\$EXECUTION_FILE\" \"\$RUNNER_TEMP", re.DOTALL
+)
+
+#: The `python3 - <<'EOF' ... EOF` heredoc in the completeness gate.
+_HEREDOC = re.compile(r"python3 - <<'EOF'\n(?P<code>.*?)\nEOF", re.DOTALL)
+
+
+def _stop_reason_run(path: Path) -> str:
+    steps = [
+        s for s in _steps(_load(path)) if s.get("name") == "Say why Claude stopped"
+    ]
+    assert steps, f"{path.name} has no 'Say why Claude stopped' step"
+    return str(steps[0].get("run", ""))
+
+
+def _run_snippet(
+    code: str, *args: Path, tmp_path: Path
+) -> "subprocess.CompletedProcess[str]":
+    script = tmp_path / "snippet.py"
+    script.write_text(code, encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(script), *(str(a) for a in args)],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=False,
+    )
+
+
+def _classify(reply_file: Path) -> "subprocess.CompletedProcess[str]":
+    return subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "util" / "classify_claude_probe.py"),
+            "--exit-code",
+            "1",
+            "--format",
+            "text",
+            "--text-file",
+            str(reply_file),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=False,
+    )
+
+
+def _transcript(*entries: dict) -> str:
+    return "\n".join(json.dumps(e) for e in entries)
+
+
+#: Ordinary security-lens prose. Every credential trigger word the classifier
+#: looks for appears here as the subject matter, not as a failure.
+_AUTH_PROSE = {
+    "type": "assistant",
+    "message": {
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "The endpoint returns 403 when the token is missing and 401 "
+                    "for an expired one, so an unauthorized caller never reaches "
+                    "the billing path. Upstream rate limit responses (429) retry."
+                ),
+            }
+        ]
+    },
+}
+
+_GENERIC_CRASH = {
+    "type": "result",
+    "subtype": "error_during_execution",
+    "is_error": True,
+    "result": "Error: process exited unexpectedly",
+}
+
+_REAL_CREDENTIAL_FAILURE = {
+    "type": "result",
+    "subtype": "error_during_execution",
+    "is_error": True,
+    "result": 'API Error: 401 {"type":"error","error":{"type":"authentication_error"}}',
+}
+
+_EXIT_QUOTA = 2
+_EXIT_CREDENTIAL = 3
+
+
+@pytest.mark.parametrize("path", (NIGHTLY_AUDIT, SECURITY_AUDIT), ids=lambda p: p.name)
+def test_a_lens_writing_about_auth_is_not_diagnosed_as_a_dead_credential(
+    path: Path, tmp_path: Path
+):
+    """A security lens's whole job is writing about 401s and `unauthorized`.
+
+    The classifier substring-matches those words, so handing it the transcript
+    turned any mid-run crash on the security lens into "rotate the secrets" —
+    paging the wrong owner with full confidence, which is the exact failure this
+    tooling exists to end. Only the terminal result may be classified.
+    """
+    code = _RESULT_EXTRACTOR.search(_stop_reason_run(path))
+    assert code, f"{path.name} no longer reduces the transcript to its result"
+
+    execution = tmp_path / "execution.jsonl"
+    execution.write_text(_transcript(_AUTH_PROSE, _GENERIC_CRASH), encoding="utf-8")
+    reply = tmp_path / "claude-result.txt"
+
+    assert (
+        _run_snippet(code["code"], execution, reply, tmp_path=tmp_path).returncode == 0
+    )
+    assert "unauthorized" not in reply.read_text(encoding="utf-8").lower()
+
+    verdict = _classify(reply)
+    assert verdict.returncode not in (_EXIT_QUOTA, _EXIT_CREDENTIAL), (
+        "a crash on a lens that writes about auth was diagnosed from its prose: "
+        + verdict.stdout
+        + verdict.stderr
+    )
+
+
+@pytest.mark.parametrize("path", (NIGHTLY_AUDIT, SECURITY_AUDIT), ids=lambda p: p.name)
+def test_a_real_credential_rejection_is_still_named(path: Path, tmp_path: Path):
+    """The guard above must not be satisfied by classifying nothing at all."""
+    code = _RESULT_EXTRACTOR.search(_stop_reason_run(path))
+    assert code
+
+    execution = tmp_path / "execution.jsonl"
+    execution.write_text(
+        _transcript(_AUTH_PROSE, _REAL_CREDENTIAL_FAILURE), encoding="utf-8"
+    )
+    reply = tmp_path / "claude-result.txt"
+    _run_snippet(code["code"], execution, reply, tmp_path=tmp_path)
+
+    assert _classify(reply).returncode == _EXIT_CREDENTIAL
+
+
+def test_a_findings_file_truncated_mid_write_does_not_sink_the_audit(
+    nightly: dict, tmp_path: Path
+):
+    """A lens killed mid-write (job timeout, cancelled runner) leaves half a JSON
+    file. The gate runs under `set -euo pipefail`, so an uncaught decode error
+    aborted it and every other lens's findings went unfiled — the all-or-nothing
+    outcome this workflow exists to remove. It must name the lens and carry on.
+    """
+    step = [
+        s
+        for s in _steps(nightly)
+        if s.get("name") == "Require every dimension to have reported in"
+    ]
+    assert step, "the completeness gate is gone"
+    code = _HEREDOC.search(str(step[0].get("run", "")))
+    assert code, "the completeness gate no longer reads the findings files"
+
+    findings = tmp_path / "audit-findings"
+    (findings / "a").mkdir(parents=True)
+    (findings / "a" / "findings-features.json").write_text(
+        '{"findings": [], "compl', encoding="utf-8"
+    )
+    (findings / "a" / "findings-security.json").write_text(
+        '{"findings": [], "complete": true}', encoding="utf-8"
+    )
+
+    # The gate globs a relative `audit-findings`, so run it from tmp_path.
+    script = tmp_path / "gate.py"
+    script.write_text(code["code"], encoding="utf-8")
+    done = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        check=False,
+    )
+
+    assert done.returncode == 0, f"a truncated file aborted the gate: {done.stderr}"
+    assert done.stdout.split() == ["features"], (
+        "the truncated lens must be reported as unfinished, and a complete one "
+        f"must not be: {done.stdout!r}"
+    )
