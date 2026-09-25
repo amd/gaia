@@ -26,7 +26,9 @@ FileSearchToolsMixin provides agent-agnostic file search and management operatio
 
 `write_file` and `edit_file` share the [file-state guard](/spec/file-io-tools-mixin#concurrent-file-changes):
 after a prior read, external content changes return a stale error before writing
-or creating a backup. Successful writes become the baseline for later edits.
+or creating a backup. Overwriting an existing file is refused, and the file left
+unchanged, when its backup cannot be made. Successful writes become the baseline
+for later edits.
 
 **Search Strategy:**
 - A named `directory` is the WHOLE scope: searched to unlimited depth, and never

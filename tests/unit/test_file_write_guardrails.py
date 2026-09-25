@@ -18,6 +18,7 @@ All tests are designed to run without LLM or external services.
 """
 
 import ast
+import datetime
 import os
 import platform
 import stat
@@ -33,6 +34,7 @@ from gaia.security import (
     MAX_WRITE_SIZE_BYTES,
     SENSITIVE_EXTENSIONS,
     SENSITIVE_FILE_NAMES,
+    BackupError,
     PathValidator,
     _format_size,
     _get_blocked_directories,
@@ -612,18 +614,34 @@ class TestCreateBackup:
 
         assert sorted(p.name for p in work.iterdir()) == ["notes.md"]
 
-    def test_multiple_backups_have_unique_names(self, validator, tmp_path):
-        """Verify multiple backups of the same file produce unique names."""
+    def test_two_backups_in_the_same_second_do_not_collide(self, validator, tmp_path):
+        """A burst of edits keeps every generation instead of overwriting one."""
         original = tmp_path / "config.yaml"
-        original.write_text("key: value")
+        original.write_text("first")
+        frozen = datetime.datetime(2026, 9, 24, 12, 0, 0)
 
-        # Create two backups with a small time gap to get different timestamps
-        backup1 = validator.create_backup(str(original))
-        assert backup1 is not None
+        with patch("gaia.security.datetime") as fake:
+            fake.datetime.now.return_value = frozen
+            fake.timedelta = datetime.timedelta
+            backup1 = validator.create_backup(str(original))
+            original.write_text("second")
+            backup2 = validator.create_backup(str(original))
 
-        # Backups created within the same second could collide, but the path
-        # object resolves uniquely in practice. We just ensure the first works.
-        assert os.path.exists(backup1)
+        assert backup1 != backup2
+        assert Path(backup1).read_text() == "first"
+        assert Path(backup2).read_text() == "second"
+        assert sorted([backup1, backup2]) == [backup1, backup2]
+
+    def test_a_failed_backup_raises_instead_of_returning_none(
+        self, validator, tmp_path
+    ):
+        """ "Nothing to back up" and "backup failed" must not look the same."""
+        original = tmp_path / "notes.md"
+        original.write_text("# Notes")
+
+        with patch("gaia.security.shutil.copy2", side_effect=OSError("No space")):
+            with pytest.raises(BackupError, match="No space"):
+                validator.create_backup(str(original))
 
     def test_only_the_newest_backups_of_a_file_are_kept(self, validator, tmp_path):
         original = tmp_path / "notes.md"
@@ -878,6 +896,22 @@ class TestChatAgentWriteFileGuardrails:
         assert result["status"] == "success"
         assert "backup_path" in result
         assert os.path.exists(result["backup_path"])
+
+    def test_overwrite_is_refused_when_the_backup_fails(
+        self, write_file_func, tmp_path
+    ):
+        """No backup, no overwrite: auto-approval assumes the backup exists."""
+        target = tmp_path / "keep_me.txt"
+        target.write_text("original content")
+
+        with patch.object(PathValidator, "_prompt_overwrite", return_value=True):
+            with patch("gaia.security.shutil.copy2", side_effect=OSError("No space")):
+                result = write_file_func(file_path=str(target), content="new")
+
+        assert result["status"] == "error"
+        assert "backup" in result["error"].lower()
+        assert "No space" in result["error"]
+        assert target.read_text() == "original content"
 
     def test_write_creates_parent_directories(self, write_file_func, tmp_path):
         """Verify parent directories are created when create_dirs=True."""
@@ -1202,6 +1236,23 @@ class TestFileIOToolsMixinWriteFileGuardrails:
         assert result["status"] == "success"
         if "backup_path" in result:
             assert os.path.exists(result["backup_path"])
+
+    def test_overwrite_is_refused_when_the_backup_fails(
+        self, mixin_and_registry, tmp_path
+    ):
+        """No backup, no overwrite: auto-approval assumes the backup exists."""
+        _, write_fn = mixin_and_registry
+        target = tmp_path / "keep_me.txt"
+        target.write_text("old")
+
+        with patch.object(PathValidator, "_prompt_overwrite", return_value=True):
+            with patch("gaia.security.shutil.copy2", side_effect=OSError("No space")):
+                result = write_fn(file_path=str(target), content="new")
+
+        assert result["status"] == "error"
+        assert "backup" in result["error"].lower()
+        assert "No space" in result["error"]
+        assert target.read_text() == "old"
 
     def test_write_with_project_dir_resolves_path(self, mixin_and_registry, tmp_path):
         """Verify project_dir parameter correctly resolves relative paths."""

@@ -148,7 +148,8 @@ Edit a Python file by replacing content with validation.
 - `backup` (bool, optional): Create backup (default: True). The copy goes to
   `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
   beside the file. The backups directory is owner-only, and the five newest
-  backups of each file are kept.
+  backups of each file are kept. If the backup cannot be made (a full disk, an
+  unwritable cache), the edit is refused and the file is left unchanged.
 - `dry_run` (bool, optional): Only simulate (default: False)
 
 **Returns:**
@@ -313,7 +314,8 @@ module level, and the tool never renames or moves a definition.
 - `backup` (bool, optional): Create backup (default: True). The copy goes to
   `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
   beside the file. The backups directory is owner-only, and the five newest
-  backups of each file are kept.
+  backups of each file are kept. If the backup cannot be made (a full disk, an
+  unwritable cache), the edit is refused and the file is left unchanged.
 
 **Returns:**
 ```python
