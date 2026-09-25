@@ -19,9 +19,10 @@ fixed set of tasks, time limit, tools and judge run against **two harnesses** �
 flagship GaiaAgent, or Claude Code driven headlessly — so a difference in the numbers
 is a difference between agents, not between conditions.
 
-This is the tool behind claims like "GLM-5.3 Flash on GAIA matches Claude Opus 5 on
-Claude Code, at a fraction of the cost." It answers that with a reproducible run
-anyone can repeat, not a one-off transcript nobody else can check.
+This is the tool behind claims like "GLM-5.3 Flash under GAIA scores within about a
+tenth of a point of Claude Opus 5 under Claude Code, for a fraction of the cost."
+It answers them with a reproducible run anyone can repeat, not a one-off transcript
+nobody else can check.
 
 <Warning>
   This drives a real agent against real models — it spends real tokens and, on a
@@ -234,7 +235,8 @@ The first directory named to `report` becomes the 100% row everything else is a
 percentage of.
 
 **`--repeats N`** runs the suite N times into `DIR/r1`, `DIR/r2`, ... One run is
-noise — two Claude Code runs on the same model have differed by 2× in wall time.
+noise — three Claude Code runs on the same model and tasks have ranged from 4:06 to
+18:30, a 4.5× spread, and a TheRock run that scored 3/4 scored 4/4 on repeat.
 `report` and `judge` both understand a `--repeats` directory automatically.
 
 **Metering flags** — real cost instead of a rate-carded estimate:
