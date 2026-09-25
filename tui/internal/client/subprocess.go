@@ -27,8 +27,10 @@ var (
 	_ CapabilityReporter      = (*SubprocessClient)(nil)
 )
 
-// closeGrace bounds how long Close() waits for an in-flight turn's reader to
-// finish before giving up on a clean reap.
+// closeGrace bounds each wait in Close(): the in-flight turn's reader, that
+// reader again after a kill, the child's own exit once stdin is closed, and
+// the reap after the kill that follows. A wedged child can therefore hold
+// quit for up to four of these before Close() gives up and reports why.
 const closeGrace = 2 * time.Second
 
 var subprocessLemonadePorts = []string{"13305", "8000"}
@@ -594,16 +596,17 @@ func describeAgentExit(code int) string {
 			"Your next message will start it again.", code)
 }
 
-// controlKey marks a stdin line as a control message rather than a query. Must
-// match gaia_agent.stdio.CONTROL_KEY — the agent only treats a line as control
-// if it parses as a JSON object carrying exactly this key, so a question that
-// merely looks like JSON is still a question.
+// controlKey marks a stdin line as a control message rather than a query.
+// Pinned, with the verbs below, by tests/fixtures/stdio/gaia_stdio_wire.json —
+// the agent only treats a line as control if it parses as a JSON object
+// carrying exactly this key, so a question that merely looks like JSON is still
+// a question.
 const controlKey = "gaia_control"
 
-// queryKey wraps a user's question so its newlines survive the trip. Must match
-// gaia_agent.stdio.QUERY_KEY. The agent still accepts a bare line as a query, so
-// an older child paired with this build keeps working — it just cannot carry a
-// multi-line question.
+// queryKey wraps a user's question so its newlines survive the trip. Pinned by
+// tests/fixtures/stdio/gaia_stdio_wire.json. The agent still accepts a bare
+// line as a query, so an older child paired with this build keeps working — it
+// just cannot carry a multi-line question.
 const queryKey = "gaia_query"
 
 // writeControl sends one control message to the child's stdin.
@@ -879,27 +882,40 @@ func (s *SubprocessClient) Close() error {
 		return nil
 	}
 
-	// If a turn's reader is still in flight it owns the reap (os/exec forbids
-	// Wait before reads complete), so wait for it rather than racing it.
+	// Wait must not close stdout underneath the turn's reader.
+	var killErr error
 	if turnDone != nil {
 		select {
 		case <-turnDone:
 		case <-time.After(closeGrace):
 			// The agent ignored EOF. Kill it and let the reader finish.
-			killErr := proc.kill()
+			killErr = proc.kill()
 			select {
 			case <-turnDone:
 			case <-time.After(closeGrace):
-				// The reader is wedged; leave the child to the OS rather than
-				// calling Wait underneath an active read.
+				return errors.Join(killErr, fmt.Errorf("agent output reader did not stop after the process was terminated"))
 			}
-			return killErr
 		}
-		return nil
 	}
 
-	proc.reap()
-	return nil
+	// A terminal event ends the reader, not the persistent child process.
+	reaped := make(chan struct{})
+	go func() {
+		proc.reap()
+		close(reaped)
+	}()
+	select {
+	case <-reaped:
+		return killErr
+	case <-time.After(closeGrace):
+		killErr = errors.Join(killErr, proc.kill())
+	}
+	select {
+	case <-reaped:
+		return killErr
+	case <-time.After(closeGrace):
+		return errors.Join(killErr, fmt.Errorf("agent process did not exit after termination"))
+	}
 }
 
 func truncateLine(s string) string {

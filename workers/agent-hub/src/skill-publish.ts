@@ -138,7 +138,16 @@ export async function handleSkillPublish(
         `from '${publisher.publisher}' cannot update it.`
     );
   }
-  const versionExists = Boolean(existing?.versions[manifest.version]);
+  // A skill version is one bundle plus the SKILL.md and audit that vouch for it;
+  // a second post under the same version would restamp its tier and verdict.
+  if (existing?.versions[manifest.version]) {
+    throw new HttpError(
+      409,
+      "version_exists",
+      `Skill '${manifest.name}@${manifest.version}' is already published and is ` +
+        `immutable. Bump the skill's version to publish a change.`
+    );
+  }
 
   const bytes = new Uint8Array(await artifactFile.arrayBuffer());
   const limit = maxBytes(env);
@@ -177,23 +186,20 @@ export async function handleSkillPublish(
     sha256,
   });
 
-  // The SKILL.md, changelog, and audit report are per-version records: written
-  // only on the first publish of a version so they stay the immutable evidence
-  // of what was audited and shipped.
-  if (!versionExists) {
-    await env.BUCKET.put(skillDocKey(manifest.name, manifest.version), skillMarkdown, {
+  // The SKILL.md, changelog, and audit report are per-version records, written
+  // once with the version's only bundle as the evidence of what was audited.
+  await env.BUCKET.put(skillDocKey(manifest.name, manifest.version), skillMarkdown, {
+    httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+  });
+  if (changelogText != null) {
+    await env.BUCKET.put(skillChangelogKey(manifest.name, manifest.version), changelogText, {
       httpMetadata: { contentType: "text/markdown; charset=utf-8" },
     });
-    if (changelogText != null) {
-      await env.BUCKET.put(skillChangelogKey(manifest.name, manifest.version), changelogText, {
-        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
-      });
-    }
-    if (auditText != null) {
-      await env.BUCKET.put(skillAuditKey(manifest.name, manifest.version), auditText, {
-        httpMetadata: { contentType: "application/json; charset=utf-8" },
-      });
-    }
+  }
+  if (auditText != null) {
+    await env.BUCKET.put(skillAuditKey(manifest.name, manifest.version), auditText, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
   }
 
   // A skill has no deprecation field in the format yet, so every version entry

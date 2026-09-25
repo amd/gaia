@@ -9,9 +9,13 @@ conversation hands off to for a first-time Microsoft or Google connect. Kept
 separate because ``onboarding_tools.py`` is already ~600 lines scoped to
 *repair*, and the guided walkthrough is a different concern.
 
-**``google_workspace`` and ``microsoft_work`` are still out of scope** — no
-account-kind interview, no resumability — see ``gaia.connectors.setup_routes``
-and #2594's remaining acceptance criteria for why.
+``gaia.connectors.setup_routes`` now authors work/school Microsoft 365 and
+Google Workspace routes too (#4090), but this module still drives only the
+two personal ones: ``onboarding_tools._run_connect`` sends ``microsoft_work``
+down the generic browser-loopback path, and there is no account-kind
+interview to pick the Workspace route. Neither route is unreachable content —
+``microsoft_work``'s drives the not-configured console error — but wiring
+them into this walkthrough is a separate change.
 
 **Credential prompts hide free text only when ``Step.sensitive`` says so.**
 Microsoft's Application (client) ID is public by design — nothing on that

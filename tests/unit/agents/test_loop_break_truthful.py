@@ -48,8 +48,8 @@ def agent():
 def test_loop_break_on_repeated_error_does_not_claim_success(agent):
     summary = agent._build_loop_break_summary(
         tool_name="mcp_tool_mcp",
-        consecutive_count=4,
-        step_results=[
+        executed_count=4,
+        recent_results=[
             {"status": "error", "error": "Tool 'mcp_tool_mcp' not found"},
         ],
     )
@@ -60,8 +60,8 @@ def test_loop_break_on_repeated_error_does_not_claim_success(agent):
 def test_loop_break_on_error_surfaces_underlying_message(agent):
     summary = agent._build_loop_break_summary(
         tool_name="some_tool",
-        consecutive_count=4,
-        step_results=[
+        executed_count=4,
+        recent_results=[
             {"status": "error", "error": "Connection refused"},
         ],
     )
@@ -72,8 +72,8 @@ def test_loop_break_on_error_with_empty_message_falls_back(agent):
     """Missing/empty ``error`` field doesn't break the helper."""
     summary = agent._build_loop_break_summary(
         tool_name="some_tool",
-        consecutive_count=4,
-        step_results=[{"status": "error"}],
+        executed_count=4,
+        recent_results=[{"status": "error"}],
     )
     assert "kept failing" in summary
     assert "the tool returned an error" in summary
@@ -84,15 +84,15 @@ def test_loop_break_on_other_error_shapes(agent):
     # success=False shape
     s1 = agent._build_loop_break_summary(
         tool_name="x",
-        consecutive_count=4,
-        step_results=[{"success": False, "error": "boom"}],
+        executed_count=4,
+        recent_results=[{"success": False, "error": "boom"}],
     )
     assert "Task completed" not in s1
     # has_errors shape
     s2 = agent._build_loop_break_summary(
         tool_name="x",
-        consecutive_count=4,
-        step_results=[{"has_errors": True, "error": "boom"}],
+        executed_count=4,
+        recent_results=[{"has_errors": True, "error": "boom"}],
     )
     assert "Task completed" not in s2
 
@@ -108,18 +108,18 @@ def test_loop_break_on_repeated_success_does_not_claim_completion(agent):
     ``create_table`` four times and being told the task was done (#3750)."""
     summary = agent._build_loop_break_summary(
         tool_name="query_documents",
-        consecutive_count=4,
-        step_results=[{"status": "success", "result": "found 3 docs"}],
+        executed_count=4,
+        recent_results=[{"status": "success", "result": "found 3 docs"}],
     )
     assert "Task completed" not in summary
     assert "query_documents" in summary and "4" in summary
     assert "can't confirm" in summary
 
 
-def test_loop_break_with_empty_step_results_does_not_claim_completion(agent):
+def test_loop_break_with_empty_recent_results_does_not_claim_completion(agent):
     """Edge case: no recorded results yet. Still a loop break, still not done."""
     summary = agent._build_loop_break_summary(
-        tool_name="x", consecutive_count=4, step_results=[]
+        tool_name="x", executed_count=4, recent_results=[]
     )
     assert "Task completed" not in summary
 
@@ -133,7 +133,7 @@ def test_helper_handles_native_path_unwrapped_results(agent):
 
         recent_results = [o.get("result") for o in previous_outputs]
         final_answer = self._build_loop_break_summary(
-            tool_name, consecutive_count, recent_results
+            tool_name, consecutive_count - 2, recent_results
         )
 
     Assert the helper correctly identifies a loop-of-errors when fed
@@ -151,8 +151,8 @@ def test_helper_handles_native_path_unwrapped_results(agent):
     ]
     summary = agent._build_loop_break_summary(
         tool_name="mcp_tool_bad_tool",
-        consecutive_count=4,
-        step_results=recent_results,
+        executed_count=4,
+        recent_results=recent_results,
     )
     # CRITICAL: must NOT claim success on loop-of-errors. This is the
     # exact bug found in eval-20260519-192836/tool_perf_normal_verbatim:
@@ -179,7 +179,7 @@ def test_wrapped_dicts_cannot_produce_a_false_success():
         {"tool": "x", "args": {}, "result": {"status": "error", "error": "boom"}},
     ]
     summary = a._build_loop_break_summary(
-        tool_name="x", consecutive_count=4, step_results=wrapped
+        tool_name="x", executed_count=4, recent_results=wrapped
     )
     assert "Task completed" not in summary
     # Unwrapping is still the caller's job: the error text is not recovered.
