@@ -16,6 +16,18 @@ import type { Session, AgentInfo } from '../types';
  *  which is the historical default (`agent_type = "chat"` in the backend). */
 export const DEFAULT_AGENT_ID = 'chat';
 
+/** Retired agent ids that `GET /api/agents` no longer returns.
+ *
+ *  They are hidden, not deleted — stored sessions still carry them — so
+ *  without this the sidebar would label years of history with the raw string
+ *  `chat` and a fallback icon. Mirrors the registrations in
+ *  `hub/agents/chat/python/gaia_agent_chat/__init__.py`. */
+const RETIRED_AGENTS: Record<string, { name: string; icon: string }> = {
+    chat: { name: 'Chat', icon: 'message-circle' },
+    doc: { name: 'Doc Agent', icon: 'file-text' },
+    file: { name: 'File Agent', icon: 'folder-search' },
+};
+
 export interface AgentSessionGroup {
     /** Resolved agent id (session.agent_type, or the default). */
     agentId: string;
@@ -57,12 +69,15 @@ export function groupSessionsByAgent(
     const groups: AgentSessionGroup[] = [];
     for (const [agentId, groupSessions] of buckets) {
         const agent = byId.get(agentId);
+        const retired = RETIRED_AGENTS[agentId];
         groupSessions.sort((a, b) => updatedAtMs(b) - updatedAtMs(a));
         groups.push({
             agentId,
-            name: agent?.name || agentId,
-            icon: agent?.icon,
-            unknown: agent === undefined,
+            name: agent?.name || retired?.name || agentId,
+            icon: agent?.icon || retired?.icon,
+            // A retired agent still resolves by id, so its sessions open and
+            // answer — flagging them "unknown" would be a false warning.
+            unknown: agent === undefined && retired === undefined,
             sessions: groupSessions,
         });
     }
@@ -76,11 +91,11 @@ export function groupSessionsByAgent(
 /** Resolve a session's agent display name (used for the flat/search list chip). */
 export function resolveAgentName(session: Session, agents: AgentInfo[]): string {
     const id = session.agent_type || DEFAULT_AGENT_ID;
-    return agents.find((a) => a.id === id)?.name || id;
+    return agents.find((a) => a.id === id)?.name || RETIRED_AGENTS[id]?.name || id;
 }
 
 /** Resolve a session's agent icon name (used for the flat/search list chip). */
 export function resolveAgentIcon(session: Session, agents: AgentInfo[]): string | undefined {
     const id = session.agent_type || DEFAULT_AGENT_ID;
-    return agents.find((a) => a.id === id)?.icon;
+    return agents.find((a) => a.id === id)?.icon || RETIRED_AGENTS[id]?.icon;
 }

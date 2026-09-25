@@ -59,7 +59,7 @@ class _FakeReg:
 
 
 class _Reg:
-    def __init__(self, agent_id, source="builtin"):
+    def __init__(self, agent_id, source="builtin", hidden=False):
         self.id = agent_id
         self.name = agent_id.title()
         self.description = ""
@@ -67,6 +67,7 @@ class _Reg:
         self.icon = ""
         self.language = "python"
         self.source = source
+        self.hidden = hidden
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +241,20 @@ def test_merge_propagates_eval_score_version_from_real_worker_payload_shape():
     assert by_id["email"]["eval_score"] == 84.53
     assert by_id["email"]["eval_score_version"] == "0.5.0"
     assert by_id["email"]["latest_version"] == "0.6.0"
+
+
+def test_merge_omits_hidden_registry_only_agents():
+    """A hidden registration is not a choice, so it must not reach the browse
+    listing — the same reason GET /api/agents drops it. Retired agents (chat/
+    doc/file) and scaffolding (builder) stay resolvable by id without
+    reappearing as something a user can pick.
+    """
+    merged = merge_with_registry(
+        [],
+        _FakeReg([_Reg("gaia"), _Reg("doc", hidden=True)]),
+        {},
+    )
+    assert [a["id"] for a in merged] == ["gaia"]
 
 
 def test_merge_registry_only_agent_defaults_to_agent_type():
