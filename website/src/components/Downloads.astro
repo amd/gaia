@@ -22,9 +22,11 @@
 // download" and "no Intel build" together there), and a machine it cannot
 // place at all keeps the full list rather than guessing.
 //
-// Nothing here builds a URL. Each link is the `url` the hub manifest published
-// for an artifact whose filename matched a key exactly, so a platform the hub
-// has not published for is absent rather than a dead link.
+// No link is invented here. A key resolves to an exact filename, that filename
+// has to match an artifact the hub published, and the href is that artifact's
+// `url` — the hub origin joined to the object `path` the manifest itself
+// declares (see getComponentRelease). A platform the hub has not published for
+// is therefore absent rather than a dead link.
 
 import { formatBytes, getComponentRelease, type PlatformBinary } from '../data/catalog';
 import {
@@ -117,16 +119,25 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
 ---
 
 <div data-downloads class:list={['w-full min-w-0', className]}>
+  {/* The two cards are options within this one region, not page sections. The
+      heading names the region so they can sit under it as h3 instead of peer to
+      the page's own headings. */}
+  <h2 class="sr-only">Get GAIA</h2>
+
   <div class="mx-auto grid w-full max-w-[720px] gap-[18px] text-left sm:grid-cols-2">
     {/* ---- Desktop app ---- */}
     <section class="g-card p-[26px]">
-      <h2 class="g-h-card">Desktop app</h2>
+      <h3 class="g-h-card">Desktop app</h3>
       <p class="g-body mt-2.5">
         A window you open like any other app. Chat, your documents and your files, with
         every tool call shown before it runs. Start here if you have not used GAIA before.
       </p>
 
-      <div class="mt-5">
+      {/* space-y-3, not a margin per block: Tailwind's rule only pairs
+          siblings that are BOTH un-hidden, and on Safari two blocks are
+          revealed at once (the Apple Silicon download and the "no Intel
+          build" line) with nothing between them otherwise. */}
+      <div class="mt-5 space-y-3">
         {desktopRows.map((row) => (
           <div data-dl-cta data-surface="desktop" data-kind="build" data-platform={row.platform} hidden>
             <a href={row.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
@@ -155,38 +166,43 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
 
     {/* ---- Terminal ---- */}
     <section class="g-card p-[26px]">
-      <h2 class="g-h-card">Terminal</h2>
+      <h3 class="g-h-card">Terminal</h3>
       <p class="g-body mt-2.5">
         The same agent in your shell, on every platform GAIA builds for. Start here if you
         work over SSH, or would rather stay in a terminal.
       </p>
 
       <div class="mt-5">
-        {tuiRows.map((row) => (
-          <div
-            data-dl-cta
-            data-surface="tui"
-            data-kind={row.installers.length ? 'installer' : 'binary'}
-            data-platform={row.platform}
-            hidden
-          >
-            <div class="flex flex-wrap items-center gap-3">
-              {row.installers.length > 0
-                ? row.installers.map((i) => (
-                    <a href={i.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
-                      <Fragment set:html={DOWNLOAD_ICON} />
-                      <span>{INSTALLER_CTA_LABELS[i.key]}</span>
-                    </a>
-                  ))
-                : row.binary && (
-                    <a href={row.binary.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
-                      <Fragment set:html={DOWNLOAD_ICON} />
-                      <span>Download for {PLATFORM_LABELS[row.platform]}</span>
-                    </a>
-                  )}
+        {/* Same reason as the desktop card: a Safari Mac reveals the Apple
+            Silicon and Intel blocks together. The captions stay outside so
+            they keep their tighter gap to the block they describe. */}
+        <div class="space-y-3">
+          {tuiRows.map((row) => (
+            <div
+              data-dl-cta
+              data-surface="tui"
+              data-kind={row.installers.length ? 'installer' : 'binary'}
+              data-platform={row.platform}
+              hidden
+            >
+              <div class="flex flex-wrap items-center gap-3">
+                {row.installers.length > 0
+                  ? row.installers.map((i) => (
+                      <a href={i.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
+                        <Fragment set:html={DOWNLOAD_ICON} />
+                        <span>{INSTALLER_CTA_LABELS[i.key]}</span>
+                      </a>
+                    ))
+                  : row.binary && (
+                      <a href={row.binary.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
+                        <Fragment set:html={DOWNLOAD_ICON} />
+                        <span>Download for {PLATFORM_LABELS[row.platform]}</span>
+                      </a>
+                    )}
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
 
         {/* One caption per kind, at card level: with two Mac blocks revealed at
             once, a caption inside each would say the same thing twice. */}
@@ -253,8 +269,14 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
                       ? [{ href: row.binary.url, label: DOWNLOAD_LABELS[row.platform] }]
                       : []),
                   ].map((o) => (
+                    /* The platform stays visible once per row — a platform can
+                       carry three links and printing it three times is worse to
+                       scan. aria-label puts it back into each link's NAME, so a
+                       links list does not read six identical "Standalone
+                       binary" entries. */
                     <a
                       href={o.href}
+                      aria-label={`${o.label} for ${PLATFORM_LABELS[row.platform]}`}
                       class="inline-flex items-baseline gap-1.5 transition-colors hover:text-g-accent-text"
                     >
                       <span class="text-g-accent-text" aria-hidden="true">↓</span>

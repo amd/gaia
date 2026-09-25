@@ -260,6 +260,20 @@ export interface PlatformBinary {
   url: string;
 }
 
+/**
+ * One artifact exactly as the manifest publishes it. `path` is the hub's own
+ * object key (`agents/<id>/<version>/<filename>`) and
+ * workers/agent-hub/schemas/manifest.schema.json requires it on every
+ * artifact — so it is the thing a download URL is built from, never a shape
+ * this file re-derives. There is no `url` field to use instead.
+ */
+interface HubArtifact {
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  path?: string;
+}
+
 export interface ComponentRelease {
   version: string;
   binaries: PlatformBinary[];
@@ -272,6 +286,8 @@ const componentReleases = new Map<string, Promise<ComponentRelease>>();
  * `agents/<id>/manifest.json`. index.json carries a single representative
  * download size, not the artifact list, so a per-platform download link has to
  * come from here.
+ *
+ * Each URL is the hub origin joined to the artifact's own published `path`.
  *
  * Fails loudly for the same reason the catalog does: a download button built
  * from stale or guessed filenames 404s on the visitor, and the filenames are
@@ -308,7 +324,7 @@ export async function getComponentRelease(
     }
     const manifest = (await res.json()) as {
       latest_version?: string;
-      versions?: Record<string, { artifacts?: Omit<PlatformBinary, "url">[] }>;
+      versions?: Record<string, { artifacts?: HubArtifact[] }>;
     };
     const version = manifest.latest_version;
     if (!version) {
@@ -328,10 +344,25 @@ export async function getComponentRelease(
     );
     return {
       version,
-      binaries: artifacts.map((a) => ({
-        ...a,
-        url: `${base}/agents/${id}/${version}/${a.filename}`,
-      })),
+      binaries: artifacts.map((a) => {
+        // The hub's own object key, never a re-derived one: a CDN move or a
+        // per-OS subdirectory would 404 every link on the site silently.
+        if (!a.path) {
+          throw new Error(
+            `[catalog] The '${id}' artifact '${a.filename}' at ${version} publishes no ` +
+              `'path'. manifest.schema.json requires it on every artifact and the download ` +
+              `URL is built from it — the site will not guess an object key. Republish ` +
+              `'${id}' from a hub Worker that emits complete artifacts (see ${url} and ` +
+              `workers/agent-hub/schemas/manifest.schema.json).`,
+          );
+        }
+        return {
+          filename: a.filename,
+          sha256: a.sha256,
+          size_bytes: a.size_bytes,
+          url: `${base}/${a.path.replace(/^\/+/, "")}`,
+        };
+      }),
     };
   };
 

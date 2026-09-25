@@ -1,9 +1,13 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { defineConfig } from 'vitest/config';
+import { getViteConfig } from 'astro/config';
 
-export default defineConfig({
+// getViteConfig, not vitest's own defineConfig: it loads astro.config.mjs and
+// its plugins, which is what lets a suite `import Downloads from './x.astro'`
+// and render it through the container API. Without it a .astro import is an
+// unknown file type and the component stays untestable.
+export default getViteConfig({
   test: {
     // src/design/literals.test.ts reads the stylesheets as text through
     // `import.meta.glob(..., { query: '?raw' })`. With Vitest's default
