@@ -15,6 +15,7 @@ patches take effect.
 
 import asyncio
 import copy
+import importlib.util
 import json
 import logging
 import os
@@ -26,7 +27,10 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import (
+    CHAT_WHEEL_AGENT_IDS,
+    agent_not_installed_message,
+)
 from gaia.daemon.broker_client import BrokerUnavailableError
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
@@ -624,7 +628,24 @@ def _agent_unavailable_message(requested: str, registry) -> str:
 
     Mirrors the fail-loudly precedent at _chat_helpers.py around line 589 — no
     silent swap to chat, just a clear message the user can act on.
+
+    The ``gaia-agent-chat`` ids are the one case where the generic message is a
+    dead end: they are hidden, so "pick another agent from the selector" names
+    a selector they are not in, and every historical session carries one. When
+    the wheel is genuinely absent, name the package and its install command
+    instead — a recorded load error still wins, since it says more than
+    "missing".
     """
+    if (
+        requested in CHAT_WHEEL_AGENT_IDS
+        and importlib.util.find_spec("gaia_agent_chat") is None
+    ):
+        return agent_not_installed_message(
+            f"The '{requested}' agent is not installed",
+            "gaia-agent-chat",
+            next_step="Then restart the server.",
+        )
+
     reason_suffix = ""
     if registry is not None:
         reason = registry.get_load_error(requested)
@@ -1554,7 +1575,7 @@ async def _get_chat_response(
         agent_type = request.agent_type or stored_agent_type
 
         # Validate requested agent_type exists in the registry before persisting
-        # (chat + sidecar types are exempt — they never live in the registry).
+        # (a relayed sidecar is exempt — it needs no registration to run).
         registry = _agent_registry
         if _agent_type_unknown(agent_type, registry):
             logger.warning(
@@ -1577,7 +1598,7 @@ async def _get_chat_response(
 
         # Honour agent model preferences from the registry (skipped when the
         # user has set a custom model override, which always takes priority).
-        if not custom_model and registry and agent_type != "chat":
+        if not custom_model and registry:
             preferred = registry.resolve_model(agent_type)
             if preferred:
                 logger.info(
@@ -1919,7 +1940,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         agent_type = request.agent_type or stored_agent_type
 
         # Validate requested agent_type exists in the registry before persisting
-        # (chat + sidecar types are exempt — they never live in the registry).
+        # (a relayed sidecar is exempt — it needs no registration to run).
         registry = _agent_registry
         if _agent_type_unknown(agent_type, registry):
             logger.warning(
@@ -1948,7 +1969,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # Honour agent model preferences from the registry (skipped when the
         # user has set a custom model override, which always takes priority).
-        if not custom_model and registry and agent_type != "chat":
+        if not custom_model and registry:
             preferred = registry.resolve_model(agent_type)
             if preferred:
                 logger.info(
