@@ -88,10 +88,26 @@ EMBEDDABLE_SHA256: Dict[str, str] = {
 # Deliberately absent: no_fetch_executables. Setting it true collapses the
 # advertised catalogue from 204 models to the 4 runnable by built-in backends,
 # which would break `gaia download` for everything else.
+# auto_evict=false is pinned rather than inherited. Lemonade v2026.39.1 added
+# VRAM auto-eviction and defaults it off today, but it is a new knob and GAIA's
+# residency model rests on which way it points.
+#
+# GAIA assumes a chat model and an embedder stay co-resident: RAGSDK scopes its
+# embedder unload so a global /unload cannot take the chat model with it (#1544),
+# and ModelSlotBroker serialises sidecar loads so they do not race the slot.
+# Eviction under VRAM pressure is that same failure arriving from underneath.
+# Under pressure the choice is a loud load failure or a silent eviction that
+# resurfaces as a cold reload or a truncated answer; fail-loudly takes the loud
+# one. Turning it on is a real option for VRAM-constrained machines, but it needs
+# measurement on AMD GPU hardware first (#4170).
+#
+# auto_evict_threshold_pct is inert while this is false, so it is left unset
+# rather than stated and ignored.
 _LEMOND_CONFIG = {
     "config_version": 2,
     "host": "localhost",
     "broadcast": False,
+    "auto_evict": False,
 }
 
 
