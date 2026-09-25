@@ -278,7 +278,27 @@ class AgentSidecarManager:
 
     @property
     def is_running(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
+        if self._proc is None:
+            return False
+        # A dead PyInstaller bootloader can leave its server child on the port.
+        return self._proc.poll() is None or self._group_alive(self._proc.pid)
+
+    @staticmethod
+    def _group_alive(pgid: int) -> bool:
+        """POSIX: True while any process remains in group *pgid*.
+
+        ``start_new_session`` makes the leader's pid the group id, and the
+        group outlives its leader. Windows has no surviving group to probe.
+        """
+        if os.name == "nt":
+            return False
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     @property
     def pid(self) -> Optional[int]:
@@ -828,63 +848,71 @@ class AgentSidecarManager:
             self._close_log()
             self._cleanup_secret_file()
             return
-        if proc.poll() is not None:
-            self._proc = None
-            self._close_log()
-            self._cleanup_secret_file()
-            self._fire_reaped()
-            return
         pid = proc.pid
-        logger.info("%s sidecar: tree-killing pid=%s", self.spec.agent_id, pid)
+        # POSIX signals the group even when the leader is gone: pgid == pid.
+        leader_alive = proc.poll() is None
+        if leader_alive or self._group_alive(pid):
+            logger.info("%s sidecar: tree-killing pid=%s", self.spec.agent_id, pid)
+            self._signal_tree(proc, 15)
+            if not self._wait_tree_gone(proc, timeout):
+                logger.warning(
+                    "%s sidecar did not exit in %ss; SIGKILL",
+                    self.spec.agent_id,
+                    timeout,
+                )
+                self._signal_tree(proc, 9)
+                self._wait_tree_gone(proc, timeout)
+        self._close_log()
+        self._cleanup_secret_file()
+        if proc.poll() is None or self._group_alive(pid):
+            # Keep _proc (and so the ledger entry) — crash-reap needs it.
+            logger.warning(
+                "%s sidecar: pid=%s or a child in its process group is still "
+                "alive after SIGKILL -- not reporting it as shut down. Kill "
+                "process group %s manually, then run "
+                "`gaia daemon stop-agent %s`.",
+                self.spec.agent_id,
+                pid,
+                pid,
+                self.spec.agent_id,
+            )
+            return
+        self._proc = None
+        self._fire_reaped()
+        logger.info("%s sidecar: shut down", self.spec.agent_id)
+
+    @staticmethod
+    def _signal_tree(proc: subprocess.Popen, sig: int) -> None:
         try:
             if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
+                if proc.poll() is not None:
+                    return
+                if sig == 9:
+                    proc.kill()
+                else:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
             else:
-                os.killpg(os.getpgid(pid), 15)  # SIGTERM to the group
+                os.killpg(proc.pid, sig)
         except (ProcessLookupError, OSError):
             pass
+
+    def _wait_tree_gone(self, proc: subprocess.Popen, timeout: float) -> bool:
+        """Wait for the leader AND (POSIX) every group member to exit."""
+        deadline = time.monotonic() + timeout
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            logger.warning(
-                "%s sidecar did not exit in %ss; SIGKILL", self.spec.agent_id, timeout
-            )
-            try:
-                if os.name != "nt":
-                    os.killpg(os.getpgid(pid), 9)  # SIGKILL
-                else:
-                    proc.kill()
-            except (ProcessLookupError, OSError):
-                pass
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                logger.warning(
-                    "%s sidecar: SIGKILL sent but the process did not exit "
-                    "within %ss; it may still be running (pid=%s)",
-                    self.spec.agent_id,
-                    timeout,
-                    pid,
-                )
-        leader_gone = proc.poll() is not None
-        self._proc = None
-        self._close_log()
-        self._cleanup_secret_file()
-        if leader_gone:
-            self._fire_reaped()
-            logger.info("%s sidecar: shut down", self.spec.agent_id)
-        else:
-            logger.warning(
-                "%s sidecar: process still alive after SIGKILL (pid=%s) -- not "
-                "reporting it as shut down",
-                self.spec.agent_id,
-                pid,
-            )
+            return False
+        while self._group_alive(proc.pid):
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+        return True
 
     def _fire_reaped(self) -> None:
         if self.on_process_reaped is not None:
