@@ -17,6 +17,9 @@ contract version is tracked separately as
   running, rather than passing or failing. It now parses the new format, and a
   version with stray leading whitespace parses again as it did before.
 
+- **`gaia hub install email` no longer refuses Intel Macs (#4218).**
+  `requirements.platforms` now includes `darwin-x64`, matching the Intel binary
+  every release already builds and `binaries.lock.json` already lists.
 - **Received-invite grounding now recognizes Google events with omitted
   organizer flags (#2787).** Calendar tools preserve the provider's explicit
   organizer signal and treat the authenticated attendee as externally invited
