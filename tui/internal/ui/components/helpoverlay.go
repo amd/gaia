@@ -280,9 +280,8 @@ const chatHelpText = `  GAIA Chat
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
-  Commands    /help /clear /bypass /cost /slack
-              /setup /memory /model /provider
-              /gateway /agents
+  Commands    /help /clear /bypass /cost /slack /setup
+              /memory /model /provider /gateway /agents
   /           On an empty line, browse commands —
               hover/click or ↑/↓ to pick, Enter or
               click to run, Esc or click out to close

@@ -462,7 +462,6 @@ class AgentLoop:
                         min_context_size=device_ctx,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
-                        device=session.get("device"),
                         dynamic_tools=dynamic_tools,
                     )
                     agent = ChatAgent(config)
