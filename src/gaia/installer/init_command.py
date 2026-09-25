@@ -43,7 +43,7 @@ from gaia.llm.lemonade_launcher import (
 )
 from gaia.llm.model_fit import MachineCapacity
 from gaia.ui.build import WebuiBuildStatus
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = logging.getLogger(__name__)
 
@@ -1161,15 +1161,8 @@ class InitCommand:
 
     @staticmethod
     def _parse_version(version: str) -> Optional[tuple]:
-        """Parse version string into tuple.
-
-        Tolerates Lemonade's CalVer dev suffix (``2026.39.0~12.abc1234``).
-        """
-        try:
-            parts = version.lstrip("v").split(".")[:3]
-            return tuple(int(re.match(r"\d+", p).group(0)) for p in parts)
-        except (ValueError, IndexError, AttributeError):
-            return None
+        """Parse version string into tuple. See :func:`gaia.version.parse_version`."""
+        return parse_version(version)
 
     def _check_version_compatibility(self, info: LemonadeInfo) -> bool:
         """

@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.14"`                  |
+| Contract version   | `API_VERSION = "2.15"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -271,6 +271,7 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
+| `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
@@ -285,16 +286,17 @@ paths call the same `build_memory_dump()` and return the identical shape.
 
 ### 5.2 `session_id` and agent retention
 
-Internal explicit deletion follows the same idle-only rule as eviction: it returns
-`False` for an absent or busy session and preserves a running agent. Successful
-deletion claims the turn lock before removal and closes outside the registry lock.
-
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
 **Pass it on every call in a conversation, and reuse the same value for the
 whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
 agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
-threads them together.
+threads them together. Omitting it is a valid, explicit one-shot: nothing
+persists past that single turn, and the agent is not told otherwise.
+
+Internal explicit deletion follows the same idle-only rule as eviction: it returns
+`False` for an absent or busy session and preserves a running agent. Successful
+deletion claims the turn lock before removal and closes outside the registry lock.
 
 A skill **captured** in-conversation (the `capture_skill` tool — itself
 confirmation-gated, so over `/query` it needs a session that can answer) loads
@@ -308,8 +310,7 @@ every turn: the agent selects per turn which loaded bodies match the query and
 collapses the rest to a one-line menu entry (re-activated by calling
 `load_skill` again). `GAIA_DYNAMIC_SKILLS=0` disables the selection;
 `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
-disables it for the session and every body renders. Omitting it is a valid, explicit one-shot: nothing
-persists past that single turn, and the agent is not told otherwise.
+disables it for the session and every body renders.
 
 A retained session also carries a **project map** — up to 600 prompt tokens of
 directory shape, entry points, installed commands and platform quirks, present
@@ -424,6 +425,39 @@ keys never travel through stdio queries. These controls are not exposed over
 remotely, so a local server URL alone does not establish local inference.
 
 ---
+
+### 5.6 Adding to a turn already running
+
+`POST /v1/gaia/query/{run_id}/followup` with `{ "text": "…" }` hands a live run
+something the user typed after it started. Contract ≥ 2.15.
+
+It is not a second turn and not an interrupt. The run keeps going on its
+existing SSE stream; the agent folds the text into that turn's context at its
+next agent-loop step boundary, labelled as arriving mid-task, and answers it
+alongside the work already in progress. A five-minute turn can therefore be
+corrected ("actually, only the unread ones") while it is still running, instead
+of the correction waiting out the turn it was meant to change.
+
+Two refusals, both loud, because the caller has already taken the message from
+the user and owes them a truthful answer about where it went:
+
+| Status | Meaning                                                      |
+| ------ | ------------------------------------------------------------ |
+| `404`  | No such run in flight — it finished or was cancelled. Send it as a new `/query`. |
+| `409`  | The run's agent is not accepting mid-turn input.              |
+
+A turn that has already formed its answer takes one more step to address a
+follow-up, so a turn answering in a single step is covered too. The one
+exception is a turn already at its step limit: the message stays queued rather
+than being consumed into a context no model call will read.
+
+Because `/query` is stateless (§2.4) the host still owns the transcript: record
+a delivered follow-up in the `context` you push on the **next** turn, between
+that turn's question and its answer, or the conversation loses words the agent
+demonstrably saw.
+
+Clients that predate 2.15 get a `404` on the path itself. Probe `/version`
+before sending rather than reading a 404 as "the run ended".
 
 ## 6. Process ownership
 
