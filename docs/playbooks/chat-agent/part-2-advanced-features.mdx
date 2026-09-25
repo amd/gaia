@@ -256,14 +256,17 @@ class ChatSession:
 ```python
 save_current_session()
   → Serialize to JSON
-  → Write to ~/.gaia/sessions/{id}.json
+  → Write atomically to ~/.gaia/sessions/{id}.json (temp file + rename)
   → Include metadata (timestamp, version)
 ```
+
+Sessions live under `~/.gaia/sessions` (or `$GAIA_CONFIG_DIR/sessions`) no matter which directory you start from. A session id must be 1–128 characters from `A-Z a-z 0-9 . _ -`; anything else raises `ValueError`.
 
 **Load process:**
 ```python
 load_session(session_id)
-  → Read JSON from disk
+  → Read JSON from disk (SessionCorruptError if the file is truncated or invalid;
+    the file is left untouched)
   → Restore indexed documents (call rag.index_document() for each)
   → Restore watched directories (start observers)
   → Restore conversation history
