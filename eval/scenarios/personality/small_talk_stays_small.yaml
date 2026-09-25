@@ -1,7 +1,6 @@
 id: small_talk_stays_small
 name: "Small Talk Stays Small -- No Tooling on a Conversational Turn"
 category: personality
-agent_type: gaia
 severity: high
 description: |
   Three turns of pure conversation against the flagship: a greeting, a

@@ -264,7 +264,12 @@ def test_the_readiness_probe_takes_no_request_parameters():
 #: This is a ceiling, not a pin. A prompt edit that moves the number by fifty
 #: tokens is fine; one that moves it by a thousand has given fast mode a tool
 #: surface or a capability section back, which is the regression.
-FAST_PREFILL_CEILING = 2500
+#:
+#: Raised from 2500 when ``wait_for_condition`` (#3402) joined the ``shell``
+#: bundle alongside ``run_shell_command`` — the two ship together, so the bare
+#: chat profile picked it up too. Still under a quarter of the default
+#: profile's cost; see ``test_fast_mode_costs_a_fraction_of_the_default``.
+FAST_PREFILL_CEILING = 2800
 
 
 @contextlib.contextmanager
@@ -325,6 +330,7 @@ def test_fast_mode_registers_only_the_conversational_surface():
         "read_tool_output",
         "run_shell_command",
         "search_documentation",
+        "wait_for_condition",
     ]
     # The 17 this agent adds on every other profile. Any one of them back means
     # _profile_registers_tools stopped gating and the prefill budget is gone.
