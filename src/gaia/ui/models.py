@@ -80,7 +80,6 @@ class SystemStatus(BaseModel):
     time_to_first_token: Optional[float] = None
     # Device compatibility check
     processor_name: Optional[str] = None
-    device_supported: bool = True
     # LLM configuration health
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
