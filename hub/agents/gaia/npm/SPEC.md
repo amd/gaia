@@ -285,16 +285,17 @@ paths call the same `build_memory_dump()` and return the identical shape.
 
 ### 5.2 `session_id` and agent retention
 
-Internal explicit deletion follows the same idle-only rule as eviction: it returns
-`False` for an absent or busy session and preserves a running agent. Successful
-deletion claims the turn lock before removal and closes outside the registry lock.
-
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
 **Pass it on every call in a conversation, and reuse the same value for the
 whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
 agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
-threads them together.
+threads them together. Omitting it is a valid, explicit one-shot: nothing
+persists past that single turn, and the agent is not told otherwise.
+
+Internal explicit deletion follows the same idle-only rule as eviction: it returns
+`False` for an absent or busy session and preserves a running agent. Successful
+deletion claims the turn lock before removal and closes outside the registry lock.
 
 A skill **captured** in-conversation (the `capture_skill` tool — itself
 confirmation-gated, so over `/query` it needs a session that can answer) loads
@@ -308,8 +309,7 @@ every turn: the agent selects per turn which loaded bodies match the query and
 collapses the rest to a one-line menu entry (re-activated by calling
 `load_skill` again). `GAIA_DYNAMIC_SKILLS=0` disables the selection;
 `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
-disables it for the session and every body renders. Omitting it is a valid, explicit one-shot: nothing
-persists past that single turn, and the agent is not told otherwise.
+disables it for the session and every body renders.
 
 A retained session also carries a **project map** — up to 600 prompt tokens of
 directory shape, entry points, installed commands and platform quirks, present
