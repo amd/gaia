@@ -521,7 +521,9 @@ class TestStartRemedyIsRunnable(unittest.TestCase):
 
         profile = next(p for p, c in INIT_PROFILES.items() if c.get("min_context_size"))
         cmd, buf = self._capturing_cmd(profile)
-        min_ctx = INIT_PROFILES[profile]["min_context_size"]
+        from gaia.llm.lemonade_client import resolve_ctx_size
+
+        min_ctx = resolve_ctx_size()
 
         with (
             patch("platform.system", return_value="Linux"),
