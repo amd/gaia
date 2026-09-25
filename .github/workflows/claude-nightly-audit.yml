@@ -144,8 +144,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Single source of truth for the model. Opus 5 by default — half the token burn of
-  # Fable for comparable static-review quality (see the MODEL note in the file header).
+  # Single source of truth for the model. Opus 5.5 by default — under half the token
+  # price of Fable for comparable static-review quality (see the MODEL note in the file header).
   AUDIT_MODEL: claude-opus-5-5
 
 jobs:
@@ -263,7 +263,7 @@ jobs:
       - name: Run Claude (${{ matrix.dimension }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -495,7 +495,19 @@ jobs:
             echo "::error title=Claude stopped::The lens hit its --max-turns ceiling before finishing. Whatever it had written to its findings file is still collected."
             exit 1
           fi
-          python3 util/classify_claude_probe.py --exit-code 1 --format stream-json --text-file "$EXECUTION_FILE"
+          # Classify only the terminal result, never the transcript: the classifier
+          # matches words like "unauthorized" and bare 401/403, which a lens that audits
+          # auth writes about constantly — its prose would read as a dead credential.
+          python3 -c 'import json,sys
+          last=""
+          for l in open(sys.argv[1],encoding="utf-8",errors="replace"):
+              l=l.strip()
+              if not l.startswith("{"): continue
+              try: e=json.loads(l)
+              except ValueError: continue
+              if e.get("type")=="result": last=str(e.get("result") or e.get("subtype") or "")
+          open(sys.argv[2],"w",encoding="utf-8").write(last)' "$EXECUTION_FILE" "$RUNNER_TEMP/claude-result.txt"
+          python3 util/classify_claude_probe.py --exit-code 1 --format text --text-file "$RUNNER_TEMP/claude-result.txt"
 
       - name: Upload findings
         if: always()
@@ -548,7 +560,11 @@ jobs:
           incomplete=$(python3 - <<'EOF'
           import json, pathlib
           for f in sorted(pathlib.Path("audit-findings").rglob("findings-*.json")):
-              if json.loads(f.read_text(encoding="utf-8")).get("complete") is not True:
+              try:
+                  done = json.loads(f.read_text(encoding="utf-8")).get("complete") is True
+              except (ValueError, AttributeError):
+                  done = False  # truncated mid-write; synthesis quarantines it
+              if not done:
                   print(f.stem.removeprefix("findings-"))
           EOF
           )
@@ -609,7 +625,7 @@ jobs:
       - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

@@ -3,7 +3,7 @@
 #
 # Fork PR Support:
 # - pr-review (pull_request_target): ✅ Works on fork PRs - full review when PR opened / marked ready
-# - pr-rereview (pull_request_target): ✅ Works on fork PRs - lightweight Sonnet re-review on each push (synchronize); flags only new regressions, silent otherwise.
+# - pr-rereview (pull_request_target): ✅ Works on fork PRs - lightweight re-review on each push (synchronize); flags only new regressions, silent otherwise.
 #   ESCALATION: if it finds NO prior Claude review on the PR (the full pr-review was skipped because
 #   the fork-PR approval gate landed after a push, so only this synchronize run ever fired) it does a
 #   FULL first review instead of staying silent — see the job's STEP 0 / FULL-REVIEW MODE prompt.
@@ -102,8 +102,8 @@
 # COST: Fork PRs consume your Anthropic quota — the Max subscription pool when
 # CLAUDE_CODE_OAUTH_TOKEN is set, otherwise per-token API billing. The full pr-review runs
 # only on open / reopen / ready; each subsequent push gets the lightweight pr-rereview
-# (Sonnet, flags only new regressions) — UNLESS no prior review exists, in which case
-# pr-rereview escalates to a full first review (still Sonnet). Both groups cancel
+# (flags only new regressions) — UNLESS no prior review exists, in which case
+# pr-rereview escalates to a full first review. Both groups cancel
 # in-progress runs on rapid pushes.
 # On the API-key fallback path (OAuth token expired), the Opus jobs bill per-token at up to
 # --max-turns 100 each until the monthly auth canary (claude-auth-canary.yml) flags the outage.
@@ -439,8 +439,8 @@ jobs:
         --model claude-opus-5-5
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
-  # Lightweight re-review on each push (synchronize): a Sonnet pass that flags only NEW
-  # regressions and stays silent otherwise, instead of re-running the full Opus review.
+  # Lightweight re-review on each push (synchronize): same model as the full review, but a
+  # prompt that flags only NEW regressions and stays silent otherwise.
   # (A true per-push delta isn't available — the pull_request event carries no before/after
   # SHA — so it scans the full diff but is told to flag only what's new, not repeat the
   # first review. cancel-in-progress collapses rapid pushes to the latest.)
@@ -1066,7 +1066,7 @@ jobs:
 
       - name: Attempt auto-fix
         id: claude   # referenced by the Notify step's execution_file check below
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1541,7 +1541,7 @@ jobs:
         # continue-on-error: a rate-limit / expired-token / outage failure here is
         # caught by the "Verify and validate release notes" step (which fails the job)
         # and the "Notify on failure" step opens a tracking issue.
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.

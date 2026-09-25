@@ -50,7 +50,7 @@ jobs:
         # It now defaults to the same model the real jobs use (claude-opus-5-5) so the
         # scheduled run exercises the actual path, not a cheaper proxy that could stay
         # green while every real job fails to resolve its model.
-        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
