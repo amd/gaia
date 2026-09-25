@@ -57,7 +57,8 @@
     /* Preserve whitespace inside spans */
     white-space: pre;
 }
-/* Terminal cursor: a solid accent block that blinks after typing finishes */
+/* Terminal cursor: only ever rendered while its own text is being written, so
+ * it blinks whenever it exists — the blink is what says "still writing". */
 .terminal-cursor {
     display: inline-block;
     width: 8px;
@@ -68,9 +69,6 @@
     /* Pixelated aesthetic - sharp edges, no rounding */
     border-radius: 0;
     image-rendering: pixelated;
-}
-
-.terminal-cursor.blink {
     animation: terminalBlink 1s step-end infinite;
 }
 

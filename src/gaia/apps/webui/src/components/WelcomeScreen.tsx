@@ -142,16 +142,14 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onStartAgentTask, onCre
                     {displayedText.length >= 4 ? (
                         <><span>{displayedText.slice(0, 4)}</span><span>{displayedText.slice(4)}</span></>
                     ) : displayedText}
-                    {phase === 'title' && (
-                        <span className={`terminal-cursor${typingComplete ? ' blink' : ''}`} />
-                    )}
+                    {/* Every cursor here is gated on its own text still being
+                        written — see docs/spec/gaia-design-language.mdx. */}
+                    {!typingComplete && <span className="terminal-cursor" />}
                 </h1>
                 <p className="welcome-sub">
                     <span className="typewriter-text">
                         {subtitleText}
-                        {(phase === 'subtitle' || phase === 'done') && (
-                            <span className={`terminal-cursor terminal-cursor-sub${phase === 'done' ? ' blink' : ''}`} />
-                        )}
+                        {phase === 'subtitle' && <span className="terminal-cursor terminal-cursor-sub" />}
                     </span>
                 </p>
                 <span className="welcome-version">v{__APP_VERSION__} <span className="beta-badge">BETA</span></span>
@@ -307,7 +305,7 @@ function Feature({ icon, title, desc, expandedDesc, codeHint }: {
                     <span className="feature-inline"><span className="feature-code-hint feature-code-erasing">{eraseText}</span><span className="terminal-cursor terminal-cursor-sm" /></span>
                 )}
                 {(phase === 'typing' || phase === 'done') && (
-                    <span className="feature-inline"><span className="feature-expanded-text">{hoverText}</span><span className={`terminal-cursor terminal-cursor-sm${phase === 'done' ? ' blink' : ''}`} /></span>
+                    <span className="feature-inline"><span className="feature-expanded-text">{hoverText}</span>{phase === 'typing' && <span className="terminal-cursor terminal-cursor-sm" />}</span>
                 )}
             </div>
         </div>
