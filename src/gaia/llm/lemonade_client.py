@@ -233,6 +233,11 @@ DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # gaia.llm.model_fit says it fits, and records the pick as ``default_model``.
 LARGE_DEFAULT_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 
+# The faster big-PC candidate: a Lemonade built-in, 2-5x faster decode than
+# Flash on Strix Halo, but text-only. Supported and switchable; which one is the
+# default is settled by `util/compare_local_models.py` on real hardware.
+QWEN3_30B_MODEL_NAME = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+
 
 def resolve_default_chat_model() -> str:
     """The chat model an agent uses when nobody passed one.
@@ -584,6 +589,18 @@ MODELS = {
         # Three model shards plus the 0.9 GB vision projector, as Lemonade counts it.
         size_gb=82.86,
         min_lemonade_version="2026.39.1",
+    ),
+    # --- Qwen3 30B A3B Instruct 2507: the fast big-PC alternative ---
+    # 30.5B MoE (3.3B active), a Lemonade built-in on llama.cpp (Q4_0).
+    # Native tool calls, no vision and no thinking mode. The "-HRX" build of the
+    # same weights is Linux-only and experimental, so it is not listed here.
+    "qwen3-30b-a3b-instruct": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=QWEN3_30B_MODEL_NAME,
+        display_name="Qwen3 30B A3B Instruct 2507",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        size_gb=17.4,
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint

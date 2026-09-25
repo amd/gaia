@@ -249,6 +249,16 @@ the same model `gaia init` would download.
 </Note>
 
 <Note>
+On the same big-memory PCs, `Qwen3-30B-A3B-Instruct-2507-GGUF` (a 17 GB Lemonade
+built-in) is the faster alternative: it generates several times faster than Qwen3.8 Flash
+on a Strix Halo, but reads text only. Switch to it with
+`gaia config set default_model Qwen3-30B-A3B-Instruct-2507-GGUF`, or pick it in the
+terminal UI's model picker; Lemonade downloads it on first use. To measure both on your
+own PC, speed, tool calling and (with `--tasks core`) agent quality, run
+`python util/compare_local_models.py` from a GAIA checkout.
+</Note>
+
+<Note>
 `gaia llm` quick queries use `default_model` when set, else `Gemma-4-E4B-it-GGUF`.
 </Note>
 

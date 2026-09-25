@@ -210,6 +210,15 @@ class TestTuiDrift:
         assert lc.DEFAULT_MODEL_NAME in local
         assert lc.LARGE_DEFAULT_MODEL_NAME[len("user.") :] in local
 
+    def test_the_fast_alternative_is_recommended_and_known(self, doc):
+        """Switchable to by name, and sized so the fit check can judge it."""
+        local = {m["id"] for m in doc["models"] if m["provider"] == "local"}
+        assert lc.QWEN3_30B_MODEL_NAME in local
+        mr = lc.find_model_requirement(lc.QWEN3_30B_MODEL_NAME)
+        assert mr is not None and mr.size_gb and mr.tool_calling
+        # A built-in: registration fields would make Lemonade 400 the pull.
+        assert mr.pull_kwargs() == {}
+
 
 class TestAgentUiFollowsTheMachineDefault:
     def test_ui_default_is_the_configured_model(self):

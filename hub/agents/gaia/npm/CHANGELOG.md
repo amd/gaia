@@ -14,6 +14,9 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- Qwen3 30B A3B Instruct 2507 is a supported chat model on the same big-memory
+  PCs: faster than Qwen3.8 Flash Next, text only. Switch with
+  `gaia config set default_model Qwen3-30B-A3B-Instruct-2507-GGUF`.
 - The default chat model now follows the hardware. On a PC with the memory for it
   (a 128 GB Strix Halo), `gaia init` also sets up Qwen3.8 Flash Next and records
   it as `default_model`; the agent and its `GET /v1/gaia/init` readiness check
