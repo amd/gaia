@@ -19,7 +19,7 @@
 .memory-dashboard-header-left {
     display: flex; align-items: center; gap: 12px;
 }
-.memory-dashboard-header h3 {
+.memory-dashboard-header h1 {
     font-size: 15px; font-weight: 600; font-family: var(--font-sans);
     color: var(--text-primary);
 }
@@ -790,7 +790,7 @@
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
-.mem-conv-detail-header h4 {
+.mem-conv-detail-header h2 {
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--text-secondary);
