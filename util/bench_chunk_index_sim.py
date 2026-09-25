@@ -123,6 +123,23 @@ def _classify(agent: Agent, name: str, source: Any, condensed: Any) -> str:
     return "records"
 
 
+def _one_entry_read(agent: Agent, fitted: Any) -> int:
+    """Size of reading the median-length index entry by number, every page."""
+    meta = json.loads(fitted) if isinstance(fitted, str) else fitted
+    meta = meta[-1] if isinstance(meta, list) and meta else meta
+    index = meta.get("index", []) if isinstance(meta, dict) else []
+    if not index:
+        return 0
+    entry = sorted(index, key=lambda e: e["length"])[len(index) // 2]
+    store = store_for(agent)
+    page = store.read(meta["artifact"], entry=entry["n"])
+    size = _size(page)
+    while "remaining" in page:
+        page = store.read(meta["artifact"], page["next_offset"], page["remaining"])
+        size += _size(page)
+    return size
+
+
 def replay(path: str) -> Dict[str, Any]:
     conversation = json.loads(Path(path).read_text(encoding="utf-8"))["conversation"]
     agent = _ReplayAgent(silent_mode=True, skip_lemonade=True)
@@ -145,12 +162,7 @@ def replay(path: str) -> Dict[str, Any]:
             if fitted is not source:
                 condensed_count += 1
                 kinds[_classify(agent, entry.get("name", ""), source, fitted)] += raw
-                index = fitted.get("index", []) if isinstance(fitted, dict) else []
-                if index:
-                    # One exact read of an average indexed part, as a sensitivity bound.
-                    refetch_total += (
-                        min(8000, sum(e["length"] for e in index) // len(index)) + 200
-                    )
+                refetch_total += _one_entry_read(agent, fitted)
         elif _is_stats(entry):
             raw_resent += raw_total
             new_resent += new_total

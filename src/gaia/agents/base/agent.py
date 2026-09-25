@@ -1762,24 +1762,35 @@ Do NOT wrap conversational replies in JSON.
     def _register_output_reader(self):
         from gaia.agents.base.artifacts import store_for
 
-        def read_tool_output(artifact: str, offset: int = 0, limit: int = 2000) -> dict:
-            """Read exact omitted tool output by handle, without rerunning the tool.
+        def read_tool_output(
+            artifact: str,
+            offset: int = 0,
+            limit: Optional[int] = None,
+            entry: Optional[int] = None,
+        ) -> dict:
+            """Read one part of a condensed tool result, verbatim, without rerunning the tool.
+
+            Pass the result's artifact and the n of the index entry you need.
+            The index already names every omitted part, so paging through a
+            whole output is almost never needed.
 
             Args:
-                artifact: Output handle returned by a truncated result.
-                offset: Zero-based character offset in the original output.
-                limit: Characters wanted. Pass an index entry's offset and
-                    length to read exactly that part. A page is at most 8000
-                    characters; when ``remaining`` is set, call again at
-                    ``next_offset`` for the rest.
+                artifact: The condensed result's artifact handle.
+                entry: The n of an index entry; returns exactly that part.
+                offset: Character offset, only when reading without an entry.
+                limit: Characters to return; defaults to the entry's length.
+                    A part longer than 8000 characters comes back in pages:
+                    when remaining is set, call again with offset=next_offset
+                    and limit=remaining.
             """
-            return store_for(self).read(artifact, offset, limit)
+            return store_for(self).read(artifact, offset, limit, entry)
 
         self._output_reader_entry = {
             "name": "read_tool_output",
             "description": read_tool_output.__doc__,
             "parameters": {
                 "artifact": {"type": "string", "required": True},
+                "entry": {"type": "integer", "required": False},
                 "offset": {"type": "integer", "required": False},
                 "limit": {"type": "integer", "required": False},
             },
@@ -5002,11 +5013,13 @@ Do NOT wrap conversational replies in JSON.
     @staticmethod
     def _elide_with_index(text: str, target: int, store) -> Dict[str, Any]:
         """Head and tail of structureless text; the index names the middle."""
+        from gaia.agents.base.chunk_index import FETCH_HINT
         from gaia.agents.base.tool_output import elide_text
 
         metadata: Dict[str, Any] = {
             "index": [
                 {
+                    "n": 1,
                     "label": f"omitted middle ({len(text)} chars)",
                     "offset": len(text),
                     "length": len(text),
@@ -5014,6 +5027,7 @@ Do NOT wrap conversational replies in JSON.
             ],
             "artifact": store.put(text),
             "continuation": "read_tool_output",
+            "fetch": FETCH_HINT,
             "total_chars": len(text),
         }
         excerpt = elide_text(
@@ -5022,11 +5036,13 @@ Do NOT wrap conversational replies in JSON.
         omitted = excerpt["omitted_chars"]
         metadata["index"] = [
             {
+                "n": 1,
                 "label": f"omitted middle ({omitted} chars)",
                 "offset": len(excerpt["head"]),
                 "length": omitted,
             }
         ]
+        store.set_index(metadata["artifact"], metadata["index"])
         excerpt.update(metadata)
         return excerpt
 
@@ -5061,6 +5077,7 @@ Do NOT wrap conversational replies in JSON.
             "index": chunk_index.index_entries(chunks, short),
             "artifact": store.put(archived),
             "continuation": "read_tool_output",
+            "fetch": chunk_index.FETCH_HINT,
             "total_chars": len(archived),
         }
         budget = target - len(serialize(metadata)) - 4
@@ -5071,6 +5088,7 @@ Do NOT wrap conversational replies in JSON.
         metadata["index"] = chunk_index.index_entries(
             [c for c in chunks if not chunk_index.covered(c, structured, shown)], short
         )
+        store.set_index(metadata["artifact"], metadata["index"])
         if isinstance(shown, dict):
             shown.update(metadata)
         elif (

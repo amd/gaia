@@ -47,6 +47,8 @@ MAX_CANDIDATES = 256
 OUTPUT_TOOLS = frozenset(
     {"run_shell_command", "run_python", "execute_python_file", "run_tests"}
 )
+#: Carried by every condensed result, so the model learns the read from the result.
+FETCH_HINT = "read_tool_output(artifact, entry=n) returns one indexed part verbatim"
 #: Arguments whose value can name a part of the result (a symbol, a pattern).
 NAMING_ARGS = ("pattern", "query", "function_name", "name", "symbol", "section")
 
@@ -717,13 +719,15 @@ def _cost(value: Any) -> int:
 
 
 def index_entries(chunks: Sequence[Chunk], short: bool = False) -> List[Dict[str, Any]]:
+    """Index entries numbered from 1; ``read_tool_output(entry=n)`` reads one."""
     return [
         {
+            "n": n,
             "label": (c.short or c.label) if short else c.label,
             "offset": c.offset,
             "length": c.length,
         }
-        for c in chunks
+        for n, c in enumerate(chunks, 1)
     ]
 
 
@@ -855,6 +859,7 @@ def head_and_tail(
         omitted = len(text) - keep
         index = [
             {
+                "n": 1,
                 "label": f"omitted middle ({omitted} chars)",
                 "offset": head,
                 "length": omitted,
@@ -1037,6 +1042,7 @@ def condense_result(
     metadata: Dict[str, Any] = {
         "artifact": body.handle or _HANDLE_PLACEHOLDER,
         "continuation": "read_tool_output",
+        "fetch": FETCH_HINT,
         "total_chars": len(body.text),
     }
     if body.field is not None:
@@ -1083,6 +1089,7 @@ def condense_result(
         shown, index = select(body.text, chunks, room, named)
     if body.handle is None:
         metadata["artifact"] = store.put(body.text)
+    store.set_index(metadata["artifact"], index)
     condensed = render(shown, index)
     size = len(serialize(condensed))
     if size > target:

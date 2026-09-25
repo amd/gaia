@@ -458,8 +458,9 @@ model. A result at or below the threshold is sent unchanged. A larger one is
 archived whole and reaches the model as a chunk index:
 
 - `shown` — the parts kept verbatim, as `{offset, text}` segments.
-- `index` — one `{label, offset, length}` per part left out, in document order.
-  `read_tool_output(artifact, offset, length)` returns exactly that part.
+- `index` — one `{n, label, offset, length}` per part left out, numbered from 1
+  in document order. `read_tool_output(artifact, entry=n)` returns exactly that
+  part; the result's `fetch` field says so.
 - `artifact`, `continuation`, `total_chars`, `truncated`, `original_chars`,
   `omitted_chars` — as before. `archived_field` names the field the archive
   holds (`content`, `stdout`, `matches`); every other field is kept, including
@@ -1116,17 +1117,19 @@ SPDX-License-Identifier: MIT
 
 ## Recovering large tool outputs
 
-When a result exceeds the model budget, the excerpt includes an `artifact`
-handle and `continuation: read_tool_output`. Call
-`read_tool_output(artifact, offset=0, limit=2000)` to retrieve exact text;
-`next_offset` is the next character offset, or `null` at the end. Pages are
-limited to 8,000 characters. Unicode offsets count characters, not bytes.
+When a result exceeds the model budget, it carries an `artifact` handle, a
+numbered `index` of the parts left out, and `continuation: read_tool_output`.
+Call `read_tool_output(artifact, entry=n)` to get entry `n` verbatim. The index
+names every omitted part, so paging through a whole output is almost never
+needed. A part longer than 8,000 characters comes back in pages: the page sets
+`remaining`, and `read_tool_output(artifact, offset=next_offset,
+limit=remaining)` continues it. Without an entry, `offset` and `limit` (default
+2,000) read any span. An entry number outside the index is an error that names
+the valid range. Unicode offsets count characters, not bytes.
+
 The archived text is the original string, the field named by
-`archived_field`, or JSON (one record per line) for a structured result. Pass
-an `index` entry's `offset` and `length` as `offset` and `limit` to read exactly
-that part; an entry longer than a page returns `remaining` and continues at
-`next_offset`. Small results remain unchanged. Structured excerpts retain whole
-records.
+`archived_field`, or JSON (one record per line) for a structured result. Small
+results remain unchanged. Structured excerpts retain whole records.
 
 Shell, Python execution and browser excerpts retain omitted output before
 applying their own display limits. File readers accept `offset` and `limit`

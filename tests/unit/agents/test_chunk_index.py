@@ -725,17 +725,18 @@ def test_condense_result_raises_rather_than_exceed_its_target(monkeypatch):
 
 
 def read_entry(agent, result, entry):
-    """Follow ``next_offset`` until the entry's whole span is read."""
+    """Read an entry by its number, following ``next_offset`` while it pages."""
     reader = agent._tools_registry["read_tool_output"]["function"]
-    parts, offset, wanted = [], entry["offset"], entry["length"]
-    while wanted:
-        page = reader(result["artifact"], offset, wanted)
-        assert len(page["content"]) <= 8000
+    page = reader(result["artifact"], entry=entry["n"])
+    assert page["entry"] == entry["n"] and page["offset"] == entry["offset"]
+    parts = [page["content"]]
+    while "remaining" in page:
+        assert len(page["content"]) == 8000
+        page = reader(result["artifact"], page["next_offset"], page["remaining"])
         parts.append(page["content"])
-        wanted -= len(page["content"])
-        assert page.get("remaining", 0) == wanted
-        offset = page["next_offset"]
-    return "".join(parts)
+    text = "".join(parts)
+    assert len(text) == entry["length"]
+    return text
 
 
 def _assert_entries_read_back(agent, result, text):
@@ -903,5 +904,129 @@ def test_mixed_text_tiles_and_condenses_within_the_target(seed):
         for segment in condensed["shown"]:
             start = segment["offset"]
             assert archived[start : start + len(segment["text"])] == segment["text"]
+        assert condensed["fetch"] == chunk_index.FETCH_HINT
+        assert [e["n"] for e in condensed["index"]] == list(
+            range(1, len(condensed["index"]) + 1)
+        )
         for entry in condensed["index"]:
-            assert entry["offset"] + entry["length"] <= len(archived)
+            span = archived[entry["offset"] : entry["offset"] + entry["length"]]
+            page = store.read(condensed["artifact"], entry=entry["n"])
+            assert page["content"] == span[:8000]
+
+
+# ---------------------------------------------------------------------------
+# Entries are read by number, on every path that condenses
+# ---------------------------------------------------------------------------
+
+
+def _metadata(result):
+    """The dict carrying artifact/index: the result, or a list's last record."""
+    if isinstance(result, str):
+        result = json.loads(result)
+    return result[-1] if isinstance(result, list) else result
+
+
+_PATHS = {
+    "python": (
+        "read_file",
+        lambda: {
+            "file_path": "/r/a.py",
+            "file_type": "python",
+            "content": python_module(),
+        },
+    ),
+    "markdown": (
+        "read_file",
+        lambda: {
+            "file_path": "/r/a.md",
+            "file_type": "markdown",
+            "content": MARKDOWN * 60,
+        },
+    ),
+    "json": (
+        "read_file",
+        lambda: {
+            "file_path": "/r/a.json",
+            "content": json.dumps(
+                {f"k{i}": list(range(60)) for i in range(40)}, indent=2
+            ),
+        },
+    ),
+    "output": ("run_shell_command", lambda: shell_result(pytest_log() * 4)),
+    "diff": (
+        "edit_file",
+        lambda: {
+            "status": "success",
+            "file_path": "/r/a.py",
+            "diff": "".join(
+                f"--- a/f{i}.py\n+++ b/f{i}.py\n@@ -1,40 +1,40 @@\n"
+                + "".join(f"-old {k}\n+new {k}\n" for k in range(40))
+                for i in range(12)
+            ),
+        },
+    ),
+    "text": (
+        "fetch_page",
+        lambda: "\n\n".join(f"Paragraph {i}. " + "words " * 80 for i in range(60)),
+    ),
+    "search": ("search_file_content", search_result),
+    "head/tail": (
+        "run_shell_command",
+        lambda: shell_result("header\n\n" + "x" * 50000 + "END\n"),
+    ),
+    "elide": ("fetch_page", lambda: "HEAD " + "m" * 40000 + " TAIL"),
+    "records": (
+        "list_messages",
+        lambda: {
+            "messages": [{"id": f"msg-{i:03d}", "body": "b" * 300} for i in range(80)]
+        },
+    ),
+}
+
+
+@pytest.mark.parametrize("path", list(_PATHS))
+def test_every_index_entry_reads_back_by_number(path):
+    name, build = _PATHS[path]
+    agent = cloud_agent()
+    result = agent._handle_large_tool_result(name, build(), [], {})
+    meta = _metadata(result)
+    assert meta["fetch"] == chunk_index.FETCH_HINT
+    archived = store_for(agent).text(meta["artifact"])
+    assert meta["index"], "nothing was indexed"
+    assert [e["n"] for e in meta["index"]] == list(range(1, len(meta["index"]) + 1))
+    for entry in meta["index"]:
+        span = archived[entry["offset"] : entry["offset"] + entry["length"]]
+        assert read_entry(agent, meta, entry) == span
+    assert len(json.dumps(result, ensure_ascii=False)) <= TARGET
+
+
+def test_a_bad_entry_number_says_what_to_do():
+    agent = cloud_agent()
+    result = agent._handle_large_tool_result(
+        *_PATHS["python"][:1], _PATHS["python"][1](), [], {}
+    )
+    reader = agent._tools_registry["read_tool_output"]["function"]
+    count = len(result["index"])
+    for bad in (0, count + 1):
+        with pytest.raises(ValueError, match=f"lists entries 1-{count}"):
+            reader(result["artifact"], entry=bad)
+    with pytest.raises(ValueError, match="entry number"):
+        reader(result["artifact"], entry="2")
+    with pytest.raises(ValueError, match="not both"):
+        reader(result["artifact"], 5, entry=1)
+    from gaia.agents.base.artifacts import retain_excerpt
+
+    excerpt = json.loads(retain_excerpt(agent, "y" * 20000, 2000))
+    with pytest.raises(ValueError, match="has no index; read it with offset"):
+        reader(excerpt["artifact"], entry=1)
+
+
+def test_the_reader_advertises_entry_first_and_no_fixed_page_size():
+    agent = cloud_agent()
+    agent._register_output_reader()
+    doc = agent._tools_registry["read_tool_output"]["description"]
+    assert doc.index("entry") < doc.index("offset")
+    assert "1 to 8000" not in doc
+    assert "almost never needed" in doc
+    params = agent._tools_registry["read_tool_output"]["parameters"]
+    assert params["entry"] == {"type": "integer", "required": False}
