@@ -141,8 +141,10 @@ ALLOWED_COMMANDS = {
     "ps",
     "top",
     "jobs",
-    # Git commands (mostly safe, read-only operations)
-    "git",  # Individual git subcommands checked separately
+    # `git` is deliberately NOT here. It has a full three-tier policy in
+    # gaia.skills.binaries instead, and that policy carries its own
+    # ungranted read-only floor (`BinaryPolicy.ungranted`) — the same
+    # subcommands this list used to allow. One table describes the binary.
 }
 
 # Actions/predicates that turn otherwise read-only commands into a write,
@@ -163,21 +165,6 @@ DANGEROUS_FIND_ACTIONS = {
     "-fprint0",
     "-fprintf",
     "-fls",
-}
-
-# Safe read-only git subcommands
-SAFE_GIT_COMMANDS = {
-    "status",
-    "log",
-    "show",
-    "diff",
-    "branch",
-    "remote",
-    "ls-files",
-    "ls-tree",
-    "describe",
-    "rev-parse",
-    "help",
 }
 
 # Global git options that sit BEFORE the subcommand. They have to be stepped
@@ -252,26 +239,28 @@ def _unrecognized_git_option_error(name: str) -> str:
     )
 
 
-def _resolve_git_subcommand(cmd_parts: list) -> tuple:
-    """Step over git's global options to find the real subcommand.
+def _git_policy_argv(cmd_parts: list) -> tuple:
+    """``git -C <path> branch`` as the policy table judges it: ``git branch``.
 
-    ``git -C <path> branch`` is a branch listing, not a ``-C`` command; reading
-    ``cmd_parts[1]`` blindly refuses every invocation that carries a global flag.
+    Git's global options sit before the subcommand, so a table reading
+    ``cmd_parts[1]`` sees ``-C`` and refuses a plain read. Each option is
+    classified rather than skipped — an unlisted one is refused, so a future
+    git release cannot slip a value-taking flag past the walk and shift the
+    subcommand index (CWE-184).
 
     Returns:
-        ``(subcommand, error_message)`` — exactly one is non-None. A terminal
-        flag like ``--version`` comes back as the subcommand, since nothing
-        follows it.
+        ``(argv, error_message)`` — exactly one is non-None. The paths those
+        options name are sandbox-checked separately by ``_git_path_refusal``.
     """
     index = 1
     while index < len(cmd_parts):
         token = cmd_parts[index]
         if not token.startswith("-"):
-            return token.lower(), None
+            break
 
         name = token.split("=", 1)[0]
         if name in GIT_TERMINAL_FLAGS:
-            return name, None
+            break
         if name in GIT_FORBIDDEN_GLOBAL_FLAGS:
             return None, (
                 f"Git global option '{name}' is not allowed: "
@@ -286,7 +275,7 @@ def _resolve_git_subcommand(cmd_parts: list) -> tuple:
             continue
         return None, _unrecognized_git_option_error(name)
 
-    return None, "No git subcommand was given."
+    return [cmd_parts[0], *cmd_parts[index:]], None
 
 
 # Safe PowerShell cmdlet prefixes (read-only operations)
@@ -615,6 +604,15 @@ def skill_granted_binaries(host: Any) -> frozenset:
     return grants.binaries() if grants is not None else frozenset()
 
 
+def _is_granted_binary(token: str, granted: frozenset) -> bool:
+    """True when *token* names a CLI this agent's skills granted."""
+    if not granted:
+        return False
+    from gaia.skills.binaries import normalize_binary
+
+    return normalize_binary(token) in granted
+
+
 def _is_granted_segment(segment: list, granted: frozenset) -> bool:
     """True when *segment* runs a CLI this agent's skills granted."""
     if not granted:
@@ -725,6 +723,50 @@ def _as_cmd_redirections(text: str) -> str:
         end = match.end()
     out.append(text[end:])
     return "".join(out)
+
+
+def _skips_path_scan(token: str, granted: frozenset) -> bool:
+    """True when this segment's operands are remote ids, so there is no path.
+
+    Narrower than :func:`_is_granted_binary` on purpose, and the difference is
+    the point: granting a LOCAL cli must not switch off the path check.
+    ``gh issue view 42`` names an issue; ``git diff --no-index /etc/passwd``
+    and ``python ../../x.py`` name files, and both are granted CLIs.
+    """
+    if not _is_granted_binary(token, granted):
+        return False
+    from gaia.skills.binaries import BINARY_POLICIES, normalize_binary
+
+    policy = BINARY_POLICIES.get(normalize_binary(token))
+    return policy is not None and policy.remote_operands
+
+
+def _grant_route(binary: str, skill_manager: Any) -> str:
+    """How to actually get *binary* granted, naming the skill where one exists.
+
+    "Load a skill that declares it" left models no route to follow.
+    """
+    from gaia.agents.base.skill_catalog import skills_granting
+
+    granting = (
+        skills_granting(skill_manager.discover(), binary)
+        if skill_manager is not None
+        else []
+    )
+    if granting:
+        return (
+            f"Call load_skill with {' or '.join(repr(n) for n in granting)}, "
+            "then run the command again."
+        )
+    if skill_manager is not None:
+        return (
+            f"No installed skill declares 'shell:execute:{binary}'; "
+            "search_skill_hub can find one."
+        )
+    return (
+        f"No skill that grants 'shell:execute:{binary}' could be looked up here; "
+        "list_skills or search_skill_hub can find one."
+    )
 
 
 def _operator_check_text(command: str) -> str:
@@ -1613,7 +1655,9 @@ class ShellToolsMixin:
 
         This prevents "cat ../secret.txt" even if "cat" is allowed. Exempt per
         SEGMENT, never per line: a granted CLI's operands are remote ids, but
-        'gh … | cat ../secret' must still be checked.
+        'gh … | cat ../secret' must still be checked. And only for a CLI whose
+        operands really are remote — a granted 'git'/'python' still gets
+        scanned.
 
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
@@ -1622,8 +1666,14 @@ class ShellToolsMixin:
         if not hasattr(self, "path_validator"):
             return None
 
+        from gaia.skills.binaries import policy_argv
+
         segments = step.segments
-        scanned = [seg for seg in segments if not _is_granted_segment(seg, granted)]
+        scanned = [
+            seg
+            for seg in segments
+            if not _skips_path_scan(policy_argv(seg)[0], granted)
+        ]
         candidates = [("Argument", a) for seg in scanned for a in seg[1:]]
         candidates += [
             (f"'{name}='", entry)
@@ -1880,100 +1930,24 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
-        # Skill-granted CLIs are gated by their own policy table instead of
-        # ALLOWED_COMMANDS; anything ungranted is still refused.
-        # Imported here — gaia.skills pulls in the connector stack.
-        from gaia.skills.binaries import (
-            BINARY_POLICIES,
-            REFUSE,
-            classify_invocation,
-            normalize_binary,
-            policy_argv,
-        )
-
-        policy_parts = policy_argv(cmd_parts)
-        binary = normalize_binary(policy_parts[0])
-        policy = BINARY_POLICIES.get(binary)
-        if policy is not None:
-            if binary not in granted_binaries:
-                from gaia.agents.base.skill_catalog import skills_granting
-
-                # Name the skill: "a skill that declares it" left models no route.
-                granting = (
-                    skills_granting(skill_manager.discover(), binary)
-                    if skill_manager is not None
-                    else []
-                )
-                if granting:
-                    route = (
-                        "Call load_skill with "
-                        f"{' or '.join(repr(n) for n in granting)}, "
-                        "then run the command again."
-                    )
-                elif skill_manager is not None:
-                    route = (
-                        f"No installed skill declares 'shell:execute:{binary}'; "
-                        "search_skill_hub can find one."
-                    )
-                else:
-                    route = (
-                        f"No skill that grants 'shell:execute:{binary}' could be "
-                        "looked up here; "
-                        "list_skills or search_skill_hub can find one."
-                    )
+        # Git's global options sit before the subcommand, so every check below
+        # has to read the call with them stepped over. The options that hand git
+        # arbitrary code are refused here rather than stepped over.
+        if cmd_base == "git" and len(cmd_parts) > 1:
+            cmd_parts, resolve_error = _git_policy_argv(cmd_parts)
+            if resolve_error is not None:
                 return {
                     "status": "error",
-                    "error": (
-                        f"Command '{binary}' is not available to this agent until a "
-                        f"skill that grants it is loaded. {route}"
-                    ),
+                    "error": resolve_error,
                     "has_errors": True,
-                    "hint": f"{policy.summary} {policy.install_hint}",
                 }
-            decision = classify_invocation(policy, policy_parts)
-            if decision.outcome == REFUSE:
-                return {
-                    "status": "error",
-                    "error": decision.message,
-                    "has_errors": True,
-                    "hint": (
-                        f"This one is refused outright, not gated — the '{binary}' "
-                        "grant will not run it even with the user's approval. "
-                        "Use an allowed command, or tell the user what you would "
-                        "have run and why it is blocked."
-                    ),
-                }
-            return None
 
-        # Special handling for git - only allow read-only operations
-        if cmd_base == "git":
-            if len(cmd_parts) > 1:
-                git_subcmd, resolve_error = _resolve_git_subcommand(cmd_parts)
-                if resolve_error is not None:
-                    return {
-                        "status": "error",
-                        "error": resolve_error,
-                        "has_errors": True,
-                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
-                    }
-                if (
-                    git_subcmd not in SAFE_GIT_COMMANDS
-                    and git_subcmd not in GIT_TERMINAL_FLAGS
-                ):
-                    return {
-                        "status": "error",
-                        "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
-                        "has_errors": True,
-                        "allowed_git_commands": sorted(SAFE_GIT_COMMANDS),
-                    }
-            # A read-only subcommand still writes a caller-chosen path when it
-            # is handed an output flag, and the subcommand check never sees it.
+        # A read subcommand still writes a caller-chosen path when it is handed
+        # an output flag, and no policy table judges the destination. Checked
+        # ahead of the grant so the widest git grant cannot reopen it.
+        if cmd_base == "git" and len(cmd_parts) > 1:
             for part in cmd_parts[1:]:
-                if (
-                    len(cmd_parts) > 1
-                    and cmd_parts[1].lower() == "ls-files"
-                    and part == "-o"
-                ):
+                if cmd_parts[1].lower() == "ls-files" and part == "-o":
                     continue
                 if _is_file_write_flag(part):
                     return {
@@ -1985,8 +1959,54 @@ class ShellToolsMixin:
                         "has_errors": True,
                         "hint": "Drop the output flag and read git's result from stdout.",
                     }
+
+        # Skill-granted CLIs are gated by their own policy table instead of
+        # ALLOWED_COMMANDS; anything ungranted is still refused.
+        # Imported here — gaia.skills pulls in the connector stack.
+        from gaia.skills.binaries import (
+            BINARY_POLICIES,
+            REFUSE,
+            classify_invocation,
+            classify_ungranted_invocation,
+            normalize_binary,
+            policy_argv,
+        )
+
+        policy_parts = policy_argv(cmd_parts)
+        binary = normalize_binary(policy_parts[0])
+        policy = BINARY_POLICIES.get(binary)
+        if policy is not None:
+            granted = binary in granted_binaries
+            classify = classify_invocation if granted else classify_ungranted_invocation
+            decision = classify(policy, policy_parts)
+            if decision.outcome != REFUSE:
+                return None
+            if granted:
+                message = decision.message
+                hint = (
+                    f"This one is refused outright, not gated — the '{binary}' "
+                    "grant will not run it even with the user's approval. "
+                    "Use an allowed command, or tell the user what you would "
+                    "have run and why it is blocked."
+                )
+            else:
+                # Name the skill: "a skill that declares it" left models no route.
+                message = f"{decision.message} {_grant_route(binary, skill_manager)}"
+                hint = (
+                    f"{policy.summary} To go beyond that, load a skill "
+                    f"declaring 'shell:execute:{binary}' — the grant is what "
+                    "widens this, not a different spelling of the command. If "
+                    f"{binary} itself is missing: {policy.install_hint}"
+                )
+            return {
+                "status": "error",
+                "error": message,
+                "has_errors": True,
+                "hint": hint,
+            }
+
         # Special handling for wmic - only allow read-only queries
-        elif cmd_base == "wmic":
+        if cmd_base == "wmic":
             for part in cmd_parts[1:]:
                 if _is_file_write_flag(part):
                     return {
@@ -2225,7 +2245,7 @@ class ShellToolsMixin:
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
                 "hint": "Only read-only, informational commands are allowed",
-                "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
+                "examples": "ls, cat, grep, find, systeminfo, powershell -Command 'Get-WmiObject ...'",
             }
 
         return None  # Command is allowed
