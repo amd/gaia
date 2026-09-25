@@ -26,6 +26,23 @@ _NATIVE_TC_KEY = "__tool_calls__"
 #: text before it shows anything to a user.
 NATIVE_TOOL_CALLS_PREFIX = '{"' + _NATIVE_TC_KEY + '":'
 
+#: Wordings of "the server could not be reached", across OSes, curl, urllib3
+#: and httpx. Shared with the agent loop so both agree on what "down" means.
+#: A connect timeout belongs here: the server never answered, so it is not the
+#: slow-model upstream timeout (#1030).
+CONNECTION_FAILURE_RE = re.compile(
+    r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
+    r"|unreachable|could not connect|couldn't connect|failed to establish"
+    r"|max retries exceeded|name or service not known|getaddrinfo"
+    r"|could not resolve host|no route to host"
+    r"|connect(?:ion)? timed out|connecttimeouterror"
+    # Windows: "No connection could be made because the target machine
+    # actively refused it" (WinError 10061).
+    r"|no connection could be made|actively refused|connection attempt failed"
+    r"|winerror 1006\d",
+    re.IGNORECASE,
+)
+
 
 def _accumulate_tool_calls(acc: dict, deltas: Optional[List[dict]]) -> None:
     """Fold one frame's ``tool_calls`` fragments into ``acc``, keyed by index.
@@ -290,12 +307,7 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         or "timed out" in msg_blob
         or "operation_timeout" in type_blob
     )
-    is_unreachable = (
-        "connection refused" in msg_blob
-        or "could not resolve host" in msg_blob
-        or "no route to host" in msg_blob
-        or "couldn't connect" in msg_blob
-    )
+    is_unreachable = bool(CONNECTION_FAILURE_RE.search(msg_blob))
 
     if is_timeout and not is_unreachable:
         return LemonadeUpstreamTimeoutError(payload=response), True
@@ -385,12 +397,7 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         or "timed out" in text
         or "operation_timeout" in text
     )
-    is_unreachable = (
-        "connection refused" in text
-        or "could not resolve host" in text
-        or "no route to host" in text
-        or "couldn't connect" in text
-    )
+    is_unreachable = bool(CONNECTION_FAILURE_RE.search(text))
     # Lemonade HTTP 5xx — typical when llama-server is mid-swap between models
     # or hit an internal recovery state. Treat them as the network-flavour
     # transient so the chat layer's reload-and-retry path gets a chance.

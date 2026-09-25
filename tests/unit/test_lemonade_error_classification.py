@@ -831,3 +831,85 @@ class TestExecuteWithAutoDownloadNarrowing:
         assert result["choices"][0]["message"]["content"] == "ok"
         assert len(_responses.calls) == 2
         mock_load.assert_called_once()
+
+
+# ── #4213: Windows refusals and connect timeouts mean "server unreachable" ──
+
+import requests
+from urllib3.connection import HTTPConnection
+from urllib3.connectionpool import HTTPConnectionPool
+from urllib3.exceptions import (
+    ConnectTimeoutError,
+    MaxRetryError,
+    NewConnectionError,
+    ReadTimeoutError,
+)
+
+from gaia.llm.providers.lemonade import (
+    CONNECTION_FAILURE_RE,
+    classify_lemonade_exception,
+)
+
+_POOL = HTTPConnectionPool("localhost", 13305)
+_CONN = HTTPConnection("localhost", 13305)
+_URL = "/api/v1/chat/completions"
+_WINDOWS_REFUSED = (
+    "[WinError 10061] No connection could be made because the target machine "
+    "actively refused it"
+)
+
+
+def _refused(os_error: str) -> requests.exceptions.ConnectionError:
+    """What ``requests`` raises when nothing is listening on the port."""
+    reason = NewConnectionError(
+        _CONN, f"Failed to establish a new connection: {os_error}"
+    )
+    return requests.exceptions.ConnectionError(MaxRetryError(_POOL, _URL, reason))
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _refused(_WINDOWS_REFUSED),
+        _refused("[Errno 61] Connection refused"),
+        _refused("[Errno 111] Connection refused"),
+        # The bare OS error, as it reads once a wrapper keeps only str(exc).
+        RuntimeError(_WINDOWS_REFUSED),
+        requests.exceptions.ConnectTimeout(
+            MaxRetryError(
+                _POOL,
+                _URL,
+                ConnectTimeoutError(
+                    _CONN, "Connection to remote timed out. (connect timeout=5)"
+                ),
+            )
+        ),
+    ],
+    ids=["windows", "macos", "linux", "windows-bare", "connect-timeout"],
+)
+def test_unreachable_server_classifies_as_network_error(exc: Exception) -> None:
+    classified = classify_lemonade_exception(exc)
+    assert isinstance(classified, LemonadeNetworkError)
+    assert not isinstance(classified, LemonadeUpstreamTimeoutError)
+
+
+def test_read_timeout_still_classifies_as_upstream_timeout() -> None:
+    """A slow model on a live server is not "server down" (#1030)."""
+    exc = requests.exceptions.ReadTimeout(
+        ReadTimeoutError(_POOL, _URL, "Read timed out. (read timeout=600)")
+    )
+    assert isinstance(classify_lemonade_exception(exc), LemonadeUpstreamTimeoutError)
+
+
+def test_windows_refusal_payload_classifies_as_network_error() -> None:
+    payload = {"error": {"type": "backend_error", "message": _WINDOWS_REFUSED}}
+    err, recognised = _classify_lemonade_response(payload)
+    assert recognised
+    assert isinstance(err, LemonadeNetworkError)
+    assert not isinstance(err, LemonadeUpstreamTimeoutError)
+
+
+def test_agent_loop_shares_the_connection_pattern() -> None:
+    from gaia.agents.base.agent import Agent
+
+    assert Agent._LOOP_CONNECTION_RE is CONNECTION_FAILURE_RE
