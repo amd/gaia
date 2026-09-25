@@ -143,10 +143,10 @@ def _github_pat() -> str:
         required_scopes=[SCOPE_MCP_USE],
     )
     env = cred.get("env") or {}
-    token = env.get("GITHUB_TOKEN")
+    token = env.get("GITHUB_PERSONAL_ACCESS_TOKEN")
     if not token:
         raise ConnectorsError(
-            "GitHub MCP credential resolved but GITHUB_TOKEN was empty. "
+            "GitHub MCP credential resolved but GITHUB_PERSONAL_ACCESS_TOKEN was empty. "
             "Re-run Settings → Connectors → GitHub → Configure to set the "
             "Personal Access Token."
         )
