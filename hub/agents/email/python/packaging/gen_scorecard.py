@@ -255,7 +255,7 @@ def _load_report_metrics(report_path, group: str, mapping: dict) -> dict:
     if data.get("skipped"):
         raise ValueError(
             f"Report {report_path} is marked skipped, but a judged eval must not "
-            f"skip (ANTHROPIC_API_KEY is required). Re-run it with the key set."
+            f"skip (a judge credential is required). Re-run it with one set."
         )
     section = data.get("summary", {}).get(group, {})
     out: dict = {}
@@ -264,7 +264,7 @@ def _load_report_metrics(report_path, group: str, mapping: dict) -> dict:
         if val is None:
             raise ValueError(
                 f"No summary.{group}.{src} in {report_path} (judged run expected). "
-                f"Re-run the eval with ANTHROPIC_API_KEY set."
+                f"Re-run the eval with a judge credential set."
             )
         out[dst] = round(float(val), 4)
     return out
@@ -439,16 +439,16 @@ def _load_draft_approval_rate(drafting_report: Path) -> float:
     if data.get("skipped"):
         raise ValueError(
             f"Drafting report {drafting_report} is marked skipped, but the judged "
-            f"drafting eval must not skip (ANTHROPIC_API_KEY is required and "
-            f"eval_drafting_report.py exits 1 when it is absent). Re-run "
-            f"eval_drafting_report.py with ANTHROPIC_API_KEY set."
+            f"drafting eval must not skip (a judge credential is required and "
+            f"eval_drafting_report.py exits 1 without one). Re-run "
+            f"eval_drafting_report.py with a judge credential set."
         )
     rate = data.get("summary", {}).get("drafting", {}).get("draft_approval_rate")
     if rate is None:
         raise ValueError(
             f"No summary.drafting.draft_approval_rate in {drafting_report} "
-            f"(judged run expected). Re-run eval_drafting_report.py with "
-            f"ANTHROPIC_API_KEY set."
+            f"(judged run expected). Re-run eval_drafting_report.py with a judge "
+            f"credential set."
         )
     return float(rate)
 
