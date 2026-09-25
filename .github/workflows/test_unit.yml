@@ -18,6 +18,10 @@ on:
       # Tested here, but outside src/: the PE-resource gate and the installer
       # filename table.
       - 'util/check_pe_resources.py'
+      # The wholesale-skip guard and the allowlist it reads.
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
       - 'installer/tui/**'
       - 'setup.py'
       - 'pyproject.toml'
@@ -39,6 +43,10 @@ on:
       # Tested here, but outside src/: the PE-resource gate and the installer
       # filename table.
       - 'util/check_pe_resources.py'
+      # The wholesale-skip guard and the allowlist it reads.
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
       - 'installer/tui/**'
       - 'setup.py'
       - 'pyproject.toml'
@@ -105,10 +113,19 @@ jobs:
           # real RAGSDK — RAGSDK._check_dependencies() raises ImportError without
           # them. They live only in the [rag]/[ui] extras, which this job (like the
           # RAG dependencies above) does not install.
+          # python-docx, python-pptx, reportlab and slack-sdk: tests/unit/rag/,
+          # tests/unit/eval/test_pdf_document_generator.py and
+          # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
+          # module level, so without them those files skip wholesale (#4206).
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf
+                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
           uv pip install --system -e ".[api]"
+
+      - name: Check no test file skips wholesale
+        # A file that skips at collection runs none of its tests; each one must
+        # be listed in util/test_lane_allowlist.yml with the lane that runs it.
+        run: python util/check_module_skips.py --workflow test_unit.yml --job unit-tests
 
       - name: Validate packaging integrity
         run: |
@@ -277,6 +294,9 @@ jobs:
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
                                   faiss-cpu pypdf
           uv pip install --system -e ".[api,mcp]"
+
+      - name: Check no test file skips wholesale
+        run: python util/check_module_skips.py --workflow test_unit.yml --job offline-integration
 
       - name: Run offline integration tests
         # No GAIA_MEMORY_DISABLED: test_memory_eval.py exercises the memory mixin.

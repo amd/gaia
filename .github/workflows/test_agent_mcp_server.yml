@@ -17,6 +17,7 @@ on:
       - 'src/gaia/ui/**'
       - 'tests/mcp/**'
       - 'tests/unit/test_agent_ui_mcp*.py'
+      - 'tests/unit/test_mcp2_server.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
   pull_request:
@@ -30,6 +31,7 @@ on:
       - 'src/gaia/ui/**'
       - 'tests/mcp/**'
       - 'tests/unit/test_agent_ui_mcp*.py'
+      - 'tests/unit/test_mcp2_server.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
   merge_group:
@@ -90,8 +92,15 @@ jobs:
         run: |
           uv pip install --system -e ".[dev,mcp,api]"
 
+      - name: Check no test file skips wholesale
+        run: python util/check_module_skips.py --workflow test_agent_mcp_server.yml --job test-mcp-agent
+
       - name: Run Agent UI MCP transcript tests
         run: python -m pytest tests/unit/test_agent_ui_mcp.py tests/unit/test_agent_ui_mcp_messages.py -v
+
+      # Skips wholesale without mcp 2.x, which test_unit.yml does not install.
+      - name: Run mcp 2.x server API tests
+        run: python -m pytest tests/unit/test_mcp2_server.py -v
 
       # TODO: Start Lemonade server for integration tests
       # For now, integration tests requiring LLM will be skipped.

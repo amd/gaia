@@ -35,6 +35,19 @@ on:
       - 'tests/unit/agents/test_large_tool_result_truncation.py'
       - 'tests/unit/agents/test_parallel_tool_calls.py'
       - 'tests/test_chat_agent.py'
+      # Chat-wheel suites that skip wholesale in test_unit.yml (#4206).
+      - 'tests/unit/test_chat_*.py'
+      - 'tests/unit/test_dynamic_tool_filtering.py'
+      - 'tests/unit/test_prompt_size_budget.py'
+      - 'tests/unit/test_run_python_tool.py'
+      - 'tests/unit/test_tool_loader_disambiguation.py'
+      - 'tests/unit/test_agent_required_connectors.py'
+      - 'tests/unit/test_multi_device_wiring.py'
+      - 'tests/unit/test_agent_hub_api.py'
+      - 'tests/unit/agents/test_registry_python_factory.py'
+      - 'tests/unit/agents/test_default_max_steps.py'
+      - 'tests/unit/agents/test_console_tool_confirmation.py'
+      - 'tests/unit/agents/tools/test_email_tools.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
   pull_request:
@@ -64,6 +77,19 @@ on:
       - 'tests/unit/agents/test_large_tool_result_truncation.py'
       - 'tests/unit/agents/test_parallel_tool_calls.py'
       - 'tests/test_chat_agent.py'
+      # Chat-wheel suites that skip wholesale in test_unit.yml (#4206).
+      - 'tests/unit/test_chat_*.py'
+      - 'tests/unit/test_dynamic_tool_filtering.py'
+      - 'tests/unit/test_prompt_size_budget.py'
+      - 'tests/unit/test_run_python_tool.py'
+      - 'tests/unit/test_tool_loader_disambiguation.py'
+      - 'tests/unit/test_agent_required_connectors.py'
+      - 'tests/unit/test_multi_device_wiring.py'
+      - 'tests/unit/test_agent_hub_api.py'
+      - 'tests/unit/agents/test_registry_python_factory.py'
+      - 'tests/unit/agents/test_default_max_steps.py'
+      - 'tests/unit/agents/test_console_tool_confirmation.py'
+      - 'tests/unit/agents/tools/test_email_tools.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
   merge_group:
@@ -105,6 +131,9 @@ jobs:
           # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
           uv pip install --system -e hub/agents/chat/python
 
+      - name: Check no test file skips wholesale
+        run: python util/check_module_skips.py --workflow test_chat_agent.yml --job test-chat-agent
+
       - name: Test persistent model history
         env:
           GAIA_MEMORY_DISABLED: "1"
@@ -131,6 +160,31 @@ jobs:
           echo "Testing registration shapes, lazy re-exports, and discovery..."
           echo ""
           python -m pytest hub/agents/chat/python/tests/ -v --tb=short
+
+      - name: Run Chat-Wheel Suites
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          # Each of these importorskips gaia_agent_chat, at module level or per
+          # test, so test_unit.yml collects them and runs none of it (#4206).
+          python -m pytest \
+            tests/unit/test_chat_agent_integration.py \
+            tests/unit/test_chat_dynamic_tools.py \
+            tests/unit/test_chat_fix_contracts.py \
+            tests/unit/test_chat_inline_web_ssrf.py \
+            tests/unit/test_chat_system_prompt_budget.py \
+            tests/unit/test_dynamic_tool_filtering.py \
+            tests/unit/test_prompt_size_budget.py \
+            tests/unit/test_run_python_tool.py \
+            tests/unit/test_tool_loader_disambiguation.py \
+            tests/unit/test_agent_required_connectors.py \
+            tests/unit/test_multi_device_wiring.py \
+            tests/unit/test_agent_hub_api.py \
+            tests/unit/agents/test_registry_python_factory.py \
+            tests/unit/agents/test_default_max_steps.py \
+            tests/unit/agents/test_console_tool_confirmation.py \
+            tests/unit/agents/tools/test_email_tools.py \
+            -v --tb=short
 
       - name: Run Framework Registry Discovery Tests
         env:

@@ -85,6 +85,9 @@ jobs:
           # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102)
           uv pip install --system -e hub/agents/email/python
 
+      - name: Check no test file skips wholesale
+        run: python util/check_module_skips.py --workflow test_email_agent.yml --job test-email-agent
+
       - name: Run Email Agent Tests
         run: |
           # Hub package smoke tests + the repo-side email unit suite, which

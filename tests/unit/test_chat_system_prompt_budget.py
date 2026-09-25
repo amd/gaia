@@ -56,6 +56,8 @@ for _mod in (
     sys.modules[_mod] = MagicMock()
     _stubbed_modules.append(_mod)
 
+_loaded_before_import = set(sys.modules)
+
 # Import once: ``gaia_agent_chat.agent`` resolves its faiss/numpy/etc.
 # references at this point, so the cached module keeps working even after
 # we remove the stubs from ``sys.modules`` below.
@@ -72,7 +74,10 @@ if _stubbed_modules:
         "gaia_agent_chat.agent",
         "gaia.agents.tools.rag_tools",
     ):
-        sys.modules.pop(_gaia_mod, None)
+        # Already imported, it bound nothing fake; evicting it would
+        # orphan the classes other test modules already hold.
+        if _gaia_mod not in _loaded_before_import:
+            sys.modules.pop(_gaia_mod, None)
 
 # Hard ceilings — chosen so Gemma 4 E4B can comfortably prompt-process
 # the full system prompt + a typical RAG tool result + the user query
