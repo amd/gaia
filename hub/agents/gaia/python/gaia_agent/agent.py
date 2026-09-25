@@ -52,11 +52,7 @@ from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.project_map import ProjectMapMixin
-from gaia.agents.base.skill_discovery import (
-    DISCOVERY_THRESHOLD_ENV,
-    SkillDiscovery,
-    discovery_env_override,
-)
+from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
     DEFAULT_SKILL_THRESHOLD,
     SkillLoader,
@@ -191,13 +187,11 @@ class GaiaAgentConfig(ChatAgentConfig):
     # with CORE so the dynamic share stays 13.
     dynamic_tools_max: int = 28
 
-    # Proactive skill discovery: match each turn against skills that are
-    # INSTALLED BUT NOT LOADED and activate the winner, so the user never has
-    # to know a skill's name. On for this agent specifically — it is the one
-    # that ships a skill library and meets users who have never read it.
-    # Overridable via GAIA_SKILL_DISCOVERY.
+    # List every installed skill in the system prompt so the model loads one
+    # when the work fits, and the user never has to know a skill's name. On for
+    # this agent specifically — it ships a skill library and meets users who
+    # have never read it. Overridable via GAIA_SKILL_DISCOVERY.
     skill_discovery: bool = True
-    skill_discovery_threshold: Optional[float] = None
 
     # On for the flagship only. It does pull a second resident model and evict
     # the chat model — a cost a document agent should not pay silently, so
@@ -309,7 +303,7 @@ class GaiaAgent(
         access at construction time — only the first real turn does.
         """
         self.skill_loader = self._maybe_build_skill_loader()
-        self._skill_discovery = self._maybe_build_skill_discovery()
+        self._skill_catalog_enabled = self._resolve_skill_catalog_enabled()
         self.register_skill_library_tools()
         # Adaptive skills (#2674): lets the agent propose a correction to a
         # loaded skill that does not fit. It only ever stages one — activating
@@ -334,39 +328,12 @@ class GaiaAgent(
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
 
-    def _maybe_build_skill_discovery(self) -> Optional[SkillDiscovery]:
-        """Construct the proactive discoverer, or ``None`` when switched off.
-
-        Built here rather than lazily so ``_discover_skills_for_turn`` never
-        races the first turn, and so a misconfigured threshold fails at startup
-        instead of mid-conversation.
-        """
-        override = discovery_env_override()
-        enabled = (
-            override if override is not None else bool(self.config.skill_discovery)
-        )
-        if not enabled:
-            return None
-        return SkillDiscovery(
-            self.skill_manager,
-            threshold=self._resolve_discovery_threshold(),
-            # Lambda, not the mapping: tool registration is still running when
-            # this is built, so a snapshot taken here would be empty and every
-            # skill would look like it had unmet requirements.
-            tools_fn=lambda: self._tools_registry,
-        )
-
-    def _resolve_discovery_threshold(self) -> Optional[float]:
-        """Threshold override: env wins over config; a malformed value fails loudly."""
-        raw = os.environ.get(DISCOVERY_THRESHOLD_ENV)
-        if raw is None:
-            return getattr(self.config, "skill_discovery_threshold", None)
-        try:
-            return float(raw)
-        except ValueError as e:
-            raise ValueError(
-                f"{DISCOVERY_THRESHOLD_ENV} must be a float, got {raw!r}"
-            ) from e
+    def _resolve_skill_catalog_enabled(self) -> bool:
+        """Whether the skill catalogue is shown: env wins over config."""
+        override = catalog_env_override()
+        if override is not None:
+            return override
+        return bool(getattr(self.config, "skill_discovery", False))
 
     def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:
         """Construct the per-turn skill-body selector, or ``None`` when off."""

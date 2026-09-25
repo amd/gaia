@@ -4,6 +4,7 @@ version: 0.2.0
 description: "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 author: AMD
 license: MIT
+npm_package: "@amd-gaia/gaia"
 
 category: general
 # Must stay declared: an omitted tier defaults to `experimental`, which makes

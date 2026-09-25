@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import stat
 import sys
@@ -27,6 +28,9 @@ audit_logger = logging.getLogger("gaia.security.audit")
 
 # Maximum file size the agent is allowed to write (10 MB)
 MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
+
+# Backups kept per edited file; older ones are removed as new ones land.
+BACKUP_GENERATIONS = 5
 
 # Sensitive file names that should never be written to by the agent
 SENSITIVE_FILE_NAMES: Set[str] = {
@@ -994,33 +998,8 @@ class PathValidator:
                 print("Please answer 'y' or 'n'.")
 
     def create_backup(self, path: str) -> Optional[str]:
-        """Create a timestamped backup of a file before modification.
-
-        Args:
-            path: Path to the file to back up.
-
-        Returns:
-            Backup file path if successful, None if file doesn't exist or backup failed.
-        """
-        try:
-            real_path = Path(os.path.realpath(path)).resolve()
-            if not real_path.exists():
-                return None
-
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            # ".bak" goes LAST. Keeping the original extension made a backup of
-            # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
-            # collects and cannot import, so editing a test file broke the whole
-            # suite (#3747). Nothing globs *.bak.
-            backup_path = real_path.with_name(f"{real_path.name}.{timestamp}.bak")
-
-            shutil.copy2(str(real_path), str(backup_path))
-            audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")
-            logger.debug(f"Created backup: {backup_path}")
-            return str(backup_path)
-        except Exception as e:
-            logger.warning(f"Failed to create backup of {path}: {e}")
-            return None
+        """Back up *path* under this validator's cache dir; see :func:`backup_file`."""
+        return backup_file(path, self.cache_dir)
 
     def audit_write(
         self, operation: str, path: str, size: int, status: str, detail: str = ""
@@ -1045,6 +1024,71 @@ class PathValidator:
             audit_logger.warning(msg)
         else:
             audit_logger.error(msg)
+
+
+def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
+    """Create a timestamped backup of a file before modification.
+
+    Backups live under ``<cache_dir>/backups``, at the original's absolute
+    path, so editing a repository never leaves files in it. The backups
+    directory and everything below it is owner-only, and only the newest
+    :data:`BACKUP_GENERATIONS` backups of each file are kept.
+
+    Args:
+        path: Path to the file to back up.
+        cache_dir: GAIA's cache directory; defaults to ``~/.gaia/cache``.
+
+    Returns:
+        Backup file path if successful, None if file doesn't exist or backup failed.
+    """
+    real_path = Path(os.path.realpath(path)).resolve()
+    if not real_path.exists():
+        return None
+
+    root = (cache_dir or Path.home() / ".gaia" / "cache") / "backups"
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # A drive or UNC share becomes one plain folder name under backups/.
+    drive = re.sub(r"[:\\/]+", "_", real_path.drive).strip("_")
+    parts = ([drive] if drive else []) + list(
+        real_path.parent.relative_to(real_path.anchor).parts
+    )
+    mirror = root.joinpath(*parts)
+    # ".bak" goes LAST. Keeping the original extension made a backup of
+    # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
+    # collects and cannot import, so editing a test file broke the whole
+    # suite (#3747). Nothing globs *.bak.
+    backup_path = mirror / f"{real_path.name}.{timestamp}.bak"
+
+    try:
+        root.parent.mkdir(parents=True, exist_ok=True)
+        # One level at a time: mkdir(parents=True) ignores mode for parents.
+        for depth in range(len(parts) + 1):
+            root.joinpath(*parts[:depth]).mkdir(mode=0o700, exist_ok=True)
+        # mkdir's mode does not narrow a directory that already exists.
+        root.chmod(0o700)
+        shutil.copy2(str(real_path), str(backup_path))
+    except OSError as e:
+        logger.warning(
+            "Failed to back up %s to %s: %s. The edit goes ahead without a backup.",
+            real_path,
+            backup_path,
+            e,
+        )
+        return None
+    audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")
+    logger.debug(f"Created backup: {backup_path}")
+
+    stamped = re.compile(re.escape(real_path.name) + r"\.\d{8}_\d{6}\.bak")
+    try:
+        # The timestamp format sorts chronologically by name.
+        generations = sorted(p for p in mirror.iterdir() if stamped.fullmatch(p.name))
+        for stale in generations[:-BACKUP_GENERATIONS]:
+            stale.unlink()
+    except OSError as e:
+        logger.warning(
+            "Failed to prune old backups of %s in %s: %s", real_path, mirror, e
+        )
+    return str(backup_path)
 
 
 def _is_interactive() -> bool:

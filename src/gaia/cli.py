@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -117,9 +117,9 @@ def initialize_lemonade_for_agent(
     Args:
         agent: Agent name (chat, talk, rag, vlm, minimal, mcp)
         quiet: Suppress output (only errors)
-        skip_if_external: If True, skip initialization when using Claude/ChatGPT
+        skip_if_external: If True, skip initialization when using Claude
         use_claude: Whether Claude API is being used
-        use_chatgpt: Whether ChatGPT API is being used
+        use_chatgpt: Removed option; True raises migration guidance
         host: Host address of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
@@ -137,10 +137,8 @@ def initialize_lemonade_for_agent(
         if not success:
             sys.exit(1)
     """
-    from gaia.llm.lemonade_client import profile_ctx_size
+    from gaia.llm.lemonade_client import resolve_ctx_size
     from gaia.llm.lemonade_manager import LemonadeManager
-
-    log = get_logger(__name__)
 
     # Use provided base_url, or host/port, or get from env var, or use defaults
     env_host, env_port, env_base_url = _get_lemonade_config()
@@ -151,43 +149,21 @@ def initialize_lemonade_for_agent(
         host = host if host is not None else env_host
         port = port if port is not None else env_port
 
+    if use_chatgpt:
+        from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+        raise ValueError(REMOVED_PROVIDER_MESSAGE)
+
     # Skip initialization if using external API
-    if skip_if_external and (use_claude or use_chatgpt):
+    if skip_if_external and use_claude:
         return True, base_url or env_base_url
 
-    # One context size per device profile, never a per-agent literal: every
-    # agent asking for the same window is what keeps a single
-    # (model, ctx_size) pair resident, so switching agents never reloads.
-    # Keyed on device, not agent, because the NPU's FLM build caps below the
-    # GPU window and would fail to load at it.
-    # Users on tight RAM can override with the ``GAIA_CTX_SIZE`` env var.
-    required_ctx = profile_ctx_size(_configured_device())
-
-    # Env-var override: lets users on lower-memory hardware dial back
-    # (or, in advanced cases, push higher up to the model's 128K max).
-    # Honors any positive integer; values lower than the requested ctx
-    # still load — the user is explicitly taking the trade-off.
-    _ctx_override = os.environ.get("GAIA_CTX_SIZE", "").strip()
-    if _ctx_override:
-        try:
-            _ctx_int = int(_ctx_override)
-            if _ctx_int > 0:
-                log.info(
-                    "GAIA_CTX_SIZE=%d overriding agent '%s' default of %d",
-                    _ctx_int,
-                    agent,
-                    required_ctx,
-                )
-                required_ctx = _ctx_int
-        except ValueError:
-            log.warning(
-                "GAIA_CTX_SIZE=%r is not a positive integer; ignoring",
-                _ctx_override,
-            )
-
-    # LemonadeManager handles all validation and error printing
-    # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
+    # Resolve inside the error boundary so invalid overrides exit cleanly.
     try:
+        required_ctx = resolve_ctx_size(device=_configured_device())
+        get_logger(__name__).debug(
+            "Initializing %s with context size %d", agent, required_ctx
+        )
         if base_url:
             success = LemonadeManager.ensure_ready(
                 min_context_size=required_ctx,
@@ -772,8 +748,10 @@ async def async_main(action, **kwargs):
             try:
                 if "agent" in locals():
                     agent.stop_watching()
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except Exception as exc:
+                get_logger(__name__).warning(
+                    "Could not stop agent file watcher: %s", exc
+                )
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
@@ -1132,7 +1110,7 @@ def build_parser():
     parent_parser.add_argument(
         "--use-chatgpt",
         action="store_true",
-        help="Use ChatGPT/OpenAI API instead of local Lemonade server",
+        help=argparse.SUPPRESS,
     )
     parent_parser.add_argument(
         "--claude-model",
@@ -1608,6 +1586,108 @@ def build_parser():
 
     telegram_parser.set_defaults(action="telegram")
 
+    # Slack command — drive the flagship agent from a Slack DM (Socket Mode)
+    slack_parser = subparsers.add_parser(
+        "slack",
+        help="Drive the GAIA agent from Slack (setup|start|stop|status)",
+        parents=[parent_parser],
+    )
+    slack_subparsers = slack_parser.add_subparsers(
+        dest="slack_action", help="slack action to perform"
+    )
+
+    s_setup = slack_subparsers.add_parser(
+        "setup", help="Create the Slack app and store its tokens"
+    )
+    s_setup.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Print the create-app URL instead of opening a browser",
+    )
+    s_setup.add_argument(
+        "--print-url",
+        action="store_true",
+        help=(
+            "Print only the pre-filled create-app URL and exit, for a caller "
+            "running its own prompts (the TUI's setup panel)."
+        ),
+    )
+
+    s_start = slack_subparsers.add_parser("start", help="Start the Slack bridge")
+    # Not argparse-required: the adapter's own refusal explains *why* an
+    # allowlist is mandatory and how to build one, which "the following
+    # arguments are required" does not.
+    s_start.add_argument(
+        "--allowed-users",
+        help=(
+            "Comma-separated Slack member IDs allowed to use the agent "
+            "(required — every member of a workspace can DM a bot). Find "
+            "yours under your avatar -> Profile -> ... -> Copy member ID."
+        ),
+    )
+    s_start.add_argument(
+        "--agent-command",
+        help=(
+            "Command that starts the agent child (default: gaia-agent). Use "
+            "this to point at a specific build."
+        ),
+    )
+    s_start.add_argument(
+        "--deny-gated-tools",
+        action="store_true",
+        help=(
+            "Run read-only: auto-deny every tool that would ask for "
+            "confirmation, instead of offering Allow/Deny buttons in Slack."
+        ),
+    )
+    s_start.add_argument(
+        "--upload-root",
+        action="append",
+        help=(
+            "Directory a file may be uploaded back to Slack from (repeatable; "
+            "default: your home directory). Files the agent writes outside "
+            "these roots are never sent."
+        ),
+    )
+    s_start.add_argument(
+        "--background",
+        action="store_true",
+        help="Record a PID file so `gaia slack stop` can find this process",
+    )
+
+    slack_subparsers.add_parser("stop", help="Stop a backgrounded Slack bridge")
+
+    slack_subparsers.add_parser(
+        "connect",
+        help=(
+            "Store a pair of Slack tokens read from stdin (app-level token on "
+            "the first line, bot token on the second). For a caller that "
+            "collected them itself, such as the TUI's setup panel; use `setup` "
+            "to be walked through it."
+        ),
+    )
+
+    s_decline = slack_subparsers.add_parser(
+        "decline", help="Record that you do not want Slack set up"
+    )
+    s_decline.add_argument(
+        "--never",
+        action="store_true",
+        help=(
+            "Never offer Slack setup again. Without this, the offer returns "
+            "once if you install Slack later."
+        ),
+    )
+
+    s_status = slack_subparsers.add_parser(
+        "status", help="Show Slack detection, configuration, and liveness"
+    )
+    s_status.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+
+    slack_parser.set_defaults(action="slack")
+
     # Schedule command — cron-based recurring skill/prompt dispatch (issue #892)
     schedule_parser = subparsers.add_parser(
         "schedule",
@@ -1992,13 +2072,14 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--agent-type",
-        default=None,
+        default=DEFAULT_AGENT_TYPE,
         metavar="AGENT_ID",
         help=(
-            "Agent registration ID to target (e.g. 'gaia-lite'). When set, "
-            "the eval runner instructs the simulator to create sessions with "
-            "this agent_type so scenarios run against the chosen agent. Omit "
-            "to use the backend default."
+            f"Agent registration ID to score (default: {DEFAULT_AGENT_TYPE}, the "
+            "flagship). Every scenario runs against this one agent, so a "
+            "scorecard names a single agent and two scorecards are comparable. "
+            "Override only to measure a different agent, and never compare the "
+            "result to a scorecard captured under another agent."
         ),
     )
     agent_eval_parser.add_argument(
@@ -3252,6 +3333,19 @@ def _handle_schedule(args):
                 file=sys.stderr,
             )
             sys.exit(1)
+        # Reject a bad cron here, at the prompt -- not a second later in the
+        # daemon's reload loop, which only finds out once this is already on
+        # disk (#4143).
+        from apscheduler.triggers.cron import CronTrigger
+
+        try:
+            CronTrigger.from_crontab(args.cron)
+        except ValueError as exc:
+            print(
+                f"❌ '{args.cron}' is not a valid cron expression: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         sink_args = {}
         if getattr(args, "to", None):
             sink_args["to"] = args.to
@@ -3331,6 +3425,10 @@ def main():
     log = get_logger(__name__)
 
     args = parser.parse_args()
+    if getattr(args, "use_chatgpt", False):
+        from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+        parser.error(REMOVED_PROVIDER_MESSAGE)
 
     # Check if action is specified
     if not args.action:
@@ -3425,6 +3523,12 @@ def main():
             webui_dist=getattr(args, "ui_dist", None),
         )
         return
+
+    # Handle slack command — see gaia.messaging.slack.cli for the flow
+    if args.action == "slack":
+        from gaia.messaging.slack.cli import main as slack_main
+
+        sys.exit(slack_main(args))
 
     # Handle telegram scaffold command
     if args.action == "telegram":
@@ -3705,6 +3809,7 @@ Let me know your answer!
                         print(f"✅ {port_result['message']}")
                     else:
                         print(f"❌ {port_result['message']}")
+                        sys.exit(1)
             except FileNotFoundError:
                 # lemonade-server not in PATH, fallback to port kill
                 log.warning("lemonade-server not found, falling back to port kill")
@@ -3713,6 +3818,7 @@ Let me know your answer!
                     print(f"✅ {port_result['message']}")
                 else:
                     print(f"❌ {port_result['message']}")
+                    sys.exit(1)
         elif args.port:
             port = args.port
             log.info(f"Attempting to kill process on port {port}")
@@ -3721,6 +3827,7 @@ Let me know your answer!
                 print(f"✅ {result['message']}")
             else:
                 print(f"❌ {result['message']}")
+                sys.exit(1)
         else:
             # A refusal must not report success — `gaia kill && next-step`
             # would otherwise run next-step having killed nothing.
@@ -4136,7 +4243,7 @@ Let me know your answer!
                 model=eval_model,
                 budget_per_scenario=args.budget,
                 timeout_per_scenario=args.timeout,
-                agent_type=getattr(args, "agent_type", None),
+                agent_type=getattr(args, "agent_type", DEFAULT_AGENT_TYPE),
                 extra_scenario_dirs=getattr(args, "scenario_dir", None),
                 extra_corpus_dirs=getattr(args, "corpus_dir", None),
                 tags=getattr(args, "tag", None),
@@ -4674,7 +4781,7 @@ def kill_process_by_port(port):
         return {"success": False, "message": f"Could not inspect port {port}: {e}"}
 
     if not listeners:
-        return {"success": False, "message": f"No process is listening on port {port}"}
+        return {"success": True, "message": f"No process is listening on port {port}"}
 
     killed = []
     refused = []
@@ -4686,28 +4793,27 @@ def kill_process_by_port(port):
         try:
             terminate_pid(pid)
             killed.append(str(pid))
-        except (subprocess.CalledProcessError, OSError) as e:
+        except (subprocess.SubprocessError, OSError) as e:
             failed.append(f"{pid}: {e}")
 
+    messages = []
     if killed:
-        return {
-            "success": True,
-            "message": f"Killed process(es) {', '.join(killed)} listening on port {port}",
-        }
-
+        messages.append(
+            f"Killed process(es) {', '.join(killed)} listening on port {port}."
+        )
     if refused:
-        return {
-            "success": False,
-            "message": (
-                f"Refusing to kill {', '.join(refused)} on port {port}: not a "
-                f"GAIA or Lemonade process. Stop it with its own tooling, or "
-                f"kill it by PID if that is really what you want."
-            ),
-        }
-
+        messages.append(
+            f"Refusing to kill {', '.join(refused)} on port {port}: not a "
+            "GAIA or Lemonade process. Stop it with its own tooling, or "
+            "kill it by PID if that is really what you want."
+        )
+    if failed:
+        messages.append(
+            f"Failed to kill process(es) on port {port} ({'; '.join(failed)})."
+        )
     return {
-        "success": False,
-        "message": f"Failed to kill the process on port {port} ({'; '.join(failed)})",
+        "success": bool(killed) and not refused and not failed,
+        "message": " ".join(messages),
     }
 
 
@@ -5366,8 +5472,8 @@ def _handle_memory_status():
         by_source = {}
         try:
             by_source = store.get_source_counts()
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).warning("Could not read memory source counts: %s", exc)
 
         # --- Format output ---
         print("\n=== GAIA Agent Memory ===\n")

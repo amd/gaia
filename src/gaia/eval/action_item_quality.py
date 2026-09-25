@@ -47,6 +47,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from gaia.agents.install_hints import agent_not_installed_message
 from gaia.eval.fixture_paths import resolve_repo_fixture
+from gaia.eval.judge_outage import judge_completion_text
 from gaia.eval.quality_metrics import Confusion
 
 # ---------------------------------------------------------------------------
@@ -710,6 +711,10 @@ def make_claude_judge(model: str | None = None) -> Callable[[str, str], bool]:
     credential is absent. The returned callable is what :func:`match_action_items`
     consumes as ``judge_fn`` — it renders the equivalence prompt, calls the
     judge, and parses the strict yes/no verdict.
+
+    An API failure that means the judge is *unreachable* (out of credit, key
+    rejected) is re-raised as :class:`~gaia.eval.judge_outage.JudgeOutageError`
+    so it reads as an outage rather than a bad score.
     """
     from gaia.eval.claude import ClaudeClient
 
@@ -718,11 +723,7 @@ def make_claude_judge(model: str | None = None) -> Callable[[str, str], bool]:
 
     def judge(predicted_desc: str, expected_desc: str) -> bool:
         prompt = build_equivalence_prompt(predicted_desc, expected_desc)
-        content = client.get_completion(prompt)
-        parts = [
-            getattr(block, "text", "") for block in content if hasattr(block, "text")
-        ]
-        return parse_equivalence_verdict("".join(parts))
+        return parse_equivalence_verdict(judge_completion_text(client, prompt))
 
     return judge
 

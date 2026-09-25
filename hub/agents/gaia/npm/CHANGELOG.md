@@ -14,6 +14,7 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.
 - Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
@@ -28,12 +29,26 @@ the terminal UI meant building it from source.
 
 - **Say something while the agent is still working.** `POST
   /v1/gaia/query/{run_id}/followup` hands a live run a message the user typed
-  after it started (contract **2.14**). The run is not interrupted and no
+  after it started (contract **2.15**). The run is not interrupted and no
   second turn starts — the agent folds the text into the turn already running
   at its next step boundary, so a correction during a five-minute task changes
   that task instead of arriving after it finished. Unknown run → `404`, an
   agent that cannot take one → `409`; both loud, because the caller has already
   taken the message from the user. See SPEC §5.6 and SKILL §7.
+- **Approve a gated tool over HTTP.** `write_file`, `run_shell_command` and the
+  seven other confirmation-gated tools can now run through `/v1/gaia/query`:
+  the stream stays open on `needs_confirmation` and
+  `POST /v1/gaia/query/{run_id}/tool_decision` answers it. Previously the only
+  possible answer was a refusal, so those tools were unreachable over HTTP.
+  `POST /v1/gaia/sessions/{session_id}/bypass` turns the asking off for a
+  session. A run that cannot answer — no `session_id`, or
+  `can_answer_questions: false` — is still refused. See SKILL §8.
+- **Claude as an inference backend.** `provider: "claude"` sends the
+  conversation to Anthropic's API instead of the local server; `model` then
+  names a Claude model. Anything outside `lemonade` / `claude` is still a 400.
+- **`gaia-agent --serve` works from a pip install.** The console script pointed
+  past the transport dispatcher, so the documented HTTP mode exited with
+  "unrecognized arguments".
 - **Tracked eval scorecard ([`SCORECARD.md`](./SCORECARD.md)).** The agent now
   ships a per-release scorecard: judged-scenario pass rate (the aggregate)
   plus per-category rates and the judge's average score across the
@@ -55,8 +70,9 @@ the terminal UI meant building it from source.
   `experimental` tier. Instructions load immediately; any `tools.py`/scripts
   the bundle carries stay **inert** until the user runs
   `gaia skill promote <name>` in a terminal, which re-audits and binds trust
-  to the audited bytes. Over `/query`, `capture_skill` is refused like the
-  other gated tools (SKILL §8; SPEC §5.2 documents the load-time deferral).
+  to the audited bytes. Over `/query`, `capture_skill` is gated like the
+  other confirmation tools (SKILL §8; SPEC §5.2 documents the load-time
+  deferral).
 - **`run_python`, always on.** A quick calculation or data transform is now one
   confirmation-gated call that runs from the project root and returns what it
   printed, instead of a throwaway script left in your repository. It joins the
@@ -171,6 +187,21 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The agent sees every installed skill and loads the one that fits.**
+  Previously a per-turn matcher scored the request against skill descriptions
+  and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never
+  learned `gh` was available. The system prompt now lists each installed skill
+  in one line (~1,000 tokens for the starter pack), and refusing a skill-gated
+  CLI names the skill to load. `GAIA_SKILL_DISCOVERY=0` still hides the list.
+  **Removed:** `GAIA_SKILL_DISCOVERY_TAU` is now ignored, and
+  `GaiaAgentConfig(skill_discovery_threshold=…)` raises `TypeError` — drop the
+  argument. See the Agent Skills spec, "Skill catalogue".
+- Contract `apiVersion` is now **2.14** (2.13 added `GET /memory`) for the two new routes and
+  the `claude` provider value. A differing major still raises
+  `VersionMismatchError`; a higher minor is accepted.
+- **Changing `model` on a live `session_id` switches in place** instead of
+  returning 409, so the conversation and any loaded skills survive it. A switch
+  that fails still returns 409 and leaves the session on its previous model.
 - **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
   written.** Previously any URL not ending in `/api/v1` had that suffix appended,
   so a reverse proxy configured as `https://proxy.example/lemonade` was silently
@@ -272,9 +303,9 @@ the terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI 0.23.1+ on `PATH` for the daemon the TUI
-  starts. 0.23.1 is the first core whose daemon knows how to supervise this
-  agent; on 0.23.0 the UI starts with nothing behind it.
+  inference, and the `gaia` Python CLI 0.24.1+ on `PATH` for the daemon the TUI
+  starts. 0.24.1 is the first core whose daemon knows how to supervise this
+  agent; on an earlier core the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.

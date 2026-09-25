@@ -78,8 +78,8 @@
 #      runtime that injects text into its system prompt, or this workflow and the
 #      composite actions it runs. Deliberately NOT `src/gaia/agents/base/**` or
 #      `src/gaia/llm/**`: those are cross-agent surfaces already covered by
-#      test_eval_agent_gemma_consolidation.yml, and adding them here would roughly
-#      double the load on the single Lemonade slot. For a core-only change that
+#      eval_flagship.yml, and adding them here would roughly double the load on
+#      the single Lemonade slot. For a core-only change that
 #      you suspect moves email behavior, `workflow_dispatch` this workflow against
 #      the branch.
 #   2. SUPERSEDING. PR runs share a per-PR concurrency group with
@@ -88,18 +88,15 @@
 #
 # COST TO THE RELEASE PATH, STATED PLAINLY. The `lemonade-eval` group runs one at
 # a time and queues the rest FIFO (`queue: max`), so adding ~1 PR run/day costs
-# release-gate and weekly calls WAIT time rather than eviction. FIFO has no
-# priority lane: a release call sits behind every PR eval already queued, plus any
+# release-gate calls WAIT time rather than eviction. FIFO has no priority lane: a release call sits behind every PR eval already queued, plus any
 # in-flight scorecard refresh (up to 14h) or gemma consolidation (up to 7.5h).
 # Even so the cost is bounded and visible, not hidden: per-PR cancel-in-progress
-# collapses repeated pushes to one run, and weekly_eval.yml treats a non-success
-# (not merely a 'failure') callee as a reportable outcome. The residual bad
-# outcome is a run that waits out GitHub's 24h job-queue limit and is CANCELLED,
+# collapses repeated pushes to one run. The residual bad outcome is a run that waits out GitHub's 24h job-queue limit and is CANCELLED,
 # leaving it with no eval and no auto-requeue — rarer than the evict-the-pending-
 # run behavior this replaced, but not gone. Re-run the job from the Checks tab if
 # the coverage matters for the change under review. Surfacing that outcome in
-# publish.yml / release_agent_email.yml the way weekly_eval.yml already does is
-# tracked separately.
+# publish.yml / release_agent_email.yml the way eval_flagship.yml's nightly does
+# (a rolling issue rather than an annotation) is tracked separately.
 #
 # A PR RUN IS ADVISORY, AND THAT IS NOT A TRIGGER-SCOPED CHOICE. Per the enforce
 # state above, no gate blocks anything on any trigger right now, so a PR run is
@@ -107,7 +104,7 @@
 # here: it would break the single-source rule, and — with every manifest at
 # enforce:false — the only exits it could soften are the fail-loudly ones. To make
 # a gate block a PR, flip its manifest's `"enforce"` to true; it then blocks the
-# weekly, the release AND the PR together, which is the right coupling.
+# release AND the PR together, which is the right coupling.
 #
 # WHAT MAKES THE ADVISORY RESULT VISIBLE. A breached bar under enforce:false is a
 # GREEN step with no annotation — evidence that exists only inside an artifact
@@ -119,8 +116,7 @@
 # FORKS. The job does not run for fork PRs — pointing a self-hosted runner at
 # unreviewed fork code is not acceptable, and a fork PR carries no
 # ANTHROPIC_API_KEY, so it could only ever produce an un-judged result.
-# test_eval_agent_gemma_consolidation.yml now triggers on `pull_request` too (a
-# `push` filter re-fired it on every main-merge, gating PRs that touched no
+# eval_flagship.yml now triggers on `pull_request` too (a `push` filter re-fired it on every main-merge, gating PRs that touched no
 # Python), so it carries the same fork and draft clauses in its job `if:` —
 # without this workflow's `skip-email-eval` clause. A fork PR touching the email
 # agent needs a maintainer to push the branch into this repo and re-run.
@@ -132,7 +128,7 @@ on:
   # core flagship agent (#3329), so email-specific eval coverage is disabled
   # rather than kept running against a surface being retired. The job below
   # is gated `if: false` for the same reason, which covers every caller
-  # (publish.yml, release_agent_email.yml, weekly_eval.yml) from one place.
+  # (publish.yml, release_agent_email.yml) from one place.
   # Pre-merge coverage for email-agent behavior changes — see the PULL-REQUEST
   # COVERAGE block in the header for why these paths and not more. Advisory
   # (report mode) by default; `ready_for_review` is in `types` so undrafting a PR
@@ -214,7 +210,7 @@ concurrency:
   #
   # The non-PR key is `github.run_id`, deliberately, NOT `github.ref`. A called
   # reusable workflow's `concurrency` is evaluated in the CALLER's context — this
-  # repo has the scar to prove it (weekly_eval.yml: a caller holding the group the
+  # repo has the scar to prove it (the now-deleted weekly caller held the group the
   # callee needed produced the phantom-job bug, every Weekly Eval run 2026-07-09..19
   # dying in <60s and filing issue #2026 on a no-op). So this expression is live on
   # the release path too, and keying it to the run id makes each release/weekly run
@@ -276,8 +272,7 @@ jobs:
     # workflow_dispatch / workflow_call runs, where that context is absent.
     runs-on: ${{ fromJSON(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
     # THE SERIAL SLOT. Same group name as email_scorecard_refresh.yml and
-    # test_eval_agent_gemma_consolidation.yml — `lemonade-eval`, exactly — so at
-    # most one eval touches the single Lemonade backend at a time (CLAUDE.md: at
+    # eval_flagship.yml — `lemonade-eval`, exactly — so at most one eval touches the single Lemonade backend at a time (CLAUDE.md: at
     # most one `gaia eval agent` process, period). Two concurrent runs
     # race-evict each other's model and produce chaotic ctx/model_load failures.
     #
@@ -289,7 +284,7 @@ jobs:
     #
     # Do NOT also declare `lemonade-eval` at the workflow level of this file: the
     # run would hold the group while its only job waited for it — a self-deadlock,
-    # and the same shape as the phantom-job bug weekly_eval.yml documents.
+    # and the same shape as the phantom-job bug described at the top of this job.
     concurrency:
       group: lemonade-eval
       cancel-in-progress: false
@@ -299,7 +294,7 @@ jobs:
     # Disabled: email-agent capability is moving into the core flagship agent
     # (#3329), so this eval suite no longer gates PRs, the weekly schedule, or
     # a release. `if: false` makes the job a no-op "skipped" — which every
-    # caller (publish.yml, release_agent_email.yml, weekly_eval.yml) reads as
+    # caller (publish.yml, release_agent_email.yml) reads as
     # a non-blocking result via `workflow_call`, so nothing downstream needs
     # its own gate changed. The prior PR/draft/label guard is preserved above
     # in git history if this suite is ever revived for a narrower surface.

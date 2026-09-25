@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """``POST /v1/gaia/query/{run_id}/followup`` — handing a RUNNING turn a message.
 
-Contract 2.14 (#3620). The turn keeps going on its existing SSE stream; the
+Contract 2.15 (#3620). The turn keeps going on its existing SSE stream; the
 agent folds the text in at its next agent-loop step boundary. This is the one
 route that writes into a live run without stopping it, so what it must never do
 is accept a message it cannot deliver — the caller empties the user's composer
@@ -247,5 +247,5 @@ def test_the_version_advertises_the_capability(built):
     major, minor = (int(p) for p in reported.split(".")[:2])
     assert (major, minor) >= (
         2,
-        13,
+        15,
     ), f"apiVersion {reported} predates mid-turn follow-ups"
