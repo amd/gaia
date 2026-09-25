@@ -917,7 +917,7 @@ class ChatAgent(
             else getattr(config, "model_id", None)
         )
         return resolve_inference_location(
-            model or DEFAULT_MODEL_NAME,
+            model or resolve_default_chat_model(),
             use_claude=use_claude,
             use_openai=bool(getattr(config, "use_chatgpt", False)),
         )
