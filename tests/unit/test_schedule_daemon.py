@@ -214,7 +214,10 @@ class TestMisfires:
         try:
             store.add(_make_schedule("later"))
             daemon.refresh_schedules(scheduler, store)
-            assert scheduler.get_job("later").misfire_grace_time >= daemon.MISFIRE_GRACE_SECONDS
+            assert (
+                scheduler.get_job("later").misfire_grace_time
+                >= daemon.MISFIRE_GRACE_SECONDS
+            )
         finally:
             scheduler.shutdown()
 
