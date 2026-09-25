@@ -300,6 +300,43 @@ def test_skill_tool_avoids_escape_hatch_activation():
     assert loader._escape_hatch_count == 0
 
 
+def test_a_still_named_skill_tool_is_not_evicted_on_the_next_turn():
+    """The tier used to decay to nothing after the turn that admitted it.
+
+    ``keep`` is named by the signal on both turns and never called. On turn 2 it
+    was already loaded, so the tier skipped it — which also left it out of the
+    this-turn protected set, making an uncalled row the LRU's first pick. The
+    recipe's own tools evicted while the recipe was still being followed.
+    """
+    tools = ["keep", "hot"]
+    embed = _make_embed_fn(
+        tools, {"q1": {"keep": 0.0, "hot": 0.0}, "q2": {"keep": 0.0, "hot": 0.9}}
+    )
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
+
+    assert loader.select("q1", _registry(tools), skill_tools=["keep"]) == ["keep"]
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loaded = loader.select("q2", _registry(tools), skill_tools=["keep"])
+
+    assert loaded == ["keep"]
+    payload = _selection_payload(records)
+    assert payload["skill"] == ["keep"]  # reported on every turn it is named
+    assert payload["evicted"] == []
+    assert "hot" in payload["skipped_at_cap"]
+
+
+def test_a_skill_tool_the_signal_stops_naming_becomes_evictable_again():
+    """Protection is per-turn, not permanent — the tier still self-heals."""
+    tools = ["stale", "hot"]
+    embed = _make_embed_fn(
+        tools, {"q1": {"stale": 0.0, "hot": 0.0}, "q2": {"stale": 0.0, "hot": 0.9}}
+    )
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
+
+    assert loader.select("q1", _registry(tools), skill_tools=["stale"]) == ["stale"]
+    assert loader.select("q2", _registry(tools)) == ["hot"]
+
+
 def test_skill_signal_absent_is_byte_identical():
     """``skill_tools`` None / [] / omitted give the same loaded set and log bytes.
 

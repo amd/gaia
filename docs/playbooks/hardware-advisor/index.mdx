@@ -26,7 +26,7 @@ icon: "microchip"
 When users ask "What size LLM can I run?", the answer depends on their actual hardware. Instead of guessing or looking up specifications manually, this agent:
 
 1. Detects system RAM, GPU, and NPU via Lemonade Server
-2. Queries the available model catalog with size estimates
+2. Queries the available model catalog with download sizes
 3. Calculates which models fit in available memory
 4. Provides personalized recommendations based on real hardware specs
 
@@ -245,7 +245,6 @@ Before we build step-by-step, let's understand what each piece does **under the 
     # Returns:
     {
         "id": "Qwen3.5-35B-A3B-GGUF",
-        "name": "Qwen3 Coder 30B",
         "size_gb": 18.5,
         "downloaded": False
     }
@@ -256,7 +255,7 @@ Before we build step-by-step, let's understand what each piece does **under the 
 **Why LemonadeClient?**
 - Provides unified API for system detection
 - Returns NPU/GPU availability from Lemonade Server
-- Model catalog with size estimates for recommendations
+- Model catalog with download sizes for recommendations
 
 ---
 
@@ -648,7 +647,7 @@ def list_available_models() -> Dict[str, Any]:
         for model in models_data:
             model_id = model.get("id", "")
 
-            # Get size estimate for this model
+            # Get the catalog download size for this model
             model_info = client.get_model_info(model_id)
             size_gb = model_info.get("size_gb", 0)
 
@@ -1094,7 +1093,7 @@ recommend_models(ram_gb=32, gpu_memory_mb=8192)
 
   2. Fetch model catalog:
       → list_models(show_all=True)
-      → Enrich with size estimates via get_model_info()
+      → Enrich with download sizes via get_model_info()
 
   3. Filter models:
       → Keep models where: size_gb <= 22.4 GB AND size_gb > 0
