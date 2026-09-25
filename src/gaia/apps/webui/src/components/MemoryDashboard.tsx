@@ -383,6 +383,7 @@ export function MemoryDashboard() {
 
     const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const maintenanceRef = useRef<HTMLDivElement>(null);
+    const betaConfirmRef = useRef<HTMLDivElement>(null);
 
     // ── Toast helpers ──────────────────────────────────────────────────
 
@@ -433,6 +434,44 @@ export function MemoryDashboard() {
         document.addEventListener('keydown', handler);
         return () => document.removeEventListener('keydown', handler);
     }, [convDetail, showMaintenanceMenu, showAddForm, editingId, expandedRowId, setShowMemoryDashboard, betaConfirm, deleteConfirm, reinitConfirm]);
+
+    // Modal focus handling for the beta-confirm dialog: move focus in, keep Tab
+    // inside it, and hand focus back to the toggle that opened it.
+    useEffect(() => {
+        if (!betaConfirm) return;
+        const panel = betaConfirmRef.current;
+        if (!panel) return;
+        const opener = document.activeElement as HTMLElement | null;
+        panel.focus();
+
+        const focusable = () => Array.from(
+            panel.querySelectorAll<HTMLElement>(
+                'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            )
+        );
+        const handler = (e: KeyboardEvent) => {
+            if (e.key !== 'Tab') return;
+            const items = focusable();
+            if (items.length === 0) {
+                e.preventDefault();
+                return;
+            }
+            const active = document.activeElement;
+            const inside = !!active && panel.contains(active) && active !== panel;
+            if (e.shiftKey && (!inside || active === items[0])) {
+                e.preventDefault();
+                items[items.length - 1].focus();
+            } else if (!e.shiftKey && (!inside || active === items[items.length - 1])) {
+                e.preventDefault();
+                items[0].focus();
+            }
+        };
+        document.addEventListener('keydown', handler);
+        return () => {
+            document.removeEventListener('keydown', handler);
+            opener?.focus();
+        };
+    }, [betaConfirm]);
 
     // ── Data loading ────────────────────────────────────────────────────
 
@@ -1010,7 +1049,7 @@ export function MemoryDashboard() {
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h3>Memory Dashboard <span style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '2px 8px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span></h3>
+                        <h1>Memory Dashboard <span style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '2px 8px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span></h1>
                     </div>
                     <div className="memory-dashboard-header-actions">
                         {/* Embedding coverage indicator */}
@@ -1878,7 +1917,7 @@ export function MemoryDashboard() {
                             {convDetail && (
                                 <div className="mem-conv-detail-overlay">
                                     <div className="mem-conv-detail-header">
-                                        <h4>Session: {convDetail.sessionId.slice(0, 12)}...</h4>
+                                        <h2>Session: {convDetail.sessionId.slice(0, 12)}...</h2>
                                         <button className="btn-icon" onClick={() => setConvDetail(null)}>
                                             <X size={16} />
                                         </button>
@@ -2003,30 +2042,39 @@ export function MemoryDashboard() {
                                     return (
                                     <>
                                         <div
+                                            aria-hidden="true"
                                             style={{
                                                 position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
                                                 zIndex: 9998, backdropFilter: 'blur(4px)',
                                             }}
                                             onClick={() => setBetaConfirm(null)}
                                         />
-                                        <div style={{
-                                            position: 'fixed', top: '50%', left: '50%',
-                                            transform: 'translate(-50%, -50%)', zIndex: 9999,
-                                            background: '#1a1a2e', border: '1px solid #333',
-                                            borderRadius: 12, padding: '28px 32px', maxWidth: 420,
-                                            width: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-                                        }}>
+                                        <div
+                                            ref={betaConfirmRef}
+                                            role="dialog"
+                                            aria-modal="true"
+                                            aria-labelledby="mem-beta-confirm-title"
+                                            aria-describedby="mem-beta-confirm-desc"
+                                            tabIndex={-1}
+                                            style={{
+                                                position: 'fixed', top: '50%', left: '50%',
+                                                transform: 'translate(-50%, -50%)', zIndex: 9999,
+                                                background: '#1a1a2e', border: '1px solid #333',
+                                                borderRadius: 12, padding: '28px 32px', maxWidth: 420,
+                                                width: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+                                            }}
+                                        >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
                                                 <span style={{
                                                     fontSize: 11, fontWeight: 700, color: '#f59e0b',
                                                     background: 'rgba(245,158,11,0.15)', padding: '3px 10px',
                                                     borderRadius: 4, letterSpacing: '0.5px',
                                                 }}>BETA</span>
-                                                <span style={{ fontSize: 16, fontWeight: 600, color: '#e0e0e0' }}>
+                                                <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 600, color: '#e0e0e0' }}>
                                                     {cfg.title}
-                                                </span>
+                                                </h2>
                                             </div>
-                                            <p style={{ fontSize: 13, lineHeight: 1.6, color: '#999', margin: '0 0 8px' }}>
+                                            <p id="mem-beta-confirm-desc" style={{ fontSize: 13, lineHeight: 1.6, color: '#999', margin: '0 0 8px' }}>
                                                 {cfg.description}
                                             </p>
                                             <ul style={{ fontSize: 13, lineHeight: 1.7, color: '#999', margin: '0 0 24px', paddingLeft: 20 }}>
