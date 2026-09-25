@@ -20,8 +20,8 @@ Idempotency (re-running a published release is a no-op):
     released version therefore always differs: the published object stays
     authoritative and is what this run reports, so the lock describes what the
     hub actually serves. ``--strict-immutable`` restores the old hard failure.
-  * any OTHER 409 (artifact_mismatch, artifact_unverifiable, id_conflict) is a
-    real rejection -- the catalog was NOT modified -- and fails loudly.
+  * any OTHER 409 (artifact_mismatch, artifact_unverifiable, id_conflict,
+    manifest_mismatch) is a real rejection -- the catalog was NOT modified -- and fails loudly.
 
 A run that stores nothing warns loudly, because with the above a forgotten
 version bump would otherwise be a green release that ships nothing.
@@ -370,9 +370,9 @@ def publish_one(
             flush=True,
         )
     elif resp.status_code == 409:
-        # Only ONE of the Worker's four 409s means "already published":
+        # Only ONE of the Worker's five 409s means "already published":
         # version_exists. artifact_mismatch / artifact_unverifiable / id_conflict
-        # all say "the catalog was NOT modified" -- reconciling those against the
+        # / manifest_mismatch all say "the catalog was NOT modified" -- reconciling those against the
         # R2 object would report success for a release the hub never recorded.
         error_code = ""
         try:
