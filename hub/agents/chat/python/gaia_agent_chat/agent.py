@@ -160,6 +160,8 @@ class ChatAgentConfig:
     # NPU's FLM build runs at 4K, so a device config can override the 32K ctx.
     device: Optional[str] = None
     min_context_size: Optional[int] = None
+    # None = per-model default (larger for Lemonade cloud models).
+    max_output_tokens: Optional[int] = None
 
     # Debug/output settings
     debug: bool = False
@@ -511,6 +513,7 @@ class ChatAgent(
                 if config.min_context_size is not None
                 else 32768
             ),
+            max_output_tokens=config.max_output_tokens,
         )
 
         # Without this, throwaway scripts land in the user's project. One path
