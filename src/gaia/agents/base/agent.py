@@ -7842,6 +7842,20 @@ Do NOT wrap conversational replies in JSON.
                         )
                         continue
 
+                # A message that landed DURING this model call was never seen
+                # by it, and the step-boundary drain above has already run —
+                # sealing here would drop words the route reported delivered.
+                # Cancel check mirrors that drain's: a turn told to stop leaves
+                # the message queued rather than consuming it. Bounded by
+                # steps_limit, which also makes the last step seal normally.
+                _cancel = getattr(self, "_cancel_event", None)
+                if (
+                    steps_taken < steps_limit
+                    and not (_cancel is not None and _cancel.is_set())
+                    and self._drain_followups(messages, conversation)
+                ):
+                    continue
+
                 # Scope line goes on AFTER the subclass hook: a subclass that
                 # rewrites the answer must not be able to drop it (#3376).
                 final_answer = self._with_verification_scope(

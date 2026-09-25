@@ -446,6 +446,11 @@ the user and owes them a truthful answer about where it went:
 | `404`  | No such run in flight — it finished or was cancelled. Send it as a new `/query`. |
 | `409`  | The run's agent is not accepting mid-turn input.              |
 
+A turn that has already formed its answer takes one more step to address a
+follow-up, so a turn answering in a single step is covered too. The one
+exception is a turn already at its step limit: the message stays queued rather
+than being consumed into a context no model call will read.
+
 Because `/query` is stateless (§2.4) the host still owns the transcript: record
 a delivered follow-up in the `context` you push on the **next** turn, between
 that turn's question and its answer, or the conversation loses words the agent

@@ -233,6 +233,107 @@ def test_a_cancelled_turn_does_not_swallow_a_followup(loop_agent):
     )
 
 
+def test_a_followup_typed_during_the_only_model_call_still_reaches_it(loop_agent):
+    """The commonest turn shape: one step, one answer.
+
+    The step-boundary drain runs BEFORE the model call, so a message typed
+    while that call is in flight has nothing left to drain it — the route
+    already told the user it was delivered, and the turn would end without the
+    model ever seeing it. Queued from inside the call, which is when a user
+    actually types.
+    """
+    sent = []
+
+    def capture(messages, **kwargs):
+        sent.append([dict(m) for m in messages])
+        if len(sent) == 1:
+            loop_agent.queue_followup("only the unread ones")
+        return _reply("All done.")
+
+    loop_agent.chat.send_messages = MagicMock(side_effect=capture)
+    loop_agent._followup_queue = queue.Queue()
+
+    loop_agent.process_query("triage my inbox")
+
+    assert len(sent) >= 2, (
+        "the turn ended after one call, so the follow-up reached no model call "
+        f"at all: {sent}"
+    )
+    assert any(
+        m["role"] == "user" and "only the unread ones" in str(m["content"])
+        for m in sent[-1]
+    ), f"the follow-up never reached the model: {sent[-1]}"
+    assert loop_agent._followup_queue.empty()
+
+
+def test_a_cancelled_single_step_turn_does_not_swallow_a_late_followup(loop_agent):
+    """Same arrival, but the user also asked to stop.
+
+    The re-check must respect a set cancel event exactly as the step-boundary
+    drain does: the message stays in the queue rather than being consumed by a
+    turn that can no longer answer it.
+    """
+
+    def capture(messages, **kwargs):
+        loop_agent.queue_followup("only the unread ones")
+        loop_agent._cancel_event.set()
+        return _reply("All done.")
+
+    loop_agent.chat.send_messages = MagicMock(side_effect=capture)
+    loop_agent._cancel_event = threading.Event()
+    loop_agent._followup_queue = queue.Queue()
+
+    loop_agent.process_query("triage my inbox")
+
+    assert not loop_agent._followup_queue.empty(), (
+        "a cancelled turn consumed the late follow-up; it is now in no queue "
+        "and no conversation"
+    )
+
+
+def test_followups_arriving_on_every_call_cannot_outrun_the_step_limit(loop_agent):
+    """The re-check continues the loop, so it needs the same ceiling.
+
+    A user (or a driver) typing on every single call must not be able to keep
+    one turn running indefinitely.
+    """
+    calls = []
+
+    def capture(messages, **kwargs):
+        calls.append(1)
+        loop_agent.queue_followup(f"and another thing {len(calls)}")
+        return _reply("All done.")
+
+    loop_agent.chat.send_messages = MagicMock(side_effect=capture)
+    loop_agent._followup_queue = queue.Queue()
+
+    loop_agent.process_query("triage my inbox", max_steps=4)
+
+    assert len(calls) <= 4, f"the turn ran {len(calls)} steps past a limit of 4"
+
+
+def test_the_last_step_leaves_a_late_followup_queued_rather_than_eating_it(loop_agent):
+    """At the ceiling there is no step left to answer in.
+
+    Draining anyway would consume the message into a context no model call
+    ever reads — the same silent drop as never draining, one step later.
+    """
+
+    def capture(messages, **kwargs):
+        loop_agent.queue_followup("only the unread ones")
+        return _reply("All done.")
+
+    loop_agent.chat.send_messages = MagicMock(side_effect=capture)
+    loop_agent._followup_queue = queue.Queue()
+
+    loop_agent.process_query("triage my inbox", max_steps=1)
+
+    assert not loop_agent._followup_queue.empty(), (
+        "the turn consumed a follow-up it had no step left to answer; it is "
+        "now in no queue and no conversation"
+    )
+
+
 def test_a_turn_with_nothing_queued_is_untouched(loop_agent):
     """Every ordinary turn now runs this on every step. It must be inert."""
     loop_agent.chat.send_messages = MagicMock(

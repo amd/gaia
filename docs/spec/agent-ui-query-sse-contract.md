@@ -405,7 +405,11 @@ neither stops it nor waits on it. `cancel` ends the run; `respond` answers a
 question the run is parked on; this one adds to a run that is busy working, and
 the run never notices a pause: the agent folds the text into the turn's context
 at its next agent-loop step boundary (the same boundary the cooperative cancel
-is checked at) and answers it alongside the work already in progress.
+is checked at) and answers it alongside the work already in progress. A turn
+that has already formed its answer takes one more step to address it, so a turn
+answering in a single step is not a hole in this — the one exception is a turn
+already at its step limit, which leaves the message queued rather than
+consuming it into a context no model call will read.
 
 Framing is part of the contract, not a detail of one agent: the text enters as a
 **user** message labelled as arriving mid-task. Unlabelled, a user message
