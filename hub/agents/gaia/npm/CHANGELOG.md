@@ -16,8 +16,9 @@ the terminal UI meant building it from source.
 
 - Conversation state is saved under `~/.gaia/sessions` instead of the directory
   the agent was started from. A `session_id` must be 1–128 characters from
-  `A-Z a-z 0-9 . _ -`, and a corrupt saved session fails the request instead of
-  being silently replaced.
+  `A-Z a-z 0-9 . _ -`; any other value is a 400 on `/query` and
+  `/sessions/{session_id}/bypass` instead of a 500. A corrupt saved session fails
+  the request instead of being silently replaced.
 - The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.

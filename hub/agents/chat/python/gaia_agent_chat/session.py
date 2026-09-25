@@ -25,6 +25,19 @@ class SessionCorruptError(RuntimeError):
     """A session file exists but cannot be parsed into a ChatSession."""
 
 
+def validate_session_id(session_id: Any) -> None:
+    """Raise ValueError unless ``session_id`` is safe to use as a file name."""
+    if (
+        not isinstance(session_id, str)
+        or not _SESSION_ID_RE.fullmatch(session_id)
+        or not session_id.strip(".")
+    ):
+        raise ValueError(
+            f"Invalid session_id {session_id!r}: use 1-128 characters from "
+            "A-Z, a-z, 0-9, '.', '_' and '-' (not only dots)."
+        )
+
+
 def default_session_dir() -> Path:
     """Default session directory: ``<GAIA_CONFIG_DIR>/sessions``."""
     return Path(gaia_config.GAIA_CONFIG_DIR) / "sessions"
@@ -287,15 +300,7 @@ class SessionManager:
 
     def _session_path(self, session_id: str) -> Path:
         """Return the file for ``session_id``, rejecting ids that could escape the dir."""
-        if (
-            not isinstance(session_id, str)
-            or not _SESSION_ID_RE.fullmatch(session_id)
-            or not session_id.strip(".")
-        ):
-            raise ValueError(
-                f"Invalid session_id {session_id!r}: use 1-128 characters from "
-                "A-Z, a-z, 0-9, '.', '_' and '-'."
-            )
+        validate_session_id(session_id)
         base = self.session_dir.resolve()
         path = (base / f"{session_id}.json").resolve()
         if path.parent != base:
