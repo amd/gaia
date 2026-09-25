@@ -53,6 +53,12 @@ _ENSURE_TIMEOUT = (5.0, 900.0)
 # gaiainit.CheckTimeout in the TUI above this plus daemon start (30s).
 _LEMONADE_ENSURE_TIMEOUT = (5.0, 80.0)
 
+# How long `gaia daemon stop` waits before tree-killing. Shutdown now stops the
+# Lemonade Server this daemon started, so this must outlast that teardown or a
+# routine stop kills the daemon before its custody store closes.
+# tests/unit/test_daemon_lemonade.py pins the margin.
+STOP_WAIT_TIMEOUT = 45.0
+
 UPGRADE_CORE_GUIDANCE = (
     "Upgrade the installed GAIA core so it matches this app: "
     "`pip install --upgrade amd-gaia`, or re-run the installer from "

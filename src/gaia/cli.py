@@ -7122,9 +7122,9 @@ def _handle_daemon_stop():
     except DaemonError as e:
         print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
         terminate_instance(inst)
-    # Shutdown drains requests (5s), waits out a Lemonade start in flight (5s)
-    # and stops the Lemonade Server it started (up to 20s).
-    if client.wait_until_gone(inst, timeout=45.0):
+    # Shutdown drains requests, waits out a Lemonade start in flight and stops
+    # the Lemonade Server it started — see client.STOP_WAIT_TIMEOUT.
+    if client.wait_until_gone(inst, timeout=client.STOP_WAIT_TIMEOUT):
         remove_instance(only_pid=inst.pid)
         print(f"✅ GAIA daemon stopped (pid {inst.pid})")
     else:

@@ -350,3 +350,77 @@ class TestManagerHook:
         ):
             assert LemonadeManager.ensure_ready(quiet=False) is False
         assert "port taken; read lemond.log" in capsys.readouterr().err
+
+
+class TestTimeoutBudgets:
+    """The daemon's Lemonade work has to fit inside the waits its callers allow.
+
+    Both regressions this class pins were budget mismatches, not logic bugs, and
+    both were invisible in review because each side's number lived in a different
+    file — one of them in a different language. Stating the relationship in a
+    comment is what let them drift in the first place.
+    """
+
+    def test_daemon_stop_outlasts_the_lemonade_teardown_it_waits_on(self):
+        """`gaia daemon stop` tree-kills when its wait runs out.
+
+        Shutdown stops the Lemonade Server this daemon started, so if the wait is
+        shorter than that teardown a routine stop prints "did not exit;
+        terminating" and kills the daemon before its custody store closes —
+        leaving the custody SQLite store open on every stop.
+        """
+        from gaia.daemon.client import STOP_WAIT_TIMEOUT
+        from gaia.daemon.lemonade import STOP_LOCK_TIMEOUT
+        from gaia.llm.lemonade_embedded import _STOP_TIMEOUT
+
+        lemonade_teardown = STOP_LOCK_TIMEOUT + _STOP_TIMEOUT
+        assert STOP_WAIT_TIMEOUT > lemonade_teardown, (
+            f"stop waits {STOP_WAIT_TIMEOUT}s but Lemonade teardown alone can take "
+            f"{lemonade_teardown}s, so the daemon is killed mid-shutdown"
+        )
+        # The rest of shutdown (request drain, sidecar teardown, custody close)
+        # runs before Lemonade is even reached.
+        assert STOP_WAIT_TIMEOUT - lemonade_teardown >= 10.0, (
+            "no room left for the request drain and sidecar teardown that run "
+            "before Lemonade is stopped"
+        )
+
+    def test_the_lemonade_stop_lock_is_bounded(self):
+        """An unbounded lock wait is the failure the margin above cannot absorb:
+        `EmbeddedLemonade.start()` holds it for up to 60s, which no reasonable
+        stop wait covers. Shutdown must give up and leave that server running."""
+        from gaia.daemon.lemonade import STOP_LOCK_TIMEOUT
+        from gaia.llm.lemonade_embedded import _START_TIMEOUT
+
+        assert 0 < STOP_LOCK_TIMEOUT < _START_TIMEOUT
+
+    def test_the_tui_check_waits_longer_than_the_python_side_may_spend(self):
+        """`gaia init --check` is what the TUI runs on every launch.
+
+        After a reboot that call starts the daemon and has it start Lemonade. The
+        Go side used to give up first, so the TUI rendered "could not be checked"
+        for a start that had actually succeeded — the exact reboot case this path
+        exists to fix.
+        """
+        import re
+        from pathlib import Path
+
+        from gaia.daemon.client import _LEMONADE_ENSURE_TIMEOUT, _START_TIMEOUT
+
+        source = (
+            Path(__file__).resolve().parents[2]
+            / "tui"
+            / "internal"
+            / "gaiainit"
+            / "gaiainit.go"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"CheckTimeout\s*=\s*(\d+)\s*\*\s*time\.Second", source)
+        assert match, "gaiainit.go no longer declares CheckTimeout in seconds"
+        check_timeout = int(match.group(1))
+
+        # start_or_attach, then the ensure call's connect + read budget.
+        python_budget = _START_TIMEOUT + sum(_LEMONADE_ENSURE_TIMEOUT)
+        assert check_timeout > python_budget, (
+            f"gaiainit.CheckTimeout is {check_timeout}s but `gaia init --check` "
+            f"may spend {python_budget}s, so the TUI kills a start that worked"
+        )
