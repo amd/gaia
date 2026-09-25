@@ -1583,7 +1583,12 @@ async def _get_chat_response(
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
         if cached_agent is not None:
+            from gaia.agents.base.console import SilentConsole
+
             agent = cached_agent
+            # A prior streaming turn leaves its fired cancel event and dead SSE console.
+            agent._cancel_event = None
+            agent.console = SilentConsole()
             agent._register_tools()
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]

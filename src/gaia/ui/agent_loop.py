@@ -392,6 +392,8 @@ class AgentLoop:
                 cached_agent = _helpers._get_cached_agent(session_id, model_id)
                 if cached_agent is not None:
                     agent = cached_agent
+                    # A prior streaming turn leaves its fired cancel event behind.
+                    agent._cancel_event = None
                     agent.console = sse_handler
                     agent._register_tools()
                 else:
