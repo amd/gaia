@@ -146,3 +146,38 @@ def test_rate_cards(model, card):
 def test_a_model_without_a_card_has_no_price_rather_than_a_guess():
     assert metering.price("Gemma-4-E4B-it-GGUF", 1000, 0, 100) is None
     assert metering.price("glm-5p3-flash", 1_000_000, 0, 0) == pytest.approx(0.15)
+
+
+def test_the_environment_key_is_used_without_touching_the_credential_store(monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", KEY)
+    monkeypatch.setattr(
+        metering,
+        "resolve_fireworks_api_key",
+        lambda: pytest.fail("the credential store was consulted needlessly"),
+    )
+    assert metering._api_key() == KEY
+
+
+def test_a_credential_store_that_never_answers_fails_loudly_rather_than_hanging(
+    monkeypatch,
+):
+    """A macOS keychain prompt nobody answers must not hang an unattended run."""
+    import threading
+    import time
+
+    released = threading.Event()
+
+    def _never_returns():
+        released.wait(30)
+        return "too-late-to-matter"
+
+    monkeypatch.delenv("FIREWORKS_API_KEY", raising=False)
+    monkeypatch.delenv("LEMONADE_FIREWORKS_API_KEY", raising=False)
+    monkeypatch.setattr(metering, "resolve_fireworks_api_key", _never_returns)
+    started = time.monotonic()
+    with pytest.raises(metering.MeterError) as raised:
+        metering._api_key(timeout_s=1)
+    released.set()
+    assert time.monotonic() - started < 10, "the read was not bounded"
+    assert "FIREWORKS_API_KEY" in str(raised.value)
+    assert "waiting for authorisation" in str(raised.value)

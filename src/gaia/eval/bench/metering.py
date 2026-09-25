@@ -24,7 +24,9 @@ other's deltas.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Dict, Mapping, Optional, Tuple
+import os
+import threading
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import requests
 
@@ -123,12 +125,38 @@ def _stamp(moment: dt.datetime) -> str:
     return moment.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _api_key() -> str:
-    key = resolve_fireworks_api_key()
+#: How long to wait for the OS credential store before giving up on it.
+KEYRING_TIMEOUT_S = 15
+
+
+def _api_key(timeout_s: int = KEYRING_TIMEOUT_S) -> str:
+    """The Fireworks key, without ever blocking a run on a credential prompt.
+
+    A macOS keychain item whose ACL demands authorisation blocks its reader
+    until someone clicks, which on an unattended run is a hang with no output
+    rather than a failure anyone can act on.
+    """
+    for name in ("FIREWORKS_API_KEY", "LEMONADE_FIREWORKS_API_KEY"):
+        value = os.getenv(name)
+        if value and value.strip():
+            return value.strip()
+    found: List[Optional[str]] = []
+    reader = threading.Thread(
+        target=lambda: found.append(resolve_fireworks_api_key()), daemon=True
+    )
+    reader.start()
+    reader.join(timeout_s)
+    key = found[0] if found else None
     if not key:
         raise MeterError(
-            "Metering needs a Fireworks API key. Set FIREWORKS_API_KEY, or save "
-            "one to the OS keyring with `gaia connectors`."
+            "Metering needs a Fireworks API key. Set FIREWORKS_API_KEY"
+            + (
+                f" — the OS credential store did not answer within {timeout_s}s, "
+                "which on macOS means the keychain is waiting for authorisation "
+                "nobody is there to give."
+                if not found
+                else ", or save one with `gaia connectors`."
+            )
         )
     return key
 

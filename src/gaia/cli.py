@@ -3378,6 +3378,10 @@ def _handle_eval_tasks(args):
     """gaia eval tasks run|judge|gate|report|gateway|controls — see gaia.eval.flagship_tasks."""
     from gaia.eval import flagship_tasks as ft
 
+    # A suite takes a quarter of an hour, and its progress is the only sign it
+    # is alive. Redirected to a log, block buffering holds every line to the end.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     judge_model = getattr(args, "judge_model", None) or DEFAULT_CLAUDE_MODEL
     in_actions = os.environ.get("GITHUB_ACTIONS") == "true"
 

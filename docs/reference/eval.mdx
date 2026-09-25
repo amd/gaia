@@ -1554,9 +1554,12 @@ Every cost carries its source, because the three are not the same thing:
 | `api_equivalent` | Claude Code's own `total_cost_usd` on Anthropic models. On a Claude subscription that is the list price of the tokens, **not money spent**: comparable as a price of compute, not as out-of-pocket cost. The reports label these cells. |
 | `harness_counts` | The harness's own per-call token counts — GAIA's, or the gateway's for Claude Code on an open model — priced with the published rate card, where no meter snapshot was taken. |
 
-A run that reached the model but counted no tokens reads `n/a`, never `$0.00`:
-Lemonade reports zero usage on a streamed Anthropic reply (observed 2026-09), so
-the Claude Code leg on an open-weights model needs `--meter` for a cost figure.
+A run that reached the model but counted no tokens reads `n/a`, never `$0.00`.
+Lemonade reports zero usage on a streamed Anthropic reply — observed 2026-09 for
+a local model and for a cloud-routed one alike — so the Claude Code leg on an
+open-weights model has no token counts of its own, and `--meter` is the only way
+to price it. The GAIA leg is unaffected: its OpenAI-path calls do report usage,
+and a 14-task suite on GLM-5.3 Flash priced from those counts came to $0.095.
 
 `--meter fireworks` snapshots `billingUsage` before and after the run. Both
 snapshots count from one **fixed** window start: a sliding window ("the last N

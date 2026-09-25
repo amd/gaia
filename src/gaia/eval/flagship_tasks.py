@@ -51,7 +51,6 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
 )
-from gaia.llm.providers.fireworks import FireworksError, resolve_fireworks_api_key
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -839,16 +838,14 @@ def fenced_paths(config: BenchConfig, out_dir: Path) -> Tuple[Path, ...]:
 def _secret_extras(metered: bool = False) -> List[str]:
     """Credentials held outside the environment, for the scrubber to redact.
 
-    Lemonade's key can live in its state file. The Fireworks key is read from
-    the keyring only for a metered run, which needs it anyway: on macOS a
-    keyring read can stop on a permission prompt nobody is there to answer.
+    Lemonade's key can live in its state file. The Fireworks key is read only
+    for a metered run, which needs it anyway, and through the meter's own
+    bounded read: a macOS keychain prompt nobody answers would otherwise hang
+    the run before its first task.
     """
     extras = [resolve_lemonade_api_key()]
     if metered:
-        try:
-            extras.append(resolve_fireworks_api_key())
-        except FireworksError as exc:
-            raise metering.MeterError(f"cannot read the Fireworks key: {exc}") from exc
+        extras.append(metering._api_key())  # pylint: disable=protected-access
     return [value for value in extras if value]
 
 

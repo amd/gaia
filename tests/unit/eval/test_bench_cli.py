@@ -307,3 +307,28 @@ def _tasks_parser(parser):
         )
 
     return subparsers(subparsers(parser).choices["eval"]).choices["tasks"]
+
+
+def test_progress_is_line_buffered_so_a_redirected_run_shows_its_work(
+    monkeypatch, tmp_path, run
+):
+    """A suite runs for a quarter of an hour; block buffering hid every line."""
+    reconfigured = {}
+
+    class Recording:
+        def reconfigure(self, **kwargs):
+            reconfigured.update(kwargs)
+
+        def write(self, text):
+            return len(text)
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(
+        ft, "run_suite", lambda *a, **k: {"suite": "core", "model": "m", "tasks": []}
+    )
+    monkeypatch.setattr(ft, "render_report", lambda card, checks: "")
+    monkeypatch.setattr(sys, "stdout", Recording())
+    run("run", "--no-judge", "--out", str(tmp_path / "out"))
+    assert reconfigured == {"line_buffering": True}

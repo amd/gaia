@@ -17,9 +17,9 @@ that stop Claude Code from working against Lemonade's Anthropic-format
 
 It counts tokens per call from the responses, since Claude Code reports none
 against a non-Anthropic endpoint. Where the upstream reports none either —
-Lemonade sends zero usage on a streamed Anthropic reply, observed 2026-09 — the
-run's cost reads "n/a" rather than zero, and ``--meter`` is the way to price it.
-It never logs a header.
+Lemonade sends zero usage on a streamed Anthropic reply, for a local and a
+cloud-routed model alike (observed 2026-09) — the run's cost reads "n/a" rather
+than zero, and ``--meter`` is the way to price it. It never logs a header.
 """
 
 from __future__ import annotations
