@@ -55,10 +55,19 @@ versa (`409 id_conflict`).
   artifact — one per platform for a native binary (e.g. the frozen email agent
   ships four binaries under `email@0.1.0`). The first publish of a version
   creates it (and stores the immutable `gaia-agent.yaml`); each later publish
-  under the same version with a *new* filename appends another artifact. The
+  under the same version with a *new* filename appends another artifact —
+  **only if it carries the same manifest** (byte-equal, or equal once parsed, so
+  line endings, comments, and key order don't matter). A different manifest is
+  rejected with `409 manifest_mismatch` and the catalog is left as it was, so a
+  later post cannot change a published version's `security_tier`, permissions,
+  or platforms. The
   per-agent manifest's `versions[v]` records every artifact in `artifacts[]`,
   with `artifact` kept as the primary (first-published) entry for single-artifact
   (wheel) agents and catalog display.
+- **Skill versions are single-shot.** A skill version is one bundle plus the
+  `SKILL.md` and audit report that vouch for it, so any second
+  `POST /publish/skill` to an existing version is rejected with
+  `409 version_exists`, whatever its filename.
 - **Server-side SHA-256.** The checksum is computed by the Worker from the bytes
   it received — never trusted from the request. It is also handed to R2's `put`
   integrity check.
