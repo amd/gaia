@@ -235,11 +235,24 @@ class TrayManager {
       if (fs.existsSync(CONFIG_PATH)) {
         const raw = fs.readFileSync(CONFIG_PATH, "utf8");
         const loaded = JSON.parse(raw);
-        return {
-          ...DEFAULT_CONFIG,
-          ...loaded,
-          tray: { ...DEFAULT_CONFIG.tray, ...(loaded.tray || {}) },
-        };
+        if (!isPlainObject(loaded)) {
+          console.warn(`[tray] ${CONFIG_PATH} is not an object; using defaults`);
+          return { ...DEFAULT_CONFIG };
+        }
+        // Repair on read: the pre-validation handler could store wrong-typed
+        // values, and set-config re-reads stored keys the payload omits.
+        const stored = isPlainObject(loaded.tray) ? loaded.tray : {};
+        const tray = { ...DEFAULT_CONFIG.tray };
+        for (const key of Object.keys(DEFAULT_CONFIG.tray)) {
+          if (typeof stored[key] === "boolean") {
+            tray[key] = stored[key];
+          } else if (key in stored) {
+            console.warn(
+              `[tray] Ignoring non-boolean ${key} in ${CONFIG_PATH}; using default`
+            );
+          }
+        }
+        return { ...DEFAULT_CONFIG, ...loaded, tray };
       }
     } catch (err) {
       console.warn("[tray] Could not load tray config:", err.message);
