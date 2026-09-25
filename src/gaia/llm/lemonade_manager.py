@@ -288,6 +288,9 @@ class LemonadeManager:
     # keep reporting the old model's cap forever (#2992).
     _context_ceiling_model: Optional[str] = None
     _lock = threading.Lock()
+    # Set while an idle-server preload runs with ``_lock`` released; other
+    # callers wait on it instead of sending a second /load.
+    _preload_in_flight: Optional[threading.Event] = None
     _log = get_logger(__name__)
 
     # Rate-limit the per-turn context re-check that fires when context_size==0.
@@ -646,6 +649,16 @@ class LemonadeManager:
             if port is None:
                 port = parsed.port
         with cls._lock:
+            # A preload in flight will change what the server reports, so wait
+            # for it and read the state it leaves behind.
+            while cls._preload_in_flight is not None:
+                preload_done = cls._preload_in_flight
+                cls._lock.release()
+                try:
+                    preload_done.wait()
+                finally:
+                    cls._lock.acquire()
+
             # Validate the requested device first — runs on every call (not just
             # first init) so a UI device switch after the manager is warm is
             # still checked. Memoised per tier, so this is at most one probe per
@@ -1072,8 +1085,10 @@ class LemonadeManager:
         Releases `lock` for the duration of the blocking `load_model` call —
         important because `auto_download=True` means a first-run user pays a
         full model-download window (potentially minutes), and we must not
-        block other threads (status pollers, parallel `ensure_ready` callers)
-        for that long.  Mirrors the lock discipline of `_try_reload_with_ctx`.
+        block other threads (status pollers) for that long.  Parallel
+        `ensure_ready` callers wait on `_preload_in_flight` rather than
+        sending a second /load.  Mirrors the lock discipline of
+        `_try_reload_with_ctx`.
 
         Returns:
             A ``(ctx_size, status)`` pair: the ctx_size actually in force
@@ -1130,6 +1145,8 @@ class LemonadeManager:
         # concurrent callers and status-pollers are not stalled.  The
         # `finally` block re-acquires before any exception propagates back
         # up to the surrounding `with cls._lock:` context manager.
+        preload_done = threading.Event()
+        cls._preload_in_flight = preload_done
         lock.release()
         try:
             client.load_model(
@@ -1151,6 +1168,8 @@ class LemonadeManager:
             ) from e
         finally:
             lock.acquire()
+            cls._preload_in_flight = None
+            preload_done.set()
 
         # Honest post-load report (#2992): loading resolves the model's
         # metadata, so a ceiling unknown before download (the common

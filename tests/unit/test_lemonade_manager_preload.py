@@ -12,6 +12,7 @@ model with the required `ctx_size` instead of asking the user to run a manual
 
 import logging
 import threading
+import time
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
@@ -274,23 +275,26 @@ def test_loaded_models_none_does_not_crash(mock_cls):
 
 @patch("gaia.llm.lemonade_manager.LemonadeClient")
 def test_concurrent_ensure_ready_loads_model_once(mock_cls):
-    """Two threads racing into ensure_ready() — only one load_model call."""
+    """Two threads racing into ensure_ready() on an idle server — one /load."""
+    loaded = threading.Event()
+
+    def _get_status():
+        # The server stays idle until the (slow) load actually completes.
+        if loaded.is_set():
+            return _status(
+                running=True,
+                context_size=32768,
+                loaded_models=[{"id": "Gemma-4-E4B-it-GGUF"}],
+            )
+        return _status(running=True, context_size=0, loaded_models=[])
+
+    def _load_model(*_args, **_kwargs):
+        time.sleep(0.5)
+        loaded.set()
+
     client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
-    # First call: idle. Subsequent: already loaded.
-    statuses = [
-        _status(running=True, context_size=0, loaded_models=[]),
-        _status(
-            running=True,
-            context_size=32768,
-            loaded_models=[{"id": "Gemma-4-E4B-it-GGUF"}],
-        ),
-        _status(
-            running=True,
-            context_size=32768,
-            loaded_models=[{"id": "Gemma-4-E4B-it-GGUF"}],
-        ),
-    ]
-    client.get_status.side_effect = statuses
+    client.get_status.side_effect = _get_status
+    client.load_model.side_effect = _load_model
     mock_cls.return_value = client
 
     results = []
@@ -310,8 +314,42 @@ def test_concurrent_ensure_ready_loads_model_once(mock_cls):
     assert client.load_model.call_count == 1
 
 
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_failed_preload_releases_waiting_callers(mock_cls):
+    """A caller waiting on a failing preload must not hang, and must see the error."""
+
+    def _load_model(*_args, **_kwargs):
+        time.sleep(0.3)
+        raise RuntimeError("download failed")
+
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.load_model.side_effect = _load_model
+    mock_cls.return_value = client
+
+    errors = []
+    barrier = threading.Barrier(2)
+
+    def _go():
+        barrier.wait()
+        try:
+            LemonadeManager.ensure_ready(min_context_size=32768, quiet=True)
+        except LemonadeClientError as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=_go) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5.0)
+
+    assert not any(t.is_alive() for t in threads)
+    assert len(errors) == 2
+    assert LemonadeManager._preload_in_flight is None
+    assert LemonadeManager.is_initialized() is False
+
+
 # ---------------------------------------------------------------------------
-# Case 8 — sanity: DEFAULT_CONTEXT_SIZE constant matches expected literal
+# Case 8 —sanity: DEFAULT_CONTEXT_SIZE constant matches expected literal
 # ---------------------------------------------------------------------------
 
 
