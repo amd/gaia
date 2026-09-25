@@ -157,3 +157,63 @@ describe("TrayManager.setNotificationCount", () => {
     expect(mgr.notificationCount).toBe(2);
   });
 });
+
+describe("tray:set-config validation", () => {
+  function setConfig(payload) {
+    setPlatform("win32");
+    new TrayManager(createMockWindow());
+    return electronMock.ipcMain.simulateInvoke("tray:set-config", payload);
+  }
+
+  beforeEach(() => {
+    electronMock.app.setLoginItemSettings = jest.fn();
+  });
+
+  test.each([[null], [undefined], ["tray"], [[]]])(
+    "rejects a %p payload with a clear error",
+    async (bad) => {
+      await expect(setConfig(bad)).rejects.toThrow(/tray:set-config expects an object/);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    }
+  );
+
+  test("persists only the known tray keys", async () => {
+    const result = await setConfig({
+      tray: { minimizeToTray: false, injected: "x" },
+    });
+    expect(result.tray).toEqual({
+      minimizeToTray: false,
+      startMinimized: false,
+      startOnLogin: false,
+    });
+    const saved = JSON.parse(fs.writeFileSync.mock.calls[0][1]);
+    expect(Object.keys(saved.tray).sort()).toEqual([
+      "minimizeToTray",
+      "startMinimized",
+      "startOnLogin",
+    ]);
+  });
+
+  test.each([["true"], [1], [null]])(
+    "rejects a non-boolean startOnLogin (%p) without touching the login item",
+    async (bad) => {
+      await expect(setConfig({ tray: { startOnLogin: bad } })).rejects.toThrow(
+        /tray\.startOnLogin must be a boolean/
+      );
+      expect(electronMock.app.setLoginItemSettings).not.toHaveBeenCalled();
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    }
+  );
+
+  test("applies a boolean startOnLogin to the OS login item", async () => {
+    await setConfig({ tray: { startOnLogin: true } });
+    expect(electronMock.app.setLoginItemSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ openAtLogin: true })
+    );
+  });
+
+  test("rejects a non-object tray section", async () => {
+    await expect(setConfig({ tray: "on" })).rejects.toThrow(/tray must be an object/);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+});
