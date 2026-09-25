@@ -459,6 +459,8 @@ class TestCredentials:
         assert "s3cret-key" in body
         assert "http://localhost:4321/api/v1" in body
         assert "LEMONADE_BASE_URL" in body and "LEMONADE_API_KEY" in body
+        # Marks the values as GAIA's own, so a stale copy is never trusted.
+        assert "GAIA_LEMONADE_EMBEDDED" in body
 
     @pytest.mark.skipif(platform.system() == "Windows", reason="POSIX file modes only")
     def test_env_file_is_owner_readable_only(self, manager):

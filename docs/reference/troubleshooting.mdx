@@ -86,24 +86,22 @@ icon: "bug"
     pass `--skip-webui-build` or set `GAIA_SKIP_WEBUI_BUILD=1`.
   </Accordion>
 
-  <Accordion title="gaia init reports a Launchpad outage (Linux)" icon="cloud-slash">
-    **Cause:** Lemonade is distributed on Linux only through `ppa:lemonade-team/stable`,
-    hosted on Canonical's Launchpad. When Launchpad cannot serve the PPA's signing key or
-    its package index, nothing about your machine is wrong — the package source is
-    temporarily unreachable.
+  <Accordion title="gaia init can't download or start Lemonade Server" icon="cloud-slash">
+    `gaia init` downloads GAIA's own Lemonade Server from GitHub into `~/.gaia/lemonade`
+    and starts it on a private port. It needs no admin rights and never uses a package
+    manager. The error names which part failed:
 
-    **Solution:** Wait a few minutes and re-run `gaia init`. Check
-    [status.canonical.com](https://status.canonical.com/) if it persists.
+    - **`Failed to download …` / `dropped mid-transfer`** — GAIA could not reach
+      `github.com`. Check your network or proxy and re-run `gaia init`.
+    - **`Checksum mismatch …`** — the download was corrupted. Re-run `gaia init`; if it
+      keeps happening, the release asset changed and GAIA needs an update.
+    - **`not published for <OS>/<arch>`** — there is no Lemonade build for this machine
+      (for example, Intel Macs). Run Lemonade Server on another machine and point GAIA at
+      it with `LEMONADE_BASE_URL`.
+    - **`exited immediately` / `did not answer`** — the server started but failed. Its own
+      error is in `~/.gaia/lemonade/lemond.log`.
 
-    **Example errors:**
-    ```
-    W: Failed to fetch https://ppa.launchpadcontent.net/lemonade-team/stable/ubuntu/dists/noble/InRelease  503  Service Unavailable
-    ERROR: b'GPGKeyTemporarilyNotFoundError'
-    ```
-
-    Do not run `sudo dpkg --configure -a` for this — your apt state is fine. If you see
-    `E: Unable to locate package lemonade-server` on an older GAIA, this outage is the
-    likely cause rather than a missing or renamed package.
+    To start over with a fresh copy, run `gaia init --force-reinstall`.
   </Accordion>
 </AccordionGroup>
 

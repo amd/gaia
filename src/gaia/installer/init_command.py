@@ -9,6 +9,9 @@ Main entry point for `gaia init` command that:
    LEMONADE_BASE_URL names)
 2. Downloads required models for the selected profile
 3. Verifies setup is working
+
+The server starts without a context size; the verify step loads each model at
+the profile's min_context_size, which is where that requirement is enforced.
 """
 
 import importlib.util
@@ -200,6 +203,35 @@ class SetupStatus:
     reasons: list
 
 
+def configured_server_too_old(health: object, profile: str, url: str) -> Optional[str]:
+    """Why a user-chosen server can't serve *profile*, or None if it can.
+
+    Shared by `gaia init` and `gaia init --check` so they can never disagree.
+    A server that advertises no parseable version is logged and allowed, since
+    there is nothing to compare.
+    """
+    from gaia.agents.base.readiness import version_meets_min
+
+    version = health.get("version") if isinstance(health, dict) else None
+    minimum = INIT_PROFILES[profile].get("min_lemonade_version")
+    verdict = version_meets_min(version, minimum)
+    if verdict is None and minimum:
+        log.warning(
+            "Could not read a version from the Lemonade Server at %s (got %r); "
+            "not checking it against the '%s' profile's minimum v%s",
+            url,
+            version,
+            profile,
+            minimum,
+        )
+    if verdict is False:
+        return (
+            f"Lemonade Server at {url} is v{version}; the '{profile}' profile "
+            f"needs v{minimum} or newer"
+        )
+    return None
+
+
 def check_setup_status(
     profile: str = DEFAULT_INIT_PROFILE,
     skip_chat_model: bool = False,
@@ -232,11 +264,12 @@ def check_setup_status(
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         LemonadeClientError,
+        configured_lemonade_url,
         resolve_lemonade_base_url,
     )
 
     profile_config = INIT_PROFILES[profile]
-    configured = os.environ.get("LEMONADE_BASE_URL", "").strip()
+    configured = configured_lemonade_url()
     if remote and not configured:
         raise ValueError("--remote needs LEMONADE_BASE_URL set to the server to check.")
 
@@ -278,17 +311,27 @@ def check_setup_status(
 
     client = LemonadeClient(base_url=base_url, verbose=False)
     try:
-        client.health_check()
+        health = client.health_check()
     except LemonadeClientError as e:
         return SetupStatus(
             ready=False,
             reasons=[f"Lemonade Server at {base_url} is not reachable: {e}"],
         )
+    if configured:
+        too_old = configured_server_too_old(health, profile, base_url)
+        if too_old:
+            return SetupStatus(ready=False, reasons=[too_old])
 
     if profile_config["models"]:
         model_ids = list(profile_config["models"])
     else:
-        model_ids = client.get_required_models(profile_config["agent"])
+        try:
+            model_ids = client.get_required_models(profile_config["agent"])
+        except LemonadeClientError as e:
+            return SetupStatus(
+                ready=False,
+                reasons=[f"Could not list the models this profile needs: {e}"],
+            )
 
     if profile not in ("sd", "npu") and not skip_chat_model:
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
@@ -377,9 +420,9 @@ class InitCommand:
         self.progress_callback = progress_callback
 
         # A configured server is someone else's to run; init only checks it.
-        self._lemonade_base_url = (
-            os.environ.get("LEMONADE_BASE_URL", "").strip() or None
-        )
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        self._lemonade_base_url = configured_lemonade_url()
         if self.remote and not self._lemonade_base_url:
             raise ValueError(
                 "--remote needs LEMONADE_BASE_URL set to the server to use, e.g. "
@@ -824,7 +867,6 @@ class InitCommand:
 
     def _check_configured_server(self) -> bool:
         """Check the server ``LEMONADE_BASE_URL`` names: reachable and new enough."""
-        from gaia.agents.base.readiness import version_meets_min
         from gaia.llm.lemonade_client import (
             LemonadeClient,
             LemonadeClientError,
@@ -842,19 +884,16 @@ class InitCommand:
             )
             return False
 
-        version = health.get("version") if isinstance(health, dict) else None
-        minimum = INIT_PROFILES[self.profile].get("min_lemonade_version")
-        if version_meets_min(version, minimum) is False:
-            self._print_error(
-                f"Lemonade Server at {url} is v{version}; the '{self.profile}' "
-                f"profile needs v{minimum} or newer."
-            )
+        too_old = configured_server_too_old(health, self.profile, url)
+        if too_old:
+            self._print_error(f"{too_old}.")
             self._print(
                 "   Upgrade that server, or unset LEMONADE_BASE_URL so `gaia init` "
                 "sets up GAIA's own."
             )
             return False
 
+        version = health.get("version") if isinstance(health, dict) else None
         label = f"Lemonade Server v{version}" if version else "Lemonade Server"
         self._print_success(f"Using {label} at {url}")
         return True

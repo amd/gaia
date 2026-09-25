@@ -52,6 +52,10 @@ from gaia.version import LEMONADE_VERSION
 log = get_logger(__name__)
 
 GITHUB_RELEASE_BASE = "https://github.com/lemonade-sdk/lemonade/releases/download"
+
+#: Set by GAIA's credentials file: LEMONADE_BASE_URL/LEMONADE_API_KEY in this
+#: environment describe GAIA's own server, not one the user runs.
+EMBEDDED_ENV_MARKER = "GAIA_LEMONADE_EMBEDDED"
 RELEASES_PAGE = "https://github.com/lemonade-sdk/lemonade/releases"
 
 # (platform.system(), normalized machine) -> asset name template.
@@ -830,15 +834,19 @@ class EmbeddedLemonade:
             Path to the written file.
         """
         base_url = self.base_url_for(port)
+        # The marker lets GAIA recognise these values as its own server's and
+        # follow the live state file once this port and key go stale.
         if platform.system() == "Windows":
             body = (
                 f'$env:LEMONADE_BASE_URL = "{base_url}"\n'
                 f'$env:LEMONADE_API_KEY = "{api_key}"\n'
+                f'$env:{EMBEDDED_ENV_MARKER} = "1"\n'
             )
         else:
             body = (
                 f'export LEMONADE_BASE_URL="{base_url}"\n'
                 f'export LEMONADE_API_KEY="{api_key}"\n'
+                f'export {EMBEDDED_ENV_MARKER}="1"\n'
             )
 
         self.root.mkdir(parents=True, exist_ok=True)

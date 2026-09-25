@@ -381,10 +381,10 @@ def _resolve_email_model_id(base_url: Optional[str] = None) -> str:
 def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     """Parse a dotted version string into a comparable int tuple.
 
-    Mirrors ``gaia.installer.init_command.InitCommand._parse_version`` (same
-    semantics: strip a leading ``v``, take the first three dotted parts as
-    ints). Kept LOCAL rather than imported because the frozen sidecar does not
-    bundle ``gaia.installer`` — importing it at runtime would ``ModuleNotFound``
+    Same semantics as the version parsing ``gaia init`` uses (strip a leading
+    ``v``, take the first three dotted parts as ints). Kept LOCAL rather than
+    imported because the frozen sidecar does not bundle ``gaia.installer`` —
+    importing it at runtime would ``ModuleNotFound``
     in the binary this endpoint exists to serve. Returns ``None`` when the
     string is missing or unparseable.
     """

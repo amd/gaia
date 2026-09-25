@@ -7523,8 +7523,8 @@ def handle_lemonade_embedded_command(args):
             print(f"✅ Embedded Lemonade {status.version} running on {status.base_url}")
             print(f"   pid {status.pid}   logs: {manager.log_path}")
             print("")
-            print("   The instance is private. Load its URL and API key with:")
-            print(f"   {manager.env_load_command()}")
+            print("   GAIA finds it on its own. For other tools, load its URL and")
+            print(f"   API key with: {manager.env_load_command()}")
         elif action == "stop":
             if manager.stop():
                 print("✅ Embedded Lemonade stopped")

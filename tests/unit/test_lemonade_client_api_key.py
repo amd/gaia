@@ -58,6 +58,25 @@ class TestResolveLemonadeApiKey:
         monkeypatch.setenv("LEMONADE_API_KEY", "   ")
         assert lc.resolve_lemonade_api_key() == "from-state"
 
+    def test_own_credentials_file_defers_to_the_live_state(
+        self, embedded_state, monkeypatch
+    ):
+        """A shell that sourced GAIA's env file keeps a key that dies with the
+        server; the restarted server's key must win."""
+        embedded_state({"pid": 1, "port": 51000, "api_key": "live-key"})
+        monkeypatch.setenv("LEMONADE_API_KEY", "stale-key")
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:50601/api/v1")
+        monkeypatch.setenv("GAIA_LEMONADE_EMBEDDED", "1")
+
+        assert lc.configured_lemonade_url() is None
+        assert lc.resolve_lemonade_base_url() == "http://localhost:51000/api/v1"
+        assert lc.resolve_lemonade_api_key() == "live-key"
+
+    def test_a_chosen_url_is_configured(self, embedded_state, monkeypatch):
+        monkeypatch.setenv("LEMONADE_BASE_URL", " http://gpu-box:13305 ")
+        monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+        assert lc.configured_lemonade_url() == "http://gpu-box:13305"
+
     def test_no_state_and_no_env_is_unauthenticated(self, embedded_state, monkeypatch):
         monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
         assert lc.resolve_lemonade_api_key() is None

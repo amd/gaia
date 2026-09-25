@@ -664,6 +664,17 @@ class TestLemonadeReady(unittest.TestCase):
         self.assertIn("refused", out)
         self.assertIn("unset LEMONADE_BASE_URL", out)
 
+    def test_gaias_own_env_file_is_managed_not_merely_checked(self):
+        import os
+
+        os.environ["LEMONADE_BASE_URL"] = "http://localhost:50601/api/v1"
+        os.environ["GAIA_LEMONADE_EMBEDDED"] = "1"
+        embedded = self._embedded(self._status())
+        ok, _ = self._run_embedded(embedded)
+
+        self.assertTrue(ok)
+        embedded.start.assert_called_once()
+
     def test_configured_server_below_profile_minimum_is_refused(self):
         ok, out, _ = self._run_configured(
             "http://gpu-box:13305", health={"status": "ok", "version": "1.0.0"}
@@ -990,6 +1001,55 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertIn("http://gpu-box:13305/api/v1", status.reasons[0])
         self.assertIn("refused", status.reasons[0])
 
+    def test_configured_server_below_the_profile_minimum_is_not_ready(self):
+        """`gaia init` refuses it, so `--check` must not call it ready."""
+        import os
+
+        from gaia.installer.init_command import check_setup_status
+
+        os.environ["LEMONADE_BASE_URL"] = "http://gpu-box:13305"
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = mock_client_class.return_value
+            mock_client.health_check.return_value = {"version": "1.0.0"}
+            mock_client.check_model_available.return_value = True
+            status = check_setup_status(profile="chat")
+
+        self.assertFalse(status.ready)
+        self.assertIn("v1.0.0", status.reasons[0])
+        mock_client.check_model_available.assert_not_called()
+
+    def test_gaias_own_env_file_is_not_a_configured_server(self):
+        """Sourcing GAIA's credentials file must not opt out of its management."""
+        import os
+
+        from gaia.installer.init_command import check_setup_status
+
+        os.environ["LEMONADE_BASE_URL"] = "http://localhost:50601/api/v1"
+        os.environ["GAIA_LEMONADE_EMBEDDED"] = "1"
+        with self._embedded(self._status()):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(
+            status.reasons, ["GAIA's Lemonade Server is installed but not running"]
+        )
+
+    def test_unlistable_profile_models_are_a_reason_not_a_traceback(self):
+        from gaia.installer.init_command import INIT_PROFILES, check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        profile = next(n for n, c in INIT_PROFILES.items() if not c["models"])
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+        ):
+            mock_client_class.return_value.get_required_models.side_effect = (
+                LemonadeClientError("500")
+            )
+            status = check_setup_status(profile=profile)
+
+        self.assertFalse(status.ready)
+        self.assertIn("500", status.reasons[0])
+
     def test_remote_without_a_configured_url_is_an_error(self):
         from gaia.installer.init_command import check_setup_status
 
@@ -1106,7 +1166,7 @@ class TestInstallPipExtras(unittest.TestCase):
 
 
 class TestNeedsInstallConsistency(unittest.TestCase):
-    """Verify that needs_install and _check_version_compatibility agree."""
+    """LemonadeInstaller.needs_install treats newer versions as installed."""
 
     def test_newer_version_needs_no_install(self):
         """LemonadeInstaller.needs_install returns False for newer versions."""
