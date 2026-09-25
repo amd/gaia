@@ -242,6 +242,49 @@ describe('token declarations', () => {
         );
         expect(dead, 'declared but never consumed').toEqual([]);
     });
+
+    // The mirror of the test above, and the direction that actually bites: an
+    // undeclared custom property is not an error anywhere in CSS, it simply
+    // paints nothing. A typo'd token, or one dropped from the palette while a
+    // rule still asked for it, leaves a borderless panel and a silent suite.
+    it('declares every token it consumes', () => {
+        const declared = new Set<string>();
+        for (const text of Object.values(CSS_SOURCES))
+            for (const m of text.matchAll(/^\s*(--[A-Za-z0-9-]+)\s*:/gm)) declared.add(m[1]);
+        // PermissionManager hands the cascade a tier's colours as inline style
+        // props, so the declaration is a TSX object key rather than a CSS rule.
+        for (const text of Object.values(TS_SOURCES))
+            for (const m of text.matchAll(/['"](--[A-Za-z0-9-]+)['"]\s*:/g)) declared.add(m[1]);
+
+        const undeclared = new Set<string>();
+        for (const text of [...Object.values(CSS_SOURCES), ...Object.values(TS_SOURCES)])
+            // The trailing group separates `var(--x)` from `var(--x, fallback)`.
+            // A fallback is a deliberate "may not exist", so only the bare form
+            // is a missing declaration.
+            for (const m of text.matchAll(/var\(\s*(--[A-Za-z0-9-]+)\s*([,)])/g))
+                if (m[2] === ')' && !declared.has(m[1])) undeclared.add(m[1]);
+
+        expect(
+            [...undeclared].sort(),
+            'consumed with no fallback and declared nowhere -- resolves to nothing',
+        ).toEqual([]);
+    });
+
+    // Shadows carry the theme the way colours do -- the dark palette needs a
+    // heavier, blacker drop than the light one -- but their values start with a
+    // length, so the colour-role guard above steps straight over them.
+    it('declares every shadow in both themes', () => {
+        const shadows = Object.keys(LIGHT).filter((t) => t.startsWith('--shadow-'));
+        expect(shadows.length, 'no shadow tokens found to check').toBeGreaterThan(0);
+        expect(
+            shadows.filter((t) => !(t in DARK)),
+            'a shadow declared only in :root keeps its light elevation in dark mode',
+        ).toEqual([]);
+        expect(
+            Object.keys(DARK).filter((t) => t.startsWith('--shadow-') && !(t in LIGHT)),
+            'a shadow declared only in dark disappears entirely in light mode',
+        ).toEqual([]);
+    });
 });
 
 describe('component stylesheets route colour through tokens', () => {
