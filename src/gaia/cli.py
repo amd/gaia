@@ -4736,6 +4736,8 @@ Let me know your answer!
                         print(f"✅ Installed Lemonade Server v{verify_info.version}")
                     else:
                         print(f"✅ Installed Lemonade Server v{result.version}")
+                    if result.restart_required:
+                        print(f"⚠️  {result.message}")
                     sys.exit(0)
                 else:
                     print(f"❌ Installation failed: {result.error}")

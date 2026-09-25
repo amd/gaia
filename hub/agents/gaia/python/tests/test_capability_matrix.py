@@ -58,9 +58,10 @@ _spec.loader.exec_module(capability_matrix)
 # the flagship eval dataset §1/§3).
 # ---------------------------------------------------------------------------
 
-# 81: 69 after #3023's `remember_skill_lesson`, plus the email and image_gen
-# bundles and `run_python` from main, and this branch's `capture_skill`.
-_EXPECTED_TOOLS_TOTAL = 81
+# 82: 69 after #3023's `remember_skill_lesson`, plus the email and image_gen
+# bundles, `run_python` and `capture_skill` from main, and this branch's
+# `wait_for_condition`.
+_EXPECTED_TOOLS_TOTAL = 82
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 _EXPECTED_CORE_COUNT = 15

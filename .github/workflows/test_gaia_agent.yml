@@ -19,6 +19,9 @@ on:
       - 'hub/agents/chat/python/**'
       # The flagship composes providers, RAG, connectors and the UI's stdio
       # adapters; restricting this to agent modules misses runtime regressions.
+      # It also covers src/gaia/api, where agent_registry.py's init_params are
+      # pinned against the flagship's constructor and sse_handler.py against
+      # its console.
       - 'src/gaia/**'
       - 'hub/skills/**'
       - 'tests/**'
