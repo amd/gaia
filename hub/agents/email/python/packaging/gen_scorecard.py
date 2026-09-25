@@ -726,18 +726,24 @@ def _query_lemonade_version(base_url: str) -> str:
     """Query the Lemonade Server health endpoint and return its version string.
 
     Args:
-        base_url: Base URL of the running Lemonade Server, e.g.
-            ``http://localhost:13305``.
+        base_url: The server's API base as ``resolve_lemonade_base_url``
+            returns it, e.g. ``http://localhost:13305/api/v1``.
 
     Returns:
-        Version string from ``/api/v1/health``.
+        Version string from ``<base_url>/health``.
 
     Raises:
         RuntimeError: If the endpoint is unreachable or the response lacks a version.
     """
-    url = base_url.rstrip("/") + "/api/v1/health"
+    from gaia.llm.lemonade_client import lemonade_auth_headers, resolve_lemonade_api_key
+
+    url = base_url.rstrip("/") + "/health"
+    # GAIA's own server answers 401 without its key.
+    request = urllib.request.Request(
+        url, headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    )
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        with urllib.request.urlopen(request, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
         # ConnectionError covers http.client.RemoteDisconnected, which escapes

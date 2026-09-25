@@ -561,9 +561,7 @@ class LemonadeStatus:
     """Status of Lemonade Server"""
 
     running: bool = False
-    url: str = field(
-        default_factory=lambda: os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
-    )
+    url: str = field(default_factory=resolve_lemonade_base_url)
     version: Optional[str] = None
     context_size: int = 0
     loaded_models: list = field(default_factory=list)
