@@ -580,10 +580,12 @@ class AttachDocumentRequest(BaseModel):
       "title": "Sprint 42 Review"
     }
     ```
+
+    Changing `agent_type`, `device`, or `mail_provider` while a chat turn is running on the session returns **409**; retry once the turn finishes. Renames are always accepted.
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}">
-    Delete a session and all its messages (cascading delete).
+    Delete a session and all its messages (cascading delete). If a chat turn is running on the session, it is stopped and the request returns once that turn has finished.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/messages">
@@ -756,7 +758,7 @@ class AttachDocumentRequest(BaseModel):
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}/documents/{doc_id}">
-    Detach a document from a session (does not delete the document).
+    Detach a document from a session (does not delete the document). Returns **409** while a chat turn is running on the session.
   </Accordion>
 </AccordionGroup>
 
