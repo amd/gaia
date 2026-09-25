@@ -39,7 +39,7 @@ import (
 	"time"
 )
 
-// Must match client.controlKey / client.queryKey on the host side.
+// Pinned by tests/fixtures/stdio/gaia_stdio_wire.json (see main_test.go).
 const (
 	controlKey = "gaia_control"
 	queryKey   = "gaia_query"

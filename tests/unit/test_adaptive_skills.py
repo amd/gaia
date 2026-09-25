@@ -56,7 +56,13 @@ from gaia.agents.base.skill_deltas import (
     validate_delta,
 )
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
-from gaia.skills.sections import parse_sections, render_sections, section_digest
+from gaia.skills.sections import (
+    find_section,
+    find_snippet_spans,
+    parse_sections,
+    render_sections,
+    section_digest,
+)
 
 from .skills_helpers import LearnedOverlayStubMixin
 
@@ -527,14 +533,65 @@ def test_an_anchor_that_does_not_exist_is_refused_with_the_valid_ones():
     assert "procedure" in str(excinfo.value)  # lists the real anchors
 
 
-def test_a_snippet_not_present_verbatim_is_refused_at_write_time():
+def test_a_snippet_that_is_not_in_the_section_is_refused_at_write_time():
     delta = _delta(
         KIND_REPLACE_SNIPPET,
         "procedure",
         {"old": "text that is not in the skill", "new": "x"},
     )
-    with pytest.raises(DeltaRefused, match="verbatim"):
+    with pytest.raises(DeltaRefused, match="not in section"):
         validate_delta(BASE_SKILL, delta)
+
+
+def test_the_refusal_shows_the_section_so_the_retry_can_succeed():
+    """ "Quote it exactly" without the thing to quote left only guessing."""
+    delta = _delta(KIND_REPLACE_SNIPPET, "procedure", {"old": "absent", "new": "x"})
+    section = next(s for s in parse_sections(BASE_SKILL) if s.slug == "procedure")
+    with pytest.raises(DeltaRefused) as excinfo:
+        validate_delta(BASE_SKILL, delta)
+    assert section.text.strip() in str(excinfo.value)
+
+
+def test_a_quote_that_lost_its_line_breaks_still_matches():
+    """The failure that blocked the feature on a real skill.
+
+    A body is hard-wrapped near 80 columns; a model reads it as prose and
+    quotes it back on one line. Byte-exact matching refused every paragraph
+    that spanned two lines, for a reason the user could not see.
+    """
+    section = next(s for s in parse_sections(BASE_SKILL) if s.slug == "procedure")
+    line = next(ln for ln in section.text.split("\n") if len(ln.split()) > 3)
+    body = BASE_SKILL.replace(line, f"{line}\n{line}", 1)
+    reflowed = " ".join(f"{line} {line}".split())
+
+    delta = _delta(
+        KIND_REPLACE_SNIPPET,
+        "procedure",
+        {"old": reflowed, "new": "ONE LINE"},
+        body=body,
+    )
+    validate_delta(body, delta)  # must not raise
+    assert "ONE LINE" in resolve_skill_body(body, [delta]).body
+
+
+def test_tolerating_line_breaks_does_not_tolerate_different_words():
+    text = "## S\n\nrun the\nreal command\n"
+    assert find_snippet_spans(text, "run the real command")
+    assert not find_snippet_spans(text, "run the fake command")
+
+
+def test_an_exact_match_wins_over_a_reflowed_one():
+    """Exactness is never traded away — the fallback runs only when it fails."""
+    assert find_snippet_spans("alpha  beta\nalpha beta", "alpha beta") == [(12, 22)]
+
+
+def test_a_differently_spelled_section_name_resolves_to_the_real_slug():
+    """A model writes a heading the way headings are written, not as a slug."""
+    sections = parse_sections(BASE_SKILL)
+    real = find_section(sections, "procedure")
+    assert real is not None
+    assert find_section(sections, "Procedure") is real
+    assert find_section(sections, "Procedure_") is real
 
 
 def test_frontmatter_is_structurally_out_of_reach():
@@ -557,6 +614,129 @@ def test_parsing_a_body_and_rendering_it_back_is_lossless():
 def test_digests_are_crlf_insensitive():
     """A Windows checkout must not orphan every delta a Linux author wrote."""
     assert section_digest("a\r\nb") == section_digest("a\nb")
+
+
+# --------------------------------------------------------------------------
+# 8b. HEADINGS INSIDE FENCED CODE ARE CONTENT, NOT SECTIONS
+#
+# A skill shows its output format by printing it, so its templates are full of
+# ``#`` lines that are examples. Splitting on them truncated the real section to
+# its fence opener and filed the author's prose under the sample data's name, so
+# a correction to "output shape" edited a code fence: it left an unbalanced
+# ```` ``` ```` and freed the example into the instructions.
+# --------------------------------------------------------------------------
+
+_FENCED_SKILL = """\
+# Report
+
+## Output shape
+
+The tool writes:
+
+```markdown
+# Transcript — staff meeting
+
+## Speakers
+
+- Priya
+```
+
+Write the brief as decisions first, then owners.
+
+## Fork this
+
+Change only the brief.
+"""
+
+
+def test_a_heading_inside_a_fence_does_not_open_a_section():
+    slugs = [s.slug for s in parse_sections(_FENCED_SKILL)]
+    assert slugs == ["report", "output-shape", "fork-this"]
+
+
+def test_the_section_holding_a_fence_keeps_all_of_its_prose():
+    """The text a correction must reach, not just the fence opener."""
+    section = next(s for s in parse_sections(_FENCED_SKILL) if s.slug == "output-shape")
+    assert "decisions first, then owners" in section.text
+    assert section.text.count("```") == 2
+
+
+def test_replacing_a_fenced_section_leaves_the_body_well_formed():
+    """The end of the real bug: the edit used to orphan the closing fence."""
+    delta = _delta(
+        KIND_REPLACE_SECTION,
+        "output-shape",
+        {"body": "## Output shape\n\nAction items first, grouped by owner.\n"},
+        body=_FENCED_SKILL,
+    )
+    resolved = resolve_skill_body(_FENCED_SKILL, [delta])
+    assert resolved.body.count("```") == 0
+    assert "Priya" not in resolved.body
+    assert "Action items first" in resolved.body
+
+
+def test_a_tilde_fence_hides_headings_too():
+    body = "# T\n\n~~~\n# not a heading\n~~~\n\n## Real\n\nx\n"
+    assert [s.slug for s in parse_sections(body)] == ["t", "real"]
+
+
+def test_a_shorter_backtick_run_does_not_close_a_longer_fence():
+    body = "# T\n\n````\n```\n# still inside\n````\n\n## Real\n\nx\n"
+    assert [s.slug for s in parse_sections(body)] == ["t", "real"]
+
+
+def test_an_unterminated_fence_swallows_the_rest_rather_than_resplitting():
+    """CommonMark's rule, and it fails toward the safe side."""
+    body = "# T\n\n```\n# never closed\n\n## Also inside\n"
+    assert [s.slug for s in parse_sections(body)] == ["t"]
+
+
+def test_fenced_bodies_still_round_trip_losslessly():
+    assert render_sections(parse_sections(_FENCED_SKILL)) == _FENCED_SKILL
+
+
+def test_no_shipped_skill_has_a_section_named_after_its_own_sample_data():
+    """The regression guard — a phantom section is invisible until someone edits it.
+
+    Parsed sections must match the headings a reader sees, for every skill that
+    ships; otherwise ``gaia skill deltas --drop-section`` offers a name that is
+    really a line of example output.
+    """
+    import re
+    from pathlib import Path
+
+    from gaia.skills.format import parse_skill_file
+
+    root = Path(__file__).resolve().parents[2] / "hub" / "skills"
+    skills = sorted(root.glob("*/SKILL.md"))
+    assert skills, f"no shipped skills found under {root}"
+
+    heading = re.compile(r"^#{1,6}[ \t]+\S")
+    fence = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+    for path in skills:
+        body = (
+            parse_skill_file(
+                path, root="agent-bundled", read_only=True, check_directory_name=False
+            ).body
+            or ""
+        )
+        visible, open_fence = 0, None
+        for line in body.split("\n"):
+            match = fence.match(line)
+            if match:
+                marker = match.group(1)
+                if open_fence is None:
+                    open_fence = marker
+                elif marker[0] == open_fence[0] and len(marker) >= len(open_fence):
+                    open_fence = None
+                continue
+            if open_fence is None and heading.match(line):
+                visible += 1
+        parsed = [s for s in parse_sections(body) if not s.is_preamble]
+        assert len(parsed) == visible, (
+            f"{path.parent.name}: {len(parsed)} parsed sections but {visible} "
+            f"headings a reader can see — {[s.slug for s in parsed]}"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1132,33 +1312,66 @@ def test_the_tool_cannot_delete_a_section(store):
     assert "Never close an issue on your own judgement." in prompt
 
 
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        # A whole-section rewrite that forgot the heading...
-        {"corrected_text": "1. Pull what landed on you."},
-        # ...and a snippet whose 'old' happens to span it. The tool's docstring
-        # tells the model to prefer this form, so guarding only the first would
-        # leave the recommended path open.
-        {"corrected_text": "1. Pull what landed on you.", "replaces": "## Procedure"},
-    ],
-    ids=["whole-section", "snippet-swallows-the-heading"],
-)
-def test_an_edit_that_deletes_the_heading_is_refused(store, kwargs):
+def test_a_snippet_that_swallows_the_heading_is_refused(store):
     """Losing the heading merges the section into the one above it.
 
     A section's span carries its own heading line, so the rendered prompt ends
     up with two procedures read as one — the same "wrong instruction beside the
-    right one" this whole design exists to avoid. A human reviewing the diff
-    would have caught it; nothing does now, so it is refused at write time.
+    right one" this whole design exists to avoid. Refused rather than repaired:
+    naming the heading in ``replaces`` aims at it deliberately, so there is no
+    unambiguous intent left to satisfy.
     """
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
 
-    result = agent.call(skill="github-triage", section="procedure", **kwargs)
+    result = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text="1. Pull what landed on you.",
+        replaces="## Procedure",
+    )
 
     assert result["status"] == "error", result
     assert "## Procedure" in result["message"], "the error must quote the line to keep"
     assert store.search_deltas(base_name="github-triage") == []
+
+
+def test_a_rewrite_that_merely_omits_the_heading_gets_it_back(store):
+    """The same invariant, without spending a turn on a refusal.
+
+    This was refused alongside the snippet case above, on the reasoning that
+    nothing else would catch a lost heading. But a body with no heading at all
+    says only "these words, in this section" — so the heading is restored and
+    the invariant holds either way. The refusal cost a round trip that a live
+    agent spent re-sending the same text without the heading again, then gave
+    up: the user asked for a change and got none.
+    """
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+
+    result = agent.call(
+        skill="github-triage",
+        section="procedure",
+        corrected_text="1. Pull what landed on you.",
+    )
+
+    assert result["status"] == "success", result
+    prompt = agent.get_skills_system_prompt()
+    assert "## Procedure" in prompt
+    assert "1. Pull what landed on you." in prompt
+
+
+def test_the_section_name_may_be_written_as_the_heading_it_is(store):
+    """A model passes "Brief shape"; the anchor stored is still the slug."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+
+    result = agent.call(
+        skill="github-triage",
+        section="Procedure",
+        corrected_text="## Procedure\n\n1. Pull what landed on you.",
+    )
+
+    assert result["status"] == "success", result
+    assert result["section"] == "procedure"
+    assert "1. Pull what landed on you." in agent.get_skills_system_prompt()
 
 
 def test_the_same_lesson_with_the_heading_kept_is_accepted(store):
