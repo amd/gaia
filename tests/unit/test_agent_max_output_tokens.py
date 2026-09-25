@@ -151,23 +151,3 @@ def test_claude_request_keeps_its_default_and_honors_an_explicit_cap(
     )
     agent.process_query("hi")
     assert create.call_args.kwargs["max_tokens"] == expected
-
-
-@pytest.mark.parametrize(
-    "cap,expected", [(None, LOCAL_MAX_OUTPUT_TOKENS), (20000, 20000)]
-)
-def test_openai_request_keeps_its_default_and_honors_an_explicit_cap(
-    monkeypatch, cap, expected
-):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-unit-test")
-    agent = _Agent(use_chatgpt=True, silent_mode=True, max_output_tokens=cap)
-    create = MagicMock(
-        return_value=SimpleNamespace(
-            choices=[
-                SimpleNamespace(message=SimpleNamespace(content='{"answer": "done"}'))
-            ]
-        )
-    )
-    agent.chat.llm_client._client.chat.completions.create = create
-    agent.process_query("hi")
-    assert create.call_args.kwargs["max_tokens"] == expected

@@ -1432,8 +1432,7 @@ Do NOT wrap conversational replies in JSON.
                 if max_output_tokens is not None
                 else (
                     CLOUD_MAX_OUTPUT_TOKENS
-                    if not (use_claude or use_chatgpt)
-                    and cloud_model_provider(model_id)
+                    if not use_claude and cloud_model_provider(model_id)
                     else LOCAL_MAX_OUTPUT_TOKENS
                 )
             ),
