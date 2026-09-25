@@ -147,6 +147,31 @@ describe("POST /publish/skill — happy path", () => {
     expect(await obj!.text()).toBe("skill-bundle-bytes");
   });
 
+  it("rejects a second artifact under an existing version (409, catalog untouched)", async () => {
+    // A skill's tier and audit verdict are per-version evidence; a later post
+    // under the same version must not be able to restamp them.
+    const env = makeEnv();
+    expect((await publishSkill(env, VALID)).status).toBe(201);
+    const manifestBefore = await (await env.bucket.get("skills/web-research/manifest.json"))!.text();
+    const indexBefore = await (await env.bucket.get("index.json"))!.text();
+
+    const verified = sampleSkill({ security_tier: "verified" });
+    const again = await publishSkill(env, {
+      ...VALID,
+      skillMarkdown: verified,
+      audit: await allowAudit(verified),
+      filename: "web-research-0.1.0-v2.zip",
+    });
+    expect(again.status).toBe(409);
+    expect(await errorCode(again)).toBe("version_exists");
+
+    expect(env.bucket.keys()).not.toContain("skills/web-research/0.1.0/web-research-0.1.0-v2.zip");
+    expect(await (await env.bucket.get("skills/web-research/manifest.json"))!.text()).toBe(manifestBefore);
+    expect(await (await env.bucket.get("index.json"))!.text()).toBe(indexBefore);
+    const entry = (await readIndex(env)).agents.find((a) => a.id === "web-research")!;
+    expect(entry.security_tier).toBe("experimental");
+  });
+
   it("blocks another publisher from updating a skill it does not own (403)", async () => {
     const env = makeEnv();
     expect((await publishSkill(env, VALID)).status).toBe(201);
