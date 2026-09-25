@@ -19,6 +19,16 @@ name: Agent Behavior E2E
 on:
   workflow_dispatch:
   push:
+    branches: [ main ]
+    paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
+      - 'src/gaia/agents/builder/**'
+      - 'src/gaia/agents/base/agent.py'
+      - 'src/gaia/eval/behavior_harness.py'
+  pull_request:
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/version.py'
       - '.github/actions/install-lemonade/**'
@@ -26,12 +36,19 @@ on:
       - 'src/gaia/agents/base/agent.py'
       - 'src/gaia/eval/behavior_harness.py'
 
+# Cancel in-progress runs when a new run is triggered — this pool hands out one
+# ephemeral machine per job, so an uncancelled superseded run holds hardware.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   behavior-e2e:
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7
 

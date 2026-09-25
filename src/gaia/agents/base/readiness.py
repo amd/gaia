@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator, List, Optional, Tuple
 
 from gaia.logger import get_logger
+from gaia.version import parse_version as _parse_version
 
 logger = get_logger(__name__)
 
@@ -371,13 +372,11 @@ def extract_loaded_ctx(loaded_models: List[dict], model_id: str) -> Optional[int
 
 
 def parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
-    """Parse a dotted version into a comparable int tuple, or None."""
-    if not version:
-        return None
-    try:
-        return tuple(int(p) for p in version.lstrip("v").split(".")[:3])
-    except (ValueError, IndexError, AttributeError):
-        return None
+    """Parse a dotted version into a comparable int tuple, or None.
+
+    Re-exported from :mod:`gaia.version`, which owns the implementation.
+    """
+    return _parse_version(version)
 
 
 def version_meets_min(found: Optional[str], minimum: Optional[str]) -> Optional[bool]:
