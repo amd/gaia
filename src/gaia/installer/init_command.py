@@ -60,7 +60,17 @@ def is_embedding_model_id(model_id: str) -> bool:
 # Hub agent ids `gaia init` installs for its profile. Everything else
 # (sd/vlm/email/...) owns its own install lifecycle; a generic "install the
 # profile's agent" would hard-fail on agents the hub index doesn't carry.
-HUB_INSTALL_AGENTS = frozenset({"chat", "gaia"})
+#
+# `chat` is NOT here: it is not a catalog agent, so there is nothing for the
+# Hub to install. Its wheel is source-install only (#2240).
+HUB_INSTALL_AGENTS = frozenset({"gaia"})
+
+# Agent ids a profile's quick-start commands need, whether or not `gaia init`
+# can fetch them. Wider than HUB_INSTALL_AGENTS by exactly `chat`: `--profile
+# chat` and `--profile npu` both lead with `gaia chat`, which resolves through
+# the `gaia-agent-chat` wheel, so reporting "initialization complete" without
+# it would be a false promise even though init cannot install it.
+PROFILE_REQUIRED_AGENTS = HUB_INSTALL_AGENTS | {"chat"}
 
 # Hub agent id -> the module a source/pip install of it makes importable. Every
 # `gaia-agent-<id>` distribution installs `gaia_agent_<id>` except the flagship:
@@ -671,12 +681,10 @@ class InitCommand:
 
         profile_config = INIT_PROFILES[self.profile]
         has_pip_extras = bool(profile_config.get("pip_extras"))
-        # Data-driven scope (#2358): "chat" and "npu" both declare
-        # `"agent": "chat"` (they resolve to the same standalone wheel), so
-        # keying off the declared agent -- not a hardcoded profile-name
-        # literal -- naturally covers both without a special case, and never
-        # touches profiles for other hub agents (gaia/email/...), each of
-        # which has its own, separately-owned install lifecycle.
+        # Data-driven scope (#2358): keyed off the declared agent, not a
+        # hardcoded profile-name literal, so it never touches profiles for
+        # agents outside the catalog (chat/sd/vlm/email/...), each of which
+        # has its own, separately-owned install lifecycle.
         has_hub_agent_check = profile_config.get("agent") in HUB_INSTALL_AGENTS
 
         _webui_src = Path(__file__).resolve().parent.parent / "apps" / "webui" / "src"
@@ -2147,8 +2155,8 @@ class InitCommand:
     def _is_hub_agent_available(agent_id: str) -> bool:
         """Whether this profile's hub agent is already present.
 
-        Two probes, because the hub ships two artifact shapes and only one of
-        them is importable. A wheel agent (``chat``) is there when
+        Two probes, because an agent ships in two artifact shapes and only one
+        of them is importable. A wheel agent (``chat``) is there when
         ``gaia_agent_<id>`` imports -- the naming convention
         ``install_hints._AGENT_SOURCE_SUBDIRS`` and every ``gaia-agent-*``
         wheel share, with the flagship's ``gaia_agent`` spelling read from
@@ -2182,13 +2190,15 @@ class InitCommand:
         return InitCommand._is_hub_agent_available("chat")
 
     def _profile_agent_available(self) -> bool:
-        """Whether the hub agent THIS profile installs is present.
+        """Whether the agent THIS profile's quick-start commands need is present.
 
-        True for profiles that install none (sd/vlm/minimal/...), so their
-        completion headline is never gated on someone else's agent.
+        True for profiles that need none (sd/vlm/minimal/...), so their
+        completion headline is never gated on someone else's agent. Keyed on
+        ``PROFILE_REQUIRED_AGENTS``, not ``HUB_INSTALL_AGENTS``: `chat` cannot
+        be hub-installed but `--profile chat`/`--profile npu` still need it.
         """
         agent_id = INIT_PROFILES[self.profile].get("agent")
-        if agent_id not in HUB_INSTALL_AGENTS:
+        if agent_id not in PROFILE_REQUIRED_AGENTS:
             return True
         return self._is_hub_agent_available(agent_id)
 
@@ -2197,17 +2207,15 @@ class InitCommand:
         isn't already available and the live catalog confirms it's published.
 
         Scoped by ``run()``'s ``has_hub_agent_check`` (profiles whose declared
-        ``"agent"`` is in ``HUB_INSTALL_AGENTS`` -- ``gaia``, plus ``chat`` and
-        ``npu``, which both declare ``"agent": "chat"``).
+        ``"agent"`` is in ``HUB_INSTALL_AGENTS``).
 
         Distinguishes two catalog states (#2358):
 
-        * Not yet published (today's state — only ``email`` is live on the
-          Hub): NOT an error. A blind "call install() and fail loud" would
-          turn today's soft success (``init`` completes, prints a
-          source-install hint) into a hard failure for every `gaia init
-          --profile chat` until the publish lands — a real regression this
-          method must not introduce. Silently returns; the existing
+        * Not yet published: NOT an error. A blind "call install() and fail
+          loud" would turn today's soft success (``init`` completes, prints a
+          source-install hint) into a hard failure for every profile whose
+          agent is still awaiting a publish — a real regression this method
+          must not introduce. Silently returns; the existing
           ``_print_completion()`` hint already tells the user how to
           source-install it in the meantime.
         * Published but the install itself genuinely fails: this method
@@ -2315,9 +2323,9 @@ class InitCommand:
         flagship_install_note = (
             "GAIA agent not installed yet -- run: gaia hub install gaia"
         )
-        # Scoped like run()'s has_hub_agent_check -- gating on the chat wheel
-        # alone would mark sd/vlm/minimal permanently "incomplete", and would
-        # call the flagship profile complete while its own wheel is missing.
+        # Scoped per profile -- gating on the chat wheel alone would mark
+        # sd/vlm/minimal permanently "incomplete", and would call the flagship
+        # profile complete while its own binary is missing.
         setup_incomplete = not self._profile_agent_available()
         headline = (
             "GAIA initialization incomplete - see below"
