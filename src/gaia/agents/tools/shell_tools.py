@@ -21,6 +21,7 @@ from typing import Any, Dict, Optional
 
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.tool_cancellation import tool_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,117 @@ DANGEROUS_FIND_ACTIONS = {
     "-fprintf",
     "-fls",
 }
+
+# Global git options that sit BEFORE the subcommand. They have to be stepped
+# over to find what the command actually is, and each one is classified here —
+# an unlisted option is refused rather than skipped, so a future git release
+# cannot slip a value-taking flag past the walk and shift the subcommand index
+# (CWE-184).
+
+# Take a value, either as `--opt=value` or as the following token.
+GIT_GLOBAL_FLAGS_WITH_VALUE = {
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+}
+
+# Standalone switches that change nothing about what gets run.
+GIT_GLOBAL_FLAGS_NO_VALUE = {
+    "-P",
+    "--no-pager",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+}
+
+# Options that ARE the whole command — there is no subcommand after them.
+GIT_TERMINAL_FLAGS = {
+    "--version",
+    "--help",
+    "-h",
+    "--html-path",
+    "--man-path",
+    "--info-path",
+}
+
+# Global options that hand git arbitrary code or configuration, so they stay
+# refused no matter how read-only the subcommand behind them looks.
+GIT_FORBIDDEN_GLOBAL_FLAGS = {
+    "-c": "it sets arbitrary git config for the run (e.g. core.pager, alias.*), which can execute a command",
+    "--config-env": "it sets arbitrary git config from the environment, which can execute a command",
+    "--exec-path": "it changes where git looks for its subcommands, which can execute an arbitrary binary",
+}
+
+
+def _unrecognized_git_option_error(name: str) -> str:
+    """Why *name* stopped the walk, phrased so the caller can act on it.
+
+    Git lets a short option carry its value attached (``-C/tmp``), but the walk
+    matches whole tokens, so the plain "not recognized" text named a flag the
+    caller never wrote and left nothing to change. The attached form stays
+    refused — teaching the `-C` sandbox check a second way to split a token is
+    how that sandbox springs a leak.
+    """
+    prefix = name[:2]
+    if prefix in GIT_FORBIDDEN_GLOBAL_FLAGS:
+        return (
+            f"Git global option '{prefix}' is not allowed: "
+            f"{GIT_FORBIDDEN_GLOBAL_FLAGS[prefix]}."
+        )
+    if prefix in GIT_GLOBAL_FLAGS_WITH_VALUE:
+        return (
+            f"Git global option '{prefix}' needs its value as a separate word: "
+            f"write '{prefix} {name[2:]}', not '{name}'."
+        )
+    return (
+        f"Git global option '{name}' is not recognized, so the subcommand "
+        "behind it cannot be identified."
+    )
+
+
+def _git_policy_argv(cmd_parts: list) -> tuple:
+    """``git -C <path> branch`` as the policy table judges it: ``git branch``.
+
+    Git's global options sit before the subcommand, so a table reading
+    ``cmd_parts[1]`` sees ``-C`` and refuses a plain read. Each option is
+    classified rather than skipped — an unlisted one is refused, so a future
+    git release cannot slip a value-taking flag past the walk and shift the
+    subcommand index (CWE-184).
+
+    Returns:
+        ``(argv, error_message)`` — exactly one is non-None. The paths those
+        options name are sandbox-checked separately by ``_git_path_refusal``.
+    """
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            break
+
+        name = token.split("=", 1)[0]
+        if name in GIT_TERMINAL_FLAGS:
+            break
+        if name in GIT_FORBIDDEN_GLOBAL_FLAGS:
+            return None, (
+                f"Git global option '{name}' is not allowed: "
+                f"{GIT_FORBIDDEN_GLOBAL_FLAGS[name]}."
+            )
+        if name in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            # `--opt=value` carries its value; `--opt value` consumes the next token.
+            index += 1 if "=" in token else 2
+            continue
+        if name in GIT_GLOBAL_FLAGS_NO_VALUE:
+            index += 1
+            continue
+        return None, _unrecognized_git_option_error(name)
+
+    return [cmd_parts[0], *cmd_parts[index:]], None
+
 
 # Safe PowerShell cmdlet prefixes (read-only operations)
 SAFE_PS_CMDLET_PREFIXES = (
@@ -589,6 +701,34 @@ def _skips_path_scan(token: str, granted: frozenset) -> bool:
     return policy is not None and policy.remote_operands
 
 
+def _grant_route(binary: str, skill_manager: Any) -> str:
+    """How to actually get *binary* granted, naming the skill where one exists.
+
+    "Load a skill that declares it" left models no route to follow.
+    """
+    from gaia.agents.base.skill_catalog import skills_granting
+
+    granting = (
+        skills_granting(skill_manager.discover(), binary)
+        if skill_manager is not None
+        else []
+    )
+    if granting:
+        return (
+            f"Call load_skill with {' or '.join(repr(n) for n in granting)}, "
+            "then run the command again."
+        )
+    if skill_manager is not None:
+        return (
+            f"No installed skill declares 'shell:execute:{binary}'; "
+            "search_skill_hub can find one."
+        )
+    return (
+        f"No skill that grants 'shell:execute:{binary}' could be looked up here; "
+        "list_skills or search_skill_hub can find one."
+    )
+
+
 def _operator_check_text(command: str) -> str:
     """The part of *command* the operator blocklist applies to.
 
@@ -632,6 +772,44 @@ def _split_pipeline(cmd_parts: list) -> list:
     if current:
         segments.append(current)
     return segments
+
+
+#: Git global options whose value is a filesystem path git will operate in.
+_GIT_PATH_FLAGS = ("-C", "--git-dir", "--work-tree")
+
+
+def _git_path_flag_values(cmd_parts: list, cwd: str) -> list:
+    """``(flag, resolved_path)`` for every path-taking git global option.
+
+    Resolved the way git does: ``-C`` is relative to the directory before it,
+    and ``--git-dir``/``--work-tree`` are relative to the last ``-C``. Without
+    this check ``-C`` would be a way around the ``working_directory`` sandbox.
+    """
+    values: list = []
+    base = Path(cwd)
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            break
+        name, has_inline, inline = token.partition("=")
+        if name not in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            index += 1
+            continue
+        if has_inline:
+            value = inline
+            index += 1
+        elif index + 1 < len(cmd_parts):
+            value = cmd_parts[index + 1]
+            index += 2
+        else:
+            break
+        if name in _GIT_PATH_FLAGS:
+            resolved = base.joinpath(value).resolve()
+            values.append((name, str(resolved)))
+            if name == "-C":
+                base = resolved
+    return values
 
 
 #: The connectors that chain one line's pipelines. Longest first, so ``||`` is
@@ -1173,6 +1351,7 @@ class ShellToolsMixin:
                     segment,
                     step.text if len(step.segments) == 1 else " ".join(segment),
                     granted_binaries=granted,
+                    skill_manager=getattr(self, "skill_manager", None),
                 )
                 if error:
                     return error, []
@@ -1284,6 +1463,10 @@ class ShellToolsMixin:
         )
         return True
 
+    #: Slice length for the pacing wait. Short enough that a Stop lands
+    #: promptly, long enough not to spin.
+    _PACE_POLL_SECONDS = 0.25
+
     def _pace_rate_limit(self) -> tuple:
         """Wait out the rate limit rather than refuse, up to a cap.
 
@@ -1298,8 +1481,17 @@ class ShellToolsMixin:
             allowed, reason, wait_time = self._check_rate_limit()
             if allowed or waited + wait_time > cap:
                 return allowed, reason, wait_time, waited
-            time.sleep(wait_time)
-            waited += wait_time
+            # Sliced, not one long sleep: this runs inside _call_tool_bounded's
+            # window, so a wait that ignored the flag would keep the worker
+            # alive past a Stop and past its own timeout (#2600).
+            remaining = wait_time
+            while remaining > 0:
+                if tool_cancelled():
+                    return False, "Rate limit wait cancelled", remaining, waited
+                slice_s = min(self._PACE_POLL_SECONDS, remaining)
+                time.sleep(slice_s)
+                remaining -= slice_s
+                waited += slice_s
 
     def _path_allowed(self, path: str) -> bool:
         """Whether *path* is inside this agent's allowed paths.
@@ -1487,12 +1679,37 @@ class ShellToolsMixin:
         """Record command execution timestamp for rate limiting."""
         self.shell_command_times.append(time.time())
 
+    def _git_path_refusal(self, segments: list, cwd: str) -> Optional[Dict[str, Any]]:
+        """Refuse a git ``-C``/``--git-dir``/``--work-tree`` outside allowed paths.
+
+        The same allowed-paths check ``working_directory`` gets.
+        """
+        for segment in segments:
+            if segment[0].lower() != "git":
+                continue
+            for flag, path in _git_path_flag_values(segment, cwd):
+                if hasattr(self, "path_validator"):
+                    allowed = self.path_validator.is_path_allowed(path)
+                elif hasattr(self, "_is_path_allowed"):
+                    allowed = self._is_path_allowed(path)
+                else:
+                    continue
+                if not allowed:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": f"Access denied: git {flag} {path} is not in allowed paths",
+                        "has_errors": True,
+                    }
+        return None
+
     @staticmethod
     def _validate_command(
         cmd_base: str,
         cmd_parts: list,
         command: str,
         granted_binaries: frozenset = frozenset(),
+        skill_manager: Any = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -1501,6 +1718,8 @@ class ShellToolsMixin:
             cmd_base: The lowercased command name.
             cmd_parts: The shlex-split command.
             command: The raw command string.
+            skill_manager: The host's skill manager, so refusing an ungranted CLI
+                can name the installed skill that grants it. Optional.
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
@@ -1514,6 +1733,18 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
+        # Git's global options sit before the subcommand, so every check below
+        # has to read the call with them stepped over. The options that hand git
+        # arbitrary code are refused here rather than stepped over.
+        if cmd_base == "git" and len(cmd_parts) > 1:
+            cmd_parts, resolve_error = _git_policy_argv(cmd_parts)
+            if resolve_error is not None:
+                return {
+                    "status": "error",
+                    "error": resolve_error,
+                    "has_errors": True,
+                }
+
         # A read subcommand still writes a caller-chosen path when it is handed
         # an output flag, and no policy table judges the destination. Checked
         # ahead of the grant so the widest git grant cannot reopen it.
@@ -1553,26 +1784,28 @@ class ShellToolsMixin:
             decision = classify(policy, policy_parts)
             if decision.outcome != REFUSE:
                 return None
+            if granted:
+                message = decision.message
+                hint = (
+                    f"This one is refused outright, not gated — the '{binary}' "
+                    "grant will not run it even with the user's approval. "
+                    "Use an allowed command, or tell the user what you would "
+                    "have run and why it is blocked."
+                )
+            else:
+                # Name the skill: "a skill that declares it" left models no route.
+                message = f"{decision.message} {_grant_route(binary, skill_manager)}"
+                hint = (
+                    f"{policy.summary} To go beyond that, load a skill "
+                    f"declaring 'shell:execute:{binary}' — the grant is what "
+                    "widens this, not a different spelling of the command. If "
+                    f"{binary} itself is missing: {policy.install_hint}"
+                )
             return {
                 "status": "error",
-                "error": decision.message,
+                "error": message,
                 "has_errors": True,
-                "hint": (
-                    (
-                        f"This one is refused outright, not gated — the '{binary}' "
-                        "grant will not run it even with the user's approval. "
-                        "Use an allowed command, or tell the user what you would "
-                        "have run and why it is blocked."
-                    )
-                    if granted
-                    else (
-                        f"{policy.summary} To go beyond that, load a skill "
-                        f"declaring 'shell:execute:{binary}' — the grant is "
-                        "what widens this, not a different spelling of the "
-                        f"command. If {binary} itself is missing: "
-                        f"{policy.install_hint}"
-                    )
-                ),
+                "hint": hint,
             }
 
         # Special handling for wmic - only allow read-only queries
@@ -1882,10 +2115,15 @@ class ShellToolsMixin:
                         }
 
                     if not self._path_allowed(working_directory):
+                        hint = (
+                            self.path_validator.scratch_hint(working_directory)
+                            if hasattr(self, "path_validator")
+                            else ""
+                        )
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Access denied: {working_directory} is not in allowed paths",
+                            "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
                             "has_errors": True,
                         }
 
@@ -1919,6 +2157,9 @@ class ShellToolsMixin:
 
                 for step, step_cwd in zip(steps, step_cwds):
                     error = self._path_traversal_refusal(step, step_cwd, granted)
+                    if error:
+                        return error
+                    error = self._git_path_refusal(step.segments, step_cwd)
                     if error:
                         return error
 

@@ -37,7 +37,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI **0.23.1 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.24.1 or newer** on `PATH` for the daemon the terminal
   UI starts. Earlier cores start a daemon that has no entry for this agent, so the
   UI comes up with nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -211,16 +211,22 @@ what it must hash to. The release pipeline regenerates it from the artifacts
 actually being served — the sidecars it just published, and the terminal-hub
 artifacts it downloaded and cross-checked against the hub's own recorded hashes.
 
-Between releases the lock carries `PENDING-replace-with-real-sha256` placeholders.
-**A placeholder blocks the fetch outright** — before any network call — so an
-unverifiable binary can never be downloaded, let alone executed. If you need to run
-against a locally built binary, build it yourself and point the lifecycle helpers
-at it directly; the fetcher will not be talked into it.
+A committed release's lock, like this one, always carries real hashes — the
+regenerate step in the release pipeline never publishes placeholders. Between
+releases, an unreleased working tree's lock instead carries
+`PENDING-replace-with-real-sha256` placeholders, and **a placeholder blocks the
+fetch outright** — before any network call — so an unverifiable binary can never
+be downloaded, let alone executed. If you need to run against a locally built
+binary, build it yourself and point the lifecycle helpers at it directly; the
+fetcher will not be talked into it.
 
 ## Links
 
 - Guide: <https://amd-gaia.ai/docs/guides/gaia>
 - Technical reference: [`SPEC.md`](./SPEC.md)
+- Eval scorecard: [`SCORECARD.md`](./SCORECARD.md) — the agent's measured
+  judged-scenario pass rate across the 13-category eval corpus, with the exact
+  recipe to reproduce it
 - Changes: [`CHANGELOG.md`](./CHANGELOG.md)
 - Issues: <https://github.com/amd/gaia/issues>
 

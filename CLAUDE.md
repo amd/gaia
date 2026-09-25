@@ -387,7 +387,11 @@ want to test an installed wheel.
 
 ### IMPORTANT: Run agent evals when changing LLM-affecting code paths — do NOT skip
 
-**Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category and compare to the committed baseline before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
+**Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
+
+**Every scenario scores the flagship `gaia` agent.** That is the `--agent-type` default and scenarios no longer pin their own, so a scorecard names one agent and two scorecards are comparable. Pass `--agent-type` only to measure a different agent — and never compare that result to a scorecard captured under another one, because `compare_scorecards` keys on `scenario_id` alone and will happily report "improved/regressed" across two different agents.
+
+**There is no committed baseline right now.** The previous ones scored the `doc` ChatAgent profile, so diffing a flagship run against them is exactly the cross-agent comparison above; they were deleted rather than reinterpreted. Until the first flagship baseline lands (a real run on AMD hardware, committed to `tests/fixtures/eval_baselines/gaia-flagship/`), `--compare` has nothing to diff and CI reports scores without a regression verdict. **Never hand-author, estimate, or copy forward a baseline number to fill the gap** — a fabricated baseline is worse than none, because it looks like a verdict.
 
 **Changes that REQUIRE an eval run before merge:**
 
@@ -415,36 +419,40 @@ Only if the eval genuinely requires the key (the subprocess errors with `ANTHROP
 # Terminal 1 — backend (needed by gaia eval agent)
 python -m gaia.ui.server --port 4200 --host 127.0.0.1
 
-# Terminal 2 — run the eval, then compare its scorecard to the committed baseline.
-# NOTE: `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT run an eval.
-#       Run the eval first; it prints the run dir and writes <run-dir>/scorecard.json.
-gaia eval agent --category rag_quality --agent-type doc
+# Terminal 2 — run the eval. Scores the flagship; no --agent-type needed.
+gaia eval agent --category rag_quality
 # → prints an ABSOLUTE path, e.g.  Output: /…/gaia/eval/results/<run-id>/   ← use it as printed, + /scorecard.json
-# Pick the BASELINE matching your model; don't `ls -t` to find it — a fresh clone stamps
-# every baseline with the checkout time, so an mtime sort picks arbitrarily.
+
+# Compare to a baseline ONLY once one is committed and it was captured under the
+# same agent. `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT
+# run an eval, so run the eval above first.
 gaia eval agent --compare \
-  tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json \
+  tests/fixtures/eval_baselines/gaia-flagship/scorecard_rag_quality.json \
   <printed-output-path>/scorecard.json
 ```
 
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
 
+With no baseline committed, the eval still tells you plenty: a category full of `INFRA_ERROR` or a score that cratered against the run you did an hour ago is a signal. What you cannot do is claim "no regression" — say what you measured, not what you compared.
+
 **#1030 (the Gemma-4 RAG-PDF timeout) is the canonical example of what happens when this rule is skipped:** a prompt change passed every unit test, then broke document Q&A in production. #1033 tracks the systemic CI gaps that let it through.
 
-### IMPORTANT: Run agent evals SERIALLY, never in parallel
+### IMPORTANT: Run agent evals SERIALLY per Lemonade backend, never in parallel against one
 
 **Never run two `gaia eval agent` invocations concurrently against the same Lemonade Server.** Each eval scenario forces Lemonade to load a specific model at a specific `ctx_size`; two concurrent runs will race-evict each other's models and you'll see chaotic failures like:
 - `request (NNNN tokens) exceeds the available context size (4096 tokens)` — one run reloaded the model at a smaller ctx
 - Spurious `BLOCKED_BY_ARCHITECTURE` / `INFRA_ERROR` results — process management collisions
 - `model_load_error: llama-server failed to start` — port conflicts on llama-server children
 
-**Rule of thumb:** at most ONE `gaia eval agent ...` process running at any time, period. If a fix-loop or batch-experiment script needs to chain runs, it must do so sequentially (`run-1 && run-2 && run-3`), never via background `&`. Before kicking off a new eval, verify nothing else is running:
+**Rule of thumb:** at most ONE `gaia eval agent ...` process per machine at any time. If a fix-loop or batch-experiment script needs to chain runs, it must do so sequentially (`run-1 && run-2 && run-3`), never via background `&`. Before kicking off a new eval, verify nothing else is running:
 
 ```bash
 ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0"
 ```
 
 This applies to every `gaia eval agent` run — including `--fix` auto-fix runs and any batch fix-loop that chains them. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
+
+**The constraint is the BACKEND, not the clock.** Two evals on two machines, each with its own Lemonade, cannot evict each other's model and are not covered by this rule. That is what lets [`eval_flagship.yml`](.github/workflows/eval_flagship.yml) fan the scenario eval out across parallel lanes on the ephemeral runner pool — every lane gets its own machine, and within a lane the categories still run one at a time. Do not "fix" that workflow back to a single serial job, and do not read this rule as licence to run two evals against one Lemonade because they are in different terminals.
 
 ## Development Workflow
 
@@ -595,8 +603,9 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 - **LLM Backend** (`src/gaia/llm/`): Multi-provider support with AMD optimization
   - `lemonade_client.py` - Lemonade Server (AMD NPU/GPU)
   - `providers/claude.py` - Claude API
-  - `providers/openai_provider.py` - OpenAI API
-  - `factory.py` - Client factory for provider selection
+  - `providers/lemonade.py` - Lemonade provider adapter
+  - `factory.py` - Client factory for provider selection (`openai`/`litellm` were
+    retired in #3899 and are rejected with a migration error)
 - **API Server** (`src/gaia/api/`): OpenAI-compatible REST API for agent access
 - **MCP Integration** (`src/gaia/mcp/`): Model Context Protocol for external integrations
 - **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/guides/chat.mdx`](docs/guides/chat.mdx)
@@ -616,7 +625,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
 | **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG; the flagship's base class — hub (`chat/`) |
-| **EmailTriageAgent** | Email triage for Gmail (local inference; needs the Google connector) — hub (`email/`) |
+| **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
 | **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
@@ -671,7 +680,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
 - `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
-- `gaia email` - Email triage for Gmail (local inference; needs the Google connector)
+- `gaia email` - Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector)
 
 **Servers & infrastructure:**
 - `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)

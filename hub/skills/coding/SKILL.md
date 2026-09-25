@@ -67,14 +67,26 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest` and `python`, so run the suite directly:
+This skill grants `pytest` and `python`, so run the suite directly. Prefer the
+`python -m` spelling — it puts the project's own directory on `sys.path`, so it
+works on a checkout that was never installed, where bare `pytest` fails to
+import the project:
 
 ```
-pytest -q tests/
-pytest -x -k discount tests/test_cart.py
-python -m pytest tests/unit          # same thing, same rules
+python -m pytest -q tests/
+python -m pytest -x -k discount tests/test_cart.py
+pytest -q tests/                     # same grant, same rules; for an installed project
 python util/lint.py --all --fix      # or whatever the project's own runner is
 ```
+
+`python -m` adds the current directory to the import path, not `src/`. For a
+project whose package lives under `src/`, scope the path to that one command:
+
+```
+PYTHONPATH=src python -m pytest -q tests/
+```
+
+Where only `python3` exists, `python3 -m pytest` works the same way.
 
 Loading this skill grants `pytest` and `python <script.py>` execution without
 another prompt. Tests and scripts are trusted project code: they can write

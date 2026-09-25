@@ -228,17 +228,11 @@ class ShellToolsMixin:
                 "cwd": str,
                 "output_truncated": bool,
                 "check_result": dict | None,  # CheckResult when a test/lint/build runner ran
-                "rate_limited": bool,  # If rate limited
+                "rate_limited": bool,  # If refused rather than paced
                 "wait_time_seconds": float,  # Time to wait
+                "waited_seconds": float,  # Present only when it paced first
                 "timed_out": bool  # If command timed out
             }
-
-        Allowed Commands:
-            File operations: ls, cat, head, tail, grep, find
-            File info: file, stat, du, df
-            System info: whoami, hostname, uname, date
-            Git (read-only): status, log, show, diff, branch
-            Path utils: which, basename, dirname
         """
         pass
 ```
@@ -301,13 +295,26 @@ if cmd_base not in ALLOWED_COMMANDS:
 
 ### Git Command Filtering
 
-`git` is no longer special-cased here. It has a full three-tier policy in
+`git` has no subcommand allowlist of its own here. It has a full three-tier
+policy in
 [`skills/binaries.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/binaries.py)
 `BINARY_POLICIES`, and that policy carries its own read-only floor for an agent
-with no skill loaded — the same subcommands this branch used to allow. One table
+with no skill loaded — the same subcommands this mixin used to allow. One table
 describes the binary, so the two cannot drift apart.
 
+What stays here is the global-flag walk. Git's global options sit *before* the
+subcommand, so the subcommand is never simply `cmd_parts[1]`: in
+`git -C /repo status` that token is `-C`. `_git_policy_argv` steps over the
+known global flags so the policy table judges `git status`, and refuses any flag
+it does not recognize rather than skipping it — an unlisted value-taking flag
+would shift the subcommand index and let an unsafe subcommand through.
+
 ```python
+if cmd_base == "git":
+    cmd_parts, error_message = _git_policy_argv(cmd_parts)
+    if error_message is not None:
+        return {"status": "error", "error": error_message, "has_errors": True}
+
 policy = BINARY_POLICIES.get(normalize_binary(cmd_base))
 if policy is not None:
     granted = binary in granted_binaries
@@ -317,9 +324,20 @@ if policy is not None:
         return {"status": "error", "error": decision.message, ...}
 ```
 
-Matching on the subcommand alone, as the old branch did, also let
+Global-flag classes (`_git_policy_argv` in `shell_tools.py`):
+
+| Class | Members | Handling |
+|-------|---------|----------|
+| `GIT_GLOBAL_FLAGS_WITH_VALUE` | `-C`, `--git-dir`, `--work-tree`, `--namespace` | Skipped with their value (`--opt=v` or `--opt v`); the paths then get the same allowed-paths check as `working_directory` |
+| `GIT_GLOBAL_FLAGS_NO_VALUE` | `-P`, `--no-pager`, `--bare`, `--literal-pathspecs`, … | Skipped |
+| `GIT_TERMINAL_FLAGS` | `--version`, `--help`, `-h`, `--man-path`, … | Are the whole command; nothing follows |
+| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Always refused — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks |
+
+Matching on the subcommand alone, as the old allowlist did, let
 `git branch -D main` and `git remote add` through unprompted; the policy table
-reads the flags too.
+reads the flags too. `git config` is outside the read-only floor for the same
+reason `-c` is refused: it writes values (`core.pager`, `alias.*`) that execute
+commands.
 
 ### Path Traversal Prevention
 
@@ -365,9 +383,16 @@ def test_run_shell_command_rate_limit_burst(agent):
         result = agent.run_shell_command("pwd")
         assert result["status"] == "success"
 
-    # 4th should be rate limited
+    # The 4th waits out the burst window, then runs
     result = agent.run_shell_command("pwd")
-    assert result["status"] == "error"
+    assert result["status"] == "success"
+    assert result["waited_seconds"] > 0
+
+def test_run_shell_command_rate_limit_cap(agent):
+    """A wait past max_rate_limit_wait_seconds is refused, not paced."""
+    agent.max_rate_limit_wait_seconds = 1
+    for i in range(4):
+        result = agent.run_shell_command("pwd")
     assert result["rate_limited"] is True
 
 def test_run_shell_command_rate_limit_sustained(agent):
@@ -473,14 +498,17 @@ result = agent.run_shell_command("git commit -m 'test'")
 ### Example 3: Rate Limiting
 
 ```python
-# Quick burst of commands
+# Quick burst of commands. The mixin paces itself: a command over the limit
+# waits for the window and then runs, so the caller writes no retry loop. The
+# wait is sliced and stops early if the agent cancels the call.
 for i in range(5):
     result = agent.run_shell_command("pwd")
-    if result.get("rate_limited"):
-        wait_time = result["wait_time_seconds"]
-        print(f"Rate limited. Wait {wait_time:.1f}s")
-        time.sleep(wait_time)
-        result = agent.run_shell_command("pwd")
+    if result.get("waited_seconds"):
+        print(f"Paced {result['waited_seconds']:.1f}s before running")
+
+# Only a wait longer than max_rate_limit_wait_seconds is refused outright.
+if result.get("rate_limited"):
+    print(f"Refused: the window is {result['wait_time_seconds']:.1f}s away")
 ```
 
 ---

@@ -997,7 +997,7 @@ These 5 tools are registered by `register_memory_tools()` and exposed to the LLM
 </CardGroup>
 
 <Card title="search_past_conversations" icon="clock-rotate-left">
-  Search conversation history by keywords, time range, or both. Returns matching turns with timestamps and session IDs.
+  Search conversation history by keywords, time range, or both. Returns matching turns with timestamps and session IDs. An empty result carries `past_conversation_turns` (turns stored by earlier sessions) and a `message` that says plainly when there are none to search.
 </Card>
 
 These map to CRUD operations: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete, plus `search_past_conversations` for history.
