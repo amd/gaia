@@ -16,7 +16,7 @@ import secrets
 import threading
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +42,7 @@ try:
 except Exception:  # pylint: disable=broad-except
     faiss = None
 
+from gaia import config as gaia_config
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
@@ -83,6 +84,19 @@ class EmptyPDFError(PDFExtractionError):
     status = "empty"
 
 
+# Files the RAG cache writes: signed chunk caches, their sidecar signatures,
+# and extracted-text markdown. clear_cache() deletes nothing else.
+_CACHE_OWNED_FILE = re.compile(
+    r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)\.json(?:\.sig)?$"
+    r"|_extracted\.md$"
+)
+
+
+def default_rag_cache_dir() -> str:
+    """Absolute default RAG cache directory: ``<GAIA_CONFIG_DIR>/cache/rag``."""
+    return str(Path(gaia_config.GAIA_CONFIG_DIR) / "cache" / "rag")
+
+
 @dataclass
 class RAGConfig:
     """Configuration for RAG SDK."""
@@ -93,7 +107,7 @@ class RAGConfig:
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation
     max_chunks: int = 5  # Increased to retrieve more context
     embedding_model: str = DEFAULT_EMBEDDING_MODEL  # Lemonade GGUF embedding model
-    cache_dir: str = ".gaia"
+    cache_dir: str = field(default_factory=default_rag_cache_dir)
     show_stats: bool = False
     use_local_llm: bool = True
     base_url: str = "http://localhost:13305/api/v1"  # Lemonade server API URL
@@ -3432,14 +3446,38 @@ Answer:"""
             )
 
     def clear_cache(self):
-        """Clear the RAG cache."""
-        import shutil
+        """Delete the files this cache wrote from ``config.cache_dir``.
+
+        Only signed chunk caches, their ``.sig`` files and ``*_extracted.md``
+        are removed; anything else in the directory is left alone.
+
+        Raises:
+            ValueError: If ``cache_dir`` resolves to ``$HOME`` or the GAIA home
+                directory, which hold far more than the RAG cache.
+        """
+        cache_dir = Path(self.config.cache_dir).expanduser().resolve()
+        protected = {
+            Path.home().resolve(),
+            Path(gaia_config.GAIA_CONFIG_DIR).expanduser().resolve(),
+        }
+        if cache_dir in protected:
+            raise ValueError(
+                f"Refusing to clear RAG cache_dir {cache_dir}: it is your home or "
+                "GAIA home directory, not a dedicated cache. Point "
+                f"RAGConfig.cache_dir at its own folder (default: "
+                f"{default_rag_cache_dir()})."
+            )
 
         with self._state_lock:
-            if os.path.exists(self.config.cache_dir):
-                shutil.rmtree(self.config.cache_dir)
-                os.makedirs(self.config.cache_dir, exist_ok=True)
-            self.log.info("Cache cleared")
+            removed = 0
+            if cache_dir.is_dir():
+                for entry in cache_dir.iterdir():
+                    if entry.is_file() and _CACHE_OWNED_FILE.search(entry.name):
+                        entry.unlink()
+                        removed += 1
+            self.log.info(
+                "Cache cleared: removed %d file(s) from %s", removed, cache_dir
+            )
 
     def get_status(self) -> Dict[str, Any]:
         """Get RAG system status."""

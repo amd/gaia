@@ -46,7 +46,7 @@ class RAGConfig:
     chunk_overlap: int = 100
     max_chunks: int = 5
     embedding_model: str = "user.embeddinggemma-300m-GGUF"
-    cache_dir: str = ".gaia"
+    cache_dir: str = field(default_factory=default_rag_cache_dir)  # ~/.gaia/cache/rag
     show_stats: bool = False
     use_local_llm: bool = True
     base_url: str = "http://localhost:13305/api/v1"
@@ -153,7 +153,8 @@ class RAGSDK:
         ...
 
     def clear_cache(self):
-        """Clear the RAG cache."""
+        """Delete only files the cache wrote (hash-named *.json / *.json.sig
+        and *_extracted.md). Raises ValueError if cache_dir is $HOME or ~/.gaia."""
         ...
 
     def get_status(self) -> Dict[str, Any]:
