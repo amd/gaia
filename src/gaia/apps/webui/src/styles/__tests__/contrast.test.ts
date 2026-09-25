@@ -278,6 +278,8 @@ describe('component stylesheets route colour through tokens', () => {
     const LITERAL_ALLOWED: Record<string, string> = {
         '/src/utils/logger.ts':
             'DevTools `%c` category palette -- never painted in the app',
+        '/src/utils/theme.ts':
+            '<meta name="theme-color"> has no cascade to read --bg-primary from; both values are pinned to it below',
     };
 
     // Nothing under `__tests__` is painted, and a test that pins what a token
@@ -411,6 +413,48 @@ describe('the Electron windows mirror the dark theme rather than inventing one',
                 literal.toLowerCase(),
             );
             expect(why.length, path).toBeGreaterThan(20);
+        }
+    });
+});
+
+describe('the browser frame is painted the same canvas as the app', () => {
+    /**
+     * `index.html` sits outside `/src`, so the globs above miss it — the same
+     * blind spot that let the Electron windows keep an indigo canvas.
+     */
+    const INDEX_HTML = (
+        import.meta.glob('/index.html', {
+            query: '?raw',
+            import: 'default',
+            eager: true,
+        }) as Record<string, string>
+    )['/index.html'];
+
+    const THEME_TS = TS_SOURCES['/src/utils/theme.ts'];
+
+    it('reads both files, not an empty set', () => {
+        expect(INDEX_HTML, 'the /index.html glob picked up nothing').toBeTruthy();
+        expect(THEME_TS, 'the /src glob no longer reaches utils/theme.ts').toBeTruthy();
+    });
+
+    it('ships the dark canvas as the pre-paint value', () => {
+        const meta = /<meta\s+name="theme-color"\s+content="(#[0-9a-fA-F]{3,8})"/.exec(INDEX_HTML);
+        expect(meta, 'index.html declares no <meta name="theme-color">').not.toBeNull();
+        expect(meta![1].toLowerCase(), 'the frame would open a different colour from the app').toBe(
+            DARK['--bg-primary'].toLowerCase(),
+        );
+    });
+
+    it('rewrites it to the canvas of whichever theme is applied', () => {
+        for (const [theme, table] of [
+            ['light', LIGHT],
+            ['dark', DARK],
+        ] as const) {
+            const m = new RegExp(`${theme}:\\s*'(#[0-9a-fA-F]{3,8})'`).exec(THEME_TS);
+            expect(m, `theme.ts names no ${theme} canvas`).not.toBeNull();
+            expect(m![1].toLowerCase(), `${theme}: the frame no longer matches --bg-primary`).toBe(
+                table['--bg-primary'].toLowerCase(),
+            );
         }
     });
 });

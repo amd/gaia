@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData } from '../types';
+import { applyTheme } from '../utils/theme';
 
 interface ChatState {
     // Agents
@@ -309,7 +310,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => {
             const next = state.theme === 'dark' ? 'light' : 'dark';
             try { localStorage.setItem('gaia-chat-theme', next); } catch { /* noop */ }
-            document.documentElement.setAttribute('data-theme', next);
+            applyTheme(next);
             return { theme: next };
         }),
     sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
