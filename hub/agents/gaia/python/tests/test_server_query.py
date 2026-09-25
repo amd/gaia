@@ -230,22 +230,27 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
     assert console.bypass_permissions is False, "shell gates must stay on over HTTP"
 
 
-def _all_route_paths(router) -> set:
-    """Every path reachable under *router*, descending into sub-routers.
+def _served_paths(app) -> set:
+    """Every path the app serves, spelled as a client would call it.
 
-    The route list is not flat on every FastAPI version: ``include_router`` can
-    leave an ``_IncludedRouter`` wrapper that carries ``.routes`` but no
-    ``.path``. Reading ``.path`` off each entry raises there, and skipping the
-    entries that lack one would walk right past the mounted API.
+    Read from the OpenAPI schema rather than by walking ``app.routes``.
+    FastAPI 0.141 / Starlette 1.7 stopped flattening ``include_router`` into
+    that list and leave a lazy ``_IncludedRouter`` carrying neither ``.path``
+    nor ``.routes``, so a walk sees only what was declared on the app itself
+    and silently misses every mounted route.
     """
-    paths = set()
-    for route in getattr(router, "routes", ()):
-        path = getattr(route, "path", None)
-        if path is not None:
-            paths.add(path)
-        if hasattr(route, "routes"):
-            paths |= _all_route_paths(route)
-    return paths
+    return set(app.openapi()["paths"])
+
+
+def _declared_paths() -> set:
+    """The same surface from the shared router, with the mount prefix applied.
+
+    Checked alongside the schema because the two can disagree: an
+    ``include_in_schema=False`` route is served but absent above, and would
+    slip a second bypass control past the assertion below.
+    """
+    prefix = f"/v1/{server_mod.AGENT_ID}"
+    return {f"{prefix}{route.path}" for route in server_mod.router.routes}
 
 
 def test_the_http_transport_exposes_only_the_session_bypass_control():
@@ -256,48 +261,20 @@ def test_the_http_transport_exposes_only_the_session_bypass_control():
     mistake would take, so pin the set rather than merely forbidding the word —
     a new one fails here instead of shipping.
     """
-    paths = _all_route_paths(server_mod.build_app())
+    served = _served_paths(server_mod.build_app())
+    declared = _declared_paths()
 
-    # Guard the guard: assert the walk reached the mounted API namespace, or a
-    # route-tree change would leave the check below passing on an empty set.
-    # Keyed on the prefix, not one endpoint — which endpoints `build_app` mounts
-    # varies by environment, and pinning a specific one made this fail on CI
-    # while passing locally.
-    assert [
-        p for p in paths if p.startswith("/v1/gaia/")
-    ], f"route walk reached no /v1/gaia/ routes: {sorted(paths)}"
+    # Guard the guard, on a route the ROUTER contributes. Keying on the
+    # "/v1/gaia/" prefix let "/v1/gaia/version" — declared on the app, not the
+    # router — satisfy it alone, so the check below passed against an empty set
+    # on the FastAPI version CI installs.
+    assert "/v1/gaia/query" in served, sorted(served)
+    assert "/v1/gaia/query" in declared, sorted(declared)
 
-    assert {p for p in paths if "bypass" in p.lower()} == {
-        "/v1/gaia/sessions/{session_id}/bypass"
-    }
-
-
-def test_the_route_walk_descends_into_included_routers():
-    """Covers the shape this repo's pinned FastAPI does not produce locally.
-
-    On the CI version, ``include_router`` leaves a wrapper carrying ``.routes``
-    and no ``.path``. Without a real one to test against, the walk is asserted
-    on a stand-in of that shape — otherwise the guard above would be a fix
-    nobody had run.
-    """
-
-    class _Leaf:
-        def __init__(self, path):
-            self.path = path
-
-    class _IncludedRouterLike:
-        """No .path, only .routes — what broke the flat comprehension."""
-
-        def __init__(self, routes):
-            self.routes = routes
-
-    class _App:
-        routes = [
-            _Leaf("/health"),
-            _IncludedRouterLike([_Leaf("/v1/gaia/query"), _Leaf("/v1/gaia/init")]),
-        ]
-
-    assert _all_route_paths(_App()) == {"/health", "/v1/gaia/query", "/v1/gaia/init"}
+    for source, paths in (("served", served), ("declared", declared)):
+        assert {p for p in paths if "bypass" in p.lower()} == {
+            "/v1/gaia/sessions/{session_id}/bypass"
+        }, f"unexpected bypass routes in {source}: {sorted(paths)}"
 
 
 # ---------------------------------------------------------------------------
