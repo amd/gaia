@@ -15,6 +15,10 @@ This module contains shared configuration constants used across the evaluation f
 # judge change out explicitly, rather than reading a shifted score as a regression.
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 
+# The agent under test. Every scenario scores the flagship — the agent users
+# actually meet — so a scorecard names one agent and comparing two is valid.
+DEFAULT_AGENT_TYPE = "gaia"
+
 # Per-million-token pricing for cloud models. An absent model costs 0.0 (local), so
 # every reachable cloud model must be listed or its spend reads as free.
 # ``cached_per_mtok`` absent = cached input bills at the input rate; 0 = free.

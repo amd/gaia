@@ -440,7 +440,7 @@ icon: "bug"
     `gaia eval agent --compare` only *diffs* scorecards — it does not run an eval.
     - **Fix**: Run the eval first (`gaia eval agent --category <cat>`); it prints the run dir and writes `<run-dir>/scorecard.json`.
     - **Then**: `gaia eval agent --compare <baseline>/scorecard.json <run-dir>/scorecard.json`.
-    - **Baseline**: pick the committed baseline matching your model under `tests/fixtures/eval_baselines/` — don't rely on mtime sorting.
+    - **Baseline**: flagship baselines live in `tests/fixtures/eval_baselines/gaia-flagship/`. None is committed yet, so until the first one lands there is no regression verdict to report, only the scores the run measured.
   </Accordion>
 
   <Accordion title="Eval runs fail with chaotic context/model errors" icon="clipboard-question">
