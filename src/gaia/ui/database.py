@@ -456,7 +456,10 @@ class ChatDatabase:
         # pin it so the auto-retitler never overwrites it (#2165).
         title_is_custom = 0 if is_placeholder_title(title) else 1
         title = title or "New Chat"
-        agent_type = agent_type or "chat"
+        # The flagship, not `chat`: callers that don't pass an agent_type (API
+        # clients, the scheduler) would otherwise land on a hidden agent the
+        # picker no longer offers.
+        agent_type = agent_type or "gaia"
         device = device or "gpu"
         # mail_provider is a FILTER (#1596): no pick stays NULL ("every
         # connected mailbox") — never silently coerce to google.
