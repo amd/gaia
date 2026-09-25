@@ -12,8 +12,6 @@ depend on Lemonade or any LLM backend.
 """
 
 import logging
-import shutil
-import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -22,15 +20,18 @@ from fastapi.testclient import TestClient
 
 from gaia.ui.routers.documents import MAX_DOCUMENT_UPLOAD_SIZE
 from gaia.ui.server import create_app
+from gaia.ui.utils import managed_documents_dir
 
 logger = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.usefixtures("isolated_gaia_home")
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def app():
+def app(isolated_gaia_home):
     """Create FastAPI app with in-memory database."""
     return create_app(db_path=":memory:")
 
@@ -49,34 +50,19 @@ def mock_index_document():
 
 
 @pytest.fixture
-def managed_docs_sandbox():
-    """Isolate the managed docs dir for the duration of a test.
-
-    The production ``MANAGED_DOCS_DIR`` is ``~/.gaia/documents``. We don't
-    want tests dropping files into the user's real home dir, so we point
-    the module-level constant at a throwaway subdirectory inside
-    ``~/.gaia/test_documents_router/`` and clean it up afterwards.
-    """
-    sandbox = Path.home() / ".gaia" / "test_documents_router" / str(uuid.uuid4())[:8]
-    sandbox.mkdir(parents=True, exist_ok=True)
-    with patch("gaia.ui.routers.documents.MANAGED_DOCS_DIR", sandbox):
-        yield sandbox
-    try:
-        shutil.rmtree(str(sandbox))
-    except OSError as exc:
-        logger.warning("Failed to clean up sandbox %s: %s", sandbox, exc)
+def managed_docs_sandbox(isolated_gaia_home):
+    """The server-managed documents dir, under the test's ``GAIA_HOME``."""
+    sandbox = managed_documents_dir()
+    sandbox.mkdir(parents=True)
+    return sandbox
 
 
 @pytest.fixture
-def home_tmp_dir():
-    """Temp dir inside the user's home (needed for path-based upload tests)."""
-    tmp_dir = Path.home() / ".gaia" / "test_documents_router" / str(uuid.uuid4())[:8]
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    yield tmp_dir
-    try:
-        shutil.rmtree(str(tmp_dir))
-    except OSError as exc:
-        logger.warning("Failed to clean up %s: %s", tmp_dir, exc)
+def home_tmp_dir(isolated_gaia_home):
+    """Dir inside the (fake) home, where path-based uploads are allowed."""
+    tmp_dir = isolated_gaia_home / "test_documents_router"
+    tmp_dir.mkdir()
+    return tmp_dir
 
 
 # ── Blob upload happy paths ──────────────────────────────────────────────────

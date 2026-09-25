@@ -72,6 +72,7 @@ from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
 from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
 from .utils import sanitize_static_path as _sanitize_static_path
+from .utils import uploads_dir
 from .utils import validate_file_path as _validate_file_path  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -664,7 +665,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
-    _uploads_dir = Path.home() / ".gaia" / "chat" / "uploads"
+    _uploads_dir = uploads_dir()
     _uploads_dir.mkdir(parents=True, exist_ok=True)
     app.mount(
         "/api/files/uploads",

@@ -21,7 +21,6 @@ external processes during tests.
 import io
 import logging
 import platform
-import shutil
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -30,15 +29,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.ui.server import create_app
+from gaia.ui.utils import uploads_dir
 
 logger = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.usefixtures("isolated_gaia_home")
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def app():
+def app(isolated_gaia_home):
     """Create FastAPI app with in-memory database."""
     return create_app(db_path=":memory:")
 
@@ -50,26 +52,15 @@ def client(app):
 
 
 @pytest.fixture
-def home_tmp_dir():
-    """Create a temporary directory inside the user's home directory.
+def home_tmp_dir(isolated_gaia_home):
+    """Dir inside the (fake) home directory.
 
-    The files router restricts all browse/preview/open operations to paths
-    within Path.home(), so we must create test fixtures there rather than
-    in the system temp directory (which is typically outside home on Windows).
-
-    Yields the Path to the temporary directory and cleans it up afterwards.
+    The files router restricts browse/preview/open to paths within
+    ``Path.home()``, so fixtures must live under it.
     """
-    home = Path.home()
-    tmp_dir = home / ".gaia" / "test_files_router" / str(uuid.uuid4())[:8]
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("Created test temp dir: %s", tmp_dir)
-    yield tmp_dir
-    # Cleanup
-    try:
-        shutil.rmtree(str(tmp_dir))
-        logger.info("Cleaned up test temp dir: %s", tmp_dir)
-    except OSError as exc:
-        logger.warning("Failed to clean up %s: %s", tmp_dir, exc)
+    tmp_dir = isolated_gaia_home / "test_files_router"
+    tmp_dir.mkdir()
+    return tmp_dir
 
 
 @pytest.fixture
@@ -322,15 +313,15 @@ class TestFileUpload:
             stem = data["filename"][: -len(ext)]
             uuid.UUID(stem)  # Validates UUID format
 
-    def test_upload_creates_uploads_dir(self, client):
-        """Verify the uploads directory exists after an upload."""
+    def test_upload_is_stored_under_gaia_home(self, client):
+        """The upload lands in ``<GAIA_HOME>/chat/uploads``."""
         resp = client.post(
             "/api/files/upload",
             files={"file": ("test.txt", io.BytesIO(b"data"), "text/plain")},
         )
         assert resp.status_code == 200
-        uploads_dir = Path.home() / ".gaia" / "chat" / "uploads"
-        assert uploads_dir.is_dir(), "Uploads directory was not created"
+        stored = uploads_dir() / resp.json()["filename"]
+        assert stored.read_bytes() == b"data"
 
     def test_uploaded_file_accessible(self, client):
         """Verify the uploaded file can be served back via its URL."""
@@ -553,8 +544,8 @@ class TestFileSearch:
     def test_search_finds_file(self, client, home_tmp_dir, sample_text_file):
         """Search for a known filename should find it."""
         # The search scans Documents/Downloads/Desktop/OneDrive then home.
-        # Our file is under ~/.gaia/test_files_router/ which is under home,
-        # so it should be found in the home fallback scan.
+        # Our file is under <home>/test_files_router/, so it should be
+        # found in the home fallback scan.
         resp = client.get(
             "/api/files/search",
             params={"query": "sample.txt", "max_results": 50},
