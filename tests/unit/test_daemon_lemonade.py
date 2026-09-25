@@ -156,6 +156,32 @@ class TestBackgroundAndStop:
         assert owner.stop() is True
         embedded.stop.assert_called_once()
 
+    def test_stop_does_not_wait_out_a_start_in_flight(self, monkeypatch):
+        """Shutdown must fit `gaia daemon stop`'s wait, even mid-start."""
+        import gaia.daemon.lemonade as owner_mod
+
+        monkeypatch.setattr(owner_mod, "STOP_LOCK_TIMEOUT", 0.05)
+        embedded = _embedded(_running())
+        owner = _owner(embedded)
+        owner._started_pid = 7
+        owner._lock.acquire()  # a start holding the lock
+        try:
+            started = time.monotonic()
+            assert owner.stop() is False
+            assert time.monotonic() - started < 1.0
+        finally:
+            owner._lock.release()
+        embedded.stop.assert_not_called()
+
+    def test_stop_forgets_a_server_that_already_exited(self):
+        embedded = _embedded(_status())
+        owner = _owner(embedded)
+        owner.ensure()  # started pid 7, which has since died
+
+        assert owner.stop() is False
+        assert owner._started_pid is None
+        embedded.stop.assert_not_called()
+
     def test_stop_leaves_a_server_it_did_not_start(self):
         """Started by `gaia init`, the user, or another daemon: not ours to stop."""
         embedded = _embedded(_running())

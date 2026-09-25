@@ -3169,9 +3169,9 @@ Examples:
         "--check",
         action="store_true",
         help="Report whether this profile is already set up and exit — no "
-        "install, no download. A stopped GAIA Lemonade Server is started, as "
-        "any GAIA command would. Exit code 0 means ready, 1 means `gaia init` "
-        "still has work to do.",
+        "install, no download. A stopped GAIA Lemonade Server is started through "
+        "the GAIA daemon (started too if needed), as any GAIA command would. "
+        "Exit code 0 means ready, 1 means `gaia init` still has work to do.",
     )
 
     # Install command (install specific components)
@@ -7133,7 +7133,9 @@ def _handle_daemon_stop():
     except DaemonError as e:
         print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
         terminate_instance(inst)
-    if client.wait_until_gone(inst, timeout=10.0):
+    # Shutdown drains requests (5s), waits out a Lemonade start in flight (5s)
+    # and stops the Lemonade Server it started (up to 20s).
+    if client.wait_until_gone(inst, timeout=45.0):
         remove_instance(only_pid=inst.pid)
         print(f"✅ GAIA daemon stopped (pid {inst.pid})")
     else:

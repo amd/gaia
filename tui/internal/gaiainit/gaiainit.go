@@ -41,9 +41,11 @@ const Profile = "gaia"
 
 // CheckTimeout bounds the readiness probe. It runs a fresh Python interpreter
 // plus one Lemonade health check, so a few seconds is normal -- but after a
-// reboot it also has the daemon start GAIA's Lemonade Server, which can take a
-// minute on a cold disk. It only guards against a wedged call hanging forever.
-const CheckTimeout = 90 * time.Second
+// reboot it also starts the daemon (up to 30s) and has it start GAIA's
+// Lemonade Server (up to 85s, _LEMONADE_ENSURE_TIMEOUT in
+// gaia/daemon/client.py). It must stay above that sum, or the TUI reports
+// "could not be checked" for a start that succeeded.
+const CheckTimeout = 150 * time.Second
 
 // notReadyExitCode is the ONLY exit code that means "not set up yet".
 // Anything else — notably 2, which an installed gaia older than `--check`

@@ -21,6 +21,9 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+#: How long shutdown waits for a start already in flight before leaving it be.
+STOP_LOCK_TIMEOUT = 5.0
+
 
 class LemonadeNotManaged(Exception):
     """The daemon has nothing to start: another server is configured, or GAIA's
@@ -152,18 +155,34 @@ class EmbeddedLemonadeOwner:
     def stop(self) -> bool:
         """Stop the embedded server if this daemon started it.
 
+        Bounded so the daemon's shutdown fits `gaia daemon stop`'s wait: a
+        start still in flight is left to finish, and the server it brings up
+        keeps running like any other this daemon did not stop.
+
         Returns:
             True if a server was stopped.
 
         Raises:
             EmbeddedLemonadeError: The server would not stop.
         """
-        with self._lock:
+        if not self._lock.acquire(timeout=STOP_LOCK_TIMEOUT):
+            logger.warning(
+                "daemon: embedded Lemonade is still starting; leaving it running"
+            )
+            return False
+        try:
             if self._started_pid is None:
                 return False
             embedded = self._factory()
             current = embedded.status()
             recorded = current.pid or current.unresponsive_pid
+            if recorded is None:
+                logger.info(
+                    "daemon: embedded Lemonade (pid %s) had already exited",
+                    self._started_pid,
+                )
+                self._started_pid = None
+                return False
             if recorded != self._started_pid:
                 logger.info(
                     "daemon: leaving embedded Lemonade (pid %s) running; this "
@@ -175,3 +194,5 @@ class EmbeddedLemonadeOwner:
             stopped = embedded.stop()
             self._started_pid = None
             return stopped
+        finally:
+            self._lock.release()

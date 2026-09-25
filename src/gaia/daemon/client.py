@@ -49,8 +49,9 @@ _REQUIRED_LEMONADE_MINOR = 2
 # Ensure: connect fast; read generously — a first-run ensure may lazily fetch the
 # sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
 _ENSURE_TIMEOUT = (5.0, 900.0)
-# Covers stopping a stalled server (20s) plus a cold start's health wait (60s).
-_LEMONADE_ENSURE_TIMEOUT = (5.0, 120.0)
+# A cold start's health wait (60s) plus a start already in flight. Keep
+# gaiainit.CheckTimeout in the TUI above this plus daemon start (30s).
+_LEMONADE_ENSURE_TIMEOUT = (5.0, 80.0)
 
 UPGRADE_CORE_GUIDANCE = (
     "Upgrade the installed GAIA core so it matches this app: "
