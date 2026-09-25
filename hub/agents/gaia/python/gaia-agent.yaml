@@ -51,7 +51,7 @@ interfaces:
 
 requirements:
   min_memory_gb: 8
-  platforms: [win-x64, linux-x64, darwin-arm64]
+  platforms: [win-x64, linux-x64, darwin-arm64, darwin-x64]
 
 # ---------------------------------------------------------------------------
 # Skills

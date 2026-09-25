@@ -122,6 +122,13 @@ CHUNK_TRUNCATION_SIZE = 2500
 # for multi-file generation) override it explicitly in their own config.
 DEFAULT_MAX_STEPS = 50
 
+# Per-reply output caps. A local model's 32K ctx must also hold a ~7.7K-token
+# system prompt plus history, so 8K is the most output it can spare.
+LOCAL_MAX_OUTPUT_TOKENS = 8192
+# A cloud reasoning model spends output tokens on thinking too; its window is
+# the provider's, not local hardware's.
+CLOUD_MAX_OUTPUT_TOKENS = 32768
+
 
 def effective_skill_body(agent, skill) -> str:
     """*skill*'s authored body with *agent*'s approved learned changes applied.
@@ -395,6 +402,13 @@ _CONTEXT_STILL_OVERFLOWING_MESSAGE = (
     "after trimming older results. Try narrowing it — fewer results, a "
     "shorter date range, or a more specific query — or start a fresh "
     "conversation and ask again."
+)
+
+# Sent once, with no tools offered, when the step limit runs out unanswered.
+_STEP_CAP_ANSWER_PROMPT = (
+    "You have used all {steps} steps and can't call more tools. Give the user "
+    "your final answer now, using only what the tool results above show: what "
+    "you found, what you couldn't finish and why, and what they can do next."
 )
 
 
@@ -1192,6 +1206,7 @@ Do NOT wrap conversational replies in JSON.
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
+        max_output_tokens: Optional[int] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -1228,6 +1243,10 @@ Do NOT wrap conversational replies in JSON.
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
+            max_output_tokens: Output-token cap for each LLM reply, thinking
+                          included. None (default) picks per model:
+                          CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
+                          LOCAL_MAX_OUTPUT_TOKENS otherwise.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
@@ -1235,6 +1254,16 @@ Do NOT wrap conversational replies in JSON.
             from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
 
             raise ValueError(REMOVED_PROVIDER_MESSAGE)
+        if max_output_tokens is not None and (
+            isinstance(max_output_tokens, bool)
+            or not isinstance(max_output_tokens, int)
+            or max_output_tokens <= 0
+        ):
+            raise ValueError(
+                f"max_output_tokens must be a positive integer or None, got "
+                f"{max_output_tokens!r}."
+            )
+        self.max_output_tokens = max_output_tokens
         self.device = device
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -1396,6 +1425,8 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent shares DEFAULT_MODEL_NAME so switching agents never evicts
         # and cold-reloads the resident model.
+        from gaia.llm.lemonade_client import cloud_model_provider
+
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
@@ -1403,12 +1434,15 @@ Do NOT wrap conversational replies in JSON.
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking
             max_history_length=20,  # Keep more history for agent conversations
-            # Output token cap. With our 32K ctx_size and a ~7.7K-token system
-            # prompt + history, leaving 8K for output gives plenty of headroom
-            # for both prose answers and long tool-call arg blobs (the eval
-            # surfaced 4K cutting off mid-tool-call on Qwen 4B). Going much
-            # higher would steal from the input-history budget.
-            max_tokens=8192,
+            max_tokens=(
+                max_output_tokens
+                if max_output_tokens is not None
+                else (
+                    CLOUD_MAX_OUTPUT_TOKENS
+                    if not use_claude and cloud_model_provider(model_id)
+                    else LOCAL_MAX_OUTPUT_TOKENS
+                )
+            ),
         )
         self.chat = AgentSDK(chat_config)
         # ``self.model_id`` was set earlier (before ``_register_tools``) so the
@@ -1424,6 +1458,20 @@ Do NOT wrap conversational replies in JSON.
 
         if self.show_prompts:
             self.console.print_prompt(self.system_prompt, "Initial System Prompt")
+
+    def _max_output_tokens(self) -> int:
+        """Output-token cap for the next LLM call, re-read per call so a model
+        switch mid-session takes effect."""
+        if self.max_output_tokens is not None:
+            return self.max_output_tokens
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
+        if isinstance(backend, LemonadeClient) and backend.cloud_model_provider(
+            self.chat.effective_model
+        ):
+            return CLOUD_MAX_OUTPUT_TOKENS
+        return LOCAL_MAX_OUTPUT_TOKENS
 
     def _get_mixin_prompts(self) -> list[str]:
         """
@@ -2041,6 +2089,13 @@ Do NOT wrap conversational replies in JSON.
         """
         return frozenset(ref.name for ref in self.skill_sets.always)
 
+    def _active_skill_names(self) -> Optional[FrozenSet[str]]:
+        """Loaded skills whose body renders this turn; ``None`` means all of them."""
+        active_filter = getattr(self, "_active_skill_filter", None)
+        if active_filter is None:
+            return None
+        return frozenset(active_filter) | self._always_on_skill_names
+
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
 
@@ -2128,6 +2183,41 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_loaded_skills", None) is None:
             self._loaded_skills = {}
         return self._loaded_skills
+
+    #: The tool a ``shell:execute:<binary>`` grant is exercised through.
+    _SKILL_SHELL_TOOL: ClassVar[str] = "run_shell_command"
+
+    def _loaded_skill_tools(self) -> List[str]:
+        """Tools this turn's active skills need in the prompt, deduped, in load order.
+
+        Each active skill's ``tools_required``, plus the shell tool when it holds
+        a ``shell:execute:<binary>`` grant — a granted binary is useless without
+        the tool that runs it. Tools a skill *provides* through its own
+        ``tools.py`` are not included; they still reach the prompt by semantic
+        match. Only skills whose body renders this turn count (see
+        :meth:`_active_skill_names`), so a loaded skill the turn is not about
+        holds no tool slots. Feeds the tool loader's SKILL signal, so an active
+        skill's tools arrive without a separate ``load_tools`` round trip.
+        """
+        skills = getattr(self, "_loaded_skills", None)
+        if not skills:
+            return []
+        active = self._active_skill_names()
+        grant_holders = self.granted_binaries.holders()
+
+        tools: List[str] = []
+        seen: set = set()
+        for skill in skills.values():
+            if active is not None and skill.name not in active:
+                continue
+            names = list(skill.gaia.tools_required)
+            if skill.name in grant_holders:
+                names.append(self._SKILL_SHELL_TOOL)
+            for name in names:
+                if name not in seen:
+                    seen.add(name)
+                    tools.append(name)
+        return tools
 
     @property
     def granted_binaries(self) -> "BinaryGrants":
@@ -2762,7 +2852,7 @@ Do NOT wrap conversational replies in JSON.
                 return ""
             return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
 
-        active = set(active_filter) | self._always_on_skill_names
+        active = self._active_skill_names()
         body_sections = []
         menu_lines = []
         for skill in sorted(skills.values(), key=lambda s: s.name):
@@ -3528,14 +3618,15 @@ Do NOT wrap conversational replies in JSON.
                 # context window — those are separate limits and conflating
                 # them led to misleading error messages telling users to
                 # raise ``--ctx-size`` when their ctx was already 32K. The
-                # actual fix is bumping the output budget in
-                # ``AgentConfig.max_tokens`` (or, for one-off long tool calls,
+                # actual fix is bumping the output budget via the agent's
+                # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
                 raise ValueError(
                     f"Tool call truncated mid-arguments (finish_reason=length). "
                     f"Model {self.model_id} ran out of output tokens before "
-                    f"finishing the call — increase AgentConfig.max_tokens."
+                    f"finishing the call ({self._max_output_tokens()} max) — "
+                    f"pass a larger max_output_tokens to the agent."
                 )
             if not raw_tool_calls:
                 raise ValueError(
@@ -4485,18 +4576,13 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Informative message about what was accomplished
         """
-        # Analyze what was done
-        tool_calls = [
-            msg
+        # Every executed call leaves one ``role: tool`` entry, whatever loop
+        # path ran it; assistant entries also hold calls that never ran.
+        tools_used = [
+            msg["name"]
             for msg in conversation
-            if msg.get("role") == "assistant" and "tool_calls" in msg
+            if msg.get("role") == "tool" and msg.get("name")
         ]
-
-        tools_used = []
-        for msg in tool_calls:
-            for tool_call in msg.get("tool_calls", []):
-                if "function" in tool_call:
-                    tools_used.append(tool_call["function"]["name"])
 
         message = f"⚠️ Reached maximum steps limit ({steps_limit} steps)\n\n"
         message += f"Completed {steps_taken} steps using these tools:\n"
@@ -4514,6 +4600,103 @@ Do NOT wrap conversational replies in JSON.
         message += "3. Or complete remaining tasks manually\n"
 
         return message
+
+    def _answer_at_step_cap(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        steps_limit: int,
+        step: int,
+    ) -> Optional[str]:
+        """Ask for the final answer once the step limit is spent, no tool calls.
+
+        Same model path and tools as the loop (streaming or not), plus
+        ``tool_choice="none"``. Returns the answer, or ``None`` when the user
+        pressed Stop. Raises when the call fails or the reply is not an answer;
+        the caller says why.
+        """
+        cancel_event = getattr(self, "_cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("the request was cancelled")
+        if self._console_cancelled():
+            return None
+
+        request = messages + [
+            {
+                "role": "user",
+                "content": _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+            }
+        ]
+        # Tool history needs the tools on some providers; the model may not call one.
+        tools = self._openai_tools
+        no_calls = {"tool_choice": "none"} if tools else {}
+        stats = None
+        if self.streaming:
+            stream = self.chat.send_messages_stream(
+                messages=request,
+                system_prompt=self.system_prompt,
+                tools=tools,
+                **no_calls,
+            )
+            response = ""
+            for chunk in stream:
+                if self._console_cancelled():
+                    stream.close()
+                    return None
+                if chunk.is_complete:
+                    stats = chunk.stats
+                    response = chunk.text or response
+                else:
+                    self.console.print_streaming_text(chunk.text)
+                    response += chunk.text
+            self.console.print_streaming_text("", end_of_stream=True)
+        else:
+            self.console.start_progress(self._progress_label())
+            try:
+                reply = self.chat.send_messages(
+                    messages=request,
+                    system_prompt=self.system_prompt,
+                    tools=tools,
+                    **no_calls,
+                )
+            finally:
+                self.console.stop_progress()
+            response, stats = reply.text, reply.stats
+
+        perf_stats = stats or self.chat.get_stats()
+        if perf_stats:
+            conversation.append(
+                {
+                    "role": "system",
+                    "content": {
+                        "type": "stats",
+                        "step": step,
+                        "performance_stats": perf_stats,
+                    },
+                }
+            )
+
+        response = re.sub(
+            r"<think>.*?</think>", "", response or "", flags=re.DOTALL
+        ).strip()
+        if not response:
+            raise ValueError("the model returned an empty reply")
+        parsed = self._parse_llm_response(response)
+        answer = parsed.get("answer")
+        if not isinstance(answer, str):
+            answer = ""
+        requested = [c["name"] for c in parsed.get("tool_calls") or []]
+        if not requested and parsed.get("tool"):
+            requested = [parsed["tool"]]
+        if requested or _unfinished_answer_kind(answer) == "tool_markup":
+            raise ValueError(
+                f"the model asked to run {', '.join(requested) or 'another tool'} "
+                "instead of answering"
+            )
+        if not answer.strip():
+            raise ValueError("the model's reply had no answer in it")
+        conversation.append({"role": "assistant", "content": parsed})
+        return answer
 
     def _write_json_to_file(self, data: Dict[str, Any], filename: str = None) -> str:
         """
@@ -5622,14 +5805,14 @@ Do NOT wrap conversational replies in JSON.
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
 
+        # Lazy skill-body activation (#2848 follow-up): re-selected every turn,
+        # so a stale skill match never survives into a turn that no longer
+        # needs it. Before the tool filter, which admits active skills' tools.
+        self._refresh_active_skill_filter(user_input)
+
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
-
-        # Lazy skill-body activation (#2848 follow-up): same per-turn timing
-        # as the tool filter above, so a stale skill match never survives
-        # into a turn that no longer needs it.
-        self._refresh_active_skill_filter(user_input)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []
@@ -5657,6 +5840,9 @@ Do NOT wrap conversational replies in JSON.
         # Set when the Agent-UI Stop is observed mid-generation (per-token) so
         # the turn ends with empty text instead of a completed answer (#2157).
         cancelled_by_console = False
+        # Set when the person at the prompt declines more steps. Distinct from
+        # cancelled_by_console, which only the Agent UI Stop button sets.
+        user_stopped = False
         error_count = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
         # Repeated calls already sent one correction; the next repeat ends the turn.
@@ -6153,6 +6339,7 @@ Do NOT wrap conversational replies in JSON.
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -6331,6 +6518,7 @@ Do NOT wrap conversational replies in JSON.
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -6623,6 +6811,7 @@ Do NOT wrap conversational replies in JSON.
                         messages=messages,
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
                     )
 
                     for chunk_response in stream_gen:
@@ -6665,6 +6854,7 @@ Do NOT wrap conversational replies in JSON.
                         messages=messages,
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
                     self.console.stop_progress()
@@ -7925,13 +8115,59 @@ Do NOT wrap conversational replies in JSON.
                             )
                         else:
                             self.console.print_info("Stopping at user request.")
+                            user_stopped = True
                             break
                     except (EOFError, KeyboardInterrupt):
                         self.console.print_info("\nStopping at user request.")
+                        user_stopped = True
                         break
                 else:
                     # Silent mode - just stop
                     break
+
+        # Out of steps with no answer: one more call, tools withheld, so the
+        # user hears what was found rather than only the canned note.
+        max_steps_reached = (
+            final_answer is None and not cancelled_by_console and not user_stopped
+        )
+        if max_steps_reached:
+            tool_steps = steps_taken
+            steps_taken += 1
+            if self._turn_recorder is not None and self.chat is not None:
+                self.chat.turn_step = steps_taken
+            self.execution_state = self.STATE_COMPLETION
+            try:
+                cap_answer = self._answer_at_step_cap(
+                    messages, conversation, steps_limit, steps_taken
+                )
+            except Exception as e:  # noqa: BLE001 - the reason goes in the answer
+                logger.warning("Could not write the step-limit summary: %s", e)
+                final_answer = (
+                    self._generate_max_steps_message(
+                        conversation, tool_steps, steps_limit
+                    ).rstrip()
+                    + f"\n\nThe summary of what I found couldn't be written: {e}"
+                )
+            else:
+                if cap_answer is None:
+                    cancelled_by_console = True
+                else:
+                    final_answer = self._with_verification_scope(
+                        self.finalize_answer(cap_answer, conversation)
+                    )
+                    verification_scope_applied = True
+                    _cap_input_tokens, cap_output_tokens = _sum_conversation_tokens(
+                        conversation, self._tool_reported_usage
+                    )
+                    turn_record = self._finish_turn_record(final_answer, steps_taken)
+                    self._publish_turn_metrics(turn_record)
+                    self.console.print_final_answer(
+                        final_answer,
+                        streaming=self.streaming,
+                        total_tokens=cap_output_tokens,
+                        ttft_seconds=_query_ttft_seconds(conversation),
+                        tok_per_s=_query_tok_per_s(conversation),
+                    )
 
         # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn
         # with empty text so it doesn't rehydrate as a completed answer and the
@@ -7972,8 +8208,8 @@ Do NOT wrap conversational replies in JSON.
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
-        # overflow, typed Lemonade error, parse give-up, loop-break summary —
-        # or leaves it None for the max-steps message below. Those are
+        # overflow, typed Lemonade error, parse give-up, loop-break summary,
+        # step-limit note when the closing call failed. Those are
         # disproportionately the runs that went wrong, so they need the scope
         # line most (#3376). The console-cancellation path returns above with a
         # deliberately empty result and is excluded (#3386).
@@ -7988,7 +8224,7 @@ Do NOT wrap conversational replies in JSON.
         result = {
             "status": (
                 "success"
-                if has_valid_answer and not has_errors
+                if has_valid_answer and not has_errors and not max_steps_reached
                 else ("failed" if has_errors else "incomplete")
             ),
             "result": (
@@ -8003,6 +8239,7 @@ Do NOT wrap conversational replies in JSON.
             "system_prompt": self.system_prompt,  # Include system prompt in the result
             "conversation": conversation,
             "steps_taken": steps_taken,
+            "max_steps_reached": max_steps_reached,
             "duration": total_duration,  # Total query processing time in seconds
             "input_tokens": total_input_tokens,  # Total input tokens across all steps
             "output_tokens": total_output_tokens,  # Total output tokens across all steps
