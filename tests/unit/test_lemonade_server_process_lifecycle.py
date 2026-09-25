@@ -220,10 +220,13 @@ def test_a_listener_that_exits_before_the_kill_is_not_an_error():
     """
     client = LemonadeClient(host="localhost", port=13305, verbose=False)
     with (
-        patch(
-            "gaia.llm.lemonade_client.listeners_on_port",
-            side_effect=[[(4242, "llama-server")], []],
+        patch.object(
+            LemonadeClient,
+            "_classify_port_listeners",
+            return_value=([(4242, "llama-server")], []),
         ),
+        # The re-check finds the port free: the pid really is gone.
+        patch("gaia.llm.lemonade_client.listeners_on_port", return_value=[]),
         patch(
             "gaia.llm.lemonade_client.terminate_pid",
             side_effect=subprocess.CalledProcessError(1, "kill"),
@@ -236,9 +239,15 @@ def test_a_listener_that_survives_the_kill_fails_loudly():
     """Still holding the port after a failed kill is a real, named failure."""
     client = LemonadeClient(host="localhost", port=13305, verbose=False)
     with (
+        patch.object(
+            LemonadeClient,
+            "_classify_port_listeners",
+            return_value=([(4242, "llama-server")], []),
+        ),
+        # The re-check still finds it: the kill genuinely did not work.
         patch(
             "gaia.llm.lemonade_client.listeners_on_port",
-            side_effect=[[(4242, "llama-server")], [(4242, "llama-server")]],
+            return_value=[(4242, "llama-server")],
         ),
         patch(
             "gaia.llm.lemonade_client.terminate_pid",

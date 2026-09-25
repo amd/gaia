@@ -14,9 +14,11 @@ Two rules make the targeting safe, and both live here:
 
 1. Only a socket in the LISTENING state whose *local* port is exactly the
    requested one counts. Columns are parsed; nothing is substring-matched.
-2. The owning process must be GAIA's or Lemonade's. Same identity check
-   :meth:`gaia.llm.lemonade_embedded.LemonadeEmbedded._daemon_alive` makes
-   before trusting a recorded pid.
+2. The owning process must run under a name GAIA's own servers use. Same
+   identity check :meth:`gaia.llm.lemonade_embedded.LemonadeEmbedded._daemon_alive`
+   makes before trusting a recorded pid. It is interpreter-level, so it
+   excludes a native service but not another Python or Node server —
+   :func:`is_gaia_process` is the stricter check for callers that need one.
 """
 
 from __future__ import annotations
