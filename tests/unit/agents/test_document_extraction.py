@@ -1477,3 +1477,25 @@ def test_invalid_unicode_is_a_retryable_reply_error():
     raw = '{"complete": true, "items": [{"quote": "page", "text": "\\ud800"}]}'
     with pytest.raises(ValueError, match="Unicode"):
         parse_page(raw, "page", 0)
+
+
+def test_a_model_loaded_skill_switches_extraction_on_mid_turn(agent, tmp_path):
+    from types import SimpleNamespace
+
+    (tmp_path / "workshop.txt").write_text("Exercise ALPHA")
+    # The model, not the query, picks the skill: the request alone is not exhaustive.
+    agent._extraction_ledger = ExtractionLedger(
+        "Go through workshop.txt for me", str(tmp_path)
+    )
+    agent._loaded_skills = {
+        "document-extract": SimpleNamespace(
+            name="document-extract",
+            body="Extract every requested item from the source document.",
+        )
+    }
+    assert not agent._extraction_ledger.enabled
+    agent._handle_large_tool_result(
+        "load_skill", {"status": "success"}, [], {"name": "document-extract"}
+    )
+    assert agent._extraction_ledger.enabled
+    assert "extract_document_items" in agent._tools_registry
