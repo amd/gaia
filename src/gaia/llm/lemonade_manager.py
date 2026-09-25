@@ -1361,4 +1361,9 @@ class LemonadeManager:
             cls._context_ceiling_model = None
             cls._last_recheck_time = 0.0
             cls._validated_min_devices = set()
+            # Signal before dropping it: waiters hold their own reference, and
+            # the preload that would have set it is gone.
+            if cls._preload_in_flight is not None:
+                cls._preload_in_flight.set()
+                cls._preload_in_flight = None
             cls._log.debug("LemonadeManager state reset")

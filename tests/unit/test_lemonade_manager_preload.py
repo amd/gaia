@@ -348,6 +348,25 @@ def test_failed_preload_releases_waiting_callers(mock_cls):
     assert LemonadeManager.is_initialized() is False
 
 
+def test_reset_releases_a_preload_that_will_never_finish():
+    """`reset()` must not leave a waiter parked on an event nobody will set.
+
+    A concurrency test that aborts mid-load leaves the preload thread behind —
+    `join(timeout=...)` does not stop it. The autouse reset fixture then runs,
+    and without this the next `ensure_ready` waits on that event forever: the
+    whole session hangs with no failure report.
+    """
+    orphaned = threading.Event()
+    LemonadeManager._preload_in_flight = orphaned
+
+    LemonadeManager.reset()
+
+    assert LemonadeManager._preload_in_flight is None
+    # Waiters captured the object itself, so clearing the slot is not enough.
+    assert orphaned.is_set()
+    assert orphaned.wait(timeout=1.0) is True
+
+
 # ---------------------------------------------------------------------------
 # Case 8 —sanity: DEFAULT_CONTEXT_SIZE constant matches expected literal
 # ---------------------------------------------------------------------------
