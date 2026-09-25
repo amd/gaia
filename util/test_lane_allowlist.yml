@@ -1,0 +1,24 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Test files that no CI lane runs, on purpose.
+#
+# Read by util/check_test_lane_coverage.py. A file listed here is exempt from
+# the "every test file must be named by a lane" rule; a file that is neither
+# listed nor named by a lane fails the check.
+#
+# The reason is the whole point. "No lane runs this" is a decision someone has
+# to be able to review, so say what makes the file unrunnable in CI — hardware
+# that no runner has, a live third-party account, a stress run measured in
+# hours. "Not ready yet" is not a reason; wire it into a lane instead.
+#
+# The checker also fails on a stale entry: one naming a file that no longer
+# exists, or one a lane has since started running. Both mean the allowlist has
+# drifted from reality and is no longer telling you anything.
+#
+# Deliberately empty. The checker currently reports 42 files in this state and
+# triaging them is a separate piece of work — several need no hardware at all
+# and should simply be wired into a lane. Filling this file in wholesale would
+# record that debt as a decision, which is exactly what it is not.
+
+files: {}

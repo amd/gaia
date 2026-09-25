@@ -18,6 +18,7 @@ import pytest
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    GPU_CTX_SIZE,
     MODELS,
     LemonadeClient,
     LemonadeStatus,
@@ -33,6 +34,15 @@ from gaia.llm.providers.lemonade import (
     LemonadeUpstreamTimeoutError,
     _classify_lemonade_response,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_context_config(monkeypatch):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
+
 
 # ── load_model: llamacpp_args & ctx_size request construction ─────────
 
@@ -160,7 +170,7 @@ class TestLoadModelRequestConstruction:
 
 class TestEnsureModelLoadedCtxResolution:
     """Verify _ensure_model_loaded resolves ctx_size correctly from the
-    MODELS registry and falls back to DEFAULT_CONTEXT_SIZE for unknowns.
+    MODELS registry and uses the configured device profile for unknowns.
     """
 
     @pytest.fixture(autouse=True)
@@ -199,7 +209,7 @@ class TestEnsureModelLoadedCtxResolution:
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_unknown_model_falls_back_to_default_ctx(self, mock_load, mock_status):
-        """Models not in MODELS registry get DEFAULT_CONTEXT_SIZE (32K)."""
+        """Models not in MODELS registry get the configured GPU profile."""
         client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(running=True, loaded_models=[])
 
@@ -209,7 +219,7 @@ class TestEnsureModelLoadedCtxResolution:
             "my-custom-model-GGUF",
             auto_download=True,
             prompt=False,
-            ctx_size=DEFAULT_CONTEXT_SIZE,
+            ctx_size=GPU_CTX_SIZE,
         )
 
     @patch.object(LemonadeClient, "get_status")
@@ -704,7 +714,7 @@ class TestModelsRegistry:
                 ), f"{key} has smaller ctx than qwen3-0.6b"
 
     def test_default_context_size_value(self):
-        """DEFAULT_CONTEXT_SIZE is 32768 -- the fallback for unknown models."""
+        """DEFAULT_CONTEXT_SIZE retains its public 32768 compatibility value."""
         assert DEFAULT_CONTEXT_SIZE == 32768
 
     def test_embedding_model_has_tool_calling_false(self):
@@ -728,6 +738,7 @@ class TestLemonadeProviderRepetitionDefaults:
         """chat() should inject repeat_penalty and repeat_last_n defaults."""
         provider = LemonadeProvider.__new__(LemonadeProvider)
         provider._backend = MagicMock(spec=LemonadeClient)
+        provider._backend.cloud_model_provider.return_value = None
         provider._model = "Gemma-4-E4B-it-GGUF"
         provider._system_prompt = None
 
@@ -756,6 +767,9 @@ class TestLemonadeProviderRepetitionDefaults:
         """Caller-specified repeat_penalty overrides the default."""
         provider = LemonadeProvider.__new__(LemonadeProvider)
         provider._backend = MagicMock(spec=LemonadeClient)
+        # Without this the mock is truthy and the local-defaults block is skipped,
+        # so the override would be asserted against no default at all.
+        provider._backend.cloud_model_provider.return_value = None
         provider._model = "Gemma-4-E4B-it-GGUF"
         provider._system_prompt = None
 
@@ -776,6 +790,9 @@ class TestLemonadeProviderRepetitionDefaults:
 
         call_kwargs = provider._backend.chat_completions.call_args[1]
         assert call_kwargs["repeat_penalty"] == 1.5
+        # Pins that the defaults block ran at all, so the override above is
+        # asserted against a default rather than against an empty branch.
+        assert call_kwargs["repeat_last_n"] == 256
 
 
 # ── LemonadeProvider: error classification integration ────────────────

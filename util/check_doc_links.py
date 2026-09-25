@@ -258,8 +258,10 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
                 return "ok", f"HTTP {code}" + (" (GitHub API)" if api_url else "")
             return "broken", f"HTTP {code}"
     except urllib.error.HTTPError as e:
-        # Some servers reject HEAD, retry with GET
-        if e.code == 405 or e.code == 403:
+        # Some servers reject HEAD, retry with GET. 400 belongs here as much as
+        # 405 does: status.canonical.com answers HEAD with 400 and GET with 200.
+        # A real 400 still fails below, because the retry must come back < 400.
+        if e.code in (400, 403, 405):
             try:
                 req_get = urllib.request.Request(
                     effective_url, headers=headers, method="GET"
