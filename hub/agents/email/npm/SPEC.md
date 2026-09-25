@@ -527,7 +527,11 @@ shuts down on any failure so a failed start never leaks a process. It refuses to
 attach to a server it did not start: if something already listens on the port it
 throws `PortInUseError` before spawning (use `connectSidecar` to reuse a running
 server), and if its own child exits while another process answers the port it
-throws `SidecarExitedError`. A child that dies during startup ends the health wait
+throws `SidecarExitedError`. That port-conflict claim follows a `/health` probe,
+never the bare fact that the child died: when the child exits and **nothing**
+answers the port, the same `SidecarExitedError` reports a sidecar that became
+healthy and then crashed, and does not send the caller looking for an incumbent
+that was never there. A child that dies during startup ends the health wait
 at once instead of running out the timeout. For finer control, the steps are
 exported individually:
 
