@@ -2035,8 +2035,8 @@ class LemonadeClient:
             f"attempting auto-download and load..."
         )
 
-        # Load model with auto-download (includes prompt, validation, etc.)
-        self.load_model(model, timeout=60, auto_download=True)
+        # Load at GAIA's ctx, or the next request cold-reloads it at that size.
+        self._ensure_model_loaded(model, auto_download=True)
 
         # Retry the API call
         self.log.info(

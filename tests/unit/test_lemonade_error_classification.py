@@ -750,13 +750,13 @@ class TestExecuteWithAutoDownloadNarrowing:
         api_call = MagicMock(return_value={"choices": [{"message": {"content": "ok"}}]})
         error = LemonadeClientError("model not loaded")
 
-        with patch.object(client, "load_model") as mock_load:
+        with patch.object(client, "_ensure_model_loaded") as mock_ensure:
             result = client._execute_with_auto_download(
                 api_call, "gemma4-it-e2b-FLM", True, error=error
             )
 
         assert result == {"choices": [{"message": {"content": "ok"}}]}
-        mock_load.assert_called_once()
+        mock_ensure.assert_called_once_with("gemma4-it-e2b-FLM", auto_download=True)
         api_call.assert_called_once()
 
     def test_auto_download_disabled_re_raises_even_for_missing_model(self) -> None:
@@ -820,14 +820,81 @@ class TestExecuteWithAutoDownloadNarrowing:
             status=200,
         )
         client = _client()
-        with (
-            patch.object(client, "_ensure_model_loaded"),
-            patch.object(client, "load_model") as mock_load,
-        ):
+        with patch.object(client, "_ensure_model_loaded") as mock_ensure:
             result = client.chat_completions(
                 model="gemma4-it-e2b-FLM",
                 messages=[{"role": "user", "content": "hi"}],
             )
         assert result["choices"][0]["message"]["content"] == "ok"
         assert len(_responses.calls) == 2
-        mock_load.assert_called_once()
+        # Once for the pre-flight, once for the missing-model recovery.
+        assert mock_ensure.call_count == 2
+
+
+# ── #4292: the auto-download retry must load at GAIA's ctx, not Lemonade's ──
+
+
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_LOAD_TIMEOUT,
+    LemonadeStatus,
+    resolve_ctx_size,
+)
+
+
+def _cold_server(client: LemonadeClient):
+    """Patch the status probes to report an empty server, with no HTTP."""
+    return (
+        patch.object(client, "get_status", return_value=LemonadeStatus(running=True)),
+        patch.object(client, "list_models", return_value={"data": []}),
+    )
+
+
+class TestAutoDownloadLoadsAtResolvedCtx:
+    """A first-run auto-download must not load at Lemonade's default ctx and
+    then cold-reload on the next request."""
+
+    def test_missing_model_loads_at_resolved_ctx(self, monkeypatch) -> None:
+        monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+        model = "Gemma-4-E4B-it-GGUF"
+        client = _client()
+        api_call = MagicMock(return_value={"ok": True})
+        status_patch, list_patch = _cold_server(client)
+
+        with status_patch, list_patch, patch.object(client, "load_model") as load:
+            result = client._execute_with_auto_download(
+                api_call, model, True, error=LemonadeClientError("model not found")
+            )
+
+        assert result == {"ok": True}
+        load.assert_called_once()
+        assert load.call_args.kwargs["ctx_size"] == resolve_ctx_size(model=model)
+        # A multi-GB cold load gets the standard load budget, not 60 s.
+        assert (
+            load.call_args.kwargs.get("timeout", DEFAULT_MODEL_LOAD_TIMEOUT)
+            == DEFAULT_MODEL_LOAD_TIMEOUT
+        )
+        api_call.assert_called_once()
+
+    def test_missing_model_honours_client_ctx_pin(self) -> None:
+        pin = 12288
+        model = "Gemma-4-E4B-it-GGUF"
+        client = LemonadeClient(host="localhost", port=13305, ctx_size_override=pin)
+        api_call = MagicMock(return_value={"ok": True})
+        status_patch, _ = _cold_server(client)
+
+        with (
+            status_patch,
+            patch.object(client, "unload_model"),
+            patch.object(
+                client,
+                "_wait_model_state",
+                side_effect=[None, {"recipe_options": {"ctx_size": pin}}],
+            ),
+            patch.object(client, "load_model") as load,
+        ):
+            client._execute_with_auto_download(
+                api_call, model, True, error=LemonadeClientError("model not found")
+            )
+
+        load.assert_called_once()
+        assert load.call_args.kwargs["ctx_size"] == pin
