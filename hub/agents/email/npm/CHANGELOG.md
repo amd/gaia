@@ -6,6 +6,14 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **`agent-email` now understands `--port=9000` and refuses malformed flags
+  instead of quietly using the default port.** `--port=9000` was read as an
+  unknown switch, a bare `--port` or `--out` printed "ignoring" and carried on,
+  and `--port 0x1f90` was accepted as hex — each ran on 8131 while you thought
+  you'd picked something else. Both `--flag value` and `--flag=value` now work,
+  ports must be plain digits, and a missing or unexpected value stops with
+  exit code 2 and the usage text.
+
 - **Starting the sidecar when port 8131 is already taken now fails with a clear
   error instead of pretending it worked.** If an earlier `agent-email
   playground` or another server held the port, `startSidecar` handed back a

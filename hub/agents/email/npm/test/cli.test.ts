@@ -5,15 +5,45 @@ import { describe, expect, it } from "vitest";
 import {
   cmdDev,
   DEFAULT_PLAYGROUND_CACHE,
+  main,
+  parseArgs,
   resolveDevCommand,
   resolvePlaygroundPort,
+  UsageError,
 } from "../src/cli.js";
 
+describe("parseArgs", () => {
+  it("accepts --flag=value as well as --flag value", () => {
+    expect(parseArgs(["playground", "--port=9000"]).flags.port).toBe("9000");
+    expect(parseArgs(["playground", "--port", "9000"]).flags.port).toBe("9000");
+    expect(parseArgs(["fetch", "--out=/tmp/x=y"]).flags.out).toBe("/tmp/x=y");
+  });
+
+  it("rejects a value flag with no value instead of falling back to the default", () => {
+    expect(() => parseArgs(["playground", "--port"])).toThrow(UsageError);
+    expect(() => parseArgs(["playground", "--port", "--no-open"])).toThrow(/--port expects a value/);
+    expect(() => parseArgs(["fetch", "--out"])).toThrow(UsageError);
+    expect(() => parseArgs(["playground", "--port="])).toThrow(/empty value/);
+  });
+
+  it("rejects a value on a boolean switch", () => {
+    expect(() => parseArgs(["fetch", "--force=yes"])).toThrow(/does not take a value/);
+  });
+});
+
+describe("main", () => {
+  it("raises a UsageError (exit 2) for a bare --port rather than binding the default", async () => {
+    await expect(main(["playground", "--port"])).rejects.toBeInstanceOf(UsageError);
+  });
+
+  it("raises a UsageError for an unknown command", async () => {
+    await expect(main(["nope"])).rejects.toBeInstanceOf(UsageError);
+  });
+});
+
 describe("playground --port validation", () => {
-  it("defaults to 8131 when no value is given", () => {
+  it("defaults to 8131 when --port is absent", () => {
     expect(resolvePlaygroundPort(undefined)).toEqual({ port: 8131 });
-    // a bare `--port` (no value) parses to boolean true → still the default
-    expect(resolvePlaygroundPort(true)).toEqual({ port: 8131 });
   });
 
   it("accepts a valid port", () => {
@@ -21,7 +51,7 @@ describe("playground --port validation", () => {
     expect(resolvePlaygroundPort("65535")).toEqual({ port: 65535 });
   });
 
-  it.each(["abc", "0", "-1", "70000", "8131.5", "4001"])(
+  it.each(["abc", "0", "-1", "70000", "8131.5", "4001", "0x1f90", "1e3", " 80 ", ""])(
     "rejects %s with an actionable error (the friendly exit-2 path)",
     (bad) => {
       const r = resolvePlaygroundPort(bad);

@@ -34,21 +34,33 @@ interface ParsedArgs {
 // the next flag as a value (or drops the value).
 const VALUE_FLAGS = new Set(["out", "base-url", "platform", "port", "python", "cmd"]);
 
-function parseArgs(argv: string[]): ParsedArgs {
+/** Raised for a malformed command line; the entry point turns it into exit 2. */
+export class UsageError extends Error {}
+
+export function parseArgs(argv: string[]): ParsedArgs {
   const out: ParsedArgs = { _: [], flags: {} };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a.startsWith("--")) {
-      const key = a.slice(2);
+      const eq = a.indexOf("=");
+      const key = eq === -1 ? a.slice(2) : a.slice(2, eq);
+      const inline = eq === -1 ? undefined : a.slice(eq + 1);
       if (VALUE_FLAGS.has(key)) {
+        if (inline !== undefined) {
+          if (inline === "") throw new UsageError(`--${key} was given an empty value`);
+          out.flags[key] = inline;
+          continue;
+        }
         const next = argv[i + 1];
         if (next === undefined || next.startsWith("--")) {
-          process.stderr.write(`warning: --${key} expects a value; ignoring\n`);
-          continue;
+          throw new UsageError(`--${key} expects a value`);
         }
         out.flags[key] = next;
         i++;
       } else {
+        if (inline !== undefined) {
+          throw new UsageError(`--${key} does not take a value (got '${a}')`);
+        }
         out.flags[key] = true;
       }
     } else {
@@ -163,7 +175,8 @@ function openBrowser(url: string): void {
 export function resolvePlaygroundPort(
   raw: string | boolean | undefined,
 ): { port: number } | { error: string } {
-  const port = typeof raw === "string" ? Number(raw) : 8131;
+  // Strict digits: Number() accepts "0x1f90", "1e3", and " 80 ".
+  const port = typeof raw === "string" ? (/^\d+$/.test(raw) ? Number(raw) : NaN) : 8131;
   if (!Number.isInteger(port) || port <= 0 || port > 65535 || port === 4001) {
     return {
       error: `--port must be a port in 1..65535 and not 4001 (got ${String(raw)})`,
@@ -374,8 +387,8 @@ function cmdVersion(): number {
   return 0;
 }
 
-async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+export async function main(argv: string[]): Promise<number> {
+  const args = parseArgs(argv);
   const cmd = args._[0] ?? "help";
   switch (cmd) {
     case "playground":
@@ -391,8 +404,7 @@ async function main(): Promise<number> {
       process.stdout.write(HELP);
       return 0;
     default:
-      process.stderr.write(`error: unknown command '${cmd}'\n\n${HELP}`);
-      return 2;
+      throw new UsageError(`unknown command '${cmd}'`);
   }
 }
 
@@ -407,10 +419,14 @@ function invokedDirectly(): boolean {
 }
 
 if (invokedDirectly()) {
-  main()
+  main(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((e) => {
       // Fail loudly with an actionable message; never swallow.
+      if (e instanceof UsageError) {
+        process.stderr.write(`error: ${e.message}\n\n${HELP}`);
+        process.exit(2);
+      }
       if (e instanceof AgentEmailError) {
         process.stderr.write(`[agent-email] ${e.name}: ${e.message}\n`);
       } else {
