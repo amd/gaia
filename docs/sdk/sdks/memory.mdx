@@ -158,7 +158,7 @@ No memories stored yet. Start building your knowledge base by remembering what t
 ```
 
 **Filters applied to the knowledge sections:**
-- Includes items from `global` context + active context
+- Includes items from every context when the active context is `global` (the default), otherwise `global` + the active context
 - Excludes items where `sensitive=1`
 - Excludes items where `superseded_by IS NOT NULL` (only current/active items)
 - Sorted by confidence descending
@@ -208,7 +208,7 @@ Registers: `remember`, `recall`, `update_memory`, `forget`, `search_past_convers
 
 ### set_memory_context()
 
-Switch the active context mid-session. Affects system prompt filtering and the default context for new `remember` calls.
+Switch the active context mid-session. Affects system prompt filtering and the context new `remember` calls are stored under.
 
 ```python
 def set_memory_context(self, context: str) -> None
@@ -980,7 +980,7 @@ These 5 tools are registered by `register_memory_tools()` and exposed to the LLM
 
 <CardGroup cols={2}>
   <Card title="remember" icon="plus">
-    Store a fact, preference, error, skill, note, or reminder. Supports `category`, `domain`, `due_at`, `context`, `sensitive`, `entity`.
+    Store a fact, preference, error, skill, note, or reminder. Supports `category`, `domain`, `due_at`, `sensitive`, `entity`. Stored under the agent's active context; the model does not pick one.
   </Card>
 
   <Card title="recall" icon="magnifying-glass">

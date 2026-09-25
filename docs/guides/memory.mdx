@@ -304,18 +304,14 @@ Different areas of your life produce different knowledge. Without scoping, the a
 | `personal` | Personal assistant mode | Appointments, health goals, personal contacts |
 | Custom (e.g., `project-x`) | User-defined per project | Project-specific facts, skills, errors |
 
-The agent's system prompt always includes `global` items plus items from the active context. You can switch contexts mid-session:
+In a default session the active context is `global`, and the system prompt includes memories from every context. An agent that sets a specific context sees that context plus `global`, and new memories are stored under the active context:
 
-```
-You: "Switch to my personal context"
-Agent: "Switched to your personal context."
-
-You: "Remember that my dentist appointment is Thursday at 2pm"
-Agent: "Done -- dentist appointment Thursday at 2pm, stored in your personal context."
+```python
+agent.set_memory_context("personal")   # or init_memory(context="personal")
 ```
 
 <Tip>
-  When you use `gaia chat`, the default context is `global`. You can start with a specific context by telling the agent, or programmatically via `init_memory(context="work")` in the SDK.
+  `gaia chat` runs in the default `global` context. The model can't choose a context when it stores a memory, so a memory can't be filed somewhere no later session reads it.
 </Tip>
 
 ---

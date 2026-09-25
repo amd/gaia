@@ -660,9 +660,20 @@ def get_session(
 
 
 @router.get("/api/memory/upcoming")
-def upcoming_items(days: int = Query(7, ge=1, le=90)) -> List[Dict]:
-    """Time-sensitive items due within N days + overdue."""
-    return _get_store().get_upcoming(within_days=days)
+def upcoming_items(
+    days: int = Query(7, ge=1, le=90),
+    include_sensitive: bool = Query(
+        False,
+        description="Include sensitive items in results. Defaults to False.",
+    ),
+) -> List[Dict]:
+    """Time-sensitive items due within N days + overdue.
+
+    Sensitive items are excluded by default, as in /api/memory/knowledge.
+    """
+    return _get_store().get_upcoming(
+        within_days=days, include_sensitive=include_sensitive
+    )
 
 
 # ---------------------------------------------------------------------------

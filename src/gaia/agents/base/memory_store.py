@@ -1398,15 +1398,23 @@ class MemoryStore:
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
     def get_by_category_contexts(
-        self, category: str, context: str, limit: int = 10
+        self, category: str, context: str | None, limit: int = 10
     ) -> List[Dict]:
         """Get non-sensitive knowledge by category for a specific context AND global.
 
-        Single query that replaces two sequential get_by_category() calls in
-        _get_context_items() — avoids the 2-round-trips-per-category overhead
-        during system prompt construction.
+        ``context=None`` reads every context. Single query that replaces two
+        sequential get_by_category() calls in _get_context_items() — avoids the
+        2-round-trips-per-category overhead during system prompt construction.
         """
-        if context == "global":
+        if context is None:
+            sql = f"""
+                SELECT {self._KNOWLEDGE_COLS} FROM knowledge
+                WHERE category = ? AND sensitive = 0 AND superseded_by IS NULL
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT ?
+            """
+            params = (category, limit)
+        elif context == "global":
             sql = f"""
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND context = ? AND sensitive = 0
@@ -1465,12 +1473,17 @@ class MemoryStore:
         include_overdue: bool = True,
         context: str | None = None,
         limit: int = 10,
+        include_sensitive: bool = False,
     ) -> List[Dict]:
         """Get time-sensitive items due within N days (or overdue).
 
         Returns items where:
         - due_at is within the window (or overdue if include_overdue=True)
         - Either never reminded, or reminded before the due date (needs follow-up)
+        - Not marked sensitive, unless include_sensitive=True
+
+        Sensitive rows are filtered in SQL rather than by the caller so they
+        cannot consume ``limit`` and leave the visible list empty.
         """
         now_iso = _now_iso()
         future_iso = (
@@ -1497,6 +1510,9 @@ class MemoryStore:
         if context is not None:
             conditions.append("context = ?")
             params.append(context)
+
+        if not include_sensitive:
+            conditions.append("sensitive = 0")
 
         where = "WHERE " + " AND ".join(conditions)
 
