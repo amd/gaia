@@ -16,15 +16,14 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - Writing a new MCP server under `src/gaia/mcp/servers/` or `src/gaia/mcp/`
 - Extending the bridge (`src/gaia/mcp/mcp_bridge.py`)
 - Adding tools, resources, or prompts to an existing server
-- Wiring an external service (Atlassian, Blender, etc.) as an MCP integration
+- Wiring an external service as an MCP integration
 - Debugging MCP protocol compliance / JSON-RPC issues
 - Editing `src/gaia/mcp/mcp.json` or `n8n.json`
 
 ## When NOT to use
 
 - Creating an agent that *uses* MCP → `gaia-agent-builder`
-- Jira/Atlassian business logic (NL→JQL etc.) → `jira-specialist`
-- Blender-specific scene automation → `blender-specialist` (but MCP protocol work on the Blender server itself stays here)
+- External-service business logic behind an MCP call (parsing a vendor's API, not the protocol plumbing) → `python-developer`
 
 ## Key files
 
@@ -32,9 +31,8 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 |------|---------|
 | `src/gaia/mcp/mcp_bridge.py` | HTTP bridge / entry point (also `gaia-mcp` console script) |
 | `src/gaia/mcp/mcp.json` | Bundled MCP server config |
-| `src/gaia/mcp/servers/` | GAIA-authored MCP servers |
+| `src/gaia/mcp/servers/` | GAIA-authored MCP servers (`agent_ui_mcp.py`, `tui_mcp.py`) |
 | `src/gaia/mcp/agent_mcp_server.py` | Exposes GAIA agents over MCP |
-| `src/gaia/mcp/blender_mcp_server.py` + `blender_mcp_client.py` | Blender integration |
 | `src/gaia/mcp/external_services.py` | External service adapters |
 | `src/gaia/mcp/mixin.py` | MCP mixin for agents |
 | `src/gaia/agents/base/mcp_agent.py` | `MCPAgent` consumer mixin |
