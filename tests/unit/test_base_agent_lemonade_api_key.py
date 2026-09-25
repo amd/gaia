@@ -166,7 +166,11 @@ def test_cloud_agent_without_url_uses_isolated_embedded_endpoint(monkeypatch, tm
     monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
     (tmp_path / "lemonade").mkdir()
     (tmp_path / "lemonade" / "state.json").write_text(
-        json.dumps({"port": 63209, "api_key": "isolated-key"})
+        json.dumps({"pid": 4242, "port": 63209, "api_key": "isolated-key"})
+    )
+    # A test cannot produce a live `lemond`; the point here is the endpoint.
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client._embedded_lemonade_alive", lambda pid: pid == 4242
     )
     checked = []
 

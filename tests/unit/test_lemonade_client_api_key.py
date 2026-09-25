@@ -3,21 +3,33 @@
 """Resolving the Lemonade credential, including the embedded server's own."""
 
 import json
+import logging
+import os
 
 import pytest
 import responses
 
 from gaia.llm import lemonade_client as lc
 
+#: A pid the liveness check is made to accept. The real check demands a live
+#: ``lemond`` image, which a test cannot produce, and these tests are about
+#: which endpoint wins — liveness itself is covered by TestStaleEmbeddedState.
+LIVE_PID = 4242
+
 
 @pytest.fixture
 def embedded_state(tmp_path, monkeypatch):
-    """Point the resolver at a throwaway embedded-Lemonade state file."""
+    """Point the resolver at a throwaway state file for a *running* instance."""
     monkeypatch.delenv("GAIA_HOME", raising=False)
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        lc, "_embedded_lemonade_alive", lambda pid: isinstance(pid, int) and pid > 0
+    )
 
     def _write(payload):
         path = tmp_path / "state.json"
+        if isinstance(payload, dict):
+            payload = {"pid": LIVE_PID, **payload}
         path.write_text(
             payload if isinstance(payload, str) else json.dumps(payload),
             encoding="utf-8",
@@ -27,6 +39,74 @@ def embedded_state(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", tmp_path / "state.json")
     return _write
+
+
+class TestStaleEmbeddedState:
+    """A state file whose process is gone must not win over the default.
+
+    Regression (#4281): a killed, crashed, or reboot-lost embedded Lemonade
+    cannot clear its own ``state.json``, so every client kept dialling the port
+    it once bound — reporting a healthy server on 13305 as unreachable, and
+    failing every Windows CI run on a persistent runner until someone who knew
+    about the file deleted it by hand.
+    """
+
+    @pytest.fixture
+    def stale_state(self, tmp_path, monkeypatch):
+        """A state file naming a port nothing is listening on."""
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        path = tmp_path / "state.json"
+        path.write_text(
+            json.dumps({"pid": 59939, "port": 59939, "api_key": "stale-key"}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", path)
+        return path
+
+    def test_dead_pid_does_not_change_the_base_url(self, stale_state, monkeypatch):
+        monkeypatch.setattr(lc, "_embedded_lemonade_alive", lambda pid: False)
+        assert lc.resolve_lemonade_base_url() == lc.DEFAULT_LEMONADE_URL
+        assert lc._get_lemonade_config()[1] == lc.DEFAULT_PORT
+
+    def test_dead_pid_does_not_hand_out_its_key(self, stale_state, monkeypatch):
+        """Credentials naming a dead port are worse than none."""
+        monkeypatch.setattr(lc, "_embedded_lemonade_alive", lambda pid: False)
+        assert lc.resolve_lemonade_api_key() is None
+        assert lc.LemonadeClient().base_url == lc.DEFAULT_LEMONADE_URL
+
+    def test_a_live_pid_is_still_honoured(self, stale_state, monkeypatch):
+        """The gate must not cost a genuinely running embedded server."""
+        monkeypatch.setattr(lc, "_embedded_lemonade_alive", lambda pid: pid == 59939)
+        assert lc.resolve_lemonade_base_url() == "http://localhost:59939/api/v1"
+        assert lc.resolve_lemonade_api_key() == "stale-key"
+
+    def test_the_fallback_names_the_leftover_file(
+        self, stale_state, monkeypatch, caplog
+    ):
+        """Silently falling back leaves the user no way to find the cause."""
+        monkeypatch.setattr(lc, "_embedded_lemonade_alive", lambda pid: False)
+        monkeypatch.setattr(lc, "_WARNED_STALE_EMBEDDED_STATE", set())
+        with caplog.at_level(logging.WARNING, logger="gaia.llm.lemonade_client"):
+            lc.resolve_lemonade_base_url()
+            lc.resolve_lemonade_base_url()
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        # Named once, not on every resolution — this is a per-request path.
+        assert len(warnings) == 1
+        assert str(stale_state) in warnings[0]
+        assert "59939" in warnings[0]
+
+    @pytest.mark.parametrize("pid", [None, 0, -1, True, "4242", 1.5, [], {}])
+    def test_an_unusable_pid_is_not_alive(self, pid):
+        """Fail closed: a pid that cannot be identified counts as gone."""
+        assert lc._embedded_lemonade_alive(pid) is False
+
+    def test_this_test_process_is_not_mistaken_for_lemond(self):
+        """Existence is not enough — the image name has to be ``lemond``."""
+        assert lc._embedded_lemonade_alive(os.getpid()) is False
 
 
 class TestResolveLemonadeApiKey:
@@ -48,7 +128,7 @@ class TestResolveLemonadeApiKey:
         Nothing exports it, so resolving from the environment alone produced
         401s that the readiness screen reported as "Lemonade not running".
         """
-        embedded_state({"pid": 1, "port": 13305, "api_key": "from-state"})
+        embedded_state({"port": 13305, "api_key": "from-state"})
         monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
         assert lc.resolve_lemonade_api_key() == "from-state"
 
@@ -82,7 +162,7 @@ class TestEmbeddedBaseURL:
         `gaia lemonade embedded` came up on 63207 holding every model, while
         the readiness screen reported the language model as not downloaded.
         """
-        embedded_state({"pid": 1, "port": 63207, "api_key": "k"})
+        embedded_state({"port": 63207, "api_key": "k"})
         monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
         _, port, base = lc._get_lemonade_config()
         assert port == 63207
@@ -237,7 +317,9 @@ class TestEmbeddedCredentialScope:
 
         (isolated / "lemonade").mkdir(parents=True)
         state = isolated / "lemonade" / "state.json"
-        state.write_text(json.dumps({"port": 63208, "api_key": "isolated-key"}))
+        state.write_text(
+            json.dumps({"pid": LIVE_PID, "port": 63208, "api_key": "isolated-key"})
+        )
         assert lc.resolve_lemonade_base_url() == "http://localhost:63208/api/v1"
         assert lc.resolve_lemonade_api_key() == "isolated-key"
         assert (

@@ -790,10 +790,14 @@ class TestBaseUrlResolution:
         from gaia.llm import lemonade_client as lc
 
         state = tmp_path / "state.json"
-        state.write_text(json.dumps({"port": 63207, "api_key": "k"}), encoding="utf-8")
+        state.write_text(
+            json.dumps({"pid": 4242, "port": 63207, "api_key": "k"}), encoding="utf-8"
+        )
         monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
         monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
         monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", state)
+        # A test cannot produce a live `lemond`; the point here is the port.
+        monkeypatch.setattr(lc, "_embedded_lemonade_alive", lambda pid: pid == 4242)
         client = LemonadeASRClient()
         assert client.base_url == "http://localhost:63207/api/v1"
         assert client.api_key == "k"
