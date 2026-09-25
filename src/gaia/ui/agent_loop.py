@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.ui.run_manager import run_manager
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,9 @@ _OBSERVE_MODEL = os.environ.get("GAIA_AUTO_OBSERVE_MODEL", "Qwen3-4B-GGUF")
 
 # Timeout (seconds) for a single autonomous tick execution
 _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
+
+# How long a user-message followup waits for the triggering turn to release the session
+_FOLLOWUP_GRACE_SECONDS = 10.0
 
 # Default agent mode. "autonomous" (observe → infer goals → execute, spec
 # docs/spec/autonomous-agent-mode.md §6.7) is not implemented yet (#2005), so
@@ -299,11 +303,40 @@ class AgentLoop:
         if not goals:
             return LoopDirective("idle")
 
-        # ── Execute tick ─────────────────────────────────────────────────
-        # Only a tick that reaches here spends hourly budget.
-        self._calls_this_hour += 1
-        directive = await self._execute_tick(session_id, session, goals)
-        return directive
+        # ── Session gate ─────────────────────────────────────────────────
+        # The tick drives the session's cached agent, so it takes the same
+        # session lock + chat semaphore a user turn does. Poll, never queue on
+        # the lock: a queued waiter would stall the user's next message.
+        session_lock = self._app_state.session_locks.setdefault(
+            session_id, asyncio.Lock()
+        )
+        chat_semaphore = self._app_state.chat_semaphore
+        # A followup is enqueued while its own turn still holds the session.
+        grace = (
+            _FOLLOWUP_GRACE_SECONDS if trigger.source == "user_message_followup" else 0
+        )
+        deadline = time.monotonic() + grace
+        while (
+            session_lock.locked()
+            or run_manager.is_running(session_id)
+            or chat_semaphore.locked()
+        ):
+            if time.monotonic() >= deadline:
+                logger.debug(
+                    "AgentLoop: session %s busy — skipping tick", session_id[:8]
+                )
+                return LoopDirective("idle", reason="session busy")
+            await asyncio.sleep(0.1)
+        # No await between the busy check and these acquires, so neither blocks.
+        await session_lock.acquire()
+        await chat_semaphore.acquire()
+        try:
+            # Only a tick that reaches here spends hourly budget.
+            self._calls_this_hour += 1
+            return await self._execute_tick(session_id, session, goals)
+        finally:
+            chat_semaphore.release()
+            session_lock.release()
 
     async def _get_active_session(self) -> Optional[str]:
         """Return the most recently updated non-private session, or None."""
@@ -384,12 +417,23 @@ class AgentLoop:
                 # yielding SSE events (nothing is consuming them in background mode).
                 # The SSEOutputHandler still captures events for the activity log.
 
+                # Resolve type + model as the chat path does; a mismatched
+                # lookup evicts the user's cached agent.
+                agent_type = session.get("agent_type") or "chat"
+                registry = _helpers._agent_registry
                 model_id = session.get("model")
                 custom_model = db.get_setting("custom_model")
                 if custom_model:
                     model_id = custom_model
+                elif registry and agent_type != "chat":
+                    model_id = registry.resolve_model(agent_type) or model_id
+                model_id, device_ctx = _helpers._apply_device_model(
+                    session, agent_type, model_id, custom_model, registry
+                )
 
-                cached_agent = _helpers._get_cached_agent(session_id, model_id)
+                cached_agent = _helpers._get_cached_agent(
+                    session_id, model_id, agent_type
+                )
                 if cached_agent is not None:
                     agent = cached_agent
                     # A prior streaming turn leaves its fired cancel event behind.
@@ -412,6 +456,8 @@ class AgentLoop:
                         streaming=False,
                         silent_mode=True,
                         debug=False,
+                        device=session.get("device"),
+                        min_context_size=device_ctx,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
                         dynamic_tools=dynamic_tools,
