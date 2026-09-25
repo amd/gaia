@@ -369,11 +369,16 @@ class TestKnowledgeCRUD:
             context="work",
         )
 
+        # params= (not an f-string URL) so httpx percent-encodes the "+" in the
+        # UTC offset -- embedded raw, the server decodes "+00:00" as a space
+        # per application/x-www-form-urlencoded, corrupting the timestamp.
         time_before = _now_iso()
-        resp = api_client.get(f"/api/memory/knowledge?time_from={time_before}")
+        resp = api_client.get(
+            "/api/memory/knowledge", params={"time_from": time_before}
+        )
         assert resp.status_code == 200
 
-        resp = api_client.get(f"/api/memory/knowledge?time_to={time_before}")
+        resp = api_client.get("/api/memory/knowledge", params={"time_to": time_before})
         assert resp.status_code == 200
 
     def test_list_knowledge_excludes_sensitive(self, api_client, memory_store):
