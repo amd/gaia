@@ -243,6 +243,7 @@ jobs:
   unit-tests-macos:
     name: Unit Tests (macOS smoke)
     runs-on: macos-latest
+    timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     continue-on-error: true
     steps:
@@ -273,7 +274,7 @@ jobs:
           echo "Checking setup.py packages, __init__.py files, and entry points"
           echo ""
           pytest tests/unit/test_packaging.py -v --tb=short
-          echo "✅ Packaging integrity checks passed"
+          echo "Packaging integrity checks passed"
 
       - name: Run unit tests (macOS smoke)
         env:
@@ -292,6 +293,7 @@ jobs:
   unit-tests-windows:
     name: Unit Tests (Windows smoke)
     runs-on: windows-latest
+    timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     continue-on-error: true
     steps:
@@ -303,8 +305,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        shell: bash
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        run: |
+          irm https://astral.sh/uv/install.ps1 | iex
+          echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
 
       - name: Install dependencies
         shell: bash
