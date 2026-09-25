@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useCallback } from 'react';
-import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle, BarChart2 } from 'lucide-react';
+import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle, BarChart2, Tag } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo } from '../types';
+import { displayVersion, isInstalledStatus } from '../utils/agentHub';
 
 const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI;
 
@@ -40,6 +41,8 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
     const isNative = agent.source === 'native';
     const canStart = !isNative || isElectron;
     const DetailIcon = getAgentIcon(agent.icon);
+    const version = displayVersion(agent);
+    const hasDetails = !!version || models.length > 0 || toolsCount > 0 || agent.min_memory_gb != null;
 
     // Close on Escape
     const handleKey = useCallback((e: KeyboardEvent) => {
@@ -100,9 +103,19 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                     </div>
 
                     {/* Technical metadata */}
+                    {hasDetails && (
                     <div className="agent-detail-section">
                         <div className="agent-detail-section-title">Details</div>
                         <div className="agent-detail-meta-grid">
+                            {version && (
+                                <div className="agent-detail-meta-item">
+                                    <Tag size={14} />
+                                    <div>
+                                        <div className="agent-detail-meta-label">Version</div>
+                                        <div className="agent-detail-meta-value">{version}</div>
+                                    </div>
+                                </div>
+                            )}
                             {models.length > 0 && (
                                 <div className="agent-detail-meta-item">
                                     <Cpu size={14} />
@@ -141,6 +154,7 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                             )}
                         </div>
                     </div>
+                    )}
 
                     {/* Access rights */}
                     <div className="agent-detail-section">
@@ -191,6 +205,17 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                                             >View scorecard</a></>
                                         )}
                                     </div>
+                                    {agent.eval_score_version && (
+                                        // The scorecard is only regenerated on a fresh eval, not on
+                                        // every release, so it commonly lags the package version
+                                        // shown above (#2965) — say which version it measured.
+                                        <div className="agent-detail-meta-label" style={{ marginTop: 2 }}>
+                                            measured on v{agent.eval_score_version}
+                                            {version && version !== agent.eval_score_version && (
+                                                <> ({isInstalledStatus(agent) ? 'current' : 'latest'}: v{version})</>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>

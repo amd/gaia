@@ -225,6 +225,13 @@ def _http(url: str, method: str = "GET") -> tuple[int, bytes]:
         return e.code, e.read()
     except urllib.error.URLError as e:
         raise SystemExit(f"error: {method} {url} failed: {e}") from e
+    except (ConnectionError, TimeoutError) as e:
+        # http.client.RemoteDisconnected escapes URLError - see do_open(). The
+        # target is a loopback Worker, so a drop means it died, not a blip.
+        raise SystemExit(
+            f"error: {method} {url} dropped mid-flight: {e}. The local wrangler "
+            f"Worker is not answering - check its log above."
+        ) from e
 
 
 # ---------------------------------------------------------------------------

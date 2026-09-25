@@ -9,7 +9,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 23 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
+- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins plus the framework output reader (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 23 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
@@ -48,12 +48,13 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Surface totals
 
-- Internal `@tool` agent-loop functions: **66**
+- Internal `@tool` agent-loop functions: **67**
   - `briefing_tools`: 3
   - `calendar_tools`: 6
   - `connection_tools`: 1
   - `delete_tools`: 4
   - `followup_tools`: 1
+  - `framework_output`: 1
   - `onboarding_tools`: 2
   - `organize_tools`: 15
   - `phishing_tools`: 2

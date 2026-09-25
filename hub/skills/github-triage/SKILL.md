@@ -68,12 +68,16 @@ report it and move on. Never re-run a denied command hoping for a different
 answer.
 
 **Refused outright — no prompt, and approval is not available.** `gh auth token`
-(prints the credential), `gh alias` (defines a shell command), `gh extension`
-(installs and runs code), `gh config`, `gh codespace`, any `gh api` write
-(`-X POST`, `-f`/`--field`, `graphql`), and the irreversible ones: `gh pr merge`,
-`gh issue close`, `gh label delete`, `gh repo delete`. Also refused inside an
-otherwise-approvable write: `--body-file` (uploads a local file's contents),
-`--editor`, and `--web`.
+and `gh auth status -t`/`--show-token` (both print the credential), `gh alias`
+(defines a shell command), `gh extension` (installs and runs code), `gh config`,
+`gh codespace`, any `gh api` write (`-X POST`, `-f`/`--field`, `graphql`), and
+the irreversible ones: `gh pr merge`, `gh issue close`, `gh label delete`,
+`gh repo delete`. Also refused on any subcommand: `--body-file` (uploads a local
+file's contents), `--editor`, `--web` (opens a browser, returns you nothing), and
+`--watch` (blocks until the run finishes). The `repo`, `release`, `run`, `search`,
+and `auth` read commands accept only reviewed flags from GAIA's policy table.
+The mixed read/write `issue`, `pr`, and `label` commands use a denylist for flags;
+their supported read actions remain limited to the actions listed above.
 
 A refused command returns an error, not a silent no-op. Report it as a refusal
 and say what you would have run. These commands are refused outright rather than

@@ -126,7 +126,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
 
         config = AgentConfig(
             model=self.model,
-            max_tokens=100,
+            max_tokens=512,
             max_history_length=3,
             system_prompt="You are a helpful assistant. Always answer questions using the conversation history. When asked about something mentioned earlier, repeat the exact information.",
         )

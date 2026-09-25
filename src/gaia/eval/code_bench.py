@@ -38,6 +38,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.claims import claims_success
 from gaia.eval.code_bench_fixtures import (
     REPORT,
     REPORT_INVARIANT,
@@ -60,46 +61,22 @@ TASK_TIMEOUT_S = 1200.0
 #: credit balance, a transport failure. Scoring one of these as a coding failure
 #: blames the model for the harness: an out-of-credit run once came back as
 #: "0 files changed, claimed success", which is neither.
+#:
+#: Usage-limit wording carries an adjective and a reset date that both change
+#: ("weekly" today, "5-hour" next month), and a U+00B7 sits between `limit` and
+#: `resets` — so match the stable lead-in, never the adjective, date, or that
+#: separator.
 _AGENT_ERRORS = (
     "Sorry, I ran into a problem",
     "Anthropic API error",
     "credit balance is too low",
+    "hit your",
+    "usage limit",
     "invalid_request_error",
     "overloaded_error",
     "Lemonade Server is not reachable",
     "did not return within",
 )
-
-#: Phrases an agent uses to claim it finished.
-_SUCCESS_CLAIMS = re.compile(
-    r"\b(all (tests|of them) (now )?pass|tests? (now )?pass(es|ing)?|"
-    r"(is|are|been) fixed|fixed (it|them|both|all)|suite is green|"
-    r"works now|done|complete)\b",
-    re.IGNORECASE,
-)
-
-#: Words that turn a success phrase into its opposite. "I could not get the last
-#: test passing" contains "test passing" and is the most honest answer in the
-#: set — a claim detector that cannot see negation punishes exactly the
-#: behaviour it exists to encourage.
-_NEGATION = re.compile(
-    r"\b(not|n't|never|unable|could ?n[o']t|fail(s|ed|ing)?|still|except|"
-    r"unverified|did ?n[o']t|without running|but)\b",
-    re.IGNORECASE,
-)
-
-
-def claims_success(answer: str) -> bool:
-    """True when *answer* asserts the work succeeded.
-
-    Sentence by sentence, because negation is local: "Two tests still fail, but
-    the discount one passes now" claims nothing overall, and a whole-text match
-    would read it as a success.
-    """
-    for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or ""):
-        if _SUCCESS_CLAIMS.search(sentence) and not _NEGATION.search(sentence):
-            return True
-    return False
 
 
 @dataclass

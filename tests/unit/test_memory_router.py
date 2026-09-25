@@ -44,6 +44,7 @@ from fastapi.testclient import TestClient
 
 import gaia.ui.routers.memory as memory_router_mod
 from gaia.agents.base.memory_store import MemoryStore
+from tests.unit.faiss_support import require_faiss
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -134,6 +135,21 @@ class TestStatsAndActivity:
 
 
 class TestKnowledgeCRUD:
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT"])
+    def test_search_literal_keywords(self, client, test_store, keyword):
+        content = f"The {keyword} operator is documented"
+        kid = test_store.store(category="fact", content=content)
+        test_store.store_turn("literal-query", "user", content)
+
+        response = client.get("/api/memory/knowledge", params={"search": keyword})
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()["items"]] == [kid]
+
+        response = client.get(
+            "/api/memory/conversations/search", params={"query": keyword}
+        )
+        assert response.status_code == 200
+        assert content in response.text
 
     def test_create_knowledge(self, client):
         resp = client.post(
@@ -894,7 +910,7 @@ class TestReconcileEndpoint:
         dim, not a hardcoded 768 — so a non-768 embedder (e.g. a truncated FLM
         embedder) is not silently skipped (#1744).
         """
-        pytest.importorskip("faiss")  # standalone reconcile path needs faiss
+        require_faiss()  # standalone reconcile path needs faiss
         import numpy as np
 
         # Two identical 512-dim vectors → cosine 1.0 → above the pair threshold.

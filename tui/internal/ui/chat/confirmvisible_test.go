@@ -128,7 +128,7 @@ func TestTheStatusBarSaysADecisionIsPending(t *testing.T) {
 	// Asserted whole, not by absence. Checking only that the OLD contradiction
 	// is gone is what let the replacement ship saying "Ctrl+C quits · Ctrl+C
 	// quit" — a hint list is a sentence, and it has to be read as one.
-	const want = "↑↓ scroll · answer above · Ctrl+C quit"
+	const want = "↑↓/wheel scroll · answer above · Ctrl+C quit"
 	if got := joinHints(m.statusHints()); got != want {
 		t.Errorf("pending-decision hint = %q, want %q", got, want)
 	}

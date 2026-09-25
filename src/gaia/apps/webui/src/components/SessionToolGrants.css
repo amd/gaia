@@ -1,0 +1,76 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* ── Session always-allow grants ──────────────────────────────────────── */
+.perm-session-grants {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary);
+}
+.perm-session-grants-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.perm-session-grants-icon {
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+.perm-session-grants-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.perm-session-revoke-all {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.perm-session-grants-empty {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.perm-session-grant-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.perm-session-grant {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.perm-session-grant-note {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.perm-session-grant-revoke {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: var(--radius-xs, 4px);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  cursor: pointer;
+}
+.perm-session-grant-revoke:hover {
+  background: rgba(239, 68, 68, 0.16);
+}
+
+.perm-session-grants .perm-tool-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs, 4px);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}

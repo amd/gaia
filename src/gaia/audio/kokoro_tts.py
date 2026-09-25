@@ -322,6 +322,21 @@ class KokoroTTS:
 
         return audio, combined_phonemes, stats
 
+    @staticmethod
+    def _drain_text_queue(text_queue: queue.Queue) -> None:
+        """Consume until the producer's terminator, so it never blocks.
+
+        The producer puts onto a bounded queue; with no consumer it wedges at
+        100 chunks and the LLM stream stops mid-answer.
+        """
+        while True:
+            try:
+                item = text_queue.get(timeout=30.0)
+            except queue.Empty:
+                return
+            if item in ("__END__", "__HALT__", None):
+                return
+
     def generate_speech_streaming(
         self, text_queue: queue.Queue, status_callback=None, interrupt_event=None
     ) -> None:
@@ -330,15 +345,32 @@ class KokoroTTS:
         buffer = ""
         audio_buffer = queue.Queue(maxsize=100)  # Buffer for processed audio chunks
 
-        # Initialize audio stream
-        stream = sd.OutputStream(
-            samplerate=24000,
-            channels=1,
-            dtype=np.float32,
-            blocksize=2400,  # 100ms buffer
-            latency="low",
-        )
-        stream.start()
+        # Initialize audio stream. Inside a try: this used to raise straight out
+        # of the TTS thread, and the producer then blocked forever on a full
+        # text_queue — a broken speaker froze the whole answer (#3554).
+        try:
+            stream = sd.OutputStream(
+                samplerate=24000,
+                channels=1,
+                dtype=np.float32,
+                blocksize=2400,  # 100ms buffer
+                latency="low",
+            )
+            stream.start()
+        except Exception as e:
+            message = (
+                f"Speaker unavailable: could not open audio output ({e}). "
+                "The reply is shown as text; voice output is off for this "
+                "session."
+            )
+            self.log.error(message)
+            print(f"\n{message}")
+            # Keep draining so the producer can finish its stream. Returning
+            # here would leave it blocked on a queue nobody reads.
+            self._drain_text_queue(text_queue)
+            if status_callback:
+                status_callback(False)
+            return
         self.log.debug("Audio stream initialized")
 
         # Playback thread function

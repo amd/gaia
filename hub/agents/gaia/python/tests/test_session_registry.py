@@ -385,3 +385,40 @@ def test_a_session_records_the_model_it_was_built_with(registry):
 
 def test_a_session_built_without_a_model_records_none(registry):
     assert registry.get_or_create("s").model_id is None
+
+
+def test_delete_refuses_busy_session_without_losing_retention(registry):
+    session = registry.get_or_create("busy")
+    last_used = registry._last_used["busy"]
+    with session.run_lock:
+        assert registry.delete("busy") is False
+        assert registry.get("busy") is session
+        assert registry._last_used["busy"] == last_used
+        assert session.agent.closed is False
+    assert registry.delete("busy") is True
+    assert session.agent.closed is True
+    assert registry.get("busy") is None
+
+
+def test_delete_claims_turn_lock_and_closes_outside_registry_lock(
+    registry, monkeypatch
+):
+    session = registry.get_or_create("idle")
+    observed = []
+
+    def close(agent):
+        assert session.run_lock.locked()
+
+        def check_registry():
+            observed.append(registry.get("idle"))
+
+        thread = threading.Thread(target=check_registry)
+        thread.start()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        agent.close_db()
+
+    monkeypatch.setattr(sr, "close_agent", close)
+    assert registry.delete("idle") is True
+    assert observed == [None]
+    assert session.run_lock.locked()

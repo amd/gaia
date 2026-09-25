@@ -35,8 +35,27 @@ class TestSessions:
         assert session["model"] == "Qwen3-0.6B-GGUF"
 
     def test_create_session_default_model(self, db):
+        """No explicit model, no configured default -> the hard-coded floor."""
         session = db.create_session()
         assert session["model"] == "Gemma-4-E4B-it-GGUF"
+
+    def test_create_session_uses_configured_default_model(self, db):
+        """A configured default_model is honored when no model is given."""
+        from gaia.config import GaiaConfig
+
+        GaiaConfig(default_model="agents-a1-q4-k-m").save()
+
+        session = db.create_session()
+        assert session["model"] == "agents-a1-q4-k-m"
+
+    def test_create_session_explicit_model_wins_over_configured_default(self, db):
+        """An explicit model= still beats a configured default_model."""
+        from gaia.config import GaiaConfig
+
+        GaiaConfig(default_model="agents-a1-q4-k-m").save()
+
+        session = db.create_session(model="Qwen3-0.6B-GGUF")
+        assert session["model"] == "Qwen3-0.6B-GGUF"
 
     def test_create_session_with_system_prompt(self, db):
         session = db.create_session(system_prompt="You are helpful.")

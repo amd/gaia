@@ -29,6 +29,24 @@ func TestTheQueuedRowNamesWhatEscActuallyCosts(t *testing.T) {
 	}
 }
 
+// Once a cancel is already pending, the NEXT Esc/Ctrl+C is forceLocalAbort
+// (#2917), which abandons a queued follow-up instead of restoring it. The row
+// must say that once it is true, or a user pressing Esc a second time on this
+// row's own promise loses their draft to a hint that stopped matching reality.
+func TestTheQueuedRowNamesAbandonmentOnceACancelIsPending(t *testing.T) {
+	m := newTestChat(t)
+	m.queued = []string{"and check the calendar"}
+	m.cancelPending = true
+
+	row := ansi.Strip(m.renderQueuedRow())
+	if !strings.Contains(row, "and check the calendar") {
+		t.Fatalf("the queued line is not echoed back: %q", row)
+	}
+	if !strings.Contains(row, "abandons") {
+		t.Errorf("the row still promises a take-back Esc no longer gives: %q", row)
+	}
+}
+
 // Esc's behaviour has to match what the row now claims: it cancels the turn AND
 // hands the line back. A test on the words alone would pass just as happily if
 // the code underneath changed.

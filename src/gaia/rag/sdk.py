@@ -589,6 +589,43 @@ class RAGSDK:
                     response = self.embedder.embeddings(
                         batch_texts, model=self.config.embedding_model, timeout=180
                     )
+                    batch_embeddings = []
+                    data = response.get("data", [])
+                    if any("index" in item for item in data):
+                        indices = [item.get("index") for item in data]
+                        if any(
+                            not isinstance(i, int) or isinstance(i, bool)
+                            for i in indices
+                        ) or sorted(indices) != list(range(len(batch_texts))):
+                            raise RuntimeError(
+                                "Embedding response has missing or duplicate indices; verify the backend and retry indexing."
+                            )
+                        data = sorted(data, key=lambda item: item["index"])
+                    for item in data:
+                        embedding = item.get("embedding", [])
+                        batch_embeddings.append(embedding)
+
+                    if len(batch_embeddings) != len(batch_texts):
+                        raise RuntimeError(
+                            f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
+                            f"vectors for batch {batch_num} using {self.config.embedding_model!r}. "
+                            "Verify Lemonade Server is reachable and the embedding model is "
+                            "fully loaded, or lower chunk_size if inputs exceed the model token limit. "
+                            "Then retry indexing. No partial batch was accepted."
+                        )
+                    expected_dim = len(all_embeddings[0]) if all_embeddings else None
+                    for embedding in batch_embeddings:
+                        if not embedding or (
+                            expected_dim is not None and len(embedding) != expected_dim
+                        ):
+                            raise RuntimeError(
+                                f"Embedding backend returned an empty or inconsistent vector "
+                                f"in batch {batch_num} using {self.config.embedding_model!r}. "
+                                "Verify the embedding model is fully loaded or lower chunk_size if "
+                                "inputs exceed its token limit, then retry indexing."
+                            )
+                        expected_dim = len(embedding)
+
                     break  # Success, exit retry loop
                 except Exception as e:
                     if attempt < max_retries:
@@ -603,36 +640,6 @@ class RAGSDK:
                         raise
 
             batch_duration = time.time() - batch_start
-
-            # Extract embeddings from response
-            # Expected format: {"data": [{"embedding": [...]}, ...]}
-            batch_embeddings = []
-            for item in response.get("data", []):
-                embedding = item.get("embedding", [])
-                batch_embeddings.append(embedding)
-
-            # If batch returned empty, fall back to one-by-one encoding
-            if len(batch_embeddings) == 0 and len(batch_texts) > 0:
-                self.log.warning(
-                    f"   ⚠️  Batch {batch_num} returned 0 embeddings, trying one-by-one"
-                )
-                for single_text in batch_texts:
-                    try:
-                        single_resp = self.embedder.embeddings(
-                            [single_text],
-                            model=self.config.embedding_model,
-                            timeout=60,
-                        )
-                        single_data = single_resp.get("data", [])
-                        if single_data:
-                            batch_embeddings.append(single_data[0].get("embedding", []))
-                        else:
-                            self.log.warning(
-                                "   ⚠️  Single text (%d chars) returned no embedding, skipping",
-                                len(single_text),
-                            )
-                    except Exception as e:
-                        self.log.warning(f"   ⚠️  Single embedding failed: {e}")
 
             all_embeddings.extend(batch_embeddings)
 
@@ -696,7 +703,12 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
-            - pdf_status: str ("readable", "encrypted", "corrupted", "empty")
+            - pdf_status: str ("readable", "degraded", "encrypted",
+              "corrupted", "empty"). "degraded" means the document indexed but
+              at least one page may be incomplete — see degraded_pages.
+            - degraded_pages: list[int], present only when pdf_status is
+              "degraded"
+            - page_warnings: dict[int, str], why each degraded page is listed
 
         Raises:
             EncryptedPDFError: PDF is password-protected.
@@ -761,6 +773,7 @@ class RAGSDK:
             try:
                 from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
+                    PdfPageInspectionError,
                     count_images_in_page,
                     extract_images_from_page_pymupdf,
                 )
@@ -800,6 +813,8 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            degraded_pages = []
+            page_warnings = {}
 
             for i, page in enumerate(reader.pages, 1):
                 page_start = time_module.time()
@@ -810,11 +825,21 @@ class RAGSDK:
                 # Step 2: Check for images
                 has_imgs = False
                 num_imgs = 0
+                page_warning = None
                 if vlm_available:
                     try:
-                        has_imgs, num_imgs = count_images_in_page(page)
-                    except Exception:  # pylint: disable=broad-except
-                        pass
+                        has_imgs, num_imgs = count_images_in_page(page, page_num=i)
+                    except PdfPageInspectionError as e:
+                        # Unknown, not "none". The inventory comes from pypdf
+                        # and the extraction from PyMuPDF, so a page pypdf
+                        # cannot inspect may still extract — try it rather than
+                        # indexing the page as blank (#3551).
+                        page_warning = str(e)
+                        self.log.warning("%s - attempting extraction anyway", e)
+                        has_imgs = True
+                        # Not zero — unknown. Reporting 0 alongside
+                        # has_images=True is a contradiction on the record.
+                        num_imgs = None
 
                 # Step 3: Extract from images if present
                 image_texts = []
@@ -829,24 +854,30 @@ class RAGSDK:
                                 vlm_pages_count += 1
                                 total_images_processed += len(image_texts)
                     except Exception as img_error:
-                        self.log.warning(
-                            f"Image extraction failed on page {i}: {img_error}"
+                        page_warning = (
+                            f"image extraction failed on page {i}: {img_error}"
                         )
+                        self.log.warning(page_warning)
 
                 # Step 4: Merge
                 merged_text = self._merge_page_texts(
                     pypdf_text, image_texts, page_num=i
                 )
 
-                pages_data.append(
-                    {
-                        "page": i,
-                        "text": merged_text,
-                        "has_images": has_imgs,
-                        "num_images": num_imgs,
-                        "vlm_used": len(image_texts) > 0,
-                    }
-                )
+                page_record = {
+                    "page": i,
+                    "text": merged_text,
+                    "has_images": has_imgs,
+                    "num_images": num_imgs,
+                    "vlm_used": len(image_texts) > 0,
+                }
+                if page_warning:
+                    # Into the metadata, which is what leaves this function.
+                    # pages_data is local — a key written here would be a
+                    # record nothing could read.
+                    degraded_pages.append(i)
+                    page_warnings[i] = page_warning
+                pages_data.append(page_record)
 
                 page_duration = time_module.time() - page_start
 
@@ -931,8 +962,18 @@ class RAGSDK:
                 "total_images": total_images_processed,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
-                "pdf_status": "readable",
+                "pdf_status": "degraded" if degraded_pages else "readable",
             }
+            if degraded_pages:
+                metadata["degraded_pages"] = degraded_pages
+                metadata["page_warnings"] = page_warnings
+                self.log.warning(
+                    "%s: %d of %d page(s) may be incomplete: %s",
+                    file_name,
+                    len(degraded_pages),
+                    total_pages,
+                    degraded_pages,
+                )
 
             return full_text, total_pages, metadata
         except PDFExtractionError:
@@ -1854,6 +1895,12 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_pages
             metadata["vlm_pages"] = pdf_metadata.get("vlm_pages", 0)
             metadata["total_images"] = pdf_metadata.get("total_images", 0)
+            # Carry the degraded-page report up. Dropping it here is what made
+            # "which pages are incomplete" a log line nobody could act on.
+            metadata["pdf_status"] = pdf_metadata.get("pdf_status", "readable")
+            if pdf_metadata.get("degraded_pages"):
+                metadata["degraded_pages"] = pdf_metadata["degraded_pages"]
+                metadata["page_warnings"] = pdf_metadata.get("page_warnings", {})
             return text, metadata
 
         # PowerPoint files
@@ -3041,7 +3088,13 @@ These positions indicate where to split the text."""
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
             if file_type == ".pdf":
-                stats["pdf_status"] = "readable"
+                # Whatever extraction reported — "readable" or "degraded".
+                # Hardcoding "readable" here erased the one signal saying some
+                # pages may be incomplete (#3551).
+                stats["pdf_status"] = file_metadata.get("pdf_status", "readable")
+                if file_metadata.get("degraded_pages"):
+                    stats["degraded_pages"] = file_metadata["degraded_pages"]
+                    stats["page_warnings"] = file_metadata.get("page_warnings", {})
             elif file_type == ".pptx":
                 stats["pptx_status"] = "readable"
             return stats

@@ -43,26 +43,26 @@ unchanged.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
+from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.project_map import ProjectMapMixin
-from gaia.agents.base.skill_discovery import (
-    DISCOVERY_THRESHOLD_ENV,
-    SkillDiscovery,
-    discovery_env_override,
-)
+from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
     DEFAULT_SKILL_THRESHOLD,
     SkillLoader,
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -78,7 +78,16 @@ _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 #: holds just a ``.gitkeep``, so without this the agent discovers NO skills and
 #: "load the github-triage skill" fails on a tree that visibly contains it.
 #: hub/agents/gaia/python/gaia_agent/agent.py -> parents[4] is hub/.
-_HUB_SKILLS_DIR = Path(__file__).resolve().parents[4] / "skills"
+#:
+#: Frozen builds skip this: PyInstaller's extraction dir has no fixed depth
+#: (Linux's is shallow enough that parents[4] raises IndexError at import
+#: time -- verified on the v0.2.0 linux-x64 freeze), and _SKILLS_DIR alone is
+#: correct there since the freeze already bundles the pack as --add-data.
+_HUB_SKILLS_DIR = (
+    _SKILLS_DIR
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parents[4] / "skills"
+)
 
 
 def _bundled_skill_roots() -> List[str]:
@@ -169,22 +178,20 @@ class GaiaAgentConfig(ChatAgentConfig):
     # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
     dynamic_tools: bool = True
 
-    # 12 CORE (FULL_CORE_TOOLS) + 14 dynamic slots. The inherited 14 was sized
+    # 15 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
-    # of loading it. Swept offline against nine representative queries: 22 cut
-    # the web bundle in half on a research question, 26 lands every matched
-    # bundle whole, and 30 buys nothing further. Costs ~4.2K tiktoken tokens of
-    # tools= against 10.5K for the whole registry.
-    dynamic_tools_max: int = 26
+    # of loading it. Swept offline against nine representative queries with 13
+    # CORE: 13 dynamic slots lands every matched bundle whole, 9 cut the web
+    # bundle in half on a research question, and 17 buys nothing further. Grows
+    # with CORE so the dynamic share stays 13.
+    dynamic_tools_max: int = 28
 
-    # Proactive skill discovery: match each turn against skills that are
-    # INSTALLED BUT NOT LOADED and activate the winner, so the user never has
-    # to know a skill's name. On for this agent specifically — it is the one
-    # that ships a skill library and meets users who have never read it.
-    # Overridable via GAIA_SKILL_DISCOVERY.
+    # List every installed skill in the system prompt so the model loads one
+    # when the work fits, and the user never has to know a skill's name. On for
+    # this agent specifically — it ships a skill library and meets users who
+    # have never read it. Overridable via GAIA_SKILL_DISCOVERY.
     skill_discovery: bool = True
-    skill_discovery_threshold: Optional[float] = None
 
     # On for the flagship only. It does pull a second resident model and evict
     # the chat model — a cost a document agent should not pay silently, so
@@ -231,18 +238,27 @@ class GaiaAgent(
     SkillLibraryToolsMixin,
     SkillLearningToolsMixin,
     CodeIndexToolsMixin,
+    EmailToolsMixin,
 ):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
 
-    # Installing a skill writes third-party code under ~/.gaia/skills and
-    # removing one deletes it, so both are gated the way file mutation is.
+    # Declared, not acquired: the user consents once via `gaia connectors`, and
+    # nothing here reaches a mailbox until an email tool is actually called.
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = list(
+        MAILBOX_REQUIREMENTS
+    )
+
+    # Installing/capturing a skill writes third-party content under
+    # ~/.gaia/skills and removing one deletes it, so all three are gated the way
+    # file mutation is. capture_skill additionally feeds pasted/fetched text
+    # into the system prompt — never without the human seeing the request.
     # remember_skill_lesson deliberately is not: it writes only to this agent's
     # own memory, applies at once, announces itself, and undoes in one command.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
-        {"install_skill", "remove_skill"}
+        {"install_skill", "capture_skill", "remove_skill"}
     )
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
@@ -271,8 +287,8 @@ class GaiaAgent(
 
         Skill-library tools go first: ChatAgent's registration ends with
         ``_snapshot_tools()``, and anything registered after that snapshot is
-        absent from this instance's registry. Code-index tools join them for the
-        same reason.
+        absent from this instance's registry. Code-index and email tools join
+        them for the same reason.
 
         Semantic code search is what makes this agent usable ON a codebase
         rather than merely in one: grep finds a string, this finds the function
@@ -287,7 +303,7 @@ class GaiaAgent(
         access at construction time — only the first real turn does.
         """
         self.skill_loader = self._maybe_build_skill_loader()
-        self._skill_discovery = self._maybe_build_skill_discovery()
+        self._skill_catalog_enabled = self._resolve_skill_catalog_enabled()
         self.register_skill_library_tools()
         # Adaptive skills (#2674): lets the agent propose a correction to a
         # loaded skill that does not fit. It only ever stages one — activating
@@ -302,45 +318,22 @@ class GaiaAgent(
         # Through the mixin, so both read the one cached resolution and can
         # never end up describing two different trees.
         index_root = self._project_map_root() or allowed[0]
-        self._init_code_index_state(repo_path=index_root)
+        # The project root is where code search STARTS; allowed_paths is how far
+        # it may reach. Passing one value for both locked a session that began
+        # inside a repo to that repo (#3544).
+        self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
         self.register_code_index_tools()
+        self.register_email_tools()
         super()._register_tools()
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
 
-    def _maybe_build_skill_discovery(self) -> Optional[SkillDiscovery]:
-        """Construct the proactive discoverer, or ``None`` when switched off.
-
-        Built here rather than lazily so ``_discover_skills_for_turn`` never
-        races the first turn, and so a misconfigured threshold fails at startup
-        instead of mid-conversation.
-        """
-        override = discovery_env_override()
-        enabled = (
-            override if override is not None else bool(self.config.skill_discovery)
-        )
-        if not enabled:
-            return None
-        return SkillDiscovery(
-            self.skill_manager,
-            threshold=self._resolve_discovery_threshold(),
-            # Lambda, not the mapping: tool registration is still running when
-            # this is built, so a snapshot taken here would be empty and every
-            # skill would look like it had unmet requirements.
-            tools_fn=lambda: self._tools_registry,
-        )
-
-    def _resolve_discovery_threshold(self) -> Optional[float]:
-        """Threshold override: env wins over config; a malformed value fails loudly."""
-        raw = os.environ.get(DISCOVERY_THRESHOLD_ENV)
-        if raw is None:
-            return getattr(self.config, "skill_discovery_threshold", None)
-        try:
-            return float(raw)
-        except ValueError as e:
-            raise ValueError(
-                f"{DISCOVERY_THRESHOLD_ENV} must be a float, got {raw!r}"
-            ) from e
+    def _resolve_skill_catalog_enabled(self) -> bool:
+        """Whether the skill catalogue is shown: env wins over config."""
+        override = catalog_env_override()
+        if override is not None:
+            return override
+        return bool(getattr(self.config, "skill_discovery", False))
 
     def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:
         """Construct the per-turn skill-body selector, or ``None`` when off."""

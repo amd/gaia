@@ -567,9 +567,14 @@ func seedAgents() []Agent {
 		// CanonicalEvents because it writes the canonical vocabulary, the only
 		// one with somewhere to put tool narration and result previews.
 		{
+			// No seeded Version: a pip/dev install has no .installed sentinel to
+			// read a real one from, and a stale literal here would outlive every
+			// release — the header falls back to naming no version rather than a
+			// confidently wrong one (LoadInstalledAgents and the peer's own probe
+			// both take priority over this field when either is available).
 			ID: FlagshipID, Name: "GAIA", Description: "Chat, documents, data, and web research — with memory and skills",
 			Category: "General", Tags: []string{"general", "chat", "rag", "memory", "skills"},
-			Icon: "✨", Version: "0.1.0", Status: StatusInstalled,
+			Icon: "✨", Status: StatusInstalled,
 			Transport:       TransportSubprocess,
 			BinaryPath:      "gaia-agent",
 			CanonicalEvents: true,

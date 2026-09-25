@@ -11,6 +11,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
@@ -244,7 +245,7 @@ func RunOneShot(
 			res.TerminalType = event.CanonicalTypeFinal
 			// `answer` is authoritative; the streamed tokens are the fallback for
 			// a sidecar that streams and then closes with an empty final.
-			res.Answer = e.Answer
+			res.Answer = chat.StripVerificationScope(e.Answer)
 			if res.Answer == "" {
 				res.Answer = streamed.String()
 			}
@@ -285,8 +286,8 @@ func RunOneShot(
 		// pointed at a subprocess agent.
 		case event.AnswerEvent:
 			res.TerminalType = event.CanonicalTypeFinal
-			res.Answer = e.Content
-			fmt.Fprintln(out, e.Content)
+			res.Answer = chat.StripVerificationScope(e.Content)
+			fmt.Fprintln(out, res.Answer)
 		case event.AgentErrorEvent:
 			res.TerminalType = event.CanonicalTypeError
 			res.ErrorDetail = e.Content

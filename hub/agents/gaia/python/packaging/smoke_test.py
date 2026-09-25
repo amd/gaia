@@ -290,11 +290,18 @@ def check_stdio_handshake(binary: Path) -> bool:
         if event["type"] != "status":
             # An 'error' here is the frozen binary failing to build its agent --
             # a missing hidden import or uncollected data file. Its detail names
-            # the cause, so print it rather than a generic verdict.
+            # the cause, so print it rather than a generic verdict. The 'detail'
+            # is only the exception's str() (see _terminal_error/stdio.py's
+            # construction-failure handler) -- the full traceback goes to
+            # stderr via traceback.format_exc(), and lives only there. Dumping
+            # it here is what turned a bare "IndexError: 4" (v0.2.0's release,
+            # useless on its own) into an actionable finding.
             log(
                 f"FAIL: expected the opening 'status' event, got "
                 f"{event['type']!r}: {event.get('detail') or event!r}"
             )
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
 
         # Reported, not asserted: the release runners have no model server, and

@@ -740,7 +740,9 @@ def _query_lemonade_version(base_url: str) -> str:
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+        # ConnectionError covers http.client.RemoteDisconnected, which escapes
+        # URLError - see urllib.request.AbstractHTTPHandler.do_open.
         raise RuntimeError(
             f"Cannot determine lemonade_version: health endpoint unreachable at "
             f"{url}: {exc}. "

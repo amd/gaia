@@ -42,6 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -54,6 +57,24 @@ jobs:
 
       - name: Build (tsc)
         run: npm run build
+
+      # query-integration.test.ts spawns the REAL Python sidecar and
+      # `describe.skipIf(!python)`-guards on it being importable. Without this
+      # step the whole block silently skips in CI (#2746) and the
+      # SCHEMA_VERSION handshake / bearer-gate / streaming-sequence assertions
+      # never run.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install email agent's Python sidecar deps
+        working-directory: .
+        run: |
+          uv pip install --system -e ".[api]" -e hub/agents/email/python
 
       - name: Test (vitest)
         run: npm test

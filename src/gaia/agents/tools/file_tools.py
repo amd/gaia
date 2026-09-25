@@ -10,22 +10,131 @@ These tools are agent-agnostic and don't depend on specific agent functionality.
 import ast
 import csv
 import fnmatch
-import logging
+import heapq
 import mimetypes
 import os
 import platform
+import re
+import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path, PureWindowsPath
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools import search_scope
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
+    check_file_state,
     record_read,
     record_write,
 )
+from gaia.agents.tools.search_scope import (
+    DEEP_ROOT_DEPTH,
+    is_broad_root,
+    root_depth,
+    search_roots,
+)
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+def _python_syntax_error(source: str, filename: str) -> str | None:
+    """The SyntaxError *source* would raise on import, or None if it is valid.
+
+    Uses ``compile`` rather than ``ast.parse``: the parser accepts a dedented
+    ``return``, a stray ``yield``/``await``, ``break`` outside a loop and
+    duplicate argument names — all of which fail at import. #3733's own
+    corruption (``return 0`` dedented out of ``main()``) is one of them.
+    Grammar is the running interpreter's, so syntax newer than the host
+    Python reads as invalid.
+    """
+    try:
+        compile(source, filename, "exec")
+    except (SyntaxError, ValueError) as e:  # ValueError: source has null bytes
+        return str(e)
+    return None
+
+
+DATE_RANGE_FORMATS = (
+    "quarter ('2025-Q1', 'Q1 2025', 'Q1-2025', '2025 Q1', \"Q1'25\", "
+    "'first quarter 2025'), year ('2025'), month ('2025-03'), "
+    "day ('2025-03-15'), or a range of those joined by ' to ' or ':' "
+    "('2025-01 to 2025-06')"
+)
+
+_QUARTER_MONTHS = {1: (1, 3), 2: (4, 6), 3: (7, 9), 4: (10, 12)}
+_ORDINAL_QUARTERS = {
+    "first": 1,
+    "1st": 1,
+    "second": 2,
+    "2nd": 2,
+    "third": 3,
+    "3rd": 3,
+    "fourth": 4,
+    "4th": 4,
+}
+_QUARTER_PATTERNS = (
+    (re.compile(r"^(?P<year>\d{4})\s*-?\s*Q(?P<q>[1-4])$", re.I), False),
+    (re.compile(r"^Q(?P<q>[1-4])\s*-?\s*(?P<year>\d{4})$", re.I), False),
+    (re.compile(r"^Q(?P<q>[1-4])\s*['’](?P<year>\d{2})$", re.I), True),
+)
+_ORDINAL_QUARTER_RE = re.compile(
+    r"^(?P<ord>first|second|third|fourth|1st|2nd|3rd|4th)\s+quarter\s+"
+    r"(?:of\s+)?(?P<year>\d{4})$",
+    re.I,
+)
+_RANGE_SPLIT_RE = re.compile(r"\s+to\s+|\s*:\s*", re.I)
+
+
+def _parse_date_value(value: str):
+    """Parse one date expression into an inclusive ("YYYY-MM", "YYYY-MM") span.
+
+    Returns None when *value* is not one of the supported forms.
+    """
+    v = value.strip()
+    for pattern, two_digit_year in _QUARTER_PATTERNS:
+        m = pattern.match(v)
+        if m:
+            if two_digit_year:
+                # Python's %y pivot: '69-'99 are 1900s, '00-'68 are 2000s.
+                year = datetime.strptime(m.group("year"), "%y").year
+            else:
+                year = int(m.group("year"))
+            start, end = _QUARTER_MONTHS[int(m.group("q"))]
+            return f"{year:04d}-{start:02d}", f"{year:04d}-{end:02d}"
+    m = _ORDINAL_QUARTER_RE.match(v)
+    if m:
+        year = int(m.group("year"))
+        start, end = _QUARTER_MONTHS[_ORDINAL_QUARTERS[m.group("ord").lower()]]
+        return f"{year:04d}-{start:02d}", f"{year:04d}-{end:02d}"
+    if re.fullmatch(r"\d{4}", v):
+        return f"{v}-01", f"{v}-12"
+    for fmt in ("%Y-%m", "%Y-%m-%d"):
+        try:
+            ym = datetime.strptime(v, fmt).strftime("%Y-%m")
+        except ValueError:
+            continue
+        return ym, ym
+    return None
+
+
+def parse_date_range(date_range: str):
+    """Parse an ``analyze_data_file`` date_range into inclusive month bounds.
+
+    Returns ("YYYY-MM", "YYYY-MM") or None if the expression is unsupported
+    (see ``DATE_RANGE_FORMATS``) or its start falls after its end.
+    """
+    parts = _RANGE_SPLIT_RE.split(date_range.strip())
+    if len(parts) == 1:
+        return _parse_date_value(parts[0])
+    if len(parts) != 2:
+        return None
+    first, last = _parse_date_value(parts[0]), _parse_date_value(parts[1])
+    if first is None or last is None or first[0] > last[1]:
+        return None
+    return first[0], last[1]
 
 
 class FileSearchToolsMixin:
@@ -67,6 +176,10 @@ class FileSearchToolsMixin:
             self, "_path_validator", None
         )
 
+    def _search_roots(self) -> List[Path]:
+        """Where a filesystem search should look — see ``search_scope`` (#3576)."""
+        return search_roots(self)
+
     def _read_access_error(self, path: str):
         """Enforce the ``--allowed-paths`` sandbox on read operations.
 
@@ -89,7 +202,7 @@ class FileSearchToolsMixin:
             return None
         is_allowed, reason = validator.validate_read(path)
         if not is_allowed:
-            return {"status": "error", "error": reason}
+            return {**NOT_EXECUTED, "status": "error", "error": reason}
         return None
 
     def register_file_search_tools(self) -> None:
@@ -100,15 +213,24 @@ class FileSearchToolsMixin:
             atomic=True,
         )
         def search_file(
-            file_pattern: str, deep_search: bool = False, file_types: str = None
+            file_pattern: str,
+            directory: str = None,
+            deep_search: bool = False,
+            file_types: str = None,
         ) -> Dict[str, Any]:
             """
-            Search for files with intelligent prioritization.
+            Find files by name or pattern.
 
-            Strategy:
-            1. Quick search: CWD + common document locations (fast)
-            2. Deep search: entire drive(s) (only when deep_search=True)
-            3. Filter by document file types for speed
+            Args:
+                file_pattern: name, substring, glob ("*.go") or regex to match.
+                directory: WHERE to look. Pass it whenever the user names a
+                    folder ("in tui/internal", "under docs") — without it the
+                    search covers the whole workspace and common document
+                    folders, which is slower and can match the wrong file.
+                deep_search: search entire drives. Slow; only after a normal
+                    search found nothing.
+                file_types: comma-separated extensions to restrict to, e.g.
+                    "go,md". Defaults to common document and source types.
             """
             try:
                 # Document file extensions to search
@@ -140,8 +262,6 @@ class FileSearchToolsMixin:
                         ".sh",
                     }
 
-                import re as _re
-
                 matching_files = []
                 pattern_lower = file_pattern.lower()
                 searched_locations = []
@@ -154,8 +274,8 @@ class FileSearchToolsMixin:
                 _compiled_re = None
                 if is_regex:
                     try:
-                        _compiled_re = _re.compile(pattern_lower, _re.IGNORECASE)
-                    except _re.error:
+                        _compiled_re = re.compile(pattern_lower, re.IGNORECASE)
+                    except re.error:
                         is_regex = False  # Fall back if invalid regex
                 # Glob: simple wildcards only when not already a regex pattern
                 is_glob = not is_regex and ("*" in file_pattern or "?" in file_pattern)
@@ -165,14 +285,10 @@ class FileSearchToolsMixin:
                 # Each alternative is a set of words that must ALL appear in the filename.
                 # Stop words ("the", "a", "an") are stripped from each alternative.
                 _QUERY_STOP_WORDS = {"the", "a", "an"}
-                if (
-                    not is_glob
-                    and not is_regex
-                    and _re.search(r"\bor\b", pattern_lower)
-                ):
+                if not is_glob and not is_regex and re.search(r"\bor\b", pattern_lower):
                     _alternatives = [
                         [w for w in alt.strip().split() if w not in _QUERY_STOP_WORDS]
-                        for alt in _re.split(r"\bor\b", pattern_lower)
+                        for alt in re.split(r"\bor\b", pattern_lower)
                         if alt.strip()
                     ]
                 else:
@@ -187,7 +303,7 @@ class FileSearchToolsMixin:
                     name_lower = file_path.name.lower()
                     stem_lower = file_path.stem.lower()
                     # Normalize separators so "employ.*book" matches "employee_handbook"
-                    name_normalized = _re.sub(r"[_\-.]", "", name_lower)
+                    name_normalized = re.sub(r"[_\-.]", "", name_lower)
                     if is_glob:
                         name_match = fnmatch.fnmatch(name_lower, pattern_lower)
                     elif is_regex and _compiled_re:
@@ -218,12 +334,75 @@ class FileSearchToolsMixin:
                     type_match = file_path.suffix.lower() in doc_extensions
                     return name_match and type_match
 
+                budget = {}
+
+                def reset_budget():
+                    budget.update(
+                        started=time.monotonic(),
+                        entries=0,
+                        truncated=False,
+                        reason="",
+                    )
+
+                def budget_exhausted() -> bool:
+                    if budget["truncated"]:
+                        return True
+                    if budget["entries"] >= search_scope.SEARCH_ENTRY_BUDGET:
+                        budget["reason"] = "entries"
+                    elif (
+                        time.monotonic() - budget["started"]
+                        >= search_scope.SEARCH_TIME_BUDGET_S
+                    ):
+                        budget["reason"] = "time"
+                    else:
+                        return False
+                    budget["truncated"] = True
+                    logger.info(
+                        "search_file stopped (%s budget) after %d entries / %.1f s",
+                        budget["reason"],
+                        budget["entries"],
+                        time.monotonic() - budget["started"],
+                    )
+                    return True
+
+                def with_truncation(result: Dict[str, Any]) -> Dict[str, Any]:
+                    """Mark a result partial when the walk ran out of budget."""
+                    if not budget["truncated"]:
+                        return result
+                    where = "a narrower `directory`" if directory else "`directory`"
+                    if budget["reason"] == "entries":
+                        stopped = (
+                            f"after examining {budget['entries']:,} files and folders"
+                        )
+                    else:
+                        stopped = f"after {time.monotonic() - budget['started']:.1f} s"
+                    hint = (
+                        f"Search stopped {stopped} — pass {where} to "
+                        "search a specific folder."
+                    )
+                    result["truncated"] = True
+                    result["hint"] = hint
+                    if not result.get("files"):
+                        result["display_message"] = (
+                            f"Search for '{file_pattern}' stopped before "
+                            "finishing; nothing matched in the part searched"
+                        )
+                        result["suggestion"] = (
+                            "This is NOT a complete zero: the search ran out of "
+                            f"budget before covering searched_paths. {hint}"
+                        )
+                    return result
+
+                reset_budget()
+                walked = set()
+
                 def search_location(location: Path, max_depth: int = 999):
                     """Search a specific location up to max_depth."""
-                    if not location.exists():
+                    if not location.exists() or budget_exhausted():
                         return
 
                     searched_locations.append(str(location))
+                    walked.add(location)
                     logger.debug(f"Searching {location}...")
 
                     def search_recursive(current_path: Path, depth: int):
@@ -252,6 +431,9 @@ class FileSearchToolsMixin:
 
                         try:
                             for item in current_path.iterdir():
+                                budget["entries"] += 1
+                                if budget_exhausted():
+                                    return
                                 # Skip system/hidden directories
                                 if item.name.startswith(
                                     (".", "$", "Windows", "Program Files")
@@ -265,62 +447,136 @@ class FileSearchToolsMixin:
                                     if matches_pattern_and_type(item):
                                         matching_files.append(str(item.resolve()))
                                         logger.debug(f"Found: {item.name}")
-                                elif item.is_dir() and depth < max_depth:
+                                elif (
+                                    item.is_dir()
+                                    and depth < max_depth
+                                    and item not in walked
+                                ):
                                     search_recursive(item, depth + 1)
                         except (PermissionError, OSError) as e:
                             logger.debug(f"Skipping {current_path}: {e}")
 
                     search_recursive(location, 0)
 
-                # Phase 0+1: Search CWD AND common locations together
-                # (always search both before returning, so Documents/Downloads
-                # files aren't missed just because CWD had some matches)
-                cwd = Path.cwd()
                 home = Path.home()
 
-                # Show progress to user
-                if hasattr(self, "console") and hasattr(self.console, "start_progress"):
-                    self.console.start_progress(
-                        f"🔍 Searching current directory ({cwd.name}) for '{file_pattern}'..."
-                    )
+                # An explicit directory is the whole scope: the user named a
+                # place, so searching anywhere else can only return the wrong
+                # file. It is sandbox-checked and must exist — a search that
+                # silently skipped it would report an honest-looking zero.
+                if directory:
+                    # Resolve BEFORE the sandbox check: "tui/internal" means a
+                    # folder in the user's workspace, not one under whatever
+                    # directory this process happens to have been spawned in.
+                    scope = Path(directory).expanduser()
+                    workspace = self._search_roots()
+                    if not scope.is_absolute():
+                        matched = next(
+                            (r for r in workspace if (r / scope).is_dir()), None
+                        )
+                        if matched is None:
+                            # No root holds it. Say that, rather than resolving
+                            # against this process's cwd and reporting "access
+                            # denied" for an absolute path the user never typed
+                            # — a typo'd folder should read as a typo. Safe to
+                            # be specific: no absolute path was supplied, so
+                            # this is not an existence oracle.
+                            listed = ", ".join(str(r) for r in workspace)
+                            return {
+                                "status": "error",
+                                "error": (
+                                    f"Directory not found: '{directory}' is not "
+                                    f"under any workspace root ({listed}). "
+                                    "Nothing was searched — this is not an "
+                                    "empty result."
+                                ),
+                                "searched_paths": [],
+                                "workspace_roots": [str(r) for r in workspace],
+                            }
+                        scope = matched / scope
+                    scope = scope.resolve()
+                    # Sandbox before the existence probe, so an out-of-sandbox
+                    # path cannot be used as a directory-existence oracle
+                    # (same order as read_file / search_file_content).
+                    denied = self._read_access_error(str(scope))
+                    if denied:
+                        return denied
+                    if not scope.is_dir():
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"Directory not found: '{directory}'. Nothing was "
+                                "searched — this is not an empty result."
+                            ),
+                            "searched_paths": [],
+                        }
+                    if hasattr(self, "console") and hasattr(
+                        self.console, "start_progress"
+                    ):
+                        self.console.start_progress(
+                            f"🔍 Searching {scope} for '{file_pattern}'..."
+                        )
+                    search_location(scope, max_depth=DEEP_ROOT_DEPTH)
+                    roots = [scope]
+                else:
+                    # Phase 0+1: the agent's allowed paths AND common document
+                    # locations (always both, so a Documents file isn't missed
+                    # just because a workspace root had some matches).
+                    roots = self._search_roots()
+                    if hasattr(self, "console") and hasattr(
+                        self.console, "start_progress"
+                    ):
+                        self.console.start_progress(
+                            f"🔍 Searching the workspace for '{file_pattern}'..."
+                        )
+                    logger.debug("Phase 0: searching %s", [str(r) for r in roots])
+                    for root in roots:
+                        # Only the project gets an exhaustive walk. The rest of
+                        # the sandbox is approvals that accumulated over time,
+                        # and a zero-result search would traverse all of them.
+                        search_location(root, max_depth=root_depth(root, roots))
 
-                logger.debug(
-                    f"Phase 0: Deep search of current directory for '{file_pattern}'..."
-                )
-                logger.debug(f"Current directory: {cwd}")
+                    # Always also search common locations (Documents, Downloads, etc.)
+                    if hasattr(self, "console") and hasattr(
+                        self.console, "start_progress"
+                    ):
+                        self.console.start_progress(
+                            "🔍 Searching common folders (Documents, Downloads, Desktop)..."
+                        )
 
-                # Search current directory thoroughly (unlimited depth)
-                search_location(cwd, max_depth=999)
+                    logger.debug("Phase 1: Searching common document locations...")
 
-                # Always also search common locations (Documents, Downloads, etc.)
-                if hasattr(self, "console") and hasattr(self.console, "start_progress"):
-                    self.console.start_progress(
-                        "🔍 Searching common folders (Documents, Downloads, Desktop)..."
-                    )
+                    common_locations = [
+                        home / "Documents",
+                        home / "Downloads",
+                        home / "Desktop",
+                        home / "OneDrive",
+                        home / "Google Drive",
+                        home / "Dropbox",
+                    ]
 
-                logger.debug("Phase 1: Searching common document locations...")
-
-                common_locations = [
-                    home / "Documents",
-                    home / "Downloads",
-                    home / "Desktop",
-                    home / "OneDrive",
-                    home / "Google Drive",
-                    home / "Dropbox",
-                ]
-
-                for location in common_locations:
-                    if len(matching_files) >= 20:
-                        break
-                    # Skip if already searched as part of CWD
-                    try:
-                        if location.resolve() == cwd.resolve() or str(
-                            location.resolve()
-                        ).startswith(str(cwd.resolve())):
-                            continue
-                    except (OSError, ValueError):
-                        pass
-                    search_location(location, max_depth=5)
+                    # By path, not string prefix: a root ~/Doc must not cover ~/Documents.
+                    for location in common_locations:
+                        if len(matching_files) >= 20:
+                            break
+                        # Skip anything already covered by a searched root. A
+                        # broad root was only walked shallowly, so it covers
+                        # nothing.
+                        try:
+                            resolved = location.resolve()
+                            if any(
+                                resolved.is_relative_to(root.resolve())
+                                for root in roots
+                                if not is_broad_root(root)
+                            ):
+                                continue
+                        except (OSError, ValueError) as e:
+                            logger.debug(
+                                "Could not resolve %s, searching it anyway: %s",
+                                location,
+                                e,
+                            )
+                        search_location(location, max_depth=5)
 
                 # Deduplicate results (CWD and common locations may overlap)
                 unique_files = []
@@ -339,32 +595,54 @@ class FileSearchToolsMixin:
                 # If found in CWD + common locations, return immediately
                 if matching_files:
                     limited_files = matching_files[:10]
-                    return {
-                        "status": "success",
-                        "files": limited_files,
-                        "file_list": self._format_file_list(limited_files),
-                        # Report only what the UI can actually access (avoid "count > returned files").
-                        "count": len(limited_files),
-                        "total_locations_searched": len(searched_locations),
-                        "search_context": "common_locations",
-                        "display_message": f"✓ Found {len(limited_files)} file(s)",
-                    }
+                    return with_truncation(
+                        {
+                            "status": "success",
+                            "files": limited_files,
+                            "file_list": self._format_file_list(limited_files),
+                            # Report only what the UI can actually access (avoid "count > returned files").
+                            "count": len(limited_files),
+                            "total_locations_searched": len(searched_locations),
+                            "search_context": "common_locations",
+                            "display_message": f"✓ Found {len(limited_files)} file(s)",
+                        }
+                    )
 
-                # Quick search found nothing
-                if not deep_search:
-                    # Return with hint that deep search is available
-                    return {
-                        "status": "success",
-                        "files": [],
-                        "count": 0,
-                        "total_locations_searched": len(searched_locations),
-                        "search_context": "common_locations",
-                        "display_message": f"No files found matching '{file_pattern}' in common locations",
-                        "deep_search_available": True,
-                        "suggestion": "I can do a deep search across all drives if you'd like (this may take a minute).",
-                    }
+                # Quick search found nothing. A named directory is the WHOLE
+                # scope: a drive-wide sweep would answer about somewhere else,
+                # which is the same wrong answer in a softer form — and the
+                # deep_search docstring tells the model to reach for it after
+                # exactly this result.
+                if not deep_search or directory:
+                    # Name the places that were searched. A bare zero reads as
+                    # "there are none", and the model relays it that way (#3576).
+                    where = ", ".join(str(r) for r in roots) or "nowhere"
+                    return with_truncation(
+                        {
+                            "status": "success",
+                            "files": [],
+                            "count": 0,
+                            "total_locations_searched": len(searched_locations),
+                            "searched_paths": [str(p) for p in searched_locations],
+                            "search_context": (
+                                "directory" if directory else "workspace"
+                            ),
+                            "display_message": (
+                                f"No files matching '{file_pattern}' under {where}"
+                            ),
+                            "deep_search_available": not directory,
+                            "suggestion": (
+                                "Zero here means zero UNDER THE PATHS LISTED IN "
+                                "searched_paths, not zero on the machine. Say where "
+                                "you looked. If the user named a folder, pass it as "
+                                "`directory`."
+                            ),
+                        }
+                    )
 
                 # Phase 2: Deep drive search (only when explicitly requested)
+                reset_budget()
+                walked.clear()
                 if hasattr(self, "console") and hasattr(self.console, "start_progress"):
                     self.console.start_progress(
                         "🔍 Deep search across all drives (this may take a minute)..."
@@ -394,42 +672,33 @@ class FileSearchToolsMixin:
                 # Return final results
                 if matching_files:
                     limited_files = matching_files[:10]
-                    return {
-                        "status": "success",
-                        "files": limited_files,
-                        "file_list": self._format_file_list(limited_files),
-                        # Report only what the UI can actually access (avoid "count > returned files").
-                        "count": len(limited_files),
-                        "total_locations_searched": len(searched_locations),
-                        "display_message": f"✓ Found {len(limited_files)} file(s) after deep search",
-                        "user_instruction": "If multiple files found, display numbered list and ask user to select one.",
-                    }
-                else:
-                    # Build helpful message about what was searched
-                    search_summary = []
-                    if str(cwd) in searched_locations:
-                        search_summary.append(f"current directory ({cwd.name})")
-                    if len(searched_locations) > 1:
-                        search_summary.append(
-                            f"{len(searched_locations)} total locations"
-                        )
-
-                    searched_str = (
-                        ", ".join(search_summary)
-                        if search_summary
-                        else f"{len(searched_locations)} locations"
+                    return with_truncation(
+                        {
+                            "status": "success",
+                            "files": limited_files,
+                            "file_list": self._format_file_list(limited_files),
+                            # Report only what the UI can actually access (avoid "count > returned files").
+                            "count": len(limited_files),
+                            "total_locations_searched": len(searched_locations),
+                            "display_message": f"✓ Found {len(limited_files)} file(s) after deep search",
+                            "user_instruction": "If multiple files found, display numbered list and ask user to select one.",
+                        }
                     )
-
-                    return {
-                        "status": "success",
-                        "files": [],
-                        "count": 0,
-                        "total_locations_searched": len(searched_locations),
-                        "search_summary": searched_str,
-                        "display_message": f"❌ No files found matching '{file_pattern}'",
-                        "searched": f"Searched {searched_str}",
-                        "suggestion": "Try a different search term, check spelling, or provide the full file path if you know it.",
-                    }
+                else:
+                    searched_str = f"{len(searched_locations)} locations"
+                    return with_truncation(
+                        {
+                            "status": "success",
+                            "files": [],
+                            "count": 0,
+                            "total_locations_searched": len(searched_locations),
+                            "searched_paths": [str(p) for p in searched_locations],
+                            "search_summary": searched_str,
+                            "display_message": f"❌ No files found matching '{file_pattern}'",
+                            "searched": f"Searched {searched_str}",
+                            "suggestion": "Try a different search term, check spelling, or provide the full file path if you know it.",
+                        }
+                    )
 
             except Exception as e:
                 logger.error(f"Error searching for files: {e}")
@@ -523,7 +792,9 @@ class FileSearchToolsMixin:
         @tool(
             atomic=True,
         )
-        def read_file(file_path: str) -> Dict[str, Any]:
+        def read_file(
+            file_path: str, offset: int = 0, limit: Optional[int] = None
+        ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
             Automatically detects file type and provides appropriate analysis:
@@ -533,6 +804,8 @@ class FileSearchToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for a bounded text page.
+                limit: Page size (1..8000 characters); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -568,6 +841,19 @@ class FileSearchToolsMixin:
                         ),
                     }
 
+                # os.path.exists() is true for a directory too, so without this
+                # check open() below raises IsADirectoryError into the generic
+                # except Exception handler as a raw errno string (amd/gaia#3890).
+                if os.path.isdir(file_path):
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"'{file_path}' is a directory, not a file. Use "
+                            "search_directory to list its contents, then call "
+                            "read_file on a file inside it."
+                        ),
+                    }
+
                 # Document formats must be indexed via index_document, not read directly.
                 # The tool docstring explicitly scopes read_file to text files (Python,
                 # Markdown, etc.); binary document types are not supported.  Returning
@@ -595,6 +881,17 @@ class FileSearchToolsMixin:
                             "then use query_specific_file or query_documents to retrieve content. "
                             "If index_document returns 'Access denied', ask the user to index the "
                             "file via the Document Library (attachment icon in the UI)."
+                        ),
+                    }
+
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    return {
+                        "status": "success",
+                        "file_path": file_path,
+                        **read_text_page(
+                            file_path, offset, 8000 if limit is None else limit
                         ),
                     }
 
@@ -678,8 +975,6 @@ class FileSearchToolsMixin:
 
                 # Markdown file - extract structure
                 elif ext == ".md":
-                    import re
-
                     result["file_type"] = "markdown"
 
                     # Extract headers
@@ -780,13 +1075,11 @@ class FileSearchToolsMixin:
                 ctx = max(0, int(context_lines))
 
                 # Support regex (like real grep) — fall back to plain substring if invalid
-                import re as _re
-
-                _flags = 0 if case_sensitive else _re.IGNORECASE
+                _flags = 0 if case_sensitive else re.IGNORECASE
                 try:
-                    _regex = _re.compile(pattern, _flags)
+                    _regex = re.compile(pattern, _flags)
                     _use_regex = True
-                except _re.error:
+                except re.error:
                     _use_regex = False
                     _search_plain = pattern if case_sensitive else pattern.lower()
 
@@ -842,8 +1135,9 @@ class FileSearchToolsMixin:
                                         if len(matches) >= 100:
                                             return False
                         return True
-                    except Exception:
-                        return True  # Continue searching
+                    except (OSError, UnicodeError) as exc:
+                        logger.warning("Could not search %s: %s", file_path, exc)
+                        return True
 
                 # Search files
                 for file_path in directory.rglob("*"):
@@ -949,12 +1243,20 @@ class FileSearchToolsMixin:
                         )
                         logger.warning(f"Write denied: {reason}")
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "write_file",
                         }
 
-                    # Create backup of existing file before overwriting
+                stale_error = check_file_state(str(resolved_path))
+                if stale_error is not None:
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "write", str(resolved_path), content_size, "denied", "stale"
+                        )
+                    return {**stale_error, "operation": "write_file"}
+                if path_validator is not None:
                     if resolved_path.exists():
                         backup_path = path_validator.create_backup(str(resolved_path))
                 else:
@@ -1271,6 +1573,7 @@ class FileSearchToolsMixin:
                                 "edit", str(resolved_path), 0, "denied", reason
                             )
                             return {
+                                **NOT_EXECUTED,
                                 "status": "error",
                                 "error": reason,
                                 "operation": "edit_file",
@@ -1280,6 +1583,7 @@ class FileSearchToolsMixin:
                             "edit", str(resolved_path), 0, "denied", reason
                         )
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": reason,
                             "operation": "edit_file",
@@ -1305,6 +1609,36 @@ class FileSearchToolsMixin:
                             "edit", str(resolved_path), 0, "denied", edit_error["error"]
                         )
                     return {**edit_error, "operation": "edit_file"}
+
+                # Validate Python syntax before editing. Existing syntax errors
+                # are allowed so an edit can repair a broken file incrementally.
+                if resolved_path.suffix.lower() == ".py":
+                    was_broken = _python_syntax_error(
+                        current_content, str(resolved_path)
+                    )
+                    if was_broken is not None:
+                        logger.debug(
+                            "Allowing edit to already-invalid Python file %s: %s",
+                            resolved_path,
+                            was_broken,
+                        )
+                    else:
+                        would_break = _python_syntax_error(
+                            updated_content, str(resolved_path)
+                        )
+                        if would_break is not None:
+                            return {
+                                "status": "error",
+                                "error": (
+                                    f"Edit refused: it would leave {resolved_path} "
+                                    f"with invalid Python syntax ({would_break}). "
+                                    f"The file is unchanged — fix the replacement "
+                                    f"text and retry."
+                                ),
+                                "syntax_errors": [would_break],
+                                "file_path": str(resolved_path),
+                                "operation": "edit_file",
+                            }
 
                 # Create backup before editing
                 backup_path = None
@@ -1342,6 +1676,7 @@ class FileSearchToolsMixin:
 
                 result = {
                     "status": "success",
+                    "operation": "edit_file",
                     "file_path": str(resolved_path),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
@@ -1698,6 +2033,13 @@ class FileSearchToolsMixin:
                 file_path: Path to the data file
                 analysis_type: 'summary', 'spending', 'trends', or 'full'
                 columns: Comma-separated column names to focus on (optional)
+                group_by: Column name to group rows by; numeric columns are
+                    summed per group, largest first (optional)
+                date_range: Keep only rows whose date column falls in this
+                    period (optional). Accepts a quarter ('2025-Q1',
+                    'Q1 2025', "Q1'25"), year ('2025'), month ('2025-03'),
+                    day ('2025-03-15'), or a range ('2025-01 to 2025-06').
+                    Unsupported formats return an error.
 
             Returns:
                 Dictionary with analysis results based on the requested type
@@ -1792,6 +2134,19 @@ class FileSearchToolsMixin:
                 if date_range:
                     from dateutil import parser as date_parser
 
+                    parsed_range = parse_date_range(date_range)
+                    if parsed_range is None:
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"Unsupported date_range: {date_range!r}. "
+                                f"Use a {DATE_RANGE_FORMATS}."
+                            ),
+                            "has_errors": True,
+                            "operation": "analyze_data_file",
+                        }
+                    start_ym, end_ym = parsed_range
+
                     # Find a date column
                     date_col_candidates = [
                         c
@@ -1809,61 +2164,50 @@ class FileSearchToolsMixin:
                             )
                         )
                     ]
-                    if date_col_candidates:
-                        date_col_filter = date_col_candidates[0]
-                        # Parse date_range into (start_year_month, end_year_month) as "YYYY-MM"
-                        dr = date_range.strip()
-                        start_ym, end_ym = None, None
-                        if " to " in dr:
-                            parts = dr.split(" to ", 1)
-                            start_ym = parts[0].strip()[:7]  # truncate to YYYY-MM
-                            end_ym = parts[1].strip()[:7]
-                        elif ":" in dr and not dr.startswith("Q"):
-                            # Handle "YYYY-MM-DD:YYYY-MM-DD" or "YYYY-MM:YYYY-MM"
-                            parts = dr.split(":", 1)
-                            start_ym = parts[0].strip()[:7]  # truncate to YYYY-MM
-                            end_ym = parts[1].strip()[:7]
-                        elif dr.upper().endswith(("-Q1", "-Q2", "-Q3", "-Q4")):
-                            year = dr[:4]
-                            quarter = dr[-2:].upper()
-                            q_map = {
-                                "Q1": ("01", "03"),
-                                "Q2": ("04", "06"),
-                                "Q3": ("07", "09"),
-                                "Q4": ("10", "12"),
-                            }
-                            m_start, m_end = q_map.get(quarter, ("01", "03"))
-                            start_ym = f"{year}-{m_start}"
-                            end_ym = f"{year}-{m_end}"
-                        else:
-                            # Single month/year — treat as exact match
-                            start_ym = dr[:7]
-                            end_ym = dr[:7]
+                    if not date_col_candidates:
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"date_range {date_range!r} given, but no date "
+                                "column was found (looked for a column name "
+                                "containing date/time/posted/period/month/year/"
+                                f"quarter). Available columns: {', '.join(all_columns)}"
+                            ),
+                            "has_errors": True,
+                            "operation": "analyze_data_file",
+                        }
+                    date_col_filter = date_col_candidates[0]
 
-                        filtered = []
-                        for row in rows:
-                            dv = row.get(date_col_filter)
-                            if dv is None or str(dv).strip() == "":
-                                continue
-                            try:
-                                if isinstance(dv, datetime):
-                                    dt = dv
-                                else:
-                                    dt = date_parser.parse(str(dv), fuzzy=True)
-                                row_ym = dt.strftime("%Y-%m")
-                                if start_ym <= row_ym <= end_ym:
-                                    filtered.append(row)
-                            except (ValueError, TypeError, OverflowError):
-                                continue
-                        rows = filtered
-                        if not rows:
-                            return {
-                                "status": "success",
-                                "file": fp.name,
-                                "row_count": 0,
-                                "date_filter_applied": date_range,
-                                "message": f"No rows matched date range: {date_range}",
-                            }
+                    filtered = []
+                    for row in rows:
+                        dv = row.get(date_col_filter)
+                        if dv is None or str(dv).strip() == "":
+                            continue
+                        try:
+                            if isinstance(dv, datetime):
+                                dt = dv
+                            else:
+                                dt = date_parser.parse(str(dv), fuzzy=True)
+                            row_ym = dt.strftime("%Y-%m")
+                            if start_ym <= row_ym <= end_ym:
+                                filtered.append(row)
+                        except (ValueError, TypeError, OverflowError):
+                            continue
+                    rows = filtered
+                    if not rows:
+                        return {
+                            "status": "success",
+                            "file": fp.name,
+                            "row_count": 0,
+                            "date_filter_applied": date_range,
+                            "date_filter_parsed": {"start": start_ym, "end": end_ym},
+                            "date_column": date_col_filter,
+                            "message": (
+                                f"No rows in column '{date_col_filter}' fall "
+                                f"between {start_ym} and {end_ym} (inclusive), "
+                                f"parsed from date_range {date_range!r}."
+                            ),
+                        }
 
                 # Filter columns if specified
                 focus_columns = all_columns
@@ -1891,6 +2235,8 @@ class FileSearchToolsMixin:
                 }
                 if date_range:
                     result["date_filter_applied"] = date_range
+                    result["date_filter_parsed"] = {"start": start_ym, "end": end_ym}
+                    result["date_column"] = date_col_filter
 
                 # Infer column types
                 column_types = {}
@@ -2424,13 +2770,19 @@ class FileSearchToolsMixin:
             Args:
                 location: 'all', 'documents', 'downloads', or 'desktop'
                 file_types: Comma-separated extensions to filter
-                max_results: Maximum number of results to return
+                max_results: Maximum results across all output fields (1-200)
                 days: Only show files modified within this many days
 
             Returns:
                 Dictionary with list of recent files sorted by modification time
             """
             try:
+                if (
+                    not isinstance(max_results, int)
+                    or isinstance(max_results, bool)
+                    or not 1 <= max_results <= 200
+                ):
+                    raise ValueError("max_results must be an integer between 1 and 200")
                 home = Path.home()
 
                 # Determine directories to scan
@@ -2491,6 +2843,7 @@ class FileSearchToolsMixin:
 
                 cutoff = datetime.now() - timedelta(days=days)
                 recent_files = []
+                total_found = 0
 
                 for scan_dir in dirs_to_scan:
                     if not scan_dir.exists():
@@ -2517,37 +2870,33 @@ class FileSearchToolsMixin:
                                 if modified_dt < cutoff:
                                     continue
 
-                                recent_files.append(
-                                    {
-                                        "file_name": item.name,
-                                        "file_path": str(item),
-                                        "size_bytes": stat_info.st_size,
-                                        "size": _human_readable_size(stat_info.st_size),
-                                        "modified": modified_dt.strftime(
-                                            "%Y-%m-%d %H:%M"
-                                        ),
-                                        "modified_ago": _relative_time(modified_dt),
-                                        "extension": item.suffix.lower(),
-                                        "directory": str(item.parent),
-                                    }
-                                )
-                            except (PermissionError, OSError):
+                                total_found += 1
+                                item_info = {
+                                    "file_name": item.name,
+                                    "file_path": str(item),
+                                    "size_bytes": stat_info.st_size,
+                                    "size": _human_readable_size(stat_info.st_size),
+                                    "modified": modified_dt.strftime("%Y-%m-%d %H:%M"),
+                                    "modified_ago": _relative_time(modified_dt),
+                                    "extension": item.suffix.lower(),
+                                    "directory": str(item.parent),
+                                }
+                                entry = (stat_info.st_mtime_ns, total_found, item_info)
+                                if len(recent_files) < max_results:
+                                    heapq.heappush(recent_files, entry)
+                                else:
+                                    heapq.heappushpop(recent_files, entry)
+                            except (PermissionError, OSError) as exc:
+                                logger.debug("Could not inspect %s: %s", item, exc)
                                 continue
 
                     except (PermissionError, OSError) as e:
                         logger.debug(f"Could not scan {scan_dir}: {e}")
                         continue
 
-                # Sort by modification time (most recent first)
-                recent_files.sort(key=lambda x: x["modified"], reverse=True)
-
-                total_found = len(recent_files)
+                shown = [entry[2] for entry in sorted(recent_files, reverse=True)]
                 locations_searched = [d.name for d in dirs_to_scan if d.exists()]
-
-                # Return all files — first batch shown directly, rest in a
-                # collapsible section so the LLM doesn't truncate them.
-                shown = recent_files[:max_results]
-                extra = recent_files[max_results:]
+                truncated = total_found > len(shown)
 
                 # Build display_message with collapsible extra files
                 loc_str = ", ".join(locations_searched)
@@ -2556,18 +2905,16 @@ class FileSearchToolsMixin:
                 ]
                 for f in shown:
                     display_parts.append(f"  {f['file_name']} ({f['directory']})")
-                if extra:
+                if truncated:
                     display_parts.append(
-                        f"\n<details><summary>+{len(extra)} more files</summary>\n"
+                        f"Showing {len(shown)} of {total_found}; {total_found - len(shown)} "
+                        "files omitted. Narrow location, file_types, or days to see other matches."
                     )
-                    for f in extra:
-                        display_parts.append(f"  {f['file_name']} ({f['directory']})")
-                    display_parts.append("</details>")
 
                 return {
                     "status": "success",
-                    "files": recent_files[:max_results],
-                    "all_files": recent_files,
+                    "files": shown,
+                    "truncated": truncated,
                     "count": len(shown),
                     "total_found": total_found,
                     "locations_searched": locations_searched,

@@ -49,7 +49,9 @@ def _github_reachable() -> bool:
             return True
     except urllib.error.HTTPError:
         return True
-    except (urllib.error.URLError, TimeoutError):
+    except (urllib.error.URLError, ConnectionError, TimeoutError):
+        # ConnectionError covers http.client.RemoteDisconnected, which escapes
+        # URLError - see urllib.request.AbstractHTTPHandler.do_open.
         return False
 
 

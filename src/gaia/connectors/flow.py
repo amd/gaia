@@ -39,6 +39,7 @@ import uuid
 import webbrowser
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Mapping, Optional
+from urllib.parse import urlsplit
 
 import httpx
 from aiohttp import web
@@ -55,7 +56,7 @@ from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
 from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
-from gaia.connectors.store import save_connection
+from gaia.connectors.store import DEFAULT_ACCOUNT, peek_connection, save_connection
 
 logger = logging.getLogger(__name__)
 
@@ -154,18 +155,18 @@ def _resolve_account_type(provider, id_token: str) -> Optional[str]:
     """Classify the signed-in account from the id_token, if the provider can.
 
     Duck-typed on ``provider.classify_account_type(claims)`` (Microsoft derives
-    ``personal`` vs ``work`` from the ``tid`` claim, #2466). Returns ``None`` when
-    the provider has no notion of account type or the token carries no usable
-    claim — an unknown kind is recorded as unknown, never guessed. Never raises:
-    the account kind is metadata, and failing to derive it must not fail a
-    connect that otherwise succeeded.
+    ``personal`` vs ``work`` from the ``tid`` claim, #2466). The claims may be
+    empty — a provider that does not request ``openid`` gets no id_token at all,
+    and decides from what it does know — so the provider, not this function,
+    owns what is conclusive. Returns ``None`` when the provider has no notion of
+    account type or nothing was conclusive; an unknown kind is recorded as
+    unknown, never guessed. Never raises: the account kind is metadata, and
+    failing to derive it must not fail a connect that otherwise succeeded.
     """
     classify = getattr(provider, "classify_account_type", None)
     if not callable(classify):
         return None
     claims = _decode_id_token_claims(id_token or "")
-    if not claims:
-        return None
     try:
         account_type = classify(claims)
     except Exception as e:  # noqa: BLE001 — metadata only, must not fail connect
@@ -199,17 +200,25 @@ async def _resolve_account_email(provider, id_token: str, access_token: str) -> 
                 )
             if resp.status_code == 200:
                 return parse(resp.json()) or "default"
-            logger.warning(
-                "flow: userinfo lookup for %s returned %s (label only)",
+            logger.error(
+                "flow: userinfo lookup for %s returned HTTP %s at %s — the "
+                "connection is usable but will be labelled 'default' instead "
+                "of the account address. Reconnect with the provider's default "
+                "scopes (a hand-typed --scopes list that drops the profile "
+                "scope cannot resolve an address).",
                 getattr(provider, "provider_id", "?"),
                 resp.status_code,
+                userinfo_url,
             )
         except Exception as e:  # noqa: BLE001 — label-only, never fail connect
-            logger.warning(
-                "flow: userinfo lookup for %s failed (%s); label falls back to "
-                "'default'",
+            logger.error(
+                "flow: userinfo lookup for %s failed (%s) at %s — the "
+                "connection is usable but will be labelled 'default' instead "
+                "of the account address. Check network reachability to the "
+                "provider, then reconnect.",
                 getattr(provider, "provider_id", "?"),
                 e,
+                userinfo_url,
             )
     return "default"
 
@@ -409,6 +418,140 @@ async def _teardown_flow(flow_id: str) -> None:
         logger.warning("flow: runner.cleanup failed for %s: %s", flow_id, e)
 
 
+async def revoke_provider_token(
+    provider_id: str, *, account_email: str = DEFAULT_ACCOUNT
+) -> Dict[str, Any]:
+    """
+    Attempt a provider-side OAuth revoke of the stored refresh token (#2591).
+
+    This is the honest half of "disconnect": callers (``oauth_pkce.disconnect``,
+    ``api.revoke_connection``) MUST NOT report a full revoke just because the
+    local keyring entry was deleted — that was the literal #2591 bug (GAIA
+    told the user it disconnected when it had only forgotten locally, leaving
+    the app's Google grant live). This function never raises for a revoke
+    failure and never deletes local state itself; it only reports what really
+    happened so the caller can act on the local delete regardless and report
+    the remote outcome truthfully:
+
+    - ``revoke_supported=False, revoke_error=None`` — the provider has no
+      public revoke endpoint (Microsoft's identity platform today; see
+      ``MicrosoftOAuthProvider.revoke_url``). The caller must say so, not
+      imply a revoke happened.
+    - ``revoke_supported=False, revoke_error=<reason>`` — no revoke was even
+      attempted, but *not* because the provider lacks one: either the stored
+      connection was forwarded by a host app (see below) or the provider
+      could not be resolved. ``revoke_error`` names which, so callers don't
+      conflate "can't be revoked" with "wasn't tried".
+    - ``revoke_supported=True, revoked_remotely=True`` — the provider's
+      revoke endpoint accepted the request (or there was no refresh token
+      stored to revoke in the first place).
+    - ``revoke_supported=True, revoked_remotely=False`` — the endpoint call
+      failed; ``revoke_error`` carries why. The provider-side grant is still
+      live and the caller must say so.
+
+    **Forwarded connections are never revoked remotely (#2591 review).** A
+    connection imported via ``api.import_forwarded_connection`` stores a
+    refresh token minted under the *host app's* OAuth client, not GAIA's own
+    (``forwarded=True`` in the keyring blob, set by ``save_connection``).
+    Google's revoke endpoint takes no client auth and kills the whole grant
+    for whoever the token belongs to — so revoking it here would silently
+    sign the host app out of the user's account, recoverable only by
+    re-consenting through that other app. Local removal still proceeds
+    (the caller deletes the keyring entry regardless); only the remote call
+    is skipped.
+    """
+    blob = peek_connection(provider_id, account_email=account_email)
+    if blob and blob.get("forwarded"):
+        return {
+            "revoke_supported": False,
+            "revoked_remotely": False,
+            "revoke_error": (
+                "this connection was forwarded to GAIA by another application "
+                "— the token belongs to that app, not GAIA, so revoking it "
+                "would also sign the host app out of the account. Disconnect "
+                "it from the app that shared it, or from your account's "
+                "connected-apps page, to fully revoke access."
+            ),
+        }
+
+    try:
+        provider = get_provider(provider_id)
+    except (ConnectorsError, KeyError) as exc:
+        # Unresolvable/unconfigured provider (e.g. a test double id, or a
+        # connector whose client credentials were never set up) — this is
+        # NOT the same as "this provider has no revoke endpoint": we simply
+        # couldn't determine whether one exists, and any live grant is
+        # untouched.
+        return {
+            "revoke_supported": False,
+            "revoked_remotely": False,
+            "revoke_error": f"provider {provider_id!r} could not be resolved: {exc}",
+        }
+    # Read the attribute directly, never via getattr-with-default: a provider
+    # that forgets to declare it must fail loudly, not silently report
+    # "revoke not supported" — the exact dishonesty #2591 exists to remove.
+    revoke_url = provider.revoke_url
+    result: Dict[str, Any] = {
+        "revoke_supported": bool(revoke_url),
+        "revoked_remotely": False,
+        "revoke_error": None,
+    }
+    if not revoke_url:
+        return result
+
+    # Logs name the endpoint, not ``provider_id``: the id is derived from
+    # ``spec.oauth_provider_ref``, which every credential-name heuristic reads
+    # as secret material, and the host identifies the provider just as exactly.
+    revoke_host = urlsplit(revoke_url).netloc
+
+    refresh_token = (blob or {}).get("refresh_token")
+    if not refresh_token:
+        # Nothing stored to revoke — there is no live grant to leave behind.
+        result["revoked_remotely"] = True
+        return result
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(revoke_url, data={"token": refresh_token})
+    except httpx.HTTPError as exc:
+        # Only the HTTP call itself (timeout, connection refused, DNS, TLS,
+        # protocol errors) is an expected failure mode worth reporting
+        # honestly and swallowing here. httpx exception strings are safe:
+        # they describe the failure (e.g. "ConnectTimeout"), never echo the
+        # request body we just posted the refresh token in. Anything else
+        # (a bug in this function) is NOT caught — it should crash loudly
+        # rather than be reported as a routine revoke failure.
+        result["revoke_error"] = (
+            f"{provider_id} revoke request failed: {type(exc).__name__}"
+        )
+        logger.warning(
+            "flow: provider-side revoke request failed endpoint=%s error_type=%s",
+            revoke_host,
+            type(exc).__name__,
+        )
+        return result
+
+    if response.status_code in (200, 204):
+        result["revoked_remotely"] = True
+        return result
+
+    # Never interpolate the response body into a log line or a
+    # caller-visible field: this request just posted the refresh token, and
+    # some providers echo request context (e.g. `error_description`) back
+    # into error bodies. The status code is enough for a user to act on and
+    # carries no risk of leaking the token.
+    result["revoke_error"] = (
+        f"{provider_id} revoke endpoint rejected the request "
+        f"(status {response.status_code})"
+    )
+    logger.warning(
+        "flow: provider-side revoke rejected endpoint=%s status=%s",
+        revoke_host,
+        response.status_code,
+    )
+    return result
+
+
 async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     """Loopback handler for ``GET /callback``."""
     flow = _pending.get(flow_id)
@@ -569,6 +712,35 @@ def _resolve_granted_scopes(
     return [s for s in returned if s in requested_set]
 
 
+#: Bound on each provider-supplied field, matching OAuthProviderError's own.
+_MAX_PROVIDER_FIELD_LEN = 300
+
+
+def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
+    """The provider's RFC 6749 ``(error, error_description)``, bounded.
+
+    Never falls back to the raw body (#3875): every request these responses
+    answer carries a credential — an authorization code, a device code, a
+    refresh token — and providers echo request context back into error
+    bodies, so the body must not reach a log line or a user-visible error.
+    Non-string fields are dropped rather than coerced, so a provider that
+    nests an object under ``error`` yields no detail instead of a stringified
+    fragment of its body.
+    """
+    try:
+        payload = resp.json()
+    except Exception:  # noqa: BLE001 — body may be empty/non-JSON
+        return "", ""
+    if not isinstance(payload, dict):
+        return "", ""
+    error = payload.get("error")
+    description = payload.get("error_description")
+    return (
+        error[:_MAX_PROVIDER_FIELD_LEN] if isinstance(error, str) else "",
+        description[:_MAX_PROVIDER_FIELD_LEN] if isinstance(description, str) else "",
+    )
+
+
 async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, Any]:
     """Run the token-exchange step and persist the connection."""
     provider = get_provider(flow.provider_id)
@@ -580,19 +752,14 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         response = await client.post(provider.token_url, data=body)
 
     if response.status_code != 200:
-        # Structured, bounded fields (#2590) — the previous behaviour
-        # interpolated the ENTIRE unbounded response.text into the message,
-        # so a caller that must not echo arbitrary exception text (it might
-        # ultimately carry provider-chosen content) had no way to report the
-        # failure at all short of a bare type name.
-        try:
-            err_payload = response.json()
-        except Exception:  # noqa: BLE001 — body may be empty/non-JSON
-            err_payload = {}
+        # Structured, bounded fields only (#2590) — the request this answers
+        # carried the authorization code and PKCE verifier, so the raw body
+        # never reaches the message (#3875).
+        error, description = _structured_oauth_error(response)
         raise OAuthProviderError(
             flow.provider_id,
-            error=err_payload.get("error", ""),
-            error_description=err_payload.get("error_description", response.text[:300]),
+            error=error,
+            error_description=description,
             status_code=response.status_code,
         )
     payload = response.json()
@@ -709,7 +876,8 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         # rejects it — under the split, that means it was registered for
         # "microsoft" (consumers) but connected via "microsoft_work"
         # (organizations, or a pinned Directory tenant id). Name the
-        # connector to use instead, never an env var.
+        # connector to use instead, never an env var. Membership test only —
+        # the body is matched against, never surfaced.
         if "AADSTS9002346" in resp.text:
             other = "microsoft" if provider_id != "microsoft" else "microsoft_work"
             raise ConnectorsError(
@@ -727,9 +895,13 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         # all (D6); the only tenant knob left is microsoft_work's optional
         # Directory (tenant) ID setup field.
         client_id_env = f"GAIA_{provider_id.upper()}_CLIENT_ID"
+        # Structured, bounded fields only — never the raw body (#3875).
+        error, description = _structured_oauth_error(resp)
+        detail = description or error
+        reason = f" ({detail})" if detail else ""
         raise ConnectorsError(
             f"Device-code request for {provider_id} failed with status "
-            f"{resp.status_code}: {resp.text[:300]}. Check the client id "
+            f"{resp.status_code}{reason}. Check the client id "
             f"({client_id_env}), or the Directory (tenant) ID setup field if "
             f"you set one. See docs/connectors/microsoft.mdx."
         )
@@ -789,11 +961,7 @@ async def poll_device_flow(
             if resp.status_code == 200:
                 payload = resp.json()
                 break
-            try:
-                err_payload = resp.json()
-            except Exception:  # noqa: BLE001 — body may be empty/non-JSON
-                err_payload = {}
-            err = err_payload.get("error", "")
+            err, err_description = _structured_oauth_error(resp)
             if err == "authorization_pending":
                 pass
             elif err == "slow_down":
@@ -808,17 +976,15 @@ async def poll_device_flow(
                     f"Device-code sign-in for {provider_id} was declined."
                 )
             else:
-                # Structured, bounded fields (#2590) — see OAuthProviderError.
-                # This is where an admin-consent-required rejection
-                # (AADSTS65001) actually surfaces during polling; a bare
-                # ConnectorsError with the response text glued in gave
-                # classify_oauth_exception nothing to inspect.
+                # Structured, bounded fields only (#2590) — see
+                # OAuthProviderError. This is where an admin-consent-required
+                # rejection (AADSTS65001) surfaces during polling; the raw
+                # body is never used as a fallback, because this request just
+                # posted the device code (#3875).
                 raise OAuthProviderError(
                     provider_id,
                     error=err,
-                    error_description=err_payload.get(
-                        "error_description", resp.text[:300]
-                    ),
+                    error_description=err_description,
                     status_code=resp.status_code,
                 )
             if _time.monotonic() >= deadline:

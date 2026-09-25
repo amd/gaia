@@ -221,7 +221,7 @@ Three tiers, default to keeping user data.
 |---|---|---|
 | **Windows NSIS** | Standard "Add or Remove Programs" entry. NSIS uninstaller wizard with optional "Also remove user data" checkbox that maps to `gaia uninstall --purge` | Wizard checkbox + silent flag `/PURGE=1` |
 | **macOS DMG** | **Drag the GAIA app from `/Applications` to the Trash.** This is what users already know how to do — the most familiar Mac UX. User data in `~/.gaia/` is left behind (same as every other Mac app). | Documented one-liner in README, FAQ, and release notes: `~/.gaia/venv/bin/gaia uninstall --purge` |
-| **Linux DEB** | `apt remove gaia-agent-ui` → tier 1; `apt purge gaia-agent-ui` → tier 3. `prerm` script stops the GAIA Agent UI Electron process only (does NOT kill the user-launched `gaia chat --ui` backend, which the user may want to keep running). `postrm` handles purge cleanup. | Native `apt purge` |
+| **Linux DEB** | `apt remove gaia-agent-ui` and `apt purge gaia-agent-ui` preserve per-user data. `prerm` script stops the GAIA Agent UI Electron process only (does NOT kill the user-launched `gaia chat --ui` backend, which the user may want to keep running). `postrm` prints a pointer to explicit per-user cleanup. | Run `gaia uninstall --purge` as the user |
 | **Linux AppImage** | Delete the `.AppImage` file. User data orphaned (consistent with how all AppImages work). | `~/.gaia/venv/bin/gaia uninstall --purge` from CLI |
 
 ### §5.2 The unifying piece: `gaia uninstall` CLI
@@ -234,7 +234,7 @@ gaia uninstall --venv             # Tier 2: also remove ~/.gaia/venv/
 gaia uninstall --purge            # Tier 3: remove ~/.gaia/{venv,chat,documents,electron-config.json,gaia.log,electron-install*}
 gaia uninstall --purge-lemonade   # Also remove Lemonade Server (opt-in)
 gaia uninstall --purge-models     # Also remove ~/.cache/lemonade/models/ (opt-in)
-gaia uninstall --dry-run          # Show what would be deleted, change nothing
+gaia uninstall --purge --dry-run          # Show what would be deleted, change nothing
 gaia uninstall --yes              # Skip confirmation prompts (CI / scripted / silent NSIS uninstall)
 ```
 
@@ -372,7 +372,7 @@ Move existing build/install/release scripts from `scripts/` into a focused `inst
 - All flag combinations work as documented
 - `--dry-run` shows accurate output
 - Tests cover happy path + each opt-in flag combination
-- Linux DEB `postrm` can call `gaia uninstall --purge --yes` reliably
+- Linux DEB `postrm` preserves personal data and prints the explicit cleanup command
 - Windows NSIS uninstaller can call `gaia uninstall --purge --yes` reliably
 
 ### Phase C — Migrate electron-forge → electron-builder

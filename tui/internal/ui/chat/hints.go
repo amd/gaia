@@ -4,6 +4,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -50,6 +51,11 @@ const (
 	rankOrient = 70
 	// What else the keyboard does. Genuinely useful, genuinely droppable.
 	rankAffordance = 40
+	// How to get the terminal's own drag-select back. Worth a column when
+	// there is one to spare — the app holds the mouse by default, so a user
+	// who tries to drag and gets nothing needs the way out — but it loses to
+	// every hint that says what is happening right now.
+	rankSecondary = 25
 	// Numbers for whoever is tuning the machinery. First to go.
 	rankDiagnostic = 10
 )
@@ -75,9 +81,27 @@ func (m ChatModel) statusHints() []hint {
 		hints = append(hints, hint{text: "End to jump to latest", rank: rankOrient})
 	}
 
+	// What the session has spent, on the one row that is always drawn. A cost
+	// nobody sees until they think to ask for it is a cost nobody sees: the
+	// point of putting it here is that it is in front of you while you decide
+	// whether to ask the expensive follow-up.
+	if spend := m.sessionSpendHint(); spend != "" {
+		hints = append(hints, hint{text: spend, rank: rankSecondary})
+	}
+
 	// In an alt-screen app the wheel and the arrows are the ONLY way back to
 	// earlier turns; a user who does not know that concludes history is gone.
-	hints = append(hints, hint{text: "↑↓ scroll", rank: rankAffordance})
+	if m.mouseSelectMode {
+		hints = append(hints, hint{text: "↑↓ scroll", rank: rankAffordance})
+	} else {
+		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
+		// Not while the agent is parked on a decision: the bar is a sentence,
+		// and "answer above" is the only thing the reader should act on. How
+		// to select text can wait for a frame where nothing is pending.
+		if m.confirmation == nil {
+			hints = append(hints, hint{text: "Ctrl+T select text", rank: rankSecondary})
+		}
+	}
 
 	if m.confirmation != nil && m.confirmation.Pending() {
 		// The modal owns the keyboard while it is up, so every hint here would
@@ -212,4 +236,49 @@ func (m ChatModel) hintBudget() int {
 	// " ● " + name, the bar's own padding, and a gap before the hint.
 	used := 3 + ansi.StringWidth(m.agentName) + len(" connected") + 4
 	return m.width - used
+}
+
+// sessionSpendHint is the running cost for the status bar, or "" when there is
+// nothing worth saying.
+//
+// Only for a provider that bills per token. A local model costs nothing to run
+// again, so a spend line there is noise on the one row that always has to
+// carry the way out — and a gateway the organisation already pays for is not
+// the user's spend to watch either.
+//
+// Dollars when a price is configured, tokens otherwise — never a guessed rate.
+func (m ChatModel) sessionSpendHint() string {
+	if len(m.cost.turns) == 0 || !m.isMeteredModel() {
+		return ""
+	}
+	_, _, _, in, out, cached, _ := m.cost.totals()
+	if in+out == 0 {
+		return ""
+	}
+	if price := lookupPrice(m.modelID); price != nil {
+		// Three decimals keep the status bar narrow, but a real spend must
+		// never render as "$0.000" — that reads as free, and the /cost view
+		// would disagree with it.
+		usd := price.totalUSD(in, cached, out)
+		if usd < 0.0005 {
+			return "<$0.001 this session"
+		}
+		return fmt.Sprintf("$%.3f this session", usd)
+	}
+	return fmt.Sprintf("%s tok this session", thousands(in+out))
+}
+
+// isMeteredModel reports whether this session's inference is billed per token
+// to the user.
+//
+// Keyed on the provider rather than on modelRemote alone: "remote" and "the
+// user pays per token" are different claims, and an AMD gateway is remote
+// without being the user's bill. Claude is the other way round — it is the
+// most obviously metered thing the TUI runs, and it carries no provider
+// prefix on its model id, so it has to be recognised by its backend.
+func (m ChatModel) isMeteredModel() bool {
+	if !m.modelRemote {
+		return false
+	}
+	return m.modelBackend == "claude" || strings.HasPrefix(m.modelID, "fireworks.")
 }

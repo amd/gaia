@@ -17,14 +17,18 @@ for all file mutation operations across agents. These tests verify:
 All tests are designed to run without LLM or external services.
 """
 
+import ast
 import os
 import platform
+import stat
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gaia.security import (
+    BACKUP_GENERATIONS,
     BLOCKED_DIRECTORIES,
     MAX_WRITE_SIZE_BYTES,
     SENSITIVE_EXTENSIONS,
@@ -493,12 +497,12 @@ class TestCreateBackup:
     """Test PathValidator.create_backup() method."""
 
     @pytest.fixture
-    def validator(self, tmp_path):
-        """Create a PathValidator with tmp_path allowed."""
+    def validator(self, tmp_path, mock_home):
+        """Create a PathValidator with tmp_path allowed; ~/.gaia is under it."""
         return PathValidator(allowed_paths=[str(tmp_path)])
 
     def test_backup_creates_file(self, validator, tmp_path):
-        """Verify backup creates a new file alongside the original."""
+        """Verify backup creates a copy of the original."""
         original = tmp_path / "document.txt"
         original.write_text("original content here")
 
@@ -519,20 +523,44 @@ class TestCreateBackup:
 
         assert backup_path is not None
         backup_name = os.path.basename(backup_path)
-        # Should match pattern: report.YYYYMMDD_HHMMSS.bak.txt
-        assert backup_name.startswith("report.")
-        assert ".bak" in backup_name
-        assert backup_name.endswith(".txt")
+        # report.txt.YYYYMMDD_HHMMSS.bak — the full original name, then the
+        # stamp, then ".bak" last.
+        assert backup_name.startswith("report.txt.")
+        assert backup_name.endswith(".bak")
 
-    def test_backup_preserves_extension(self, validator, tmp_path):
-        """Verify backup preserves the original file extension."""
+    def test_backup_keeps_the_original_name_but_not_its_extension(
+        self, validator, tmp_path
+    ):
+        """A backup must not still look like a file of the original type.
+
+        Keeping ".py" on the end made a backup of a test module importable-
+        looking: pytest collected ``test_x.<stamp>.bak.py``, failed on the
+        dotted module name, and took the whole suite down with it (#3747). The
+        original name is still there to read; the extension is not (#3747).
+        """
         original = tmp_path / "script.py"
         original.write_text("print('hello')")
 
         backup_path = validator.create_backup(str(original))
 
         assert backup_path is not None
-        assert backup_path.endswith(".py")
+        assert not backup_path.endswith(".py")
+        assert os.path.basename(backup_path).startswith("script.py.")
+
+    def test_a_backup_of_a_test_file_is_not_collectable(self, validator, tmp_path):
+        """The regression itself: pytest must not try to import the backup."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        original = tests_dir / "test_thing.py"
+        original.write_text("def test_ok():\n    assert True\n")
+
+        backup_path = validator.create_backup(str(original))
+
+        assert backup_path is not None
+        name = os.path.basename(backup_path)
+        assert not (
+            name.startswith("test_") and name.endswith(".py")
+        ), f"{name} matches pytest's test_*.py glob and will break collection"
 
     def test_backup_nonexistent_file_returns_none(self, validator, tmp_path):
         """Verify create_backup returns None for a nonexistent file."""
@@ -550,15 +578,39 @@ class TestCreateBackup:
         assert backup_path is not None
         assert str(backup_path) != str(original)
 
-    def test_backup_in_same_directory(self, validator, tmp_path):
-        """Verify backup is created in the same directory as the original."""
-        original = tmp_path / "notes.md"
+    def test_backup_lands_in_gaia_state_mirroring_the_original(
+        self, validator, tmp_path
+    ):
+        """Under ~/.gaia/cache/backups, at the original's own absolute path."""
+        work = tmp_path / "repo" / "docs"
+        work.mkdir(parents=True)
+        original = work / "notes.md"
         original.write_text("# Notes")
 
-        backup_path = validator.create_backup(str(original))
+        backup_path = Path(validator.create_backup(str(original)))
 
-        assert backup_path is not None
-        assert os.path.dirname(backup_path) == str(tmp_path)
+        real = original.resolve()
+        # A Windows drive becomes its own folder: C:\x -> backups\C\x.
+        drive = real.drive.rstrip(":")
+        expected_dir = (
+            validator.cache_dir
+            / "backups"
+            / drive
+            / real.parent.relative_to(real.anchor)
+        )
+        assert backup_path.parent == expected_dir
+        assert backup_path.name.startswith("notes.md.")
+        assert backup_path.read_text() == "# Notes"
+
+    def test_backing_up_leaves_nothing_next_to_the_original(self, validator, tmp_path):
+        work = tmp_path / "repo"
+        work.mkdir()
+        original = work / "notes.md"
+        original.write_text("# Notes")
+
+        validator.create_backup(str(original))
+
+        assert sorted(p.name for p in work.iterdir()) == ["notes.md"]
 
     def test_multiple_backups_have_unique_names(self, validator, tmp_path):
         """Verify multiple backups of the same file produce unique names."""
@@ -572,6 +624,45 @@ class TestCreateBackup:
         # Backups created within the same second could collide, but the path
         # object resolves uniquely in practice. We just ensure the first works.
         assert os.path.exists(backup1)
+
+    def test_only_the_newest_backups_of_a_file_are_kept(self, validator, tmp_path):
+        original = tmp_path / "notes.md"
+        original.write_text("# Notes")
+        mirror = Path(validator.create_backup(str(original))).parent
+        old = [f"notes.md.20200101_00000{i}.bak" for i in range(BACKUP_GENERATIONS + 1)]
+        # Backups of other files, one sharing the name as a prefix.
+        others = ["notes.md.orig.20200101_000000.bak", "todo.md.20200101_000000.bak"]
+        for name in old + others:
+            (mirror / name).write_text("old")
+
+        newest = Path(validator.create_backup(str(original)))
+
+        kept = sorted(
+            p.name
+            for p in mirror.iterdir()
+            if p.name.startswith("notes.md.") and p.name not in others
+        )
+        assert len(kept) == BACKUP_GENERATIONS
+        assert newest.name in kept
+        assert old[0] not in kept and old[1] not in kept
+        assert all((mirror / name).exists() for name in others)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+    def test_backups_directory_is_owner_only(self, validator, tmp_path):
+        root = validator.cache_dir / "backups"
+        root.mkdir(mode=0o755)
+        root.chmod(0o755)
+        original = tmp_path / "repo" / "src" / "app.py"
+        original.parent.mkdir(parents=True)
+        original.write_text("x = 1\n")
+
+        backup = Path(validator.create_backup(str(original)))
+
+        directory = backup.parent
+        while directory != root:
+            assert stat.S_IMODE(directory.stat().st_mode) == 0o700, directory
+            directory = directory.parent
+        assert stat.S_IMODE(root.stat().st_mode) == 0o700
 
 
 # ============================================================================
@@ -706,7 +797,7 @@ class TestChatAgentWriteFileGuardrails:
     """
 
     @pytest.fixture
-    def mock_agent(self, tmp_path):
+    def mock_agent(self, tmp_path, mock_home):
         """Create a mock agent with path_validator set to the tmp_path allowlist."""
         agent = MagicMock()
         agent.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
@@ -807,7 +898,7 @@ class TestChatAgentEditFileGuardrails:
     """Test that ChatAgent's edit_file tool enforces PathValidator guardrails."""
 
     @pytest.fixture
-    def mixin_and_registry(self, tmp_path):
+    def mixin_and_registry(self, tmp_path, mock_home):
         """Set up a FileSearchToolsMixin with validator and register tools."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
         from gaia.agents.tools.file_tools import FileSearchToolsMixin
@@ -840,7 +931,128 @@ class TestChatAgentEditFileGuardrails:
             new_content="GAIA",
         )
         assert result["status"] == "success"
+        assert result["operation"] == "edit_file"
         assert target.read_text() == "Hello, GAIA!"
+
+    def test_edit_python_file_rejects_invalid_syntax(
+        self, mixin_and_registry, tmp_path
+    ):
+        """Verify edit_file refuses Python edits that break syntax."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        original = "def main():\n    print('hello')\n"
+        target.write_text(original)
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="    print('hello')",
+            new_content="print('broken')\nreturn",
+        )
+
+        assert result["status"] == "error"
+        assert "syntax" in result["error"].lower()
+        assert target.read_text() == original
+
+    @pytest.mark.parametrize(
+        "name,original,old_content,new_content",
+        [
+            # The literal corruption from #3733: `    return 0` inside main()
+            # dedented to a top-level `return`. ast.parse accepts this; only
+            # compile() reports "'return' outside function".
+            (
+                "return outside function",
+                "def main():\n    print('hello')\n    return 0\n",
+                "    return 0",
+                "return 0",
+            ),
+            (
+                "yield outside function",
+                "def main():\n    print('hello')\n    yield 1\n",
+                "    yield 1",
+                "yield 1",
+            ),
+            (
+                "await outside async def",
+                "async def main():\n    await go()\n",
+                "async def main():",
+                "def main():",
+            ),
+            (
+                "duplicate argument",
+                "def main(a, b):\n    return a\n",
+                "def main(a, b):",
+                "def main(a, a):",
+            ),
+            (
+                "break outside loop",
+                "for i in range(3):\n    break\n",
+                "for i in range(3):\n    break",
+                "if True:\n    break",
+            ),
+        ],
+    )
+    def test_edit_python_file_rejects_compile_only_errors(
+        self, mixin_and_registry, tmp_path, name, original, old_content, new_content
+    ):
+        """Reject edits the parser accepts but the compiler rejects (#3733).
+
+        ast.parse() builds a tree without running the symtable pass, so a
+        dedented return, a stray yield/await, a duplicate argument name and
+        break outside a loop all parse cleanly and still fail at import.
+        """
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        target.write_text(original)
+
+        # Precondition: the parser alone would wave this through.
+        broken = original.replace(old_content, new_content)
+        ast.parse(broken)
+        with pytest.raises(SyntaxError):
+            compile(broken, str(target), "exec")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content=old_content,
+            new_content=new_content,
+        )
+
+        assert result["status"] == "error", f"{name} was accepted: {result}"
+        assert "syntax" in result["error"].lower()
+        assert str(target) in result["error"]
+        assert target.read_text() == original
+
+    def test_edit_python_file_can_repair_existing_syntax_error(
+        self, mixin_and_registry, tmp_path
+    ):
+        """Verify an invalid Python file can be repaired incrementally."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "broken.py"
+        target.write_text("def main(:\n    print('hello')\n")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="def main(:",
+            new_content="def main():",
+        )
+
+        assert result["status"] == "success"
+        assert result["operation"] == "edit_file"
+        assert target.read_text() == "def main():\n    print('hello')\n"
+
+    def test_edit_python_file_accepts_valid_syntax(self, mixin_and_registry, tmp_path):
+        """Verify edit_file accepts Python edits that remain syntactically valid."""
+        _, edit_fn = mixin_and_registry
+        target = tmp_path / "app.py"
+        target.write_text("def main():\n    print('hello')\n")
+
+        result = edit_fn(
+            file_path=str(target),
+            old_content="    print('hello')",
+            new_content="    print('updated')",
+        )
+
+        assert result["status"] == "success"
+        assert target.read_text() == "def main():\n    print('updated')\n"
 
     def test_edit_sensitive_file_blocked(self, mixin_and_registry, tmp_path):
         """Verify editing a sensitive file is blocked."""
@@ -917,7 +1129,7 @@ class TestFileIOToolsMixinWriteFileGuardrails:
     """
 
     @pytest.fixture
-    def mixin_and_registry(self, tmp_path):
+    def mixin_and_registry(self, tmp_path, mock_home):
         """Set up a FileIOToolsMixin with validator and register tools."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
         from gaia.agents.tools.file_io_tools import FileIOToolsMixin
@@ -1012,7 +1224,7 @@ class TestFileIOToolsMixinEditFileGuardrails:
     """Test that FileIOToolsMixin's edit_file tool enforces PathValidator guardrails."""
 
     @pytest.fixture
-    def mixin_and_registry(self, tmp_path):
+    def mixin_and_registry(self, tmp_path, mock_home):
         """Set up a FileIOToolsMixin with validator and register tools."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
         from gaia.agents.tools.file_io_tools import FileIOToolsMixin
@@ -1330,3 +1542,103 @@ class TestNoPathValidatorFallback:
         # Should succeed (with warning logged)
         assert result["status"] == "success"
         assert result["bytes_written"] == 5
+
+
+# ============================================================================
+# 11. Edits leave no backup next to the edited file
+# ============================================================================
+
+
+class TestEditingLeavesTheWorkspaceClean:
+    """Every write/edit used to leave ``name.<stamp>.bak`` beside the file, and
+    nothing removed them — they littered every repository the agent touched."""
+
+    @pytest.fixture
+    def repo(self, tmp_path, mock_home):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+        return repo
+
+    @staticmethod
+    def _tool(mixin_cls, register, name, repo, validated=True):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        mixin = mixin_cls()
+        mixin.path_validator = (
+            PathValidator(allowed_paths=[str(repo)]) if validated else None
+        )
+        mixin._path_validator = None
+        mixin.console = None
+        saved = dict(_TOOL_REGISTRY)
+        _TOOL_REGISTRY.clear()
+        try:
+            getattr(mixin, register)()
+            return _TOOL_REGISTRY[name]["function"], mixin.path_validator
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(saved)
+
+    @pytest.mark.parametrize(
+        "module, mixin, register",
+        [
+            (
+                "gaia.agents.tools.file_tools",
+                "FileSearchToolsMixin",
+                "register_file_search_tools",
+            ),
+            (
+                "gaia.agents.tools.file_io_tools",
+                "FileIOToolsMixin",
+                "register_file_io_tools",
+            ),
+        ],
+    )
+    def test_edit_file_leaves_no_new_file_beside_the_original(
+        self, repo, module, mixin, register
+    ):
+        import importlib
+
+        mixin_cls = getattr(importlib.import_module(module), mixin)
+        edit_file, validator = self._tool(mixin_cls, register, "edit_file", repo)
+
+        result = edit_file(
+            file_path=str(repo / "app.py"), old_content="x = 1", new_content="x = 2"
+        )
+
+        assert result["status"] == "success", result
+        assert (repo / "app.py").read_text(encoding="utf-8") == "x = 2\n"
+        assert sorted(p.name for p in repo.iterdir()) == ["app.py"]
+        # The safety net is still there, in GAIA's own state directory.
+        backup = Path(result["backup_path"])
+        assert backup.is_relative_to(validator.cache_dir / "backups")
+        assert backup.read_text(encoding="utf-8") == "x = 1\n"
+
+    @pytest.mark.parametrize(
+        "name, kwargs",
+        [
+            ("edit_python_file", {"old_content": "x = 1", "new_content": "x = 2"}),
+            (
+                "replace_function",
+                {"function_name": "f", "new_implementation": "def f():\n    return 2"},
+            ),
+        ],
+    )
+    def test_without_a_validator_the_edit_is_refused_and_leaves_nothing(
+        self, repo, mock_home, name, kwargs
+    ):
+        """A host that never bound path_validator is refused (#3316): no edit,
+        and no backup beside the file either."""
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+
+        source = "x = 1\n\n\ndef f():\n    return 1\n"
+        (repo / "app.py").write_text(source, encoding="utf-8")
+        tool, _ = self._tool(
+            FileIOToolsMixin, "register_file_io_tools", name, repo, validated=False
+        )
+
+        result = tool(file_path=str(repo / "app.py"), **kwargs)
+
+        assert result["status"] == "error" and "path_validator" in result["error"]
+        assert sorted(p.name for p in repo.iterdir()) == ["app.py"]
+        assert (repo / "app.py").read_text(encoding="utf-8") == source

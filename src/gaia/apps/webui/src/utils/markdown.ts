@@ -41,19 +41,21 @@ export const SAFE_DISALLOWED_ELEMENTS: ReadonlyArray<string> = [
  * Returns the URL untouched if its scheme is in the allow list, otherwise
  * returns an empty string (renders an inert anchor).
  *
- * Schemes are matched case-insensitively. Relative URLs (no scheme) and
- * fragment-only URLs (`#anchor`) pass through unchanged — they cannot
- * navigate cross-origin.
+ * Schemes are matched case-insensitively. Only fragment-only URLs (`#anchor`)
+ * pass through without a scheme: the renderer is loaded from `file://`, so a
+ * root-relative (`/Windows/System32/calc.exe`), UNC (`//host/share/x.exe`) or
+ * plain relative href resolves to a `file:` URL that the shell would hand to
+ * ShellExecute. Those are inert here.
  */
 export function safeUrlTransform(url: string): string {
     if (!url) return '';
 
-    // Allow fragment-only links and same-page anchors.
-    if (url.startsWith('#') || url.startsWith('/')) return url;
+    // Allow same-page anchors only.
+    if (url.startsWith('#')) return url;
 
     // Extract scheme (case-insensitive). RFC 3986: scheme = ALPHA *(ALPHA / DIGIT / "+" / "-" / ".")
     const colonIdx = url.indexOf(':');
-    if (colonIdx === -1) return url; // relative URL
+    if (colonIdx === -1) return ''; // scheme-less — resolves against file://
 
     const scheme = url.slice(0, colonIdx).toLowerCase();
     if (scheme === 'https' || scheme === 'http' || scheme === 'mailto') {

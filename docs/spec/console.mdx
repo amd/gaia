@@ -164,13 +164,16 @@ class OutputHandler(ABC):
         answer: str,
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
+        tok_per_s: Optional[float] = None,
     ):
         """Print final answer/result.
 
         total_tokens: real output-token count generated across the run, if
         known. ttft_seconds: real time-to-first-token for the LLM call that
-        produced this answer, if known. Both None when no real value is
-        available — never a substituted estimate.
+        produced this answer, if known. tok_per_s: the backend's own
+        generation rate for this turn, if it reported one — never derived
+        from the turn's wall clock, which includes tool time. All None when
+        no real value is available — never a substituted estimate.
         """
         ...
 
@@ -381,6 +384,7 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         streaming: bool = True,
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
+        tok_per_s: Optional[float] = None,
     ) -> None:
         """
         Print the final answer.

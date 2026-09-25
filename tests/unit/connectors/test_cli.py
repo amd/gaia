@@ -873,6 +873,28 @@ class TestDisconnect:
         # Idempotent — works even when nothing to disconnect.
         assert rc == 0
 
+    def test_disconnect_forwarded_connection_reports_no_remote_revoke(self):
+        # #2591 review: a forwarded connection's stored token belongs to the
+        # host app, not GAIA — the CLI must say plainly that no remote
+        # revoke was attempted, never the generic "no API to revoke"
+        # wording (which would wrongly suggest GAIA simply can't revoke
+        # anything for this provider).
+        from gaia.connectors.providers import get as get_provider
+        from gaia.connectors.store import save_connection
+
+        save_connection(
+            provider="google",
+            account_email="alice@example.com",
+            refresh_token="host-app-rt",
+            scopes=["s"],
+            client_id_hash=get_provider("google").client_id_hash,
+            forwarded=True,
+        )
+        rc, out, _err = _run("connectors", "disconnect", "google")
+        assert rc == 0
+        assert "forwarded" in out
+        assert "no API to revoke" not in out
+
 
 class TestMissingSubcommand:
     def test_no_subcommand_returns_exit_2(self):

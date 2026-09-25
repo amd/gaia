@@ -13,7 +13,7 @@ Coverage:
 - ``GoogleOAuthProvider`` reads ``GAIA_GOOGLE_CLIENT_ID`` at instantiation
   (NOT at module import) and surfaces a ``ConfigurationError`` when missing.
 - ``authorization_params()`` returns Google-specific extras (``access_type``,
-  ``prompt``).
+  ``prompt``, ``include_granted_scopes``).
 - ``client_id_hash`` is a stable CRC32 fingerprint of the client id.
 """
 
@@ -222,6 +222,9 @@ class TestGoogleProvider:
         #                       on every authorization)
         assert params.get("access_type") == "offline"
         assert params.get("prompt") == "consent"
+        # #2605: safe now that flow.py persists the token response's actual
+        # granted scope, not the requested one.
+        assert params.get("include_granted_scopes") == "true"
 
     def test_authorization_url_includes_pkce_and_state(self, monkeypatch):
         monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "id.apps.example")

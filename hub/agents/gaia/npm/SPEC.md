@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.12"`                  |
+| Contract version   | `API_VERSION = "2.14"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -265,12 +265,23 @@ the header.
 | `GET`  | `/version`                       | Contract probe. `{ "apiVersion", "agentVersion" }` |
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
+| `GET`  | `/v1/gaia/memory`                | The `/memory` snapshot (contract ≥ 2.13)       |
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
+| `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
+
+`GET /v1/gaia/memory` returns the read-only snapshot behind the TUI's
+`/memory` view: `{ "available", "reason", "stats", "contexts", "shown",
+"total", "items" }`. `available: false` means the session has no live memory
+store (Lemonade down, embedding model not pulled, disabled via env) — `reason`
+names why, so an outage never renders as "you have no memories". This is the
+daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
+paths call the same `build_memory_dump()` and return the identical shape.
 
 ### 5.2 `session_id` and agent retention
 
@@ -279,15 +290,26 @@ model is loaded — `/v1/gaia/init` answers that.
 whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
 agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
-threads them together.
+threads them together. Omitting it is a valid, explicit one-shot: nothing
+persists past that single turn, and the agent is not told otherwise.
+
+Internal explicit deletion follows the same idle-only rule as eviction: it returns
+`False` for an absent or busy session and preserves a running agent. Successful
+deletion claims the turn lock before removal and closes outside the registry lock.
+
+A skill **captured** in-conversation (the `capture_skill` tool — itself
+confirmation-gated, so over `/query` it needs a session that can answer) loads
+**instruction-only** until a human runs `gaia skill promote <name>` in a
+terminal: `load_skill` injects its body but defers registering any tools it
+declares, and reports the deferral in its result. Integrators must not expect
+a captured skill's `<skill>/<tool>` names to exist before that promote.
 
 A retained skill stays *loaded* but its body is not necessarily in the prompt
 every turn: the agent selects per turn which loaded bodies match the query and
 collapses the rest to a one-line menu entry (re-activated by calling
 `load_skill` again). `GAIA_DYNAMIC_SKILLS=0` disables the selection;
 `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
-disables it for the session and every body renders. Omitting it is a valid, explicit one-shot: nothing
-persists past that single turn, and the agent is not told otherwise.
+disables it for the session and every body renders.
 
 A retained session also carries a **project map** — up to 600 prompt tokens of
 directory shape, entry points, installed commands and platform quirks, present
@@ -317,10 +339,11 @@ not survive and should be reloaded.
 A second `/query` reusing a `run_id` that is still in flight gets `409` —
 `run_id` is caller-minted, so mint a fresh UUID per request; reusing one would
 leave the earlier run with no way to be cancelled. A `/query` supplying a `model`
-that differs from the one its `session_id` was built with also gets `409`: only
-agent construction reads a model, so the request cannot be honoured on the
-retained agent. Omit `model` to continue on the session's current one, or start a
-new `session_id` to switch.
+that differs from the one its `session_id` was built with **switches the retained
+agent in place** (≥ 2.14), so the conversation and any loaded skills survive the
+change; the same machinery the stdio transport's `/model` uses. A switch that
+fails — a missing Claude credential, an unknown local model — is a `409` naming
+the reason, and leaves the session on its previous model.
 
 ### 5.3 Version gate
 
@@ -378,14 +401,17 @@ the hub, which is what this package delivers, is supervised by the daemon over
 the HTTP surface above instead (§6.1).
 
 It emits the identical canonical event vocabulary, but its input channel accepts
-a JSON line carrying a `gaia_control` key, which gives it something HTTP does
-not have: a back-channel that can answer a confirmation prompt *while* a turn is
-in flight, and stop that turn (`cancel`) without ending the process — so loaded
-skills, "always" grants, history and the bypass mode survive a cancel. It also
-takes `--bypass-permissions` (start with gating off) and
-`--use-claude` / `--claude-model` (route chat to the Anthropic API instead of
-local Lemonade; embeddings stay on Lemonade either way). None of that is
-reachable over `/v1/gaia/query`.
+a JSON line carrying a `gaia_control` key: a back-channel that answers a
+confirmation prompt *while* a turn is in flight, toggles bypass, and stops a turn
+(`cancel`) without ending the process — so loaded skills, "always" grants,
+history and the bypass mode survive a cancel.
+
+Contract 2.14 gave the HTTP surface the same three capabilities per run and per
+session — `/tool_decision`, `/sessions/{id}/bypass`, and `provider: "claude"`.
+What remains stdio-only is the *launch* form of those switches:
+`--bypass-permissions` starts a process with gating already off, and
+`--use-claude` / `--claude-model` pin the backend for the life of the process
+(embeddings stay on Lemonade either way).
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models;

@@ -10,8 +10,9 @@ That is a complete record of what an agent was asked to do, every tool call it m
 what failed, and what it cost. This skill turns that exhaust into an evidence-backed
 report.
 
-**The pipeline is deterministic Python** (`gaia.factory.harvest`); an LLM is used only to
-classify session intent. Everything derived is written to `~/.gaia/cache/factory/` and
+**The core pipeline is deterministic Python** (`gaia.factory.harvest`) — no LLM, no
+network. Two optional steps do call a model through the local Claude Code CLI:
+`classify` (use-case labels) and `synthesize` (the written analysis). Everything derived is written to `~/.gaia/cache/factory/` and
 must never be committed — transcripts contain absolute paths, branch names, and whatever
 the user pasted into a prompt.
 
@@ -40,11 +41,15 @@ python -m gaia.factory.harvest.context --labels "$FACTORY/labels.txt" > "$FACTOR
 
 # 5. What each proposed fix would actually save, in tokens and dollars.
 python -m gaia.factory.harvest.savings > "$FACTORY/savings.md"
+
+# 6. Optional, needs the Claude Code CLI: label use cases, then write the analysis.
+python -m gaia.factory.harvest.classify
+python -m gaia.factory.harvest.synthesize > "$FACTORY/analysis.md"
 ```
 
-All accept `--root` (transcripts elsewhere) and `--out` / `--cache`; `context` and
-`savings` also take `--projects` if the raw transcripts are not under
-`~/.claude/projects`.
+Only `scan` takes `--root` (transcripts elsewhere); `scan` and `classify` write with
+`--out`. Every other step reads the cache with `--cache`, and `context` and `savings`
+also take `--projects` if the raw transcripts are not under `~/.claude/projects`.
 
 Outputs in `~/.gaia/cache/factory/`:
 
@@ -87,21 +92,30 @@ catch them.
 
 ## Classifying intent
 
-`scan` produces `intents.jsonl` but assigns no use-case. To label:
+`scan` produces `intents.jsonl` but assigns no use-case. Run
+`python -m gaia.factory.harvest.classify`, which batches the sessions, labels each
+from its **opening instruction** against a closed taxonomy, and writes
+`$FACTORY/labels.txt` as `<8-char-session-prefix> <use-case>` — one tag per line, the
+format `report --labels` and `context --labels` read. Then re-run both with `--labels`.
 
-1. Split the intents into batches of ~70.
-2. For each batch, ask a subagent to assign one primary use-case plus up to two secondary
-   tags, returning strict JSON. Give every batch **the same taxonomy** — the one in the
-   reference report is a good starting set (`pr_lifecycle`, `code_review`, `doc_audit`,
-   `feature_impl`, `ci_debug`, `security_fix`, `research`, …), extended where the corpus
-   demands it.
-3. Write `$FACTORY/labels.txt` as `<8-char-session-prefix> <primary> <secondary,secondary>`.
-   It carries session-id prefixes, so it belongs in the cache directory like everything
-   else derived — not in a repo.
-4. Re-run `report --labels "$FACTORY/labels.txt"`.
+Three properties matter, and they are enforced rather than advised:
 
-Classify from the **first user message**, not the auto-generated title — the title is a
-summary of what happened, which leaks the outcome into the label.
+- **The taxonomy is closed.** A batch that invents tags makes its per-use-case tables
+  incomparable with every other batch.
+- **Nothing partial is written.** A batch whose labels do not cover it exactly is an
+  error; `labels.txt` appears only once every batch has validated.
+- **`no_instruction` is assigned locally.** A session whose transcript carries no
+  opening instruction cannot be classified from one, and folding those into `other`
+  hides them among sessions that did state a goal.
+
+Classify from the first user message, never the auto-generated title — the title
+summarises what happened, which leaks the outcome into the label.
+
+To label by hand, write the same two-column file yourself. It carries session-id
+prefixes, so it belongs in the cache directory like everything else derived. `report`
+checks those prefixes against the corpus either way: nothing matching is an error, and
+partial coverage is stated in every use-case table so the labelled subset is never read
+as the whole corpus.
 
 ## What to actually report
 
@@ -136,6 +150,12 @@ These are not optional; the analysis is worthless without them.
   nobody should trust.
 
 ## Privacy
+
+`scan` covers **every Claude Code project on the machine**, not just the current repo:
+`~/.claude/projects/` holds one subdirectory per project, and there is no per-project
+filter — `--root` relocates the scan, it cannot narrow it. `tables.md` never breaks the
+count down by project, so check `top_projects` in `stats.json` to see the mix before
+sharing anything.
 
 Transcripts contain absolute paths, branch names, repository content, and any secret
 pasted into a prompt. The pipeline writes only to `~/.gaia/cache/factory/`. If a report is

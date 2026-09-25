@@ -917,29 +917,6 @@ class TestLemonadeClientMock(unittest.TestCase):
             self.client.unload_model(embed_model, ignore_if_not_loaded=True)
 
     @responses.activate
-    def test_set_params(self):
-        """Test setting basic generation parameters."""
-        # Mock response
-        params_response = {
-            "status": "success",
-            "message": "Generation parameters set successfully",
-            "params": {
-                "temperature": 0.8,
-                "top_p": 0.9,
-                "top_k": 40,
-                "min_length": 0,
-                "max_length": 2048,
-                "do_sample": True,
-            },
-        }
-        responses.add(
-            responses.POST, f"{API_BASE}/params", json=params_response, status=200
-        )
-
-        result = self.client.set_params(temperature=0.8, top_p=0.9, top_k=40)
-        self.assertEqual(result, params_response)
-
-    @responses.activate
     def test_get_stats(self):
         """Test retrieving performance statistics."""
         # Mock response
@@ -956,6 +933,78 @@ class TestLemonadeClientMock(unittest.TestCase):
 
         result = self.client.get_stats()
         self.assertEqual(result, stats_response)
+
+    def test_get_stats_merges_model_load_seconds_when_a_load_happened(self):
+        """#2924: get_stats() must surface the client-measured load time
+        alongside Lemonade's own (load-blind) generation stats."""
+        stats_response = {"time_to_first_token": 7.6, "tokens_per_second": 20.0}
+        self.client._last_model_load_seconds = 36.9
+        with patch.object(self.client, "_send_request", return_value=stats_response):
+            result = self.client.get_stats()
+        self.assertEqual(result["model_load_seconds"], 36.9)
+        self.assertEqual(result["time_to_first_token"], 7.6)
+        # The original dict must not be mutated in place.
+        self.assertNotIn("model_load_seconds", stats_response)
+
+    def test_get_stats_omits_model_load_seconds_when_no_load_happened(self):
+        """The common warm-path shape is unchanged from before #2924."""
+        stats_response = {"time_to_first_token": 7.7}
+        self.client._last_model_load_seconds = None
+        with patch.object(self.client, "_send_request", return_value=stats_response):
+            result = self.client.get_stats()
+        self.assertEqual(result, stats_response)
+        self.assertNotIn("model_load_seconds", result)
+
+    def test_ensure_model_loaded_locked_times_an_actual_load(self):
+        """A cold load (model not resident) must set _last_model_load_seconds
+        to the wall-clock time load_model() actually took."""
+        monotonic_values = iter([100.0, 136.9])
+        with (
+            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(self.client, "list_models", return_value={"data": []}),
+            patch.object(self.client, "load_model", return_value={"status": "success"}),
+            patch(
+                "gaia.llm.lemonade_client.time.monotonic",
+                side_effect=lambda: next(monotonic_values),
+            ),
+        ):
+            self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertAlmostEqual(self.client._last_model_load_seconds, 36.9)
+
+    def test_ensure_model_loaded_locked_leaves_none_when_already_resident(self):
+        """A warm call (model already loaded at sufficient ctx) is a fast
+        no-op — it must never report a load duration."""
+        self.client._last_model_load_seconds = 99.0  # stale, from an earlier cold call
+        loaded_entry = {
+            "id": TEST_MODEL,
+            "recipe_options": {"ctx_size": 65536},
+        }
+        with (
+            patch.object(
+                self.client,
+                "get_status",
+                return_value={"loaded_models": [loaded_entry]},
+            ),
+            patch.object(self.client, "_find_loaded_entry", return_value=loaded_entry),
+        ):
+            self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertIsNone(self.client._last_model_load_seconds)
+
+    def test_ensure_model_loaded_locked_never_records_a_failed_load(self):
+        """A load that raises must not leave a stale/partial duration behind
+        — never misattribute latency to a request that never got a response."""
+        with (
+            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(self.client, "list_models", return_value={"data": []}),
+            patch.object(
+                self.client,
+                "load_model",
+                side_effect=LemonadeClientError("boom"),
+            ),
+        ):
+            with self.assertRaises(LemonadeClientError):
+                self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertIsNone(self.client._last_model_load_seconds)
 
     @responses.activate
     def test_pull_model(self):
@@ -2444,6 +2493,7 @@ class TestLemonadeClientIntegration(unittest.TestCase):
         # Collect the streamed chunks
         content = ""
         chunk_count = 0
+        usage = None
         print("Starting streaming chat completion test...")
 
         try:
@@ -2458,6 +2508,16 @@ class TestLemonadeClientIntegration(unittest.TestCase):
 
                 # Check chunk structure
                 self.assertIn("choices", chunk)
+
+                # The token accounting arrives in a final chunk that carries no
+                # choices — that is the OpenAI streaming shape when usage is
+                # requested, and the only place a streamed turn reports its
+                # tokens at all. Indexing choices[0] unconditionally crashes on
+                # it, which is how this was found.
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
+                if not chunk["choices"]:
+                    continue
 
                 # Extract and accumulate content
                 delta = chunk["choices"][0].get("delta", {})
@@ -2474,6 +2534,16 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             self.assertIn("1", content, "Response should include '1'")
             self.assertIn("2", content, "Response should include '2'")
             self.assertIn("3", content, "Response should include '3'")
+
+            # A streamed turn has to report its tokens. Without this the cost
+            # and tokens/sec readouts have nothing to sum, and the gap is
+            # invisible locally because /stats answers instead — only a real
+            # server proves it, which is why this assertion lives here.
+            self.assertIsNotNone(
+                usage, "streamed turn reported no usage — stream_options lost?"
+            )
+            self.assertGreater(usage.get("prompt_tokens", 0), 0)
+            self.assertGreater(usage.get("completion_tokens", 0), 0)
             print("✅ Streaming chat completion test passed")
 
         except LemonadeClientError as e:
@@ -2546,19 +2616,6 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             error_str = str(e)
             print(f"❌ Error during hybrid NPU validation: {error_str}")
             self.fail(f"Hybrid NPU validation failed: {error_str}")
-
-    @pytest.mark.skip(reason="Parameter setting API is still in development")
-    def test_integration_set_params(self):
-        """Integration test for setting generation parameters."""
-        # Set parameters
-        response = self.client.set_params(temperature=0.8, top_p=0.95, top_k=50)
-
-        # Verify response
-        self.assertIn("params", response)
-        params = response["params"]
-        self.assertEqual(params.get("temperature"), 0.8)
-        self.assertEqual(params.get("top_p"), 0.95)
-        self.assertEqual(params.get("top_k"), 50)
 
     def test_integration_get_stats(self):
         """Integration test for getting performance stats."""
@@ -2823,8 +2880,6 @@ class TestLemonadeClientIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     # Use pytest to run tests - either all tests or a specific test pattern
-    import pytest
-
     print("\n====================================================")
     print("========== RUNNING LEMONADE CLIENT TESTS ===========")
     print("====================================================")

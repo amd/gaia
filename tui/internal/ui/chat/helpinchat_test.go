@@ -39,7 +39,10 @@ func TestHelpOpensWithNoRootModelWrappingTheChat(t *testing.T) {
 	if !strings.Contains(view, "GAIA Chat") {
 		t.Errorf("the panel is open but not drawn:\n%s", view)
 	}
-	for _, want := range []string{"Ctrl+T", "/model", "Enter"} {
+	// /bypass rather than /model: openHelp's model uses newTestChat's "email"
+	// agent, which is not the flagship — /model is now gated away from it
+	// (availability.go) — /bypass is offered to every agent.
+	for _, want := range []string{"Ctrl+T", "/bypass", "Enter"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the rendered panel never mentions %q", want)
 		}

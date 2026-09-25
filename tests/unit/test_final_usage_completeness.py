@@ -31,6 +31,7 @@ FULL_ANSWER = {
     "tools_used": 1,
     "tokens": 148,
     "ttft": 17.4,
+    "tok_per_s": 44.2,
 }
 
 
@@ -55,6 +56,7 @@ class TestEveryMeasurementSurvives:
             ("elapsed", 19.7),
             ("tokens", 148),
             ("ttft", 17.4),
+            ("tok_per_s", 44.2),
         ],
     )
     def test_field_reaches_the_wire(self, field, expected):
@@ -79,6 +81,10 @@ class TestAbsentMeasurementsStayAbsent:
     def test_a_turn_with_no_ttft_reports_none(self):
         event = {k: v for k, v in FULL_ANSWER.items() if k != "ttft"}
         assert "ttft" not in translate(event)["usage"]
+
+    def test_a_turn_with_no_measured_rate_reports_none(self):
+        event = {k: v for k, v in FULL_ANSWER.items() if k != "tok_per_s"}
+        assert "tok_per_s" not in translate(event)["usage"]
 
     def test_a_bare_answer_carries_no_usage_at_all(self):
         final = translate({"type": "answer", "content": "hi"})

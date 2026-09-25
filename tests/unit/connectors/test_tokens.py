@@ -362,6 +362,36 @@ class TestTenantRotationForwarding:
         assert loaded["tenant"] == "consumers"
 
 
+class TestForwardedFlagRotation:
+    """#2591 review: a forwarded connection's ``forwarded`` marker must
+    survive refresh-token rotation. If rotation dropped it, the very next
+    ``gaia connectors disconnect`` would revoke the host app's own OAuth
+    grant instead of skipping the remote call — silently, since the flag
+    would already be gone by the time revoke_provider_token reads it."""
+
+    @respx.mock
+    async def test_forwarded_flag_survives_rotation(self, google_provider):
+        save_connection(
+            provider="google",
+            account_email="alice@example.com",
+            refresh_token="host-app-rt",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            client_id_hash=google_provider.client_id_hash,
+            forwarded=True,
+        )
+        respx.post("https://oauth2.googleapis.com/token").mock(
+            return_value=_ok_token_response(
+                access="ok", expires_in=3600, refresh="ROTATED-REFRESH"
+            )
+        )
+        await get_or_refresh("google")
+        loaded = load_connection(
+            "google", current_client_id_hash=google_provider.client_id_hash
+        )
+        assert loaded["refresh_token"] == "ROTATED-REFRESH"
+        assert loaded["forwarded"] is True
+
+
 class TestTenantMismatchThroughGetOrRefresh:
     """A18: get_or_refresh must pass the LIVE provider's tenant as
     current_tenant to load_connection, so the store-level TENANT_MISMATCH

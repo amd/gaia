@@ -31,7 +31,7 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    use_chatgpt: bool = False  # Removed; True raises migration guidance
     use_local_llm: bool = (
         True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
     )
@@ -106,7 +106,8 @@ class AgentSDK:
                 else self.config.model
             ),
             base_url=self.config.base_url,
-            system_prompt=self.config.system_prompt,
+            # The SDK supplies per-request prompts, including runtime overrides.
+            system_prompt=None,
         )
 
         # Store conversation history
@@ -139,10 +140,39 @@ class AgentSDK:
             self.config.system_prompt,
         )
 
+    def _generate_conversation(
+        self,
+        full_prompt: str,
+        enhanced_message: str,
+        *,
+        no_history: bool = False,
+        **kwargs,
+    ):
+        """Keep custom instructions in the provider's native system channel."""
+        if not self.config.system_prompt:
+            return self.llm_client.generate(
+                full_prompt, model=self.effective_model, **kwargs
+            )
+        messages = [{"role": "system", "content": self.config.system_prompt}]
+        if not no_history:
+            for entry in self.get_formatted_history():
+                # Stored assistant prefixes can outlive a display-name change.
+                role = "user" if entry["role"] == "user" else "assistant"
+                messages.append({"role": role, "content": entry["message"]})
+            if len(messages) > 1:
+                messages[-1] = {"role": "user", "content": enhanced_message}
+            else:
+                messages.append({"role": "user", "content": enhanced_message})
+        else:
+            messages.append({"role": "user", "content": enhanced_message})
+        return self.llm_client.chat(messages, model=self.effective_model, **kwargs)
+
     def _normalize_message_content(self, content: Any) -> str:
         """
         Convert message content into a string for prompt construction, handling structured payloads.
         """
+        if content is None:
+            return ""
         if isinstance(content, str):
             return content
         if isinstance(content, list):
@@ -175,30 +205,127 @@ class AgentSDK:
         return list(messages)
 
     def _structure_history_message(self, msg: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert one history entry to the active provider's message shape."""
+        """Convert one history entry to the provider's message shape.
+
+        Native tool calls stay native for every backend. Flattened to text,
+        the call would vanish from its (empty) assistant turn and the result
+        would read as something the user said.
+        """
         role = msg.get("role", "user")
         content = self._normalize_message_content(msg.get("content", ""))
-        if self.config.use_claude and role == "assistant" and msg.get("tool_calls"):
+        if role == "assistant" and msg.get("tool_calls"):
             return {
                 "role": "assistant",
                 "content": content if msg.get("content") else None,
                 "tool_calls": msg["tool_calls"],
             }
-        if self.config.use_claude and role == "tool":
-            return {
+        if role == "tool":
+            entry = {
                 "role": "tool",
                 "content": content,
-                "name": msg.get("name", "tool"),
                 "tool_call_id": msg.get("tool_call_id"),
             }
-        if role == "tool":
-            # Local/OpenAI-compatible backends receive tool results as user text.
-            # The native Claude path above preserves the IDs Anthropic requires.
-            return {
-                "role": "user",
-                "content": f"[Tool result: {msg.get('name', 'tool')}] {content}",
-            }
+            if self.config.use_claude:
+                entry["name"] = msg.get("name", "tool")
+            return entry
         return {"role": role, "content": content}
+
+    @staticmethod
+    def _tool_result_as_text(msg: Dict[str, Any], name: str) -> Dict[str, Any]:
+        """A tool result with no native call to answer, sent as plain text."""
+        return {
+            "role": "user",
+            "content": f"[Tool result: {msg.get('name', name)}] {msg.get('content', '')}",
+        }
+
+    def _pair_tool_history(
+        self, structured: List[Dict[str, Any]], names: Dict[int, str]
+    ) -> List[Dict[str, Any]]:
+        """Send a call and its result natively only when both halves match.
+
+        OpenAI-style servers reject an unanswered call and a result that answers
+        no call in the turn directly before it. Matched pairs go native,
+        unanswered calls are dropped, and any other result is sent as text.
+        """
+        out: List[Dict[str, Any]] = []
+        i, n = 0, len(structured)
+        while i < n:
+            msg = structured[i]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                j = i + 1
+                while j < n and structured[j].get("role") == "tool":
+                    j += 1
+                block = list(range(i + 1, j))
+                result_ids = {structured[k].get("tool_call_id") for k in block}
+                calls = [
+                    tc
+                    for tc in msg["tool_calls"]
+                    if tc.get("id") and tc.get("id") in result_ids
+                ]
+                call_ids = {tc["id"] for tc in calls}
+                dropped = len(msg["tool_calls"]) - len(calls)
+                if dropped:
+                    self.log.warning(
+                        "Dropping %d of %d tool call(s) from an assistant turn: "
+                        "no result follows them directly.",
+                        dropped,
+                        len(msg["tool_calls"]),
+                    )
+                if calls:
+                    out.append({**msg, "tool_calls": calls})
+                else:
+                    out.append(
+                        {"role": "assistant", "content": msg.get("content") or ""}
+                    )
+                answered = set()
+                leftover = []
+                for k in block:
+                    tid = structured[k].get("tool_call_id")
+                    if tid in call_ids and tid not in answered:
+                        answered.add(tid)
+                        out.append(structured[k])
+                    else:
+                        leftover.append(k)
+                if leftover:
+                    self.log.debug(
+                        "Sending %d tool result(s) as text: they answer no call "
+                        "in the turn before them.",
+                        len(leftover),
+                    )
+                # Text results go after the native block on purpose: a text
+                # message inside it would split the pairs the server checks.
+                out.extend(
+                    self._tool_result_as_text(structured[k], names.get(k, "tool"))
+                    for k in leftover
+                )
+                i = j
+                continue
+            if msg.get("role") == "tool":
+                out.append(self._tool_result_as_text(msg, names.get(i, "tool")))
+            else:
+                out.append(msg)
+            i += 1
+        return out
+
+    def _structure_history(
+        self, messages: List[Dict[str, Any]], effective_system_prompt: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """System prompt, then the history in the provider's shape, paired."""
+        structured: List[Dict[str, Any]] = []
+        names: Dict[int, str] = {}
+        if effective_system_prompt:
+            structured.append({"role": "system", "content": effective_system_prompt})
+        for msg in messages:
+            if msg.get("role", "user") == "system":
+                self.log.warning(
+                    "Dropping system-role message from conversation history; "
+                    "system prompt already prepended."
+                )
+                continue
+            if msg.get("role") == "tool":
+                names[len(structured)] = msg.get("name", "tool")
+            structured.append(self._structure_history_message(msg))
+        return self._pair_tool_history(structured, names)
 
     # ── per-turn performance recording (dev mode, opt-in) ──────────────────
     #
@@ -278,20 +405,7 @@ class AgentSDK:
             # Build structured messages for the LLM (no manual ChatML formatting —
             # the provider/server applies the chat template exactly once).
             effective_system_prompt = system_prompt or self.config.system_prompt
-            structured = []
-            if effective_system_prompt:
-                structured.append(
-                    {"role": "system", "content": effective_system_prompt}
-                )
-            for msg in messages:
-                role = msg.get("role", "user")
-                if role == "system":
-                    self.log.warning(
-                        "Dropping system-role message from conversation history; "
-                        "system prompt already prepended."
-                    )
-                    continue
-                structured.append(self._structure_history_message(msg))
+            structured = self._structure_history(messages, effective_system_prompt)
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -371,20 +485,7 @@ class AgentSDK:
             # Build structured messages for the LLM (no manual ChatML formatting —
             # the provider/server applies the chat template exactly once).
             effective_system_prompt = system_prompt or self.config.system_prompt
-            structured = []
-            if effective_system_prompt:
-                structured.append(
-                    {"role": "system", "content": effective_system_prompt}
-                )
-            for msg in messages:
-                role = msg.get("role", "user")
-                if role == "system":
-                    self.log.warning(
-                        "Dropping system-role message from conversation history; "
-                        "system prompt already prepended."
-                    )
-                    continue
-                structured.append(self._structure_history_message(msg))
+            structured = self._structure_history(messages, effective_system_prompt)
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -458,6 +559,8 @@ class AgentSDK:
         """
         Send a message and get a complete response with conversation history.
 
+        Failed turns restore the conversation history to its pre-call state.
+
         Args:
             message: The message to send
             no_history: When True, bypass stored chat history and send only this prompt
@@ -466,6 +569,8 @@ class AgentSDK:
         Returns:
             AgentResponse with the complete response and updated history
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -509,9 +614,10 @@ class AgentSDK:
                 generate_kwargs["temperature"] = self.config.temperature
 
             # Note: Retry logic is now handled at the LLM client level
-            response = self.llm_client.generate(
+            response = self._generate_conversation(
                 full_prompt,
-                model=self.effective_model,
+                enhanced_message,
+                no_history=no_history,
                 **generate_kwargs,
             )
 
@@ -530,17 +636,26 @@ class AgentSDK:
                 else None
             )
 
-            return AgentResponse(
+            result = AgentResponse(
                 text=response, history=history, stats=stats, is_complete=True
             )
+            completed = True
+            return result
 
         except Exception as e:
             self.log.error(f"Error in send: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def send_stream(self, message: str, **kwargs):
         """
         Send a message and get a streaming response with conversation history.
+
+        Failure or cancellation before the final chunk restores prior history.
+        Closing after the final chunk preserves the completed turn.
 
         Args:
             message: The message to send
@@ -549,6 +664,8 @@ class AgentSDK:
         Yields:
             AgentResponse chunks as they arrive
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -583,8 +700,8 @@ class AgentSDK:
                 generate_kwargs["temperature"] = self.config.temperature
 
             full_response = ""
-            for chunk in self.llm_client.generate(
-                full_prompt, model=self.effective_model, stream=True, **generate_kwargs
+            for chunk in self._generate_conversation(
+                full_prompt, enhanced_message, stream=True, **generate_kwargs
             ):
                 full_response += chunk
                 yield AgentResponse(text=chunk, is_complete=False)
@@ -603,11 +720,19 @@ class AgentSDK:
                 else None
             )
 
-            yield AgentResponse(text="", history=history, stats=stats, is_complete=True)
+            result = AgentResponse(
+                text="", history=history, stats=stats, is_complete=True
+            )
+            completed = True
+            yield result
 
         except Exception as e:
             self.log.error(f"Error in send_stream: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def get_history(self) -> List[str]:
         """
@@ -814,10 +939,6 @@ class AgentSDK:
             old_history = list(self.chat_history)
             new_maxlen = kwargs["max_history_length"] * 2
             self.chat_history = deque(old_history, maxlen=new_maxlen)
-
-        if "system_prompt" in kwargs:
-            # System prompt is handled through Prompts class, not directly
-            pass
 
         if "assistant_name" in kwargs:
             # Assistant name change affects history display but not underlying storage

@@ -409,9 +409,6 @@ def _declared_npm_scripts(path: Path) -> List[str]:
 #: Overrides the resolved root. Set by a host that knows the workspace.
 PROJECT_ROOT_ENV = "GAIA_PROJECT_ROOT"
 
-#: How far up from the working directory to look for a repository root.
-_MAX_ASCEND = 4
-
 #: Directory names that mark an installed (non-editable) distribution. A ``gaia``
 #: package under one of these is a wheel in somebody else's venv, not a checkout.
 _INSTALLED_PACKAGE_DIRS = frozenset({"site-packages", "dist-packages"})
@@ -452,8 +449,9 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
     """The project this task is about, or ``None`` when there isn't one.
 
     Order: *explicit* argument, then ``GAIA_PROJECT_ROOT``, then the working
-    directory or the nearest repository above it (at most :data:`_MAX_ASCEND`
-    levels, never the home directory and never :func:`is_agent_own_source`).
+    directory or the nearest repository above it — searching upward until the
+    home directory or the filesystem root, and never
+    :func:`is_agent_own_source`.
 
     ``None`` is a real answer, not a degraded one — an agent answering questions
     from a home directory is not in a project, and inventing a map of ``~``
@@ -474,7 +472,11 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
 
     cwd = Path.cwd().resolve()
     home = Path.home().resolve()
-    for ancestor in [cwd, *list(cwd.parents)[: _MAX_ASCEND - 1]]:
+    # Walk to the home directory or the filesystem root, the way git does. A
+    # fixed depth cap looks safe and silently skips the map on ordinary trees:
+    # Maven's `src/main/java/com/acme/svc` is six deep, and this repo's own
+    # `hub/agents/gaia/python/gaia_agent` is five.
+    for ancestor in [cwd, *cwd.parents]:
         if ancestor == home or ancestor == ancestor.parent:
             break
         if not is_code_repository(ancestor):

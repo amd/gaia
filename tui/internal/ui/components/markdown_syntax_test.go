@@ -247,3 +247,29 @@ func luminance(t *testing.T, hex string) float64 {
 	}
 	return 0.2126*channel(1) + 0.7152*channel(3) + 0.0722*channel(5)
 }
+
+// An answer is laid out line by line by the model; markdown's rule that a
+// single newline is a space is a document rule, not a chat one. Reflowing a
+// numbered list into one run-on paragraph is what it produced here, and it also
+// split URLs across the wrap — a link is only clickable while it is whole.
+func TestTheModelsLineBreaksSurvive(t *testing.T) {
+	SetWordWrap(100)
+	md := "1. Feature Update - https://github.com/amd/gaia/pull/3700\n" +
+		"2. Bug Fixes - https://github.com/amd/gaia/pull/3701\n" +
+		"3. Refactoring Code - https://github.com/amd/gaia/pull/3702"
+
+	lines := []string{}
+	for _, l := range strings.Split(strings.Trim(ansi.Strip(RenderMarkdown(md)), "\n"), "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, strings.TrimSpace(l))
+		}
+	}
+	if len(lines) != 3 {
+		t.Fatalf("three lines in, %d out — they were reflowed:\n%q", len(lines), lines)
+	}
+	for i, want := range []string{"3700", "3701", "3702"} {
+		if !strings.HasSuffix(lines[i], want) {
+			t.Errorf("line %d = %q, want it to end at pull/%s — the URL was split", i, lines[i], want)
+		}
+	}
+}

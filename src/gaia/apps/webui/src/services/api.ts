@@ -11,6 +11,27 @@ const API_BASE = getApiBase();
 
 // -- Helpers -------------------------------------------------------------------
 
+/**
+ * Pull a human-readable message out of an error response body.
+ *
+ * FastAPI's `detail` is a plain string for `HTTPException`, but a *list of
+ * error objects* for request-validation failures (422) — interpolating one of
+ * those into a message renders "[object Object]" in the UI.
+ */
+function parseErrorDetail(errorText: string): string {
+    try {
+        const parsed = JSON.parse(errorText).detail;
+        if (Array.isArray(parsed)) {
+            return parsed.map((e) => e?.msg ?? JSON.stringify(e)).join('; ') || errorText;
+        }
+        if (parsed && typeof parsed !== 'string') return JSON.stringify(parsed);
+        return parsed || errorText;
+    } catch {
+        // Body isn't JSON (proxy HTML, empty response) — the raw text is the useful thing.
+        return errorText;
+    }
+}
+
 function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
@@ -72,9 +93,7 @@ async function apiFetch<T>(
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
-        let detail = errorText;
-        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
-        throw new Error(getFriendlyError(res.status, detail));
+        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
     }
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
@@ -519,7 +538,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request', 'needs_confirmation', 'policy_alert',
+    'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
 ]);
 
 export function sendMessageStream(
@@ -713,19 +732,20 @@ export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
 
 // -- Tool Confirmation ---------------------------------------------------------
 
-/** Resolve a pending tool execution confirmation (Allow or Deny). */
-export async function confirmToolExecution(
-    sessionId: string,
-    confirmId: string,
-    action: 'allow' | 'deny',
-    remember: boolean,
-): Promise<void> {
-    return apiFetch('POST', '/chat/confirm', { session_id: sessionId, confirm_id: confirmId, action, remember });
-}
-
 /** Confirm or deny a tool execution (simplified API for permission_request events). */
 export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
     return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
+}
+
+/** Answer a pending mid-run `needs_input` question (#2595). The agent
+ *  blocks server-side until this call lands, so the run continues once it
+ *  resolves. */
+export async function respondToInput(
+    sessionId: string,
+    requestId: string,
+    value: string,
+): Promise<{ status: string; request_id: string }> {
+    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
 }
 
 /** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
@@ -774,9 +794,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        let detail = errorText;
-        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
-        throw new Error(getFriendlyError(res.status, detail));
+        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
     }
 
     const data = await res.json();

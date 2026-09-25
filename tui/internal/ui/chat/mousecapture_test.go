@@ -11,14 +11,11 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
 
-// Opening the palette must capture the mouse — otherwise a click on a row
-// does nothing, and the whole feature is dead.
-func TestOpeningThePaletteCapturesTheMouse(t *testing.T) {
+// Opening the palette must upgrade capture to All-Motion — the transcript
+// already holds the mouse for the wheel, but hover needs motion reporting the
+// plain mode does not ask for.
+func TestOpeningThePaletteUpgradesCaptureToAllMotion(t *testing.T) {
 	m, _ := newTestModel(t)
-	if m.mouseCaptured {
-		t.Fatal("test setup: mouse should start released")
-	}
-
 	m = typeInto(t, m, "/")
 	if !m.palette.open {
 		t.Fatal("test setup: palette should have opened")
@@ -31,53 +28,52 @@ func TestOpeningThePaletteCapturesTheMouse(t *testing.T) {
 	}
 }
 
-// The mouse must be released the moment the overlay closes — this is the
-// whole point of scoping capture to the overlay rather than turning it back
-// on globally (see ui/app.go's teaOptions doc comment).
-func TestClosingThePaletteReleasesTheMouse(t *testing.T) {
+// Closing the overlay must step capture back DOWN rather than release it: the
+// transcript still wants the wheel, and All-Motion tracking is noticeably
+// chattier over SSH than Cell-Motion.
+func TestClosingThePaletteStepsCaptureBackDown(t *testing.T) {
 	m, _ := newTestModel(t)
 	m = typeInto(t, m, "/")
-	if !m.mouseCaptured {
-		t.Fatal("test setup: palette should have captured the mouse")
+	if !m.mouseCaptureAllMotion {
+		t.Fatal("test setup: palette should have upgraded capture to All-Motion")
 	}
 
 	m, _ = press(t, m, tea.KeyEsc)
 	if m.palette.open {
 		t.Fatal("test setup: Esc should have closed the palette")
 	}
-	if m.mouseCaptured {
-		t.Error("closing the palette did not give the mouse back to the terminal")
+	if !m.mouseCaptured {
+		t.Error("closing the palette killed the transcript's wheel scrolling")
+	}
+	if m.mouseCaptureAllMotion {
+		t.Error("no overlay is open — capture should have stepped back down to Cell-Motion")
 	}
 }
 
-// The core constraint the task calls out explicitly: Ctrl+T's wheel mode is a
-// standing USER choice, and an overlay opening and closing around it must not
-// silently fight it — neither turning it off when the overlay closes, nor
-// leaving it stuck in the overlay's own (All-Motion) tracking mode after.
-func TestUserWheelModeSurvivesAnOverlayOpeningAndClosing(t *testing.T) {
+// SELECT MODE is a standing USER choice, and an overlay opening and closing
+// around it must not silently fight it: the overlay still needs its clicks
+// while it is up, and the mouse must go straight back to the terminal after.
+func TestSelectModeSurvivesAnOverlayOpeningAndClosing(t *testing.T) {
 	m, _ := newTestModel(t)
 	m, _ = press(t, m, tea.KeyCtrlT)
-	if !m.mouseWheelOn || !m.mouseCaptured || m.mouseCaptureAllMotion {
-		t.Fatal("test setup: Ctrl+T should have turned on plain (Cell-Motion) wheel mode")
+	if !m.mouseSelectMode || m.mouseCaptured {
+		t.Fatal("test setup: Ctrl+T should have handed the mouse to the terminal")
 	}
 
 	m = typeInto(t, m, "/")
 	if !m.palette.open || !m.mouseCaptured || !m.mouseCaptureAllMotion {
-		t.Fatal("test setup: palette should be open, capture upgraded to All-Motion")
+		t.Fatal("test setup: palette should be open with All-Motion capture")
 	}
 
 	m, _ = press(t, m, tea.KeyEsc)
 	if m.palette.open {
 		t.Fatal("test setup: Esc should have closed the palette")
 	}
-	if !m.mouseWheelOn {
-		t.Error("the palette closing turned off the user's own wheel mode")
+	if !m.mouseSelectMode {
+		t.Error("the palette closing turned off the user's own select mode")
 	}
-	if !m.mouseCaptured {
-		t.Error("the palette closing released the mouse the user still wants for wheel scrolling")
-	}
-	if m.mouseCaptureAllMotion {
-		t.Error("wheel mode alone needs no hover tracking — capture should have stepped back down to Cell-Motion")
+	if m.mouseCaptured {
+		t.Error("the palette closing kept a capture the user had asked to give up")
 	}
 }
 
@@ -109,7 +105,10 @@ func TestOpeningAndClosingAQuestionScopesTheMouseTheSameWay(t *testing.T) {
 	if m.question != nil {
 		t.Fatal("test setup: answering should have cleared the question")
 	}
-	if m.mouseCaptured {
-		t.Error("the question closing did not give the mouse back")
+	if m.mouseCaptureAllMotion {
+		t.Error("the question closing left hover tracking on with nothing to hover")
+	}
+	if !m.mouseCaptured {
+		t.Error("the question closing killed the transcript's wheel scrolling")
 	}
 }

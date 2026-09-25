@@ -27,7 +27,7 @@ func (c *claudeModelTransport) ClaudeModelAtLaunch() string { return c.model }
 
 func claudeLaunchModel(t *testing.T, id string) ChatModel {
 	t.Helper()
-	m := NewChatModelForCatalogAgent(&claudeModelTransport{model: id}, setupAgentID, "GAIA", false)
+	m := NewChatModelForCatalogAgent(&claudeModelTransport{model: id}, setupAgentID, "GAIA", "", false)
 	m.width, m.height = 100, 30
 	return m
 }

@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -159,5 +161,164 @@ func TestFetchMemory_SentinelNeverLeaksAsALiteralQuestion(t *testing.T) {
 	}
 	if !sawEcho {
 		t.Fatal("a real question must be answered as a real question, not the memory dump")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SSEClient.FetchMemory (#3978) -- the daemon-relayed side of MemoryProvider.
+// ---------------------------------------------------------------------------
+
+func TestSSEFetchMemoryReturnsParsedDump(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.13"
+	f.memoryBody = `{"available":true,"stats":{"total_knowledge":2,"by_category":{"fact":1,"preference":1},"by_context":{"global":2},"sensitive_count":0,"entity_count":0,"avg_confidence":0.6},"contexts":[{"context":"global","count":2}],"shown":2,"total":2,"items":[{"id":"1","category":"fact","content":"likes go","context":"global","confidence":0.6,"sensitive":false}]}`
+	c := f.clientFor(t, "gaia")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dump, err := c.FetchMemory(ctx)
+	if err != nil {
+		t.Fatalf("FetchMemory: %v", err)
+	}
+	if !dump.Available {
+		t.Fatalf("expected Available=true, got %+v", dump)
+	}
+	if dump.Stats.TotalKnowledge != 2 {
+		t.Errorf("expected TotalKnowledge=2, got %d", dump.Stats.TotalKnowledge)
+	}
+	if len(dump.Items) != 1 || dump.Items[0].Content != "likes go" {
+		t.Errorf("unexpected items: %+v", dump.Items)
+	}
+}
+
+// A peer below 2.13 has no /memory route at all -- trusting whatever a stray
+// 404 handler answers would be exactly the "confident empty dump" failure
+// mode #3978 exists to avoid, so the client must refuse before calling it.
+func TestSSEFetchMemoryRefusesAnOldPeerContract(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.12" // predates memory (2.13)
+	c := f.clientFor(t, "gaia")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := c.FetchMemory(ctx)
+	if err == nil {
+		t.Fatal("expected ErrMemoryContractTooOld for a peer below 2.13, got nil")
+	}
+	var tooOld *ErrMemoryContractTooOld
+	if !errors.As(err, &tooOld) {
+		t.Fatalf("error = %v (%T), want *ErrMemoryContractTooOld", err, err)
+	}
+	if tooOld.Version != "2.12" {
+		t.Errorf("tooOld.Version = %q, want 2.12", tooOld.Version)
+	}
+}
+
+func TestSSEFetchMemoryAcceptsExactFloorVersion(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.13"
+	c := f.clientFor(t, "gaia")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := c.FetchMemory(ctx); err != nil {
+		t.Fatalf("a peer at exactly the floor version must be accepted: %v", err)
+	}
+}
+
+// A non-200 must surface the daemon's detail text, never a silently empty
+// dump that reads as "the agent remembers nothing" (CLAUDE.md: no silent
+// fallbacks).
+func TestSSEFetchMemorySurfacesNonOKDetail(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.13"
+	f.memoryStatus = http.StatusServiceUnavailable
+	c := f.clientFor(t, "gaia")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dump, err := c.FetchMemory(ctx)
+	if err == nil {
+		t.Fatalf("expected an error for a 503, got a dump: %+v", dump)
+	}
+	if !strings.Contains(err.Error(), "memory store unavailable") {
+		t.Errorf("error does not surface the daemon's detail: %v", err)
+	}
+	var tooOld *ErrMemoryContractTooOld
+	if errors.As(err, &tooOld) {
+		t.Fatalf("a 503 must surface as a plain error, not the contract-too-old gate: %v", err)
+	}
+}
+
+// buildStallingAgent compiles a child that reads its line and then never
+// answers, so a fetch against it can only end on the caller's deadline --
+// standing in for the cold start that was being cut off mid-boot.
+func buildStallingAgent(t *testing.T) string {
+	t.Helper()
+	const src = `package main
+
+import (
+	"bufio"
+	"os"
+	"time"
+)
+
+func main() {
+	sc := bufio.NewScanner(os.Stdin)
+	for sc.Scan() {
+		time.Sleep(60 * time.Second)
+	}
+}
+`
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "stalling_agent.go")
+	if err := os.WriteFile(srcPath, []byte(src), 0644); err != nil {
+		t.Fatalf("write stalling agent source: %v", err)
+	}
+	binName := "stalling_agent"
+	if runtime.GOOS == "windows" {
+		binName = "stalling_agent.exe"
+	}
+	binPath := filepath.Join(tmpDir, binName)
+
+	goExe := "go"
+	if p, err := exec.LookPath("go"); err == nil {
+		goExe = p
+	}
+	cmd := exec.Command(goExe, "build", "-o", binPath, srcPath)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build stalling agent: %v\n%s", err, out)
+	}
+	return binPath
+}
+
+// A deadline closes the event channel exactly like a dead child does. Reporting
+// both as "the agent closed the connection before answering" told a user whose
+// agent was merely still booting that it had hung up on them.
+func TestSubprocessFetchMemoryNamesTheTimeoutNotAHangUp(t *testing.T) {
+	c := NewCanonicalSubprocessClient(buildStallingAgent(t), nil, false)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := c.FetchMemory(ctx)
+	if err == nil {
+		t.Fatal("expected an error when the agent never answers")
+	}
+	if strings.Contains(err.Error(), "closed the connection") {
+		t.Errorf("a timeout is reported as a hang-up: %v", err)
+	}
+	if !strings.Contains(err.Error(), "did not answer in time") {
+		t.Errorf("the error does not name the timeout: %v", err)
 	}
 }

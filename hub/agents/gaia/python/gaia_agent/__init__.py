@@ -9,7 +9,7 @@ this module must not drag in RAG, the browser stack, or a model client.
 
 __all__ = ["build_gaia"]
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 _LAZY = {
     "GaiaAgent": "agent",
@@ -48,6 +48,8 @@ def _factory(**kwargs):
 
 def build_gaia():
     """Return the :class:`AgentRegistration` for the flagship ``gaia`` agent."""
+    from gaia_agent.connectors import MAILBOX_REQUIREMENTS
+
     from gaia.agents.registry import AgentRegistration, build_model_tiers
 
     tiers = build_model_tiers("Full")
@@ -68,13 +70,13 @@ def build_gaia():
         factory=_factory,
         agent_dir=None,
         models=[],
-        required_connections=[],
+        required_connections=list(MAILBOX_REQUIREMENTS),
         category="general",
         tags=["general", "chat", "rag", "memory", "skills"],
         icon="sparkles",
         # Must equal the real registry size for the default construction, and
         # the manifest's own tools_count. Drift-guarded by tests/test_gaia_agent.py.
-        tools_count=73,
+        tools_count=81,
         # ChatAgent loads MCP servers dynamically, so the Settings "Active for"
         # panel must list this agent for MCP-server connectors.
         consumes_mcp_servers=True,

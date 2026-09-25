@@ -1018,3 +1018,212 @@ class TestReadToolsSandbox:
 
         assert result["status"] == "success"
         assert result["content"] == "no validator here"
+
+
+# ===========================================================================
+# 11. analyze_data_file date_range parsing (#3882)
+# ===========================================================================
+
+
+class TestParseDateRange:
+    @pytest.mark.parametrize(
+        "expr, expected",
+        [
+            ("2025-Q1", ("2025-01", "2025-03")),
+            ("2025-q2", ("2025-04", "2025-06")),
+            ("Q1 2025", ("2025-01", "2025-03")),
+            ("Q3-2025", ("2025-07", "2025-09")),
+            ("2025 Q4", ("2025-10", "2025-12")),
+            ("Q1'25", ("2025-01", "2025-03")),
+            ("Q2 '25", ("2025-04", "2025-06")),
+            ("Q1'00", ("2000-01", "2000-03")),
+            ("Q4'68", ("2068-10", "2068-12")),
+            ("Q2'69", ("1969-04", "1969-06")),
+            ("Q1'98", ("1998-01", "1998-03")),
+            ("first quarter 2025", ("2025-01", "2025-03")),
+            ("4th quarter of 2024", ("2024-10", "2024-12")),
+            ("2025", ("2025-01", "2025-12")),
+            ("2025-03", ("2025-03", "2025-03")),
+            ("2025-03-15", ("2025-03", "2025-03")),
+            ("2025-01 to 2025-06", ("2025-01", "2025-06")),
+            ("2025-01-01:2025-03-31", ("2025-01", "2025-03")),
+            ("2025-01:2025-02", ("2025-01", "2025-02")),
+            ("Q1 2025 to Q2 2025", ("2025-01", "2025-06")),
+            ("  2025-Q1  ", ("2025-01", "2025-03")),
+        ],
+    )
+    def test_accepted_forms(self, expr, expected):
+        from gaia.agents.tools.file_tools import parse_date_range
+
+        assert parse_date_range(expr) == expected
+
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            "last month",
+            "Q5 2025",
+            "March 2025",
+            "2025-13",
+            "2025-02-30",
+            "25",
+            "2025-06 to 2025-01",
+            "2025-01:2025-02:2025-03",
+        ],
+    )
+    def test_unsupported_forms_return_none(self, expr):
+        from gaia.agents.tools.file_tools import parse_date_range
+
+        assert parse_date_range(expr) is None
+
+
+@pytest.fixture
+def analyze_sales(tmp_path):
+    """analyze_data_file bound to a small CSV spanning 2025-01..2025-05."""
+    f = tmp_path / "sales.csv"
+    f.write_text(
+        "date,region,amount\n"
+        "2025-01-10,east,100\n"
+        "2025-02-14,west,200\n"
+        "2025-03-31,east,300\n"
+        "2025-04-01,west,400\n"
+        "2025-05-20,east,500\n",
+        encoding="utf-8",
+    )
+    _StubMixin().register_file_search_tools()
+    analyze = _TOOL_REGISTRY["analyze_data_file"]["function"]
+    return lambda **kw: analyze(str(f), **kw)
+
+
+class TestAnalyzeDataFileDateRange:
+    @pytest.mark.parametrize(
+        "expr", ["2025-Q1", "Q1 2025", "Q1-2025", "2025 Q1", "Q1'25", "Q1 '25"]
+    )
+    def test_quarter_forms_filter_to_q1(self, analyze_sales, expr):
+        result = analyze_sales(date_range=expr)
+
+        assert result["status"] == "success"
+        assert result["row_count"] == 3
+        assert result["date_filter_parsed"] == {"start": "2025-01", "end": "2025-03"}
+        assert result["summary"]["amount"]["sum"] == 600
+
+    def test_bare_year_keeps_whole_year(self, analyze_sales):
+        result = analyze_sales(date_range="2025")
+
+        assert result["row_count"] == 5
+
+    def test_single_month_and_day(self, analyze_sales):
+        assert analyze_sales(date_range="2025-04")["row_count"] == 1
+        assert analyze_sales(date_range="2025-02-01")["row_count"] == 1
+
+    def test_to_and_colon_ranges(self, analyze_sales):
+        assert analyze_sales(date_range="2025-02 to 2025-04")["row_count"] == 3
+        assert analyze_sales(date_range="2025-01-01:2025-02-28")["row_count"] == 2
+
+    def test_unparseable_range_is_an_error_not_zero_rows(self, analyze_sales):
+        result = analyze_sales(date_range="last quarter")
+
+        assert result["status"] == "error"
+        assert result["has_errors"] is True
+        assert "row_count" not in result
+        assert "'last quarter'" in result["error"]
+        assert "Q1 2025" in result["error"]
+
+    def test_genuinely_empty_period_reports_parsed_range(self, analyze_sales):
+        result = analyze_sales(date_range="Q3 2025")
+
+        assert result["status"] == "success"
+        assert result["row_count"] == 0
+        assert result["date_filter_parsed"] == {"start": "2025-07", "end": "2025-09"}
+        assert "2025-07" in result["message"] and "2025-09" in result["message"]
+
+    def test_no_date_column_is_an_error(self, tmp_path):
+        f = tmp_path / "plain.csv"
+        f.write_text("region,amount\neast,100\n", encoding="utf-8")
+        _StubMixin().register_file_search_tools()
+        analyze = _TOOL_REGISTRY["analyze_data_file"]["function"]
+
+        result = analyze(str(f), date_range="2025-Q1")
+
+        assert result["status"] == "error"
+        assert "no date column" in result["error"]
+
+
+def test_large_text_file_supports_bounded_page(read_file_fn, tmp_path):
+    path = tmp_path / "large.txt"
+    with path.open("w", encoding="utf-8") as stream:
+        stream.write("x" * 10_000_001 + "EXACT-MIDDLE")
+    result = read_file_fn(str(path), offset=10_000_001, limit=12)
+    assert result["status"] == "success"
+    assert result["content"] == "EXACT-MIDDLE"
+    assert result["next_offset"] is None
+
+
+@pytest.mark.parametrize("limit", [1, 20, 200])
+def test_recent_files_bounds_every_output_field(tmp_path, monkeypatch, limit):
+    import os
+    import time
+    from unittest.mock import patch
+
+    documents = tmp_path / "Documents"
+    documents.mkdir()
+    now = time.time()
+    for index in range(205):
+        path = documents / f"report_{index:03}.txt"
+        path.write_text("fact")
+        os.utime(path, (now - index, now - index))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"](max_results=limit)
+    assert result["status"] == "success"
+    assert result["total_found"] == 205
+    assert result["count"] == limit
+    assert result["truncated"] is True
+    assert "all_files" not in result
+    assert len(result["files"]) == limit
+    assert [item["file_name"] for item in result["files"]] == [
+        f"report_{index:03}.txt" for index in range(limit)
+    ]
+    assert "report_204.txt" not in result["display_message"]
+    assert f"Showing {limit} of 205" in result["display_message"]
+
+
+@pytest.mark.parametrize("limit", [0, -1, 201, True])
+def test_recent_files_rejects_invalid_limit(limit):
+    from unittest.mock import patch
+
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"](max_results=limit)
+    assert result["status"] == "error"
+    assert "1 and 200" in result["error"]
+
+
+def test_recent_files_below_limit_is_complete(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    (tmp_path / "Documents").mkdir()
+    (tmp_path / "Documents" / "only.txt").write_text("fact")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert result["total_found"] == result["count"] == 1
+    assert result["truncated"] is False
+    assert "omitted" not in result["display_message"]
+
+
+def test_unreadable_content_search_reports_reason(tmp_path, caplog):
+    from unittest.mock import patch
+
+    target = tmp_path / "readme.txt"
+    target.write_text("find me")
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        with patch(
+            "builtins.open", side_effect=PermissionError("test permission denial")
+        ):
+            _TOOL_REGISTRY["search_file_content"]["function"](
+                "find", directory=str(tmp_path)
+            )
+    assert "test permission denial" in caplog.text

@@ -154,6 +154,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     from gaia.agents.tools.audio_tools import AudioToolsMixin
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
     from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+    from gaia.agents.tools.email_tools import EmailToolsMixin
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
     from gaia.agents.tools.file_tools import FileSearchToolsMixin
     from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
@@ -186,6 +187,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         (CodeIndexToolsMixin, "register_code_index_tools"),
         (AudioToolsMixin, "register_audio_tools"),
         (MemoryMixin, "register_memory_tools"),
+        (EmailToolsMixin, "register_email_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)
@@ -228,7 +230,7 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
         encoding="utf-8"
     )
-    inline = {"execute_python_file", "list_files", "request_user_input"}
+    inline = {"execute_python_file", "run_python", "list_files", "request_user_input"}
     return frozenset(t for t in inline if f"def {t}(" in source)
 
 
@@ -639,6 +641,46 @@ def test_the_guide_consumes_lists_match_the_manifests():
             f"tools_required: guide={sorted(documented[skill.name])} "
             f"manifest={sorted(skill.gaia.tools_required)}"
         )
+
+
+def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
+    """#4252: daily-brief and the guide once said TTS doesn't exist — it does.
+
+    ``text_to_speech`` is a real, always-registered ChatAgent tool
+    (``gaia_agent_chat/agent.py``), so a doc listing it as a missing capability
+    tells the model to under-promise. Skill-aware scheduling genuinely is still
+    missing (``gaia schedule add --skill`` is rejected, #1019), so that claim
+    must stay.
+    """
+    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
+    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def text_to_speech(" in source
+
+    daily_brief = (STARTER_ROOT / "daily-brief" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    for doc_name, text in (("daily-brief/SKILL.md", daily_brief), ("guide", guide)):
+        lowered = text.lower()
+        assert "text-to-speech" not in lowered or "text_to_speech" in text, (
+            f"{doc_name} still talks about text-to-speech without naming the "
+            "text_to_speech tool that already provides it"
+        )
+        assert (
+            "not exposed as an agent tool" not in lowered
+        ), f"{doc_name} still claims TTS is not an agent tool"
+        assert (
+            "not a tool an agent can call" not in lowered
+        ), f"{doc_name} still claims TTS is not callable by an agent"
+
+    # The scheduling limitation is still real — don't let a future edit
+    # accidentally claim it works before #1019 actually lands.
+    assert "gaia schedule add" in daily_brief
+    assert "gaia schedule add --skill" in guide
 
 
 def test_the_guides_run_a_skill_snippet_still_type_checks():

@@ -106,6 +106,20 @@ def test_answer_omits_ttft_when_source_has_none():
     assert "ttft" not in out[0]["usage"]
 
 
+def test_answer_maps_tok_per_s_into_usage():
+    # The backend's own generation rate. The TUI used to derive one by
+    # dividing tokens by the turn's wall clock, which counts tool execution
+    # as model time; only a measured rate reaches usage.tok_per_s.
+    out = _tr().translate(_real_answer_event(total_tokens=72, tok_per_s=44.2))
+    assert out[0]["usage"]["tok_per_s"] == 44.2
+
+
+def test_answer_omits_tok_per_s_when_the_backend_reported_none():
+    # The remote OpenAI-compatible case: no timing on the wire, no stat.
+    out = _tr().translate(_real_answer_event(total_tokens=72))
+    assert "tok_per_s" not in out[0]["usage"]
+
+
 def test_answer_is_terminal():
     out = _tr().translate({"type": "answer", "content": "Done."})
     assert out[0]["type"] in TERMINAL_TYPES

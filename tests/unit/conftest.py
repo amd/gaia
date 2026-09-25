@@ -45,6 +45,19 @@ def mock_home(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _isolate_gaia_config(tmp_path, monkeypatch):
+    """Keep unit tests off the developer's real ``~/.gaia/config.json``.
+
+    ``GAIA_CONFIG_FILE`` is resolved at import time, so patching ``HOME`` is
+    not enough.
+    """
+    from gaia import config as config_mod
+
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "allow_network: opt out of the _block_network socket guard"
@@ -70,6 +83,19 @@ def _block_network(request, monkeypatch):
     def _blocked_connect_ex(*args, **kwargs):
         return 1
 
+    # Windows has no native socketpair(); asyncio builds its event-loop self
+    # pipe over a loopback TCP connect, which the guard would otherwise block.
+    real_connect = socket.socket.connect
+    real_socketpair = socket.socketpair
+
+    def _unguarded_socketpair(*args, **kwargs):
+        socket.socket.connect = real_connect
+        try:
+            return real_socketpair(*args, **kwargs)
+        finally:
+            socket.socket.connect = _blocked_connect
+
+    monkeypatch.setattr(socket, "socketpair", _unguarded_socketpair)
     monkeypatch.setattr(socket.socket, "connect", _blocked_connect)
     monkeypatch.setattr(socket.socket, "connect_ex", _blocked_connect_ex)
     yield

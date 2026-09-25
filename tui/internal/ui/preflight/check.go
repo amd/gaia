@@ -230,6 +230,7 @@ type agentsBody struct {
 	Agents []struct {
 		AgentID      string  `json:"agent_id"`
 		State        string  `json:"state"`
+		Mode         *string `json:"mode"`
 		PID          *int    `json:"pid"`
 		AgentVersion *string `json:"agent_version"`
 		APIVersion   *string `json:"api_version"`
@@ -278,6 +279,10 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 			continue
 		}
 		if a.State == "running" {
+			if conflict, conflicts := modeConflictRow(cfg, a.Mode); conflicts {
+				conflict.Raw = row.Raw
+				return conflict.commit(rep)
+			}
 			live := probeSidecarAnswers(ctx, t, cfg)
 			row.Raw = strings.TrimSpace(row.Raw + "\n\n" + live.trace)
 			if !live.answered {
@@ -317,6 +322,43 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 		Where:   daemonLog(),
 	}
 	return row.commit(rep)
+}
+
+// modeConflictRow answers the question the launch is about to ask the daemon:
+// this sidecar is running, but in which mode, and did the caller ask for the
+// other one? Only an EXPLICIT preference conflicts — with no
+// GAIA_<AGENT>_AGENT_MODE set the ensure request carries no mode at all and the
+// daemon attaches to whatever is up.
+//
+// Answering here rather than at the first query is the point: the daemon's 409
+// used to arrive after this gate had passed and the chat header had rendered.
+func modeConflictRow(cfg Config, running *string) (Row, bool) {
+	want, explicit := daemon.CallerMode(cfg.AgentID)
+	if !explicit || running == nil || *running == "" || *running == want {
+		return Row{}, false
+	}
+
+	envVar := daemon.ModeEnvVar(cfg.AgentID)
+	row := Row{Key: KeySidecar}
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = fmt.Sprintf("running in %s mode, %s requested", *running, want)
+	row.Detail = fmt.Sprintf(
+		"The %s agent is already running in %s mode, and %s=%s asks for %s. "+
+			"One process serves both, so the mode cannot change under it.",
+		cfg.AgentName, *running, envVar, want, want)
+	// Stopping a sidecar this machine is running is the user's call, but it is
+	// reversible and scoped to one agent — so it gets the key, and the remedy
+	// names the alternative that needs no restart at all.
+	row.Fix = FixRestartSidecar
+	row.Remedy = Remedy{
+		Action: fmt.Sprintf(
+			"Press f to stop it and start it again in %s mode. To use the one "+
+				"already running instead, unset %s and relaunch.", want, envVar),
+		Command: "gaia daemon stop-agent " + cfg.AgentID,
+		Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
+	}
+	return row, true
 }
 
 func describeSidecar(version *string, pid *int) string {
@@ -822,8 +864,9 @@ var connectScopes = map[string][]string{
 		"https://www.googleapis.com/auth/calendar.readonly",
 	},
 	"microsoft": {
-		// catalog/microsoft.py default_scopes
-		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+		// catalog/microsoft.py default_scopes — no `openid`: an Entra tenant can
+		// reject the whole authorization request over it (AADSTS65002, #4079).
+		"offline_access", "https://graph.microsoft.com/User.Read",
 		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES (OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES)
 		"https://graph.microsoft.com/Mail.ReadWrite",
 		"https://graph.microsoft.com/Mail.Send",
@@ -831,7 +874,7 @@ var connectScopes = map[string][]string{
 	},
 	"microsoft_work": {
 		// catalog/microsoft.py default_scopes (work tenant — same Graph app registration shape)
-		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+		"offline_access", "https://graph.microsoft.com/User.Read",
 		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES — identical to personal Outlook;
 		// only the connector id (token/grant/keyring slot) differs.
 		"https://graph.microsoft.com/Mail.ReadWrite",

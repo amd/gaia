@@ -94,7 +94,13 @@ class WhisperAsr(AudioRecorder):
         self.transcription_queue = transcription_queue
 
     def _record_audio_streaming(self):
-        """Record audio for streaming mode - puts chunks directly into queue."""
+        """Record audio for streaming mode - puts chunks directly into queue.
+
+        Any failure clears ``is_recording`` and records the reason on
+        ``mic_error``. This runs on its own thread, so raising here reaches
+        nobody: leaving the flag set is what left ``gaia talk`` printing
+        "Listening…" forever against a microphone that never opened (#3554).
+        """
         try:
             # Log device info
             if self.device_index is not None:
@@ -158,20 +164,32 @@ class WhisperAsr(AudioRecorder):
                         audio_buffer = audio_buffer[chunk_size - overlap_size :]
 
                 except Exception as e:
-                    self.log.error(f"Error reading from stream: {e}")
+                    self.mic_error = self.device_error_message("read from", e)
+                    self.log.error(self.mic_error)
                     break
 
             # Process any remaining audio
             if len(audio_buffer) > self.RATE * 0.5:  # At least 0.5 seconds
                 self.audio_queue.put(audio_buffer.copy())
 
+        except Exception as e:
+            # Opening or querying the device failed, so recording never began.
+            self.mic_error = self.device_error_message("open", e)
+            self.log.error(self.mic_error)
         finally:
+            # Always clear the flag: the supervisor loop polls it to notice the
+            # capture thread is gone, and it is the only way out of "Listening…".
+            self.is_recording = False
             if self.stream:
-                self.stream.stop()
-                self.stream.close()
+                try:
+                    self.stream.stop()
+                    self.stream.close()
+                except Exception as e:  # noqa: BLE001 - teardown of a dead device
+                    self.log.debug(f"Ignoring error closing the input stream: {e}")
 
     def start_recording_streaming(self):
         """Start recording in streaming mode."""
+        self.mic_error = None
         self.is_recording = True
         self.record_thread = threading.Thread(target=self._record_audio_streaming)
         self.record_thread.start()

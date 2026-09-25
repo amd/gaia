@@ -13,7 +13,7 @@
  *     coexists with the terminal `final` answer that follows.
  *   - It is a separate, non-blocking surface: dispatching it must NEVER
  *     touch `notificationStore`'s permission-request path or any
- *     `confirm_id`-keyed state (unlike `tool_confirm` / `permission_request`
+ *     `confirm_id`-keyed state (unlike `permission_request`
  *     handled a few lines above in ChatView's `onAgentEvent`).
  *
  * `needs_confirmation` is not yet in `StreamEventType` (types/index.ts) nor
@@ -249,7 +249,7 @@ describe('ChatView needs_confirmation wiring (#2109, stateless D1)', () => {
         expect(selectActivePermissionPrompt(useNotificationStore.getState())).toBeNull();
     });
 
-    it('does not call confirmTool/confirmToolExecution for a needs_confirmation event', async () => {
+    it('does not call confirmTool for a needs_confirmation event', async () => {
         await driveSend();
 
         act(() => {
@@ -257,6 +257,5 @@ describe('ChatView needs_confirmation wiring (#2109, stateless D1)', () => {
         });
 
         expect(mockedApi.confirmTool).not.toHaveBeenCalled();
-        expect(mockedApi.confirmToolExecution).not.toHaveBeenCalled();
     });
 });

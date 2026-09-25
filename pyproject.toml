@@ -55,15 +55,10 @@ python_functions = ["test_*"]
 addopts = "--tb=short --strict-markers"
 asyncio_mode = "auto"
 
-# UV configuration for PyTorch CPU-only builds
-# GAIA is optimized for AMD hardware and doesn't require NVIDIA/CUDA dependencies
-# This ensures torch, torchvision, and torchaudio are installed from CPU-only index
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
-torchvision = [{ index = "pytorch-cpu" }]
-torchaudio = [{ index = "pytorch-cpu" }]
+# A `[tool.uv.pip]` config block (to drop the repeated `--extra-index-url`
+# flag) was evaluated and rejected in #2881 — it breaks dependency resolution
+# for this project's real extras unless paired with `unsafe-best-match`, which
+# disables uv's dependency-confusion protection repo-wide. Keep the flag.
+# (The `[[tool.uv.index]]`/`[tool.uv.sources]` block once here was also dead:
+# `uv pip install`, which every install path uses, ignores both — regardless
+# of the missing `[project]` table.)

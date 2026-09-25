@@ -71,12 +71,18 @@ def _sanitize_fts5_query(query: str, use_and: bool = True) -> Optional[str]:
     if not sanitized:
         return None
 
-    words = sanitized.split()
+    # Quote each token so words such as AND/OR/NOT stay literal FTS5 terms.
+    # FTS5's unicode61 tokenizer treats "_" as a separator, so a token of only
+    # underscores would quote to an empty phrase and zero out an AND query —
+    # drop it rather than let it silently empty the whole search.
+    words = [f'"{word}"' for word in sanitized.split() if word.strip("_")]
+    if not words:
+        return None
     if len(words) > 1:
         operator = " AND " if use_and else " OR "
         return operator.join(words)
 
-    return sanitized
+    return words[0]
 
 
 # ============================================================================
@@ -196,6 +202,39 @@ def _safe_json_loads(value) -> object:
     except (json.JSONDecodeError, TypeError):
         logger.warning("[MemoryStore] corrupt JSON column value ignored: %.80r", value)
         return None
+
+
+def _bounded_args_json(args: dict | None) -> str | None:
+    """Tool args as JSON that always parses and fits MAX_FTS_QUERY_LENGTH.
+
+    Cutting the serialized text left every large write_file/edit_file call
+    unreadable in tool history. Long values are shortened instead, keeping
+    short ones like file_path, and ``_truncated`` marks a partial result.
+    """
+    if not args:
+        return None
+    text = json.dumps(args, default=str)
+    if len(text) <= MAX_FTS_QUERY_LENGTH:
+        return text
+    for limit in (200, 60, 0):
+        shrunk: dict = {}
+        for k, v in args.items():
+            # Nested lists/dicts are shortened as their JSON text.
+            v_text = v if isinstance(v, str) else json.dumps(v, default=str)
+            shrunk[k] = v_text[:limit] + "..." if len(v_text) > limit else v
+        shrunk["_truncated"] = True
+        text = json.dumps(shrunk, default=str)
+        if len(text) <= MAX_FTS_QUERY_LENGTH:
+            return text
+    keys: list[str] = []
+    for key in sorted(str(k) for k in args):
+        if (
+            len(json.dumps({"_truncated": True, "keys": keys + [key]}))
+            > MAX_FTS_QUERY_LENGTH
+        ):
+            break
+        keys.append(key)
+    return json.dumps({"_truncated": True, "keys": keys})
 
 
 # ============================================================================
@@ -895,6 +934,16 @@ class MemoryStore:
             for r in rows
         ]
 
+    def count_conversation_turns(self, exclude_session: str | None = None) -> int:
+        """Number of stored turns, optionally leaving out one session's."""
+        sql = "SELECT COUNT(*) FROM conversations"
+        params: tuple = ()
+        if exclude_session is not None:
+            sql += " WHERE session_id != ?"
+            params = (exclude_session,)
+        with self._lock:
+            return int(self._conn.execute(sql, params).fetchone()[0])
+
     # ==================================================================
     # Knowledge — Store (with dedup)
     # ==================================================================
@@ -1126,7 +1175,10 @@ class MemoryStore:
                     )
                     return cast(str, existing_id)
         except sqlite3.OperationalError as e:
-            logger.debug("[MemoryStore] FTS5 dedup search error: %s", e)
+            # A failed dedup search means store() falls through to inserting a
+            # duplicate -- debug level hid exactly that for as long as this
+            # query could raise (#4142's own bug was one such cause).
+            logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None
 
@@ -2028,13 +2080,10 @@ class MemoryStore:
     ) -> None:
         """Log a tool call to tool_history."""
         now = _now_iso()
-        args_json = json.dumps(args, default=str) if args else None
-        # Truncate all text columns to MAX_FTS_QUERY_LENGTH chars.  Tool args,
+        args_json = _bounded_args_json(args)
+        # Truncate the text columns to MAX_FTS_QUERY_LENGTH chars. Tool args,
         # results, and error messages can all be arbitrarily large (e.g.
-        # write_file called with 100 KB content).  Storing the full payload
-        # bloats the database without adding search or observability value.
-        if args_json and len(args_json) > MAX_FTS_QUERY_LENGTH:
-            args_json = args_json[:MAX_FTS_QUERY_LENGTH]
+        # write_file called with 100 KB content).
         if result_summary and len(result_summary) > MAX_FTS_QUERY_LENGTH:
             result_summary = result_summary[:MAX_FTS_QUERY_LENGTH]
         if error and len(error) > MAX_FTS_QUERY_LENGTH:

@@ -23,8 +23,9 @@ Two rules restore it:
 
 * transient failures (timeouts, dropped connections) are never persisted — they
   describe a moment, not a rule this agent must obey;
-* a tool that succeeds retires the errors stored against it, because a call that
-  just worked is direct evidence the tool is not broken.
+* a call that succeeds retires the errors stored against the same operation
+  (rows stored before operations were recorded are matched by tool), because
+  a call that just worked is direct evidence it is not broken.
 """
 
 from __future__ import annotations
@@ -60,8 +61,8 @@ class TestTransientErrorsAreNotPersisted:
             "Access denied: C:\\Windows is not in allowed paths",
         ],
     )
-    def test_durable_constraints_are_still_remembered(self, message):
-        """These are rules about this agent, and worth carrying forward."""
+    def test_standing_conditions_are_not_transient(self, message):
+        """Not transient. Refusals are kept out by ``executed: False`` instead."""
         assert not MemoryMixin._is_transient_error(message)
 
     def test_matching_is_case_insensitive(self):
@@ -93,6 +94,8 @@ class _Host(MemoryMixin):
 
 
 class TestSuccessRetiresStaleErrors:
+    """Rows with no recorded operation — see test_memory_error_refusals.py."""
+
     def test_a_working_tool_drops_its_recorded_errors(self):
         store = _Store(
             [
@@ -104,7 +107,7 @@ class TestSuccessRetiresStaleErrors:
             ]
         )
 
-        _Host(store)._forget_errors_for_tool("run_shell_command")
+        _Host(store)._forget_errors_for_operation("run_shell_command", {})
 
         assert store.deleted == ["1", "2"]
         assert store.entries == []
@@ -118,7 +121,7 @@ class TestSuccessRetiresStaleErrors:
             ]
         )
 
-        _Host(store)._forget_errors_for_tool("load_skill")
+        _Host(store)._forget_errors_for_operation("load_skill", {})
 
         assert store.deleted == ["2"]
         assert [e["id"] for e in store.entries] == ["1"]
@@ -130,4 +133,4 @@ class TestSuccessRetiresStaleErrors:
             def get_by_category(self, *a, **k):
                 raise RuntimeError("database is locked")
 
-        _Host(Exploding([]))._forget_errors_for_tool("run_shell_command")
+        _Host(Exploding([]))._forget_errors_for_operation("run_shell_command", {})

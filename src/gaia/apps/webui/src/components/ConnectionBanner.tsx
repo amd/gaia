@@ -372,13 +372,10 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         >
                             Lemonade
                         </a>
-                        , set ctx&#8209;size to {MIN_CONTEXT_SIZE.toLocaleString()}, or
-                        restart with:{' '}
-                        <code>
-                            {systemStatus?.start_command
-                                ? systemStatus.start_command
-                                : `LEMONADE_CTX_SIZE=${MIN_CONTEXT_SIZE} (see Settings)`}
-                        </code>
+                        , set ctx&#8209;size to {MIN_CONTEXT_SIZE.toLocaleString()} and reload the model.{' '}
+                        {systemStatus?.start_command
+                            ? <>Restart command: <code>{systemStatus.start_command}</code></>
+                            : systemStatus?.start_instruction}
                     </span>
                 </div>
                 {onRetry && (

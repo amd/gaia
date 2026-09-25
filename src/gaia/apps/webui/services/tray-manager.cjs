@@ -53,6 +53,9 @@ class TrayManager {
     /** @type {Electron.Tray | null} */
     this.tray = null;
 
+    /** @type {number} Unread notifications reflected in the tooltip/badge. */
+    this._notificationCount = 0;
+
     /** @type {object} */
     this.config = this._loadConfig();
 
@@ -69,7 +72,8 @@ class TrayManager {
     if (this.tray) return;
 
     this.tray = new Tray(this._icon);
-    this.tray.setToolTip("GAIA");
+    // Re-apply any count that arrived before the tray existed.
+    this.setNotificationCount(this._notificationCount);
 
     // Single-click: show/focus window
     this.tray.on("click", () => this._showWindow());
@@ -93,6 +97,45 @@ class TrayManager {
   /** Update the context menu. */
   refresh() {
     this._rebuildContextMenu();
+  }
+
+  /**
+   * Reflect the unread-notification count in the tray tooltip (and the dock /
+   * launcher badge where the platform has one).
+   *
+   * @param {number} count Unread notifications; negative/NaN is treated as 0.
+   */
+  setNotificationCount(count) {
+    const unread =
+      typeof count === "number" && Number.isFinite(count) && count > 0
+        ? Math.floor(count)
+        : 0;
+    if (unread !== this._notificationCount) {
+      console.log(`[tray] Unread notifications: ${unread}`);
+    }
+    this._notificationCount = unread;
+
+    const trayAlive =
+      this.tray &&
+      !(typeof this.tray.isDestroyed === "function" && this.tray.isDestroyed());
+    if (trayAlive) {
+      this.tray.setToolTip(
+        unread > 0
+          ? `GAIA — ${unread} unread notification${unread === 1 ? "" : "s"}`
+          : "GAIA"
+      );
+    }
+
+    // Dock (macOS) / Unity launcher (Linux) badge. Windows has no
+    // app.setBadgeCount equivalent — the tooltip above is the badge there.
+    if (process.platform !== "win32" && typeof app.setBadgeCount === "function") {
+      app.setBadgeCount(unread);
+    }
+  }
+
+  /** @returns {number} The unread count last passed to setNotificationCount. */
+  get notificationCount() {
+    return this._notificationCount || 0;
   }
 
   /** @returns {boolean} Whether minimize-to-tray is enabled. */

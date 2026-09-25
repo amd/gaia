@@ -156,6 +156,84 @@ class TestBuilderFailLoudly:
         assert agent.chat.send_messages.call_count == 1
 
 
+class TestBuilderRetriesMalformedCall:
+    """A create_agent call missing a required argument is retried once (#3581)."""
+
+    def test_missing_required_arg_retries_and_succeeds(self, tmp_path):
+        """Turn 1 drops 'name' → corrective turn → turn 2 creates the agent."""
+        agent = _make_agent(tmp_path)
+        agent.console = MagicMock()
+
+        no_name = '{"tool": "create_agent", "tool_args": {"description": "a bot"}}'
+        with_name = '{"tool": "create_agent", "tool_args": {"name": "Zephyr"}}'
+        responses = iter([no_name, with_name])
+
+        agent.chat = MagicMock()
+        agent.chat.send_messages.side_effect = lambda **kwargs: _mock_chat_response(
+            next(responses)
+        )
+
+        tool_result = f"Agent 'Zephyr Agent' created at {tmp_path}/zephyr/agent.py"
+        results = iter(
+            [
+                {
+                    "status": "error",
+                    "error_type": "invalid_arguments",
+                    "error": "Missing required arguments for create_agent: name",
+                },
+                tool_result,
+            ]
+        )
+        with patch.object(
+            agent, "_execute_tool", side_effect=lambda *a, **k: next(results)
+        ):
+            result = agent._process_query_impl("create an agent named Zephyr")
+
+        assert result["answer"] == tool_result
+        assert agent.chat.send_messages.call_count == 2
+
+    def test_missing_required_arg_retried_only_once(self, tmp_path):
+        """A second malformed call fails loudly instead of looping."""
+        agent = _make_agent(tmp_path)
+        agent.console = MagicMock()
+
+        no_name = '{"tool": "create_agent", "tool_args": {"description": "a bot"}}'
+        agent.chat = MagicMock()
+        agent.chat.send_messages.return_value = _mock_chat_response(no_name)
+
+        arg_error = {
+            "status": "error",
+            "error_type": "invalid_arguments",
+            "error": "Missing required arguments for create_agent: name",
+        }
+        with patch.object(
+            agent, "_execute_tool", return_value=arg_error
+        ) as mock_execute:
+            result = agent._process_query_impl("create an agent named Zephyr")
+
+        assert mock_execute.call_count == 2
+        assert "unable to create the agent" in result["answer"].lower()
+        assert "Missing required arguments" in result["answer"]
+
+    def test_creation_error_still_fails_immediately(self, tmp_path):
+        """A genuine creation failure is not retried — it stays loud."""
+        agent = _make_agent(tmp_path)
+        agent.console = MagicMock()
+
+        call = '{"tool": "create_agent", "tool_args": {"name": "Foo"}}'
+        agent.chat = MagicMock()
+        agent.chat.send_messages.return_value = _mock_chat_response(call)
+
+        creation_error = {"status": "error", "error": "reserved agent name"}
+        with patch.object(
+            agent, "_execute_tool", return_value=creation_error
+        ) as mock_execute:
+            result = agent._process_query_impl("create an agent named Foo")
+
+        mock_execute.assert_called_once()
+        assert "reserved agent name" in result["answer"]
+
+
 class TestBuilderSurfacesModelError:
     """A model-load 404 must name the missing model, not hide behind a placeholder (#2243)."""
 

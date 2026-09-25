@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: MIT
 """Cooperative cancellation for tools the agent has stopped waiting for (#2600)."""
 
+import logging
 import threading
 import time
 
 import pytest
 
 from gaia.agents.base.tools import (
+    AbandonedWorkerLogFilter,
     ToolCancelled,
     raise_if_cancelled,
     set_tool_cancel_event,
@@ -119,3 +121,84 @@ class TestBoundedCallSetsCancellation:
 
         assert seen["during"] is False
         assert tool_cancelled() is False
+
+
+class TestAbandonedWorkerLogIsolation:
+    """A timed-out worker's later log calls must not reach a later caller's
+    log-capture window (#2600).
+
+    The worker uses ``gaia.database.mixin`` -- the exact logger the original
+    CI failure leaked from -- to show the filter works regardless of which
+    module the abandoned tool body happens to log through.
+    """
+
+    LEAK_LOGGER = "gaia.database.mixin"
+
+    def teardown_method(self):
+        set_tool_cancel_event(None)
+
+    def _run_past_timeout_then_log(self, message: str):
+        """Start a tool that overruns its timeout, then have the abandoned
+        worker log *after* the caller has already moved on, mirroring the
+        real bug: the emitting call happens once nothing is waiting on it.
+        """
+        from gaia.agents.base.agent import Agent, ToolExecutionTimeout
+
+        logged = threading.Event()
+
+        def slow_tool():
+            time.sleep(0.2)  # overrun the 0.05s window below
+            logging.getLogger(self.LEAK_LOGGER).info(message)
+            logged.set()
+            return "finished late"
+
+        class _StubAgent(Agent):
+            def _register_tools(self):
+                pass
+
+        agent = object.__new__(_StubAgent)
+        agent._resolve_tool_timeout = lambda _name: 0.05
+
+        with pytest.raises(ToolExecutionTimeout):
+            Agent._call_tool_bounded(agent, slow_tool, {}, "slow_tool")
+
+        assert logged.wait(5), "abandoned worker never reached its log call"
+
+    def test_abandoned_worker_log_is_dropped_when_filter_is_attached(self, caplog):
+        """Reproduces #2600: attach the filter to the capture handler exactly
+        as GaiaLogger attaches it to the root console/file handlers, then
+        prove the late record from the abandoned worker never arrives.
+
+        pytest reuses a single ``LogCaptureHandler`` for the whole session
+        (only its records are reset between tests, not its filters), so the
+        filter is removed again in ``finally`` -- otherwise it would silently
+        suppress every other test's log assertions too.
+        """
+        caplog.set_level(logging.INFO, logger=self.LEAK_LOGGER)
+        log_filter = AbandonedWorkerLogFilter()
+        caplog.handler.addFilter(log_filter)
+        try:
+            self._run_past_timeout_then_log("zombie worker wrote this")
+
+            leaked = [r for r in caplog.records if r.name == self.LEAK_LOGGER]
+            assert not leaked, f"abandoned worker's log record leaked: {leaked}"
+
+            # A later, unrelated caller on the SAME logger still logs
+            # normally -- the filter only silences the abandoned thread.
+            logging.getLogger(self.LEAK_LOGGER).info("unrelated later caller")
+            later = [r for r in caplog.records if r.name == self.LEAK_LOGGER]
+            assert len(later) == 1
+            assert later[0].getMessage() == "unrelated later caller"
+        finally:
+            caplog.handler.removeFilter(log_filter)
+
+    def test_abandoned_worker_log_leaks_without_the_filter(self, caplog):
+        """Baseline: without the filter attached, the bug from #2600
+        reproduces -- the zombie worker's record lands in this window.
+        """
+        caplog.set_level(logging.INFO, logger=self.LEAK_LOGGER)
+
+        self._run_past_timeout_then_log("zombie worker wrote this too")
+
+        leaked = [r for r in caplog.records if r.name == self.LEAK_LOGGER]
+        assert leaked, "expected the unfiltered baseline to reproduce the leak"

@@ -12,7 +12,7 @@ import json
 import linecache
 import textwrap
 import traceback
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 # Paths to filter out (framework internals)
 FRAMEWORK_PATHS: Set[str] = {
@@ -24,6 +24,91 @@ FRAMEWORK_PATHS: Set[str] = {
     "gaia_agent_chat",
     "site-packages/",
 }
+
+
+class MissingHostAttributeError(RuntimeError):
+    """A tool mixin's host object never bound an attribute the mixin requires."""
+
+
+def missing_host_attr_message(
+    host: Any, attr_name: str, mixin_name: str, hint: str, doc_anchor: str
+) -> str:
+    """Build the message used for a missing required host attribute.
+
+    Shared so every code path that reports this condition — whether it
+    raises (``require_host_attr``) or returns a structured error (a tool
+    that reports rather than raising) — uses identical wording.
+    """
+    return (
+        f"{type(host).__name__} registers {mixin_name}'s tools but never "
+        f"binds self.{attr_name}. {hint} See {doc_anchor} for a worked "
+        "example."
+    )
+
+
+def require_host_attr(
+    host: Any, attr_name: str, mixin_name: str, hint: str, doc_anchor: str
+) -> Any:
+    """Read a host attribute a tool mixin depends on, failing loudly if unbound.
+
+    Tool mixins (``RAGToolsMixin``, ``FileIOToolsMixin``, ...) read state off
+    ``self`` that nothing sets for them — the host agent class is responsible
+    for binding it, usually before ``super().__init__()`` runs. A host that
+    forgets raises a bare ``AttributeError`` deep inside a tool body, which an
+    outer ``except Exception`` there would otherwise turn into a misleading
+    generic failure. This does the same single read (so a property like
+    ``ChatAgent.rag`` is invoked normally, not probed) but re-raises with a
+    message naming the host class, the attribute, and how to fix it.
+
+    An ``AttributeError`` raised *inside* a lazy property's getter is a
+    different failure and is re-raised untouched — blaming the host for
+    "never binding" an attribute whose own build broke sends the reader to
+    the wrong place entirely.
+
+    Args:
+        host: The tool-mixin instance (``self`` from inside a tool function).
+        attr_name: Name of the required attribute (e.g. ``"rag"``).
+        mixin_name: Name of the mixin that requires it (for the message).
+        hint: One-line instruction on what to set the attribute to.
+        doc_anchor: Path (optionally with ``#anchor``) to a worked example.
+
+    Returns:
+        The attribute's value (may legitimately be ``None`` if the host set
+        it to ``None`` on purpose — only a truly unbound attribute raises).
+
+    Raises:
+        MissingHostAttributeError: If ``host`` never bound ``attr_name``.
+        AttributeError: Unchanged, if ``attr_name`` resolves to a descriptor
+            whose getter raised one.
+    """
+    try:
+        return getattr(host, attr_name)
+    except AttributeError as e:
+        if _raised_inside_getter(host, attr_name, e):
+            raise
+        raise MissingHostAttributeError(
+            missing_host_attr_message(host, attr_name, mixin_name, hint, doc_anchor)
+        ) from e
+
+
+def _raised_inside_getter(host: Any, attr_name: str, error: AttributeError) -> bool:
+    """Whether ``error`` came from inside a descriptor rather than the lookup.
+
+    ``ChatAgent.rag`` is a property that builds RAG on first read. When that
+    build fails with its own ``AttributeError``, the attribute is declared —
+    the lookup reached a getter and the getter raised. A failed *lookup*, by
+    contrast, names this attribute on this object (CPython sets ``name`` and
+    ``obj`` on the ``AttributeError`` it raises), which is also what an
+    unassigned ``__slots__`` member looks like.
+    """
+    declared = any(attr_name in vars(klass) for klass in type(host).__mro__)
+    if not declared:
+        return False
+    lookup_failed = (
+        getattr(error, "name", None) == attr_name
+        and getattr(error, "obj", None) is host
+    )
+    return not lookup_failed
 
 
 def format_user_error(

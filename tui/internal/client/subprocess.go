@@ -24,10 +24,13 @@ var (
 	_ PermissionBypasser      = (*SubprocessClient)(nil)
 	_ AgentCanceler           = (*SubprocessClient)(nil)
 	_ LocalAgentStopper       = (*SubprocessClient)(nil)
+	_ CapabilityReporter      = (*SubprocessClient)(nil)
 )
 
-// closeGrace bounds how long Close() waits for an in-flight turn's reader to
-// finish before giving up on a clean reap.
+// closeGrace bounds each wait in Close(): the in-flight turn's reader, that
+// reader again after a kill, the child's own exit once stdin is closed, and
+// the reap after the kill that follows. A wedged child can therefore hold
+// quit for up to four of these before Close() gives up and reports why.
 const closeGrace = 2 * time.Second
 
 var subprocessLemonadePorts = []string{"13305", "8000"}
@@ -723,6 +726,36 @@ func (s *SubprocessClient) Cancel(context.Context) error {
 // somewhere this client cannot reach.
 func (s *SubprocessClient) AbortStopsAgent() bool { return true }
 
+// Supports implements CapabilityReporter. The stdio memory-dump sentinel
+// (memory.go) is always there for a local child -- there is nothing to probe,
+// so the answer is immediate and always known.
+func (s *SubprocessClient) Supports(c Capability) (supported, known bool) {
+	switch c {
+	case CapabilityMemory:
+		return true, true
+	default:
+		// Unknown, not "known to be unsupported": a capability this build has
+		// never heard of would otherwise be hidden by whichever transport was
+		// not taught about it, with nothing on screen saying why.
+		return false, false
+	}
+}
+
+// ProbeCapabilities implements the async-probe seam client.CapabilityReporter
+// callers dispatch at chat start. A subprocess child has nothing to negotiate
+// -- Supports already answers immediately -- so this is a no-op.
+func (s *SubprocessClient) ProbeCapabilities(context.Context) error { return nil }
+
+// AgentStarted reports whether the child is already spawned, so a caller can
+// tell a fast round-trip to a warm agent from one that has to pay the cold
+// start first (imports, skill loading, backend probe -- tens of seconds). The
+// UI uses it to say which of the two the user is waiting on.
+func (s *SubprocessClient) AgentStarted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.started
+}
+
 // BypassAtLaunch reports whether the child was spawned with bypass already on,
 // so the UI can show the warning from the very first frame rather than only
 // after a toggle.
@@ -848,27 +881,40 @@ func (s *SubprocessClient) Close() error {
 		return nil
 	}
 
-	// If a turn's reader is still in flight it owns the reap (os/exec forbids
-	// Wait before reads complete), so wait for it rather than racing it.
+	// Wait must not close stdout underneath the turn's reader.
+	var killErr error
 	if turnDone != nil {
 		select {
 		case <-turnDone:
 		case <-time.After(closeGrace):
 			// The agent ignored EOF. Kill it and let the reader finish.
-			killErr := proc.kill()
+			killErr = proc.kill()
 			select {
 			case <-turnDone:
 			case <-time.After(closeGrace):
-				// The reader is wedged; leave the child to the OS rather than
-				// calling Wait underneath an active read.
+				return errors.Join(killErr, fmt.Errorf("agent output reader did not stop after the process was terminated"))
 			}
-			return killErr
 		}
-		return nil
 	}
 
-	proc.reap()
-	return nil
+	// A terminal event ends the reader, not the persistent child process.
+	reaped := make(chan struct{})
+	go func() {
+		proc.reap()
+		close(reaped)
+	}()
+	select {
+	case <-reaped:
+		return killErr
+	case <-time.After(closeGrace):
+		killErr = errors.Join(killErr, proc.kill())
+	}
+	select {
+	case <-reaped:
+		return killErr
+	case <-time.After(closeGrace):
+		return errors.Join(killErr, fmt.Errorf("agent process did not exit after termination"))
+	}
 }
 
 func truncateLine(s string) string {

@@ -37,10 +37,11 @@ def _find_function(tree: ast.AST, name: str) -> ast.FunctionDef:
     raise AssertionError(f"function {name!r} not found in agent.py")
 
 
-def test_task_completed_with_appears_in_exactly_one_string_literal():
-    """``"Task completed with"`` must live in exactly ONE string
-    literal inside ``_build_loop_break_summary``. Two copies (one per
-    legacy loop-break site) was the lie-on-loop bug.
+def test_loop_break_summary_never_claims_completion():
+    """No string literal in ``_build_loop_break_summary`` may say "Task
+    completed". The helper only runs after the loop guard STOPPED a turn, so
+    any completion claim from it is false — first as duplicated literals (the
+    lie-on-loop bug), then as the non-error branch (#3750).
 
     The walk is scoped to the helper's body so unrelated mentions
     (assertions in tests, future docstrings, comments) don't trip
@@ -49,11 +50,10 @@ def test_task_completed_with_appears_in_exactly_one_string_literal():
     src = AGENT_PY.read_text(encoding="utf-8")
     tree = ast.parse(src)
     helper = _find_function(tree, "_build_loop_break_summary")
-    hits = [n for n in _string_literals_in(helper) if "Task completed with" in n.value]
-    assert len(hits) == 1, (
-        f"expected exactly 1 'Task completed with' literal in "
-        f"_build_loop_break_summary, found {len(hits)} at "
-        f"lines {[n.lineno for n in hits]}"
+    hits = [n for n in _string_literals_in(helper) if "Task completed" in n.value]
+    assert not hits, (
+        f"_build_loop_break_summary claims completion at lines "
+        f"{[n.lineno for n in hits]} — a loop break is never a finish"
     )
 
 

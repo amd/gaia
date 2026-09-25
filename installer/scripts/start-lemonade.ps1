@@ -19,7 +19,7 @@
     Server port (default: 13305, Lemonade's default since v10.1)
 
 .PARAMETER CtxSize
-    Context size (default: 8192)
+    Context size (default: 32768)
 
 .PARAMETER InitWaitTime
     Seconds to wait after loading model (default: 10)

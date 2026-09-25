@@ -535,7 +535,10 @@ def test_start_hint_modern_linux_names_systemctl_not_lemonade_server(mocker):
 
     hint = describe_start_hint(ctx_size=32768)
 
-    assert hint.command == "LEMONADE_CTX_SIZE=32768 systemctl --user start lemond"
+    assert hint.command is None
+    assert "systemctl --user start lemond" in hint.instruction
+    assert "32768" in hint.instruction
+    assert "reload the model" in hint.instruction
     assert "lemonade-server" not in hint.instruction
     # systemctl returns immediately — callers must not append " &".
     assert hint.foreground is False
@@ -729,6 +732,7 @@ def test_start_hint_instruction_embeds_the_command_verbatim(mocker):
         return_value=LemonadeTooling(
             found=True,
             kind="modern",
+            source="env",
             client_path="/usr/bin/lemonade",
             server_launcher="/usr/bin/lemond",
         ),

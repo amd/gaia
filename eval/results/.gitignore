@@ -2,5 +2,8 @@
 eval-*/
 rerun/
 
+# `gaia eval sessions` output is built from the user's own Claude Code sessions
+sessions*/
+
 # Keep baseline reference
 !baseline.json

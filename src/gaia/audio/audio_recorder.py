@@ -48,6 +48,12 @@ class AudioRecorder:
         self.audio_queue = queue.Queue()
         self.stream = None  # Add stream as class attribute
 
+        #: Why the microphone stopped, set by the capture thread. ``None`` until
+        #: something goes wrong. Capture runs on its own thread, so raising
+        #: there reaches nobody — the caller reads this to say what happened
+        #: instead of printing "Listening…" at a dead device (#3554).
+        self.mic_error = None
+
         # Voice detection parameters
         self.SILENCE_THRESHOLD = 0.003
         self.MIN_AUDIO_LENGTH = self.RATE * 0.25
@@ -71,8 +77,31 @@ class AudioRecorder:
         """Detect if audio chunk contains speech based on amplitude."""
         return np.abs(audio_chunk).mean() > self.SILENCE_THRESHOLD
 
+    def device_error_message(self, verb: str, error: Exception) -> str:
+        """One actionable line naming the device and what to try next."""
+        try:
+            name = sd.query_devices(self.device_index)["name"]
+            device = f"[{self.device_index}] {name}"
+        except Exception:  # noqa: BLE001 - the device is what is broken
+            device = (
+                f"index {self.device_index}"
+                if self.device_index is not None
+                else "the default input device"
+            )
+        return (
+            f"Microphone unavailable: could not {verb} {device} ({error}). "
+            "Pick another with `gaia talk --audio-device-index <N>`; list them "
+            "with `gaia test asr-list-audio-devices`."
+        )
+
     def _record_audio(self):
-        """Internal method to record audio."""
+        """Internal method to record audio.
+
+        Any failure clears ``is_recording`` and records the reason on
+        ``mic_error``. This runs on its own thread, so the old ``raise`` reached
+        nobody and left the flag set — which is what kept ``gaia talk`` printing
+        "Listening…" at a microphone that never opened (#3554).
+        """
         try:
             device_info = sd.query_devices(self.device_index)
             self.log.debug(f"Using audio device: {device_info['name']}")
@@ -148,13 +177,18 @@ class AudioRecorder:
                             silence_counter = 0
 
                 except Exception as e:
-                    self.log.error(f"Error reading from stream: {e}")
+                    self.mic_error = self.device_error_message("read from", e)
+                    self.log.error(self.mic_error)
                     break
 
         except Exception as e:
-            self.log.error(f"Error with device {self.device_index}: {e}")
-            raise
+            # Opening or querying the device failed, so recording never began.
+            self.mic_error = self.device_error_message("open", e)
+            self.log.error(self.mic_error)
         finally:
+            # Always clear the flag: the supervisor loop polls it to notice the
+            # capture thread is gone, and it is the only way out of "Listening…".
+            self.is_recording = False
             try:
                 if self.stream is not None:
                     self.stream.stop()
@@ -208,6 +242,7 @@ class AudioRecorder:
             return
 
         # Set recording flag before starting threads
+        self.mic_error = None
         self.is_recording = True
 
         # Start record thread

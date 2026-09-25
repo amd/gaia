@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -162,9 +163,11 @@ func Start(sender Sender, state *State, opts Options) (*Server, error) {
 	mux.HandleFunc(APIPrefix+"/status", s.auth(s.handleStatus))
 	mux.HandleFunc(APIPrefix+"/screen", s.auth(s.handleScreen))
 	mux.HandleFunc(APIPrefix+"/keys", s.auth(s.handleKeys))
+	mux.HandleFunc(APIPrefix+"/mouse", s.auth(s.handleMouse))
 	mux.HandleFunc(APIPrefix+"/text", s.auth(s.handleText))
 	mux.HandleFunc(APIPrefix+"/wait", s.auth(s.handleWait))
 	mux.HandleFunc(APIPrefix+"/frames", s.auth(s.handleFrames))
+	mux.HandleFunc(APIPrefix+"/recording", s.auth(s.handleRecording))
 	mux.HandleFunc(APIPrefix+"/resize", s.auth(s.handleResize))
 	// Unknown paths answer in the same error envelope as everything else, so a
 	// typo'd endpoint is a readable message rather than Go's HTML 404 page.
@@ -476,20 +479,32 @@ func (s *Server) handleScreen(w http.ResponseWriter, r *http.Request) {
 	if format == "" {
 		format = "plain"
 	}
-	if format != "plain" && format != "ansi" {
+	if format != "plain" && format != "ansi" && format != "svg" {
 		writeErr(w, http.StatusBadRequest, apiError{
 			Code:    "bad_format",
 			Message: fmt.Sprintf("unknown format %q", format),
-			Hint:    "use format=plain (ANSI stripped, the default) or format=ansi",
+			Hint:    "use format=plain (ANSI stripped, the default), format=ansi, or format=svg for a picture of the frame",
 		})
 		return
 	}
 	raw, seq, _ := s.state.Current()
+	cols, rows := s.state.Size()
+
+	// A picture is returned as the document itself, not wrapped in JSON: it is
+	// meant to be written straight to a file and opened, and a client that has
+	// to unwrap and unescape it first is a client that will get that wrong.
+	if format == "svg" {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("X-Gaia-Frame-Seq", strconv.Itoa(seq))
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, ScreenSVG(raw, cols, rows))
+		return
+	}
+
 	screen := raw
 	if format == "plain" {
 		screen = PlainScreen(raw)
 	}
-	cols, rows := s.state.Size()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"format": format,
 		"seq":    seq,
@@ -553,6 +568,102 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sent":    len(msgs),
 		"keys":    req.Keys,
+		"seq":     seq,
+		"settled": settled,
+	})
+}
+
+type mouseEvent struct {
+	Action string `json:"action"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+}
+
+type mouseRequest struct {
+	Events  []mouseEvent `json:"events"`
+	DelayMS int          `json:"delay_ms"`
+}
+
+// handleMouse injects mouse gestures at absolute screen cells — the same
+// coordinate frame /screen reports, so a client reads a row off the screen and
+// clicks that row. See mouse.go for why a double click is two presses.
+func (s *Server) handleMouse(w http.ResponseWriter, r *http.Request) {
+	var req mouseRequest
+	if !s.decode(w, r, &req) {
+		return
+	}
+	if len(req.Events) == 0 {
+		writeErr(w, http.StatusBadRequest, apiError{
+			Code:    "no_events",
+			Message: "events is empty",
+			Hint:    `send {"events": [{"action": "click", "x": 24, "y": 16}]}`,
+		})
+		return
+	}
+	if len(req.Events) > 100 {
+		writeErr(w, http.StatusBadRequest, apiError{
+			Code:    "too_many_events",
+			Message: fmt.Sprintf("%d events in one request; the cap is 100", len(req.Events)),
+			Hint:    "split the sequence across several calls, reading the screen in between",
+		})
+		return
+	}
+	if err := checkDelayBudget(req.DelayMS, len(req.Events)); err != nil {
+		writeErr(w, http.StatusBadRequest, *err)
+		return
+	}
+
+	// Injection goes straight into the program's message queue, which bypasses
+	// the terminal's mouse-reporting gate entirely. That is fine while the app
+	// holds the mouse — the messages are the ones the terminal would have sent
+	// — but while the TERMINAL holds it (SELECT MODE), a real user's wheel or
+	// click never reaches the app at all, and injecting one anyway reports a
+	// pass for a gesture nobody can make. Refuse instead, and say why.
+	if _, _, snap := s.state.Current(); snap.Chat != nil && snap.Chat.MouseOwner == "terminal" {
+		writeErr(w, http.StatusConflict, apiError{
+			Code:    "mouse_not_captured",
+			Message: "the terminal owns the mouse right now, so a real click or wheel would not reach the TUI",
+			Hint:    "leave SELECT MODE first (send ctrl+t, or esc) — /status reports state.chat.mouse_owner",
+		})
+		return
+	}
+
+	cols, rows := s.state.Size()
+	var msgs []tea.Msg
+	for _, e := range req.Events {
+		// Off-screen coordinates are refused rather than clamped: a click the
+		// caller believes landed on row 40 of a 30-row terminal did not land
+		// anywhere, and silently moving it would report a pass for a gesture
+		// the user cannot make.
+		if cols > 0 && rows > 0 && (e.X >= cols || e.Y >= rows) {
+			writeErr(w, http.StatusBadRequest, apiError{
+				Code:    "off_screen",
+				Message: fmt.Sprintf("(%d, %d) is outside the %dx%d terminal", e.X, e.Y, cols, rows),
+				Hint:    "read /screen for the current size, or resize first",
+			})
+			return
+		}
+		built, err := MouseMsgsFor(e.Action, e.X, e.Y)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, apiError{
+				Code:    "bad_mouse_event",
+				Message: err.Error(),
+				Hint:    "supported actions: " + strings.Join(SupportedMouseActions(), ", "),
+			})
+			return
+		}
+		msgs = append(msgs, built...)
+	}
+
+	if !s.injectable(w) {
+		return
+	}
+	s.debugf("inject: mouse (%d gestures, %d messages; delay %dms)",
+		len(req.Events), len(msgs), req.DelayMS)
+	seq, settled := s.send(msgs, time.Duration(req.DelayMS)*time.Millisecond)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sent":    len(msgs),
+		"events":  len(req.Events),
 		"seq":     seq,
 		"settled": settled,
 	})
@@ -733,6 +844,42 @@ func (s *Server) handleFrames(w http.ResponseWriter, r *http.Request) {
 		"latest_seq": latest,
 		"truncated":  truncated,
 	})
+}
+
+// handleRecording replays the kept frame history as one looping animated SVG.
+//
+// There is no start/stop: the state records every frame it draws, so a
+// recording is a view over history rather than a mode to remember to enter —
+// which means the interesting moment is already captured by the time anyone
+// realises it was interesting.
+func (s *Server) handleRecording(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGet(w, r) {
+		return
+	}
+	since, err := intParam(r, "since", 0)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, apiError{Code: "bad_param", Message: err.Error()})
+		return
+	}
+	limit, err := intParam(r, "limit", 60)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, apiError{Code: "bad_param", Message: err.Error()})
+		return
+	}
+	frames, _, _ := s.state.Frames(since, limit)
+	if len(frames) == 0 {
+		writeErr(w, http.StatusNotFound, apiError{
+			Code:    "no_frames",
+			Message: "no frames recorded yet",
+			Hint:    "drive the TUI first, then ask for the recording; `since` may also be past the newest frame",
+		})
+		return
+	}
+	cols, rows := s.state.Size()
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("X-Gaia-Frame-Count", strconv.Itoa(len(frames)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, RecordingSVG(frames, cols, rows))
 }
 
 type resizeRequest struct {

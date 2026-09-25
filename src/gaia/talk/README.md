@@ -39,8 +39,7 @@ python src/gaia/talk/app.py --system-prompt "You are a helpful cooking assistant
 - **Voice Input**: Uses Whisper ASR for speech recognition
 - **Voice Output**: Uses Kokoro TTS for speech synthesis  
 - **Direct LLM**: Communicates directly with LLM via LLMClient (no agent server needed)
-- **Interrupts**: Press Enter to interrupt generation or TTS
-- **Commands**: Say "stop" to quit the application
+- **Commands**: Say "stop" to quit the application, or "restart" to clear the chat history
 - **Stats**: Optional performance statistics display
 - **Flexible**: Supports both local LLM and OpenAI API
 
@@ -54,5 +53,5 @@ python src/gaia/talk/app.py --system-prompt "You are a helpful cooking assistant
 ## Controls
 
 - **Speak**: Just talk normally - the app will detect when you stop speaking
-- **Interrupt**: Press Enter during generation or speech playback
 - **Quit**: Say "stop" or press Ctrl+C
+- **Clear history**: Say "restart"

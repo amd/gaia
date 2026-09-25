@@ -36,7 +36,7 @@ from gaia_agent_chat.tool_bundles import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max=26 minus 12 CORE leaves 14).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=28 minus 15 CORE leaves 13).
 MAX_BUNDLE_MEMBERS = 6
 
 
@@ -106,10 +106,33 @@ def test_escape_hatch_is_registered_and_core(flagship_registry):
     assert "load_tools" in flagship_registry
 
 
-def test_skill_discovery_loader_is_registered_and_core(flagship_registry):
-    """A shortlist must be able to call the tool its prompt advertises."""
+def test_load_skill_is_registered_and_core(flagship_registry):
+    """The skill catalogue must be able to call the tool its prompt advertises."""
     assert "load_skill" in FULL_CORE_TOOLS
     assert "load_skill" in flagship_registry
+
+
+def test_file_edit_tools_are_core(flagship_registry):
+    """Semantic selection cannot rank editing (#3752) — it must be always-on."""
+    assert {"write_file", "edit_file"} <= set(FULL_CORE_TOOLS)
+    assert {"write_file", "edit_file"} <= flagship_registry
+
+
+def test_run_python_is_core(flagship_registry):
+    """Without it the model guesses a number or leaves a script in the repo."""
+    assert "run_python" in FULL_CORE_TOOLS
+    assert "run_python" in flagship_registry
+
+
+def test_skill_catalogue_renders_for_the_flagship():
+    """A skill the model cannot see is a skill it never loads (#3764)."""
+    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.delenv("GAIA_SKILL_DISCOVERY", raising=False)
+        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        prompt = agent.system_prompt
+    assert "==== SKILLS ====" in prompt
+    assert "- github-triage: " in prompt
 
 
 def test_bundle_menu_renders_for_the_flagship():
@@ -139,7 +162,10 @@ def test_optional_tools_are_present_on_a_full_install(flagship_registry):
 
 def test_core_is_subset_of_bundle_union():
     """Every CORE tool is in a bundle too, except the CORE-only load_tools."""
-    assert set(FULL_CORE_TOOLS) - _bundle_members() == {"load_tools"}
+    assert set(FULL_CORE_TOOLS) - _bundle_members() == {
+        "load_tools",
+        "read_tool_output",
+    }
 
 
 def test_bundles_have_unique_names():

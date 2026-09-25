@@ -864,14 +864,27 @@ class AgentSidecarManager:
             try:
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                pass
+                logger.warning(
+                    "%s sidecar: SIGKILL sent but the process did not exit "
+                    "within %ss; it may still be running (pid=%s)",
+                    self.spec.agent_id,
+                    timeout,
+                    pid,
+                )
         leader_gone = proc.poll() is not None
         self._proc = None
         self._close_log()
         self._cleanup_secret_file()
         if leader_gone:
             self._fire_reaped()
-        logger.info("%s sidecar: shut down", self.spec.agent_id)
+            logger.info("%s sidecar: shut down", self.spec.agent_id)
+        else:
+            logger.warning(
+                "%s sidecar: process still alive after SIGKILL (pid=%s) -- not "
+                "reporting it as shut down",
+                self.spec.agent_id,
+                pid,
+            )
 
     def _fire_reaped(self) -> None:
         if self.on_process_reaped is not None:

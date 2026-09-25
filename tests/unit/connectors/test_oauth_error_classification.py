@@ -234,3 +234,58 @@ def test_loopback_token_exchange_failure_is_structured_not_raw_text(monkeypatch)
 
     assert exc.value.error == "invalid_grant"
     assert exc.value.error_description == "code expired"
+
+
+def test_loopback_exchange_without_a_description_omits_the_body(monkeypatch):
+    """#3875: with no structured ``error_description`` the exchange used to
+    fall back to the raw body — which answers a POST carrying the
+    authorization code and PKCE verifier. Only bounded fields may surface."""
+    from gaia.connectors.flow import _PendingFlow
+
+    leaky_body = "invalid_grant: code 4/0Ab-token-shaped-secret-value was rejected"
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, data=None, **kwargs):
+            return _FakeResp(400, {"error": "invalid_grant"}, text=leaky_body)
+
+    monkeypatch.setattr(flow_mod.httpx, "AsyncClient", _FakeClient)
+
+    class _Prov:
+        provider_id = "microsoft"
+        token_url = "https://example/token"
+        client_id_hash = "abc"
+
+        def token_request_body(self, **kw):
+            return {}
+
+    monkeypatch.setattr(flow_mod, "get_provider", lambda pid: _Prov())
+
+    async def _run():
+        flow = _PendingFlow(
+            flow_id="f1",
+            provider_id="microsoft",
+            scopes=[MAIL_READ],
+            code_verifier="v",
+            state="s",
+            redirect_uri="http://127.0.0.1/callback",
+            runner=None,
+            future=asyncio.get_event_loop().create_future(),
+        )
+        await flow_mod._exchange_code_for_tokens(flow, "code")
+
+    with pytest.raises(OAuthProviderError) as exc:
+        asyncio.run(_run())
+
+    assert exc.value.error_description == ""
+    assert "token-shaped-secret-value" not in str(exc.value)
+    assert exc.value.status_code == 400
+    assert "invalid_grant" in str(exc.value)

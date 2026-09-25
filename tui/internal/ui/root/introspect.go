@@ -33,14 +33,25 @@ func (m FlagshipModel) ControlSnapshot() control.Snapshot {
 	case viewChat:
 		snap.View = control.ViewChat
 		if m.chat != nil {
+			// Taken whole from the chat model rather than field by field: the
+			// transcript's diagnostics (control.ChatState) are added to over
+			// time, and copying two of them by hand is how this drifted into
+			// reporting a view with no scroll or mouse state at all.
+			inner := m.chat.ControlSnapshot()
 			snap.Agent = m.chat.AgentID()
 			snap.Streaming = m.chat.IsStreaming()
-			snap.Overlay = m.chat.ControlSnapshot().Overlay
+			snap.Overlay = inner.Overlay
+			snap.Chat = inner.Chat
 		}
 	}
 
 	if m.help.Open {
 		snap.Overlay = "help"
+		// The root model owns the panel on this path, so the chat model's own
+		// help flag is false — report the one that is actually on screen.
+		if snap.Chat != nil {
+			snap.Chat.HelpOpen = true
+		}
 	}
 	// Halt wins over every other overlay. It draws nothing and intercepts no
 	// key — the screen that raised it (preflight.Model) already pauses

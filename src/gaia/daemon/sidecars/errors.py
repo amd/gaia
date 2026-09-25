@@ -39,6 +39,19 @@ class SidecarSpawnError(SidecarError):
     """The sidecar process could not be launched (dev env missing, port in use)."""
 
 
+class SidecarInhibitedError(SidecarSpawnError):
+    """A spawn was refused because ``GAIA_TEST_INHIBIT_SIDECAR`` held it down.
+
+    Test-only (see :mod:`gaia.daemon.sidecars.registry`): the daemon's normal
+    resilience is to auto-spawn-or-attach a stopped agent on the next
+    ``ensure`` — good behavior in production, but it means a test that stops
+    an agent to verify degraded-state messaging can never observe that state,
+    because the very next probe silently heals it. This lets a test hold the
+    stopped state in place. A :class:`SidecarSpawnError` subclass so it maps
+    to the existing 502 route handling with no new branch.
+    """
+
+
 class RouteNotAvailableError(SidecarError):
     """A UI capability whose REST route does not exist on the sidecar yet."""
 
@@ -52,12 +65,19 @@ class SidecarHTTPError(SidecarError):
     into a generic ``HTTPError``.
     """
 
-    def __init__(self, status_code: int, detail: str, *, path: str = ""):
+    def __init__(
+        self, status_code: int, detail: str, *, path: str = "", agent_id: str = ""
+    ):
         self.status_code = status_code
         self.detail = detail
         self.path = path
+        self.agent_id = agent_id
         where = f" from {path}" if path else ""
-        super().__init__(f"email sidecar returned HTTP {status_code}{where}: {detail}")
+        # Defaults to the bare noun rather than "email": since #4161 more than
+        # one agent raises this, and a flagship failure that says "email
+        # sidecar" sends the reader to the wrong log.
+        who = f"{agent_id} sidecar" if agent_id else "sidecar"
+        super().__init__(f"{who} returned HTTP {status_code}{where}: {detail}")
 
 
 class VersionMismatchError(SidecarError):

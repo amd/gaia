@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Cloud inference must never acquire or reconfigure the local model slot."""
 
+import contextlib
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -184,6 +185,8 @@ def test_discovered_custom_cloud_avoids_local_load(client):
         (403, "model access"),
         (404, "deployed model"),
         (429, "Wait before retrying"),
+        (402, "spending limit"),
+        (412, "spending limit"),
         (500, "Check the provider"),
     ],
 )
@@ -373,6 +376,25 @@ def test_local_provider_keeps_lemonade_performance_stats(monkeypatch):
     get_stats.assert_called_once()
 
 
+def test_local_provider_prefers_the_calls_own_usage(monkeypatch):
+    """/stats counts only uncached tokens of the server's last request (#4003)."""
+    adapter = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+    get_stats = MagicMock(
+        return_value={"input_tokens": 89, "cache_tokens": 6553, "output_tokens": 7}
+    )
+    monkeypatch.setattr(adapter._backend, "get_stats", get_stats)
+    adapter._last_model = "Gemma-4-E4B-it-GGUF"
+    adapter._last_usage = {
+        "prompt_tokens": 6642,
+        "completion_tokens": 7,
+        "total_tokens": 6649,
+        "tokens_per_second": 25.0,
+    }
+
+    assert adapter.get_performance_stats() == adapter._last_usage
+    get_stats.assert_not_called()
+
+
 def test_model_availability_failure_emits_diagnostic(client, monkeypatch, caplog):
     monkeypatch.setattr(
         client,
@@ -400,6 +422,8 @@ def test_model_availability_does_not_hide_programming_errors(client, monkeypatch
         (403, "model access"),
         (404, "deployed model"),
         (429, "Wait before retrying"),
+        (402, "spending limit"),
+        (412, "spending limit"),
         (500, "Check the provider"),
     ],
 )
@@ -434,3 +458,139 @@ def test_cloud_sse_backend_error_uses_status_without_reflecting_body(
     assert remedy in str(error.value)
     assert reflected_key not in str(error.value)
     assert reflected_key not in caplog.text
+
+
+_PENALTIES = (
+    "frequency_penalty",
+    "presence_penalty",
+    "repeat_penalty",
+    "repeat_last_n",
+)
+
+
+def _sent_body(monkeypatch, model, stream, **chat_kwargs):
+    """Send one LemonadeProvider.chat through the real client; return the wire body."""
+    client = LemonadeClient(verbose=False, ctx_size_override=1024)
+    monkeypatch.setattr(client, "_ensure_model_loaded", lambda *a, **k: None)
+    monkeypatch.setattr(
+        client, "_model_slot_lease", lambda *a, **k: contextlib.nullcontext()
+    )
+    adapter = LemonadeProvider(model=model)
+    adapter._backend = client
+    messages = [{"role": "user", "content": "hi"}]
+    sent = []
+
+    if stream:
+        chunk = {
+            "id": "c",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [
+                {"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}
+            ],
+        }
+
+        def handle(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+
+        with OpenAI(
+            base_url=client.base_url,
+            api_key="test-placeholder",
+            http_client=httpx.Client(transport=httpx.MockTransport(handle)),
+        ) as sdk:
+            monkeypatch.setattr("gaia.llm.lemonade_client.OpenAI", lambda **kw: sdk)
+            list(adapter.chat(messages, stream=True, **chat_kwargs))
+    else:
+
+        def handle(request):
+            sent.append(json.loads(request.body))
+            return 200, {}, json.dumps({"choices": [{"message": {"content": "ok"}}]})
+
+        with responses.RequestsMock() as mock:
+            mock.add_callback(
+                responses.POST, f"{client.base_url}/chat/completions", callback=handle
+            )
+            adapter.chat(messages, **chat_kwargs)
+
+    assert len(sent) == 1
+    return sent[0]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_cloud_model_request_carries_no_repetition_penalties(monkeypatch, stream):
+    body = _sent_body(monkeypatch, "fireworks.deepseek-v4p1-flash", stream)
+    assert [key for key in _PENALTIES if key in body] == []
+    assert body["temperature"] == 0.1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_local_model_request_keeps_repetition_penalties(monkeypatch, stream):
+    body = _sent_body(monkeypatch, "Gemma-4-E4B-it-GGUF", stream)
+    assert {key: body[key] for key in _PENALTIES} == {
+        "frequency_penalty": 0.3,
+        "presence_penalty": 0.1,
+        "repeat_penalty": 1.1,
+        "repeat_last_n": 256,
+    }
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_cloud_model_request_keeps_explicit_caller_penalty(monkeypatch, stream):
+    body = _sent_body(
+        monkeypatch, "fireworks.deepseek-v4p1-flash", stream, frequency_penalty=0.5
+    )
+    assert body["frequency_penalty"] == 0.5
+    assert "presence_penalty" not in body
+
+
+class TestCachedTokenCapture:
+    """A cached-token count is reported when measured and omitted when not.
+
+    Fireworks bills cached prompt tokens at a tenth of the input rate, so the
+    count drives a real dollar figure. That makes the absent case matter as
+    much as the present one: a backend that said nothing about caching must
+    not come back as "0 cached", which reads as a measurement and prices the
+    turn as if the whole prompt were billed fresh.
+    """
+
+    def capture(self, usage):
+        adapter = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+        adapter._capture_usage(usage, timings=None)
+        return adapter._last_usage
+
+    def test_reported_counts_are_kept(self):
+        captured = self.capture(
+            {
+                "prompt_tokens": 120,
+                "completion_tokens": 8,
+                "total_tokens": 128,
+                "prompt_tokens_details": {"cached_tokens": 96},
+                "completion_tokens_details": {"reasoning_tokens": 3},
+            }
+        )
+        assert captured["cached_tokens"] == 96
+        assert captured["reasoning_tokens"] == 3
+
+    def test_a_reported_zero_is_a_measurement(self):
+        captured = self.capture(
+            {
+                "prompt_tokens": 120,
+                "completion_tokens": 8,
+                "total_tokens": 128,
+                "prompt_tokens_details": {"cached_tokens": 0},
+            }
+        )
+        assert captured["cached_tokens"] == 0
+
+    def test_an_unreported_count_is_left_out(self):
+        captured = self.capture(
+            {"prompt_tokens": 120, "completion_tokens": 8, "total_tokens": 128}
+        )
+        assert "cached_tokens" not in captured
+        assert "reasoning_tokens" not in captured

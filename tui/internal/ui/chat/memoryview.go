@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,12 +16,18 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
-// memoryFetchTimeout bounds how long /memory waits on the agent. The fetch is
-// a local SQLite read through a store the agent already has open — normally
-// well under a second — so a timeout this long only ever fires when the
-// agent process itself is wedged, and Esc cancels sooner if the user does
-// not want to wait even that long.
-const memoryFetchTimeout = 20 * time.Second
+// memoryFetchTimeout is a backstop for an agent that has genuinely wedged —
+// not a budget for how long the answer ought to take. The events decide that:
+// the fetch resolves when the agent answers, errors, or its pipe closes, and
+// Esc cancels whenever the user stops wanting to wait.
+//
+// Sized for the slowest legitimate case rather than the typical one. The read
+// itself is a local SQLite query, but /memory typed as the first thing in a
+// session spawns the child on that call and pays its whole cold start —
+// imports, skill loading, backend probe. Measured at 37s on a developer
+// machine, which a 20s budget cut off and then reported as the agent hanging
+// up.
+const memoryFetchTimeout = 3 * time.Minute
 
 // memoryContentTruncateAt caps how much of one memory row's content is shown
 // inline before the "+N chars" marker takes over. Long enough that the
@@ -43,15 +50,27 @@ type memoryDumpMsg struct {
 func (m ChatModel) startMemoryFetch() (tea.Model, tea.Cmd) {
 	provider, ok := m.client.(client.MemoryProvider)
 	if !ok {
+		// Both real transports implement MemoryProvider (SubprocessClient and
+		// SSEClient, memory.go) -- this only fires for a client that
+		// genuinely has no memory route at all (a test double, or a future
+		// third transport). A too-old daemon sidecar is a DIFFERENT case,
+		// caught below by FetchMemory's own contract check
+		// (client.ErrMemoryContractTooOld) -- that gets its own,
+		// version-specific message, not this one.
 		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: "This agent does not support /memory.",
+			Role: RoleError,
+			Content: "/memory is not available over this session's connection. " +
+				"Run `gaia tui status` to see how this agent is connected.",
 		})
 		m.updateViewport()
 		return m, nil
 	}
 
 	m.memoryLoading = true
+	// Captured before the fetch starts it: a cold start is tens of seconds,
+	// and "Loading memory…" for that long reads as a hang rather than as the
+	// agent booting.
+	m.memoryColdStart = !agentAlreadyStarted(m.client)
 	m.memoryView = nil
 	m.updateViewport()
 
@@ -62,6 +81,18 @@ func (m ChatModel) startMemoryFetch() (tea.Model, tea.Cmd) {
 		dump, err := provider.FetchMemory(ctx)
 		return memoryDumpMsg{dump: dump, err: err}
 	})
+}
+
+// agentAlreadyStarted reports whether the agent process is up. A transport
+// that cannot answer (the daemon relay, a test double) reports true: only the
+// subprocess transport spawns its child lazily on the first request, so only
+// it has a cold start to warn about.
+func agentAlreadyStarted(c client.AgentClient) bool {
+	starter, ok := c.(interface{ AgentStarted() bool })
+	if !ok {
+		return true
+	}
+	return starter.AgentStarted()
 }
 
 // dismissMemoryView clears whatever /memory left on screen — the finished
@@ -78,18 +109,34 @@ func (m ChatModel) dismissMemoryView() tea.Model {
 }
 
 // handleMemoryDump lands a /memory fetch's result. A failure (including a
-// cancelled/timed-out fetch) is reported as a status line, not a blank or
-// silently-dropped view — an agent that never answered is a different fact
-// from "you have no memories" (CLAUDE.md: no silent fallbacks).
+// timed-out fetch) is reported as an error, not a blank or silently-dropped
+// view — an agent that never answered is a different fact from "you have no
+// memories" (CLAUDE.md: no silent fallbacks).
 func (m ChatModel) handleMemoryDump(msg memoryDumpMsg) (tea.Model, tea.Cmd) {
+	// Esc dismisses the fetch and clears memoryLoading, so a result arriving
+	// after that belongs to a request the user already walked away from.
+	// Reporting its cancellation back to them would be answering a question
+	// they withdrew — this is the one dropped result that is not a silent
+	// fallback.
+	if !m.memoryLoading {
+		return m, nil
+	}
 	m.memoryLoading = false
 	m.memoryCancelFn = nil
 
 	if msg.err != nil {
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: fmt.Sprintf("[!] could not load memory: %v", msg.err),
-		})
+		var tooOld *client.ErrMemoryContractTooOld
+		if errors.As(msg.err, &tooOld) {
+			// Its own message already names the floor and the fix
+			// (gaia hub uninstall/install) -- flattening it into the generic
+			// line below would lose that specificity.
+			m.messages = append(m.messages, Message{Role: RoleError, Content: tooOld.Error()})
+		} else {
+			m.messages = append(m.messages, Message{
+				Role:    RoleError,
+				Content: fmt.Sprintf("could not load memory: %v", msg.err),
+			})
+		}
 		m.updateViewport()
 		return m, nil
 	}

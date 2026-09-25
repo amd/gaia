@@ -10,6 +10,7 @@ downstream eval that consumes these synthetic fixtures.
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -120,6 +121,21 @@ def test_generate_document_returns_content_and_metadata(generator, mock_claude_c
     )
     # Content was long enough (>= 80% of target) — no extension call made.
     mock_claude_client.get_completion_with_usage.assert_called_once()
+
+
+def test_generate_document_reads_past_a_thinking_block(generator, mock_claude_client):
+    """#3884 — the default generator model answers with [thinking, text]."""
+    long_content = "Technical Spec\n\n" + ("Realistic section content. " * 100)
+    mock_claude_client.get_completion_with_usage.return_value = _usage_response(
+        [
+            SimpleNamespace(type="thinking", thinking="drafting", signature="sig"),
+            SimpleNamespace(type="text", text=long_content),
+        ]
+    )
+
+    content, _ = generator.generate_document("technical_spec", target_tokens=500)
+
+    assert content == long_content
 
 
 def test_generate_document_extends_when_too_short(generator, mock_claude_client):

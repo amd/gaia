@@ -112,3 +112,86 @@ class TestRunStepModeGate:
     async def test_unset_mode_defaults_to_goal_driven(self, tmp_path):
         directive = await self._run(None, tmp_path)
         assert directive.directive == "idle"
+
+
+class TestHourlyBudgetOnlySpentOnRealTicks:
+    """The hourly call budget must only be spent when a tick actually reaches
+    _execute_tick, not on idle no-ops (no session, or no actionable goals).
+    See #3743 for the full production log evidence.
+    """
+
+    def _make_loop(self, db):
+        loop = AgentLoop()
+        loop._db = db
+        loop._app_state = type("S", (), {"tunnel": None})()
+        return loop
+
+    async def _run(self, loop, tmp_path):
+        initialized = tmp_path / ".gaia" / "chat" / "initialized"
+        initialized.parent.mkdir(parents=True, exist_ok=True)
+        initialized.touch()
+        with patch("gaia.ui.agent_loop.Path.home", return_value=tmp_path):
+            trigger = agent_loop_mod.AgentTrigger("idle_tick", None)
+            return await loop._run_step(trigger)
+
+    async def test_idle_tick_with_no_goals_does_not_spend_budget(self, tmp_path):
+        loop = self._make_loop(FakeDB({"agent_mode": "goal_driven"}))
+        with patch.object(AgentLoop, "_get_actionable_goals", return_value=[]):
+            for _ in range(5):
+                directive = await self._run(loop, tmp_path)
+                assert directive.directive == "idle"
+        assert loop._calls_this_hour == 0
+
+    async def test_idle_tick_with_no_session_does_not_spend_budget(self, tmp_path):
+        """The other early-return this fix covers: no active session at all."""
+        loop = self._make_loop(FakeDB({"agent_mode": "goal_driven"}, sessions=[]))
+        for _ in range(5):
+            directive = await self._run(loop, tmp_path)
+            assert directive.directive == "idle"
+        assert loop._calls_this_hour == 0
+
+    async def test_idle_tick_with_no_goals_never_hits_rate_limit(self, tmp_path):
+        """Regression: previously this would exhaust the budget purely on
+        no-op ticks and start returning 'hourly rate limit' instead of the
+        honest 'nothing to do' idle."""
+        loop = self._make_loop(FakeDB({"agent_mode": "goal_driven"}))
+        with patch.object(AgentLoop, "_get_actionable_goals", return_value=[]):
+            for _ in range(agent_loop_mod._HOURLY_LIMIT + 10):
+                directive = await self._run(loop, tmp_path)
+                assert directive.directive == "idle"
+                assert directive.reason != "hourly rate limit"
+
+    async def test_real_tick_does_spend_budget(self, tmp_path):
+        """A tick that actually reaches _execute_tick must still count."""
+        loop = self._make_loop(FakeDB({"agent_mode": "goal_driven"}))
+        with (
+            patch.object(
+                AgentLoop, "_get_actionable_goals", return_value=[{"id": "g1"}]
+            ),
+            patch.object(
+                AgentLoop,
+                "_execute_tick",
+                return_value=agent_loop_mod.LoopDirective("idle"),
+            ),
+        ):
+            await self._run(loop, tmp_path)
+        assert loop._calls_this_hour == 1
+
+    async def test_rate_limit_still_throttles_real_ticks(self, tmp_path):
+        """The limit must still bind once real work is actually happening —
+        this fix must not disable throttling, only stop it firing on no-ops."""
+        loop = self._make_loop(FakeDB({"agent_mode": "goal_driven"}))
+        with (
+            patch.object(
+                AgentLoop, "_get_actionable_goals", return_value=[{"id": "g1"}]
+            ),
+            patch.object(
+                AgentLoop,
+                "_execute_tick",
+                return_value=agent_loop_mod.LoopDirective("idle"),
+            ),
+        ):
+            for _ in range(agent_loop_mod._HOURLY_LIMIT):
+                await self._run(loop, tmp_path)
+            limited = await self._run(loop, tmp_path)
+        assert limited.reason == "hourly rate limit"

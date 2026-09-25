@@ -793,7 +793,7 @@ async def test_connector(connector_id: str) -> Dict[str, Any]:
 async def disconnect_connector(connector_id: str) -> Response:
     """Disconnect a connector — removes credentials and (for MCP) removes from mcp_servers.json."""
     try:
-        await disconnect(connector_id)
+        revoke_result = await disconnect(connector_id)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"Unknown connector: {connector_id!r}"
@@ -801,7 +801,14 @@ async def disconnect_connector(connector_id: str) -> Response:
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
 
-    await _emitter.emit("connector.disconnected", {"connector_id": connector_id})
+    # #2591: carry the provider-side revoke outcome on the SSE event (never
+    # present a bare "disconnected" that reads as a full revoke when only
+    # the local credential was cleared). ``revoke_result`` is ``None`` for
+    # handler types with no remote-revoke concept (e.g. MCP servers).
+    await _emitter.emit(
+        "connector.disconnected",
+        {"connector_id": connector_id, **(revoke_result or {})},
+    )
     return Response(status_code=204)
 
 
@@ -1115,32 +1122,16 @@ async def forward_connection(
     token or client secret.
 
     Required scopes are resolved from the granted agents' ``REQUIRED_CONNECTORS``
-    declarations (single source of truth). This means scope requirements
-    auto-tighten as agents add new ``ConnectorRequirement`` entries — no
-    duplication in the router.
+    declarations via the same shared ``_resolve_grant_scopes`` used by
+    ``configure``/``authorize``/``authorize-device`` (#2606) — one resolver so
+    the two surfaces cannot drift. An agent that is registered but declares no
+    requirement for ``provider`` is rejected with 400 ``agent_declares_no_scopes``
+    rather than silently granting it zero required scopes.
     """
+    grant_map = _resolve_grant_scopes(request, provider, body.grant_agents)
     required: set[str] = set()
-    if body.grant_agents:
-        registry = getattr(request.app.state, "agent_registry", None)
-        if registry is None:
-            raise HTTPException(
-                status_code=503, detail="Agent registry not initialized"
-            )
-        by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
-        unknown_agents = [nsid for nsid in body.grant_agents if nsid not in by_nsid]
-        if unknown_agents:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "unknown_agent",
-                    "agent_ids": unknown_agents,
-                },
-            )
-        for nsid in body.grant_agents:
-            reg = by_nsid[nsid]
-            for cr in reg.required_connections:
-                if cr.connector_id == provider:
-                    required.update(cr.scopes)
+    for scopes in grant_map.values():
+        required.update(scopes)
 
     try:
         summary = connections.import_forwarded_connection(
@@ -1193,12 +1184,17 @@ async def revoke_forwarded_connection(provider: str) -> Response:
     from gaia.connectors.store import clear_provider_credentials
     from gaia.connectors.tokens import _cache as _token_cache
 
-    connections.revoke_connection(provider)
+    # #2591: call the async core directly — this handler is already on the
+    # event loop, and ``revoke_connection``'s sync wrapper would raise
+    # rather than let a nested loop deadlock.
+    revoke_result = await connections.revoke_connection_async(provider)
     clear_provider_credentials(provider)
     revoke_all_grants_for(provider)
     _provider_registry.pop(provider, None)
     for key in [k for k in _token_cache if k[0] == provider]:
         _token_cache.pop(key, None)
 
-    await _emitter.emit("connector.disconnected", {"connector_id": provider})
+    await _emitter.emit(
+        "connector.disconnected", {"connector_id": provider, **revoke_result}
+    )
     return Response(status_code=204)

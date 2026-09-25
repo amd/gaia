@@ -85,6 +85,7 @@ _API_NAMES: frozenset[str] = frozenset(
         "poll_device_flow",
         "revoke_agent_grant",
         "revoke_connection",
+        "revoke_connection_async",
         "start_authorization",
         "start_device_flow",
         "tripwire_check",

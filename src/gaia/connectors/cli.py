@@ -681,17 +681,51 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
     from gaia.connectors.handler import disconnect
 
     async def _run():
-        await disconnect(args.connector_id)
+        return await disconnect(args.connector_id)
 
     try:
-        asyncio.run(_run())
+        result = asyncio.run(_run())
     except KeyError:
         sys.stderr.write(
             f"gaia connectors disconnect: unknown connector {args.connector_id!r}\n"
         )
         return 1
 
-    sys.stdout.write(f"Disconnected {args.connector_id}.\n")
+    # #2591: report the provider-side revoke outcome honestly instead of a
+    # bare "Disconnected" that implies GAIA's app access was actually
+    # revoked when only the local keyring entry was cleared.
+    result = result or {}
+    if not result.get("revoke_supported"):
+        if "revoke_supported" not in result:
+            # Handler type with no remote-revoke concept at all (e.g. an
+            # MCP-server connector) — nothing to be honest or dishonest about.
+            sys.stdout.write(f"Disconnected {args.connector_id}.\n")
+        elif result.get("revoke_error"):
+            # No revoke was even attempted, and it's not because the
+            # provider lacks an endpoint (forwarded connection, or the
+            # provider couldn't be resolved) — surface the real reason
+            # rather than the generic "no API" wording (#2591 review).
+            sys.stdout.write(
+                f"Disconnected {args.connector_id} locally. "
+                f"{result['revoke_error']}\n"
+            )
+        else:
+            sys.stdout.write(
+                f"Disconnected {args.connector_id} locally. This provider has "
+                "no API to revoke access remotely — remove GAIA from your "
+                "account's connected-apps page if you want to fully revoke "
+                "it.\n"
+            )
+    elif result.get("revoked_remotely"):
+        sys.stdout.write(
+            f"Disconnected {args.connector_id} (provider access revoked).\n"
+        )
+    else:
+        sys.stdout.write(
+            f"Disconnected {args.connector_id} locally, but the provider did "
+            f"not confirm the revoke ({result.get('revoke_error')}). It may "
+            "still show as connected in your account's app permissions.\n"
+        )
     return 0
 
 

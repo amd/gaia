@@ -16,7 +16,7 @@ from reportlab.platypus import (
     Spacer,
 )
 
-from gaia.eval.claude import ClaudeClient
+from gaia.eval.claude import ClaudeClient, first_text_block
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
@@ -215,7 +215,7 @@ Generate ONLY the document content with the sections listed above."""
             response = self.claude_client.get_completion_with_usage(prompt)
 
             generated_content = (
-                response["content"][0].text
+                first_text_block(response["content"], self.claude_client.model)
                 if isinstance(response["content"], list)
                 else response["content"]
             )
@@ -263,7 +263,7 @@ Generate only the additional content (without repeating the existing content).""
             response = self.claude_client.get_completion_with_usage(extension_prompt)
 
             extension_content = (
-                response["content"][0].text
+                first_text_block(response["content"], self.claude_client.model)
                 if isinstance(response["content"], list)
                 else response["content"]
             )

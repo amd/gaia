@@ -103,12 +103,11 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 	m.dev = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-5 * time.Second)
-	m.ttft = 1 * time.Second
 
 	m = feed(t, m, event.CanonicalFinalEvent{
 		Type:   "final",
 		Answer: "short",
-		Usage:  []byte(`{"steps":2,"tools_used":1,"tokens":42}`),
+		Usage:  []byte(`{"steps":2,"tools_used":1,"tokens":42,"ttft":1.0}`),
 	})
 
 	last := m.messages[len(m.messages)-1]
@@ -152,56 +151,69 @@ func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 	}
 }
 
-// TestCanonicalTTFTAnchorsOnFirstToken covers the warm-query shape: the
-// status frame arrives immediately, but ttft must anchor on the first real
-// token, not the status frame.
-func TestCanonicalTTFTAnchorsOnFirstToken(t *testing.T) {
+// TestCanonicalTTFTIsNeverMeasuredClientSide is the regression for the number
+// that started this: an 11-step turn printed "2208.3s · ttft 2206.8s", because
+// the first token the CLIENT sees on a tool-calling turn arrives only after
+// the agent has finished deciding. Nothing on the wire but the backend's own
+// measurement may set ttft.
+func TestCanonicalTTFTIsNeverMeasuredClientSide(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
-	m.queryStart = time.Now()
+	m.queryStart = time.Now().Add(-2206 * time.Second)
 
-	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"})
-	if m.ttft != 0 {
-		t.Fatalf("status frame must not set ttft, got %v", m.ttft)
-	}
-
-	// Simulate 8s of real elapsed time between the status frame and the
-	// first token, matching the live-baseline warm-query gap.
-	m.queryStart = m.queryStart.Add(-8 * time.Second)
-
-	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: "Hi"})
-	if m.ttft < 7500*time.Millisecond || m.ttft > 8500*time.Millisecond {
-		t.Errorf("ttft = %v, want ~8s (anchored on the token, not the earlier status frame)", m.ttft)
-	}
-
-	// A second token must not move ttft again.
-	firstTTFT := m.ttft
-	m.queryStart = m.queryStart.Add(-100 * time.Second) // would blow up ttft if re-anchored
-	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: " there"})
-	if m.ttft != firstTTFT {
-		t.Errorf("ttft changed on a second token: got %v, want unchanged %v", m.ttft, firstTTFT)
+	m = feed(t, m,
+		event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"},
+		event.CanonicalTokenEvent{Type: "token", Delta: "Hi"},
+		event.CanonicalTokenEvent{Type: "token", Delta: " there"},
+		event.CanonicalFinalEvent{Type: "final", Answer: "Hi there"},
+	)
+	if last := m.messages[len(m.messages)-1]; last.TTFT != 0 {
+		t.Errorf("TTFT = %v on a turn whose backend reported none, want 0 (omitted)", last.TTFT)
 	}
 }
 
-// TestCanonicalLegacyTransportNeverSetsTTFT: the legacy transport never
-// fires ChunkEvent, so ttft stays 0 and is omitted — intentional, not a bug.
-func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
+// A legacy answer event carrying no measurements leaves them absent, however
+// long the turn took on this side.
+func TestLegacyTransportWithNoMeasurementsReportsNone(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
 	m.queryStart = time.Now().Add(-5 * time.Second)
 
-	m = feed(t, m, event.AnswerEvent{Type: "answer", Content: "no chunk events here", Steps: 1, ToolsUsed: 0})
+	m = feed(t, m, event.AnswerEvent{Type: "answer", Content: "nothing measured", Steps: 1})
 
 	last := m.messages[len(m.messages)-1]
-	if last.TTFT != 0 {
-		t.Errorf("legacy transport with no ChunkEvent must leave TTFT at 0, got %v", last.TTFT)
+	if last.TTFT != 0 || last.TokPerS != 0 || last.Tokens != 0 {
+		t.Errorf("invented a measurement nobody reported: %+v", last)
 	}
 }
 
-// TestCanonicalTTFTFallsBackToServerReportedValue: when no token ever
-// streamed this turn (the normal non-streaming tool-calling path), the
-// client must use the server-reported usage.ttft instead of leaving it at 0.
-func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
+// ...and one that carries them renders them, same as the daemon transport.
+// The producer has always put these on the answer event; the legacy path used
+// to drop all three, so a subprocess run showed none of them.
+func TestLegacyTransportRendersTheBackendsMeasurements(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.dev = true
+	m.streaming = true
+	m.queryStart = time.Now().Add(-37 * time.Second)
+
+	m = feed(t, m, event.AnswerEvent{
+		Type: "answer", Content: "391", Steps: 1,
+		Tokens: 68, TTFT: 31.695, TokPerS: 13.3,
+	})
+
+	last := m.messages[len(m.messages)-1]
+	rendered := m.renderMessage(&last, nil)
+	for _, want := range []string{"ttft 31.7s", "68 tokens", "13.3 tok/s"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("stats line missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// The backend's ttft reaches the user on the non-streaming tool-calling path —
+// which is the normal one for a native tool-calling model, and the path where
+// the old client-side stamp was most wrong.
+func TestCanonicalServerReportedTTFTReachesTheUser(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.dev = true
 	m.streaming = true
@@ -218,7 +230,7 @@ func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
 	last := m.messages[len(m.messages)-1]
 	wantTTFT := time.Duration(9.4 * float64(time.Second))
 	if last.TTFT != wantTTFT {
-		t.Fatalf("TTFT = %v, want %v from the server-reported usage.ttft fallback", last.TTFT, wantTTFT)
+		t.Fatalf("TTFT = %v, want the backend-reported %v", last.TTFT, wantTTFT)
 	}
 
 	rendered := m.renderMessage(&last, nil)
@@ -227,36 +239,52 @@ func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
 	}
 }
 
-// TestCanonicalTTFTClientObservedWinsOverServerReported ensures a genuinely
-// streamed token still anchors ttft on the real client-observed timestamp
-// rather than the server-reported fallback: the client's wall-clock
-// measurement is an end-to-end observation (covers the wire too), while the
-// server-reported value is only Lemonade's own internal timer for the first
-// LLM call. The two are not interchangeable, so the more complete
-// measurement must win whenever it was actually captured.
-func TestCanonicalTTFTClientObservedWinsOverServerReported(t *testing.T) {
+// TestCanonicalServerReportedTTFTWinsOverAStreamedTurn: a turn that streamed
+// tokens still takes its ttft from the backend. The client's own wall clock
+// looks like the more complete measurement — it covers the wire too — but on
+// any turn with tool calls it is measuring the agent loop, not the model.
+func TestCanonicalServerReportedTTFTWinsOverAStreamedTurn(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
 	m.queryStart = time.Now().Add(-8 * time.Second)
 
-	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: "Hi"})
-	clientTTFT := m.ttft
-	if clientTTFT <= 0 {
-		t.Fatalf("test setup: client-observed ttft should be positive, got %v", clientTTFT)
-	}
+	m = feed(t, m,
+		event.CanonicalTokenEvent{Type: "token", Delta: "Hi"},
+		event.CanonicalFinalEvent{
+			Type:   "final",
+			Answer: "Hi there",
+			Usage:  []byte(`{"ttft":0.05,"tok_per_s":42.5}`),
+		},
+	)
 
-	// The final event's server-reported ttft is deliberately a very different
-	// value (0.05s) — if the fallback ever overrides a real client
-	// observation, this assertion catches it.
+	last := m.messages[len(m.messages)-1]
+	if last.TTFT != 50*time.Millisecond {
+		t.Errorf("TTFT = %v, want the backend-reported 50ms", last.TTFT)
+	}
+	if last.TokPerS != 42.5 {
+		t.Errorf("TokPerS = %v, want the backend-reported 42.5", last.TokPerS)
+	}
+}
+
+// A backend that reports no rate must leave the stat absent rather than have
+// the client divide tokens by a wall clock that counted tool time.
+func TestCanonicalNoReportedRateMeansNoRate(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now().Add(-30 * time.Second)
+
 	m = feed(t, m, event.CanonicalFinalEvent{
 		Type:   "final",
-		Answer: "Hi there",
-		Usage:  []byte(`{"ttft":0.05}`),
+		Answer: "done",
+		Usage:  []byte(`{"tokens":420,"steps":11}`),
 	})
 
 	last := m.messages[len(m.messages)-1]
-	if last.TTFT != clientTTFT {
-		t.Errorf("TTFT = %v, want the client-observed %v (server-reported fallback must not override it)", last.TTFT, clientTTFT)
+	if last.TokPerS != 0 {
+		t.Errorf("TokPerS = %v on a backend that reported none, want 0 (omitted)", last.TokPerS)
+	}
+	if last.Tokens != 420 {
+		t.Errorf("Tokens = %d, want the reported 420", last.Tokens)
 	}
 }
 

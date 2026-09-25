@@ -96,6 +96,11 @@ class MockApp extends EventEmitter {
     super();
     this._isReady = false;
     this._isQuitting = false;
+    this._badgeCount = 0;
+    this.setBadgeCount = jest.fn((count) => {
+      this._badgeCount = count;
+      return true;
+    });
   }
 
   whenReady() {
@@ -240,7 +245,21 @@ module.exports = {
     buildFromTemplate: jest.fn(() => ({})),
   },
   
-  Tray: jest.fn(),
+  // A usable fake, not a bare jest.fn(): TrayManager calls setToolTip/
+  // setContextMenu/isDestroyed on the instance, and a `{}` would make every
+  // one of those a TypeError inside the code under test.
+  Tray: jest.fn().mockImplementation(function Tray(icon) {
+    this._icon = icon;
+    this._toolTip = null;
+    this._contextMenu = null;
+    this._destroyed = false;
+    this._handlers = {};
+    this.setToolTip = jest.fn(function (text) { this._toolTip = text; });
+    this.setContextMenu = jest.fn(function (menu) { this._contextMenu = menu; });
+    this.on = jest.fn(function (event, fn) { this._handlers[event] = fn; });
+    this.destroy = jest.fn(function () { this._destroyed = true; });
+    this.isDestroyed = jest.fn(function () { return this._destroyed; });
+  }),
 
   nativeImage: {
     createFromPath: jest.fn((p) => ({

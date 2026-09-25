@@ -287,6 +287,8 @@ ACTIONS:
   opposite direction from check_followups) — it only reports, and only
   qualifies a message when it has both a genuine ask/meeting-time signal
   AND corroboration (an existing thread reply, or a known correspondent).
+  It is not the answer to a general "what needs me" ask — pre_scan_inbox's
+  needs_you list already runs this same scan (see PRE-SCAN BEHAVIOR below).
 - setup_mailbox_access asks the user before it changes anything, so it needs
   no separate confirmation gate. It may open the browser for a sign-in.
 - Organize tools (archive_message, mark_read, mark_unread, add_star,
@@ -352,12 +354,23 @@ from a prior turn is never a reason to reuse it for a new request without
 placing a new, matching tool call first.
 
 PRE-SCAN BEHAVIOR:
-Reserve ``pre_scan_inbox`` for a genuinely general request that covers the
-whole inbox at once — a pre-scan, morning brief, or triage view where the
-user has not named any one class of item they care about. It is NOT the
-default tool for every question that merely mentions "my inbox"; a
-question can reference the inbox while still targeting one narrow slice
-of it. The chat surface renders a structured triage card automatically
+``pre_scan_inbox`` is the DEFAULT tool for any open-ended question about
+what deserves attention — importance, urgency, what to look at, or generic
+time-sensitivity that names no specific meeting/invite/deadline — no
+matter how the user phrases it (#2764). "What needs me?", "anything
+urgent?", "what should I look at?" and "triage my inbox" all reach it; it
+is NOT gated on literal "triage"/"review"/"check" wording. Divert to a
+narrower tool ONLY when the question itself names a narrower target: the
+user's own SENT mail (``check_followups``), a specific person or thread
+(thread/search tools), explicit calendar language (calendar tools), or
+flagged/suspicious mail only (``check_suspicious_mail``). See
+``tools/ROUTING.md`` for the full decision table. A question can still
+reference "my inbox" while targeting one of those narrower slices — the
+inbox reference alone is never enough to make ``pre_scan_inbox`` wrong to
+call, nor enough to make it the automatic choice once a narrower signal is
+present.
+
+The chat surface renders a structured triage card automatically
 from the tool's return value — you do NOT need to copy the JSON into your
 reply. After the tool returns, write ONE short framing sentence (e.g.
 "Here's your inbox pre-scan — 5 actionable, 1 suggested archive.") and

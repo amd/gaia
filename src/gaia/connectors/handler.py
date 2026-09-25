@@ -81,8 +81,15 @@ class ConnectorHandler(Protocol):
         spec: ConnectorSpec,
         *,
         account_id: Optional[str] = None,
-    ) -> None:
-        """Remove stored credentials for this connector."""
+    ) -> Optional[Dict[str, Any]]:
+        """Remove stored credentials for this connector.
+
+        OAuth handlers return a revoke-outcome dict (``revoke_supported``,
+        ``revoked_remotely``, ``revoke_error`` — see
+        ``oauth_pkce.OAuthPkceHandler.disconnect``) so callers can report the
+        provider-side outcome honestly; handlers with no remote-revoke
+        concept (e.g. ``mcp_server``) may return ``None``.
+        """
         ...
 
     async def test(self, spec: ConnectorSpec) -> Dict[str, Any]:
@@ -252,11 +259,15 @@ async def disconnect(
     connector_id: str,
     *,
     account_id: Optional[str] = None,
-) -> None:
-    """Disconnect a connector (remove stored credentials)."""
+) -> Optional[Dict[str, Any]]:
+    """Disconnect a connector (remove stored credentials).
+
+    Returns the handler's revoke-outcome dict, or ``None`` for handler types
+    with no remote-revoke concept — see ``ConnectorHandler.disconnect``.
+    """
     spec = REGISTRY.get(connector_id)
     handler = _get_handler(spec)
-    await handler.disconnect(spec, account_id=account_id)
+    return await handler.disconnect(spec, account_id=account_id)
 
 
 async def health_check(connector_id: str) -> Dict[str, Any]:

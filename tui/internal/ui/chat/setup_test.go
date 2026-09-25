@@ -24,7 +24,7 @@ import (
 func gaiaTestModel(t *testing.T) ChatModel {
 	t.Helper()
 	c := &nullClient{}
-	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA", false)
+	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA", "", false)
 	m.width, m.height = 100, 30
 	return m
 }
@@ -79,7 +79,7 @@ func TestSetupOnANonFlagshipAgentDeclines(t *testing.T) {
 		t.Fatal("declining must not start anything")
 	}
 	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus || !strings.Contains(last.Content, "does not have a local setup step") {
+	if last.Role != RoleError || !strings.Contains(last.Content, "does not have a local setup step") {
 		t.Errorf("expected a decline note, got: %+v", last)
 	}
 }

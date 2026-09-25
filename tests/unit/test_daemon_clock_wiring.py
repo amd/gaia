@@ -266,7 +266,10 @@ def test_stop_logs_error_and_running_stays_true_when_thread_wont_join(tmp_path, 
     with caplog.at_level(logging.ERROR, logger="gaia.daemon.scheduler.clock"):
         clock.stop()
 
-    assert any(r.levelno >= logging.ERROR for r in caplog.records), (
+    assert any(
+        r.levelno >= logging.ERROR and r.name == "gaia.daemon.scheduler.clock"
+        for r in caplog.records
+    ), (
         "stop() must log loudly when the polling thread fails to join; "
         f"captured records: {[r.getMessage() for r in caplog.records]}"
     )

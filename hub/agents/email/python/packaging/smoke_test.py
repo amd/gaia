@@ -233,8 +233,9 @@ def check_triage() -> bool:
             return True
         log(f"FAIL: triage returned unexpected HTTP {e.code}: {detail[:500]}")
         return False
-    except (urllib.error.URLError, TimeoutError) as e:
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         # Accepted + routed, then timed out waiting on an absent model.
+        # ConnectionError covers RemoteDisconnected, which escapes URLError.
         log(f"triage request timed out waiting on Lemonade (none reachable): {e}")
         log("triage check PASS (route accepted + routed the request)")
         return True

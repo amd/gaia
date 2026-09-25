@@ -1,6 +1,12 @@
 package preflight
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"net/http"
+
+	"github.com/amd/gaia/tui/internal/daemon"
+)
 
 // Runner is what the readiness screen probes through, and what its `f` key acts
 // through.
@@ -80,6 +86,34 @@ func (d daemonRunner) Fix(ctx context.Context, cfg Config, kind FixKind, onLine 
 			return FixResult{Err: err}
 		}
 		return FixResult{Note: cfg.AgentName + " agent started."}
+
+	case FixRestartSidecar:
+		// Stop first: ensure alone would attach to the process already running in
+		// the other mode, report success, and change nothing.
+		resp, err := d.t.Do(ctx, http.MethodPost,
+			daemon.APIPrefix+"/agents/"+cfg.AgentID+"/stop", nil)
+		if err != nil {
+			return FixResult{Err: err, Diagnosis: Diagnosis{
+				Cause:   "The background service could not be asked to stop the agent: " + err.Error(),
+				Remedy:  "Stop it in a terminal, then press r to re-check.",
+				Command: "gaia daemon stop-agent " + cfg.AgentID,
+				Where:   daemonLog(),
+			}}
+		}
+		if resp.Status != http.StatusOK {
+			l := Ladder{AgentID: cfg.AgentID}
+			diag := l.Status("stop the agent's sidecar", resp.Status, string(resp.Body))
+			return FixResult{Err: errFixFailed, Diagnosis: diag}
+		}
+		if err := d.t.EnsureAgent(ctx, cfg.AgentID); err != nil {
+			return FixResult{Err: err, Diagnosis: Diagnosis{
+				Cause:   "The agent stopped but did not come back: " + err.Error(),
+				Remedy:  "Start it in a terminal to see why, then press r.",
+				Command: "gaia daemon start-agent " + cfg.AgentID,
+				Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
+			}}
+		}
+		return FixResult{Note: cfg.AgentName + " agent restarted in the requested mode."}
 
 	case FixPullModel:
 		res := Provision(ctx, d.t, cfg, onLine)

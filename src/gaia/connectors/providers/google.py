@@ -29,6 +29,7 @@ from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
 from gaia.connectors.errors import OAuthClientNotConfiguredError
+from gaia.connectors.setup_routes import get_route, render_console_steps
 
 # Plain-language descriptions for the AgentUI consent dialog (AC23). The
 # router and the CLI both surface this map; agents declare scope URLs in
@@ -63,6 +64,13 @@ class GoogleOAuthProvider:
     provider_id: str = "google"
     auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     token_url: str = "https://oauth2.googleapis.com/token"
+    # Google's token-revocation endpoint (RFC 7009-alike; takes either an
+    # access or refresh token as ``token=``). Its presence is what
+    # ``flow.revoke_provider_token`` uses to decide whether a real
+    # provider-side revoke is even possible for this provider (#2591) —
+    # never assume every provider has one (Microsoft does not; see
+    # ``MicrosoftOAuthProvider.revoke_url``).
+    revoke_url: str | None = "https://oauth2.googleapis.com/revoke"
     default_scopes: Sequence[str] = (
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
@@ -92,20 +100,29 @@ class GoogleOAuthProvider:
             else stored.get("client_id") or os.environ.get("GAIA_GOOGLE_CLIENT_ID", "")
         )
         if not resolved_id:
-            raise OAuthClientNotConfiguredError(
-                "google",
-                provider_label="Google",
-                # Missing the Data access step; see docs/connectors/google.mdx until #2594 restructures this.
-                console_steps=(
+            # Derived from setup_routes.GOOGLE_PERSONAL (#2594) — a single
+            # source of truth shared with the guided in-chat walkthrough,
+            # same pattern as microsoft.py. Five hand-copies of a walkthrough
+            # drifted apart once already (#2116); this is the second one.
+            route = get_route(self.provider_id)
+            console_steps = (
+                render_console_steps(route)
+                if route is not None
+                else (
                     "  1. Create or pick a project at "
                     "https://console.cloud.google.com\n"
                     "  2. Enable the Gmail API (and any other Google API you "
                     "need) for that project\n"
                     "  3. Configure the OAuth consent screen (External; add "
                     "yourself as a test user)\n"
-                    "  4. Create an OAuth client ID of type 'Desktop app' — this "
-                    "gives you a Client ID and Client Secret"
-                ),
+                    "  4. Create an OAuth client ID of type 'Desktop app' — "
+                    "this gives you a Client ID and Client Secret"
+                )
+            )
+            raise OAuthClientNotConfiguredError(
+                "google",
+                provider_label="Google",
+                console_steps=console_steps,
                 example=(
                     "  For the email agent, copy-paste (bash) after creating the "
                     "client above:\n"
@@ -147,16 +164,18 @@ class GoogleOAuthProvider:
         - ``prompt=consent`` — force the consent screen on every connect, so
           we always receive a refresh token (Google issues a refresh token
           ONLY on the first consent unless ``prompt=consent`` is set).
-
-        Deliberately NOT setting ``include_granted_scopes=true`` (#2603): it
-        would make ``flow.py``'s persisted ``scopes`` (what was requested)
-        diverge from what Google actually granted, which ``flow.py`` never
-        reconciles (it persists ``flow.scopes`` and never reads back
-        ``payload.get("scope")``) — GAIA's recorded scope metadata would
-        under-report real token access. See #2605 for the reconciliation
-        this needs before turning the flag on.
+        - ``include_granted_scopes=true`` — fold in scopes already granted
+          under other connections for this client, instead of limiting the
+          grant to just this request. Safe now that ``flow.py``'s
+          ``_resolve_granted_scopes`` (#2730 D6) reads back the token
+          response's actual ``scope`` field and persists that, not the
+          requested set (#2605).
         """
-        return {"access_type": "offline", "prompt": "consent"}
+        return {
+            "access_type": "offline",
+            "prompt": "consent",
+            "include_granted_scopes": "true",
+        }
 
     def authorization_url(
         self,

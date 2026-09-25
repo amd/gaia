@@ -22,6 +22,7 @@ unit tests, NOT a parallel implementation.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import mailbox
 import re
@@ -809,6 +810,65 @@ def _absolute_date_epoch(value: str) -> Optional[float]:
     return dt.timestamp()
 
 
+def _query_tokens(query: str) -> List[str]:
+    """Split a Gmail query into whitespace tokens while keeping quoted phrases intact."""
+    tokens: List[str] = []
+    current: List[str] = []
+    quote = False
+    for ch in query or "":
+        if ch == '"':
+            quote = not quote
+            continue
+        if ch.isspace() and not quote:
+            if current:
+                tokens.append("".join(current))
+                current = []
+            continue
+        current.append(ch)
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def _payload_text(part: Dict[str, Any]) -> str:
+    """Flatten a Gmail API payload tree to its readable text body."""
+    mime_type = (part.get("mimeType") or "").lower()
+    body = part.get("body") or {}
+    if mime_type.startswith("multipart/") or mime_type == "message/rfc822":
+        chunks: List[str] = []
+        for child in part.get("parts") or []:
+            child_text = _payload_text(child)
+            if child_text:
+                chunks.append(child_text)
+        return "\n".join(chunks)
+
+    if mime_type in {"text/plain", "text/html"}:
+        raw_b64 = body.get("data")
+        if not raw_b64:
+            return ""
+        try:
+            raw = base64.urlsafe_b64decode(raw_b64 + "=" * (-len(raw_b64) % 4))
+            text = raw.decode("utf-8", errors="replace")
+        except binascii.Error as exc:
+            raise ValueError(f"invalid base64 body data: {exc}") from exc
+        if mime_type == "text/html":
+            text = re.sub(r"<[^>]+>", " ", text)
+        return text
+    return ""
+
+
+def _searchable_text(msg: Dict[str, Any]) -> str:
+    """Compose the text Gmail searches over: subject + snippet + decoded body."""
+    headers = {
+        (h.get("name") or "").lower(): h.get("value", "")
+        for h in (msg.get("payload") or {}).get("headers", [])
+    }
+    subject = headers.get("subject", "")
+    snippet = msg.get("snippet") or ""
+    body = _payload_text(msg.get("payload") or {})
+    return "\n".join(part for part in (subject, snippet, body) if part)
+
+
 def _msg_epoch(msg: Dict[str, Any]) -> float:
     """Message receipt time in epoch seconds from Gmail's millis ``internalDate``."""
     try:
@@ -863,7 +923,9 @@ def _query_matches(query: str, msg: Dict[str, Any]) -> bool:
     }
     label_ids = set(msg.get("labelIds", []))
     now = datetime.now(timezone.utc).timestamp()
-    for token in query.split():
+    searchable = _searchable_text(msg).lower()
+    for token in _query_tokens(query):
+        literal = token
         date_verdict = _date_operator_matches(token, msg, now)
         if date_verdict is not None:
             if not date_verdict:
@@ -881,11 +943,10 @@ def _query_matches(query: str, msg: Dict[str, Any]) -> bool:
             if needle not in headers.get("subject", "").lower():
                 return False
         else:
-            # Free-text — match against subject + snippet.
-            if (
-                token not in headers.get("subject", "").lower()
-                and token not in (msg.get("snippet") or "").lower()
-            ):
+            # Free-text — match against subject + snippet + body, with quoted
+            # phrases treated as single search terms (Gmail preserves the quote
+            # wrapper only for the parser, not for the text match itself).
+            if literal and literal not in searchable:
                 return False
     return True
 

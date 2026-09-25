@@ -39,6 +39,26 @@ type fakeRelay struct {
 	// contractVersion is what GET /v1/<agent>/version reports. Empty means the
 	// route 404s, like a sidecar predating it.
 	contractVersion string
+	// versionStatus, when non-zero, makes GET /v1/<agent>/version answer with
+	// this HTTP status instead of contractVersion -- standing in for an
+	// operational failure (401 stale token, 503 sidecar still binding) that is
+	// NOT a version signal, unlike the 404 contractVersion == "" produces.
+	versionStatus int
+	// versionBody, when set, is the raw JSON GET /v1/<agent>/version returns,
+	// overriding contractVersion/agentReleaseVersion — the two sidecars spell
+	// the release version differently and a test needs to pin the exact wire
+	// shape, not a reconstruction of it.
+	versionBody string
+	// agentReleaseVersion is the "version" field GET /v1/<agent>/version
+	// reports (the shipped agent release, e.g. "0.2.0") -- distinct from
+	// contractVersion, which is the wire contract. Empty omits the field.
+	agentReleaseVersion string
+	// memoryStatus, when non-zero, is the HTTP status GET /v1/<agent>/memory
+	// returns instead of memoryBody.
+	memoryStatus int
+	// memoryBody is the raw JSON body GET /v1/<agent>/memory returns on
+	// success (memoryStatus == 0, defaulting to 200).
+	memoryBody string
 	// strictBody replicates the sidecar's pydantic `extra="forbid"`: an unknown
 	// request field is a 422, not an ignored key. This is what makes a published
 	// older sidecar reject a field a newer TUI invented.
@@ -68,20 +88,38 @@ type fakeRelay struct {
 	// down its own read (#2901).
 	onCancelPost func()
 
-	mu          sync.Mutex
-	token       string
-	queries     []queryRequest
-	rawBodies   []string
-	cancelled   []string
-	confirmed   []confirmCall
-	auths       []string
-	versionHits int
+	mu             sync.Mutex
+	token          string
+	queries        []queryRequest
+	rawBodies      []string
+	cancelled      []string
+	confirmed      []confirmCall
+	decisions      []decisionCall
+	bypasses       []bypassCall
+	decisionStatus int
+	bypassStatus   int
+	auths          []string
+	versionHits    int
 }
 
 // confirmCall is one recorded POST .../query/{run_id}/confirm.
 type confirmCall struct {
 	runID    string
 	approved bool
+}
+
+// decisionCall is one recorded POST .../query/{run_id}/tool_decision — the LIVE
+// permission seam, distinct from /confirm's resume model.
+type decisionCall struct {
+	runID     string
+	decision  string
+	confirmID string
+}
+
+// bypassCall is one recorded POST .../sessions/{session_id}/bypass.
+type bypassCall struct {
+	sessionID string
+	enabled   bool
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -164,13 +202,40 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.versionHits++
 		f.mu.Unlock()
+		if f.versionStatus != 0 {
+			w.WriteHeader(f.versionStatus)
+			_, _ = w.Write([]byte(`{"detail":"not available yet"}`))
+			return
+		}
+		if f.versionBody != "" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(f.versionBody))
+			return
+		}
 		if f.contractVersion == "" {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"no route"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"apiVersion":%q,"agentVersion":"0.5.0"}`, f.contractVersion)
+		fmt.Fprintf(w, `{"apiVersion":%q,"version":%q,"agent":"email"}`,
+			f.contractVersion, f.agentReleaseVersion)
+
+	case strings.HasSuffix(r.URL.Path, "/memory"):
+		if r.Method != http.MethodGet {
+			f.t.Errorf("memory request method = %q, want GET", r.Method)
+		}
+		if f.memoryStatus != 0 {
+			w.WriteHeader(f.memoryStatus)
+			_, _ = w.Write([]byte(`{"detail":"memory store unavailable"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		body := f.memoryBody
+		if body == "" {
+			body = `{"available":true,"stats":{"total_knowledge":0,"by_category":{},"by_context":{},"sensitive_count":0,"entity_count":0,"avg_confidence":0},"contexts":[],"shown":0,"total":0,"items":[]}`
+		}
+		_, _ = w.Write([]byte(body))
 
 	case strings.HasSuffix(r.URL.Path, "/prescan"):
 		if r.Method != http.MethodPost {
@@ -201,6 +266,59 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			// that the ask-to-stop and its eventual effect are decoupled.
 			f.onCancelPost()
 		}
+
+	case strings.HasSuffix(r.URL.Path, "/tool_decision"):
+		if r.Method != http.MethodPost {
+			f.t.Errorf("tool_decision method = %q, want POST", r.Method)
+		}
+		var body struct {
+			Decision  string `json:"decision"`
+			ConfirmID string `json:"confirm_id"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("tool_decision body: %v", err)
+		}
+		parts := strings.Split(r.URL.Path, "/")
+		f.mu.Lock()
+		f.decisions = append(f.decisions, decisionCall{
+			runID: parts[len(parts)-2], decision: body.Decision, confirmID: body.ConfirmID,
+		})
+		status := f.decisionStatus
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"detail":"nothing pending"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"run_id":"r","decision":"allow","delivered":true}`))
+
+	case strings.HasSuffix(r.URL.Path, "/bypass"):
+		if r.Method != http.MethodPost {
+			f.t.Errorf("bypass method = %q, want POST", r.Method)
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("bypass body: %v", err)
+		}
+		parts := strings.Split(r.URL.Path, "/")
+		f.mu.Lock()
+		f.bypasses = append(f.bypasses, bypassCall{
+			sessionID: parts[len(parts)-2], enabled: body.Enabled,
+		})
+		status := f.bypassStatus
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"detail":"no such session"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"session_id":"s","enabled":true}`))
 
 	case strings.HasSuffix(r.URL.Path, "/confirm"):
 		// No shipped sidecar has this route (the resume model is unimplemented
@@ -348,7 +466,16 @@ func (f *fakeRelay) lastQuery() queryRequest {
 	return f.queries[len(f.queries)-1]
 }
 
+// client builds a relay-backed client for the `email` agent, which is what
+// most of this file's tests exercise. Memory tests must use clientFor with the
+// flagship id instead — memory is gaia-only, so a relay client named `email`
+// is refused before any request is made.
 func (f *fakeRelay) client(t *testing.T) *SSEClient {
+	t.Helper()
+	return f.clientFor(t, "email")
+}
+
+func (f *fakeRelay) clientFor(t *testing.T, agentID string) *SSEClient {
 	t.Helper()
 	// consume() fires cancelRun in a detached goroutine that outlives the turn,
 	// and it logs on a best-effort cancel failure. Routing that straight to
@@ -378,7 +505,7 @@ func (f *fakeRelay) client(t *testing.T) *SSEClient {
 		},
 		Logf: safeLogf,
 	})
-	return NewSSEClient("email", dc, SSEOptions{
+	return NewSSEClient(agentID, dc, SSEOptions{
 		ReadTimeout: 5 * time.Second,
 		Logf:        safeLogf,
 	})

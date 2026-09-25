@@ -27,6 +27,7 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.flow import (
     complete_authorization,
+    revoke_provider_token,
     start_authorization,
 )
 from gaia.connectors.handler import register_handler
@@ -235,15 +236,29 @@ class OAuthPkceHandler:
         spec: ConnectorSpec,
         *,
         account_id: Optional[str] = None,
-    ) -> None:
-        """Remove stored tokens AND per-agent grants. Keyring deletion is the
-        source of truth for "is this configured" — once the blob is gone,
-        ``store.peek_connection`` returns ``None`` and the catalog UI shows
-        "not configured". Grant cleanup prevents silent inheritance: if the
-        same ``connector_id`` is reconnected later, the new tokens must NOT
-        carry the prior user's agent consents."""
+    ) -> Dict[str, Any]:
+        """Revoke the provider-side OAuth grant (when the provider supports
+        it), then remove stored tokens AND per-agent grants. Keyring
+        deletion is the source of truth for "is this configured" — once the
+        blob is gone, ``store.peek_connection`` returns ``None`` and the
+        catalog UI shows "not configured". Grant cleanup prevents silent
+        inheritance: if the same ``connector_id`` is reconnected later, the
+        new tokens must NOT carry the prior user's agent consents.
+
+        Local state is ALWAYS cleared, even when the provider-side revoke
+        fails or isn't supported — that is the user's unambiguous intent in
+        clicking Disconnect. What must never happen (#2591) is reporting
+        that as a full revoke: the returned dict tells the caller exactly
+        what the provider confirmed, so the CLI/UI can say so honestly
+        instead of implying GAIA's app access was actually revoked.
+        """
         provider_id = spec.oauth_provider_ref or spec.id
         account_email = account_id or DEFAULT_ACCOUNT
+
+        revoke_result = await revoke_provider_token(
+            provider_id, account_email=account_email
+        )
+
         delete_connection(provider_id, account_email=account_email)
 
         # Wipe per-agent grants for this connector_id. Local import keeps
@@ -260,7 +275,14 @@ class OAuthPkceHandler:
         # never silently inherit prior state.
         revoke_all_activations_for(spec.id)
 
-        logger.info("oauth_pkce: disconnected connector_id=%s", spec.id)
+        logger.info(
+            "oauth_pkce: disconnected connector_id=%s revoke_supported=%s "
+            "revoked_remotely=%s",
+            spec.id,
+            revoke_result["revoke_supported"],
+            revoke_result["revoked_remotely"],
+        )
+        return revoke_result
 
     async def test(self, spec: ConnectorSpec) -> Dict[str, Any]:
         """

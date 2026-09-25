@@ -81,6 +81,7 @@ class TestBaseDefault:
         for name in (
             "run_shell_command",
             "execute_python_file",
+            "run_python",
             "write_file",
             "edit_file",
         ):
