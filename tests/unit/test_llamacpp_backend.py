@@ -340,7 +340,10 @@ class TestLaunchServerCtxSize:
         )
 
     @patch("builtins.open", MagicMock())
-    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch(
+        "gaia.llm.lemonade_client.LemonadeClient._stop_lemonade_listeners",
+        return_value=[],
+    )
     @patch("subprocess.Popen")
     @patch("socket.create_connection")
     @patch("time.sleep")
@@ -365,7 +368,10 @@ class TestLaunchServerCtxSize:
         assert "65536" in cmd
 
     @patch("builtins.open", MagicMock())
-    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch(
+        "gaia.llm.lemonade_client.LemonadeClient._stop_lemonade_listeners",
+        return_value=[],
+    )
     @patch("subprocess.Popen")
     @patch("socket.create_connection")
     @patch("time.sleep")

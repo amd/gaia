@@ -26,7 +26,6 @@ from threading import Event, Thread
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import openai  # For exception types
-import psutil
 import requests
 from dotenv import load_dotenv
 
@@ -40,6 +39,7 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 from gaia.logger import get_logger
+from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 
 # Load environment variables from .env file
 load_dotenv()
@@ -968,23 +968,6 @@ def _emoji(unicode_char: str, ascii_fallback: str) -> str:
     return unicode_char if _UNICODE_SUPPORTED else ascii_fallback
 
 
-def kill_process_on_port(port):
-    """Kill any process that is using the specified port."""
-    for proc in psutil.process_iter(["pid", "name"]):
-        try:
-            connections = proc.net_connections()
-            for conn in connections:
-                if conn.laddr.port == port:
-                    proc_name = proc.name()
-                    proc_pid = proc.pid
-                    proc.kill()
-                    print(
-                        f"Killed process {proc_name} (PID: {proc_pid}) using port {port}"
-                    )
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
-
-
 def _prompt_user_for_download(
     model_name: str, size_gb: float, estimated_minutes: int
 ) -> bool:
@@ -1347,6 +1330,30 @@ class LemonadeClient:
         """True when this client's server would run on the local host."""
         return (self.host or "").strip().lower() in self._LOCAL_HOSTS
 
+    def _stop_lemonade_listeners(self) -> List[Tuple[int, str]]:
+        """Kill the GAIA/Lemonade processes listening on this client's port.
+
+        Returns the ``(pid, name)`` listeners left running because they belong
+        to another program. Never kills the calling process.
+        """
+        try:
+            listeners = listeners_on_port(self.port)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise LemonadeClientError(
+                f"Could not list the processes listening on port {self.port}: "
+                f"{e}. Install lsof (or netstat) so GAIA can free the port."
+            ) from e
+        foreign: List[Tuple[int, str]] = []
+        for pid, name in listeners:
+            if pid == os.getpid():
+                continue
+            if not is_killable_process(name):
+                foreign.append((pid, name))
+                continue
+            terminate_pid(pid)
+            self.log.info(f"Stopped {name} (PID {pid}) listening on port {self.port}")
+        return foreign
+
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
         Launch the Lemonade server using subprocess.
@@ -1395,8 +1402,16 @@ class LemonadeClient:
             )
             return
 
-        # Ensure we kill anything using the port
-        kill_process_on_port(self.port)
+        foreign = self._stop_lemonade_listeners()
+        if foreign:
+            held_by = ", ".join(
+                f"PID {pid} ({name or 'unknown process'})" for pid, name in foreign
+            )
+            raise LemonadeClientError(
+                f"Cannot start Lemonade Server: port {self.port} is held by "
+                f"{held_by}, which is not a GAIA or Lemonade process. Stop it, "
+                "or point GAIA at another port with LEMONADE_BASE_URL."
+            )
 
         tooling = resolve_lemonade()
         if not tooling.found:
@@ -1421,6 +1436,8 @@ class LemonadeClient:
         # Merge — never replace — the parent environment; the child loses
         # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
         popen_env = {**os.environ, **spec.env}
+        # Own process group, so terminate_server's group kill can't reach the caller.
+        session = {} if sys.platform.startswith("win") else {"start_new_session": True}
 
         if background == "terminal":
             # New console window on Windows; argv-only — a resolved path must
@@ -1429,6 +1446,7 @@ class LemonadeClient:
                 spec.argv,
                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
                 env=popen_env,
+                **session,
             )
         elif background == "silent":
             # Run in background with subprocess
@@ -1441,6 +1459,7 @@ class LemonadeClient:
                     text=True,
                     bufsize=1,
                     env=popen_env,
+                    **session,
                 )
             except Exception:
                 self._log_file.close()
@@ -1455,6 +1474,7 @@ class LemonadeClient:
                 text=True,
                 bufsize=1,
                 env=popen_env,
+                **session,
             )
 
             # Print stdout and stderr in real-time only for foreground mode
@@ -1530,17 +1550,16 @@ class LemonadeClient:
                         check=False,
                     )
                 elif self.server_process.pid:
-                    # On Linux/Unix, kill the process group to terminate child processes
+                    # The server leads its own group, so its pid is the group id;
+                    # never getpgid(), which can resolve to the caller's group.
                     try:
-                        os.killpg(os.getpgid(self.server_process.pid), signal.SIGTERM)
+                        os.killpg(self.server_process.pid, signal.SIGTERM)
                         # Wait a bit for graceful termination
                         try:
                             self.server_process.wait(timeout=2)
                         except subprocess.TimeoutExpired:
                             # Force kill if graceful termination failed
-                            os.killpg(
-                                os.getpgid(self.server_process.pid), signal.SIGKILL
-                            )
+                            os.killpg(self.server_process.pid, signal.SIGKILL)
                     except (OSError, ProcessLookupError):
                         # Process or process group doesn't exist, try individual kill
                         try:
@@ -1564,8 +1583,11 @@ class LemonadeClient:
                     pass
                 self._log_file = None
 
-            # Ensure port is free
-            kill_process_on_port(self.port)
+            for pid, name in self._stop_lemonade_listeners():
+                self.log.warning(
+                    f"Left PID {pid} ({name or 'unknown process'}) running on "
+                    f"port {self.port}: not a GAIA or Lemonade process"
+                )
 
             # Reset reference
             self.server_process = None
