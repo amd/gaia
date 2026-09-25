@@ -687,7 +687,10 @@ class ProceduralMemoryMixin:
             return result
 
         pending, already_consumed = self._drop_consumed_episodes(store, window, force)
-        consumed_now: Set[str] = set()
+        # A session with no user turn has no goal, so CLUSTER can never take it.
+        # Left unmarked it pins the watermark and every later pass re-reads the
+        # whole history behind it.
+        pending, consumed_now = self._mark_unclusterable_episodes(store, pending)
 
         # CLUSTER — embedder failure RE-RAISES here (fail-loud).
         clusters = (
@@ -812,6 +815,45 @@ class ProceduralMemoryMixin:
                 unusable[0].get("detail"),
             )
         return [s for s in window if s["session_id"] not in marks], set(marks)
+
+    @staticmethod
+    def _mark_unclusterable_episodes(
+        store, pending: List[Dict]
+    ) -> Tuple[List[Dict], Set[str]]:
+        """Consume the episodes CLUSTER is structurally unable to take.
+
+        ``cluster_by_goal`` skips a session with no goal unconditionally, and a
+        session has no goal when it recorded no ``role='user'`` turn.  Such an
+        episode can never be handed to the distiller, so nothing would ever mark
+        it — and because ``_advance_synthesis_watermark`` stops below the oldest
+        unconsumed episode, one of them pins the watermark for good.  Every later
+        pass then re-scans all history behind it, a cost that only grows.
+
+        Marking the fact is not a policy choice: no future session can give a
+        past session a user turn.  A one-off *goal* that has not yet reached
+        ``min_occurrences`` is a different case — it may still recur — and is
+        deliberately left pending.
+
+        Returns:
+            ``(still_pending, consumed_ids)``.
+        """
+        unclusterable = [s for s in pending if not str(s.get("goal") or "").strip()]
+        if not unclusterable:
+            return pending, set()
+
+        ids = [s["session_id"] for s in unclusterable]
+        store.mark_sessions_synthesized(
+            ids,
+            "unusable",
+            detail="no user turn, so there is no goal to cluster on",
+        )
+        logger.debug(
+            "[MemoryMixin] skill synthesis: %d episode(s) have no goal to "
+            "cluster on; marked so they stop holding the watermark back",
+            len(ids),
+        )
+        consumed = set(ids)
+        return [s for s in pending if s["session_id"] not in consumed], consumed
 
     @staticmethod
     def _mark_cluster_consumed(

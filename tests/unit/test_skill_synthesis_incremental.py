@@ -201,6 +201,37 @@ class TestWatermark:
 
         assert host._memory_session_id not in store.get_synthesis_marks()
 
+    def test_a_session_with_no_user_turn_does_not_pin_the_watermark(self, host, store):
+        """CLUSTER skips a goalless session unconditionally, so nothing would
+        ever mark it — and the watermark stops below the oldest unconsumed
+        episode.  One of them would hold the floor forever, and every later pass
+        would re-scan all history behind it."""
+        for i in range(3):
+            store.log_tool_call("no_user_turn", f"tool_{i}", {"x": i}, "ok", True)
+        _seed_cluster(store, "ticket_", "Triage an inbound support ticket")
+
+        result = host._synthesize_skills()
+
+        assert result["stored"] == 1
+        assert store.get_synthesis_marks()["no_user_turn"]["outcome"] == "unusable"
+        assert store.get_synthesis_watermark() is not None
+
+    def test_a_goalless_episode_leaves_no_history_behind_the_watermark(
+        self, host, store
+    ):
+        """The cost a pinned watermark leaves behind is the DETECT re-scan: it
+        covers everything above the floor, on every start, forever."""
+        from gaia.agents.base.skill_synthesis import extract_sequences
+
+        for i in range(3):
+            store.log_tool_call("no_user_turn", f"tool_{i}", {"x": i}, "ok", True)
+        _seed_cluster(store, "ticket_", "Triage an inbound support ticket")
+
+        host._synthesize_skills()
+
+        watermark = store.get_synthesis_watermark()
+        assert extract_sequences(store, since=watermark) == []
+
 
 # ---------------------------------------------------------------------------
 # Marks — an episode the distiller could not use is not retried

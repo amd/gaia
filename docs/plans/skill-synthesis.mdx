@@ -109,8 +109,11 @@ new model, no new store engine.
                                  │
                                  ▼
   4. STORE    reconcile_and_store(candidate, store)            PROPOSED
-     Mem0 ADD / UPDATE / NOOP; supersede when success_count
-     dominates (Zep lineage) → row in the procedures table
+     Mem0 ADD / UPDATE / NOOP; supersede when the LINEAGE's
+     success_count dominates (Zep lineage) → row in procedures.
+     The counts are the matched row's plus the episodes it was
+     not built from, so an incremental window can still win and
+     re-read history counts each session once.
                                  │
                                  ▼
   5. RECALL   recall_skill(goal, top_k=2)   (live path)        PROPOSED
