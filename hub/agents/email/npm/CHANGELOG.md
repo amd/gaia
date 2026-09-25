@@ -14,6 +14,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   anything (use `connectSidecar` to reuse a running server), or
   `SidecarExitedError` if the port is taken mid-start. A sidecar that crashes
   at startup now fails straight away instead of after the full 30 s wait.
+  A sidecar that becomes healthy and *then* crashes says so, instead of
+  blaming a port conflict and sending you to hunt for a process that was
+  never there.
+
+- **Intel Macs can now install the agent.** Every release publishes an Intel
+  macOS binary, but the hub manifest didn't list Intel macOS as supported, so
+  `gaia hub install email` refused it before downloading anything.
 
 - **Asking a content question about your mail ("who signed this?", "what
   date was agreed?") now actually gets an answer when the answer is in the
