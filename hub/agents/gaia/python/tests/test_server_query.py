@@ -21,6 +21,8 @@ What these pin, and the bug each one caught:
   on the old one with no error at all.
 * **Cancel before start** — ``run_id`` is minted before the POST, so a cancel can
   legitimately arrive first; it used to be dropped and the run proceeded.
+* **Unsafe session_id** — an id that can't be a session file name (``../x``,
+  ``a:b``) came back as a 500; it is the caller's error and must be a 400.
 """
 
 from __future__ import annotations
@@ -824,6 +826,50 @@ def test_bypass_on_an_unknown_session_is_a_404_not_a_new_session(built):
 
     assert response.status_code == 404, response.text
     assert agents == [], "no agent may be built by a bypass toggle"
+
+
+# ---------------------------------------------------------------------------
+# Session-id validation
+# ---------------------------------------------------------------------------
+
+_ALLOWED_CHARS = "A-Z, a-z, 0-9, '.', '_' and '-'"
+
+
+@pytest.mark.parametrize("bad_id", ["../x", "a:b", "a/b", "...", "x" * 129])
+def test_query_refuses_an_unsafe_session_id_as_a_400(built, bad_id):
+    """The id names a file under ~/.gaia/sessions; one it can't name used to
+    surface as a 500 from deep inside the run."""
+    client, agents = built
+
+    response = client.post("/v1/gaia/query", json=_body(session_id=bad_id))
+
+    assert response.status_code == 400, response.text
+    assert _ALLOWED_CHARS in response.json()["detail"]
+    assert agents == [], "no agent may be built for a refused session id"
+
+
+@pytest.mark.parametrize("bad_id", ["a:b", "...", "x" * 129])
+def test_bypass_refuses_an_unsafe_session_id_as_a_400(built, bad_id):
+    """A slash never reaches this route (the router 404s it), so only
+    single-segment bad ids can be exercised here."""
+    client, _ = built
+
+    response = client.post(f"/v1/gaia/sessions/{bad_id}/bypass", json={"enabled": True})
+
+    assert response.status_code == 400, response.text
+    assert _ALLOWED_CHARS in response.json()["detail"]
+
+
+@pytest.mark.parametrize("good_id", [str(uuid.uuid4()), "s1"])
+def test_ordinary_session_ids_still_work_on_both_routes(built, good_id):
+    client, _ = built
+
+    query = client.post("/v1/gaia/query", json=_body(session_id=good_id))
+    bypass = client.post(f"/v1/gaia/sessions/{good_id}/bypass", json={"enabled": True})
+
+    assert query.status_code == 200, query.text
+    assert bypass.status_code == 200, bypass.text
+    assert sr.registry.get(good_id).permissions.bypass is True
 
 
 def test_the_session_hands_each_turn_its_accumulated_permission_state(built):
