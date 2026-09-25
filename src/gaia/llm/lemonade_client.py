@@ -4292,47 +4292,6 @@ class LemonadeClient:
         self.log.info(f"Model unloaded successfully: {response}")
         return response
 
-    def set_params(
-        self,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
-        do_sample: Optional[bool] = None,
-    ) -> Dict[str, Any]:
-        """
-        Set generation parameters for text completion.
-
-        Args:
-            temperature: Controls randomness (higher = more random)
-            top_p: Controls diversity via nucleus sampling
-            top_k: Controls diversity by limiting to k most likely tokens
-            min_length: Minimum length of generated text in tokens
-            max_length: Maximum length of generated text in tokens
-            do_sample: Whether to use sampling or greedy decoding
-
-        Returns:
-            Dict containing the status and updated parameters
-        """
-        request_data = {}
-
-        if temperature is not None:
-            request_data["temperature"] = temperature
-        if top_p is not None:
-            request_data["top_p"] = top_p
-        if top_k is not None:
-            request_data["top_k"] = top_k
-        if min_length is not None:
-            request_data["min_length"] = min_length
-        if max_length is not None:
-            request_data["max_length"] = max_length
-        if do_sample is not None:
-            request_data["do_sample"] = do_sample
-
-        url = f"{self.base_url}/params"
-        return self._send_request("post", url, request_data)
-
     def health_check(self) -> Dict[str, Any]:
         """
         Check server health.
