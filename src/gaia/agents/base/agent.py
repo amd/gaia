@@ -1014,16 +1014,11 @@ class Agent(abc.ABC):
     #: skill name -> ids of the deltas currently applied to it.
     _overlaid_skills: Optional[Dict[str, List[str]]] = None
 
-    #: Proactive skill discovery: matches the user's turn against skills that
-    #: are INSTALLED BUT NOT LOADED and activates the winner, so a user never
-    #: has to know a skill's name. ``None`` (the default) leaves every existing
-    #: agent's behavior and composed prompt byte-identical; GaiaAgent builds one.
-    #: See :mod:`gaia.agents.base.skill_discovery`.
-    _skill_discovery: Optional[Any] = None
-
-    #: This turn's discovery note, rendered by
-    #: ``get_skill_discovery_system_prompt``. Cleared and recomputed per turn.
-    _skill_discovery_result: Optional[Any] = None
+    #: List every installed skill in the system prompt so the model can load one
+    #: when the work fits. ``False`` (the default) keeps every other agent's
+    #: composed prompt byte-identical; GaiaAgent turns it on.
+    #: See :mod:`gaia.agents.base.skill_catalog`.
+    _skill_catalog_enabled: bool = False
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -1189,7 +1184,7 @@ Do NOT wrap conversational replies in JSON.
         output_handler=None,
         max_plan_iterations: int = 3,
         max_consecutive_repeats: int = 4,
-        min_context_size: int = 32768,
+        min_context_size: Optional[int] = None,
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
@@ -1216,7 +1211,7 @@ Do NOT wrap conversational replies in JSON.
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
             max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
-            min_context_size: Minimum context size required for this agent (default: 32768).
+            min_context_size: Minimum context size required; unset uses the model/device resolver.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
             skill_set: Explicit skill set to activate (the generic
@@ -1293,7 +1288,11 @@ Do NOT wrap conversational replies in JSON.
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or skip_lemonade):
-            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+            from gaia.llm.lemonade_client import (
+                LemonadeClient,
+                cloud_model_provider,
+                resolve_ctx_size,
+            )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
@@ -1304,6 +1303,11 @@ Do NOT wrap conversational replies in JSON.
                 # The local manager preloads a chat model even on an idle server.
                 LemonadeClient(base_url=base_url, verbose=False).health_check()
             else:
+                if (
+                    min_context_size is None
+                    or os.environ.get("GAIA_CTX_SIZE", "").strip()
+                ):
+                    min_context_size = resolve_ctx_size(model_id, device)
                 LemonadeManager.ensure_ready(
                     min_context_size=min_context_size,
                     quiet=silent_mode,
@@ -1922,89 +1926,25 @@ Do NOT wrap conversational replies in JSON.
         """
         return None
 
-    def _discover_skills_for_turn(self, user_input: str) -> None:
-        """Match this turn against installed-but-unloaded skills and act on it.
+    def get_skill_catalog_system_prompt(self) -> str:
+        """Sourcing rule + one line per installed skill, for agents that opt in.
 
-        No-op unless a subclass built a
-        :class:`~gaia.agents.base.skill_discovery.SkillDiscovery` — every other
-        agent's composed prompt stays byte-identical.
-
-        Runs BEFORE :meth:`_refresh_active_tool_filter` so tools the loaded skill
-        registers are visible on the same turn, and BEFORE
-        :meth:`_refresh_active_skill_filter` so the skill is in ``loaded_skills``
-        when the body filter is computed. Pinned via :meth:`_pin_skill_body` so
-        that filter cannot immediately hide the body of the skill it just decided
-        the turn was about.
+        Auto-discovered by :meth:`_get_mixin_prompts`. It depends only on what is
+        installed, so it stays in the static, cached head of the prompt.
         """
-        discovery = self._skill_discovery
-        if discovery is None:
-            return
-
-        previous = self._skill_discovery_result
-        query = self._build_skill_discovery_query(user_input)
-        result = discovery.run(
-            query, loaded=self.loaded_skills, load_fn=self.load_skill
-        )
-        self._skill_discovery_result = result
-        if result.loaded:
-            self._pin_skill_body(result.loaded)
-
-        # Rebuild whenever the note changed, INCLUDING after a successful load.
-        # ``load_skill`` rebuilds too, but it runs before the line above, so the
-        # prompt it composed still carries the *previous* turn's note — the
-        # "SKILL ACTIVATED" line would be missing on exactly the turns that
-        # earned it. The later ``_refresh_active_skill_filter`` only recomposes
-        # when the body filter changes, so it cannot be relied on to fix this.
-        before = previous.prompt_fragment() if previous is not None else ""
-        if result.prompt_fragment() != before:
-            self.rebuild_system_prompt()
-
-    def _build_skill_discovery_query(self, user_input: str) -> str:
-        """The text discovery matches on — previous + current user message.
-
-        Reuses ChatAgent's tool-selection query when the agent has one, so a
-        follow-up ("and the one before that?") still carries the prior turn's
-        subject instead of matching on four pronouns.
-
-        ``user_input`` may already carry ``MemoryMixin``'s per-turn dynamic
-        context (current time, upcoming/overdue items) prepended to it —
-        ``process_query`` augments the message before this ever runs. That
-        preamble is real content to the LLM but pure noise to a lexical BM25
-        matcher: "Current time: 2026-09-18T00:14 (Friday)" dilutes a genuine
-        match enough to drop it below the auto-load floor on turn 1 of every
-        session (measured: a workout-video request scored 0.61 clean, 0.27
-        augmented — the difference between auto-loading and merely being
-        shortlisted). ``self._original_user_input`` is the clean text
-        ``MemoryMixin.process_query`` saved before augmenting; prefer it here
-        so discovery scores what the user actually said.
-        """
-        clean = getattr(self, "_original_user_input", None) or user_input
-        builder = getattr(self, "_build_tool_selection_query", None)
-        if callable(builder):
-            return builder(clean)
-        return clean
-
-    def get_skill_discovery_system_prompt(self) -> str:
-        """Sourcing rule + this turn's discovery note.
-
-        Auto-discovered by :meth:`_get_mixin_prompts`. Returns "" for any agent
-        without discovery enabled, so no existing prompt changes.
-        """
-        if self._skill_discovery is None:
+        if not self._skill_catalog_enabled:
             return ""
-        from gaia.agents.base.skill_discovery import GROUNDING_RULE
+        from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        result = self._skill_discovery_result
-        note = result.prompt_fragment() if result is not None else ""
-        return f"{GROUNDING_RULE}\n\n{note}" if note else GROUNDING_RULE
+        catalog = render_catalog(self.skill_manager.discover())
+        return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
         """Keep *name*'s body rendered for the next few filter refreshes.
 
-        Unlike :meth:`_note_skill_active` this works before any filter exists —
-        proactive discovery runs before the first refresh of a session, and
-        without the pin the very next selection could hide the body of the skill
-        that was just loaded *because* this turn needed it.
+        Unlike :meth:`_note_skill_active` this works before any filter exists,
+        so the next selection cannot hide the body of a skill that was just
+        loaded *because* this turn needed it.
         """
         # getattr throughout: test stubs copy these methods onto a plain class
         # without inheriting the class attributes they read.
@@ -5614,12 +5554,6 @@ Do NOT wrap conversational replies in JSON.
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
 
-        # Proactive skill discovery: a skill the user never named can become
-        # loaded here, registering its tools — so it must run BEFORE the tool
-        # filter, or those tools are invisible on the very turn that loaded the
-        # skill, and before the body filter for the same reason.
-        self._discover_skills_for_turn(user_input)
-
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
@@ -5632,7 +5566,9 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        messages = []
+        from gaia.agents.base.history import TurnMessages
+
+        messages = TurnMessages()
 
         # Per-turn performance record (dev mode; no-op unless GAIA_TURN_LOG is
         # set). Built here so it spans the whole turn — the total it reports is
@@ -5704,6 +5640,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
+        messages.recorded.clear()
         messages.append({"role": "user", "content": user_input})
 
         # Use provided max_steps or fall back to class default
@@ -6229,7 +6166,7 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            messages = self._shrink_messages_for_overflow(messages)
+                            messages[:] = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -6387,7 +6324,7 @@ Do NOT wrap conversational replies in JSON.
                             # model still sees its tool-call history, but cap
                             # any single tool-result content to 500 chars and
                             # drop all-but-last-2 tool results entirely.
-                            messages = self._shrink_messages_for_overflow(messages)
+                            messages[:] = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -7924,6 +7861,7 @@ Do NOT wrap conversational replies in JSON.
                 "error_count": len(self.error_history),
                 "error_history": self.error_history,
             }
+            self.last_result["model_messages"] = messages.finish("")
             # Returns before the tail seal below.
             self._finish_turn_record("", steps_taken)
             return self.last_result
@@ -7985,6 +7923,8 @@ Do NOT wrap conversational replies in JSON.
             "error_history": self.error_history,  # Include the full error history
             "tool_schema": self._trace_tool_schema(),
         }
+
+        result["model_messages"] = messages.finish(result["result"])
 
         # Catches the exits that never printed an answer (max steps). Sealed
         # BEFORE the trace write — attached after, the artifact never saw it.

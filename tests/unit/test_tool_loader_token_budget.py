@@ -57,13 +57,14 @@ BASELINE_NATIVE_TOKENS = 5128
 # and should bump the baseline deliberately.
 TOLERANCE = 0.10
 
+# A recorded scorecard used purely as a PARSER sample — the assertions below
+# pin what parse_ttft_from_scorecard extracts from this shape, not agent quality.
 _SCORECARD_FIXTURE = os.path.join(
     os.path.dirname(__file__),
     "..",
     "fixtures",
-    "eval_baselines",
-    "gemma-4-e4b-d71cd914",
-    "scorecard_tool_selection.json",
+    "eval",
+    "ttft_parse_scorecard.json",
 )
 
 
@@ -174,8 +175,9 @@ def test_size_distribution_native_exceeds_text(doc_agent):
 def test_parse_ttft_from_committed_scorecard():
     """Component-C parser: first-vs-later TTFT and needed-sets from a scorecard.
 
-    Uses the committed gemma-4-e4b tool_selection baseline so the parsing
-    logic is covered without a live backend.
+    Reads a committed scorecard sample so the parsing logic is covered without a
+    live backend. The fixture is a parser input, not a quality baseline — the
+    assertions pin what the parser extracts, never how well an agent scored.
     """
     ttft = parse_ttft_from_scorecard(_SCORECARD_FIXTURE)
 

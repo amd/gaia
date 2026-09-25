@@ -94,6 +94,20 @@ class AgentSidecarSpec:
     required_connections: Tuple[ConnectorRequirement, ...] = field(
         default_factory=tuple
     )
+    #: One-line description for the agent's card. A binary install ships no
+    #: importable wheel, so the entry point's own registration (e.g.
+    #: ``gaia_agent.build_gaia``) never loads and the UI would otherwise show
+    #: a generated "<Name> agent" placeholder. Transcribed from the package's
+    #: registration, drift-guarded by
+    #: tests/unit/agents/test_sidecar_card_drift.py.
+    description: str = ""
+    #: Starter prompts the card offers. Empty means the frontend falls back to
+    #: its generic suggestions, which is what a hub-installed flagship showed
+    #: before #4161 — four prompts that had nothing to do with the agent.
+    conversation_starters: Tuple[str, ...] = field(default_factory=tuple)
+    category: str = ""
+    tags: Tuple[str, ...] = field(default_factory=tuple)
+    icon: str = ""
 
 
 # The email agent's caller-auth token channel (#1706). MUST equal
@@ -411,7 +425,10 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
         "email": AgentSidecarSpec(
             agent_id="email",
             service_id="gaia-agent-email",
-            display_name="Email",
+            # "Email Triage" — matches gaia-agent.yaml's `name` and the
+            # package's own registration, so a binary and a wheel install
+            # label the same agent the same way.
+            display_name="Email Triage",
             expected_api_major="2",
             docs_url="https://amd-gaia.ai/docs/guides/email",
             token_env_var=_EMAIL_TOKEN_ENV_VAR,
@@ -424,6 +441,24 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             forward_providers=("google", "microsoft", "microsoft_work"),
             forwarded_mode_env_var=_EMAIL_FORWARDED_MODE_ENV_VAR,
             required_connections=_EMAIL_REQUIRED_CONNECTIONS,
+            # Transcribed verbatim from gaia_agent_email.build_email_triage;
+            # drift-guarded by tests/unit/agents/test_sidecar_card_drift.py.
+            description=(
+                "Read, triage, organize, and reply to email through your "
+                "connected Google account. All email content is processed "
+                "locally on your machine."
+            ),
+            conversation_starters=(
+                "Run a pre-scan",
+                "Triage my inbox",
+                "Which of my sent emails are still waiting on a reply?",
+                "Summarize my unread emails",
+                "Draft a reply to my most recent message",
+                "Show me today's calendar",
+            ),
+            category="productivity",
+            tags=("email", "gmail", "calendar", "triage"),
+            icon="mail",
         ),
         "gaia": AgentSidecarSpec(
             agent_id="gaia",
@@ -442,5 +477,19 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             # No forward_providers: the flagship reaches external services through
             # MCP servers the user activates, not daemon-forwarded OAuth tokens.
             # Listing a provider here would hand it credentials it cannot use.
+            description=(
+                "The flagship agent — conversation, document Q&A, data "
+                "analysis, and web research, with memory that persists and "
+                "skills you can add"
+            ),
+            conversation_starters=(
+                "What can you do?",
+                "Summarize the documents in this folder",
+                "Research this topic and write me a brief",
+                "What did we talk about last time?",
+            ),
+            category="general",
+            tags=("general", "chat", "rag", "memory", "skills"),
+            icon="sparkles",
         ),
     }
