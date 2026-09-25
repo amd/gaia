@@ -40,6 +40,7 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 from gaia.logger import get_logger
+from gaia.version import parse_version
 
 # Load environment variables from .env file
 load_dotenv()
@@ -292,8 +293,6 @@ def is_llm_model_entry(model: Dict[str, Any]) -> bool:
 # bundled ChatAgent system prompt alone runs >7000 tokens before any user
 # message; running below this silently truncates prompts and yields empty
 # responses from llama.cpp. Consumed by:
-#   - ``_ensure_model_loaded`` (this module), as the fallback ctx_size when
-#     loading a model that isn't in the ``MODELS`` registry.
 #   - ``gaia.llm.lemonade_manager`` — re-exported as ``DEFAULT_CONTEXT_SIZE``.
 #   - ``gaia.ui.routers.system`` — drives the "context window too small"
 #     banner and the pre-flight load ctx requirement.
@@ -320,6 +319,55 @@ def profile_ctx_size(device: Optional[str]) -> int:
     fails the load outright.
     """
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
+
+def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) -> int:
+    """Resolve the requested local window for startup and subsequent reloads.
+
+    An explicit client ``ctx_size_override`` remains a separate exact pin.
+    GPU/CPU profile sizes are defaults, not model capability ceilings.
+    """
+    if device is None:
+        from gaia.config import GaiaConfig
+
+        device = GaiaConfig.load().default_device
+    if model and model.lower().endswith("-flm"):
+        device = "npu"
+    ctx = profile_ctx_size(device)
+    if model:
+        for requirement in MODELS.values():
+            if _model_ids_match(requirement.model_id, model):
+                ctx = requirement.min_ctx_size
+                break
+
+    override = os.environ.get("GAIA_CTX_SIZE", "").strip()
+    if override:
+        try:
+            ctx = int(override)
+        except ValueError as exc:
+            raise LemonadeClientError(
+                "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
+            ) from exc
+        if ctx <= 0:
+            raise LemonadeClientError(
+                "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
+            )
+
+    if (device or "").strip().lower() == "npu" and ctx > NPU_CTX_SIZE:
+        get_logger(__name__).warning(
+            "Requested context %d exceeds the NPU ceiling; using %d tokens.",
+            ctx,
+            NPU_CTX_SIZE,
+        )
+        ctx = NPU_CTX_SIZE
+    if override and ctx < DEFAULT_CONTEXT_SIZE:
+        get_logger(__name__).warning(
+            "GAIA_CTX_SIZE=%d is below the recommended %d tokens; agent prompts "
+            "may be truncated. Increase or unset GAIA_CTX_SIZE if replies are empty.",
+            ctx,
+            DEFAULT_CONTEXT_SIZE,
+        )
+    return ctx
 
 
 def active_profile_ctx_size() -> int:
@@ -688,6 +736,32 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
         if mr.model_id == model_id:
             return mr.tool_calling
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
+
+
+def _usage_dict(usage: Any) -> Dict[str, Any]:
+    """The SDK's usage object as a plain dict, nested details included.
+
+    ``model_dump`` where the SDK offers it, attribute reads otherwise, so a
+    provider that returns a shape the SDK does not model (Fireworks' cached and
+    reasoning counts live in nested ``*_details`` objects) still survives the
+    trip to the caller.
+    """
+    if hasattr(usage, "model_dump"):
+        return usage.model_dump(exclude_none=True)
+    out: Dict[str, Any] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = getattr(usage, key, None)
+        if value is not None:
+            out[key] = value
+    for key in ("prompt_tokens_details", "completion_tokens_details"):
+        details = getattr(usage, key, None)
+        if details is None:
+            continue
+        if hasattr(details, "model_dump"):
+            out[key] = details.model_dump(exclude_none=True)
+        else:
+            out[key] = {k: v for k, v in vars(details).items() if not k.startswith("_")}
+    return out
 
 
 def _tool_call_deltas(delta: Any) -> Optional[List[Dict[str, Any]]]:
@@ -1534,8 +1608,10 @@ class LemonadeClient:
             if hasattr(self, "_log_file") and self._log_file:
                 try:
                     self._log_file.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    get_logger(__name__).warning(
+                        "Could not close Lemonade log file: %s", exc
+                    )
                 self._log_file = None
 
             # Ensure port is free
@@ -2025,7 +2101,7 @@ class LemonadeClient:
         }
         """
         if self.cloud_model_provider(model):
-            # These local llama.cpp defaults are inserted by LemonadeProvider.
+            # llama.cpp-only sampling knobs; cloud providers do not accept them.
             kwargs.pop("repeat_penalty", None)
             kwargs.pop("repeat_last_n", None)
 
@@ -2064,6 +2140,15 @@ class LemonadeClient:
             "stream": stream,
             **kwargs,
         }
+
+        # An OpenAI-compatible stream sends usage only if asked. Without this
+        # a streamed turn reports no token counts at all, and the gap is
+        # invisible locally — llama.cpp answers the /stats poll, so the numbers
+        # appear to be there — while a cloud-routed model, whose /stats is all
+        # zeros, silently loses them. That is backwards: the counts matter most
+        # where the tokens are billed. Caller-supplied stream_options win.
+        if stream and "stream_options" not in data:
+            data["stream_options"] = {"include_usage": True}
 
         if stop:
             data["stop"] = stop
@@ -2255,6 +2340,13 @@ class LemonadeClient:
             "temperature": temperature,
             "max_completion_tokens": max_completion_tokens,
             "stream": True,
+            # An OpenAI-compatible stream sends its token accounting only if
+            # asked, in one final chunk that carries no choices. Without this a
+            # streamed turn reports no tokens at all — invisible locally, where
+            # llama.cpp answers the /stats poll instead, and total for a
+            # cloud-routed model whose /stats is all zeros. That is backwards:
+            # the counts matter most where the tokens are billed.
+            "stream_options": {"include_usage": True},
             **standard_kwargs,
         }
 
@@ -2279,6 +2371,21 @@ class LemonadeClient:
             tokens_generated = 0
             for chunk in stream:
                 tokens_generated += 1
+                # The usage chunk is the last one and carries no choices:
+                # forward it as its own frame rather than dropping it on the
+                # floor with the rest of the non-choice chunks.
+                usage = getattr(chunk, "usage", None)
+                if usage is not None and not chunk.choices:
+                    yield {
+                        "id": chunk.id,
+                        "object": "chat.completion.chunk",
+                        "created": chunk.created,
+                        "model": chunk.model,
+                        "choices": [],
+                        "usage": _usage_dict(usage),
+                    }
+                    continue
+
                 # Convert to dict format expected by our API
                 yield {
                     "id": chunk.id,
@@ -3612,21 +3719,7 @@ class LemonadeClient:
             self._last_model_load_seconds = time.monotonic() - _pin_load_start
             return
 
-        # Determine the ctx_size GAIA expects for this model. This lookup
-        # happens BEFORE the "already loaded" check so we can detect a
-        # model that's loaded at the wrong window and reload it — pre-#1030
-        # follow-up the function returned early on any match, leaving
-        # Gemma 4 loaded at Lemonade's default 32K even after GAIA
-        # bumped MODELS[…].min_ctx_size to 65536. That's why
-        # ``summarize_document`` kept hitting LemonadeContextOverflowError
-        # at 35K-token sections.
-        expected_ctx: Optional[int] = None
-        for _key, _req in MODELS.items():
-            if _req.model_id == model:
-                expected_ctx = _req.min_ctx_size
-                break
-        if expected_ctx is None:
-            expected_ctx = DEFAULT_CONTEXT_SIZE
+        expected_ctx = resolve_ctx_size(model=model)
 
         # Best-effort pre-flight probe (#2053): skip a redundant /load when the
         # model is already loaded at a sufficient ctx. A probe failure here is
@@ -3749,18 +3842,6 @@ class LemonadeClient:
             else:
                 print(f"🔄 Loading model: {model}...")
 
-        # ``expected_ctx`` was resolved above (either from MODELS or the
-        # GAIA-wide default). Pass it explicitly to /load so Lemonade
-        # doesn't fall back to its own 4096-token default and silently
-        # truncate GAIA's larger prompts.
-        if expected_ctx == DEFAULT_CONTEXT_SIZE and not any(
-            req.model_id == model for req in MODELS.values()
-        ):
-            self.log.info(
-                f"Model '{model}' not in MODELS registry; "
-                f"defaulting to ctx_size={expected_ctx} to fit agent prompts"
-            )
-
         # The actual load failure is the one this method must NOT swallow
         # (#2053): a model that is present but fails to load (bad recipe, OOM,
         # corrupt checkpoint) previously got hidden by a blanket
@@ -3795,8 +3876,10 @@ class LemonadeClient:
                 )
             else:
                 print(f"✅ Model loaded: {model}")
-        except Exception:
-            pass  # Ignore print errors
+        except Exception as exc:
+            get_logger(__name__).warning(
+                "Could not display model load confirmation: %s", exc
+            )
 
     def _consume_pull_stream(self, model_name: str, phase: str) -> bool:
         """Drive ``pull_model_stream`` to completion, logging progress at INFO.
@@ -4210,47 +4293,6 @@ class LemonadeClient:
         self.log.info(f"Model unloaded successfully: {response}")
         return response
 
-    def set_params(
-        self,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
-        do_sample: Optional[bool] = None,
-    ) -> Dict[str, Any]:
-        """
-        Set generation parameters for text completion.
-
-        Args:
-            temperature: Controls randomness (higher = more random)
-            top_p: Controls diversity via nucleus sampling
-            top_k: Controls diversity by limiting to k most likely tokens
-            min_length: Minimum length of generated text in tokens
-            max_length: Maximum length of generated text in tokens
-            do_sample: Whether to use sampling or greedy decoding
-
-        Returns:
-            Dict containing the status and updated parameters
-        """
-        request_data = {}
-
-        if temperature is not None:
-            request_data["temperature"] = temperature
-        if top_p is not None:
-            request_data["top_p"] = top_p
-        if top_k is not None:
-            request_data["top_k"] = top_k
-        if min_length is not None:
-            request_data["min_length"] = min_length
-        if max_length is not None:
-            request_data["max_length"] = max_length
-        if do_sample is not None:
-            request_data["do_sample"] = do_sample
-
-        url = f"{self.base_url}/params"
-        return self._send_request("post", url, request_data)
-
     def health_check(self) -> Dict[str, Any]:
         """
         Check server health.
@@ -4658,8 +4700,8 @@ class LemonadeClient:
                 # Also check for partial match
                 if model_id.lower() in model.get("id", "").lower():
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).warning("Could not query loaded models: %s", exc)
         return False
 
     def _check_lemonade_installed(self) -> bool:
@@ -4679,8 +4721,10 @@ class LemonadeClient:
             health = self.health_check()
             if health.get("status") == "ok":
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            get_logger(__name__).debug(
+                "Lemonade health check failed before installation check: %s", exc
+            )
 
         # Health check failed - determine if we can auto-start
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
@@ -4747,7 +4791,10 @@ class LemonadeClient:
         try:
 
             def _version_tuple(v: str) -> tuple:
-                return tuple(int(p) for p in v.lstrip("v").split(".")[:3])
+                parsed = parse_version(v)
+                if parsed is None:
+                    raise ValueError(f"unparseable version {v!r}")
+                return parsed
 
             actual_tuple = _version_tuple(actual_version)
             min_tuple = _version_tuple(LEMONADE_MIN_VERSION)
@@ -4927,8 +4974,10 @@ class LemonadeClient:
                         status = self.get_status()
                         status.running = True
                         return status
-                except Exception:
-                    pass
+                except Exception as exc:
+                    get_logger(__name__).debug(
+                        "Lemonade startup health probe failed: %s", exc
+                    )
                 time.sleep(2)
 
             if not quiet:
@@ -5308,9 +5357,10 @@ if __name__ == "__main__":
             for chunk in client.chat_completions(
                 model=DEFAULT_MODEL_NAME, messages=messages, stream=True, timeout=30
             ):
-                if "choices" in chunk and chunk["choices"][0].get("delta", {}).get(
-                    "content"
-                ):
+                # The last chunk carries usage and no choices.
+                if not chunk.get("choices"):
+                    continue
+                if chunk["choices"][0].get("delta", {}).get("content"):
                     print(chunk["choices"][0]["delta"]["content"], end="", flush=True)
         except Exception as e:
             print(f"Streaming chat completion failed: {e}")

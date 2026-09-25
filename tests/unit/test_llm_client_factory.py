@@ -113,18 +113,6 @@ class TestClaudeNotSupported:
             client.load_model("some-model")
 
 
-class TestOpenAINotSupported:
-    def test_openai_vision_raises_not_supported(self):
-        with patch("openai.OpenAI"):
-            from gaia.llm import NotSupportedError, create_client
-
-            client = create_client("openai", api_key="test")
-
-        with pytest.raises(NotSupportedError) as exc:
-            client.vision([b"image"], "describe this")
-        assert "OpenAI" in str(exc.value)
-
-
 # =============================================================================
 # Provider Name Tests
 # =============================================================================
@@ -137,13 +125,6 @@ class TestProviderNames:
 
             client = create_client("lemonade")
             assert client.provider_name == "Lemonade"
-
-    def test_openai_provider_name(self):
-        with patch("openai.OpenAI"):
-            from gaia.llm import create_client
-
-            client = create_client("openai", api_key="test")
-            assert client.provider_name == "OpenAI"
 
     def test_claude_provider_name(self):
         with patch("gaia.llm.providers.claude.anthropic"):

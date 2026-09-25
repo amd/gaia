@@ -15,7 +15,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
@@ -197,7 +197,7 @@ class CodeIndexSDK:
                 ]
 
         # Discover source files
-        source_files = self._discover_files()
+        source_files, discovery_truncated = self._discover_files()
         self.log.info(f"Discovered {len(source_files)} source files")
 
         # Lazy import parsers
@@ -208,10 +208,16 @@ class CodeIndexSDK:
         new_chunks: List[CodeChunk] = []
         new_file_hashes: Dict[str, str] = {}
         files_indexed = 0
+        unreadable_files = []
 
         for file_path in source_files:
             rel_path = str(Path(file_path).relative_to(self._repo_root))
-            content = self._read_file_safe(file_path)
+            try:
+                content = self._read_file_safe(file_path)
+            except OSError as error:
+                unreadable_files.append(f"{rel_path}: {error}")
+                self.log.warning(f"Could not read {rel_path}: {error}")
+                continue
             if content is None:
                 continue
 
@@ -242,6 +248,19 @@ class CodeIndexSDK:
 
         all_chunks = reused_chunks + new_chunks
         if not all_chunks:
+            if unreadable_files:
+                raise RuntimeError(
+                    "Cannot confirm an empty code index: source files could not "
+                    "be read. The previous index was retained. Check "
+                    f"permissions and retry: {', '.join(unreadable_files[:5])}"
+                )
+            if discovery_truncated:
+                raise RuntimeError(
+                    "Cannot confirm an empty code index: discovery reached its "
+                    "scan limit. The previous index was retained. Raise "
+                    "max_walk_entries or max_files, or narrow repo_path, and retry."
+                )
+            self.clear_index()
             self.log.warning("No chunks to index")
             return IndexResult(
                 files_indexed=0,
@@ -550,10 +569,10 @@ class CodeIndexSDK:
         """SHA-256 of the resolved repo path — used as cache subdirectory."""
         return hashlib.sha256(str(self._repo_root).encode()).hexdigest()[:16]
 
-    def _discover_files(self) -> List[str]:
+    def _discover_files(self) -> Tuple[List[str], bool]:
         """
         Walk the repository, respecting .gitignore patterns and size/binary limits.
-        Returns list of absolute file paths.
+        Returns absolute file paths and whether a scan limit stopped the walk.
         """
         import fnmatch
 
@@ -624,8 +643,17 @@ class CodeIndexSDK:
         # giant assets/ subtree indexes what was found, exactly like the
         # max_files cap below, and the truncation is logged loudly.
         entries_seen = 0
+        truncated = False
 
-        for root, dirs, files in os.walk(str(self._repo_root)):
+        def fail_discovery(error: OSError) -> None:
+            # An incomplete scan cannot establish that the index is empty.
+            raise RuntimeError(
+                f"Code index scan of {self._repo_root} failed: {error}. "
+                "The previous index was retained. Check that the repository "
+                "is available and readable, then retry."
+            ) from error
+
+        for root, dirs, files in os.walk(str(self._repo_root), onerror=fail_discovery):
             rel_root = Path(root).relative_to(self._repo_root)
 
             # Filter out skipped directories in-place
@@ -646,6 +674,7 @@ class CodeIndexSDK:
             entries_seen += len(dirs) + len(files)
 
             if len(result) >= self.config.max_files:
+                truncated = True
                 break
 
             for fname in files:
@@ -670,8 +699,11 @@ class CodeIndexSDK:
                 # Check size
                 try:
                     size = os.path.getsize(abs_path)
-                except OSError:
+                except FileNotFoundError:
+                    # Vanished files and dangling symlinks are genuinely absent.
                     continue
+                except OSError as error:
+                    fail_discovery(error)
                 if size > max_size_bytes:
                     self.log.debug(f"Skipping large file ({size} bytes): {rel_path}")
                     continue
@@ -679,6 +711,7 @@ class CodeIndexSDK:
                 result.append(abs_path)
 
             if entries_seen > self.config.max_walk_entries:
+                truncated = True
                 self.log.warning(
                     f"discovery stopped after {entries_seen} directory "
                     f"entries under {self._repo_root} (max_walk_entries="
@@ -689,7 +722,7 @@ class CodeIndexSDK:
                 )
                 break
 
-        return result
+        return result, truncated
 
     def _read_gitignore_patterns(self) -> List[str]:
         """Read .gitignore patterns from repo root."""
@@ -706,7 +739,7 @@ class CodeIndexSDK:
         return patterns
 
     def _read_file_safe(self, file_path: str) -> Optional[str]:
-        """Read a file, returning None on error or binary content."""
+        """Read text; return None for absent/policy-skipped files, raise I/O errors."""
         # Validate the path is within the repo root
         if self._path_validator is not None:
             if not self._path_validator.is_path_allowed(file_path, prompt_user=False):
@@ -723,7 +756,7 @@ class CodeIndexSDK:
                 return Path(file_path).read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 return Path(file_path).read_text(encoding="latin-1")
-        except OSError:
+        except FileNotFoundError:
             return None
 
     def _chunk_to_embed_text(self, chunk: CodeChunk) -> str:

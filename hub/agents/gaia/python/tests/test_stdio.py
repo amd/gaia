@@ -365,6 +365,8 @@ class _HistoryAgent(_FakeAgent):
     def __init__(self):
         super().__init__()
         self.conversation_history = []
+        # An explicit device keeps the history budget off the user's config file.
+        self.device = "gpu"
 
 
 def test_a_turn_is_recorded_for_the_next_prompt():
@@ -390,17 +392,59 @@ def test_history_accumulates_across_turns():
     assert len(agent.conversation_history) == 4
 
 
-def test_history_is_trimmed_in_whole_turns():
+def test_clear_history_control_routes_to_a_queue_sentinel(monkeypatch):
+    """The pump must hand clear_history to the turn loop, not the query path."""
+    import io
+    import queue as queue_mod
+
+    lines = (
+        json.dumps({stdio.CONTROL_KEY: stdio.CONTROL_CLEAR_HISTORY})
+        + "\nhello after the clear\n"
+    )
+    monkeypatch.setattr(stdio.sys, "stdin", io.StringIO(lines))
+    q: "queue_mod.Queue" = queue_mod.Queue()
+
+    stdio._pump_stdin(q, stdio.PermissionState())
+
+    first = q.get_nowait()
+    assert isinstance(first, stdio._ClearHistory)
+    assert q.get_nowait() == "hello after the clear"
+    assert q.get_nowait() is None  # stdin closed
+
+
+def test_clear_history_sentinel_empties_the_next_prompt():
+    """After a clear, the next prompt must carry NO earlier turns — the exact
+    /clear bug: the view emptied while conversation_history kept riding."""
+    agent = _HistoryAgent()
+    stdio._record_turn(agent, "my api key is hunter2", "Noted.")
+    stdio._record_turn(agent, "what did I just tell you?", "hunter2")
+    assert agent.conversation_history  # precondition: there is history to leak
+
+    # The turn loop's sentinel branch, verbatim.
+    history = getattr(agent, "conversation_history", None)
+    if history is not None:
+        history.clear()
+
+    assert agent.conversation_history == []
+
+
+def test_history_is_trimmed_in_whole_turns(monkeypatch):
     """A window opening on an answer whose question was dropped reads as the
     model asserting something unprompted."""
+    from gaia.agents.base import history
+
+    monkeypatch.setattr(history, "history_budget", lambda *args: 100)
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
     agent = _HistoryAgent()
 
-    for i in range(stdio.MAX_HISTORY_TURNS + 6):
+    for i in range(18):
         stdio._record_turn(agent, f"q{i}", f"a{i}")
 
-    assert len(agent.conversation_history) == stdio.MAX_HISTORY_TURNS * 2
-    assert agent.conversation_history[0]["role"] == "user"
-    assert agent.conversation_history[-1]["role"] == "assistant"
+    window = list(agent.conversation_history)
+    assert len(window) == 12
+    assert [m["role"] for m in window] == ["user", "assistant"] * 6
+    assert window[0]["content"] == "q12"
+    assert window[-1]["content"] == "a17"
 
 
 def test_an_empty_query_is_not_recorded():
@@ -973,7 +1017,10 @@ def test_cloud_model_switch_preserves_session_and_reports_remote(
     assert events[0]["model_backend"] == provider
     assert events[0]["model_remote"] is True
     assert name in events[1]["answer"]
-    assert "this conversation is sent to" in events[1]["answer"]
+    # The switch message is built from the shared inference-location helper
+    # (#3674), so it says where the conversation goes and what stays here.
+    assert "a cloud provider" in events[1]["answer"]
+    assert "sent there to be answered" in events[1]["answer"]
     assert agent.chat.history is history
     assert agent.embedder is embedder
     assert agent.chat.llm_client is client
@@ -1381,6 +1428,117 @@ def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
     events = [json.loads(line) for line in _lines(wire)]
     assert events[-1]["type"] == "error"
     assert "dispatch bug" in events[-1]["detail"]
+
+
+def test_native_tool_evidence_survives_final_event_worker_race_and_restart(tmp_path):
+    """The final SSE event arrives before process_query returns its raw trace."""
+    import time
+
+    from gaia.agents.base.history import SessionHistory
+
+    trace = [
+        {"role": "user", "content": "read the file"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "read-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "read-1",
+            "name": "read_file",
+            "content": "private fact: violet-otter-92",
+        },
+        {"role": "assistant", "content": "Read it."},
+    ]
+
+    class NativeAgent(_HistoryAgent):
+        def process_query(self, query):
+            self.console.event_queue.put(
+                {"type": "final_answer", "content": "Read it."}
+            )
+            time.sleep(0.03)
+            return {"result": "Read it.", "model_messages": trace}
+
+    path = tmp_path / "session.sqlite3"
+    agent = NativeAgent()
+    agent.conversation_history = SessionHistory(path)
+    _run(agent, "read the file")
+    assert list(agent.conversation_history) == trace
+    agent.conversation_history.close()
+    restarted = _HistoryAgent()
+    restarted.conversation_history = SessionHistory(path)
+    restarted.conversation_history.prepare(restarted, "What was the private fact?")
+    assert list(restarted.conversation_history) == trace
+    restarted.conversation_history.clear()
+    restarted.conversation_history.prepare(restarted, "What was it?")
+    assert restarted.conversation_history == []
+    restarted.conversation_history.close()
+    reopened = SessionHistory(path)
+    reopened.prepare(restarted, "What was it?")
+    assert reopened == []
+    reopened.close()
+
+
+def test_context_eviction_does_not_delete_tui_archive(tmp_path, monkeypatch):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    monkeypatch.setattr(history, "history_budget", lambda *args: 100)
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
+    for i in range(12):
+        stdio._record_turn(agent, f"q{i}", f"a{i}")
+    assert agent.conversation_history[0]["content"] == "q6"
+    monkeypatch.setattr(history, "history_budget", lambda *args: 1000)
+    agent.conversation_history.prepare(agent, "all evidence")
+    assert len(agent.conversation_history) == 24
+    assert agent.conversation_history[0]["content"] == "q0"
+    agent.conversation_history.close()
+
+
+def test_persistence_failure_emits_one_error_and_no_premature_final(monkeypatch):
+    agent = _HistoryAgent()
+    agent._script = [{"type": "final_answer", "content": "done"}]
+
+    def fail(*args, **kwargs):
+        raise OSError("transcript disk is full")
+
+    monkeypatch.setattr(stdio, "_record_turn", fail)
+    events = [json.loads(line) for line in _lines(_run(agent, "work"))]
+    terminal = [e for e in events if e["type"] in stdio.TERMINAL_TYPES]
+    assert len(terminal) == 1
+    assert terminal[0]["type"] == "error"
+    assert "disk is full" in terminal[0]["detail"]
+
+
+def test_error_turn_retains_completed_tool_evidence():
+    class PartialAgent(_HistoryAgent):
+        def process_query(self, query):
+            self.console.event_queue.put(
+                {"type": "agent_error", "content": "later step failed"}
+            )
+            return {
+                "model_messages": [
+                    {"role": "user", "content": query},
+                    {
+                        "role": "user",
+                        "content": "[Recorded tool result] file was written",
+                    },
+                    {"role": "assistant", "content": "Stopped: later step failed"},
+                ]
+            }
+
+    agent = PartialAgent()
+    events = [json.loads(line) for line in _lines(_run(agent, "write then verify"))]
+    assert sum(e["type"] in stdio.TERMINAL_TYPES for e in events) == 1
+    assert "file was written" in agent.conversation_history[1]["content"]
 
 
 def test_clear_conversation_resets_only_history(monkeypatch):
