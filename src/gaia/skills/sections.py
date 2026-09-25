@@ -34,8 +34,8 @@ from typing import List, Optional, Tuple
 #: supported — no shipped skill uses it, and accepting both would make the slug
 #: for a given heading depend on which form the author picked.
 #:
-#: Unanchored leading whitespace is also deliberate: an indented line is a code
-#: block in CommonMark, so ``    # Heading`` is content, not a split point.
+#: The anchor at ``^#`` is also deliberate: an indented line is a code block in
+#: CommonMark, so ``    # Heading`` is content, not a split point.
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*$")
 
 #: A fenced-code delimiter: three or more backticks or tildes, indented up to
@@ -197,7 +197,7 @@ def find_section(sections: List[Section], slug: str) -> Optional[Section]:
     section. The caller is usually a model, and a model writes a heading the
     way headings are written.
     """
-    wanted = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
+    wanted = slugify_heading(slug)
     for section in sections:
         if section.slug == slug:
             return section

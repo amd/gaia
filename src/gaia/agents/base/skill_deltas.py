@@ -473,10 +473,13 @@ def validate_delta(
             # quote, so the only way out was to guess again. Line breaks are
             # already tolerated by the matcher, which leaves genuinely absent
             # text — and for that the section itself is the answer.
+            shown = section.text.strip()
+            if len(shown) > MAX_PAYLOAD_CHARS:
+                shown = shown[:MAX_PAYLOAD_CHARS] + "...(truncated)"
             raise DeltaRefused(
                 f"the text to replace is not in section {delta.anchor_section!r}. "
                 "Line breaks do not have to match, but the words do. The "
-                f"section reads:\n\n{section.text.strip()}"
+                f"section reads:\n\n{shown}"
             )
 
     # A section's span carries its own heading line, so an edit that removes it
