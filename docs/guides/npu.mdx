@@ -128,7 +128,21 @@ lemonade backends install flm:npu
 
 ### Model not available
 
-If `gemma4-it-e2b-FLM` is not found, pull it manually:
-```bash
-lemonade pull gemma4-it-e2b-FLM --recipe flm
 ```
+Error pulling model: No built-in model with the name 'gemma4-it-e2b-FLM' is registered.
+```
+
+The FLM backend is missing, not the model. Lemonade discovers `*-FLM` models
+through the FLM runtime itself, so until `flm:npu` is installed none of them
+exist to pull. Install the backend first, then pull by name:
+
+```bash
+lemonade backends install flm:npu
+lemonade pull gemma4-it-e2b-FLM
+```
+
+<Warning>
+Do not add `--recipe flm`. The recipe is baked into the built-in model and
+applied at load time; passing it turns the call into a custom-model
+registration, which fails asking for `--checkpoint`.
+</Warning>

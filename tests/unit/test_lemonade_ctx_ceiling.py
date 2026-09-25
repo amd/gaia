@@ -222,9 +222,9 @@ class TestFloorCeilingConflict:
         loaded, the best-effort ceiling check must not make a *catalog*
         HTTP call (``show_all=True``) — mirrors
         `test_known_model_uses_registry_ctx_size` in
-        test_lemonade_model_loading.py. The pre-existing ``is_downloaded``
-        probe still calls ``list_models()`` (no show_all) further down; that
-        is unrelated to the ceiling check and untouched by this fix."""
+        test_lemonade_model_loading.py. The ``is_downloaded`` banner probe
+        further down makes the one ``show_all`` call (#4214); a second would
+        be the ceiling check reaching for the catalog."""
         client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
@@ -235,8 +235,10 @@ class TestFloorCeilingConflict:
             client, "list_models", return_value={"data": []}
         ) as mock_list:
             client._ensure_model_loaded("Qwen3-0.6B-GGUF", auto_download=True)
-        for call in mock_list.call_args_list:
-            assert call.kwargs.get("show_all") is not True
+        catalog_calls = [
+            c for c in mock_list.call_args_list if c.kwargs.get("show_all") is True
+        ]
+        assert len(catalog_calls) == 1
         mock_load.assert_called_once_with(
             "Qwen3-0.6B-GGUF", auto_download=True, prompt=False, ctx_size=4096
         )
