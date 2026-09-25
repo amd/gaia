@@ -165,10 +165,7 @@ def test_ui_classifier_routes_model_not_found_404_and_names_model() -> None:
     assert classified.model_id == "Qwen3.5-35B-A3B-GGUF"
     # The missing model id and a concrete remediation must both be surfaced.
     assert "Qwen3.5-35B-A3B-GGUF" in classified.user_message
-    assert (
-        "gaia download" in classified.user_message
-        or "gaia init" in classified.user_message
-    )
+    assert "gaia init" in classified.user_message
 
 
 def test_ui_classifier_model_not_found_type_without_quoted_name() -> None:

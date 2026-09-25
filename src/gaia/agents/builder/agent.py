@@ -25,6 +25,7 @@ from gaia.agents.registry import (
     get_lemonade_models,
     resolve_preferred_model,
 )
+from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.llm.providers.lemonade import LemonadeError, LemonadeNetworkError
 from gaia.logger import get_logger
 
@@ -140,11 +141,11 @@ def _select_builder_model(base_url: str) -> str:
     selected = resolve_preferred_model(BUILDER_PREFERRED_MODELS, available)
     if selected is None:
         candidates = ", ".join(BUILDER_PREFERRED_MODELS)
+        pull = describe_client_hint("pull", BUILDER_PREFERRED_MODELS[-1]).instruction
         err = LemonadeError(
             user_message=(
                 "No usable model is installed for the agent builder. Install "
-                f"one of: {candidates} — for example "
-                f"`gaia download {BUILDER_PREFERRED_MODELS[-1]}` — or run "
+                f"one of: {candidates}. For example: {pull.rstrip('.')}. Or run "
                 "`gaia init` to set up a profile, then try again."
             )
         )

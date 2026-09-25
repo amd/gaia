@@ -197,18 +197,64 @@ def test_remedy_helpers_never_emit_an_unparseable_gaia_command(mocker, tooling, 
 
 
 # ---------------------------------------------------------------------------
-# Static guard: no NEW `gaia download <model>` may appear anywhere
+# LemonadeError remedies the agent returns verbatim as its answer
 # ---------------------------------------------------------------------------
 
-# The three surviving occurrences all live in LemonadeError.user_message text,
-# which agents/base/agent.py returns to the user verbatim as the agent's answer
-# — CLAUDE.md's eval gate for LemonadeError subclasses covers them, so they
-# need a `gaia eval agent` run and are being fixed separately. Delete an entry
-# here when its site is fixed; do NOT add to this list.
-KNOWN_EVAL_GATED_SITES = {
-    "llm/providers/lemonade.py",
-    "agents/builder/agent.py",
-}
+
+def _gaia_commands(text):
+    return re.findall(r"`(gaia [^`]*)`", text)
+
+
+@pytest.mark.parametrize("tooling", [MODERN_LINUX, LEGACY, NOT_FOUND])
+def test_missing_model_remedy_pulls_with_the_resolved_client(mocker, tooling):
+    from gaia.llm.providers.lemonade import LemonadeModelNotFoundError
+
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch("gaia.llm.lemonade_launcher.resolve_lemonade", return_value=tooling)
+
+    message = LemonadeModelNotFoundError(model_id="SD-Turbo").user_message
+
+    assert "SD-Turbo" in message
+    assert describe_client_hint("pull", "SD-Turbo").instruction in message
+    assert "gaia download" not in message
+    for command in _gaia_commands(message):
+        _assert_parses(command)
+
+
+def test_missing_model_remedy_without_a_model_id_names_no_dead_command():
+    from gaia.llm.providers.lemonade import LemonadeModelNotFoundError
+
+    message = LemonadeModelNotFoundError().user_message
+
+    assert "gaia download" not in message
+    for command in _gaia_commands(message):
+        _assert_parses(command)
+
+
+def test_builder_no_model_remedy_pulls_with_the_resolved_client(mocker):
+    from gaia.agents.builder import agent as builder_agent
+    from gaia.llm.providers.lemonade import LemonadeError
+
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade", return_value=MODERN_LINUX
+    )
+    mocker.patch.object(builder_agent, "get_lemonade_models", return_value=[])
+
+    with pytest.raises(LemonadeError) as excinfo:
+        builder_agent._select_builder_model("http://localhost:13305/api/v1")
+
+    message = excinfo.value.user_message
+    model = builder_agent.BUILDER_PREFERRED_MODELS[-1]
+    assert f"/usr/bin/lemonade pull {model}" in message
+    assert "gaia download" not in message
+    for command in _gaia_commands(message):
+        _assert_parses(command)
+
+
+# ---------------------------------------------------------------------------
+# Static guard: no NEW `gaia download <model>` may appear anywhere
+# ---------------------------------------------------------------------------
 
 _DEAD_DOWNLOAD = re.compile(r"gaia download\s+(?!-)[\w.{<]")
 
@@ -222,8 +268,6 @@ def test_no_new_gaia_download_with_a_positional_model():
 
     for path in sorted(src_root.rglob("*.py")):
         rel = path.relative_to(src_root).as_posix()
-        if rel in KNOWN_EVAL_GATED_SITES:
-            continue
         for lineno, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
@@ -237,18 +281,6 @@ def test_no_new_gaia_download_with_a_positional_model():
         "rejected by argparse. Use describe_client_hint('pull', model) "
         "instead:\n" + "\n".join(offenders)
     )
-
-
-def test_the_known_gated_sites_still_exist():
-    """Guard the allow-list: once a site is fixed its entry must be removed,
-    otherwise the exclusion silently starts hiding a future regression."""
-    src_root = Path(__file__).resolve().parents[2] / "src" / "gaia"
-    for rel in KNOWN_EVAL_GATED_SITES:
-        text = (src_root / rel).read_text(encoding="utf-8")
-        assert _DEAD_DOWNLOAD.search(text), (
-            f"{rel} no longer contains `gaia download <model>` — remove it "
-            "from KNOWN_EVAL_GATED_SITES."
-        )
 
 
 if __name__ == "__main__":
