@@ -165,6 +165,7 @@ jobs:
           echo "  - tests/unit/agents/test_sidecar_card_drift.py"
           echo "      the daemon spec's transcribed card vs the package's own (#4161);"
           echo "      skips itself without the wheel, so it only runs in this lane"
+          echo "  - tests/test_ui_email_scope_consent.py  connector scopes + no-mailbox 503"
           echo ""
           python -m pytest \
             tests/unit/agents/email/ \
@@ -178,6 +179,7 @@ jobs:
             tests/unit/test_daemon_forward.py \
             tests/unit/test_daemon_remedy_commands.py \
             tests/unit/agents/test_sidecar_card_drift.py \
+            tests/test_ui_email_scope_consent.py \
             -v --tb=short
 
       - name: Test summary
