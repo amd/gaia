@@ -328,18 +328,18 @@ jobs:
       publish_to_release: false
 
   # ── Email eval suite (release gate, self-hosted) ────────────────────
-  # Runs the SAME triage + drafting + action-item eval suite as the nightly
-  # (test_email_agent_eval.yml) on the [self-hosted, lemonade-eval] AMD runner,
-  # so the core release exercises the email agent on its committed corpus before
+  # Runs the triage + drafting + action-item eval suite (test_email_agent_eval.yml)
+  # on the [self-hosted, lemonade-eval] AMD runner, so the core release
+  # exercises the email agent on its committed corpus before
   # publish. Report mode: it runs + uploads its scorecard/gate reports and only
   # HARD-BLOCKS the release when a tests/fixtures/email/ threshold manifest sets
   # enforce:true (data, not code). The approval gate below waits on it; the
-  # shared `lemonade-eval` concurrency group keeps it serial with the
-  # nightly/refresh runs on the single Lemonade slot.
+  # shared `lemonade-eval` concurrency group keeps it serial with the other
+  # runs on the single Lemonade slot.
   #
   # NOTE: the general `gaia eval agent` gate is intentionally NOT wired here yet.
-  # It now runs on every qualifying PR (test_eval_agent_gemma_consolidation.yml)
-  # but ships no committed baseline, so it has no regression verdict to give and
+  # It now runs on every qualifying PR (eval_flagship.yml) but ships no
+  # committed baseline, so it has no regression verdict to give and
   # would gate a release on nothing. Wire it once the first flagship baseline
   # lands and the eval is enforcing.
   email-eval:

@@ -37,9 +37,13 @@ wherever ``GAIA_CONFIG_DIR`` points)::
       }
     }
 
-Only hub-installed skills are tracked. A skill created with ``gaia skill create``
-or copied in with ``gaia skill import`` has no hub provenance to record, so
-inventing a lock entry for it would assert a source it does not have.
+Hub-installed skills and **captured** skills are tracked. A capture
+(``source: "captured"``) records where the bundle came from (``origin``) and the
+code-trust state (``captured`` / ``code_trusted``) that gates whether its
+``tools.py`` may register — see :mod:`gaia.skills.capture`. A skill created with
+``gaia skill create`` or copied in with ``gaia skill import`` has no provenance
+to record, so inventing a lock entry for it would assert a source it does not
+have.
 
 A missing lock file is an **empty** lock, not an error — that is a machine with no
 hub-installed skills. A *corrupt* one raises: silently starting over would drop
@@ -67,6 +71,9 @@ LOCK_SCHEMA_VERSION = 1
 
 #: ``source`` value for a skill pulled from the Agent Hub.
 SOURCE_HUB = "hub"
+
+#: ``source`` value for a skill captured from pasted text, a URL, or a folder.
+SOURCE_CAPTURED = "captured"
 
 
 def _now() -> str:
@@ -96,6 +103,17 @@ class LockEntry:
     permissions: list[str] = field(default_factory=list)
     installed_at: str = field(default_factory=_now)
     path: str = ""
+    #: Where a captured skill's bytes came from (URL, path, or "pasted-text").
+    origin: str = ""
+    #: True for skills brought in by :func:`gaia.skills.capture.capture_skill`.
+    captured: bool = False
+    #: False while a captured skill's ``tools.py``/scripts are inert; flipped by
+    #: ``gaia skill promote`` after an audit ALLOW. Hub installs earned trust
+    #: through the install gauntlet, so their default is True.
+    code_trusted: bool = True
+    #: Content digest of the bundle the promote audited. Trust is bound to
+    #: these bytes: edit the skill after promoting and the code defers again.
+    code_digest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

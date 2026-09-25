@@ -6,6 +6,8 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 
 import os
 import platform
+import re
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,7 +65,7 @@ from gaia.llm.lemonade_client import (
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
-from gaia.security import PathValidator
+from gaia.security import PathValidator, stable_scratch_dir
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -72,6 +74,11 @@ from gaia.vlm.mixin import VLMToolsMixin
 # (which legitimately caches ``None``) is never mistaken for "not attempted
 # yet" and rebuilt on every access.
 _UNSET = object()
+
+# Tools that create files; an agent with none of them gets no scratch directory.
+_FILE_CREATING_TOOLS = frozenset(
+    {"write_file", "write_python_file", "write_markdown_file"}
+)
 
 # ``notify_desktop``'s Windows fallback: the title and body reach PowerShell
 # through the child's environment, never as text inside ``-Command``. A "'" in
@@ -86,6 +93,21 @@ NOTIFY_DESKTOP_PS_SCRIPT = (
     f"[string]$env:{NOTIFY_MESSAGE_ENV_VAR}, "
     f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
 )
+
+# ``run_python`` puts the project root on PYTHONPATH, so ``import gaia``
+# resolves far enough to fail on the symbol instead of the package — and the
+# raw ImportError reads as a typo worth retrying rather than the wrong path.
+_GAIA_TOOL_IMPORT_PATTERN = re.compile(
+    r"^[ \t]*(?:from[ \t]+gaia(?:\.[\w.]+)?[ \t]+import[ \t]+.*"
+    r"|import[ \t]+gaia(?:\.[\w.]+)?(?![\w.]).*)$",
+    re.MULTILINE,
+)
+
+
+def _imports_gaia_tools(code: str) -> Optional[str]:
+    """The offending line when a snippet tries to import GAIA itself."""
+    match = _GAIA_TOOL_IMPORT_PATTERN.search(code or "")
+    return match.group(0).strip() if match else None
 
 
 @dataclass
@@ -259,6 +281,8 @@ class ChatAgent(
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
             on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
         )
+        # Created after tool registration, once we know the agent can write files.
+        self.scratch_dir: Optional[Path] = None
 
         # Store config for access in other methods
         self.config = config
@@ -322,7 +346,7 @@ class ChatAgent(
                 chunk_overlap=config.chunk_overlap,  # Configurable overlap for context preservation
                 max_chunks=config.max_chunks,
                 show_stats=config.show_stats,
-                use_local_llm=not (config.use_claude or config.use_chatgpt),
+                use_local_llm=not config.use_claude,
                 use_llm_chunking=config.use_llm_chunking,  # Enable semantic chunking
                 base_url=effective_base_url,  # Pass base_url to RAG for VLM client
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
@@ -456,6 +480,20 @@ class ChatAgent(
                 else 32768
             ),
         )
+
+        # Without this, throwaway scripts land in the user's project. One path
+        # per project, so the prompt line naming it is stable across sessions.
+        if any(name in self._tools_registry for name in _FILE_CREATING_TOOLS):
+            self.path_validator.set_scratch_dir(
+                str(
+                    stable_scratch_dir(
+                        getattr(config, "project_root", None) or os.getcwd()
+                    )
+                )
+            )
+            self.scratch_dir = self.path_validator.scratch_dir
+            # A prompt cached during init predates the scratch line.
+            self.__dict__.pop("_system_prompt_cache", None)
 
         # Index initial documents (only if RAG is available)
         if self.rag_documents and self.rag:
@@ -804,8 +842,14 @@ class ChatAgent(
         general-purpose agent it front-loads the prompt with an identity that
         is wrong for every other turn. The procedure lives in the ``image-gen``
         skill instead, which renders only when a turn calls for it.
+
+        Filtered by the method that produced it, not by its text: matching
+        "Stable Diffusion" also dropped any fragment that merely mentions it,
+        such as the skill catalogue listing ``image-gen`` (#3764).
         """
-        return [p for p in super()._get_mixin_prompts() if "Stable Diffusion" not in p]
+        prompts = super()._get_mixin_prompts()
+        origins = getattr(self, "_mixin_prompt_origins", {})
+        return [p for p in prompts if origins.get(p) != "get_sd_system_prompt"]
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
@@ -1116,7 +1160,15 @@ No documents are currently indexed.
             "data_file_rules": data_file_rules,
             "load_tools_menu": load_tools_menu,
         }
-        return base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+        prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+        scratch_dir = getattr(self, "scratch_dir", None)
+        if scratch_dir is not None:
+            prompt += (
+                f"\nScratch directory for temporary files: {scratch_dir} — put "
+                "throwaway scripts and intermediate files here, never in the "
+                "user's project.\n"
+            )
+        return prompt
 
     def _create_console(self):
         """Create console for chat agent."""
@@ -1466,7 +1518,8 @@ No documents are currently indexed.
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",
-                        "error": f"Access denied: {file_path}",
+                        "error": f"Access denied: {file_path}."
+                        f"{self.path_validator.scratch_hint(file_path)}",
                     }
 
                 p = Path(file_path)
@@ -1531,6 +1584,10 @@ No documents are currently indexed.
                 never saved in the workspace. Report numbers from its printed
                 output — do not work them out in your head.
 
+                This runs a plain Python process with no access to your own
+                tools. `from gaia import <tool>` does not work — to use another
+                tool, call it directly as a tool instead of from here.
+
                 Args:
                     code: Python source to run; print() whatever you need back.
                     timeout: Max seconds to wait (default 60)
@@ -1544,6 +1601,21 @@ No documents are currently indexed.
                 import time
 
                 from gaia.agents.base.project_map import resolve_project_root
+
+                offending = _imports_gaia_tools(code)
+                if offending:
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"`{offending}` cannot work here: this snippet runs "
+                            "as a separate Python process with no access to "
+                            "your tools. Call the tool you need directly "
+                            "instead of running it through run_python. Use "
+                            "run_python only for plain Python — arithmetic, "
+                            "parsing, reshaping data you already have."
+                        ),
+                        "has_errors": True,
+                    }
 
                 try:
                     if hasattr(self, "_project_map_root"):
@@ -2561,3 +2633,16 @@ No documents are currently indexed.
                 self._scratchpad.close_db()
         except Exception as e:
             logger.error(f"Error closing scratchpad during cleanup: {e}")
+        scratch_dir = getattr(self, "scratch_dir", None)
+        if scratch_dir is not None:
+            try:
+                shutil.rmtree(scratch_dir)
+                self.scratch_dir = None
+            except FileNotFoundError:
+                self.scratch_dir = None
+            except Exception as e:
+                logger.error(
+                    "Could not remove scratch directory %s during cleanup: %s",
+                    scratch_dir,
+                    e,
+                )

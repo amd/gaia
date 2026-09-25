@@ -1020,6 +1020,134 @@ class TestReadToolsSandbox:
         assert result["content"] == "no validator here"
 
 
+# ===========================================================================
+# 11. analyze_data_file date_range parsing (#3882)
+# ===========================================================================
+
+
+class TestParseDateRange:
+    @pytest.mark.parametrize(
+        "expr, expected",
+        [
+            ("2025-Q1", ("2025-01", "2025-03")),
+            ("2025-q2", ("2025-04", "2025-06")),
+            ("Q1 2025", ("2025-01", "2025-03")),
+            ("Q3-2025", ("2025-07", "2025-09")),
+            ("2025 Q4", ("2025-10", "2025-12")),
+            ("Q1'25", ("2025-01", "2025-03")),
+            ("Q2 '25", ("2025-04", "2025-06")),
+            ("Q1'00", ("2000-01", "2000-03")),
+            ("Q4'68", ("2068-10", "2068-12")),
+            ("Q2'69", ("1969-04", "1969-06")),
+            ("Q1'98", ("1998-01", "1998-03")),
+            ("first quarter 2025", ("2025-01", "2025-03")),
+            ("4th quarter of 2024", ("2024-10", "2024-12")),
+            ("2025", ("2025-01", "2025-12")),
+            ("2025-03", ("2025-03", "2025-03")),
+            ("2025-03-15", ("2025-03", "2025-03")),
+            ("2025-01 to 2025-06", ("2025-01", "2025-06")),
+            ("2025-01-01:2025-03-31", ("2025-01", "2025-03")),
+            ("2025-01:2025-02", ("2025-01", "2025-02")),
+            ("Q1 2025 to Q2 2025", ("2025-01", "2025-06")),
+            ("  2025-Q1  ", ("2025-01", "2025-03")),
+        ],
+    )
+    def test_accepted_forms(self, expr, expected):
+        from gaia.agents.tools.file_tools import parse_date_range
+
+        assert parse_date_range(expr) == expected
+
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            "last month",
+            "Q5 2025",
+            "March 2025",
+            "2025-13",
+            "2025-02-30",
+            "25",
+            "2025-06 to 2025-01",
+            "2025-01:2025-02:2025-03",
+        ],
+    )
+    def test_unsupported_forms_return_none(self, expr):
+        from gaia.agents.tools.file_tools import parse_date_range
+
+        assert parse_date_range(expr) is None
+
+
+@pytest.fixture
+def analyze_sales(tmp_path):
+    """analyze_data_file bound to a small CSV spanning 2025-01..2025-05."""
+    f = tmp_path / "sales.csv"
+    f.write_text(
+        "date,region,amount\n"
+        "2025-01-10,east,100\n"
+        "2025-02-14,west,200\n"
+        "2025-03-31,east,300\n"
+        "2025-04-01,west,400\n"
+        "2025-05-20,east,500\n",
+        encoding="utf-8",
+    )
+    _StubMixin().register_file_search_tools()
+    analyze = _TOOL_REGISTRY["analyze_data_file"]["function"]
+    return lambda **kw: analyze(str(f), **kw)
+
+
+class TestAnalyzeDataFileDateRange:
+    @pytest.mark.parametrize(
+        "expr", ["2025-Q1", "Q1 2025", "Q1-2025", "2025 Q1", "Q1'25", "Q1 '25"]
+    )
+    def test_quarter_forms_filter_to_q1(self, analyze_sales, expr):
+        result = analyze_sales(date_range=expr)
+
+        assert result["status"] == "success"
+        assert result["row_count"] == 3
+        assert result["date_filter_parsed"] == {"start": "2025-01", "end": "2025-03"}
+        assert result["summary"]["amount"]["sum"] == 600
+
+    def test_bare_year_keeps_whole_year(self, analyze_sales):
+        result = analyze_sales(date_range="2025")
+
+        assert result["row_count"] == 5
+
+    def test_single_month_and_day(self, analyze_sales):
+        assert analyze_sales(date_range="2025-04")["row_count"] == 1
+        assert analyze_sales(date_range="2025-02-01")["row_count"] == 1
+
+    def test_to_and_colon_ranges(self, analyze_sales):
+        assert analyze_sales(date_range="2025-02 to 2025-04")["row_count"] == 3
+        assert analyze_sales(date_range="2025-01-01:2025-02-28")["row_count"] == 2
+
+    def test_unparseable_range_is_an_error_not_zero_rows(self, analyze_sales):
+        result = analyze_sales(date_range="last quarter")
+
+        assert result["status"] == "error"
+        assert result["has_errors"] is True
+        assert "row_count" not in result
+        assert "'last quarter'" in result["error"]
+        assert "Q1 2025" in result["error"]
+
+    def test_genuinely_empty_period_reports_parsed_range(self, analyze_sales):
+        result = analyze_sales(date_range="Q3 2025")
+
+        assert result["status"] == "success"
+        assert result["row_count"] == 0
+        assert result["date_filter_parsed"] == {"start": "2025-07", "end": "2025-09"}
+        assert "2025-07" in result["message"] and "2025-09" in result["message"]
+
+    def test_no_date_column_is_an_error(self, tmp_path):
+        f = tmp_path / "plain.csv"
+        f.write_text("region,amount\neast,100\n", encoding="utf-8")
+        _StubMixin().register_file_search_tools()
+        analyze = _TOOL_REGISTRY["analyze_data_file"]["function"]
+
+        result = analyze(str(f), date_range="2025-Q1")
+
+        assert result["status"] == "error"
+        assert "no date column" in result["error"]
+
+
 def test_large_text_file_supports_bounded_page(read_file_fn, tmp_path):
     path = tmp_path / "large.txt"
     with path.open("w", encoding="utf-8") as stream:

@@ -73,6 +73,21 @@ const (
 	memoryContractMinor = 13
 )
 
+// toolDecisionContract is the contract version that introduced
+// `POST /query/{run_id}/tool_decision` and `POST /sessions/{id}/bypass`
+// (schema 2.14). A peer below it has no such route, and its plain 404 reads as
+// "the run already finished" rather than "this agent is too old to be asked".
+// Read it together with toolDecisionAgentID, never on its own.
+const (
+	toolDecisionContractMajor = 2
+	toolDecisionContractMinor = 14
+)
+
+// toolDecisionAgentID is the only agent that serves those routes. `email` also
+// reports 2.14 and has neither, so a version-only gate would offer them there
+// and then 404 — the same reason memoryAgentID exists.
+const toolDecisionAgentID = "gaia"
+
 // memoryAgentID is the only agent that serves a memory dump. The flagship owns
 // the memory store; `email` reports a numerically HIGHER contract (2.14) and
 // has no such route, so a version-only gate would offer /memory there and then
@@ -99,6 +114,9 @@ type peerContract struct {
 	canAnswerQuestions bool
 	// supportsSession is true only when the peer is provably >= 2.12.
 	supportsSession bool
+	// supportsToolDecision is true only when the peer is the gaia agent at
+	// >= 2.14, and so has the routes that answer a permission prompt and toggle bypass.
+	supportsToolDecision bool
 	// answered is true only when the /version probe actually heard from the
 	// peer: a parsed 200 body, or a 404 (no such route -- which is itself a
 	// definitive "old enough to predate every contract this file tracks").
@@ -107,6 +125,14 @@ type peerContract struct {
 	// answered and is old", and callers that need the distinction (Supports,
 	// FetchMemory) must not collapse the two (#3978 A1).
 	answered bool
+}
+
+// versionLabel names the peer's contract for an error a user reads.
+func (p peerContract) versionLabel() string {
+	if p.version == "" {
+		return "an unknown version"
+	}
+	return p.version
 }
 
 // negotiate resolves the peer's contract once per client and caches it,
@@ -203,18 +229,21 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 
 	supports := contractAtLeast(payload.APIVersion, questionsContractMajor, questionsContractMinor)
 	supportsSession := contractAtLeast(payload.APIVersion, sessionContractMajor, sessionContractMinor)
-	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t)",
-		s.agentID, payload.APIVersion, supports, supportsSession)
+	supportsDecision := s.agentID == toolDecisionAgentID &&
+		contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
+	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, tool decisions: %t)",
+		s.agentID, payload.APIVersion, supports, supportsSession, supportsDecision)
 	agentVersion := payload.Version
 	if agentVersion == "" {
 		agentVersion = payload.AgentVersion
 	}
 	return peerContract{
-		version:            payload.APIVersion,
-		agentVersion:       agentVersion,
-		canAnswerQuestions: supports,
-		supportsSession:    supportsSession,
-		answered:           true,
+		version:              payload.APIVersion,
+		agentVersion:         agentVersion,
+		canAnswerQuestions:   supports,
+		supportsSession:      supportsSession,
+		supportsToolDecision: supportsDecision,
+		answered:             true,
 	}
 }
 
