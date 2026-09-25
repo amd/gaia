@@ -5,6 +5,9 @@
 import json
 import logging
 import os
+import socket
+import subprocess
+import sys
 
 import pytest
 import responses
@@ -15,6 +18,28 @@ from gaia.llm import lemonade_client as lc
 #: ``lemond`` image, which a test cannot produce, and these tests are about
 #: which endpoint wins — liveness itself is covered by TestStaleEmbeddedState.
 LIVE_PID = 4242
+
+
+def reaped_pid() -> int:
+    """A pid that really is gone: spawned, waited on, and exited.
+
+    Beats a made-up number — the liveness check runs for real against it, so
+    the dead-state path is exercised end to end rather than mocked past.
+    """
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    process.wait(timeout=60)
+    return process.pid
+
+
+def closed_port() -> int:
+    """A port nothing is listening on — the stale file's recorded port."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 @pytest.fixture
@@ -64,6 +89,40 @@ class TestStaleEmbeddedState:
         )
         monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", path)
         return path
+
+    def test_a_dead_daemon_does_not_hijack_the_endpoint(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """The whole bug, with nothing stubbed out.
+
+        The tests below pin the wiring with ``_embedded_lemonade_alive``
+        replaced, so they stay green against any liveness check — including one
+        that calls a dead pid alive. This one hands the real check a pid that is
+        genuinely gone, and is what fails if #4281 comes back.
+        """
+        monkeypatch.delenv("GAIA_HOME", raising=False)
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        monkeypatch.setattr(lc, "_WARNED_STALE_EMBEDDED_STATE", set())
+        dead, port = reaped_pid(), closed_port()
+        path = tmp_path / "state.json"
+        path.write_text(
+            json.dumps({"pid": dead, "port": port, "api_key": "stale-key"}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(lc, "EMBEDDED_LEMONADE_STATE", path)
+
+        caplog.set_level(logging.WARNING, logger="gaia.llm.lemonade_client")
+        assert lc.resolve_lemonade_base_url() == lc.DEFAULT_LEMONADE_URL
+        assert lc._get_lemonade_config()[1] == lc.DEFAULT_PORT
+        assert lc.resolve_lemonade_api_key() is None
+
+        warning = "\n".join(
+            r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
+        )
+        assert str(path) in warning
+        assert str(port) in warning
+        assert str(dead) in warning
 
     def test_dead_pid_does_not_change_the_base_url(self, stale_state, monkeypatch):
         monkeypatch.setattr(lc, "_embedded_lemonade_alive", lambda pid: False)
