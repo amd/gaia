@@ -334,6 +334,7 @@ gaia install [OPTIONS]
 |--------|------|-------------|
 | `--lemonade` | flag | Install Lemonade Server |
 | `--yes, -y` | flag | Skip confirmation prompts |
+| `--silent` | flag | Silent installation (no UI, no desktop shortcuts) |
 
 **Examples:**
 
@@ -344,6 +345,10 @@ gaia install --lemonade
 
 ```bash Non-Interactive
 gaia install --lemonade --yes
+```
+
+```bash Silent (no UI, no shortcuts)
+gaia install --lemonade --silent
 ```
 </CodeGroup>
 
@@ -1352,6 +1357,20 @@ gaia mcp agent <request> [--domain DOMAIN] [--context CONTEXT]
 Pass a natural-language `request` and, optionally, a `--domain` (e.g. `atlassian`,
 `gaia`, `all`) and free-form `--context` string to steer the orchestrator.
 
+#### `gaia mcp serve` options
+
+Wraps the Agent UI backend's REST API as MCP tools, so an MCP client (Claude
+Code, for example) can chat through the same backend that powers the browser
+UI — conversations and tool activity show up there in real time. The Agent UI
+backend (`gaia chat --ui`) must already be running.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--host` | `localhost` | Bind address |
+| `--port` | `8766` | Port for the MCP server |
+| `--backend` | `http://localhost:4200` | GAIA Agent UI backend URL |
+| `--stdio` | off | Use stdio transport instead of HTTP (Claude Code / eval runner integration) |
+
 #### `gaia mcp tui` options
 
 Wraps the [TUI control API](#tui-control-api) as MCP tools, so an assistant can
@@ -1734,6 +1753,16 @@ Generate a report:
 gaia report -d ./eval_results
 ```
 
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-d, --eval-dir` | `./output/evaluations` | Directory containing `.eval.json` files to analyze |
+| `-o, --output-file` | `LLM_Evaluation_Report.md` | Output filename for the markdown report |
+| `--summary-only` | off | Only display the summary on the console; don't save a report file |
+
+<Warning>
+  `gaia report` is registered but not currently dispatched ([#3488](https://github.com/amd/gaia/issues/3488)) — it prints top-level help and exits 0 instead of generating a report.
+</Warning>
+
 Visualize llama.cpp performance logs:
 ```bash
 gaia perf-vis ./logs/llama-server.log
@@ -1844,6 +1873,24 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 </Note>
 
 [→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
+
+---
+
+### Code Benchmark
+
+Each task ships a project and a test suite; the agent is asked to change it and
+the suite decides pass/fail — no LLM judge. A TUI must already be running with
+a control port, since this drives *that* session so the run is visible.
+
+```bash
+gaia eval code --control ~/.gaia/tui/control.json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--control` | – | Path to the running TUI's `control.json` |
+| `--out` | `eval/results/code-<timestamp>` | Output directory |
+| `--workspace` | a temp directory | Where to materialize the task projects |
 
 ---
 
@@ -3281,6 +3328,8 @@ All commands support these global options:
 |--------|------|---------|-------------|
 | `--logging-level` | string | INFO | Logging verbosity [DEBUG, INFO, WARNING, ERROR, CRITICAL] |
 | `-v, --version` | flag | - | Show program's version and exit |
+| `--claude-model <name>` | string | `claude-sonnet-4-20250514` | Claude model to use when `--use-claude` is set |
+| `--no-lemonade-check` | flag | - | Skip the Lemonade server reachability check (CI/testing without Lemonade) |
 
 ---
 
