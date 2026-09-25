@@ -164,6 +164,41 @@ func TestAFollowUpRefusedAfterTheTurnEndedGoesBackToTheComposer(t *testing.T) {
 	}
 }
 
+// The real Esc path, which the test above only approximates by clearing
+// m.streaming by hand. A cancel does not end the turn: the agent stops at its
+// next step boundary, so m.streaming is still true when the refused delivery
+// lands. Queueing it there outlives requestCancel's own restoreQueuedToComposer
+// and fires the message as a fresh turn the moment the turn settles — exactly
+// what Esc was pressed to prevent.
+func TestAFollowUpRefusedWhileACancelIsPendingGoesBackToTheComposer(t *testing.T) {
+	c := &followUpClient{supported: true, err: errors.New("no live run to take a follow-up")}
+	m := newFollowUpChat(t, c)
+	m.cancelFn = func() {}
+	m.events = make(chan interface{})
+	m = typeInto(t, m, "and the calendar")
+
+	m, cmd := press(t, m, tea.KeyEnter)
+
+	// Esc while the POST is still in flight. The turn has NOT settled.
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+	if !m.cancelPending {
+		t.Fatal("test setup: cancelPending must be true after Esc")
+	}
+	if !m.streaming {
+		t.Fatal("test setup: a pending cancel must not have ended the turn")
+	}
+
+	m = run(t, m, cmd)
+
+	if len(m.queued) != 0 {
+		t.Fatalf("the message was queued behind a cancelled turn, so it fires as a new turn the user did not ask for: %q", m.queued)
+	}
+	if got := m.input.Value(); got != "and the calendar" {
+		t.Errorf("the message was not put back in the composer: %q", got)
+	}
+}
+
 // /clear mid-turn means "clear when this turn is over", and the agent has no
 // use for the literal word folded into its context.
 func TestSlashCommandsAreNeverSentMidTurn(t *testing.T) {

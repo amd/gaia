@@ -103,16 +103,19 @@ func (m ChatModel) handleFollowUpSent(msg followUpSentMsg) (tea.Model, tea.Cmd) 
 // owed both the reason and where it went instead.
 //
 // Where it goes depends on whether there is still a turn to wait behind. With
-// one running, the queue is right — it goes out when that turn ends. With the
-// turn already over, the queue would fire it as a new turn IMMEDIATELY, and the
+// one running and not being cancelled, the queue is right — it goes out when
+// that turn ends. Otherwise the queue would fire it as a new turn, and the
 // commonest way to end up here is the user pressing Esc: answering a cancel by
 // starting a turn is the opposite of what they asked for. So it goes back to
 // the composer, where Esc's own recovery puts everything else.
 func (m ChatModel) handleFollowUpFailed(msg followUpFailedMsg) (tea.Model, tea.Cmd) {
 	m.sending = dropFirst(m.sending, msg.text)
 
+	// A cancel requested while this delivery was in flight has already run
+	// restoreQueuedToComposer, so re-queueing here would outlive it.
+	queue := m.streaming && !m.cancelPending
 	landed := "holding it until this turn ends"
-	if !m.streaming {
+	if !queue {
 		landed = "put it back in the composer"
 	}
 	m.messages = append(m.messages, Message{
@@ -121,7 +124,7 @@ func (m ChatModel) handleFollowUpFailed(msg followUpFailedMsg) (tea.Model, tea.C
 			sanitizeErrorText(msg.err.Error()), landed),
 	})
 
-	if m.streaming {
+	if queue {
 		m.queued = append(m.queued, msg.text)
 		m.updateViewport()
 		return m, nil

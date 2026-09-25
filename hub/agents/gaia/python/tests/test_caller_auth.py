@@ -137,8 +137,11 @@ def test_every_route_on_the_router_is_gated(monkeypatch):
             ), f"{method} {url} answered {r.status_code}, not 401"
             checked += 1
     # A router that stopped exposing its routes would otherwise pass vacuously.
+    # The floor is the CURRENT non-exempt route count, not a historical one: at
+    # 4 against 8 real routes, half the surface could vanish and this still
+    # passed. Raise it with the route set, never leave it trailing behind.
     assert (
-        checked >= 4
+        checked >= 8
     ), f"only {checked} routes were checked; the enumeration is not working"
 
 
