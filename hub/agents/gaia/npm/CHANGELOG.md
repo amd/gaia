@@ -104,6 +104,24 @@ the terminal UI meant building it from source.
   starts one in the background; `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns that off,
   and `GAIA_PROJECT_ROOT` picks the project when the working directory is not
   it. See SKILL §11.
+- **`--bypass-permissions` now lifts the shell guardrails too.** It used to skip
+  only the confirmation prompt, which left the agent unable to run a build or a
+  test suite even with the user's blanket consent: no interpreter, test runner
+  or package manager was reachable, and nothing could write its output anywhere.
+  Under bypass, redirection (`>`, `>>`, `<`), backgrounding (`&`), substitution
+  (`` ` ``, `$()`) and the newline now parse and run — chaining with `&&` / `||`
+  / `;` / `|` already worked by default — the
+  read-only allowlist is replaced by a developer set (`node`, `npm`, `make`,
+  `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`, `timeout`, `export`,
+  `cp`, `mv`, plus `python` / `python3` / `pytest` / `gh` / `git`), and the
+  shell rate limit is dropped. Off by default and byte-identical to before when
+  off. `git` in that set means its policy's outright refusals — push, reset,
+  rebase — also stop applying under bypass. `rm` stays excluded. Every command run this way is audit-logged with its full
+  arguments. Stdio only — an HTTP session's `/bypass` stops its approval prompts
+  but never lifts the shell gates, and the request body cannot ask for it.
+  Redirection has one exception: a command that
+  is nothing but a skill-granted CLI runs argv-only, so `>` there is refused
+  with an explanation instead of reaching the binary as text. See SPEC §5.5.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a

@@ -378,6 +378,15 @@ It applies to the very next gated tool, including one in a turn already running,
 and an unknown session is a **404** rather than a new one. A malformed
 `session_id` is a **400**, same as on `/query`.
 
+**That bypass stops the prompts; it does not open the shell.** The stdio
+transport's `--bypass-permissions` does both — it runs gated tools unasked *and*
+lifts the shell tool's guardrails (redirection and the other shell-only
+operators, the read-only binary allowlist, the rate limit). That second half is
+arbitrary code execution, appropriate for one local parent on a private pipe and
+not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
+gates, and the request body rejects unknown fields so a client cannot ask. See
+SPEC §5.5.
+
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
 immediately with a terminal `final` saying it stopped before running the action,
