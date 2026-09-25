@@ -146,7 +146,9 @@ def test_launch_server_leaves_a_non_gaia_listener_running():
             time.sleep(0.1)
 
         client = LemonadeClient(host="localhost", port=port, verbose=False)
-        with pytest.raises(LemonadeClientError, match="not a GAIA or Lemonade"):
+        with pytest.raises(
+            LemonadeClientError, match="which GAIA will not stop for you"
+        ):
             _launch_with_mocked_server(client)
 
         assert listener.poll() is None, "launch_server killed a non-GAIA listener"
