@@ -696,6 +696,12 @@ class ProjectMapMixin:
         """One line on the semantic index, or ``None`` when it does not apply."""
         if not pm.is_repository:
             return None
+        # Every line below advises calling index_codebase or search_code_index.
+        # An agent that composes this mixin without the code-index tools would
+        # be told to call one that does not exist — the same guard
+        # _maybe_start_background_index already applies to the trigger.
+        if "index_codebase" not in self._tool_names():
+            return None
         indexed = self._code_index_is_built()
         if indexed is None:
             return None
