@@ -55,6 +55,22 @@ def json_response(payload, status=200):
     return httpx.Response(status, json=payload)
 
 
+def unfenced(message):
+    """The body a read returns, with the untrusted-content fence stripped.
+
+    ``read_email`` wraps every body in the fence (#4150); these tests are about
+    what is inside it — truncation, and the per-turn budget it is charged to.
+    """
+    from gaia.agents.tools._email.phishing import (
+        UNTRUSTED_BODY_CLOSE,
+        UNTRUSTED_BODY_OPEN,
+    )
+
+    body = message["body"]
+    assert body.startswith(UNTRUSTED_BODY_OPEN) and body.endswith(UNTRUSTED_BODY_CLOSE)
+    return body[len(UNTRUSTED_BODY_OPEN) : -len(UNTRUSTED_BODY_CLOSE)].strip("\n")
+
+
 def graph_error(status, code=None, body=None):
     """A Graph error response: either a structured `{error: {code}}` body, or
     a raw text body (HTML, plain text) to simulate what Graph and proxies
@@ -776,7 +792,7 @@ def test_read_email_body_is_bounded_and_truncation_is_visible(harness_factory):
     h = harness_factory(lambda r: json_response(message))
 
     out = json.loads(h._tool("read_email")(message_id="AAMk-1"))["message"]
-    assert len(out["body"]) == _MAX_BODY_CHARS
+    assert len(unfenced(out)) == _MAX_BODY_CHARS
     assert out["body_truncated"] is True
     assert out["body_original_chars"] == len(huge)
 
@@ -785,7 +801,7 @@ def test_a_short_body_is_not_marked_truncated(harness_factory):
     h = harness_factory(lambda r: json_response(GRAPH_MESSAGE))
     out = json.loads(h._tool("read_email")(message_id="AAMk-1"))["message"]
     assert "body_truncated" not in out
-    assert out["body"] == "<p>Can you confirm?</p>"
+    assert unfenced(out) == "<p>Can you confirm?</p>"
 
 
 def test_backend_is_not_built_until_a_tool_runs():
@@ -899,7 +915,7 @@ def test_turn_budget_refuses_once_the_turn_is_full(harness_factory):
     assert "message" not in refusal
 
     budget = h._email_turn_budget_chars()
-    total_charged = sum(len(r["message"]["body"]) for r in successes)
+    total_charged = sum(len(unfenced(r["message"])) for r in successes)
     assert total_charged == h._email_turn_body_chars
     assert total_charged <= budget + _MAX_BODY_CHARS
 
@@ -1037,3 +1053,246 @@ def test_turn_counter_increments_without_agent_init():
     bare._turn_seq += 1
     assert bare._turn_seq == 1
     assert Agent._turn_seq == 0
+
+
+# --------------------------------------------------------------------------
+# recollection search — broadening a query the provider ANDs down to zero
+# --------------------------------------------------------------------------
+
+
+def _mailbox_matching(*matching_queries):
+    """A Graph handler whose mailbox only answers the given `$search` terms.
+
+    Models the real failure: every term is ANDed, so the long paraphrase the
+    model builds from a user's recollection matches nothing while two words
+    from the message match immediately.
+    """
+    wanted = {q.lower() for q in matching_queries}
+    seen = []
+
+    def handler(request):
+        term = (request.url.params.get("$search") or "").strip('"')
+        seen.append(term)
+        hit = term.lower() in wanted
+        return json_response({"value": [GRAPH_MESSAGE] if hit else []})
+
+    return handler, seen
+
+
+def test_search_docstring_warns_that_terms_are_anded(harness_factory):
+    """The model must be told a longer query is a narrower one.
+
+    Without this the natural translation of a sentence into keywords is
+    always wrong, and the zero result reads as "no such mail".
+    """
+    h = harness_factory(lambda r: json_response({"value": []}))
+    doc = h._tool("search_email").__doc__.lower()
+
+    assert "anded" in doc and "narrower" in doc
+
+
+def test_zero_result_query_is_broadened_until_it_hits(harness_factory):
+    handler, seen = _mailbox_matching("argument cameras")
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(query="the argument over cameras police use")
+    )
+
+    assert out["count"] == 1
+    assert out["broadened"] is True
+    assert out["query_used"] == "argument cameras"
+    assert seen[0] == "the argument over cameras police use"  # full query tried first
+    assert seen[-1] == "argument cameras"
+
+
+def test_broadened_result_names_the_query_that_produced_it(harness_factory):
+    handler, _ = _mailbox_matching("contract counter-signature")
+    h = harness_factory(handler)
+
+    out = json.loads(
+        h._tool("search_email")(
+            query="please sign off on the contract counter-signature schedule"
+        )
+    )
+
+    assert out["query_requested"] == (
+        "please sign off on the contract counter-signature schedule"
+    )
+    assert out["query_used"] == "contract counter-signature"
+    assert [a["count"] for a in out["attempts"]] == [0, 0, 1]
+    # The model must not present a looser match as an exact one.
+    assert "approximate" in out["note"]
+
+
+def test_absent_message_still_reports_zero_after_broadening(harness_factory):
+    """The case a naive retry loop gets wrong: broadening must not invent a hit."""
+    handler, seen = _mailbox_matching()  # nothing matches, ever
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="quarterly budget from Dana"))
+
+    assert out["success"] is True
+    assert out["count"] == 0
+    assert out["messages"] == []
+    assert len(seen) == len(out["attempts"]) >= 2
+    assert len(seen) <= 6  # broadening is bounded, not an unbounded retry loop
+    assert all(a["count"] == 0 for a in out["attempts"])
+    assert "No message matched" in out["note"]
+
+
+def test_short_query_that_hits_is_not_broadened(harness_factory):
+    handler, seen = _mailbox_matching("flock newsletter")
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="flock newsletter"))
+
+    assert out["count"] == 1
+    assert out["broadened"] is False
+    assert out["query_used"] == "flock newsletter"
+    assert seen == ["flock newsletter"]  # one round trip, no wasted retry
+
+
+def test_empty_query_still_fails_loudly(harness_factory):
+    """Broadening must not turn a rejected query into a silent empty result."""
+    h = harness_factory(lambda r: json_response({"value": []}))
+
+    out = json.loads(h._tool("search_email")(query="   "))
+
+    assert out["success"] is False
+    assert "non-empty search string" in out["error"]
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        # Nothing to drop — the pair rung is the query itself, so it is skipped.
+        ("flock cameras", ["flock cameras", "cameras", "flock"]),
+        # Stopwords go first, then the two longest terms, then one at a time.
+        (
+            "the argument over surveillance cameras police",
+            [
+                "the argument over surveillance cameras police",
+                "argument surveillance cameras police",
+                "argument surveillance",
+                "surveillance",
+                "argument",
+                "cameras",
+            ],
+        ),
+        # A boolean the model emitted is operator noise, not a keyword.
+        (
+            "camera debate OR argument policy",
+            [
+                "camera debate OR argument policy",
+                "camera debate argument policy",
+                "camera argument",
+                "argument",
+                "camera",
+                "debate",
+            ],
+        ),
+        # A quoted phrase stays one term, whole, at every rung.
+        (
+            '"Fieldstone MSA" needs a counter-signature',
+            [
+                '"Fieldstone MSA" needs a counter-signature',
+                '"Fieldstone MSA" counter-signature',
+                "counter-signature",
+                '"Fieldstone MSA"',
+            ],
+        ),
+        # An all-stopword query has no content rung to fall back to.
+        ("did you get it", ["did you get it"]),
+    ],
+)
+def test_broadening_ladder_is_deterministic(query, expected):
+    from gaia.agents.tools.email_tools import _broadening_ladder
+
+    assert _broadening_ladder(query) == expected
+
+
+def test_no_broadened_rung_is_a_bare_mailbox_filter():
+    """A rung of only operators returns a slice of the mailbox, not a match.
+
+    ``is:unread`` alone is non-empty for almost every mailbox, so the ladder
+    would stop there and hand the model 25 unrelated messages labelled as a
+    broadened hit — the confident wrong answer this feature exists to prevent.
+    """
+    from gaia.agents.tools.email_tools import _broadening_ladder
+
+    def names_content(term):
+        """Independent of the implementation: does this term say what to find?"""
+        field, separator, _ = term.partition(":")
+        return not term.startswith("-") and not (separator and field.isidentifier())
+
+    for query in (
+        "is:unread flock",
+        "invoice newer_than:7d",
+        "from:dana invoice",
+        "label:work contract signature",
+        "-promo receipt",
+    ):
+        for rung in _broadening_ladder(query):
+            assert any(
+                names_content(t) for t in rung.split()
+            ), f"{query!r} produced an operator-only rung: {rung!r}"
+
+    # An operator-only query is still run once, exactly as asked.
+    assert _broadening_ladder("is:unread") == ["is:unread"]
+
+
+def test_surrounding_whitespace_is_not_a_broadening(harness_factory):
+    """``broadened`` must track terms, not spacing.
+
+    Small models emit trailing and doubled spaces constantly. Reporting one
+    as a broadening tells the model to hedge about an exact first-try hit.
+    """
+    handler, seen = _mailbox_matching("Acme invoice")
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query=" Acme  invoice "))
+
+    assert out["count"] == 1
+    assert out["broadened"] is False
+    assert "note" not in out  # nothing to hedge about
+    assert seen == ["Acme invoice"]
+
+
+def test_mid_ladder_backend_failure_is_reported_not_swallowed(harness_factory):
+    """A rung that errors must surface the error, not read as 'no such mail'."""
+    calls = []
+
+    def handler(request):
+        calls.append((request.url.params.get("$search") or "").strip('"'))
+        if len(calls) == 1:
+            return json_response({"value": []})
+        return httpx.Response(401, text="expired")
+
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="quarterly budget Dana"))
+
+    assert out["success"] is False
+    assert "gaia connectors" in out["error"]
+    # An empty result here would read to the model as a genuine miss.
+    assert "messages" not in out and "count" not in out
+    assert len(calls) == 2
+
+
+def test_limit_is_clamped_on_every_broadened_rung(harness_factory):
+    """The clamp lives inside the loop; a rung outside it would send limit raw."""
+    from gaia.agents.tools.email_tools import _MAX_LIMIT
+
+    tops = []
+
+    def handler(request):
+        tops.append(int(request.url.params["$top"]))
+        return json_response({"value": []})
+
+    h = harness_factory(handler)
+
+    json.loads(h._tool("search_email")(query="quarterly budget from Dana", limit=500))
+
+    assert len(tops) >= 3  # the ladder really did run several rungs
+    assert set(tops) == {_MAX_LIMIT}

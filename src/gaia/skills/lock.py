@@ -38,12 +38,15 @@ wherever ``GAIA_CONFIG_DIR`` points)::
       }
     }
 
-``gaia skill install`` writes ``source: "hub"`` entries. A skill created with
-``gaia skill create`` or copied in with ``gaia skill import`` has no hub
-provenance, so install never invents one; ``gaia skill lock --relock``
+``gaia skill install`` writes ``source: "hub"`` entries. A capture
+(``source: "captured"``) records where the bundle came from (``origin``) and the
+code-trust state (``captured`` / ``code_trusted``) that gates whether its
+``tools.py`` may register — see :mod:`gaia.skills.capture`. A skill created with
+``gaia skill create`` or copied in with ``gaia skill import`` has no provenance
+of either kind, so neither path invents one; ``gaia skill lock --relock``
 (:mod:`gaia.skills.drift`) may record it as ``source: "local"``, which asserts
 exactly the origin it has and nothing more. Only a ``hub`` entry's tier is an
-enforcement decision; a ``local`` entry's is the author's own claim.
+enforcement decision; any other source's is the author's own claim.
 
 A missing lock file is an **empty** lock, not an error — that is a machine with no
 hub-installed skills. A *corrupt* one raises: silently starting over would drop
@@ -76,6 +79,9 @@ LOCK_SCHEMA_VERSION = 1
 
 #: ``source`` value for a skill pulled from the Agent Hub.
 SOURCE_HUB = "hub"
+
+#: ``source`` value for a skill captured from pasted text, a URL, or a folder.
+SOURCE_CAPTURED = "captured"
 
 #: ``source`` value for a skill that lives in the user root without hub
 #: provenance — authored with ``gaia skill create``, copied in with
@@ -117,6 +123,17 @@ class LockEntry:
     permissions: list[str] = field(default_factory=list)
     installed_at: str = field(default_factory=_now)
     path: str = ""
+    #: Where a captured skill's bytes came from (URL, path, or "pasted-text").
+    origin: str = ""
+    #: True for skills brought in by :func:`gaia.skills.capture.capture_skill`.
+    captured: bool = False
+    #: False while a captured skill's ``tools.py``/scripts are inert; flipped by
+    #: ``gaia skill promote`` after an audit ALLOW. Hub installs earned trust
+    #: through the install gauntlet, so their default is True.
+    code_trusted: bool = True
+    #: Content digest of the bundle the promote audited. Trust is bound to
+    #: these bytes: edit the skill after promoting and the code defers again.
+    code_digest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

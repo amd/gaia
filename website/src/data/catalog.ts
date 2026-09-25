@@ -87,7 +87,7 @@ export interface Agent {
   eval_score?: number;
   // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
   // distributed as an npm client + frozen sidecar. Present → GAIA install is
-  // shown first, with npm as the embed path. Absent → pip/GAIA (language-driven).
+  // shown first, with npm as the embed path. Absent → GAIA and source installs.
   npm_package?: string;
   // Localhost URL of the agent's interactive playground, served by its sidecar
   // (e.g. "http://127.0.0.1:8131/v1/email/playground"). Only resolves once the
@@ -476,8 +476,8 @@ export function isNpmSidecar(agent: Agent): boolean {
  *    client + frozen binary, NOT a PyPI wheel. We show GAIA first (recommended)
  *    and npm as the embed option — no broken `pip install` (there's no wheel)
  *    and no unverified source build.
- *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
- *    source build (language-driven, the long-standing default).
+ *  - Otherwise: the GAIA app install and a source build. Implementation
+ *    language does not prove that a package was published to PyPI.
  */
 export function installMethods(agent: Agent): InstallMethod[] {
   // A skill is not an agent package: it installs into ~/.gaia/skills/ and is
@@ -545,14 +545,6 @@ export function installMethods(agent: Agent): InstallMethod[] {
       note: "Recommended — installs into your GAIA app and registers the agent automatically.",
     },
   ];
-  if (agent.language === "python") {
-    methods.push({
-      key: "pip",
-      label: "pip",
-      command: `pip install gaia-agent-${agent.id}`,
-      note: "Python package from PyPI. Discovered via the gaia.agent entry-point group.",
-    });
-  }
   methods.push({
     key: "source",
     label: "Source",

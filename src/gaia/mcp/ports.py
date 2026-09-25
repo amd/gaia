@@ -11,9 +11,13 @@ Port map (each surface binds loopback by default):
 - 8768 ``TELEGRAM_HEALTH_PORT`` — Telegram adapter ``/healthz`` probe. Every
   surface gets its own default so the MCP bridge and the Telegram health
   server do not collide on one machine; pass ``--health-port`` to move it.
+- 8769 ``SLACK_HEALTH_PORT`` — Slack adapter ``/healthz`` probe. Socket Mode
+  itself needs no inbound port (the connection is an outbound WebSocket);
+  this is only so a supervisor can ask whether the bridge is alive.
 """
 
 MCP_BRIDGE_PORT = 8765
 AGENT_UI_MCP_PORT = 8766
 TUI_MCP_PORT = 8767
 TELEGRAM_HEALTH_PORT = 8768
+SLACK_HEALTH_PORT = 8769

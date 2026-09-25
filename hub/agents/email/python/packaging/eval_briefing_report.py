@@ -40,6 +40,7 @@ from gaia.eval.briefing_quality import (
     make_claude_judge,
     summarize_briefings,
 )
+from gaia.eval.judge_outage import run_with_outage_guard
 
 CORPUS_PATH = "tests/fixtures/email/briefing_ground_truth.json"
 
@@ -161,4 +162,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_with_outage_guard(main))
