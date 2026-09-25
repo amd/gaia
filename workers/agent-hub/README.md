@@ -21,6 +21,7 @@ depend on any `src/gaia` code.
 | `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, `CHANGELOG.md`, `SPEC.md`, `SKILL.md`, `EVALUATION.md`, `CAPABILITY_MATRIX.md`, or `SCORECARD.md` |
 | `GET /skills/<name>/manifest.json` | none | Per-skill aggregate manifest (all versions) |
 | `GET /skills/<name>/<version>/<file>` | none | Download a skill bundle, its raw `SKILL.md`, `CHANGELOG.md`, or `audit.json` |
+| `POST /reindex` | Bearer (`REINDEX_TOKEN`) | Maintainer-only rebuild of `index.json` from the immutable R2 objects — the recovery path if the catalog is lost or a schema change needs backfilling (#3538). Idempotent and non-destructive; does not touch the stored artifacts or manifests. |
 | `GET /health` | none | Liveness probe |
 
 ### Catalog lanes
@@ -54,10 +55,19 @@ versa (`409 id_conflict`).
   artifact — one per platform for a native binary (e.g. the frozen email agent
   ships four binaries under `email@0.1.0`). The first publish of a version
   creates it (and stores the immutable `gaia-agent.yaml`); each later publish
-  under the same version with a *new* filename appends another artifact. The
+  under the same version with a *new* filename appends another artifact —
+  **only if it carries the same manifest** (byte-equal, or equal once parsed, so
+  line endings, comments, and key order don't matter). A different manifest is
+  rejected with `409 manifest_mismatch` and the catalog is left as it was, so a
+  later post cannot change a published version's `security_tier`, permissions,
+  or platforms. The
   per-agent manifest's `versions[v]` records every artifact in `artifacts[]`,
   with `artifact` kept as the primary (first-published) entry for single-artifact
   (wheel) agents and catalog display.
+- **Skill versions are single-shot.** A skill version is one bundle plus the
+  `SKILL.md` and audit report that vouch for it, so any second
+  `POST /publish/skill` to an existing version is rejected with
+  `409 version_exists`, whatever its filename.
 - **Server-side SHA-256.** The checksum is computed by the Worker from the bytes
   it received — never trusted from the request. It is also handed to R2's `put`
   integrity check.
@@ -238,7 +248,16 @@ checked into the repo:
    Tokens are tied to the AMD Developer Program. The `authors` list bounds which
    `author` values a token may publish under; `"*"` is reserved for hub admins.
 
-3. **Deploy:**
+3. **Set the reindex token** as a secret, separate from `PUBLISH_TOKENS`:
+
+   ```bash
+   npx wrangler secret put REINDEX_TOKEN
+   ```
+
+   Guards `POST /reindex` (see the route table above). Unset, the route fails
+   loudly with `500 config_error` rather than falling back to allow-all.
+
+4. **Deploy:**
 
    ```bash
    npx wrangler deploy
@@ -281,7 +300,7 @@ checked into the repo:
    # {"status":"ok","build":"<commit>"}   — "unknown" means a hand-run deploy
    ```
 
-4. **(Optional) Bind the route** by uncommenting the `routes` line in
+5. **(Optional) Bind the route** by uncommenting the `routes` line in
    `wrangler.toml` to serve the API under `hub.amd-gaia.ai/*`.
 
 `MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps artifact size and can be

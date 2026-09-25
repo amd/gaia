@@ -141,6 +141,11 @@ class InstallResult:
     version: Optional[str] = None
     message: str = ""
     error: Optional[str] = None
+    restart_required: bool = False
+
+
+# msiexec exit codes for a successful install that still needs a reboot.
+_MSI_SUCCESS_REBOOT_REQUIRED = (3010, 1641)
 
 
 class LemonadeInstaller:
@@ -698,6 +703,16 @@ class LemonadeInstaller:
                     version=self.target_version,
                     message=f"Installed Lemonade v{self.target_version}",
                 )
+            elif result.returncode in _MSI_SUCCESS_REBOOT_REQUIRED:
+                return InstallResult(
+                    success=True,
+                    version=self.target_version,
+                    message=(
+                        f"Installed Lemonade v{self.target_version}. "
+                        "Restart Windows to finish the installation."
+                    ),
+                    restart_required=True,
+                )
             elif result.returncode == 1602:
                 return InstallResult(
                     success=False, error="Installation was cancelled by user"
@@ -705,7 +720,7 @@ class LemonadeInstaller:
             elif result.returncode == 1603:
                 return InstallResult(
                     success=False,
-                    error="Installation failed. Check Windows Event Log for details.",
+                    error=f"Installation failed (error 1603). See the MSI log: {msi_log}",
                 )
             elif result.returncode == 1618:
                 return InstallResult(
@@ -716,7 +731,10 @@ class LemonadeInstaller:
             else:
                 return InstallResult(
                     success=False,
-                    error=f"msiexec failed with code {result.returncode}: {result.stderr}",
+                    error=(
+                        f"msiexec failed with code {result.returncode}: "
+                        f"{result.stderr} See the MSI log: {msi_log}"
+                    ),
                 )
 
         except subprocess.TimeoutExpired:
