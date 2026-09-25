@@ -2487,6 +2487,8 @@ Run a prompt on a recurring cron schedule and route its output to a sink. Schedu
 
 The running daemon reloads schedules every second, so adding, pausing, resuming, removing, or editing a schedule does not require a restart. Pausing or removing a schedule prevents future runs; it does not interrupt a run already in progress.
 
+A run that comes due while the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name.
+
 ```bash
 gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 ```
