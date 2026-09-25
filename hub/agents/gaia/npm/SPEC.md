@@ -294,7 +294,8 @@ deletion claims the turn lock before removal and closes outside the registry loc
 whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
 agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
-threads them together.
+threads them together. A `session_id` must be 1–128 characters from
+`A-Z a-z 0-9 . _ -` (a UUID works); any other value fails the request.
 
 A skill **captured** in-conversation (the `capture_skill` tool — itself
 confirmation-gated, so over `/query` it needs a session that can answer) loads
