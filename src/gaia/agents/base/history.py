@@ -99,8 +99,21 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
     retained: deque = deque()
     used = 0
     evicted = 0
+    unreplayable = 0
+    hole = False
     for turn in turns:
         cost = count_tokens(json.dumps(turn, ensure_ascii=False))
+        if cost > budget:
+            hole = True
+            unreplayable += 1
+            continue
+        if hole:
+            # Replay stays contiguous: nothing before a dropped turn may sit
+            # next to what followed it.
+            evicted += len(retained)
+            retained.clear()
+            used = 0
+            hole = False
         retained.append((turn, cost))
         used += cost
         if used > budget:
@@ -109,15 +122,13 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
                 _, removed = retained.popleft()
                 used -= removed
                 evicted += 1
-            if used > budget:
-                retained.clear()
-                used = 0
-                evicted += 1
-    if evicted:
+    if evicted or unreplayable:
         logger.warning(
-            "Context budget excluded %d older turn(s); full evidence remains in "
-            "the session database (history budget: %d estimated tokens).",
+            "Context budget excluded %d older turn(s) and %d turn(s) larger than "
+            "the whole history budget; full evidence remains in the session "
+            "database (history budget: %d estimated tokens).",
             evicted,
+            unreplayable,
             budget,
         )
     return [message for turn, _ in retained for message in turn]

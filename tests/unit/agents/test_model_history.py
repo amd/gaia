@@ -47,6 +47,17 @@ def test_oversized_turn_is_not_split_or_silently_truncated():
     logger.warning.assert_called_once()
 
 
+def test_newest_oversized_turn_keeps_the_earlier_turns(caplog):
+    turns = [_turn(i) for i in range(5)] + [[{"role": "user", "content": "x" * 10000}]]
+
+    def costs(text):
+        return 1000 if "xxxx" in text else 10
+
+    with patch("gaia.agents.base.history.count_tokens", side_effect=costs):
+        assert select_history(turns, 100) == sum(turns[:5], [])
+    assert "1 turn(s) larger than the whole history budget" in caplog.text
+
+
 @pytest.mark.parametrize("budget", [0, -100])
 def test_impossible_budget_warns_and_preserves_persisted_turns(caplog, budget):
     turns = [_turn(0)]
