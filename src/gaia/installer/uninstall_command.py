@@ -15,9 +15,13 @@ Tiers:
       uninstaller; this command only owns the shared Python-side state.
     * ``--venv``          — Tier 2: remove ``~/.gaia/venv/``.
     * ``--purge``         — Tier 3: venv + chat data + documents + the embedded
-      Lemonade runtime + electron config + install logs / state files. Always
-      keeps ``~/.gaia/`` itself so other tools that store data there (MCP
-      config, etc.) are preserved.
+      Lemonade runtime + electron config + install logs / state files + the
+      one-line installer's ``bin/`` + agent ``traces/`` + the daemon's
+      ``host/`` state (custody store included; the daemon is stopped first).
+      When purging the default ``~/.gaia``, it also removes the installer's
+      ``# Added by GAIA installer`` shell rc lines, or its Windows user PATH
+      entries. Always keeps ``~/.gaia/`` itself so other tools that store data
+      there (MCP config, etc.) are preserved.
 
 Opt-in extras (only valid alongside ``--purge``):
     * ``--purge-lemonade`` — best-effort Lemonade Server removal.
@@ -57,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import ntpath
 import os
 import shutil
 import stat
@@ -167,7 +172,258 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "gaia.log",
         gaia / "electron-install-state.json",
         gaia / "electron-install.log",
+        gaia / "bin",
+        gaia / "traces",
     ]
+
+
+def _daemon_host_dir() -> Path:
+    """The daemon's state directory (``~/.gaia/host`` or ``$GAIA_DAEMON_HOME``)."""
+    from gaia.daemon import paths
+
+    return paths.host_dir()
+
+
+def _installer_gaia_dir(home: Optional[Path] = None) -> Path:
+    """The ``~/.gaia`` the one-line installers hardcode, ignoring ``GAIA_HOME``."""
+    return (home if home is not None else Path.home()) / ".gaia"
+
+
+def _purges_installer_home(home: Optional[Path] = None) -> bool:
+    """Whether this purge targets the directory the installer's PATH edits name.
+
+    With ``GAIA_HOME`` pointing elsewhere, the rc/PATH entries still serve the
+    untouched ``~/.gaia`` install, so removing them would break it.
+    """
+    return _gaia_home(home).resolve(strict=False) == _installer_gaia_dir(home).resolve(
+        strict=False
+    )
+
+
+# ---------------------------------------------------------------------------
+# Installer shell rc / user PATH edits
+# ---------------------------------------------------------------------------
+
+# Exactly what installer/scripts/install.sh appends: "", this marker, the export.
+RC_MARKER = "# Added by GAIA installer"
+_RC_EXPORT_PREFIX = 'export PATH="$PATH:'
+# Every file install.sh may write its block to (primary rc + .bashrc + .zshrc).
+_RC_FILES = (".zshrc", ".bashrc", ".bash_profile", ".profile")
+
+
+def _installer_posix_path_dirs(home: Optional[Path] = None) -> set:
+    gaia = _installer_gaia_dir(home)
+    return {str(gaia / "venv" / "bin"), str(gaia / "bin")}
+
+
+def _is_installer_export(line: str, allowed_dirs: set) -> bool:
+    """Current (venv/bin + bin) and pre-0.23 (venv/bin only) export shapes."""
+    if not (line.startswith(_RC_EXPORT_PREFIX) and line.endswith('"')):
+        return False
+    dirs = line[len(_RC_EXPORT_PREFIX) : -1].split(":")
+    return bool(dirs) and all(d in allowed_dirs for d in dirs)
+
+
+def _strip_installer_rc_blocks(text: str, allowed_dirs: set) -> tuple:
+    """Remove every installer block from ``text``.
+
+    Returns ``(new_text, removed, unrecognized)``: ``unrecognized`` counts
+    marker lines whose export was hand-edited, which are left in place.
+    """
+    lines = text.splitlines(keepends=True)
+    out: List[str] = []
+    removed = unrecognized = 0
+    i = 0
+    while i < len(lines):
+        if lines[i].rstrip("\r\n") == RC_MARKER:
+            nxt = lines[i + 1].rstrip("\r\n") if i + 1 < len(lines) else ""
+            if _is_installer_export(nxt, allowed_dirs):
+                # The installer wrote the blank line before its marker too.
+                if out and out[-1] in ("\n", "\r\n"):
+                    out.pop()
+                removed += 1
+                i += 2
+                continue
+            unrecognized += 1
+        out.append(lines[i])
+        i += 1
+    return "".join(out), removed, unrecognized
+
+
+def _rc_edit_candidates(home: Optional[Path] = None) -> tuple:
+    """Return ``(files_to_edit, hand_edited_files)`` among the shell rc files.
+
+    Raises:
+        UninstallPlanError: an rc file exists but cannot be read.
+    """
+    user_home = home if home is not None else Path.home()
+    allowed = _installer_posix_path_dirs(home)
+    to_edit: List[Path] = []
+    hand_edited: List[Path] = []
+    for name in _RC_FILES:
+        rc = user_home / name
+        if not rc.is_file():
+            continue
+        try:
+            text = rc.read_bytes().decode("utf-8", errors="surrogateescape")
+        except OSError as exc:
+            raise UninstallPlanError(
+                f"could not read {rc} to check for the GAIA installer's PATH "
+                f"line: {exc}. Fix its permissions or remove the "
+                f"'{RC_MARKER}' block by hand, then re-run."
+            ) from exc
+        _, removed, unrecognized = _strip_installer_rc_blocks(text, allowed)
+        if removed:
+            to_edit.append(rc)
+        if unrecognized:
+            hand_edited.append(rc)
+    return to_edit, hand_edited
+
+
+def _edit_rc_file(
+    rc: Path, allowed_dirs: set, *, printer: Callable[[str], None] = print
+) -> bool:
+    """Rewrite ``rc`` without the installer blocks. Follows symlinks."""
+    tmp: Optional[Path] = None
+    try:
+        target = rc.resolve(strict=True)
+        text = target.read_bytes().decode("utf-8", errors="surrogateescape")
+        new_text, removed, _ = _strip_installer_rc_blocks(text, allowed_dirs)
+        if not removed:
+            _print(f"  [skip] {rc} (no GAIA installer PATH line)", printer=printer)
+            return True
+        tmp = target.with_name(f".{target.name}.gaia-uninstall.tmp")
+        tmp.write_bytes(new_text.encode("utf-8", errors="surrogateescape"))
+        shutil.copymode(target, tmp)
+        os.replace(tmp, target)
+    except OSError as exc:
+        _print(f"  [error] failed to edit {rc}: {exc}", printer=printer)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+        return False
+    _print(f"  [edited] {rc} (removed the GAIA installer PATH line)", printer=printer)
+    return True
+
+
+def _is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
+def _installer_windows_path_dirs(user_home) -> List[str]:
+    """What installer/scripts/install.ps1 adds to the user PATH."""
+    gaia = ntpath.join(str(user_home), ".gaia")
+    return [ntpath.join(gaia, "venv", "Scripts"), ntpath.join(gaia, "bin")]
+
+
+def _normalize_path_entry(entry: str) -> str:
+    return entry.strip().strip('"').replace("/", "\\").rstrip("\\").casefold()
+
+
+def _strip_user_path_entries(raw: str, targets: List[str]) -> tuple:
+    """Drop ``targets`` from a raw ``;``-separated PATH, keeping every other
+    entry exactly as written (``%VARS%`` unexpanded). Returns
+    ``(new_raw, removed_entries)``."""
+    wanted = {_normalize_path_entry(t) for t in targets}
+    kept: List[str] = []
+    removed: List[str] = []
+    for entry in raw.split(";"):
+        if entry.strip() and _normalize_path_entry(entry) in wanted:
+            removed.append(entry)
+        else:
+            kept.append(entry)
+    return ";".join(kept), removed
+
+
+def _read_user_path() -> tuple:
+    """Return ``(raw_value, registry_kind)`` of ``HKCU\\Environment\\Path``.
+
+    ``winreg`` returns REG_EXPAND_SZ unexpanded, so ``%VARS%`` survive a
+    rewrite (the same rule installer/nsis/gaia-path.ps1 follows).
+    """
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
+        ) as key:
+            return winreg.QueryValueEx(key, "Path")
+    except FileNotFoundError:
+        return "", winreg.REG_EXPAND_SZ
+
+
+def _write_user_path(value: str, kind: int) -> None:
+    import winreg
+
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+    ) as key:
+        winreg.SetValueEx(key, "Path", 0, kind, value)
+
+
+def _broadcast_environment_change() -> bool:
+    """Tell Explorer the user environment changed. Returns False on failure."""
+    import ctypes
+
+    hwnd_broadcast, wm_settingchange, smto_abortifhung = 0xFFFF, 0x1A, 0x2
+    result = ctypes.c_ulong(0)
+    return bool(
+        ctypes.windll.user32.SendMessageTimeoutW(
+            hwnd_broadcast,
+            wm_settingchange,
+            0,
+            "Environment",
+            smto_abortifhung,
+            5000,
+            ctypes.byref(result),
+        )
+    )
+
+
+def _windows_path_entries_to_remove(home: Optional[Path] = None) -> List[str]:
+    """Installer entries currently on the user PATH.
+
+    Raises:
+        UninstallPlanError: the registry value cannot be read.
+    """
+    user_home = home if home is not None else Path.home()
+    try:
+        raw, _ = _read_user_path()
+    except OSError as exc:
+        raise UninstallPlanError(
+            f"could not read the user PATH from HKCU\\Environment: {exc}. "
+            "Remove the ~\\.gaia\\venv\\Scripts and ~\\.gaia\\bin entries by "
+            "hand (Settings > System > About > Advanced system settings > "
+            "Environment Variables), then re-run."
+        ) from exc
+    _, removed = _strip_user_path_entries(raw, _installer_windows_path_dirs(user_home))
+    return removed
+
+
+def _remove_windows_path_entries(
+    home: Optional[Path] = None, *, printer: Callable[[str], None] = print
+) -> bool:
+    user_home = home if home is not None else Path.home()
+    try:
+        raw, kind = _read_user_path()
+        new_raw, removed = _strip_user_path_entries(
+            raw, _installer_windows_path_dirs(user_home)
+        )
+        if not removed:
+            _print("  [skip] user PATH (no GAIA installer entries)", printer=printer)
+            return True
+        _write_user_path(new_raw, kind)
+    except OSError as exc:
+        _print(f"  [error] failed to update the user PATH: {exc}", printer=printer)
+        return False
+    for entry in removed:
+        _print(f"  [removed] user PATH entry {entry}", printer=printer)
+    if not _broadcast_environment_change():
+        _print(
+            "  [note] could not notify Windows of the PATH change; sign out and "
+            "back in before opening a new terminal.",
+            printer=printer,
+        )
+    return True
 
 
 def _safe_roots(home: Optional[Path] = None) -> List[Path]:
@@ -200,6 +456,11 @@ class UnsafeGaiaHomeError(RuntimeError):
     Raised before any plan is built, so a misconfigured ``GAIA_HOME`` can
     never reach :func:`_remove_path`.
     """
+
+
+class UninstallPlanError(RuntimeError):
+    """Something the plan must inspect (a shell rc file, the user PATH) could
+    not be read, so nothing is deleted."""
 
 
 # Entries only GAIA creates. At least one must exist before any tier deletes
@@ -317,6 +578,11 @@ class UninstallPlan:
     purge_lemonade: bool = False
     purge_models_path: Optional[Path] = None
     purge_hf_cache_path: Optional[Path] = None
+    # Stop the daemon before deleting its state, or it rewrites instance.json.
+    stop_daemon: bool = False
+    rc_files: List[Path] = field(default_factory=list)
+    windows_path_entries: List[str] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
 
     def unique_paths(self) -> List[Path]:
         """Return deduplicated paths preserving the order they were added."""
@@ -335,6 +601,8 @@ class UninstallPlan:
             and not self.purge_lemonade
             and self.purge_models_path is None
             and self.purge_hf_cache_path is None
+            and not self.rc_files
+            and not self.windows_path_entries
         )
 
 
@@ -357,6 +625,8 @@ def build_plan(
         UnsafeGaiaHomeError: when a tier would delete inside a GAIA home that
             is really the user's home directory, a drive root, or a directory
             with no sign that GAIA owns it.
+        UninstallPlanError: when a shell rc file or the Windows user PATH
+            cannot be read.
     """
     plan = UninstallPlan()
 
@@ -366,6 +636,7 @@ def build_plan(
     if purge:
         for path in _purge_paths(home):
             plan.tiered_paths.append(("--purge", path))
+        _plan_installer_leftovers(plan, home)
     elif venv:
         for path in _venv_paths(home):
             plan.tiered_paths.append(("--venv", path))
@@ -380,6 +651,35 @@ def build_plan(
         plan.purge_hf_cache_path = _huggingface_cache_dir(home)
 
     return plan
+
+
+def _plan_installer_leftovers(plan: UninstallPlan, home: Optional[Path]) -> None:
+    """Add daemon state and the one-line installer's PATH edits to a purge."""
+    gaia_home = _gaia_home(home).resolve(strict=False)
+    host = _daemon_host_dir()
+    try:
+        host_inside = host.resolve(strict=False).is_relative_to(gaia_home)
+    except OSError:
+        host_inside = False
+    if host_inside:
+        plan.tiered_paths.append(("--purge", host))
+        plan.stop_daemon = True
+    elif host.exists():
+        plan.notes.append(
+            f"Daemon state at {host} is outside the GAIA home (GAIA_DAEMON_HOME), "
+            "so it is left alone. Run `gaia daemon stop`, then delete it yourself."
+        )
+
+    if not _purges_installer_home(home):
+        return
+    plan.rc_files, hand_edited = _rc_edit_candidates(home)
+    for rc in hand_edited:
+        plan.notes.append(
+            f"{rc} has a '{RC_MARKER}' line whose PATH export was changed by "
+            "hand, so it is left alone. Remove it by hand if you no longer need it."
+        )
+    if _is_windows():
+        plan.windows_path_entries = _windows_path_entries_to_remove(home)
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +705,9 @@ def _print_no_flags_help(printer: Callable[[str], None] = print) -> None:
         "Choose a tier:",
         "  gaia uninstall --venv            Remove ~/.gaia/venv/ (Tier 2)",
         "  gaia uninstall --purge           Remove venv + chat + documents +",
-        "                                   embedded Lemonade + config + logs (Tier 3)",
+        "                                   embedded Lemonade + config + logs +",
+        "                                   installer binaries + daemon state,",
+        "                                   and the installer's PATH edits (Tier 3)",
         "",
         "Optional extras (must be combined with --purge):",
         "  --purge-lemonade                 Also uninstall Lemonade Server",
@@ -451,6 +753,15 @@ def _print_plan(
             f"  (--purge-hf-cache) {plan.purge_hf_cache_path}",
             printer=printer,
         )
+    for rc in plan.rc_files:
+        _print(
+            f"  (--purge) {rc}: the '{RC_MARKER}' PATH line",
+            printer=printer,
+        )
+    for entry in plan.windows_path_entries:
+        _print(f"  (--purge) user PATH entry {entry}", printer=printer)
+    for note in plan.notes:
+        _print(f"  [note] {note}", printer=printer)
     _print(printer=printer)
 
 
@@ -581,6 +892,47 @@ def _refuse_running_embedded_purge(
         "Run `gaia lemonade embedded stop` first.",
         printer=printer,
     )
+    return True
+
+
+def _stop_daemon(printer: Callable[[str], None] = print) -> bool:
+    """Stop a running GAIA daemon before its state directory is deleted.
+
+    Mirrors ``gaia daemon stop``: graceful authed shutdown, then terminate.
+    Returns False (and says why) when the daemon may still be running.
+    """
+    from gaia.daemon import client, instance, paths
+    from gaia.daemon.errors import DaemonError
+
+    inst = instance.read_instance()
+    if inst is None:
+        return True
+    try:
+        if not instance.pid_alive(inst.pid):
+            return True
+        try:
+            client.request_shutdown(inst)
+        except DaemonError:
+            instance.terminate_instance(inst)
+        if not client.wait_until_gone(inst, timeout=10.0):
+            instance.terminate_instance(inst)
+            if instance.pid_alive(inst.pid):
+                _print(
+                    f"error: The GAIA daemon (pid {inst.pid}) did not exit. "
+                    "Run `gaia daemon stop` (or end that process), then re-run.",
+                    printer=printer,
+                )
+                return False
+    except ImportError as exc:
+        _print(
+            f"error: Cannot tell whether the GAIA daemon recorded in "
+            f"{paths.instance_path()} (pid {inst.pid}) is still running: "
+            f'{exc}. Install the daemon extras (`pip install "amd-gaia[api]"`), '
+            f"or end pid {inst.pid} yourself, then re-run.",
+            printer=printer,
+        )
+        return False
+    _print(f"  [daemon] stopped the GAIA daemon (pid {inst.pid})", printer=printer)
     return True
 
 
@@ -860,6 +1212,7 @@ def execute_plan(
     plan: UninstallPlan,
     *,
     allowed_roots: List[Path],
+    home: Optional[Path] = None,
     printer: Callable[[str], None] = print,
 ) -> int:
     """Execute a plan and return the exit code.
@@ -889,6 +1242,15 @@ def execute_plan(
 
     if plan.purge_hf_cache_path is not None:
         _remove(plan.purge_hf_cache_path)
+
+    allowed_dirs = _installer_posix_path_dirs(home)
+    for rc in plan.rc_files:
+        if not _edit_rc_file(rc, allowed_dirs, printer=printer):
+            all_ok = False
+
+    if plan.windows_path_entries:
+        if not _remove_windows_path_entries(home, printer=printer):
+            all_ok = False
 
     if plan.purge_lemonade:
         _remove_lemonade(printer=printer)
@@ -999,6 +1361,9 @@ def run(
     except UnsafeGaiaHomeError as exc:
         _print(f"error: {exc}", printer=printer)
         return EXIT_USAGE
+    except UninstallPlanError as exc:
+        _print(f"error: {exc}", printer=printer)
+        return EXIT_FS_ERROR
 
     if plan.is_empty() and dry_run:
         _print("[dry-run] Nothing to do — no tier or extras selected.", printer=printer)
@@ -1031,11 +1396,14 @@ def run(
     # Windows data-loss guard: gaia.log is held open by a FileHandler
     # attached by gaia.logger. Detach + close it before rmtree walks into
     # ~/.gaia so the file can actually be removed.
+    if plan.stop_daemon and not _stop_daemon(printer=printer):
+        return EXIT_ABORTED
+
     if purge:
         _close_gaia_log_handlers(home=home)
 
     allowed_roots = _safe_roots(home)
-    return execute_plan(plan, allowed_roots=allowed_roots, printer=printer)
+    return execute_plan(plan, allowed_roots=allowed_roots, home=home, printer=printer)
 
 
 def register_subparser(
@@ -1068,7 +1436,9 @@ def register_subparser(
         action="store_true",
         help=(
             "Tier 3: remove venv + chat + documents + embedded Lemonade + "
-            "electron config + install logs. Implies --venv."
+            "electron config + install logs + installer binaries (~/.gaia/bin) + "
+            "traces + daemon state (~/.gaia/host, stopping the daemon first), "
+            "and the installer's shell rc / user PATH edits. Implies --venv."
         ),
     )
     parser.add_argument(
