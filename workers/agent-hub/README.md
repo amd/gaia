@@ -21,6 +21,7 @@ depend on any `src/gaia` code.
 | `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, `CHANGELOG.md`, `SPEC.md`, `SKILL.md`, `EVALUATION.md`, `CAPABILITY_MATRIX.md`, or `SCORECARD.md` |
 | `GET /skills/<name>/manifest.json` | none | Per-skill aggregate manifest (all versions) |
 | `GET /skills/<name>/<version>/<file>` | none | Download a skill bundle, its raw `SKILL.md`, `CHANGELOG.md`, or `audit.json` |
+| `POST /reindex` | Bearer (`REINDEX_TOKEN`) | Maintainer-only rebuild of `index.json` from the immutable R2 objects — the recovery path if the catalog is lost or a schema change needs backfilling (#3538). Idempotent and non-destructive; does not touch the stored artifacts or manifests. |
 | `GET /health` | none | Liveness probe |
 
 ### Catalog lanes
@@ -238,7 +239,16 @@ checked into the repo:
    Tokens are tied to the AMD Developer Program. The `authors` list bounds which
    `author` values a token may publish under; `"*"` is reserved for hub admins.
 
-3. **Deploy:**
+3. **Set the reindex token** as a secret, separate from `PUBLISH_TOKENS`:
+
+   ```bash
+   npx wrangler secret put REINDEX_TOKEN
+   ```
+
+   Guards `POST /reindex` (see the route table above). Unset, the route fails
+   loudly with `500 config_error` rather than falling back to allow-all.
+
+4. **Deploy:**
 
    ```bash
    npx wrangler deploy
@@ -281,7 +291,7 @@ checked into the repo:
    # {"status":"ok","build":"<commit>"}   — "unknown" means a hand-run deploy
    ```
 
-4. **(Optional) Bind the route** by uncommenting the `routes` line in
+5. **(Optional) Bind the route** by uncommenting the `routes` line in
    `wrangler.toml` to serve the API under `hub.amd-gaia.ai/*`.
 
 `MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps artifact size and can be
