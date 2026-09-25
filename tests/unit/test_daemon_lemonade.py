@@ -286,6 +286,7 @@ class TestClientCall:
         assert post.call_args.args[0].endswith("/daemon/v1/lemonade/ensure")
 
 
+@pytest.mark.embedded_start
 class TestManagerHook:
     """LemonadeManager only reaches for the daemon when GAIA's own server is
     installed and stopped -- never in CI or on a machine that didn't set it up."""
