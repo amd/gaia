@@ -585,7 +585,8 @@ npx @amd-gaia/agent-email help
 (`--out` to override), `startSidecar`s on `--port` (default 8131), opens the default
 browser to `/v1/email/playground` (`--no-open` to skip), and runs until Ctrl+C.
 The command owns the sidecar lifecycle itself (`autoCleanup: false`) and shuts it
-down on `SIGINT`/`SIGTERM`/`SIGHUP` or on any startup error. Lemonade still has to
+down on `SIGINT`/`SIGTERM`/`SIGHUP` or on any startup error. If that shutdown
+fails, `playground` prints the error and exits 1 rather than 0. Lemonade still has to
 be running for live triage — the page itself reports if it isn't.
 
 `fetch` is the supported, build-time path. It resolves

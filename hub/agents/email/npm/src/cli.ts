@@ -224,20 +224,26 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
 
     // Stay alive until interrupted, then shut the sidecar down cleanly. We own all
     // the signals the auto-reaper would have handled (it's off, above).
-    await new Promise<void>((resolve) => {
+    const stopError = await new Promise<Error | undefined>((resolve) => {
       let stopping = false;
       const stop = (): void => {
         if (stopping) return; // a second signal shouldn't re-enter shutdown
         stopping = true;
         process.stdout.write("\n[agent-email] stopping the sidecar ...\n");
-        void shutdown(sidecar)
-          .catch(() => undefined)
-          .finally(resolve);
+        shutdown(sidecar).then(
+          () => resolve(undefined),
+          (e: unknown) => resolve(e instanceof Error ? e : new Error(String(e))),
+        );
       };
       for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
         process.once(sig, stop);
       }
     });
+    // A surviving sidecar keeps the port bound; its error names the pid to kill.
+    if (stopError) {
+      process.stderr.write(`[agent-email] ${stopError.message}\n`);
+      return 1;
+    }
     return 0;
   } catch (e) {
     await shutdown(sidecar).catch(() => undefined);

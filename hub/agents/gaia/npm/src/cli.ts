@@ -429,7 +429,7 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
     process.stdout.write(`    Health:     ${sidecar.baseUrl}/health\n`);
     process.stdout.write("    Lemonade must be running for live queries. Ctrl+C to stop.\n\n");
     let stop!: () => void;
-    const stopped = new Promise<void>((resolve) => {
+    const stopped = new Promise<Error | undefined>((resolve) => {
       let stopping = false;
       stop = (): void => {
         if (stopping) {
@@ -443,7 +443,10 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
         }
         stopping = true;
         process.stderr.write("\n[gaia] stopping the sidecar ...\n");
-        void shutdown(sidecar).catch(() => undefined).finally(resolve);
+        shutdown(sidecar).then(
+          () => resolve(undefined),
+          (e: unknown) => resolve(e instanceof Error ? e : new Error(String(e))),
+        );
       };
       // process.on, not once: a second Ctrl+C during the shutdown would
       // otherwise hit Node's default disposition and kill us mid-teardown,
@@ -451,12 +454,18 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
       // absorbs the repeats.
       for (const sig of SERVE_SIGNALS) process.on(sig, stop);
     });
+    let stopError: Error | undefined;
     try {
-      await stopped;
+      stopError = await stopped;
     } finally {
       // Left installed, they would swallow every later signal AND suppress
       // Node's default disposition, so Ctrl+C would stop working entirely.
       for (const sig of SERVE_SIGNALS) process.removeListener(sig, stop);
+    }
+    // A surviving sidecar keeps the port bound; its error names the pid to kill.
+    if (stopError) {
+      process.stderr.write(`[gaia] ${stopError.message}\n`);
+      return 1;
     }
     return 0;
   } catch (e) {

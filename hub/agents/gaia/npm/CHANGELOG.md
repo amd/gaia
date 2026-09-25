@@ -14,6 +14,10 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- `gaia serve` no longer exits 0 when Ctrl+C fails to stop the sidecar. The
+  error naming the surviving process and how to kill it was discarded, so the
+  next `serve` hit an unexplained port conflict. It now prints that error and
+  exits 1.
 - The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.

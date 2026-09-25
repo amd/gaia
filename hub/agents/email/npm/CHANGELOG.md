@@ -6,6 +6,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **`agent-email playground` no longer reports a clean exit when Ctrl+C fails
+  to stop the sidecar.** A failed shutdown was thrown away and the command
+  exited 0. It now prints the error and exits 1.
+
 - **`agent-email` now understands `--port=9000` and refuses malformed flags
   instead of quietly using the default port.** `--port=9000` was read as an
   unknown switch, a bare `--port` or `--out` printed "ignoring" and carried on,
