@@ -4836,6 +4836,20 @@ def handle_email_command(args):
     """
     log = get_logger(__name__)
 
+    # The query contract has no server field, so the sidecar would ignore it.
+    base_url = getattr(args, "base_url", None)
+    if base_url:
+        print(
+            "❌ gaia email does not accept --base-url: the email agent runs "
+            "inside the GAIA daemon and uses the daemon's LEMONADE_BASE_URL.\n"
+            "   To use another Lemonade server, run `gaia daemon stop`, set\n"
+            f"   LEMONADE_BASE_URL={base_url} in this shell, and re-run\n"
+            "   `gaia email` — the daemon restarts with that server.\n"
+            "   See https://amd-gaia.ai/docs/guides/email",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     # --spec: generate the HTML endpoint spec and open it in a browser.
     # No LLM, no Lemonade, no daemon — short-circuit before any server check.
     if getattr(args, "spec", False):
@@ -4870,7 +4884,6 @@ def handle_email_command(args):
             agent="email",
             skip_if_external=True,
             # Deliberately omitted: use_claude / use_chatgpt — see AC3.
-            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)

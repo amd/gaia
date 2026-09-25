@@ -110,3 +110,43 @@ class TestDispatch:
             assert init_kwargs.get("use_chatgpt", False) is False
             assert "use_claude" not in call.kwargs
             assert "use_chatgpt" not in call.kwargs
+
+    def test_base_url_is_rejected_instead_of_only_reaching_the_health_check(
+        self, capsys
+    ):
+        """#4312: the query runs in the daemon's email sidecar, which never sees
+        the CLI's ``--base-url``. Accepting it would pre-flight one server and
+        then triage on another, so the flag must fail loudly before either."""
+        import sys
+
+        from gaia import cli
+
+        old_argv = sys.argv
+        sys.argv = [
+            "gaia",
+            "email",
+            "--base-url",
+            "http://lemonade.example:13305/api/v1",
+            "-q",
+            "ping",
+        ]
+        try:
+            with (
+                patch("gaia.daemon.agent_query.run_query") as run_query,
+                patch(
+                    "gaia.cli.initialize_lemonade_for_agent",
+                    return_value=(True, None),
+                ) as init_lemonade,
+                pytest.raises(SystemExit) as exc,
+            ):
+                cli.main()
+        finally:
+            sys.argv = old_argv
+
+        assert exc.value.code == 2
+        run_query.assert_not_called()
+        init_lemonade.assert_not_called()
+        err = capsys.readouterr().err
+        assert "--base-url" in err
+        assert "LEMONADE_BASE_URL=http://lemonade.example:13305/api/v1" in err
+        assert "gaia daemon stop" in err
