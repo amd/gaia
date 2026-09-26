@@ -263,3 +263,54 @@ func TestCompactGatewayKeepsProviderAndFieldsVisible(t *testing.T) {
 		}
 	}
 }
+func TestBenchmarkedPicksFollowSuggestedAndShowTheirNotes(t *testing.T) {
+	m := New("", 100, 40)
+	m.selected = 1
+	m = m.setup()
+	if !strings.Contains(m.View(), "Benchmarked picks: "+benchmarkedNames()) {
+		t.Fatal("setup screen does not name the benchmarked picks")
+	}
+	discovered := []lemonade.Model{{ID: "fireworks.aaa"}, {ID: "fireworks.zzz"}}
+	for i := len(lemonade.Benchmarked) - 1; i >= 0; i-- {
+		discovered = append(discovered, lemonade.Model{ID: lemonade.Benchmarked[i].ID})
+	}
+	discovered = append(discovered, lemonade.Model{ID: lemonade.FireworksModel})
+	next, _ := m.Update(modelsMsg{models: discovered})
+	m = next.(Model)
+	if m.models[0].ID != lemonade.FireworksModel {
+		t.Fatal("suggested model lost its place")
+	}
+	for i, p := range lemonade.Benchmarked {
+		if m.models[i+1].ID != p.ID {
+			t.Fatalf("pick %d is %q, want %q", i+1, m.models[i+1].ID, p.ID)
+		}
+	}
+	if m.models[len(m.models)-2].ID != "fireworks.aaa" || m.models[len(m.models)-1].ID != "fireworks.zzz" {
+		t.Fatal("unmeasured models are not alphabetical after the picks")
+	}
+	m = key(m, tea.KeyDown)
+	view := m.View()
+	pick := lemonade.Benchmarked[0]
+	for _, want := range []string{strings.TrimPrefix(pick.ID, "fireworks.") + " · benchmarked", pick.Name + " — " + pick.Note, pick.Bench} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("focused pick view lacks %q", want)
+		}
+	}
+	if strings.Count(view, "· benchmarked") != len(lemonade.Benchmarked) {
+		t.Fatal("benchmarked marker count does not match the picks")
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd().(SelectedMsg).ID != pick.ID {
+		t.Fatal("wrong selection")
+	}
+}
+func TestUndiscoveredBenchmarkedPickIsNotOffered(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 1
+	m = m.setup()
+	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.only"}}})
+	m = next.(Model)
+	if len(m.models) != 1 || strings.Contains(m.View(), "benchmarked") {
+		t.Fatal("a pick the account does not expose was offered")
+	}
+}

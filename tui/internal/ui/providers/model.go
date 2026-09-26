@@ -180,11 +180,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.models = v.models
 		sort.Slice(m.models, func(i, j int) bool {
-			if m.models[i].ID == lemonade.FireworksModel {
-				return true
-			}
-			if m.models[j].ID == lemonade.FireworksModel {
-				return false
+			ri, rj := lemonade.PickRank(m.models[i].ID), lemonade.PickRank(m.models[j].ID)
+			if ri != rj {
+				return ri < rj
 			}
 			return m.models[i].ID < m.models[j].ID
 		})
@@ -380,7 +378,7 @@ func (m Model) View() string {
 				lines = append(lines, "Usage may incur charges.")
 			}
 		} else if m.chosen() == "fireworks" {
-			lines = append(lines, "Chat history is sent to Fireworks AI. Usage may incur charges.", "Suggested model: Gemma 4 31B IT", "Endpoint: "+lemonade.FireworksURL)
+			lines = append(lines, "Chat history is sent to Fireworks AI. Usage may incur charges.", "Suggested model: Gemma 4 31B IT", "Benchmarked picks: "+benchmarkedNames(), "Endpoint: "+lemonade.FireworksURL)
 		} else {
 			lines = append(lines, "Chat history is sent to your configured AMD gateway.")
 		}
@@ -427,6 +425,8 @@ func (m Model) View() string {
 			label := strings.TrimPrefix(models[i].ID, m.chosen()+".")
 			if models[i].ID == lemonade.FireworksModel {
 				label += " · suggested"
+			} else if _, ok := lemonade.BenchmarkedPick(models[i].ID); ok {
+				label += " · benchmarked"
 			}
 			if i == m.focus {
 				lines = append(lines, title.Render(marker+label))
@@ -439,6 +439,9 @@ func (m Model) View() string {
 		} else {
 			lines = append(lines, fmt.Sprintf("%d of %d", m.focus+1, len(models)))
 			selected := models[m.focus]
+			if pick, ok := lemonade.BenchmarkedPick(selected.ID); ok {
+				lines = append(lines, pick.Name+" — "+pick.Note, pick.Bench)
+			}
 			details := []string{}
 			if selected.ContextLength > 0 {
 				details = append(details, fmt.Sprintf("Context: %s tokens", formatTokens(selected.ContextLength)))
@@ -497,6 +500,15 @@ func (m Model) View() string {
 		wrapped = append(wrapped[:1], wrapped[len(wrapped)-budget+1:]...)
 	}
 	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(append(wrapped, "", ansi.Truncate(hint, w, "…")), "\n"))
+}
+
+// benchmarkedNames is the picks as one line for the setup screen.
+func benchmarkedNames() string {
+	names := make([]string, 0, len(lemonade.Benchmarked))
+	for _, p := range lemonade.Benchmarked {
+		names = append(names, p.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 func formatTokens(n int) string {

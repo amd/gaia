@@ -175,8 +175,17 @@ Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
 **Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
 the masked field; it stays in Lemonade memory until the server restarts. Provider
 settings are shared with other clients of that server. Fireworks suggests
-`fireworks.gemma-4-31b-it` when your account exposes it. AMD Gateway accepts your
-organization's HTTPS endpoint and authentication header.
+`fireworks.gemma-4-31b-it` when your account exposes it, and pins three
+**benchmarked** picks right after it — models measured end to end with the GAIA
+flagship agent, so the list says what each costs and what it is good at:
+
+- `fireworks.glm-5p3-flash` — GLM-5.3 Flash: cheapest per task; best value for everyday coding.
+- `fireworks.deepseek-v4p1-flash` — DeepSeek V4.1 Flash: highest quality of the cheap tier; re-sent context is near-free.
+- `fireworks.kimi-k2p7-code` — Kimi K2.7 Code: strongest on large codebases; about 4-9x the cost.
+
+The numbers behind each pick are in the
+[AI providers guide](../docs/guides/ai-providers.mdx#benchmarked-fireworks-picks).
+AMD Gateway accepts your organization's HTTPS endpoint and authentication header.
 
 Type to search discovered models, then press Enter to select. The header shows
 the active provider; remote chat sends conversation history to that provider.
