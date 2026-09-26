@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.13"`                  |
+| Contract version   | `API_VERSION = "2.15"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -269,6 +269,9 @@ the header.
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
+| `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
+| `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
@@ -283,24 +286,34 @@ paths call the same `build_memory_dump()` and return the identical shape.
 
 ### 5.2 `session_id` and agent retention
 
-Internal explicit deletion follows the same idle-only rule as eviction: it returns
-`False` for an absent or busy session and preserves a running agent. Successful
-deletion claims the turn lock before removal and closes outside the registry lock.
-
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
 **Pass it on every call in a conversation, and reuse the same value for the
 whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
 agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
-threads them together.
+threads them together. A `session_id` must be 1–128 characters from
+`A-Z a-z 0-9 . _ -`, not only dots (a UUID works); any other value is a **400**
+naming the allowed characters, on `/query` and on `/sessions/{session_id}/bypass`.
+Omitting it is a valid, explicit one-shot: nothing persists past that single
+turn, and the agent is not told otherwise.
+
+Internal explicit deletion follows the same idle-only rule as eviction: it returns
+`False` for an absent or busy session and preserves a running agent. Successful
+deletion claims the turn lock before removal and closes outside the registry lock.
+
+A skill **captured** in-conversation (the `capture_skill` tool — itself
+confirmation-gated, so over `/query` it needs a session that can answer) loads
+**instruction-only** until a human runs `gaia skill promote <name>` in a
+terminal: `load_skill` injects its body but defers registering any tools it
+declares, and reports the deferral in its result. Integrators must not expect
+a captured skill's `<skill>/<tool>` names to exist before that promote.
 
 A retained skill stays *loaded* but its body is not necessarily in the prompt
 every turn: the agent selects per turn which loaded bodies match the query and
 collapses the rest to a one-line menu entry (re-activated by calling
 `load_skill` again). `GAIA_DYNAMIC_SKILLS=0` disables the selection;
 `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
-disables it for the session and every body renders. Omitting it is a valid, explicit one-shot: nothing
-persists past that single turn, and the agent is not told otherwise.
+disables it for the session and every body renders.
 
 A retained session also carries a **project map** — up to 600 prompt tokens of
 directory shape, entry points, installed commands and platform quirks, present
@@ -330,10 +343,11 @@ not survive and should be reloaded.
 A second `/query` reusing a `run_id` that is still in flight gets `409` —
 `run_id` is caller-minted, so mint a fresh UUID per request; reusing one would
 leave the earlier run with no way to be cancelled. A `/query` supplying a `model`
-that differs from the one its `session_id` was built with also gets `409`: only
-agent construction reads a model, so the request cannot be honoured on the
-retained agent. Omit `model` to continue on the session's current one, or start a
-new `session_id` to switch.
+that differs from the one its `session_id` was built with **switches the retained
+agent in place** (≥ 2.14), so the conversation and any loaded skills survive the
+change; the same machinery the stdio transport's `/model` uses. A switch that
+fails — a missing Claude credential, an unknown local model — is a `409` naming
+the reason, and leaves the session on its previous model.
 
 ### 5.3 Version gate
 
@@ -391,14 +405,17 @@ the hub, which is what this package delivers, is supervised by the daemon over
 the HTTP surface above instead (§6.1).
 
 It emits the identical canonical event vocabulary, but its input channel accepts
-a JSON line carrying a `gaia_control` key, which gives it something HTTP does
-not have: a back-channel that can answer a confirmation prompt *while* a turn is
-in flight, and stop that turn (`cancel`) without ending the process — so loaded
-skills, "always" grants, history and the bypass mode survive a cancel. It also
-takes `--bypass-permissions` (start with gating off) and
-`--use-claude` / `--claude-model` (route chat to the Anthropic API instead of
-local Lemonade; embeddings stay on Lemonade either way). None of that is
-reachable over `/v1/gaia/query`.
+a JSON line carrying a `gaia_control` key: a back-channel that answers a
+confirmation prompt *while* a turn is in flight, toggles bypass, and stops a turn
+(`cancel`) without ending the process — so loaded skills, "always" grants,
+history and the bypass mode survive a cancel.
+
+Contract 2.14 gave the HTTP surface the same three capabilities per run and per
+session — `/tool_decision`, `/sessions/{id}/bypass`, and `provider: "claude"`.
+What remains stdio-only is the *launch* form of those switches:
+`--bypass-permissions` starts a process with gating already off, and
+`--use-claude` / `--claude-model` pin the backend for the life of the process
+(embeddings stay on Lemonade either way).
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models;
@@ -410,7 +427,74 @@ keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
 
+`--bypass-permissions` turns off more than the prompt. It also lifts the shell
+tool's own guardrails for the session: the shell-only operators — redirection
+(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
+newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
+default, the read-only binary allowlist is replaced by a developer set
+(`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
+`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
+which already had their own paths), and the shell rate limit is dropped. `git`
+being in that set means its policy's outright refusals — push, reset, rebase —
+also stop applying under bypass. That is
+arbitrary code execution in the working directory, which is why it exists only
+on this transport: one local parent process on a private pipe. It is **not**
+reachable over HTTP, and the request body cannot ask for it —
+`POST /v1/gaia/sessions/{id}/bypass` stops an HTTP session's approval prompts
+but never lifts these shell gates. `rm` is excluded
+from the developer set — not a boundary, since anything in the set can delete a
+file, but a tripwire against an accidental recursive delete. Redirection has one
+exception: a command that is nothing but a skill-granted CLI runs argv-only
+rather than through a shell, so a `>` there is refused with an explanation
+instead of reaching the binary as a literal argument.
+
+Every shell command run under bypass is recorded with its full arguments and its
+per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
+does not skip the record. Treat that file as sensitive; arguments are verbatim.
+The host can toggle bypass mid-session over `gaia_control`, and the shell gates
+follow on the very next command.
+
+`--use-claude` is the one with a reach beyond the machine, and it cannot be
+turned on for what this package delivers: the terminal UI **refuses** it for a
+daemon-transport agent, with an error saying so, because the daemon relay has no
+way to switch inference backends. So the local-only claim in the README holds
+for every path this package installs — it is a property of the transport, not a
+default someone can flip.
+
 ---
+
+### 5.6 Adding to a turn already running
+
+`POST /v1/gaia/query/{run_id}/followup` with `{ "text": "…" }` hands a live run
+something the user typed after it started. Contract ≥ 2.15.
+
+It is not a second turn and not an interrupt. The run keeps going on its
+existing SSE stream; the agent folds the text into that turn's context at its
+next agent-loop step boundary, labelled as arriving mid-task, and answers it
+alongside the work already in progress. A five-minute turn can therefore be
+corrected ("actually, only the unread ones") while it is still running, instead
+of the correction waiting out the turn it was meant to change.
+
+Two refusals, both loud, because the caller has already taken the message from
+the user and owes them a truthful answer about where it went:
+
+| Status | Meaning                                                      |
+| ------ | ------------------------------------------------------------ |
+| `404`  | No such run in flight — it finished or was cancelled. Send it as a new `/query`. |
+| `409`  | The run's agent is not accepting mid-turn input.              |
+
+A turn that has already formed its answer takes one more step to address a
+follow-up, so a turn answering in a single step is covered too. The one
+exception is a turn already at its step limit: the message stays queued rather
+than being consumed into a context no model call will read.
+
+Because `/query` is stateless (§2.4) the host still owns the transcript: record
+a delivered follow-up in the `context` you push on the **next** turn, between
+that turn's question and its answer, or the conversation loses words the agent
+demonstrably saw.
+
+Clients that predate 2.15 get a `404` on the path itself. Probe `/version`
+before sending rather than reading a 404 as "the run ended".
 
 ## 6. Process ownership
 
