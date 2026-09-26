@@ -588,6 +588,31 @@ class TestLemonadeReady(unittest.TestCase):
         embedded.start.assert_called_once()
         self.assertIn("v0.0.1", out)
 
+    def test_older_running_version_installs_the_new_one_before_starting(self):
+        """The old binary on disk must not satisfy the install check."""
+        import tempfile
+        from pathlib import Path
+
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+        with tempfile.TemporaryDirectory() as home:
+            embedded = EmbeddedLemonade(home=Path(home))
+            old_binary = embedded.root / "dist" / "0.0.1" / embedded.daemon_path.name
+            old_binary.parent.mkdir(parents=True)
+            old_binary.touch()
+            old = self._status(running=True, version="0.0.1", port=1, pid=1)
+            new = self._status(running=True, port=51234, pid=2)
+            with (
+                patch.object(embedded, "status", return_value=old),
+                patch.object(embedded, "stop"),
+                patch.object(embedded, "install") as install,
+                patch.object(embedded, "start", return_value=new),
+            ):
+                ok, _ = self._run_embedded(embedded)
+
+        self.assertTrue(ok)
+        install.assert_called_once_with(force=False)
+
     def test_unresponsive_instance_is_stopped_before_starting(self):
         embedded = self._embedded(self._status(port=1, unresponsive_pid=77))
         ok, out = self._run_embedded(embedded)
