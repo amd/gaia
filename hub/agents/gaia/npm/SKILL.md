@@ -129,11 +129,17 @@ does not install. Required before any query succeeds:
 
 1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
    one, so `gaia daemon start` is normally all that is needed (`gaia init`
-   also installs and starts it on first run).
-2. The default model downloaded (`gaia init`). `gaia download` takes **no**
-   model argument — naming one makes it exit 2. To pull a single model instead,
-   repeat the command `GET /v1/gaia/init` gives you: it names the Lemonade
-   client this machine actually has. Do not invent one.
+   also installs and starts it on first run). Qwen3.8 Flash Next needs
+   **v2026.39.1 or newer**, the version `gaia init` installs; older servers
+   cannot load it.
+2. The machine's default chat model downloaded — run `gaia init`. It picks
+   `user.Qwen3.8-Flash-Next-GGUF` where it fits (a 128 GB Strix Halo) and
+   `Gemma-4-E4B-it-GGUF` everywhere else, and records the pick as `default_model`
+   in `~/.gaia/config.json`. `model.id` below names whichever this machine uses.
+   `gaia download` takes **no** model argument — naming one makes it exit 2. To
+   pull a single model instead, repeat the command `GET /v1/gaia/init` gives
+   you: it names the Lemonade client this machine actually has. Do not invent
+   one.
 
 Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 (it never pulls or loads) that probes Lemonade, compares its version to the

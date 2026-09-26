@@ -25,12 +25,10 @@ type Recommendation struct {
 	Note string
 }
 
-// RecommendedModels is ranked by the agent task benchmark (September 2026); refresh it as models change.
-var RecommendedModels = []Recommendation{
-	{ID: "fireworks.glm-5p3-flash", Note: "best overall, cheapest"},
-	{ID: "fireworks.deepseek-v4p1-flash", Note: "fastest"},
-	{ID: "fireworks.deepseek-v4-pro-0813", Note: "most truthful"},
-}
+// RecommendedModels is ranked by the agent task benchmark (September 2026). It
+// is the Fireworks section of recommended_models.json, in file order; refresh
+// it there as models change.
+var RecommendedModels []Recommendation
 
 func TopRecommendation() Recommendation { return RecommendedModels[0] }
 
@@ -72,6 +70,8 @@ type Model struct {
 	Provider      string   `json:"cloud_provider"`
 	Downloaded    bool     `json:"downloaded"`
 	Labels        []string `json:"labels"`
+	// Size is the download size in GB as Lemonade's catalog reports it.
+	Size float64 `json:"size"`
 }
 
 func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || IsCloudID(m.ID) }

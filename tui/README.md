@@ -174,13 +174,19 @@ fine.
 Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
 **Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
 the masked field; it stays in Lemonade memory until the server restarts. Provider
-settings are shared with other clients of that server. For Fireworks, the models
-that scored best on GAIA's agent benchmark are listed first, ranked and labelled
-with why (`fireworks.glm-5p3-flash` — best overall, cheapest;
+settings are shared with other clients of that server. Each provider lists a
+★ **Recommended** group first. For Fireworks that group is the models that
+scored best on GAIA's agent benchmark, ranked and labelled with why
+(`fireworks.glm-5p3-flash` — best overall, cheapest;
 `fireworks.deepseek-v4p1-flash` — fastest;
-`fireworks.deepseek-v4-pro-0813` — most truthful) whenever your account exposes
-them. AMD Gateway accepts your organization's HTTPS endpoint and authentication
-header.
+`fireworks.deepseek-v4-pro-0813` — most truthful), whenever your account
+exposes them. AMD Gateway accepts your organization's HTTPS endpoint and
+authentication header.
+
+**Local** lists every chat model Lemonade offers, not only downloaded ones.
+Models that fit this PC's memory and disk download in the panel when selected;
+models that don't are shown as "won't fit" and cannot be downloaded. The
+recommended list lives in `internal/lemonade/recommended_models.json`.
 
 Type to search discovered models, then press Enter to select. The header shows
 the active provider; remote chat sends conversation history to that provider.

@@ -12,6 +12,14 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Changed
+
+- The default chat model now follows the hardware. On a PC with the memory for it
+  (a 128 GB Strix Halo), `gaia init` also sets up Qwen3.8 Flash Next and records
+  it as `default_model`; the agent and its `GET /v1/gaia/init` readiness check
+  use it for chat. Gemma 4 E4B is still downloaded for vision. Every other PC
+  keeps Gemma alone.
+
 ### Fixed
 
 - `/v1/gaia/query` now honours `provider` on an existing session. It used to

@@ -36,6 +36,7 @@ except ImportError:
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import source_install_command
 from gaia.installer._stdin import stdin_is_tty
+from gaia.llm.model_fit import MachineCapacity
 from gaia.ui.build import WebuiBuildStatus
 
 log = logging.getLogger(__name__)
@@ -203,6 +204,131 @@ class SetupStatus:
     reasons: list
 
 
+@dataclass
+class ChatModelChoice:
+    """Which chat model this machine should run, and why."""
+
+    model_id: str
+    #: True when the user set ``default_model``; False when the hardware chose.
+    user_set: bool
+    #: ``(model_id, reason)`` for each larger default passed over.
+    skipped: list
+    #: What the machine was judged against; None when the user chose.
+    capacity: Optional[MachineCapacity] = None
+
+
+def resolve_init_chat_model(
+    client, *, reset_corrupt: bool, enforce_fit: bool
+) -> ChatModelChoice:
+    """The chat model `gaia init` sets up: the user's ``default_model`` when it
+    is a local Lemonade model, else the largest default that fits this machine
+    (Qwen3.8-Flash on a 128 GB Strix Halo, Gemma 4 E4B everywhere else).
+
+    ``--check`` and ``run()`` both go through here so they can never disagree
+    about what "set up" means on this machine. ``reset_corrupt`` is run()'s
+    policy (it rewrites a corrupt config); the read-only check raises instead.
+    ``enforce_fit`` refuses a user's model that cannot fit — only run(), which
+    would download it, needs that; ``--check`` just reports it missing.
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.llm.lemonade_client import (
+        cloud_model_provider,
+        recommend_default_chat_model,
+    )
+
+    try:
+        configured = GaiaConfig.load().default_model
+    except GaiaConfigError as e:
+        if not reset_corrupt:
+            raise
+        log.warning("Ignoring corrupt config; gaia init rewrites it: %s", e)
+        configured = None
+    # A Claude or cloud default has nothing to download; the local chat model
+    # then follows the hardware, and the user's setting is left as it is.
+    is_local = (
+        configured
+        and not configured.startswith("claude-")
+        and not cloud_model_provider(configured)
+    )
+    if is_local:
+        if enforce_fit:
+            _refuse_if_it_does_not_fit(client, configured)
+        return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
+    model_id, skipped, capacity = recommend_default_chat_model(client)
+    return ChatModelChoice(
+        model_id=model_id, user_set=False, skipped=skipped, capacity=capacity
+    )
+
+
+def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
+    """Raise when a user-chosen model would be downloaded but cannot fit.
+
+    Setup must never download a model the PC cannot run. A model already on
+    disk is not a download. A model whose size neither GAIA nor Lemonade knows
+    cannot be judged here; Lemonade still refuses one that would not fit the
+    disk.
+    """
+    from gaia.llm.lemonade_client import (
+        _model_ids_match,
+        find_model_requirement,
+        lemonade_server_version,
+    )
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        check_fit,
+        check_server_supports,
+    )
+
+    size = None
+    for entry in client.list_models(show_all=True).get("data", []):
+        if _model_ids_match(entry.get("id"), model_id):
+            if entry.get("downloaded"):
+                return
+            size = entry.get("size")
+            break
+    mr = find_model_requirement(model_id)
+    size = size or (mr.size_gb if mr else None)
+    if size:
+        capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+        verdict = check_fit(float(size), capacity)
+        if not verdict.fits:
+            raise ModelFitError(
+                f"default_model {model_id} will not fit this PC: {verdict.reason}. "
+                "Choose a smaller one with `gaia config set default_model <id>` "
+                "(`/provider` in the TUI lists what fits), then re-run `gaia init`."
+            )
+    if mr and mr.min_lemonade_version:
+        supported = check_server_supports(
+            mr.min_lemonade_version, lemonade_server_version(client)
+        )
+        if not supported.fits:
+            raise ModelFitError(f"default_model {model_id} {supported.reason}.")
+
+
+# Profiles whose chat model follows the hardware. ``minimal`` promises a small
+# setup, and the vlm, email and sd agents pin Gemma themselves.
+HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
+
+
+def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
+    """``model_ids`` plus the chat model ``profile`` needs on this machine.
+
+    The chat model is added, never swapped in for Gemma: the vision and
+    document-image paths still load Gemma by name. ``resolve_chat`` is only
+    called for hardware-chosen profiles, so the others never probe Lemonade.
+    """
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    ids = list(model_ids)
+    if profile in ("sd", "npu"):
+        return ids
+    chat = resolve_chat() if profile in HARDWARE_CHAT_PROFILES else DEFAULT_MODEL_NAME
+    if chat not in ids:
+        ids.append(chat)
+    return ids
+
+
 def configured_server_too_old(health: object, profile: str, url: str) -> Optional[str]:
     """Why a user-chosen server can't serve *profile*, or None if it can.
 
@@ -342,11 +468,14 @@ def check_setup_status(
                 reasons=[f"Could not list the models this profile needs: {e}"],
             )
 
-    if profile not in ("sd", "npu") and not skip_chat_model:
-        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-        if DEFAULT_MODEL_NAME not in model_ids:
-            model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+    if not skip_chat_model:
+        model_ids = with_chat_model(
+            profile,
+            model_ids,
+            lambda: resolve_init_chat_model(
+                client, reset_corrupt=False, enforce_fit=False
+            ).model_id,
+        )
 
     if skip_chat_model:
         model_ids = [m for m in model_ids if is_embedding_model_id(m)]
@@ -418,6 +547,10 @@ class InitCommand:
             progress_callback: Optional callback for progress updates
         """
         self.profile = profile.lower()
+        # This machine's chat model, resolved once so download and verify agree.
+        self._chat_choice: Optional[ChatModelChoice] = None
+        # Set once that model is confirmed on disk; only then is it recorded.
+        self._chat_model_ready = False
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build
         self.force_reinstall = force_reinstall
@@ -820,6 +953,7 @@ class InitCommand:
                     config = GaiaConfig()
                 config.profile = self.profile
                 config.default_device = "npu" if self.profile == "npu" else "gpu"
+                self._record_chat_choice(config)
                 config.save()
             except Exception as e:
                 self._print_error(
@@ -1082,6 +1216,47 @@ class InitCommand:
             self._print_error(self._server_problem_hint())
             return False
 
+    def _record_chat_choice(self, config) -> None:
+        """Save a hardware-picked chat model as ``default_model`` so every agent
+        resolves to it. Never overwrites a model the user chose, and records
+        nothing when the pick is the floor model every agent already defaults to
+        or when setup did not download it (declined, or ``--skip-models``).
+        """
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+        choice = self._chat_choice
+        if choice is None or choice.user_set or config.default_model:
+            return
+        # An undownloaded default would make every agent's first load fail.
+        if not self._chat_model_ready:
+            return
+        if choice.model_id != DEFAULT_MODEL_NAME:
+            config.default_model = choice.model_id
+
+    def _chat_model(self, client) -> str:
+        """This machine's chat model; says why on first resolution."""
+        if self._chat_choice is None:
+            choice = resolve_init_chat_model(
+                client, reset_corrupt=True, enforce_fit=True
+            )
+            self._chat_choice = choice
+            if choice.user_set:
+                self._print(
+                    f"   Chat model: {choice.model_id} (default_model in ~/.gaia/config.json)"
+                )
+            else:
+                cap = choice.capacity
+                where = (
+                    f" — this PC has {cap.memory_gb:.0f} GB for models "
+                    f"({cap.memory_source})"
+                    if cap
+                    else ""
+                )
+                self._print(f"   Chat model: {choice.model_id}{where}")
+                for skipped_id, reason in choice.skipped:
+                    self._print(f"   Not using {skipped_id}: {reason}")
+        return self._chat_choice.model_id
+
     def _download_models(self) -> bool:
         """
         Download models for the selected profile.
@@ -1107,14 +1282,13 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            # Include default GPU model for profiles that use llamacpp.
+            # Include this machine's chat model for profiles that use llamacpp.
             # SD profile has its own LLM and doesn't need the default model.
             # NPU profile uses FLM models exclusively — don't append GGUF model.
-            if self.profile not in ("sd", "npu") and not self.skip_chat_model:
-                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-                if DEFAULT_MODEL_NAME not in model_ids:
-                    model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+            if not self.skip_chat_model:
+                model_ids = with_chat_model(
+                    self.profile, model_ids, lambda: self._chat_model(client)
+                )
 
             # A Claude-backed session never calls the local chat LLM — only
             # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
@@ -1174,16 +1348,13 @@ class InitCommand:
             # with checkpoint + recipe + the embedding label. Look those up from
             # the model registry so the pull request is valid (#1745 auto-label bug
             # is avoided by passing ``embedding=True`` explicitly).
-            from gaia.llm.lemonade_client import MODELS
-
-            registry_by_id = {mr.model_id: mr for mr in MODELS.values()}
+            from gaia.llm.lemonade_client import find_model_requirement
 
             recipe = profile_config.get("recipe")
             success = True
             for model_id in model_ids:
                 self._print("")
-                mr = registry_by_id.get(model_id)
-                is_custom = model_id.startswith("user.")
+                mr = find_model_requirement(model_id)
                 label = f"{model_id} (recipe={recipe})" if recipe else model_id
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {label}"
@@ -1191,19 +1362,16 @@ class InitCommand:
                 # Built-in models are pulled by name only. Passing recipe (even
                 # =None) can make Lemonade treat the call as a custom-model
                 # registration, which 400s on built-in names (#1655). Only
-                # user.-namespaced models carry checkpoint + recipe + the
-                # embedding label.
-                pull_kwargs = (
-                    {
-                        "checkpoint": mr.checkpoint,
-                        "recipe": mr.recipe,
-                        "embedding": mr.embedding,
-                    }
-                    if (mr and is_custom)
-                    else {}
-                )
+                # user.-namespaced models carry their registration fields.
+                pull_kwargs = mr.pull_kwargs() if mr else {}
+                # Two hours covers a few GB on any link; an 80 GB model needs
+                # time proportional to its size (~5 MB/s floor).
+                if mr and mr.size_gb:
+                    pull_kwargs["timeout"] = max(7200, int(mr.size_gb * 200))
                 if client.ensure_model_downloaded(model_id, **pull_kwargs):
                     self._print_success(f"Downloaded {model_id}")
+                    if self._chat_choice and model_id == self._chat_choice.model_id:
+                        self._chat_model_ready = True
                 else:
                     self._print_error(f"Failed to download {model_id}")
                     success = False
@@ -1412,13 +1580,11 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            # Include default CPU model for profiles that need gaia llm
-            # SD profile has its own LLM and doesn't need the 0.5B model
-            if self.profile != "sd" and not self.skip_chat_model:
-                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-                if DEFAULT_MODEL_NAME not in model_ids:
-                    model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+            # Same chat model the download step set up (NPU and SD bring their own).
+            if not self.skip_chat_model:
+                model_ids = with_chat_model(
+                    self.profile, model_ids, lambda: self._chat_model(client)
+                )
 
             if self.skip_chat_model:
                 model_ids = [m for m in model_ids if is_embedding_model_id(m)]
