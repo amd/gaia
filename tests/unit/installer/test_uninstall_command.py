@@ -890,10 +890,13 @@ class TestLemonadePythonResolution:
     the GAIA venv, NOT where Lemonade was installed — so pip-uninstalling
     against it is a no-op. ``_resolve_lemonade_python`` locates the real
     interpreter by inspecting the lemonade-server console script.
+
+    These use a real tmp dir: pyfakefs' teardown calls os.getuid() while the
+    faked "linux" platform is still in effect, which crashes on Windows.
     """
 
-    def test_resolves_direct_shebang_posix(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
+    def test_resolves_direct_shebang_posix(self, tmp_path, monkeypatch):
+        lemonade = tmp_path / "bin" / "lemonade-server"
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
 
@@ -902,8 +905,8 @@ class TestLemonadePythonResolution:
 
         assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
 
-    def test_resolves_env_shebang_posix(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
+    def test_resolves_env_shebang_posix(self, tmp_path, monkeypatch):
+        lemonade = tmp_path / "bin" / "lemonade-server"
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
 
@@ -917,8 +920,8 @@ class TestLemonadePythonResolution:
         monkeypatch.setattr(uc.shutil, "which", lambda name: None)
         assert uc._resolve_lemonade_python() is None
 
-    def test_script_without_shebang_returns_none(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
+    def test_script_without_shebang_returns_none(self, tmp_path, monkeypatch):
+        lemonade = tmp_path / "bin" / "lemonade-server"
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
 
