@@ -538,7 +538,7 @@ exported individually:
 - `fetchBinary(opts)` → download + verify + install; returns `{ binaryPath, sha256, cached, ... }`.
 - `resolveBinaryPath({ resourcesDir })` → locate a fetched binary (throws `BinaryNotFoundError` if absent).
 - `spawnSidecar({ binaryPath, host?, port?, extraArgs? })` → spawn with `--host 127.0.0.1 --port <p>` (default port **8131**).
-- `waitForHealth(baseUrl, { timeoutMs })` → poll `/health`; throws `HealthTimeoutError` on timeout (never assumes ready).
+- `waitForHealth(baseUrl, { timeoutMs, signal })` → poll `/health`; throws `HealthTimeoutError` on timeout or when `signal` aborts (never assumes ready).
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child.
