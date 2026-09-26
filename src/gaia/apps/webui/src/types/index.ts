@@ -487,14 +487,14 @@ export interface SystemStatus {
     // LLM configuration health
     context_size_sufficient: boolean;
     model_downloaded: boolean | null;
-    default_model_name: string | null;
+    default_model_name: string;
     /**
      * Catalog-reported size of ``default_model_name`` (GB). Used by the
      * "model not downloaded" banner so the size hint stays in sync with
      * the actual default — replaces the previously hard-coded "~25 GB".
      */
     default_model_size_gb: number | null;
-    lemonade_url: string | null;
+    lemonade_url: string;
     expected_model_loaded: boolean;
     /** Live progress while a model pull is in flight. ``null`` otherwise. */
     download_progress: DownloadProgress | null;

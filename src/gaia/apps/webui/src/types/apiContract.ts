@@ -7,7 +7,9 @@
  *
  * `tsc` fails here when the backend sends a field the hand-written type lacks,
  * the hand-written type declares a field the backend never sends, or a shared
- * field's kind (string / number / boolean / null / array / object) disagrees.
+ * field's kind set (string / number / boolean / null / array / object) differs
+ * in either direction — a TS type too narrow for the wire, or one that allows a
+ * kind (typically `null`) the backend never sends.
  * The error names the check (position 0 = missing from the TS type, 1 = not on
  * the wire, 2 = kind mismatch) and the field, e.g. `Type '"agent_mode"' is not
  * assignable to type 'never'`. Fix the hand-written type, or regenerate
@@ -61,8 +63,13 @@ type NotOnWire<Wire, Ts, TsOnly> = Exclude<keyof Ts, keyof Wire | TsOnly>;
 
 // Backend defaults surface as `?:` in api.gen.ts but are always sent, so
 // `undefined` is stripped from the wire side before comparing kinds.
+//
+// Equals, not `extends`: assignability only catches a TS type too NARROW for the
+// wire. A TS type whose kinds are a superset — `string | null` for a field the
+// backend always sends as `string` — passed silently and left dead null handling
+// in the UI.
 type KindMismatch<Wire, Ts> = {
-    [K in Shared<Wire, Ts>]-?: [Kind<Exclude<Wire[K], undefined>>] extends [Kind<Exclude<Ts[K], undefined>>]
+    [K in Shared<Wire, Ts>]-?: Equals<Kind<Exclude<Wire[K], undefined>>, Kind<Exclude<Ts[K], undefined>>> extends true
         ? never
         : K;
 }[Shared<Wire, Ts>];
@@ -82,6 +89,16 @@ type Assert<T extends true> = T;
 // NoDrift below would pass vacuously.
 export type DriftSelfTest = Assert<
     Equals<Drift<{ sent: string; kind: number | null }, { kind: number; extra: string }>, ['sent', 'extra', 'kind']>
+>;
+
+// The kind check must fire in BOTH directions. The direction below — a TS type
+// permitting `null` for a field the backend always sends — is the one an
+// assignability test silently passes; `lemonade_url` and `default_model_name`
+// were both in that state.
+export type KindMismatchIsSymmetricSelfTest = Assert<
+    Equals<KindMismatch<{ narrow: string }, { narrow: string | null }>, 'narrow'> extends true
+        ? Equals<KindMismatch<{ wide: string | null }, { wide: string }>, 'wide'>
+        : false
 >;
 
 // `AgentInfo` also carries the Hub catalog's fields, which come from
