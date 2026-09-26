@@ -35,9 +35,22 @@
       "label": "Qwen3 Coder Next"
     },
     {
-      "id": "fireworks.gemma-4-31b-it",
+      "id": "fireworks.glm-5p3-flash",
       "provider": "fireworks",
-      "label": "Gemma 4 31B IT"
+      "label": "GLM-5.3 Flash",
+      "note": "best overall, cheapest"
+    },
+    {
+      "id": "fireworks.deepseek-v4p1-flash",
+      "provider": "fireworks",
+      "label": "DeepSeek V4.1 Flash",
+      "note": "fastest"
+    },
+    {
+      "id": "fireworks.deepseek-v4-pro-0813",
+      "provider": "fireworks",
+      "label": "DeepSeek V4 Pro",
+      "note": "most truthful"
     }
   ]
 }

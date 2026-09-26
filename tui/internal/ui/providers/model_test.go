@@ -52,19 +52,144 @@ func TestProviderScreenOffersAllDestinations(t *testing.T) {
 		}
 	}
 }
-func TestSuggestedGemmaIsFirstAndSelectionIsExplicit(t *testing.T) {
+func ids(entries []lemonade.Entry) string {
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Model.ID)
+	}
+	return strings.Join(out, ",")
+}
+
+// fireworks builds the catalog a Fireworks account listing these ids produces.
+func fireworks(ids ...string) modelsMsg {
+	var models []lemonade.Model
+	for _, id := range ids {
+		models = append(models, lemonade.Model{ID: id, Recipe: "cloud"})
+	}
+	return modelsMsg{entries: lemonade.BuildEntries("fireworks", models, lemonade.Capacity{}, nil)}
+}
+
+// rankedLabel is the picker label of a ranked recommendation.
+func rankedLabel(id string) string {
+	for _, r := range lemonade.RecommendedFor("fireworks") {
+		if r.ID == id {
+			return r.Label
+		}
+	}
+	return strings.TrimPrefix(id, "fireworks.")
+}
+
+func TestRecommendedModelsLeadInRankOrderAndSelectionIsExplicit(t *testing.T) {
+	rec := lemonade.RecommendedModels
 	m := New("", 100, 30)
 	m.selected = 1
 	m = m.setup()
-	entries := lemonade.BuildEntries("fireworks", []lemonade.Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: lemonade.FireworksModel, Recipe: "cloud"}}, lemonade.Capacity{}, nil)
-	next, _ := m.Update(modelsMsg{entries: entries})
+	next, _ := m.Update(fireworks("fireworks.aaa", rec[2].ID, "fireworks.zzz", rec[0].ID, rec[1].ID))
 	m = next.(Model)
-	if m.ctx.Err() != nil || m.entries[0].Model.ID != lemonade.FireworksModel || m.stage != "models" {
-		t.Fatal("model silently selected or suggestion missing")
+	want := strings.Join([]string{rec[0].ID, rec[1].ID, rec[2].ID, "fireworks.aaa", "fireworks.zzz"}, ",")
+	if m.ctx.Err() != nil || m.stage != "models" || ids(m.entries) != want {
+		t.Fatalf("model silently selected or order wrong: %s", ids(m.entries))
 	}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd().(SelectedMsg).ID != lemonade.FireworksModel {
+	if cmd().(SelectedMsg).ID != lemonade.TopRecommendation().ID {
 		t.Fatal("wrong selection")
+	}
+}
+func TestMissingRecommendedModelIsNeverInjected(t *testing.T) {
+	rec := lemonade.RecommendedModels
+	m := New("", 100, 30)
+	m.selected = 1
+	next, _ := m.Update(fireworks("fireworks.b", rec[2].ID, "fireworks.a"))
+	m = next.(Model)
+	if ids(m.entries) != strings.Join([]string{rec[2].ID, "fireworks.a", "fireworks.b"}, ",") {
+		t.Fatalf("absent recommendation broke ordering: %s", ids(m.entries))
+	}
+	if strings.Contains(m.View(), rankedLabel(rec[0].ID)) {
+		t.Fatal("top recommendation shown although the provider does not serve it")
+	}
+}
+func TestRankMatchesTheAccountPathFormInThePicker(t *testing.T) {
+	top := lemonade.TopRecommendation()
+	path := "fireworks.accounts/fireworks/models/" + strings.TrimPrefix(top.ID, "fireworks.")
+	m := New("", 100, 30)
+	m.selected = 1
+	next, _ := m.Update(fireworks("fireworks.aaa", path))
+	m = next.(Model)
+	if m.entries[0].Model.ID != path || m.entries[0].Recommended == nil {
+		t.Fatalf("account-path id not recognised as the top pick: %s", ids(m.entries))
+	}
+}
+func TestRecommendedRowsShowRankAndNoteOnOneLine(t *testing.T) {
+	rec := lemonade.RecommendedModels
+	for _, width := range []int{100, 48} {
+		m := New("", width, 30)
+		m.selected = 1
+		next, _ := m.Update(fireworks("fireworks.plain-model", rec[1].ID, rec[0].ID))
+		m = next.(Model)
+		view := ansi.Strip(m.View())
+		for i, r := range rec[:2] {
+			row := fmt.Sprintf("★ %s · #%d %s", rankedLabel(r.ID), i+1, r.Note)
+			if width == 100 && !strings.Contains(view, row) {
+				t.Fatalf("missing %q in %s", row, view)
+			}
+			if strings.Count(view, fmt.Sprintf("#%d ", i+1)) != 1 {
+				t.Fatalf("rank %d rendered on %d lines at width %d: %s", i+1, strings.Count(view, fmt.Sprintf("#%d ", i+1)), width, view)
+			}
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, "plain-model") && strings.Contains(line, "#") {
+				t.Fatalf("plain row carries a rank: %q", line)
+			}
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("row overflows width %d: %q", width, line)
+			}
+		}
+	}
+}
+
+// The widths above are all wide enough to fit a ranked row untruncated, so they
+// never exercise the guard. This one is not: without the truncate the row wraps
+// onto a second line and pushes a row above it out of the height budget.
+func TestNarrowRankedRowStaysOnOneTruncatedLine(t *testing.T) {
+	top := lemonade.TopRecommendation()
+	name := rankedLabel(top.ID)
+	width := 36
+	if got := len("★ ") + len(name) + len(" · #1 ") + len(top.Note) + 2; got <= width-4 {
+		t.Fatalf("width %d no longer forces a truncation (row is %d cells); lower it", width, got)
+	}
+	m := New("", width, 30)
+	m.selected = 1
+	next, _ := m.Update(fireworks(top.ID))
+	m = next.(Model)
+
+	var rows []string
+	for _, line := range strings.Split(ansi.Strip(m.View()), "\n") {
+		if strings.Contains(line, name) {
+			rows = append(rows, strings.TrimRight(line, " "))
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ranked row rendered on %d lines at width %d: %q", len(rows), width, rows)
+	}
+	if !strings.HasSuffix(rows[0], "…") {
+		t.Fatalf("row was not truncated at width %d: %q", width, rows[0])
+	}
+	if strings.Contains(rows[0], top.Note) {
+		t.Fatalf("note survived intact at width %d, so nothing was truncated: %q", width, rows[0])
+	}
+}
+
+func TestSetupScreenNamesTopRecommendation(t *testing.T) {
+	top := lemonade.TopRecommendation()
+	m := New("", 100, 30)
+	m.selected = 1
+	m = m.setup()
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "Recommended model: "+strings.TrimPrefix(top.ID, "fireworks.")+" · "+top.Note) {
+		t.Fatalf("setup screen does not name %s: %s", top.ID, view)
+	}
+	if strings.Contains(view, "Gemma 4 31B") {
+		t.Fatal("setup screen still names a model the provider no longer serves")
 	}
 }
 func TestEmptyCatalogStaysInSetup(t *testing.T) {
@@ -101,7 +226,7 @@ func TestRefreshFailureOrEmptyCatalogCannotCrashSelection(t *testing.T) {
 		m.selected = 1
 		m = m.setup()
 		m.stage = "models"
-		m.entries = plain(lemonade.Model{ID: lemonade.FireworksModel})
+		m.entries = plain(lemonade.Model{ID: "fireworks.any"})
 		result := modelsMsg{}
 		if failure {
 			result.err = errors.New("connection failed")
@@ -121,7 +246,7 @@ func TestRefreshFailureOrEmptyCatalogCannotCrashSelection(t *testing.T) {
 func TestModelSearchAndMetadata(t *testing.T) {
 	m := New("", 80, 24)
 	m.selected = 1
-	next, _ := m.Update(modelsMsg{entries: plain(lemonade.Model{ID: lemonade.FireworksModel, ContextLength: 262144, Labels: []string{"tool-calling", "vision"}}, lemonade.Model{ID: "fireworks.qwen"})})
+	next, _ := m.Update(modelsMsg{entries: plain(lemonade.Model{ID: "fireworks.gemma", ContextLength: 262144, Labels: []string{"tool-calling", "vision"}}, lemonade.Model{ID: "fireworks.qwen"})})
 	m = next.(Model)
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gemma")})
 	m = next.(Model)
@@ -152,7 +277,7 @@ func TestConnectingCanBeCancelledWithoutWaiting(t *testing.T) {
 func TestOldPanelResultsCannotAffectNewPanel(t *testing.T) {
 	old := New("", 80, 24)
 	m := New("", 80, 24)
-	next, _ := m.Update(modelsMsg{source: old.client, entries: plain(lemonade.Model{ID: lemonade.FireworksModel})})
+	next, _ := m.Update(modelsMsg{source: old.client, entries: plain(lemonade.Model{ID: "fireworks.any"})})
 	m = next.(Model)
 	if m.stage != "providers" {
 		t.Fatal("late result reopened an old model selection")
