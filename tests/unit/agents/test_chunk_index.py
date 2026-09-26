@@ -6,8 +6,8 @@ On a real 144K-line repository 83% of the agent's conversation was accumulated
 tool results, re-sent on every step. These tests pin that an over-budget
 result is split along its own structure -- functions, headings, JSON records,
 a search's files, test sections -- that every indexed part reads back exactly
-through ``read_tool_output``, and that the whole mechanism cuts the characters
-a long task re-sends by at least half.
+through ``read_tool_output``, and that at a small budget the mechanism cuts
+the characters a long task re-sends by at least half.
 """
 
 from __future__ import annotations
@@ -22,15 +22,19 @@ import pytest
 
 from gaia.agents.base import chunk_index
 from gaia.agents.base.artifacts import ArtifactStore, store_for
-from gaia.llm.lemonade_client import CLOUD_TRUNCATION_BUDGET, truncation_budget
+from gaia.llm.lemonade_client import truncation_budget
 from tests.unit.agents.test_large_tool_result_truncation import make_agent
 
 CLOUD_MODEL = "fireworks.kimi-k2p7-code"
-THRESHOLD, TARGET = CLOUD_TRUNCATION_BUDGET
+#: Small enough that realistic inputs condense; indexing does not depend on
+#: which profile set the budget.
+THRESHOLD, TARGET = 8000, 6000
 
 
-def cloud_agent():
-    return make_agent(device=None, model_id=CLOUD_MODEL)
+def small_budget_agent():
+    agent = make_agent(device=None, model_id=CLOUD_MODEL)
+    agent._truncation_budget = lambda: (THRESHOLD, TARGET)
+    return agent
 
 
 def assert_tiles(text, chunks, *, line_aligned=True):
@@ -431,7 +435,7 @@ def test_a_25kb_python_read_is_indexed_by_function_and_reads_back_exactly(
     path = tmp_path / "inventory.py"
     path.write_text(source, encoding="utf-8")
     original = read_file_tool(str(path))
-    agent = cloud_agent()
+    agent = small_budget_agent()
     conversation = []
 
     result = agent._handle_large_tool_result(
@@ -491,7 +495,7 @@ def test_a_25kb_python_read_is_indexed_by_function_and_reads_back_exactly(
 
 
 def test_check_result_survives_condensation_verbatim():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     original = shell_result(pytest_log() * 3)
 
     result = agent._handle_large_tool_result(
@@ -512,7 +516,7 @@ def test_check_result_survives_condensation_verbatim():
 
 def test_shell_output_already_archived_by_the_tool_is_indexed_whole():
     """The shell caps stdout itself; the index still covers every byte of it."""
-    agent = cloud_agent()
+    agent = small_budget_agent()
     full = pytest_log() * 4
     from gaia.agents.base.artifacts import retain_excerpt
 
@@ -530,7 +534,7 @@ def test_shell_output_already_archived_by_the_tool_is_indexed_whole():
 
 
 def test_a_100_match_search_is_bounded_and_grouped_by_file():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     original = search_result()
     assert len(json.dumps(original)) > 40000
 
@@ -552,7 +556,7 @@ def test_a_100_match_search_is_bounded_and_grouped_by_file():
 
 
 def test_structureless_text_keeps_head_and_tail_and_indexes_the_middle():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     text = "HEAD " + "m" * 30000 + " TAIL"
 
     result = agent._handle_large_tool_result("fetch_page", text, [], {})
@@ -565,7 +569,7 @@ def test_structureless_text_keeps_head_and_tail_and_indexes_the_middle():
 
 
 def test_dropped_records_are_indexed_and_kept_ones_are_not():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     payload = {
         "messages": [{"id": f"msg-{i:03d}", "body": "b" * 300} for i in range(60)]
     }
@@ -584,7 +588,7 @@ def test_dropped_records_are_indexed_and_kept_ones_are_not():
 
 
 def test_a_read_tool_output_page_is_never_condensed_again():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     handle = store_for(agent).put('"quoted"\n' * 2000)
     page = store_for(agent).read(handle, 0, 8000)
     assert len(json.dumps(page)) > THRESHOLD
@@ -595,7 +599,7 @@ def test_a_read_tool_output_page_is_never_condensed_again():
 
 
 def test_a_result_between_target_and_threshold_reaches_the_model_whole():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     payload = {"items": [{"id": i, "text": "t" * 90} for i in range(70)]}
     size = len(json.dumps(payload))
     assert TARGET < size <= THRESHOLD
@@ -614,22 +618,20 @@ def test_labels_named_by_the_call_arguments_are_shown_first():
 
 
 # ---------------------------------------------------------------------------
-# The budget: cost-aware for a remote model, unchanged for local hardware
+# The budget: conservative for a remote model, per profile for local hardware
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("model", [CLOUD_MODEL, "fireworks.deepseek-v4p1-flash"])
-def test_a_cloud_model_gets_the_cloud_budget(model):
+def test_a_cloud_model_gets_the_conservative_budget(model):
     agent = make_agent(device=None, model_id=model)
-    assert agent._truncation_budget() == CLOUD_TRUNCATION_BUDGET
-    assert CLOUD_TRUNCATION_BUDGET[0] < truncation_budget("npu")[0]
+    assert agent._truncation_budget() == truncation_budget(None) == (30000, 20000)
 
 
 @pytest.mark.parametrize("device", ["npu", "gpu", "cpu"])
 def test_local_device_profiles_keep_their_own_budget(device):
     agent = make_agent(device=device)
     assert agent._truncation_budget() == truncation_budget(device)
-    assert agent._truncation_budget() != CLOUD_TRUNCATION_BUDGET
     assert truncation_budget("npu") == (30000, 20000)
     assert truncation_budget("gpu") == (60000, 40000)
 
@@ -649,7 +651,7 @@ def _resent(results) -> int:
 
 
 def test_indexing_halves_the_characters_a_40_step_task_re_sends():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     large = [
         (
             "read_file",
@@ -755,7 +757,7 @@ def _assert_entries_read_back(agent, result, text):
 def test_every_entry_of_a_huge_python_file_reads_back(classes, size):
     source = python_module(n_classes=classes, methods=6, functions=10)
     assert len(source) > size
-    agent = cloud_agent()
+    agent = small_budget_agent()
     original = {"status": "success", "file_path": "/r/big.py", "file_type": "python"}
     original["content"] = source
 
@@ -767,7 +769,7 @@ def test_every_entry_of_a_huge_python_file_reads_back(classes, size):
 
 
 def test_a_single_50k_line_keeps_the_end_of_the_output_in_view():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     stdout = "header\n\n" + "x" * 50000 + "END-OF-RUN\n"
     original = shell_result(stdout)
 
@@ -782,7 +784,7 @@ def test_a_single_50k_line_keeps_the_end_of_the_output_in_view():
 
 
 def test_the_head_tail_middle_of_structureless_text_reads_back_whole():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     text = "HEAD " + "m" * 60000 + " TAIL"
     result = agent._handle_large_tool_result("fetch_page", text, [], {})
     (middle,) = result["index"]
@@ -826,7 +828,6 @@ def test_a_lemonade_served_local_model_keeps_the_device_budget(monkeypatch, prof
     agent = make_agent(device=None, model_id=DEFAULT_MODEL_NAME)
 
     assert agent._truncation_budget() == truncation_budget(profile)
-    assert agent._truncation_budget() != CLOUD_TRUNCATION_BUDGET
 
 
 # ---------------------------------------------------------------------------
@@ -987,7 +988,7 @@ _PATHS = {
 @pytest.mark.parametrize("path", list(_PATHS))
 def test_every_index_entry_reads_back_by_number(path):
     name, build = _PATHS[path]
-    agent = cloud_agent()
+    agent = small_budget_agent()
     result = agent._handle_large_tool_result(name, build(), [], {})
     meta = _metadata(result)
     assert meta["fetch"] == chunk_index.FETCH_HINT
@@ -1001,7 +1002,7 @@ def test_every_index_entry_reads_back_by_number(path):
 
 
 def test_a_bad_entry_number_says_what_to_do():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     result = agent._handle_large_tool_result(
         *_PATHS["python"][:1], _PATHS["python"][1](), [], {}
     )
@@ -1022,7 +1023,7 @@ def test_a_bad_entry_number_says_what_to_do():
 
 
 def test_the_reader_advertises_entry_first_and_no_fixed_page_size():
-    agent = cloud_agent()
+    agent = small_budget_agent()
     agent._register_output_reader()
     doc = agent._tools_registry["read_tool_output"]["description"]
     assert doc.index("entry") < doc.index("offset")

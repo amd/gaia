@@ -32,7 +32,7 @@ import pytest
 import gaia.agents.base.agent as agent_module
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import SilentConsole
-from gaia.llm.lemonade_client import CLOUD_TRUNCATION_BUDGET, truncation_budget
+from gaia.llm.lemonade_client import truncation_budget
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -729,4 +729,4 @@ def test_gateway_budget_does_not_load_local_device_config(monkeypatch, model):
         raise ValueError("broken local configuration")
 
     monkeypatch.setattr(GaiaConfig, "load", invalid_config)
-    assert agent._truncation_budget() == CLOUD_TRUNCATION_BUDGET
+    assert agent._truncation_budget() == truncation_budget(None)

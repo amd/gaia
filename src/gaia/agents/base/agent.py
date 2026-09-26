@@ -61,7 +61,6 @@ from gaia.agents.base.verification import (
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import (
-    CLOUD_TRUNCATION_BUDGET,
     DEFAULT_MODEL_NAME,
     budget_for_ctx,
     is_context_overflow_error,
@@ -4777,10 +4776,11 @@ Do NOT wrap conversational replies in JSON.
                 if isinstance(backend, LemonadeClient)
                 else cloud_model_provider(model)
             )
-            # A remote model is budgeted by re-send cost, not by local hardware.
-            if cloud:
-                return CLOUD_TRUNCATION_BUDGET
-            device = GaiaConfig.load().default_device
+            # Gateway sessions do not depend on local hardware configuration.
+            # Preserve their conservative admission budget until metadata supplies
+            # a provider-specific window; do not guess one from the host profile.
+            if not cloud:
+                device = GaiaConfig.load().default_device
         return truncation_budget(device)
 
     #: Scalar annotations worth coercing, by name as well as by type: a module

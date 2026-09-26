@@ -485,9 +485,8 @@ its one index entry.
 
 Local thresholds/targets are 30,000/20,000 characters for NPU and 60,000/40,000
 for GPU/CPU. An omitted device follows the configured profile; FLM models retain
-the NPU budget. A cloud model reached through Lemonade uses 8,000/6,000: its
-limit is the cost of re-sending every result on every later step, not its
-context window. The Claude path uses its existing larger window. These are
+the NPU budget. A cloud model reached through Lemonade gets the conservative
+30,000/20,000 without reading the local device profile. The Claude path uses its existing larger window. These are
 per-result character budgets, not measured remaining tokens.
 
 ## Common Pitfalls and Solutions

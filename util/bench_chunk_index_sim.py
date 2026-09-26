@@ -4,7 +4,7 @@
 
 Offline and deterministic: no model, no network. Every ``role: "tool"`` result
 in a transcript's ``conversation`` goes through the agent's real
-``_handle_large_tool_result`` with the cloud budget, and each step (a
+``_handle_large_tool_result`` with a remote model's budget, and each step (a
 ``role: "system"`` entry whose content has ``type == "stats"``) re-sends every
 result that came before it -- the cost the chunk index exists to cut.
 
@@ -31,13 +31,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from gaia.agents.base import chunk_index  # noqa: E402
 from gaia.agents.base.agent import Agent  # noqa: E402
 from gaia.agents.base.artifacts import store_for  # noqa: E402
-from gaia.llm.lemonade_client import CLOUD_TRUNCATION_BUDGET  # noqa: E402
+from gaia.llm.lemonade_client import truncation_budget  # noqa: E402
 
 _OLD_METADATA = ("artifact", "continuation", "total_chars")
 
 
 class _ReplayAgent(Agent):
-    budget = CLOUD_TRUNCATION_BUDGET
+    budget = truncation_budget(None)
 
     def _get_system_prompt(self) -> str:
         return "replay"
@@ -219,8 +219,8 @@ def main(argv: List[str] | None = None) -> int:
         nargs=2,
         type=int,
         metavar=("THRESHOLD", "TARGET"),
-        default=CLOUD_TRUNCATION_BUDGET,
-        help="chars (default: the cloud budget %(default)s)",
+        default=truncation_budget(None),
+        help="chars (default: a remote model's budget %(default)s)",
     )
     args = parser.parse_args(argv)
     _ReplayAgent.budget = tuple(args.budget)

@@ -440,10 +440,6 @@ def budget_for_ctx(ctx_size: int) -> Tuple[int, int]:
     return threshold, target
 
 
-#: Remote-model (threshold, target): sized by re-send cost per step, not by context.
-CLOUD_TRUNCATION_BUDGET: Tuple[int, int] = (8000, 6000)
-
-
 def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
     """(threshold, target) char budget for large tool-result truncation.
 
