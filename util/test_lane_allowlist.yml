@@ -1,0 +1,47 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Test files that no CI lane runs, on purpose.
+#
+# Read by util/check_test_lane_coverage.py. A file listed here is exempt from
+# the "every test file must be named by a lane" rule; a file that is neither
+# listed nor named by a lane fails the check.
+#
+# The reason is the whole point. "No lane runs this" is a decision someone has
+# to be able to review, so say what makes the file unrunnable in CI — hardware
+# that no runner has, a live third-party account, a stress run measured in
+# hours. "Not ready yet" is not a reason; wire it into a lane instead.
+#
+# The checker also fails on a stale entry: one naming a file that no longer
+# exists, or one a lane has since started running. Both mean the allowlist has
+# drifted from reality and is no longer telling you anything.
+#
+# A file that runs without Lemonade, a live account or AMD hardware belongs in
+# test_unit.yml's offline-integration job, not here.
+
+files:
+  # A real model on a self-hosted Strix Halo runner (the real_model marker).
+  tests/integration/eval/test_sidecar_eval.py: Scores the email sidecar against a real model; real_model marker, self-hosted Strix Halo only.
+  tests/integration/eval/test_sidecar_eval_gaia.py: Scores the flagship sidecar against a real model; real_model marker, self-hosted Strix Halo only.
+
+  # A live Lemonade Server with models loaded.
+  tests/integration/test_chat_rag_pdf_chat_e2e.py: Chats over an indexed PDF end to end; needs a live Lemonade Server with the chat and embedding models.
+  tests/integration/test_chat_rag_pdf_e2e.py: Indexes and queries a PDF end to end; needs a live Lemonade Server with the chat and embedding models.
+  tests/integration/test_pptx_rag_e2e.py: Answers questions over an indexed PPTX; needs a live Lemonade Server with the chat and embedding models.
+  tests/integration/test_code_index_live.py: Embeds and searches real code; needs a live Lemonade Server serving the embedding model.
+  tests/integration/test_check_suspicious_mail_tool_selection_2900.py: Measures which tool a real model picks for mail phrasings; needs a live Lemonade Server with the email model.
+  tests/integration/test_email_agent_triage.py: Holds triage accuracy to a baseline; needs a live Lemonade Server with the email model.
+  tests/integration/test_email_bench_throughput.py: Benchmarks triage throughput; needs a live Lemonade Server with the email model.
+  tests/integration/test_daemon_broker_lemonade.py: Drives concurrent real model loads through the broker; needs a live Lemonade Server with downloaded models.
+  tests/integration/test_lemonade_model_residency.py: Checks an LLM and an embedder stay co-resident; needs a live Lemonade Server with both loaded.
+  tests/integration/test_lemonade_predownload_checks.py: Proves the real /models, /system-info and /health shapes the unit test mocks; needs a live Lemonade Server.
+  tests/integration/test_gateway_lemonade.py: Proves Lemonade accepts the gateway's cloud-provider registration and discovery calls, not just that GAIA sent them; needs a live Lemonade Server 11.8.0+, skips otherwise.
+  tests/test_lemonade_health.py: Reads context_size from the real health endpoint; needs a live Lemonade Server.
+  tests/mcp/test_email_mcp_stdio_parity.py: Both the REST and MCP-stdio surfaces triage with the local LLM; needs a live Lemonade Server with the email model.
+
+  # A live third-party account.
+  tests/integration/test_email_agent_live_gmail.py: Reads a real Gmail inbox; needs GAIA_GMAIL_LIVE_ACCOUNT credentials, never available in CI.
+
+  # Manual runs against running services.
+  tests/stress/test_agent_ui_stress.py: A hand-run stress script against a running Agent UI and Lemonade Server; not a pytest suite.
+  tests/test_sd_model_sweep.py: A hand-run sweep over every SD model and resolution on a live Lemonade Server, writing an image report; not a pytest suite.

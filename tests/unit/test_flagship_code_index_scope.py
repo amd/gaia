@@ -26,7 +26,6 @@ def _register_tools_only(config, project_root):
     agent.observers = []  # __del__ runs on an agent that never ran __init__
     with (
         patch.object(GaiaAgent, "_maybe_build_skill_loader", return_value=None),
-        patch.object(GaiaAgent, "_maybe_build_skill_discovery", return_value=None),
         patch.object(GaiaAgent, "register_skill_library_tools"),
         patch.object(GaiaAgent, "register_skill_learning_tools"),
         patch.object(GaiaAgent, "register_code_index_tools"),

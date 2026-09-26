@@ -85,6 +85,24 @@ icon: "bug"
     **Workaround:** To skip the Agent UI frontend build entirely (the CLI still works),
     pass `--skip-webui-build` or set `GAIA_SKIP_WEBUI_BUILD=1`.
   </Accordion>
+
+  <Accordion title="gaia init can't download or start Lemonade Server" icon="cloud-slash">
+    `gaia init` downloads GAIA's own Lemonade Server from GitHub into `~/.gaia/lemonade`
+    and starts it on a private port. It needs no admin rights and never uses a package
+    manager. The error names which part failed:
+
+    - **`Failed to download …` / `dropped mid-transfer`** — GAIA could not reach
+      `github.com`. Check your network or proxy and re-run `gaia init`.
+    - **`Checksum mismatch …`** — the download was corrupted. Re-run `gaia init`; if it
+      keeps happening, the release asset changed and GAIA needs an update.
+    - **`not published for <OS>/<arch>`** — there is no Lemonade build for this machine
+      (for example, Intel Macs). Run Lemonade Server on another machine and point GAIA at
+      it with `LEMONADE_BASE_URL`.
+    - **`exited immediately` / `did not answer`** — the server started but failed. Its own
+      error is in `~/.gaia/lemonade/lemond.log`.
+
+    To start over with a fresh copy, run `gaia init --force-reinstall`.
+  </Accordion>
 </AccordionGroup>
 
 ---
@@ -420,7 +438,7 @@ icon: "bug"
     `gaia eval agent --compare` only *diffs* scorecards — it does not run an eval.
     - **Fix**: Run the eval first (`gaia eval agent --category <cat>`); it prints the run dir and writes `<run-dir>/scorecard.json`.
     - **Then**: `gaia eval agent --compare <baseline>/scorecard.json <run-dir>/scorecard.json`.
-    - **Baseline**: pick the committed baseline matching your model under `tests/fixtures/eval_baselines/` — don't rely on mtime sorting.
+    - **Baseline**: flagship baselines live in `tests/fixtures/eval_baselines/gaia-flagship/`. None is committed yet, so until the first one lands there is no regression verdict to report, only the scores the run measured.
   </Accordion>
 
   <Accordion title="Eval runs fail with chaotic context/model errors" icon="clipboard-question">

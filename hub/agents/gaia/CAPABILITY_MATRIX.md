@@ -9,25 +9,28 @@ python hub/agents/gaia/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools, the 4 code-index tools, and the load_tools escape hatch). This is the REGISTERED size — what the agent can do. Dynamic tool loading means a single turn only shows the model a subset of it, and it is distinct from the REST surface's 4 functional verbs, a purpose-built streaming facade for external callers.
+- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools, the 4 code-index tools, and the load_tools escape hatch). This is the REGISTERED size — what the agent can do. Dynamic tool loading means a single turn only shows the model a subset of it, and it is distinct from the REST surface's 7 functional verbs, a purpose-built streaming facade for external callers.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
 
-4 exposed ops (4 REST functional, no MCP surface) and their eval coverage:
+7 exposed ops (7 REST functional, no MCP surface) and their eval coverage:
 
 | Op | Surface | Eval coverage |
 |---|---|---|
 | `memory` | REST | no quality eval (contract-tested only) |
 | `query` | REST | no quality eval (contract-tested only) |
 | `query/{run_id}/cancel` | REST | no quality eval (contract-tested only) |
+| `query/{run_id}/followup` | REST | no quality eval (contract-tested only) |
 | `query/{run_id}/respond` | REST | no quality eval (contract-tested only) |
+| `query/{run_id}/tool_decision` | REST | no quality eval (contract-tested only) |
+| `sessions/{session_id}/bypass` | REST | no quality eval (contract-tested only) |
 
 The committed SSE sequence pins under `python/eval_baselines/query_sequences/` shape-test the `/query` stream (canonical event vocabulary, ordering, single terminal) via `gaia.eval.sidecar_harness` — contract coverage, not a judged quality bar.
 
 ## Surface totals
 
-- Registered agent-loop tools: **81** (CORE 15 + 21 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+- Registered agent-loop tools: **83** (CORE 16 + 21 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
   - `clipboard`: 2
   - `code_index`: 4
   - `data`: 6
@@ -38,13 +41,13 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `file_edit`: 3
   - `file_search`: 3
   - `image_gen`: 3
-  - `loop_control`: 2
+  - `loop_control`: 3
   - `media_transcription`: 4
   - `memory`: 5
   - `rag_index`: 5
   - `rag_query`: 6
   - `screenshot`: 1
-  - `shell`: 4
+  - `shell`: 5
   - `skill_hub`: 4
   - `skills`: 5
   - `vision`: 2
@@ -58,11 +61,14 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `search_skill_hub`
   - `skill_status`
   - `unload_skill`
-- REST functional verbs: **4** (8 total operations in the sidecar contract, including the health/version/init probes)
+- REST functional verbs: **7** (11 total operations in the sidecar contract, including the health/version/init probes)
   - `memory`
   - `query`
   - `query/{run_id}/cancel`
+  - `query/{run_id}/followup`
   - `query/{run_id}/respond`
+  - `query/{run_id}/tool_decision`
+  - `sessions/{session_id}/bypass`
 - MCP tools: **0** (see MCP Scope Decision)
 - Eval suites: **2**
   - `perf`: enforce=False, acceptance_enforce=None

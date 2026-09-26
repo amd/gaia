@@ -38,7 +38,7 @@ func TestConfigureKeepsKeyOutOfInstallAndDiscoversModels(t *testing.T) {
 			}
 			fmt.Fprint(w, `{}`)
 		case "/models":
-			fmt.Fprint(w, `{"data":[{"id":"fireworks.gemma-4-31b-it","recipe":"cloud","downloaded":false},{"id":"local","downloaded":true},{"id":"fireworks.embed","recipe":"cloud","labels":["embeddings"]}]}`)
+			fmt.Fprint(w, `{"data":[{"id":"fireworks.chat","recipe":"cloud","downloaded":false},{"id":"local","downloaded":true},{"id":"fireworks.embed","recipe":"cloud","labels":["embeddings"]}]}`)
 		}
 	}))
 	defer s.Close()
@@ -48,13 +48,56 @@ func TestConfigureKeepsKeyOutOfInstallAndDiscoversModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	models, err := c.Models(context.Background(), "fireworks")
-	if err != nil || len(models) != 1 || models[0].ID != FireworksModel {
+	if err != nil || len(models) != 1 || models[0].ID != "fireworks.chat" {
 		t.Fatalf("models=%v err=%v", models, err)
 	}
 	if strings.Join(calls, ",") != "/install,/cloud/auth,/models" {
 		t.Fatal(calls)
 	}
 }
+func TestRecommendedModelsAreRankedAndLookedUpByID(t *testing.T) {
+	if len(RecommendedModels) < 2 || TopRecommendation() != RecommendedModels[0] {
+		t.Fatal("top recommendation must be the first ranked entry")
+	}
+	seen := map[string]bool{}
+	for i, r := range RecommendedModels {
+		rank, note, ok := Rank(r.ID)
+		if !ok || rank != i+1 || note != r.Note || note == "" || !strings.HasPrefix(r.ID, "fireworks.") || seen[r.ID] {
+			t.Fatalf("entry %d %+v: rank=%d note=%q ok=%v", i, r, rank, note, ok)
+		}
+		seen[r.ID] = true
+	}
+	if rank, note, ok := Rank("fireworks.unknown"); ok || rank != 0 || note != "" {
+		t.Fatalf("unknown id resolved: rank=%d note=%q ok=%v", rank, note, ok)
+	}
+}
+
+// Lemonade reports Fireworks models under either the short name or the full
+// account path (the Python side handles both — see
+// tests/unit/test_fireworks_catalog.py). Ranking the short form only would
+// leave the long form unranked: the same silent no-op this list replaced.
+func TestRankMatchesTheFullAccountPathForm(t *testing.T) {
+	for i, r := range RecommendedModels {
+		short := strings.TrimPrefix(r.ID, "fireworks.")
+		long := "fireworks.accounts/fireworks/models/" + short
+		rank, note, ok := Rank(long)
+		if !ok || rank != i+1 || note != r.Note {
+			t.Fatalf("%q did not rank as %s: rank=%d note=%q ok=%v", long, r.ID, rank, note, ok)
+		}
+	}
+}
+
+// The provider stays in the key: a gateway model sharing a Fireworks model's
+// name is a different model and must not inherit its rank.
+func TestRankDoesNotMatchAcrossProviders(t *testing.T) {
+	short := strings.TrimPrefix(TopRecommendation().ID, "fireworks.")
+	for _, id := range []string{"amd." + short, short, "amd.accounts/fireworks/models/" + short} {
+		if rank, _, ok := Rank(id); ok {
+			t.Fatalf("%q inherited rank %d from a Fireworks recommendation", id, rank)
+		}
+	}
+}
+
 func TestErrorsNeverReflectProviderBodyOrFollowRedirects(t *testing.T) {
 	for _, status := range []int{301, 400, 401, 403, 404, 409, 500} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {

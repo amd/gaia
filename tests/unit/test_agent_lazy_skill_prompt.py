@@ -80,6 +80,7 @@ class _StubAgent:
     _note_skill_active = Agent._note_skill_active
     _pin_skill_body = Agent._pin_skill_body
     _always_on_skill_names = Agent._always_on_skill_names
+    _active_skill_names = Agent._active_skill_names
 
     def __init__(self, manager, *, manifest=None, skill_set=None):
         self._skill_manager = manager

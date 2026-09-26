@@ -11,7 +11,7 @@
  *   - pin gating: init() sets autoDownload=false when a pin is present
  *   - clearPin(): restores autoDownload, allowDowngrade=false, github feed
  *   - getState() includes currentVersion and pinnedVersion
- *   - 3 new IPC channels registered on init and removed on destroy
+ *   - IPC handlers: invoked with bad input, they reject without side effects
  *
  * electron-updater is mapped via moduleNameMapper in package.json to
  * mocks/electron-updater.js — a module-level singleton MockAutoUpdater.
@@ -467,30 +467,6 @@ describe("getState() extended state", () => {
 // ── Tests: IPC handler registration ───────────────────────────────────────────
 
 describe("IPC handler registration", () => {
-  test("registers gaia:update:list-releases on init", () => {
-    const mod = loadModule();
-    const win = makeMockWindow();
-    mod.init(win);
-
-    expect(electronMock.ipcMain._handlers.has("gaia:update:list-releases")).toBe(true);
-  });
-
-  test("registers gaia:update:install-version on init", () => {
-    const mod = loadModule();
-    const win = makeMockWindow();
-    mod.init(win);
-
-    expect(electronMock.ipcMain._handlers.has("gaia:update:install-version")).toBe(true);
-  });
-
-  test("registers gaia:update:resume on init", () => {
-    const mod = loadModule();
-    const win = makeMockWindow();
-    mod.init(win);
-
-    expect(electronMock.ipcMain._handlers.has("gaia:update:resume")).toBe(true);
-  });
-
   test("removes all 5 IPC handlers on destroy", () => {
     const mod = loadModule();
     const win = makeMockWindow();
@@ -523,5 +499,113 @@ describe("gaia:update:resume IPC", () => {
     const result = await electronMock.ipcMain.simulateInvoke("gaia:update:resume");
     expect(result).toHaveProperty("pinnedVersion", null);
     expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
+  });
+});
+
+// ── Tests: IPC handlers invoked from the renderer ─────────────────────────────
+
+function invoke(channel, ...args) {
+  return electronMock.ipcMain.simulateInvoke(channel, ...args);
+}
+
+function pinFilePath() {
+  return path.join(tmpHome, ".gaia", "update-config.json");
+}
+
+describe("gaia:update:install-version IPC tag validation", () => {
+  let checkSpy;
+  let setFeedSpy;
+
+  beforeEach(() => {
+    const mod = loadModule();
+    mod.init(makeMockWindow());
+    mockAutoUpdaterInstance._feedURL = null;
+    mockAutoUpdaterInstance.allowDowngrade = false;
+    checkSpy = jest
+      .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
+      .mockResolvedValue(null);
+    setFeedSpy = jest.spyOn(mockAutoUpdaterInstance, "setFeedURL");
+  });
+
+  test.each([
+    ["path traversal", "v0.20.0/../../../evil"],
+    ["leading traversal", "../v0.20.0"],
+    ["missing v prefix", "0.20.0"],
+    ["missing patch", "v0.20"],
+    ["four components", "v0.20.0.1"],
+    ["channel name", "latest"],
+    ["trailing newline", "v0.20.0\n"],
+    ["trailing space", "v0.20.0 "],
+    ["slash in suffix", "v0.20.0-rc/1"],
+    ["query string", "v0.20.0?x=1"],
+    ["absolute URL", "https://evil.example/v0.20.0"],
+    ["empty string", ""],
+    ["null", null],
+    ["undefined", undefined],
+    ["number", 20],
+    ["object", { tag: "v0.20.0" }],
+    ["array", ["v0.20.0"]],
+  ])("rejects a malformed tag (%s) without pinning or touching the feed", async (_label, tag) => {
+    await expect(invoke("gaia:update:install-version", tag)).rejects.toThrow(
+      /Invalid release tag/
+    );
+
+    expect(setFeedSpy).not.toHaveBeenCalled();
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(mockAutoUpdaterInstance.allowDowngrade).toBe(false);
+    expect(fs.existsSync(pinFilePath())).toBe(false);
+    const status = await invoke("gaia:update:get-status");
+    expect(status.pinnedVersion).toBeNull();
+  });
+
+  test("accepts a prerelease tag and points the feed at that release folder", async () => {
+    const state = await invoke("gaia:update:install-version", "v0.21.0-rc.1");
+
+    expect(state.pinnedVersion).toBe("v0.21.0-rc.1");
+    expect(mockAutoUpdaterInstance._feedURL).toEqual({
+      provider: "generic",
+      url: "https://github.com/amd/gaia/releases/download/v0.21.0-rc.1/",
+    });
+    expect(checkSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a rejected tag does not clear an existing pin", async () => {
+    await invoke("gaia:update:install-version", "v0.20.0");
+    await expect(invoke("gaia:update:install-version", "v0.19.0/..")).rejects.toThrow(
+      /Invalid release tag/
+    );
+
+    const status = await invoke("gaia:update:get-status");
+    expect(status.pinnedVersion).toBe("v0.20.0");
+    expect(JSON.parse(fs.readFileSync(pinFilePath(), "utf8")).pinnedVersion).toBe(
+      "v0.20.0"
+    );
+  });
+});
+
+describe("gaia:update:check IPC", () => {
+  test("with no feed configured, reports no-channel instead of checking", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow());
+    const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates");
+
+    const state = await invoke("gaia:update:check");
+
+    expect(state.status).toBe("no-channel");
+    expect(checkSpy).not.toHaveBeenCalled();
+  });
+
+  test("a failing check surfaces the error in the returned state", async () => {
+    process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
+    const mod = loadModule();
+    mod.init(makeMockWindow());
+    jest
+      .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
+      .mockRejectedValue(new Error("net::ERR_NAME_NOT_RESOLVED"));
+
+    const state = await invoke("gaia:update:check");
+
+    expect(state.status).toBe("error");
+    expect(state.error).toMatch(/ERR_NAME_NOT_RESOLVED/);
   });
 });

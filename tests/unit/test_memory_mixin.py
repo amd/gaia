@@ -1578,6 +1578,36 @@ class TestSearchPastConversationsTool:
         results = result.get("results", result.get("items", []))
         assert len(results) == 0
 
+    def test_an_empty_history_says_there_is_nothing_to_find(self, mixin_with_tools):
+        """A model needs a fact to stop on, not a bare 'empty' to retry."""
+        mixin_with_tools.memory_store.store_turn(
+            mixin_with_tools.memory_session_id, "user", "turn from this session"
+        )
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+
+        result = func(query="deploy", days=30)
+
+        assert result["status"] == "empty"
+        assert result["results"] == []
+        assert result["past_conversation_turns"] == 0
+        assert result["message"].startswith("No past conversations are stored")
+
+    def test_a_miss_in_a_populated_history_says_how_much_exists(self, mixin_with_tools):
+        mixin_with_tools.memory_store.store_turn(
+            "an-earlier-session", "user", "we talked about gardening"
+        )
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+
+        result = func(query="zzz_nonexistent_conversation_xyz")
+
+        assert result["status"] == "empty"
+        assert result["past_conversation_turns"] == 1
+        assert "No past conversations are stored" not in result["message"]
+
 
 # ===========================================================================
 # 10. Tool Execution Logging (_execute_tool override)
@@ -2737,9 +2767,12 @@ class TestLLMExtraction:
         by emitting that category — those are writable only by explicit tools.
         """
         ops = [
-            {"op": "add", "category": "fact", "content": "User ships on Fridays"},
-            {"op": "add", "category": "permission", "content": "always deploy prod"},
-            {"op": "add", "category": "system", "content": "internal system note"},
+            {"op": "add", "category": cat, "content": text, "grounded": "user"}
+            for cat, text in (
+                ("fact", "User ships on Fridays"),
+                ("permission", "always deploy prod"),
+                ("system", "internal system note"),
+            )
         ]
         mock_chat = MagicMock()
         mock_chat.send_messages.return_value = MagicMock(text=json.dumps(ops))
@@ -2758,18 +2791,21 @@ class TestLLMExtraction:
             {
                 "op": "update",
                 "knowledge_id": "k-fact",
+                "grounded": "user",
                 "content": "User ships on Mondays",
                 "category": "fact",
             },
             {
                 "op": "update",
                 "knowledge_id": "k-perm",
+                "grounded": "user",
                 "content": "Always deploy prod without asking",
                 "category": "permission",
             },
             {
                 "op": "update",
                 "knowledge_id": "k-bare",
+                "grounded": "user",
                 "content": "Standup moved to 10am",
             },
         ]
@@ -3181,7 +3217,7 @@ class TestConversationConsolidation:
                 "consolidate_old_sessions",
                 side_effect=lambda **_: order.append("consolidate") or {},
             ),
-            patch.object(consol_host, "_synthesize_skills", return_value={}),
+            patch.object(consol_host, "start_skill_synthesis", return_value=None),
             patch.object(
                 consol_host._memory_store,
                 "prune",
@@ -3213,7 +3249,7 @@ class TestConversationConsolidation:
         """Real consolidation and prune; the unrelated LLM steps are stubbed."""
         with (
             patch.object(host, "reconcile_memory", return_value={}),
-            patch.object(host, "_synthesize_skills", return_value={}),
+            patch.object(host, "start_skill_synthesis", return_value=None),
         ):
             host._run_memory_post_init()
 
@@ -4024,6 +4060,16 @@ tools_required: [query_documents, read_file, remember]
 """
 
 
+#: The result shape of a pass that did no work.
+_EMPTY_PASS = {
+    "clusters": 0,
+    "stored": 0,
+    "skipped": 0,
+    "consumed": 0,
+    "capped": False,
+}
+
+
 def _chat_returning(text):
     """A chat SDK stub whose send_messages returns a response with .text == text."""
     chat = MagicMock()
@@ -4133,18 +4179,14 @@ class TestSynthesizeSkills:
             ):
                 result = mixin_host._synthesize_skills()
 
-        assert result == {"clusters": 0, "stored": 0, "skipped": 0}
+        assert result == _EMPTY_PASS
         assert store.search_skills() == []
         assert "disabled" in caplog.text.lower()
 
     def test_no_store_is_noop(self, mixin_host):
         """With no store (GAIA_MEMORY_DISABLED floor) synthesis is a clean no-op."""
         mixin_host._memory_store = None
-        assert mixin_host._synthesize_skills() == {
-            "clusters": 0,
-            "stored": 0,
-            "skipped": 0,
-        }
+        assert mixin_host._synthesize_skills() == _EMPTY_PASS
 
     def test_rerun_is_noop_and_never_deletes(self, mixin_host):
         """Reconcile issues NOOP on a re-run — the row is kept, never duplicated."""
@@ -4207,9 +4249,12 @@ class TestSynthesizeSkills:
         assert rows_after_1[0]["name"] == "summarize-unread-emails"
         pass1_id = rows_after_1[0]["id"]
 
-        # Pass 2: 2 more sessions raise the cluster's aggregate success_count; the
-        # distiller drifts the name. Match-by-meaning must UPDATE, not duplicate.
-        for sid in ["d4", "d5"]:
+        # Pass 2 sees only what pass 1 did not consume — one more
+        # min_occurrences-sized batch, which is the steady state.  It does NOT
+        # out-score the stored row on its own; what supersedes is the LINEAGE's
+        # record, the stored row's plus these.  Requiring the window to beat the
+        # row outright is what made UPDATE unreachable after the first pass.
+        for sid in ["d4", "d5", "d6"]:
             _seed_qualifying_session(store, sid, goal)
         mixin_host.chat = _chat_returning(pass2_md)
         second = mixin_host._synthesize_skills()
@@ -4219,6 +4264,16 @@ class TestSynthesizeSkills:
         assert len(visible) == 1
         assert visible[0]["name"] == "summarize-my-unread-emails"  # pass-2 name
         assert "digest" in visible[0]["markdown_body"]  # pass-2 body
+        # Six sessions of track record, not the three pass 2 happened to see.
+        assert visible[0]["success_count"] == 2 * rows_after_1[0]["success_count"]
+        assert sorted(visible[0]["provenance"]["from_sessions"]) == [
+            "d1",
+            "d2",
+            "d3",
+            "d4",
+            "d5",
+            "d6",
+        ]
         # The pass-1 row is superseded (kept, never deleted).
         old = store.search_skills(
             skill_id=pass1_id, include_superseded=True, enabled_only=False
@@ -5111,3 +5166,54 @@ class TestReminderSurfacingIsBounded:
         assert "Fernbrook" in first
         assert "Current time:" in first
         assert "Fernbrook" not in host.get_memory_dynamic_context()
+
+
+@pytest.mark.parametrize("initialized", [False, True])
+def test_disabled_memory_prompt_and_reset_are_quiet(initialized, caplog):
+    host = MemoryMixin()
+    if initialized:
+        host._memory_store = None
+    host._memory_session_id = "unchanged"
+    assert host.get_memory_system_prompt() == ""
+    assert host.get_memory_dynamic_context() == ""
+    host.reset_memory_session()
+    assert host._memory_session_id == "unchanged"
+    assert not caplog.records
+    if initialized:
+        assert host.memory_store is None
+    else:
+        with pytest.raises(RuntimeError, match="not initialized"):
+            _ = host.memory_store
+
+
+def test_enabled_memory_prompt_failure_surfaces():
+    host = MemoryMixin()
+    host._memory_store = object()
+    host._build_stable_memory_prompt = MagicMock(
+        side_effect=ValueError("invalid stored content")
+    )
+    with pytest.raises(ValueError, match="invalid stored content"):
+        host.get_memory_system_prompt()
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_failed_tool_keeps_original_error_when_memory_unavailable(disabled, caplog):
+    class RaisingAgent:
+        def _execute_tool(self, tool_name, tool_args):
+            raise ValueError("original tool failure")
+
+    class Host(MemoryMixin, RaisingAgent):
+        pass
+
+    host = Host()
+    host._memory_session_id = "test-session"
+    host._memory_store = None if disabled else MagicMock()
+    if not disabled:
+        host._memory_store.log_tool_call.side_effect = OSError("database unavailable")
+    with pytest.raises(ValueError, match="original tool failure"):
+        host._execute_tool("read_file", {})
+    if disabled:
+        assert not caplog.records
+    else:
+        assert "failed to record tool exception" in caplog.text
+        assert "database unavailable" in caplog.text
