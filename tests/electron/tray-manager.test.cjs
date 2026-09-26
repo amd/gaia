@@ -218,6 +218,141 @@ describe("tray:set-config validation", () => {
   });
 });
 
+describe("agent config persistence", () => {
+  const AGENT_CFG = { autoStart: true, restartOnCrash: false, logLevel: "debug" };
+  let disk;
+
+  beforeEach(() => {
+    disk = null;
+    fs.existsSync.mockImplementation(
+      (p) => !String(p).endsWith("tray-config.json") || disk !== null
+    );
+    fs.readFileSync.mockImplementation(() => disk);
+    fs.writeFileSync.mockImplementation((_p, data) => {
+      disk = data;
+    });
+  });
+
+  afterEach(() => {
+    fs.existsSync.mockImplementation(() => true);
+    fs.readFileSync.mockImplementation(() => "{}");
+    fs.writeFileSync.mockImplementation(() => {});
+  });
+
+  function freshManager() {
+    setPlatform("win32");
+    return new TrayManager(createMockWindow());
+  }
+
+  const invoke = (channel, ...args) =>
+    electronMock.ipcMain.simulateInvoke(channel, ...args);
+
+  test("a saved agent config survives a reload from disk", async () => {
+    freshManager();
+    await invoke("tray:set-config", { agents: { "email-agent": AGENT_CFG } });
+
+    freshManager();
+    const reloaded = await invoke("tray:get-config");
+    expect(reloaded.agents).toEqual({ "email-agent": AGENT_CFG });
+  });
+
+  test("saving one agent keeps the others and the tray settings", async () => {
+    freshManager();
+    await invoke("tray:set-config", {
+      tray: { minimizeToTray: false },
+      agents: { a: AGENT_CFG },
+    });
+    const other = { autoStart: false, restartOnCrash: true, logLevel: "warn" };
+    await invoke("tray:set-config", { agents: { b: other } });
+
+    freshManager();
+    const reloaded = await invoke("tray:get-config");
+    expect(reloaded.agents).toEqual({ a: AGENT_CFG, b: other });
+    expect(reloaded.tray.minimizeToTray).toBe(false);
+  });
+
+  test("an unconfigured install reports an empty agents section", async () => {
+    freshManager();
+    const cfg = await invoke("tray:get-config");
+    expect(cfg.agents).toEqual({});
+  });
+
+  test("a malformed agents section on disk keeps the tray settings", async () => {
+    disk = JSON.stringify({
+      tray: { minimizeToTray: false, startMinimized: true },
+      agents: { "email-agent": { autoStart: "yes" } },
+    });
+    const errors = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    freshManager();
+    const cfg = await invoke("tray:get-config");
+
+    expect(cfg.tray.minimizeToTray).toBe(false);
+    expect(cfg.tray.startMinimized).toBe(true);
+    expect(cfg.agents).toEqual({});
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringMatching(/Ignoring invalid agents section/)
+    );
+    errors.mockRestore();
+  });
+
+  test("a non-object tray section falls back without losing agents", async () => {
+    disk = JSON.stringify({ tray: "on", agents: { a: AGENT_CFG } });
+
+    freshManager();
+    const cfg = await invoke("tray:get-config");
+
+    expect(cfg.tray).toEqual({
+      minimizeToTray: true,
+      startMinimized: false,
+      startOnLogin: false,
+    });
+    expect(cfg.agents).toEqual({ a: AGENT_CFG });
+  });
+
+  test("a failed write rejects and leaves the in-memory config unchanged", async () => {
+    freshManager();
+    fs.writeFileSync.mockImplementation(() => {
+      throw new Error("EACCES: permission denied");
+    });
+    await expect(
+      invoke("tray:set-config", { agents: { a: AGENT_CFG } })
+    ).rejects.toThrow(/Could not save settings to .*EACCES/);
+    const cfg = await invoke("tray:get-config");
+    expect(cfg.agents).toEqual({});
+  });
+
+  test("drops unknown per-agent keys", async () => {
+    freshManager();
+    const result = await invoke("tray:set-config", {
+      agents: { a: { ...AGENT_CFG, injected: "x" } },
+    });
+    expect(result.agents.a).toEqual(AGENT_CFG);
+  });
+
+  test.each([
+    [{ agents: "on" }, /agents must be an object/],
+    [{ agents: { a: null } }, /agents\.a must be an object/],
+    [
+      { agents: { a: { ...AGENT_CFG, autoStart: "yes" } } },
+      /agents\.a\.autoStart must be a boolean/,
+    ],
+    [
+      { agents: { a: { autoStart: true, logLevel: "info" } } },
+      /agents\.a\.restartOnCrash must be a boolean/,
+    ],
+    [
+      { agents: { a: { ...AGENT_CFG, logLevel: "loud" } } },
+      /agents\.a\.logLevel must be one of/,
+    ],
+    [{ agents: { "": AGENT_CFG } }, /agent id must be a non-empty string/],
+  ])("rejects invalid agent config %p without writing", async (payload, err) => {
+    freshManager();
+    await expect(invoke("tray:set-config", payload)).rejects.toThrow(err);
+    expect(disk).toBeNull();
+  });
+});
+
 describe("tray config already on disk from the unvalidated handler", () => {
   const DEFAULT_TRAY = {
     minimizeToTray: true,

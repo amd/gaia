@@ -13,7 +13,7 @@ interface AgentConfigDialogProps {
 }
 
 export function AgentConfigDialog({ agentId, onClose }: AgentConfigDialogProps) {
-  const { agents, configs, statuses, setConfig } = useAgentStore();
+  const { agents, configs, statuses, lastError, saveConfig } = useAgentStore();
   const agent = agents[agentId];
   const status = statuses[agentId];
 
@@ -37,29 +37,13 @@ export function AgentConfigDialog({ agentId, onClose }: AgentConfigDialogProps) 
     setIsDirty(true);
   }, []);
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     log.system.info(`[AgentConfigDialog] Saving config for ${agentId}:`, localConfig);
-    setConfig(agentId, localConfig);
-    setIsDirty(false);
-
-    // Persist via Electron IPC if available
-    const api = window.gaiaAPI;
-    if (api) {
-      api.tray.getConfig().then((trayConfig) => {
-        const updated = {
-          ...trayConfig,
-          agents: { ...trayConfig.agents, [agentId]: localConfig },
-        };
-        api.tray.setConfig(updated).catch((err: unknown) => {
-          log.system.error(`[AgentConfigDialog] Failed to persist config for ${agentId}:`, err);
-        });
-      }).catch((err: unknown) => {
-        log.system.error(`[AgentConfigDialog] Failed to get tray config:`, err);
-      });
+    if (await saveConfig(agentId, localConfig)) {
+      setIsDirty(false);
+      onClose();
     }
-
-    onClose();
-  }, [agentId, localConfig, setConfig, onClose]);
+  }, [agentId, localConfig, saveConfig, onClose]);
 
   const handleCancel = useCallback(() => {
     if (isDirty) {
@@ -218,6 +202,12 @@ export function AgentConfigDialog({ agentId, onClose }: AgentConfigDialogProps) 
               </span>
             </div>
           </section>
+
+          {lastError && (
+            <div className="agent-error-banner" role="alert">
+              <span>{lastError}</span>
+            </div>
+          )}
 
           {/* Footer with save/cancel */}
           <div className="config-footer">

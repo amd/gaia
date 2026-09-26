@@ -103,6 +103,8 @@ gaia telegram stop
 gaia telegram stop --force
 ```
 
+The adapter deletes `~/.gaia/telegram.pid` when it exits. `stop` signals the recorded PID only after confirming it is still a `gaia telegram start` process; a leftover PID file that names any other process is removed without signalling it.
+
 `gaia telegram status` checks `127.0.0.1:8768` by default. If you changed the health binding, point it at the right host and port with `--health-host` and `--health-port`. When running the adapter in the background, `gaia telegram start` also accepts `--health-port` to move the health server (e.g. when the default collides with another local service).
 
 ### Command reference

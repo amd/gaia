@@ -6,6 +6,8 @@
  * unexplained.
  */
 
+import { EventEmitter } from "node:events";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const SHUTDOWN_ERROR = "taskkill failed for pid 4242";
@@ -31,6 +33,7 @@ afterEach(() => {
   // signal disposition for the whole vitest worker.
   for (const [sig, listener] of installed) process.removeListener(sig, listener);
   installed = [];
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.doUnmock("../src/fetch.js");
   vi.doUnmock("../src/lifecycle.js");
@@ -128,4 +131,43 @@ describe("agent-email playground on Ctrl+C", () => {
       0,
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "exits 1 naming the pid when the real shutdown can't stop the sidecar",
+    async () => {
+      vi.spyOn(process, "kill").mockImplementation((() => true) as typeof process.kill);
+      const child = Object.assign(new EventEmitter(), {
+        pid: 4243, // never emits "exit", even after SIGKILL
+        exitCode: null,
+        signalCode: null,
+        kill: vi.fn(),
+      });
+      vi.doMock("../src/fetch.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../src/fetch.js")>()),
+        fetchBinary: vi.fn(async () => ({ binaryPath: "/fake/email-agent", cached: true })),
+      }));
+      // `shutdown` is deliberately left unmocked — this exercises the real one.
+      vi.doMock("../src/lifecycle.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../src/lifecycle.js")>()),
+        startSidecar: vi.fn(async () => ({
+          child,
+          host: "127.0.0.1",
+          port: 8131,
+          baseUrl: "http://127.0.0.1:8131",
+        })),
+      }));
+      const { main } = await import("../src/cli.js");
+      const before = process.listeners("SIGINT").slice();
+      const running = main(["playground", "--no-open"]);
+      const handlers = await waitForHandlers(before);
+
+      vi.useFakeTimers();
+      for (const l of handlers) l();
+      await vi.advanceTimersByTimeAsync(10_000); // SIGTERM wait + post-SIGKILL wait
+
+      expect(await running).toBe(1);
+      expect(stderr.join("")).toContain("pid 4243");
+      expect(stderr.join("")).toContain("kill -9 -4243");
+    },
+  );
 });
