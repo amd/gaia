@@ -272,6 +272,16 @@ uv run python -m gaia.ui.server --debug
 cd src/gaia/apps/webui && npm run dev
 ```
 
+**Changed a backend pydantic model?** Regenerate the frontend's API types, or CI fails:
+
+```bash
+python -m gaia.ui.export_openapi                     # writes src/types/api.schemas.json
+cd src/gaia/apps/webui && npm run gen:api-types      # writes src/types/api.gen.ts
+npx tsc --noEmit                                     # checks the hand-written types still match
+```
+
+If `tsc` then flags `src/types/apiContract.ts`, update the matching interface in `src/types/index.ts`.
+
 ### Linting and Formatting
 
 `util/lint.py` drives all repo lint tooling. Running it with no flags runs

@@ -35,7 +35,7 @@ function formatSize(bytes: number): string {
 }
 
 // Format date
-function formatDate(iso: string): string {
+function formatDate(iso: string | null): string {
     if (!iso) return '';
     const d = new Date(iso);
     const now = new Date();
