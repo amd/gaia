@@ -31,14 +31,17 @@ type modelsMsg struct {
 	capacity string
 	err      error
 }
+
+// Pull messages carry their download's channel so a cancelled download's late
+// result is never taken for a newer one's.
 type pullProgressMsg struct {
-	source *lemonade.Client
-	p      lemonade.PullProgress
+	ch chan tea.Msg
+	p  lemonade.PullProgress
 }
 type pullDoneMsg struct {
-	source *lemonade.Client
-	id     string
-	err    error
+	ch  chan tea.Msg
+	id  string
+	err error
 }
 type clearedMsg struct {
 	source *lemonade.Client
@@ -142,10 +145,10 @@ func (m Model) startPull(e lemonade.Entry) (Model, tea.Cmd) {
 			// slot free so the final message below never blocks once the
 			// panel stops reading (the user pressed esc).
 			if len(ch) < cap(ch)-1 {
-				ch <- pullProgressMsg{source: c, p: p}
+				ch <- pullProgressMsg{ch: ch, p: p}
 			}
 		})
-		ch <- pullDoneMsg{source: c, id: e.Model.ID, err: err}
+		ch <- pullDoneMsg{ch: ch, id: e.Model.ID, err: err}
 		close(ch)
 	}()
 	m.stage = "download"
@@ -291,13 +294,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.note = ""
 		return m, m.Init()
 	case pullProgressMsg:
-		if v.source != m.client || m.stage != "download" {
+		if v.ch != m.pullCh || m.stage != "download" {
 			return m, nil
 		}
 		m.pullLine = pullLine(v.p)
 		return m, waitPull(m.pullCh)
 	case pullDoneMsg:
-		if v.source != m.client || m.stage != "download" {
+		if v.ch != m.pullCh || m.stage != "download" {
 			return m, nil
 		}
 		if m.pullCancel != nil {
@@ -344,6 +347,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if v.String() == "esc" && m.pullCancel != nil {
 				m.pullCancel()
 				m.pullCancel = nil
+				m.pullCh = nil
 				m.pulling = nil
 				m.stage = "models"
 				m.note = "Download stopped."

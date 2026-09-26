@@ -3,6 +3,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -372,13 +373,27 @@ func TestEscStopsADownloadAndReturnsToTheList(t *testing.T) {
 		}
 	}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	stopped := next.(Model).pullCh
 	m = key(next.(Model), tea.KeyEsc)
 	if m.stage != "models" || m.ctx.Err() != nil || !strings.Contains(m.note, "stopped") {
 		t.Fatalf("stage=%s note=%q panelCtx=%v", m.stage, m.note, m.ctx.Err())
 	}
 	// The late completion must not select anything.
-	next, cmd := m.Update(pullDoneMsg{source: m.client, id: "Tiny-GGUF"})
+	next, cmd := m.Update(pullDoneMsg{ch: stopped, id: "Tiny-GGUF"})
 	if cmd != nil || next.(Model).stage != "models" {
 		t.Fatal("a stopped download still selected its model")
 	}
+
+	// Nor may it end a download started after the stop.
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.stage != "download" || m.pullCh == stopped {
+		t.Fatalf("second download did not start: stage=%s", m.stage)
+	}
+	next, _ = m.Update(pullDoneMsg{ch: stopped, id: "Tiny-GGUF", err: context.Canceled})
+	if got := next.(Model); got.stage != "download" || got.note != "" {
+		t.Fatalf("the stopped download's result ended the new one: stage=%s note=%q", got.stage, got.note)
+	}
+	m = key(next.(Model), tea.KeyEsc)
 }
