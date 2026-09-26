@@ -387,7 +387,11 @@ want to test an installed wheel.
 
 ### IMPORTANT: Run agent evals when changing LLM-affecting code paths — do NOT skip
 
-**Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category and compare to the committed baseline before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
+**Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
+
+**Every scenario scores the flagship `gaia` agent.** That is the `--agent-type` default and scenarios no longer pin their own, so a scorecard names one agent and two scorecards are comparable. Pass `--agent-type` only to measure a different agent — and never compare that result to a scorecard captured under another one, because `compare_scorecards` keys on `scenario_id` alone and will happily report "improved/regressed" across two different agents.
+
+**There is no committed baseline right now.** The previous ones scored the `doc` ChatAgent profile, so diffing a flagship run against them is exactly the cross-agent comparison above; they were deleted rather than reinterpreted. Until the first flagship baseline lands (a real run on AMD hardware, committed to `tests/fixtures/eval_baselines/gaia-flagship/`), `--compare` has nothing to diff and CI reports scores without a regression verdict. **Never hand-author, estimate, or copy forward a baseline number to fill the gap** — a fabricated baseline is worse than none, because it looks like a verdict.
 
 **Changes that REQUIRE an eval run before merge:**
 
@@ -415,36 +419,40 @@ Only if the eval genuinely requires the key (the subprocess errors with `ANTHROP
 # Terminal 1 — backend (needed by gaia eval agent)
 python -m gaia.ui.server --port 4200 --host 127.0.0.1
 
-# Terminal 2 — run the eval, then compare its scorecard to the committed baseline.
-# NOTE: `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT run an eval.
-#       Run the eval first; it prints the run dir and writes <run-dir>/scorecard.json.
-gaia eval agent --category rag_quality --agent-type doc
+# Terminal 2 — run the eval. Scores the flagship; no --agent-type needed.
+gaia eval agent --category rag_quality
 # → prints an ABSOLUTE path, e.g.  Output: /…/gaia/eval/results/<run-id>/   ← use it as printed, + /scorecard.json
-# Pick the BASELINE matching your model; don't `ls -t` to find it — a fresh clone stamps
-# every baseline with the checkout time, so an mtime sort picks arbitrarily.
+
+# Compare to a baseline ONLY once one is committed and it was captured under the
+# same agent. `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT
+# run an eval, so run the eval above first.
 gaia eval agent --compare \
-  tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json \
+  tests/fixtures/eval_baselines/gaia-flagship/scorecard_rag_quality.json \
   <printed-output-path>/scorecard.json
 ```
 
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
 
+With no baseline committed, the eval still tells you plenty: a category full of `INFRA_ERROR` or a score that cratered against the run you did an hour ago is a signal. What you cannot do is claim "no regression" — say what you measured, not what you compared.
+
 **#1030 (the Gemma-4 RAG-PDF timeout) is the canonical example of what happens when this rule is skipped:** a prompt change passed every unit test, then broke document Q&A in production. #1033 tracks the systemic CI gaps that let it through.
 
-### IMPORTANT: Run agent evals SERIALLY, never in parallel
+### IMPORTANT: Run agent evals SERIALLY per Lemonade backend, never in parallel against one
 
 **Never run two `gaia eval agent` invocations concurrently against the same Lemonade Server.** Each eval scenario forces Lemonade to load a specific model at a specific `ctx_size`; two concurrent runs will race-evict each other's models and you'll see chaotic failures like:
 - `request (NNNN tokens) exceeds the available context size (4096 tokens)` — one run reloaded the model at a smaller ctx
 - Spurious `BLOCKED_BY_ARCHITECTURE` / `INFRA_ERROR` results — process management collisions
 - `model_load_error: llama-server failed to start` — port conflicts on llama-server children
 
-**Rule of thumb:** at most ONE `gaia eval agent ...` process running at any time, period. If a fix-loop or batch-experiment script needs to chain runs, it must do so sequentially (`run-1 && run-2 && run-3`), never via background `&`. Before kicking off a new eval, verify nothing else is running:
+**Rule of thumb:** at most ONE `gaia eval agent ...` process per machine at any time. If a fix-loop or batch-experiment script needs to chain runs, it must do so sequentially (`run-1 && run-2 && run-3`), never via background `&`. Before kicking off a new eval, verify nothing else is running:
 
 ```bash
 ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0"
 ```
 
 This applies to every `gaia eval agent` run — including `--fix` auto-fix runs and any batch fix-loop that chains them. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
+
+**The constraint is the BACKEND, not the clock.** Two evals on two machines, each with its own Lemonade, cannot evict each other's model and are not covered by this rule. That is what lets [`eval_flagship.yml`](.github/workflows/eval_flagship.yml) fan the scenario eval out across parallel lanes on the ephemeral runner pool — every lane gets its own machine, and within a lane the categories still run one at a time. Do not "fix" that workflow back to a single serial job, and do not read this rule as licence to run two evals against one Lemonade because they are in different terminals.
 
 ## Development Workflow
 
@@ -544,7 +552,6 @@ gaia/
 │   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
 │   ├── scratchpad/     # Scratchpad tables backend
-│   ├── shell/          # Shell integration
 │   ├── sidecar/        # Shared building blocks for local agent sidecars
 │   ├── skills/         # Skill backend (gaia skill): loader, install, audit, signing
 │   ├── talk/           # Voice interaction SDK
@@ -595,8 +602,9 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 - **LLM Backend** (`src/gaia/llm/`): Multi-provider support with AMD optimization
   - `lemonade_client.py` - Lemonade Server (AMD NPU/GPU)
   - `providers/claude.py` - Claude API
-  - `providers/openai_provider.py` - OpenAI API
-  - `factory.py` - Client factory for provider selection
+  - `providers/lemonade.py` - Lemonade provider adapter
+  - `factory.py` - Client factory for provider selection (`openai`/`litellm` were
+    retired in #3899 and are rejected with a migration error)
 - **API Server** (`src/gaia/api/`): OpenAI-compatible REST API for agent access
 - **MCP Integration** (`src/gaia/mcp/`): Model Context Protocol for external integrations
 - **RAG System** (`src/gaia/rag/`): Document Q&A with PDF support - see [`docs/guides/chat.mdx`](docs/guides/chat.mdx)
@@ -616,7 +624,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
 | **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG; the flagship's base class — hub (`chat/`) |
-| **EmailTriageAgent** | Email triage for Gmail (local inference; needs the Google connector) — hub (`email/`) |
+| **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
 | **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
@@ -642,12 +650,13 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
 | `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search, page fetch, download |
-| `email` | `gaia.agents.tools.email_tools.EmailToolsMixin` | Read-only mailbox tools (Outlook / Microsoft Graph) |
+| `email` | `gaia.agents.tools.email_tools.EmailToolsMixin` | Read-only mailbox tools (Gmail / Outlook) |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
@@ -658,6 +667,35 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 - Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so the ctx size is fixed machine-wide; the NPU email model above is the only case where a second model id enters the picture.
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
 - Image generation (SD): `SDXL-Turbo`
+
+### IMPORTANT: Never hardcode how Lemonade is started — `lemonade-server serve` is dead
+
+There are **three** launch forms, and only one is right for a given machine. Writing
+any of them as a literal string in a message, doc, or start path is a bug:
+
+| Form | Command | When |
+|------|---------|------|
+| Legacy CLI | `lemonade-server serve` | **Pre-10.7 only — dropped.** Errors with "command not found" on every modern install |
+| Modern install | Win `LemonadeServer.exe --silent` (+ `LEMONADE_CTX_SIZE` in env) · Linux `systemctl --user start lemond` · macOS the `lemond` daemon | A user-installed Lemonade |
+| [Embeddable](https://lemonade-server.ai/docs/embeddable/runtime/) | `LEMONADE_API_KEY=KEY lemond ./ --port PORT` | A Lemonade GAIA bundles and owns |
+
+**Resolve against the machine; never switch on `runtime.GOOS` or the platform.**
+[`resolve_lemonade()` / `build_start_command()`](src/gaia/llm/lemonade_launcher.py) own
+this decision and return a `StartSpec(argv, env)` — go through them. The embeddable form
+takes a working directory and a port that the others don't, so **nothing may assume the
+argv shape.** `tui/internal/ui/preflight/lemonade.go` is the reference for doing this
+from Go, and its header comment explains why a GOOS table inherits the Python probe's
+macOS blind spot.
+
+For the embeddable form, the positional `./` is lemond's working directory (holding
+`config.json`, `bin/`, `models/`), `LEMONADE_API_KEY` locks the endpoints to GAIA, and
+every request then carries `Authorization: Bearer KEY` — which
+`lemonade_auth_headers()` already emits. Readiness is `GET /v1/health`.
+
+**Why this is a rule and not a note:** a remedy naming a command that errors is worse
+than no remedy — the user has no path forward and no reason to doubt the instruction.
+GAIA shipped `lemonade-server serve` in ~10 user-facing strings for releases after it
+stopped existing, and it was found only when a user tried to follow it.
 
 ## CLI Commands
 
@@ -671,7 +709,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
 - `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
-- `gaia email` - Email triage for Gmail (local inference; needs the Google connector)
+- `gaia email` - Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector)
 
 **Servers & infrastructure:**
 - `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
@@ -679,6 +717,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
+- `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
 

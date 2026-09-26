@@ -127,9 +127,11 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running (`lemonade-server serve`).
-2. The default model downloaded (`gaia download Gemma-4-E4B-it-GGUF`, or
-   `gaia init`).
+1. Lemonade **10.2.0 or newer**, running (`gaia init` installs and starts it).
+2. The default model downloaded (`gaia init`). `gaia download` takes **no**
+   model argument — naming one makes it exit 2. To pull a single model instead,
+   repeat the command `GET /v1/gaia/init` gives you: it names the Lemonade
+   client this machine actually has. Do not invent one.
 
 Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 (it never pulls or loads) that probes Lemonade, compares its version to the
@@ -150,7 +152,9 @@ alone:
                 "min_version": "10.2.0", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
-  "hint": "Local Lemonade Server is not reachable at … — start it with `lemonade-server serve`, or set LEMONADE_BASE_URL to a running server."
+  // The start instruction is resolved for the host's Lemonade install
+  // (tray app, macOS app, systemd service, or CLI) — render it verbatim.
+  "hint": "Local Lemonade Server is not reachable at …. Start the Lemonade app from Applications, then retry. Or set LEMONADE_BASE_URL to a running server. See https://amd-gaia.ai/docs/guides/gaia."
 }
 ```
 
@@ -226,7 +230,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.13**; the stream is
+package — call it with plain `fetch`. Contract version **2.15**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -236,10 +240,10 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `query` | yes | Non-empty. |
 | `run_id` | yes | **You mint it**, and it must be a UUID (non-UUID → 422). It is the cancel handle, valid from the instant the request is sent. |
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
-| `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. |
+| `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
-| `model` | no | Overrides the model id — only when the run builds a fresh agent. On a retained `session_id` the agent already exists, so a model that differs from the one it was built with is a **409**, not an override. |
-| `provider` | no | Local inference only — anything but `"lemonade"` is a **400**. |
+| `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
+| `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
 | `max_steps` | no | ≥ 1. |
 
 ```ts
@@ -299,7 +303,7 @@ The canonical event shapes, as emitted:
 | `token` | `{ type, delta }` — answer text to append |
 | `tool_call` | `{ type, tool, args }` |
 | `tool_result` | `{ type, tool, data, render? }` |
-| `needs_confirmation` | `{ type, run_id, action, summary }` — no `confirm_url`; see §8 |
+| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope? }` — answer it, or it ends the run; see §8 |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `final` | `{ type, answer, usage? }` — terminal |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
@@ -321,44 +325,85 @@ Rules a client must respect:
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
   Dropping the HTTP connection also cancels the run.
+- **Add to a running turn with `POST /v1/gaia/query/{run_id}/followup`**
+  (contract ≥ 2.15, body `{ text }`). The run is not interrupted and no second
+  turn starts: the agent folds the text in at its next step boundary and
+  answers it alongside what it was already doing. Unknown run → **404**, an
+  agent that cannot take one → **409**; both are loud, so hold the message
+  rather than telling the user it was sent. `/query` is stateless, so put a
+  delivered follow-up into the next turn's `context` yourself, between that
+  turn's question and its answer.
 
-## 8. Over `/v1/gaia/query`, confirmation-gated tools are **refused, not prompted**
+## 8. Over `/v1/gaia/query`, a gated tool asks — when you can answer
 
-Read this before you design a workflow around it. This section is about the HTTP
-surface — the agent's other transport can collect an approval; see SPEC §5.5.
-
-Eight of the agent's tools mutate the machine and need explicit approval
+Nine of the agent's tools mutate the machine and need explicit approval
 before they run. Six sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
-**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which spawns a PowerShell
-child on Windows to draw the notification — and the flagship adds two of its
-own, **`install_skill`** and **`remove_skill`**, because installing a skill
-writes third-party code under `~/.gaia/skills` and removing one deletes it.
-Everything else — reading, indexing, querying, web fetching, memory — runs
-without asking.
+**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which
+spawns a PowerShell child on Windows to draw the notification — and the
+flagship adds three of its own (`CONFIRMATION_REQUIRED_TOOLS`):
+**`install_skill`**, **`capture_skill`**, and **`remove_skill`**, because
+installing or capturing a skill writes third-party content under
+`~/.gaia/skills` and removing one deletes it. A capture that does land is
+additionally **code-inert**: its instructions load, but any `tools.py`/scripts
+stay unregistered until a human runs `gaia skill promote <name>` in a
+terminal. Everything else — reading, indexing, querying, web fetching,
+memory — runs without asking.
 
-Over `/v1/gaia/query` there is **no way to collect an approval**, so the stream
-does not prompt. When the agent reaches one of those tools it emits a
-`needs_confirmation` event, and the server **immediately follows it with a
-terminal `final`** whose `answer` says it stopped before running that action,
-then cancels the run. There is no `confirm_url`, no resume, and no
-`/query/{run_id}/confirm` endpoint — it is a deliberate deny-by-default stub, not
-an oversight.
-
-Concretely, your client sees:
+**Contract ≥ 2.14 can answer one.** Send a `session_id` and leave
+`can_answer_questions` unset (or `true`). The stream emits `needs_confirmation`
+carrying a `confirm_id` and then **stays open** while the agent waits:
 
 ```
-data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary":"Run 'write_file'?"}
+data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary":"Run 'write_file'?","confirm_id":"…","always_scope":"write_file"}
+```
+
+Answer it on the same run, then keep reading the stream:
+
+```
+POST /v1/gaia/query/{run_id}/tool_decision
+{ "decision": "allow" | "deny" | "always", "confirm_id": "…" }
+```
+
+`always` grants the pending call's scope for the rest of the session — say so in
+your UI, because it stops asking. Unknown run → **404**; a prompt that is no
+longer pending → **409**; any decision outside those three → **422**. All loud,
+never a silent drop. Send `confirm_id`: without it a late answer resolves
+whichever prompt replaced the one it was typed against.
+
+To stop being asked for a whole session:
+
+```
+POST /v1/gaia/sessions/{session_id}/bypass
+{ "enabled": true }
+```
+
+It applies to the very next gated tool, including one in a turn already running,
+and an unknown session is a **404** rather than a new one. A malformed
+`session_id` is a **400**, same as on `/query`.
+
+**That bypass stops the prompts; it does not open the shell.** The stdio
+transport's `--bypass-permissions` does both — it runs gated tools unasked *and*
+lifts the shell tool's guardrails (redirection and the other shell-only
+operators, the read-only binary allowlist, the rate limit). That second half is
+arbitrary code execution, appropriate for one local parent on a private pipe and
+not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
+gates, and the request body rejects unknown fields so a client cannot ask. See
+SPEC §5.5.
+
+**A run nobody can answer is still refused.** With `can_answer_questions: false`,
+or with no `session_id`, the server emits `needs_confirmation`, follows it
+immediately with a terminal `final` saying it stopped before running the action,
+and cancels the run:
+
+```
 data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
-So: **`/query` cannot run any of those eight tools.** If your integration needs
-that, drive the agent from a surface that can prompt — its stdio transport is the
-one that can, because its control channel carries an approval back to a turn
-already in flight (SPEC §5.5) — or perform the mutation yourself from your own
-code and let the agent do the reading and reasoning. Treat `needs_confirmation`
-as an early warning that the run is about to end, not as a question you can
-answer.
+That is deny-by-default, not an oversight: parking a batch run on a prompt
+nobody will ever see reads as a hang. So a one-shot integration cannot run those
+nine tools — pass a `session_id` and answer, or perform the mutation from your
+own code and let the agent do the reading and reasoning.
 
 ## 9. File-access scope
 
@@ -377,6 +422,11 @@ systemd user units, `LaunchAgents`, and a repo's `.git/` (hooks and config). Bot
 come back as a structured error naming the file and the reason, so do not plan an
 integration around reading a credential file or editing a shell rc — perform
 those from your own code.
+
+The agent also gets its own scratch directory for throwaway scripts and
+intermediate files, so they stay out of the user's project. It is created per
+agent under the system temp dir, deleted when the agent closes, and is the only
+part of the temp dir the agent may use.
 
 **In 0.1.1 narrowing it is a construction-time setting only.** The packaged
 sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
@@ -494,7 +544,7 @@ There is no silent null.
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  The eight gated tools are unreachable **over `/query`** — the agent itself can
+  The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Between releases that is the *expected* state — it is not a
@@ -516,7 +566,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.23.1+**: an older core's daemon starts fine but
+  comes up. It must also be **0.24.1+**: an older core's daemon starts fine but
   has no sidecar entry for this agent, which reads as a UI with a dead agent
   rather than as a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
@@ -547,7 +597,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.13","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.15","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -574,10 +624,9 @@ finish (or close an idle session) and retry the same `/query`.
 - **409 — the `run_id` is still in flight.** You mint it, so mint a fresh UUID
   per request; reusing one would leave the earlier run with no way to be
   cancelled.
-- **409 — `model` differs from what this `session_id` was built with.** Only
-  construction reads a model, so it cannot be applied to the retained agent.
-  Omit `model` to stay on the session's current one, or start a new
-  `session_id` to switch.
+- **409 — the model switch itself failed** (a missing Claude credential, an
+  unknown local model). The session stays on its previous model, so this is a
+  failed request rather than a broken session; `detail` names the reason.
 - **400 — the `Host` header is absent or empty.** The loopback check fails
   closed, so omitting the header is refused rather than served. Send
   `Host: 127.0.0.1:<port>`; every real HTTP client already does.

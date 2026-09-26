@@ -10,7 +10,6 @@ Handles model loading/unloading and image-to-text extraction via Lemonade server
 
 import base64
 import logging
-import os
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -83,7 +82,6 @@ class VLMClient:
     Handles:
     - Model loading (default: Qwen3-VL-4B-Instruct-GGUF)
     - Image-to-markdown conversion
-    - State tracking for VLM processing
     """
 
     def __init__(
@@ -99,35 +97,38 @@ class VLMClient:
         Args:
             vlm_model: Vision model to use for image extraction
             base_url: Lemonade server API URL (defaults to LEMONADE_BASE_URL env var)
-            auto_load: Automatically load VLM model on first use
+            auto_load: Load (and download if missing) the VLM on each request,
+                at the context size GAIA requires for it
             api_key: API key for an authenticated Lemonade server. Forwarded
                 AS-IS to the inner ``LemonadeClient``, which handles the
                 ``LEMONADE_API_KEY`` env-var fallback. VLMClient does NOT
                 pre-resolve the env var (single source of truth).
         """
-        # Use provided base_url, fall back to env var, then default
-        if base_url is None:
-            base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
-        from urllib.parse import urlparse
+        from gaia.llm.lemonade_client import (
+            LemonadeClient,
+            resolve_lemonade_base_url,
+        )
 
-        from gaia.llm.lemonade_client import LemonadeClient
+        # The one resolver: argument, LEMONADE_BASE_URL, GAIA's own embedded
+        # server (a port chosen at start time), then the default. An inline
+        # env-var default could not see the embedded server at all.
+        base_url = resolve_lemonade_base_url(base_url)
 
         self.vlm_model = vlm_model
         self.base_url = base_url
 
-        # Parse base_url to extract host and port for LemonadeClient
-        parsed = urlparse(base_url)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 13305
-
-        # Get base server URL (without /api/v1) for user-facing messages
-        self.server_url = f"http://{host}:{port}"
-
+        # Hand the configured URL through whole. Decomposing it to host+port
+        # rebuilt every request as http://host:13305/api/v1, which downgraded
+        # https to http, dropped a reverse-proxy path prefix, and invented a
+        # port for a URL that named none — so a remote or tunnelled server was
+        # never actually contacted (#3553).
         self.client = LemonadeClient(
-            model=vlm_model, host=host, port=port, api_key=api_key
+            model=vlm_model, base_url=base_url, api_key=api_key
         )
+
+        # Base server URL (without the /api/vN suffix) for user-facing messages.
+        self.server_url = self.client.base_url.rsplit("/api/", 1)[0]
         self.auto_load = auto_load
-        self.vlm_loaded = False
 
         logger.debug(f"VLM Client initialized: {self.vlm_model} at {self.server_url}")
 
@@ -167,38 +168,6 @@ class VLMClient:
             )
             return False
 
-    def _ensure_vlm_loaded(self) -> bool:
-        """
-        Ensure VLM model is loaded, load it if necessary.
-
-        The model will be automatically downloaded if not available (handled by
-        lemonade_client.chat_completions with auto_download=True).
-
-        Returns:
-            True if VLM is loaded, False if loading failed
-        """
-        if self.vlm_loaded:
-            return True
-
-        if not self.auto_load:
-            logger.warning("VLM not loaded and auto_load=False")
-            return False
-
-        try:
-            logger.debug(f"Loading VLM model: {self.vlm_model}")
-            # Load model (auto-download handled by lemonade_client, may take hours)
-            self.client.load_model(self.vlm_model, timeout=60, auto_download=True)
-            self.vlm_loaded = True
-            logger.debug(f"VLM model loaded: {self.vlm_model}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to load VLM model: {e}")
-            logger.error(
-                f"   Make sure Lemonade server is running at {self.server_url}"
-            )
-            return False
-
     def extract_from_image(
         self,
         image_bytes: bytes,
@@ -223,15 +192,6 @@ class VLMClient:
                 string — a caller that indexes the return value would otherwise
                 index the error as content (#3555).
         """
-        # Ensure VLM is loaded
-        if not self._ensure_vlm_loaded():
-            error_msg = (
-                f"VLM model '{self.vlm_model}' is not available at "
-                f"{self.server_url}"
-            )
-            logger.error(error_msg)
-            raise VLMExtractionError(error_msg, page_num, image_num)
-
         # Encode image as base64 and detect MIME type
         # Note: Image size optimization happens in pdf_utils.py during extraction
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -277,13 +237,14 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                 f"   Image: {mime_type}, {len(image_b64)} chars base64 ({len(image_bytes)} bytes raw)"
             )
 
-            # Call VLM using chat completions endpoint
+            # auto_download loads the model at its required ctx under the model-slot lease.
             response = self.client.chat_completions(
                 model=self.vlm_model,
                 messages=messages,
                 temperature=0.1,  # Low temp for accurate extraction
                 max_completion_tokens=4096,  # Increased for complex extractions
                 timeout=300,  # VLM needs more time for complex forms (5 min)
+                auto_download=self.auto_load,
             )
 
             elapsed = time.time() - start_time
@@ -398,18 +359,15 @@ Output format: Clean markdown with the ACTUAL text from the image."""
 
     def cleanup(self):
         """
-        Cleanup VLM resources.
+        Mark the end of a batch.
 
-        Call this after batch processing to mark VLM as unloaded.
-        Note: Model remains loaded on server; this just updates local state.
+        Holds no local state: the model stays loaded on the server, and each
+        request re-checks that it is loaded at the right context size.
         """
-        if self.vlm_loaded:
-            logger.info("🧹 VLM processing complete")
-            self.vlm_loaded = False
+        logger.debug("VLM processing complete")
 
     def __enter__(self):
-        """Context manager entry - ensure VLM loaded."""
-        self._ensure_vlm_loaded()
+        """Context manager entry - the model loads on the first request."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

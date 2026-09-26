@@ -277,6 +277,23 @@ def test_skill_tool_admitted_ahead_of_semantic_at_cap():
     assert "hi" in payload["skipped_at_cap"]  # higher-scored semantic, skipped
 
 
+def test_over_cap_skill_request_settles_instead_of_rotating():
+    """A SKILL request larger than the free slots keeps the same tools every turn.
+
+    One slot, two requested tools. Without holding already-loaded requested
+    tools, turn 2 evicts ``t1`` for ``t2``, turn 3 swaps back — the prompt
+    changes every turn and neither tool stays. A semantic match cannot take a
+    still-requested tool's slot either (SKILL > SEMANTIC).
+    """
+    tools = ["t1", "t2", "hi"]
+    embed = _make_embed_fn(tools, {"q": {"t1": 0.0, "t2": 0.0, "hi": 0.9}})
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
+    turns = [
+        loader.select("q", _registry(tools), skill_tools=["t1", "t2"]) for _ in range(3)
+    ]
+    assert turns == [["t1"], ["t1"], ["t1"]]
+
+
 def test_skill_tool_avoids_escape_hatch_activation():
     """Pre-loading the recipe's tool keeps the escape-hatch counter at 0.
 
@@ -298,6 +315,43 @@ def test_skill_tool_avoids_escape_hatch_activation():
     assert loader.select("q", _registry(tools), skill_tools=["needed"]) == ["needed"]
     loader.record_tool_use("needed")
     assert loader._escape_hatch_count == 0
+
+
+def test_a_still_named_skill_tool_is_not_evicted_on_the_next_turn():
+    """The tier used to decay to nothing after the turn that admitted it.
+
+    ``keep`` is named by the signal on both turns and never called. On turn 2 it
+    was already loaded, so the tier skipped it — which also left it out of the
+    this-turn protected set, making an uncalled row the LRU's first pick. The
+    recipe's own tools evicted while the recipe was still being followed.
+    """
+    tools = ["keep", "hot"]
+    embed = _make_embed_fn(
+        tools, {"q1": {"keep": 0.0, "hot": 0.0}, "q2": {"keep": 0.0, "hot": 0.9}}
+    )
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
+
+    assert loader.select("q1", _registry(tools), skill_tools=["keep"]) == ["keep"]
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loaded = loader.select("q2", _registry(tools), skill_tools=["keep"])
+
+    assert loaded == ["keep"]
+    payload = _selection_payload(records)
+    assert payload["skill"] == ["keep"]  # reported on every turn it is named
+    assert payload["evicted"] == []
+    assert "hot" in payload["skipped_at_cap"]
+
+
+def test_a_skill_tool_the_signal_stops_naming_becomes_evictable_again():
+    """Protection is per-turn, not permanent — the tier still self-heals."""
+    tools = ["stale", "hot"]
+    embed = _make_embed_fn(
+        tools, {"q1": {"stale": 0.0, "hot": 0.0}, "q2": {"stale": 0.0, "hot": 0.9}}
+    )
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
+
+    assert loader.select("q1", _registry(tools), skill_tools=["stale"]) == ["stale"]
+    assert loader.select("q2", _registry(tools)) == ["hot"]
 
 
 def test_skill_signal_absent_is_byte_identical():
@@ -432,17 +486,28 @@ def test_load_bundle_skips_members_absent_from_registry():
     assert "a1" in loaded and "ghost" not in loaded
 
 
-def test_load_bundle_is_cap_aware_and_protects_just_loaded():
-    """At cap, load_bundle evicts an LRU non-CORE tool, never CORE or just-loaded."""
+def test_load_bundle_overshoots_the_cap_then_the_next_turn_trims():
+    """Mid-turn load_bundle is add-only; the cap is restored at the turn boundary.
+
+    Evicting mid-turn would drop a tool from the middle of the offered list and
+    re-prefill everything after it, so the overshoot rides until the next
+    ``select``, which trims LRU-first.
+    """
     tools = ["c1", "d1", "a1", "a2"]
-    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0}})
+    embed = _make_embed_fn(
+        tools,
+        {
+            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
+            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
+        },
+    )
     bundles = [ToolBundle(name="A", members=frozenset({"a1", "a2"}), description="A")]
     loader = ToolLoader(frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=3)
     reg = _registry(tools)
     assert loader.select("q", reg) == ["c1", "d1"]  # CORE + matched d1 (2 of 3)
-    loaded = loader.load_bundle("A", reg)  # wants a1,a2 with 1 slot free → evict
-    assert set(loaded) == {"c1", "a1", "a2"}  # cap held; d1 evicted
-    assert "d1" not in loaded
+    loaded = loader.load_bundle("A", reg)  # wants a1,a2 with 1 slot free
+    assert loaded == ["c1", "d1", "a1", "a2"]  # add-only: d1 keeps its slot
+    assert loader.select("q2", reg) == ["c1", "a1", "a2"]  # cap restored, d1 LRU
 
 
 def test_load_bundle_emits_same_turn_loaded_superset_line():
@@ -454,6 +519,32 @@ def test_load_bundle_emits_same_turn_loaded_superset_line():
     assert events, "no load_tools TOOL_LOADER line captured"
     assert events[0]["turn"] == loader._turn
     assert {"a1", "a2"} <= set(events[0]["loaded"])
+
+
+def test_load_bundle_reports_evictions_from_the_selection_not_a_literal():
+    """The eviction fields must read from the scratch object.
+
+    load_bundle is add-only today, so a hardcoded ``[]`` looks correct — and
+    would keep claiming "nothing evicted" if eviction returned to this path.
+    """
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+
+    real_admit = loader._admit
+
+    def _admit_and_evict(name, sel):
+        sel.evicted.append(f"victim_of_{name}")
+        sel.skipped_at_cap.append(f"skipped_for_{name}")
+        return real_admit(name, sel)
+
+    loader._admit = _admit_and_evict
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.load_bundle("A", reg)
+
+    events = [p for p in _loader_payloads(records) if p.get("event") == "load_tools"]
+    assert events, "no load_tools TOOL_LOADER line captured"
+    assert events[0]["evicted"] == ["victim_of_a1", "victim_of_a2"]
+    assert events[0]["skipped_at_cap"] == ["skipped_for_a1", "skipped_for_a2"]
 
 
 def test_escape_hatch_and_load_counters_increment():

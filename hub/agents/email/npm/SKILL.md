@@ -61,9 +61,14 @@ await shutdown(sidecar); // graceful stop — auto-cleanup also reaps on exit
   to run once.
 - `startSidecar` throws if the binary can't start, never becomes healthy, or the
   contract MAJOR version mismatches — and cleans up so a failed start leaks nothing.
+  If the port is already taken (e.g. a `playground` still running) it throws
+  `PortInUseError` without spawning; to reuse a running server, use
+  `connectSidecar({ baseUrl })` instead.
 - The sidecar is auto-reaped when your process exits, crashes, or is signalled
   (default `autoCleanup`), so a missed `shutdown` won't orphan the frozen binary's
   child. `shutdown(sidecar)` is the graceful, awaited stop; `autoCleanup: false` opts out.
+  If the sidecar survives the forced kill, `shutdown` rejects with an error naming the
+  pid and the command to kill it — catch it and surface it rather than ignoring it.
 
 ## 4. Call the typed client
 
@@ -377,7 +382,8 @@ What that means for your integration:
 - **Low concurrency.** One local Lemonade model slot, so parallel `triage` calls
   serialize. Cap inflight calls.
 - **Cleanup is automatic** (default `autoCleanup`): the sidecar's child is reaped on
-  exit/crash/signal. Call `shutdown` for a graceful stop, or `autoCleanup: false` to
+  exit/crash/signal. Call `shutdown` for a graceful stop (it rejects, naming the pid,
+  if the sidecar survives the forced kill), or `autoCleanup: false` to
   wire signals yourself. The package does not restart a crashed sidecar.
 
 ## Fast local iteration (when you need to fix the agent, not just call it)
