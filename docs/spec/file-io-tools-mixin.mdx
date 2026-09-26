@@ -41,6 +41,19 @@ to the returned generation. Successful writes record their new content so a late
 edit accepts the agent's own changes. New files and files without a prior read
 remain writable, subject to the existing path and write policies.
 
+### No backup, no write
+
+Every tool that modifies an existing file backs it up first. If that backup
+cannot be made — a full disk, an unwritable cache directory — `write_file`,
+`write_python_file`, `write_markdown_file`, `replace_function`, `edit_file`, and
+`edit_python_file` refuse the change and leave the file untouched. The error
+names the cause and the directory to free or make writable.
+
+The refusal carries `executed: False`, because nothing ran. A tool result
+without it is treated as having executed and failed, which is how a one-off
+full disk would otherwise be stored as a durable "writing this file is broken"
+lesson and replayed into later prompts long after the disk was freed.
+
 ---
 
 ## Host Agent Contract
@@ -148,7 +161,8 @@ Edit a Python file by replacing content with validation.
 - `backup` (bool, optional): Create backup (default: True). The copy goes to
   `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
   beside the file. The backups directory is owner-only, and the five newest
-  backups of each file are kept.
+  backups of each file are kept. If the backup cannot be made (a full disk, an
+  unwritable cache), the edit is refused and the file is left unchanged.
 - `dry_run` (bool, optional): Only simulate (default: False)
 
 **Returns:**
@@ -313,7 +327,8 @@ module level, and the tool never renames or moves a definition.
 - `backup` (bool, optional): Create backup (default: True). The copy goes to
   `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
   beside the file. The backups directory is owner-only, and the five newest
-  backups of each file are kept.
+  backups of each file are kept. If the backup cannot be made (a full disk, an
+  unwritable cache), the edit is refused and the file is left unchanged.
 
 **Returns:**
 ```python

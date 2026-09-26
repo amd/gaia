@@ -36,6 +36,7 @@ from gaia.agents.tools.search_scope import (
     search_roots,
 )
 from gaia.logger import get_logger
+from gaia.security import BackupError
 
 logger = get_logger(__name__)
 
@@ -1296,6 +1297,18 @@ class FileSearchToolsMixin:
                     result["backup_path"] = backup_path
                 return result
 
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                    "operation": "write_file",
+                }
             except PermissionError:
                 logger.error(f"Permission denied writing to: {file_path}")
                 return {
@@ -1686,6 +1699,18 @@ class FileSearchToolsMixin:
                     result["backup_path"] = backup_path
                 return result
 
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                    "operation": "edit_file",
+                }
             except Exception as e:
                 logger.error(f"Error editing file: {e}")
                 path_validator = getattr(self, "path_validator", None)

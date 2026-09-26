@@ -18,6 +18,7 @@ All tests are designed to run without LLM or external services.
 """
 
 import ast
+import datetime
 import os
 import platform
 import stat
@@ -27,12 +28,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia.agents.base.verification import check_was_executed
 from gaia.security import (
     BACKUP_GENERATIONS,
     BLOCKED_DIRECTORIES,
     MAX_WRITE_SIZE_BYTES,
     SENSITIVE_EXTENSIONS,
     SENSITIVE_FILE_NAMES,
+    BackupError,
     PathValidator,
     _format_size,
     _get_blocked_directories,
@@ -612,18 +615,56 @@ class TestCreateBackup:
 
         assert sorted(p.name for p in work.iterdir()) == ["notes.md"]
 
-    def test_multiple_backups_have_unique_names(self, validator, tmp_path):
-        """Verify multiple backups of the same file produce unique names."""
+    def test_two_backups_in_the_same_second_do_not_collide(self, validator, tmp_path):
+        """A burst of edits keeps every generation instead of overwriting one."""
         original = tmp_path / "config.yaml"
-        original.write_text("key: value")
+        original.write_text("first")
+        frozen = datetime.datetime(2026, 9, 24, 12, 0, 0)
 
-        # Create two backups with a small time gap to get different timestamps
-        backup1 = validator.create_backup(str(original))
-        assert backup1 is not None
+        with patch("gaia.security.datetime") as fake:
+            fake.datetime.now.return_value = frozen
+            fake.timedelta = datetime.timedelta
+            backup1 = validator.create_backup(str(original))
+            original.write_text("second")
+            backup2 = validator.create_backup(str(original))
 
-        # Backups created within the same second could collide, but the path
-        # object resolves uniquely in practice. We just ensure the first works.
-        assert os.path.exists(backup1)
+        assert backup1 != backup2
+        assert Path(backup1).read_text() == "first"
+        assert Path(backup2).read_text() == "second"
+        assert sorted([backup1, backup2]) == [backup1, backup2]
+
+    def test_a_failed_backup_raises_instead_of_returning_none(
+        self, validator, tmp_path
+    ):
+        """ "Nothing to back up" and "backup failed" must not look the same."""
+        original = tmp_path / "notes.md"
+        original.write_text("# Notes")
+
+        with patch("gaia.security.shutil.copy2", side_effect=OSError("No space")):
+            with pytest.raises(BackupError, match="No space"):
+                validator.create_backup(str(original))
+
+    def test_a_copy_that_dies_mid_stream_leaves_no_partial_backup(
+        self, validator, tmp_path
+    ):
+        """A truncated .bak still counts as a generation and can evict a good one."""
+        original = tmp_path / "notes.md"
+        original.write_text("# Notes")
+        good = Path(validator.create_backup(str(original)))
+        mirror = good.parent
+
+        def truncated_copy(src, dst):
+            # ENOSPC after the destination is opened and partly written.
+            Path(dst).write_text("# No")
+            raise OSError("No space left on device")
+
+        with patch("gaia.security.shutil.copy2", side_effect=truncated_copy):
+            with pytest.raises(BackupError, match="No space"):
+                validator.create_backup(str(original))
+
+        survivors = sorted(p.name for p in mirror.iterdir())
+        assert survivors == [good.name]
+        assert good.read_text() == "# Notes"
 
     def test_only_the_newest_backups_of_a_file_are_kept(self, validator, tmp_path):
         original = tmp_path / "notes.md"
@@ -878,6 +919,25 @@ class TestChatAgentWriteFileGuardrails:
         assert result["status"] == "success"
         assert "backup_path" in result
         assert os.path.exists(result["backup_path"])
+
+    def test_overwrite_is_refused_when_the_backup_fails(
+        self, write_file_func, tmp_path
+    ):
+        """No backup, no overwrite: auto-approval assumes the backup exists."""
+        target = tmp_path / "keep_me.txt"
+        target.write_text("original content")
+
+        with patch.object(PathValidator, "_prompt_overwrite", return_value=True):
+            with patch("gaia.security.shutil.copy2", side_effect=OSError("No space")):
+                result = write_file_func(file_path=str(target), content="new")
+
+        assert result["status"] == "error"
+        assert "backup" in result["error"].lower()
+        assert "No space" in result["error"]
+        assert target.read_text() == "original content"
+        # Nothing ran, so this must not be learned as a durable failure.
+        assert result["executed"] is False
+        assert not check_was_executed(result)
 
     def test_write_creates_parent_directories(self, write_file_func, tmp_path):
         """Verify parent directories are created when create_dirs=True."""
@@ -1202,6 +1262,26 @@ class TestFileIOToolsMixinWriteFileGuardrails:
         assert result["status"] == "success"
         if "backup_path" in result:
             assert os.path.exists(result["backup_path"])
+
+    def test_overwrite_is_refused_when_the_backup_fails(
+        self, mixin_and_registry, tmp_path
+    ):
+        """No backup, no overwrite: auto-approval assumes the backup exists."""
+        _, write_fn = mixin_and_registry
+        target = tmp_path / "keep_me.txt"
+        target.write_text("old")
+
+        with patch.object(PathValidator, "_prompt_overwrite", return_value=True):
+            with patch("gaia.security.shutil.copy2", side_effect=OSError("No space")):
+                result = write_fn(file_path=str(target), content="new")
+
+        assert result["status"] == "error"
+        assert "backup" in result["error"].lower()
+        assert "No space" in result["error"]
+        assert target.read_text() == "old"
+        # Nothing ran, so this must not be learned as a durable failure.
+        assert result["executed"] is False
+        assert not check_was_executed(result)
 
     def test_write_with_project_dir_resolves_path(self, mixin_and_registry, tmp_path):
         """Verify project_dir parameter correctly resolves relative paths."""
@@ -1642,3 +1722,84 @@ class TestEditingLeavesTheWorkspaceClean:
         assert result["status"] == "error" and "path_validator" in result["error"]
         assert sorted(p.name for p in repo.iterdir()) == ["app.py"]
         assert (repo / "app.py").read_text(encoding="utf-8") == source
+
+
+class TestFailedBackupIsNotLearned:
+    """A full disk is a passing condition, not a lesson.
+
+    Every tool that backs up before writing must declare the refusal as
+    not-executed, or MemoryMixin stores it under "Known errors to avoid" and
+    replays it into later prompts long after the disk is freed.
+    """
+
+    @pytest.fixture
+    def repo(self, tmp_path, mock_home):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text("x = 1\n\n\ndef f():\n    return 1\n", "utf-8")
+        (repo / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return repo
+
+    _EDIT_PY = {"old_content": "x = 1", "new_content": "x = 2"}
+    _REPLACE = {"function_name": "f", "new_implementation": "def f():\n    return 2"}
+
+    @pytest.mark.parametrize(
+        "module, mixin, register, name, target, kwargs",
+        [
+            (
+                "gaia.agents.tools.file_io_tools",
+                "FileIOToolsMixin",
+                "register_file_io_tools",
+                n,
+                t,
+                k,
+            )
+            for n, t, k in [
+                ("write_python_file", "app.py", {"content": "x = 2\n"}),
+                ("edit_python_file", "app.py", _EDIT_PY),
+                ("write_markdown_file", "notes.md", {"content": "# New\n"}),
+                ("write_file", "notes.md", {"content": "new"}),
+                ("edit_file", "app.py", _EDIT_PY),
+                ("replace_function", "app.py", _REPLACE),
+            ]
+        ]
+        + [
+            (
+                "gaia.agents.tools.file_tools",
+                "FileSearchToolsMixin",
+                "register_file_search_tools",
+                n,
+                t,
+                k,
+            )
+            for n, t, k in [
+                ("write_file", "notes.md", {"content": "new"}),
+                ("edit_file", "app.py", _EDIT_PY),
+            ]
+        ],
+    )
+    def test_a_failed_backup_is_refused_as_not_executed(
+        self, repo, module, mixin, register, name, target, kwargs
+    ):
+        import importlib
+
+        mixin_cls = getattr(importlib.import_module(module), mixin)
+        tool, _ = TestEditingLeavesTheWorkspaceClean._tool(
+            mixin_cls, register, name, repo
+        )
+        path = repo / target
+        before = path.read_text(encoding="utf-8")
+
+        with patch.object(PathValidator, "_prompt_overwrite", return_value=True):
+            with patch(
+                "gaia.security.shutil.copy2",
+                side_effect=OSError("No space left on device"),
+            ):
+                result = tool(file_path=str(path), **kwargs)
+
+        assert result["status"] == "error", result
+        assert "No space left on device" in result["error"]
+        assert path.read_text(encoding="utf-8") == before
+        # The gate MemoryMixin._auto_store_error actually consults.
+        assert result["executed"] is False, result
+        assert not check_was_executed(result)
