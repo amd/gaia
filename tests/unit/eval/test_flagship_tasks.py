@@ -926,6 +926,33 @@ def test_verified_needs_a_passing_test_run_after_the_last_edit(conversation, ver
     assert ft.tests_verified(conversation) is verified
 
 
+JEST_PASSED = "PASS src/a.test.js\n\nTests:       10 passed, 10 total\nTime: 1.2 s\n"
+JEST_FAILED = "FAIL src/a.test.js\n\nTests:       1 failed, 9 passed, 10 total\n"
+GO_PASSED = "ok  \tgithub.com/x/pkg\t0.012s\n"
+GO_FAILED = "--- FAIL: TestA (0.00s)\nFAIL\nFAIL\tgithub.com/x/pkg\t0.012s\n"
+
+
+@pytest.mark.parametrize(
+    "conversation, verified",
+    [
+        ([_edit(), _shell("npm test", 0, JEST_PASSED)], True),
+        ([_edit(), _shell("npm test | tail -5", 0, JEST_FAILED)], False),
+        ([_edit(), _shell("go test ./...", 0, GO_PASSED)], True),
+        ([_edit(), _shell("go test ./... 2>&1 | tail", 0, GO_FAILED)], False),
+        ([_edit(), _shell("npm test", 0, "> app@1.0.0 test\n> jest\n")], False),
+    ],
+    ids=[
+        "jest-passed",
+        "jest-failure-behind-a-pipe",
+        "go-passed",
+        "go-failure-behind-a-pipe",
+        "runner-printed-no-summary",
+    ],
+)
+def test_verified_reads_every_runner_the_record_knows(conversation, verified):
+    assert ft.tests_verified(conversation) is verified
+
+
 def test_a_huge_setup_diff_reaches_the_judge_as_a_file_list():
     """A generated fixture's contents are noise the judge may answer from."""
     log = "".join(f"+2026-09-18 line {i}\n" for i in range(2000))

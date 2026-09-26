@@ -93,3 +93,18 @@ describe("external links go through the scheme allow-list", () => {
     expect(calls.length).toBe(guarded.length);
   });
 });
+
+describe("backend port selection fails loudly", () => {
+  test("a findFreePort failure is not papered over with the default port", () => {
+    const body = functionBody("startBackend");
+    expect(body).toContain("await portManager.findFreePort()");
+    expect(body).not.toMatch(/backendPort\s*=\s*DEFAULT_BACKEND_PORT/);
+    expect(body).toMatch(/catch \(err\) \{\s*throw new Error\(/);
+  });
+
+  test("a rejected startup routes to the fatal error dialog", () => {
+    const body = whenReadyBody();
+    expect(body).toContain("await startBackend()");
+    expect(body).toMatch(/\}\)\.catch\(\(err\) => \{[^}]*_fatalHandler\(err\);/);
+  });
+});

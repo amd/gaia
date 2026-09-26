@@ -17,7 +17,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - Editing existing subparsers or flags
 - Wiring a new standalone console script (`setup.py` `console_scripts`)
 - Updating `docs/reference/cli.mdx` to match CLI changes
-- Writing CLI-level integration tests in `tests/test_cli.py`
+- Writing CLI-level integration tests in `tests/unit/cli/`
 
 ## When NOT to use
 
@@ -32,7 +32,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 | `src/gaia/cli.py` | Single entry point — `main()`, `async_main()`, parent parser, all subparsers |
 | `setup.py` | `console_scripts` entries (main entry + standalone binaries) |
 | `docs/reference/cli.mdx` | User-facing CLI reference (MUST be updated for new commands) |
-| `tests/test_cli.py` | CLI integration tests (if exists) |
+| `tests/unit/cli/test_cli_smoke.py` | Smoke-tests every subcommand + standalone binary with `--help` |
 
 ## `console_scripts` (from setup.py)
 
@@ -45,11 +45,14 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## Current top-level subcommands
 
-Verified via `grep subparsers.add_parser src/gaia/cli.py`:
-
-`prompt`, `chat`, `browse`, `analyze`, `talk`, `summarize`, `blender`, `sd`, `jira`, `email`, `docker`, `api`, `telegram`, `knowledge`, `connectors`, `download`, `llm`, `eval` (with nested `agent`, `benchmark`), `report`, `perf-vis`, `mcp` (with nested `start`, `stop`, `status`, `list`, `tools`, `test`, `test-client`, `agent`, `docker`, `serve`), `youtube`, `kill`, `test`, `stats`, `memory`, `diagnostics`, `agent` (with nested `export`, `import`), plus setup helpers (`init`, `install`, `cache`).
-
-Always run `gaia -h` or grep `cli.py` before assuming a command exists — the set evolves.
+Don't hand-maintain a copy here — it rots (some of `browse`, `analyze`, `blender`,
+`sd`, `jira`, `docker` were once listed and are gone). CLAUDE.md's "CLI Commands"
+section is the maintained list; `gaia -h` and `build_parser()` in `src/gaia/cli.py`
+are the source of truth. Three subcommands are registered from outside
+`build_parser()`'s own `subparsers.add_parser()` calls — `connectors`
+(`gaia.connectors.cli.add_subparser`), `skill` (`gaia.skills.cli.add_subparser`),
+and `uninstall` (`gaia.installer.uninstall_command.register_subparser`) — grep
+those modules too if a command seems to be missing.
 
 ## Parent-parser pattern (shared flags)
 
@@ -84,7 +87,7 @@ parent_parser.add_argument("--stats", "--show-stats", dest="show_stats", action=
 2. **Dispatch in `async_main`** — add an `elif action == "widget":` branch
 3. **Update `docs/reference/cli.mdx`** — new section, example usage, flag table
 4. **Update `CLAUDE.md`** CLI list if it's a user-facing addition
-5. **Add a test** — `tests/test_cli.py` with a subprocess call to `gaia widget`
+5. **Add a test** — `tests/unit/cli/` with a subprocess call to `gaia widget` (the `test_cli_smoke.py` discovery walk picks up the new subparser automatically)
 6. **Lint** — `python util/lint.py --all --fix`
 
 ## Nested subcommand pattern
@@ -105,7 +108,7 @@ start.add_argument("--port", type=int, default=8765)
 gaia -h
 gaia widget -h
 gaia widget input.json --format yaml
-python -m pytest tests/test_cli.py -xvs
+python -m pytest tests/unit/cli/ -xvs
 ```
 
 ## Common pitfalls
