@@ -24,6 +24,11 @@ FileSearchToolsMixin provides agent-agnostic file search and management operatio
 - Directory search with depth control
 - Generic file writing with directory creation
 
+`write_file` and `edit_file` share the [read-before-edit guard](/spec/file-io-tools-mixin#read-before-edit):
+an existing file the agent has not read, or one whose mtime or size changed
+since it did, is refused before anything is written or backed up. Successful
+writes become the baseline for later edits.
+
 **Search Strategy:**
 - A named `directory` is the WHOLE scope: searched to unlimited depth, and never
   widened — not by Phase 1, not by `deep_search` (#3576)

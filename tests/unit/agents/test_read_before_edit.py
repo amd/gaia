@@ -479,3 +479,39 @@ class TestRefusedBeforeConfirmation:
         assert result["status"] == "error"
         assert "read_file" not in result["error"]
         assert outside.read_text(encoding="utf-8") == "secret"
+
+
+class TestRefusalIsAudited:
+    """#3656 logged a denied stale write; the read-first refusal keeps that."""
+
+    @pytest.mark.parametrize("mixin", ["file_io", "file_search"])
+    def test_a_refused_overwrite_is_a_denied_audit_entry(self, host, sample, mixin):
+        with patch.object(host.path_validator, "audit_write") as audited:
+            result = host.tools[mixin]["write_file"](
+                file_path=str(sample), content="replaced\n"
+            )
+
+        assert result["status"] == "error"
+        denied = [c.args for c in audited.call_args_list if c.args[3] == "denied"]
+        assert len(denied) == 1, denied
+        operation, audited_path, _, _, reason = denied[0]
+        assert operation == "write"
+        assert os.path.basename(audited_path) == sample.name
+        assert reason == "not_read"
+        assert sample.read_text(encoding="utf-8") == SAMPLE
+
+    def test_an_externally_changed_file_is_audited_as_changed_since_read(
+        self, host, sample
+    ):
+        _read(host, sample)
+        sample.write_text("changed elsewhere\n", encoding="utf-8")
+        _bump_mtime(sample)
+
+        with patch.object(host.path_validator, "audit_write") as audited:
+            result = host.tools["file_io"]["write_file"](
+                file_path=str(sample), content="replaced\n"
+            )
+
+        assert result["status"] == "error"
+        denied = [c.args for c in audited.call_args_list if c.args[3] == "denied"]
+        assert [c[4] for c in denied] == ["changed_since_read"]

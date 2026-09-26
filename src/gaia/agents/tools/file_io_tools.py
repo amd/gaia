@@ -256,12 +256,22 @@ class FileIOToolsMixin:
         preferred about half the time (#3600) — but the omission was not
         deliberate and this is the largest single lever measured.
         """
+        registry = getattr(self, "_tools_registry", {})
+        # edit_file alone, not both: ChatAgent pops edit_python_file out of
+        # every profile that registers this mixin, so requiring the pair would
+        # silence the fragment everywhere it is supposed to apply.
+        if "edit_file" not in registry:
+            return ""
+        python_clause = (
+            ", or edit_python_file for .py when you want the edit syntax-checked"
+            if "edit_python_file" in registry
+            else ""
+        )
         return (
             "==== CHANGING A FILE ====\n"
             "To change a file, call edit_file with the exact existing text as "
-            "old_content, or edit_python_file for .py when you want the edit "
-            "syntax-checked. Both work on any text file — source, documentation, "
-            "configuration.\n"
+            f"old_content{python_clause}. It works on any text file — source, "
+            "documentation, configuration.\n"
             "Do not shell out to sed, awk, python or a heredoc to rewrite a file: "
             "the edit tools validate the path, keep a backup and report what "
             "changed, and a shell rewrite does none of that.\n"
@@ -481,6 +491,13 @@ class FileIOToolsMixin:
                 reads = file_read_record(self)
                 refusal = reads.refusal(file_path, "overwriting")
                 if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        str(file_path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
                     return refusal
 
                 # Backup existing file before overwrite
@@ -564,7 +581,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(file_path)):
-                    reason = f"Access denied: {file_path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {file_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(file_path))}"
+                    )
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
@@ -704,7 +724,8 @@ class FileIOToolsMixin:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Access denied: {directory} is not in allowed paths",
+                        "error": f"Access denied: {directory} is not in allowed paths."
+                        f"{path_validator.scratch_hint(directory)}",
                     }
 
                 results = []
@@ -869,6 +890,13 @@ class FileIOToolsMixin:
                 reads = file_read_record(self)
                 refusal = reads.refusal(file_path, "overwriting")
                 if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        str(file_path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
                     return refusal
 
                 # Backup existing file before overwrite
@@ -960,6 +988,13 @@ class FileIOToolsMixin:
                 reads = file_read_record(self)
                 refusal = reads.refusal(path, "overwriting")
                 if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        str(path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
                     return refusal
 
                 # Backup existing file before overwrite
@@ -1069,7 +1104,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(path)):
-                    reason = f"Access denied: {path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(path))}"
+                    )
                     path_validator.audit_write("edit", str(path), 0, "denied", reason)
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
@@ -1211,12 +1249,20 @@ class FileIOToolsMixin:
                     return {
                         **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Access denied: {gaia_path} is not in allowed paths",
+                        "error": f"Access denied: {gaia_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(gaia_path)}",
                     }
 
                 reads = file_read_record(self)
                 refusal = reads.refusal(gaia_path, "overwriting")
                 if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        gaia_path,
+                        0,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
                     return refusal
 
                 # Start building content
@@ -1322,7 +1368,10 @@ class FileIOToolsMixin:
 
                 # Check allowlist
                 if not path_validator.is_path_allowed(str(file_path)):
-                    reason = f"Access denied: {file_path} is not in allowed paths"
+                    reason = (
+                        f"Access denied: {file_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(file_path))}"
+                    )
                     path_validator.audit_write(
                         "edit", str(file_path), 0, "denied", reason
                     )
@@ -1352,6 +1401,13 @@ class FileIOToolsMixin:
                 reads = file_read_record(self)
                 refusal = reads.refusal(file_path)
                 if refusal is not None:
+                    path_validator.audit_write(
+                        "edit",
+                        str(file_path),
+                        new_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
                     return refusal
 
                 with open(file_path, "r", encoding="utf-8") as f:

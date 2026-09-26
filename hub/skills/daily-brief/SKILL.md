@@ -52,9 +52,11 @@ The user picks the sections. A good default:
 ## Honest limits
 
 - **It is not delivered to you — you ask for it.** The flagship version of this
-  idea (arrives at 7am as a voice note on Telegram) needs three things GAIA does
-  not have yet: skill-aware scheduling, text-to-speech as an agent tool, and
-  Telegram voice-note support. See the guide for what would unblock it.
+  idea (arrives at 7am as a voice note on Telegram) needs two things GAIA does
+  not have yet: `gaia schedule add` wired to run a skill directly (the flag
+  exists but is rejected — see [#1019](https://github.com/amd/gaia/issues/1019)),
+  and Telegram voice-note support. Text-to-speech already exists as the
+  `text_to_speech` agent tool. See the guide for what would unblock it.
 - Headlines come from `search_web` (DuckDuckGo), not a curated news API, so
   coverage is uneven. Say where a claim came from.
 - The "your items" section needs memory enabled; drop it silently if not.

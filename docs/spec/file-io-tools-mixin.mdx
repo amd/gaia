@@ -27,6 +27,18 @@ FileIOToolsMixin provides comprehensive file I/O operations with intelligent fil
 - Generic file operations without validation
 - Security through path validation
 
+### Concurrent file changes
+
+`write_file`, `write_python_file`, `write_markdown_file`, `update_gaia_md`,
+`replace_function`, `edit_file`, and `edit_python_file` refuse a file whose
+mtime or size changed since the agent read it, and refuse one it has never read
+at all. Rejection leaves the file and its backups untouched. A successful write
+records the file again, so the agent's own change does not block its next edit.
+Creating a new file needs no read.
+
+See [Read before edit](#read-before-edit) for what counts as a read, the exact
+refusal shape, and how the rule interacts with confirmation prompts.
+
 ---
 
 ## Host Agent Contract
@@ -254,6 +266,10 @@ blind; this makes the agent look at what it is about to change.
 - **What counts as a read:** `read_file` returning the file, a paged
   (`offset`/`limit`) read included. So does the agent creating the file, or
   editing it successfully. A shell `cat` does not.
+- **`filesystem_tools`' `read_file` unlocks only its text views** — the plain,
+  paged, CSV and JSON ones. Its PDF, image, binary and `metadata` views show a
+  summary rather than the file, so they unlock nothing. The `file_io` and
+  `file_search` reads have no such split.
 - **Changed on disk since the read** — a different mtime or size, a bare
   `touch` included — is refused too, until the agent reads the file again.
 - **Creating a file needs no read.**

@@ -635,9 +635,9 @@ def test_parse_give_up_path_carries_the_statement(agent):
 def test_loop_break_summary_path_carries_the_statement(agent):
     """A repeated failing check breaks the loop — and still states its scope.
 
-    This exit is the clearest case for the feature: every call errored, the
-    summary must not claim completion (#3750), and the scope line is what tells
-    the user the check did not pass.
+    Every call errored, so the summary must not claim completion (#3750)
+    and must not guess a cause it does not have (#3888); the scope line is
+    what tells the user the check ran and did not pass.
     """
     agent.max_consecutive_repeats = 2
     agent.shell_result = {"status": "error", "error": "boom", "return_code": 1}

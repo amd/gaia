@@ -5,6 +5,7 @@ import { useEffect, useCallback } from 'react';
 import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle, BarChart2, Tag } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo } from '../types';
+import { displayVersion, isInstalledStatus } from '../utils/agentHub';
 
 const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI;
 
@@ -40,7 +41,8 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
     const isNative = agent.source === 'native';
     const canStart = !isNative || isElectron;
     const DetailIcon = getAgentIcon(agent.icon);
-    const hasDetails = !!agent.version || models.length > 0 || toolsCount > 0 || agent.min_memory_gb != null;
+    const version = displayVersion(agent);
+    const hasDetails = !!version || models.length > 0 || toolsCount > 0 || agent.min_memory_gb != null;
 
     // Close on Escape
     const handleKey = useCallback((e: KeyboardEvent) => {
@@ -105,12 +107,12 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                     <div className="agent-detail-section">
                         <div className="agent-detail-section-title">Details</div>
                         <div className="agent-detail-meta-grid">
-                            {agent.version && (
+                            {version && (
                                 <div className="agent-detail-meta-item">
                                     <Tag size={14} />
                                     <div>
                                         <div className="agent-detail-meta-label">Version</div>
-                                        <div className="agent-detail-meta-value">{agent.version}</div>
+                                        <div className="agent-detail-meta-value">{version}</div>
                                     </div>
                                 </div>
                             )}
@@ -209,8 +211,8 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                                         // shown above (#2965) — say which version it measured.
                                         <div className="agent-detail-meta-label" style={{ marginTop: 2 }}>
                                             measured on v{agent.eval_score_version}
-                                            {agent.version && agent.version !== agent.eval_score_version && (
-                                                <> (current: v{agent.version})</>
+                                            {version && version !== agent.eval_score_version && (
+                                                <> ({isInstalledStatus(agent) ? 'current' : 'latest'}: v{version})</>
                                             )}
                                         </div>
                                     )}
