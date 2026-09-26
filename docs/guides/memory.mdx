@@ -107,7 +107,7 @@ The agent remembered across sessions -- no copy-paste, no notes app. Run `gaia c
 Agent memory operates on four principles:
 
 1. **Store automatically once enabled** -- conversations, tool calls, errors, and preferences are captured without manual effort
-2. **Recall naturally** -- hybrid semantic+keyword search finds memories by meaning, not just exact words. The LLM decides when to search using its own tools (no forced pre-query step).
+2. **Recall naturally** -- each turn, the few stored memories most relevant to your message are added to the agent's context automatically, each with the date it was learned. For anything more, the LLM searches with its own tools: hybrid semantic+keyword search finds memories by meaning, not just exact words.
 3. **Learn continuously** -- LLM extraction from every conversation, not just regex patterns. The agent sees what it already knows and decides what's new, what's changed, and what's contradicted -- like intelligent memory management.
 4. **Be temporally aware** -- the agent knows the current time, what is coming up, what is overdue, and proactively surfaces time-sensitive items
 

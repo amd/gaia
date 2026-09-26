@@ -43,7 +43,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import numpy as np
@@ -184,6 +184,16 @@ RRF_WEIGHT_BM25 = 0.4
 
 #: RRF smoothing constant (standard value from the original RRF paper).
 RRF_K = 60
+
+#: Memories surfaced per turn for the current request, and the cosine floor a
+#: match must clear. In the embedder's space, unrelated stored memories sit
+#: around 0.3 and same-topic ones above 0.8.
+TURN_RECALL_TOP_K = 3
+TURN_RECALL_MIN_SIMILARITY = 0.5
+
+#: Categories per-turn recall may surface. Reminders have their own due-date
+#: path, and privileged categories live in the stable prompt.
+_TURN_RECALL_CATEGORIES = frozenset({"fact", "preference", "note", "skill", "error"})
 
 #: Cosine similarity threshold for reconciliation pair detection.
 RECONCILE_SIMILARITY_THRESHOLD = 0.85
@@ -2348,7 +2358,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             return ""
 
     def _build_stable_memory_prompt(self) -> str:
-        """Stable memory: system context + preferences + facts + known errors. No timestamps."""
+        """Stable memory: system context + preferences + facts + known errors.
+
+        Personal items carry the absolute dates they were learned and last
+        confirmed. No clock time, so the prompt stays stable within a session.
+        """
         ctx = self._memory_context
         sections = []
 
@@ -2371,30 +2385,42 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # 1-4. User-created sections (preference, fact, skill, error)
         user_sections: list = []
+        # (rendered line, memory id) so the truncation below can tell which
+        # memories the model actually ends up seeing.
+        rendered: List[Tuple[str, Any]] = []
 
         prefs = self._get_context_items("preference", ctx, limit=10)
         if prefs:
-            pref_lines = [f"  - {p['content']}" for p in prefs]
+            pref_lines = [f"  - {p['content']} ({self._memory_age(p)})" for p in prefs]
+            rendered.extend(zip(pref_lines, (p["id"] for p in prefs)))
             user_sections.append("Preferences:\n" + "\n".join(pref_lines))
 
         facts = self._get_context_items("fact", ctx, limit=5)
         if facts:
             fact_lines = [
-                f"  - {f['content']} (confidence: {f['confidence']:.2f})" for f in facts
+                f"  - {f['content']} (confidence: {f['confidence']:.2f}, "
+                f"{self._memory_age(f)})"
+                for f in facts
             ]
+            rendered.extend(zip(fact_lines, (f["id"] for f in facts)))
             user_sections.append("Known facts:\n" + "\n".join(fact_lines))
 
         skills = self._get_context_items("skill", ctx, limit=3)
         if skills:
             skill_lines = [
-                f"  - {s['content']} (confidence: {s['confidence']:.2f})"
+                f"  - {s['content']} (confidence: {s['confidence']:.2f}, "
+                f"{self._memory_age(s)})"
                 for s in skills
             ]
+            rendered.extend(zip(skill_lines, (s["id"] for s in skills)))
             user_sections.append("Skills:\n" + "\n".join(skill_lines))
 
         errors = self._get_context_items("error", ctx, limit=5)
         if errors:
-            error_lines = [f"  - {e['content']}" for e in errors]
+            error_lines = [
+                f"  - {e['content']} ({self._memory_age(e)})" for e in errors
+            ]
+            rendered.extend(zip(error_lines, (e["id"] for e in errors)))
             user_sections.append("Known errors to avoid:\n" + "\n".join(error_lines))
 
         sections.extend(user_sections)
@@ -2441,7 +2467,54 @@ class MemoryMixin(ProceduralMemoryMixin):
         # crowding the actual conversation context.
         if len(result) > 4000:
             result = result[:4000] + "\n... (memory truncated)"
+        # Suppress per-turn recall only for memories the cap actually left in.
+        self._stable_memory_ids = {mid for line, mid in rendered if line in result}
         return result
+
+    @staticmethod
+    def _memory_age(item: Dict) -> str:
+        """``learned 2026-06-03, last confirmed 2026-09-20``, dates only."""
+        learned = str(item.get("created_at") or "")[:10]
+        confirmed = str(item.get("updated_at") or "")[:10]
+        if not learned:
+            return "learned on an unknown date"
+        if confirmed and confirmed != learned:
+            return f"learned {learned}, last confirmed {confirmed}"
+        return f"learned {learned}"
+
+    def _recall_memories_for_turn(self, query: str) -> List[Dict]:
+        """The few stored memories most relevant to *query*, for this turn only.
+
+        Vector search with an absolute cosine floor, so an unrelated nearest
+        neighbour is never surfaced. Skips what the stable prompt already shows,
+        and doesn't count as a use (no confidence bump), because the model
+        didn't ask for it.
+        """
+        index = getattr(self, "_faiss_index", None)
+        if not query or not query.strip() or index is None or index.ntotal == 0:
+            return []
+        shown = getattr(self, "_stable_memory_ids", set())
+        ctx = self._memory_context
+        # A default (global) session is unscoped and reads every context.
+        contexts = None if ctx == "global" else (ctx, "global")
+        hits = self._faiss_search(self._embed_text(query), TURN_RECALL_TOP_K * 4)
+        items: List[Dict] = []
+        for kid, score in hits:
+            if score < TURN_RECALL_MIN_SIMILARITY or kid in shown:
+                continue
+            item = self._memory_store.get_item(kid)
+            if (
+                item is None
+                or item["category"] not in _TURN_RECALL_CATEGORIES
+                or item.get("sensitive")
+                or item.get("superseded_by")
+                or (contexts is not None and item.get("context") not in contexts)
+            ):
+                continue
+            items.append(item)
+            if len(items) == TURN_RECALL_TOP_K:
+                break
+        return self._redact_credentials(items)
 
     def _reminder_window_open(self, now_ts: float) -> bool:
         """Whether this turn may carry proactive reminders.
@@ -2489,7 +2562,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
 
     def _build_dynamic_memory_context(self) -> str:
-        """Dynamic per-turn context: current time + upcoming/overdue items."""
+        """Dynamic per-turn context: time, upcoming items, relevant memories."""
         store = self._memory_store
         ctx = self._memory_context
         lines = []
@@ -2530,6 +2603,27 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "call update_memory for that."
             )
             self._mark_reminded(upcoming, now)
+
+        query = getattr(self, "_memory_turn_query", "") or ""
+        try:
+            relevant = self._recall_memories_for_turn(query)
+        except Exception as e:
+            logger.warning(
+                "[MemoryMixin] could not retrieve memories for this turn "
+                "(embedding or search failed); none are surfaced: %s",
+                e,
+            )
+            relevant = []
+        if relevant:
+            mem_lines = [
+                f"  - [{item['category']}] {item['content']} "
+                f"({self._memory_age(item)})"
+                for item in relevant
+            ]
+            lines.append(
+                "Stored memories that may bear on this message:\n"
+                + "\n".join(mem_lines)
+            )
 
         return "[GAIA Memory Context]\n" + "\n\n".join(lines)
 
@@ -2596,6 +2690,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Save original so _after_process_query stores the clean user text
         self._original_user_input = user_input
         self._turn_tool_record = []
+        self._memory_turn_query = user_input
 
         # Refresh the recalled-procedure injection for this goal (#887 RECALL).
         # Uses the clean goal (not the dynamic-context-augmented message) and
