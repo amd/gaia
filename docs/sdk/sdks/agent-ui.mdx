@@ -170,9 +170,30 @@ for s in db.list_sessions(limit=10):
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_message` | `(session_id, role, content, rag_sources?, tokens_prompt?, tokens_completion?) -> int` | Add a message, returns message ID |
+| `add_message` | `(session_id, role, content, rag_sources?, tokens_prompt?, tokens_completion?, model_messages?) -> int` | Add a message, returns message ID |
 | `get_messages` | `(session_id, limit=100, offset=0) -> List[Dict]` | Get messages oldest-first |
 | `count_messages` | `(session_id) -> int` | Count messages in a session |
+| `get_context_messages` | `(session_id) -> List[Dict]` | Read ordered model history, including tool evidence; separate from UI pagination |
+
+In-process chat and autonomous turns save the agent's `model_messages` on the
+assistant or autonomous row. These contain the current turn's user message,
+assistant tool calls, tool results and final answer, without duplicating prior
+history or the system prompt. The nullable JSON column is added automatically to
+existing databases; legacy rows retain their original text-only context.
+
+Restoration budgets complete turns against the resolved model/device window
+(including `GAIA_CTX_SIZE` and the NPU ceiling), reserving the current prompt, native tool schemas, output allowance and
+2K estimated tokens of headroom. History uses at most half the resolved window.
+Counts use GAIA's shared token estimator, not a guarantee against the model's
+exact tokenizer. On overflow, old turns are removed in a block toward half the
+history budget; the newest turn is retained if it fits. The full stored trace
+remains in SQLite, and exclusions produce a warning in the backend log.
+
+`get_messages` and the ordinary transcript API do not expose the internal trace.
+Deleting a transcript message also deletes its evidence. The email sidecar's
+separate `/query` contract still carries bounded prose; native evidence replay
+for that transport is a separate extension.
+
 
 **Example:**
 
@@ -580,10 +601,12 @@ class AttachDocumentRequest(BaseModel):
       "title": "Sprint 42 Review"
     }
     ```
+
+    Changing `agent_type`, `device`, or `mail_provider` while a chat turn is running on the session returns **409**; retry once the turn finishes. Renames are always accepted.
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}">
-    Delete a session and all its messages (cascading delete).
+    Delete a session and all its messages (cascading delete). If a chat turn is running on the session, it is stopped and the request returns once that turn has finished.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/messages">
@@ -598,6 +621,21 @@ class AttachDocumentRequest(BaseModel):
     Export a session to Markdown or JSON.
 
     **Query params:** `format` ("markdown" or "json", default "markdown")
+  </Accordion>
+
+  <Accordion title="GET /api/sessions/events">
+    SSE stream of system-level session events (e.g. `set_active_session`) —
+    the frontend subscribes on mount.
+  </Accordion>
+
+  <Accordion title="POST /api/sessions/{session_id}/activate">
+    Signal the frontend to switch to this session, for automation callers
+    (e.g. `open_session_in_browser()` in the MCP bridge) rather than a user
+    click. Emits the `set_active_session` event on `/api/sessions/events`.
+  </Accordion>
+
+  <Accordion title="PATCH /api/sessions/{session_id}/private">
+    Toggle a session's private (incognito) mode.
   </Accordion>
 </AccordionGroup>
 
@@ -697,6 +735,31 @@ class AttachDocumentRequest(BaseModel):
     }
     ```
   </Accordion>
+
+  <Accordion title="GET /api/chat/active">
+    Session ids with a currently-running chat turn — a run continues
+    server-side after the user navigates away, so this (not an open SSE
+    connection) is the source of truth for a "still running" indicator.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/attach">
+    Re-attach to an in-flight background run and stream its events over SSE
+    (`?session_id=`). Read-only — replays every event emitted so far, then
+    streams live events to completion; takes no session lock.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/cancel">
+    Cancel an active streaming turn without tearing down the HTTP connection
+    — sets the SSE handler's cancelled flag and, for an email-relay turn
+    parked in a blocking socket read, forces it to error out.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/user-input">
+    Answer a mid-run `needs_input` question from the agent. Tries an
+    in-process agent first, then an email-relay run blocked on the sidecar's
+    own query loop; a session with neither pending is a 404, never a silent
+    no-op accept.
+  </Accordion>
 </AccordionGroup>
 
 ### Documents
@@ -756,7 +819,7 @@ class AttachDocumentRequest(BaseModel):
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}/documents/{doc_id}">
-    Detach a document from a session (does not delete the document).
+    Detach a document from a session (does not delete the document). Returns **409** while a chat turn is running on the session.
   </Accordion>
 </AccordionGroup>
 
@@ -833,45 +896,60 @@ class AttachDocumentRequest(BaseModel):
     Return details for a single registered agent (description, models,
     conversation starters, `source` = `builtin` or `custom_python`).
   </Accordion>
+
+  <Accordion title="GET /api/agents/disk">
+    List custom agents present on disk, registered or not — the source list
+    the export/import flow scans.
+  </Accordion>
+
+  <Accordion title="POST /api/agents/export">
+    Export all custom agents as a downloadable zip bundle. Refused while a
+    tunnel is active.
+  </Accordion>
+
+  <Accordion title="POST /api/agents/import">
+    Import a custom agent bundle from an uploaded zip file. Refused while a
+    tunnel is active.
+  </Accordion>
 </AccordionGroup>
 
 ### MCP
 
-The MCP router manages external Model Context Protocol servers the agent can
-connect to.
+The MCP router is read-only status for external MCP servers, plus lifecycle
+for GAIA's *own* MCP server (the one that exposes Agent UI tools to clients
+like Claude Code). Registering, enabling, and disabling an external MCP
+server connector lives under [Connectors](#connectors) — `mcp_server` is one
+of that router's connector types.
 
 <AccordionGroup>
   <Accordion title="GET /api/mcp/servers">
-    List configured MCP servers and their enabled state.
-  </Accordion>
-
-  <Accordion title="POST /api/mcp/servers">
-    Register a new MCP server configuration.
-  </Accordion>
-
-  <Accordion title="DELETE /api/mcp/servers/{name}">
-    Remove a registered MCP server configuration.
-  </Accordion>
-
-  <Accordion title="POST /api/mcp/servers/{name}/enable">
-    Enable a previously-registered MCP server.
-  </Accordion>
-
-  <Accordion title="POST /api/mcp/servers/{name}/disable">
-    Disable a server without removing its configuration.
+    List configured MCP servers (from `~/.gaia/mcp_servers.json`) and their
+    enabled state.
   </Accordion>
 
   <Accordion title="GET /api/mcp/servers/{name}/tools">
-    List tools exposed by a specific MCP server.
-  </Accordion>
-
-  <Accordion title="GET /api/mcp/catalog">
-    Return the curated catalog of known-good MCP servers (Context7, etc.).
+    List tools exposed by a specific MCP server (opens a transient connection).
   </Accordion>
 
   <Accordion title="GET /api/mcp/status">
-    Overall MCP client status — number of connected servers, aggregate tool
-    count, last-error details.
+    Runtime MCP client status from the most recent chat session — connected
+    servers, aggregate tool count, last-error details.
+  </Accordion>
+
+  <Accordion title="GET /api/mcp/agent-server/status">
+    Status of GAIA's own MCP server — whether it's running, its port, and the
+    URL MCP clients connect to.
+  </Accordion>
+
+  <Accordion title="POST /api/mcp/agent-server/start">
+    Start GAIA's MCP server as a background subprocess so external MCP
+    clients (e.g. Claude Code) can call Agent UI tools (sessions, chat, files,
+    memory). Optional JSON body `{"port": <int>}`; defaults to
+    `AGENT_UI_MCP_PORT`.
+  </Accordion>
+
+  <Accordion title="POST /api/mcp/agent-server/stop">
+    Stop GAIA's MCP server, if it was started by the UI.
   </Accordion>
 </AccordionGroup>
 
@@ -928,6 +1006,12 @@ Used to reach the UI from a phone.
 
   <Accordion title="POST /api/documents/index-folder">
     Recursively index all supported files under a folder.
+  </Accordion>
+
+  <Accordion title="POST /api/documents/{doc_id}/reindex">
+    Re-run the RAG indexing pipeline for a document — clears any previous
+    failure, then always ends in `complete` or `failed` (never 200 while
+    leaving the document in a bad state).
   </Accordion>
 </AccordionGroup>
 
@@ -1217,7 +1301,404 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     }
     ```
   </Accordion>
+
+  <Accordion title="GET /api/memory/knowledge/{knowledge_id}">
+    Fetch one knowledge entry by ID, including superseded rows — the list
+    endpoint hides those by default, so this is what verifies a supersession
+    chain (`superseded_by`).
+  </Accordion>
+
+  <Accordion title="GET /api/memory/contexts">
+    List every distinct context tag with its knowledge count.
+  </Accordion>
+
+  <Accordion title="GET /api/memory/entities/{entity}">
+    All knowledge linked to one entity name.
+  </Accordion>
+
+  <Accordion title="GET /api/memory/errors">
+    Recent tool errors across every tool, most recent first.
+  </Accordion>
+
+  <Accordion title="GET /api/memory/tools/{tool_name}/history">
+    Recent call history for a single tool (arguments, result, latency).
+  </Accordion>
+
+  <Accordion title="GET /api/memory/conversations/search">
+    Full-text search across every stored conversation.
+  </Accordion>
+
+  <Accordion title="POST /api/memory/prune">
+    Delete tool history, conversations, and low-confidence knowledge older
+    than `days` (default 90). Returns per-table row counts.
+  </Accordion>
+
+  <Accordion title="DELETE /api/memory/all">
+    Permanently delete all knowledge, tool history, and conversation data.
+    Irreversible.
+  </Accordion>
+
+  <Accordion title="POST /api/memory/reinitialize">
+    Wipe all memory, then re-run initialization from scratch — re-collects
+    system context if discovery consent is granted. Irreversible.
+  </Accordion>
+
+  <Accordion title="POST /api/memory/refresh-system-context">
+    Re-collect OS, hardware, installed-app, and version facts. Deletes stale
+    `category="system"` entries and stores fresh ones — no LLM call, runs in
+    a few seconds.
+  </Accordion>
+
+  <Accordion title="GET /api/memory/stream-discovery">
+    SSE stream of the local system-discovery scan (git identity, installed
+    apps, recent file types, shell config, …) that seeds first-run memory.
+  </Accordion>
+
+  <Accordion title="GET /api/memory/stream-inference">
+    SSE stream of LLM-assisted profile inference over the discovery findings
+    — each `insight` event is a candidate fact awaiting approval.
+  </Accordion>
+
+  <Accordion title="POST /api/memory/commit-discovery">
+    Store approved discovery findings from the onboarding wizard. Items are
+    validated as knowledge creates, so a disallowed category 422s the whole
+    batch before anything is written.
+  </Accordion>
+
+  <Accordion title="POST /api/memory/commit-inference">
+    Store approved inference insights, replacing the prior inferred profile
+    (old `source="inferred"` rows are deleted first — a failure here leaves
+    the old profile in place rather than partially wiped).
+  </Accordion>
+
+  <Accordion title="GET /api/memory/settings">
+    Memory feature flags: `memory_enabled`, `mcp_memory_enabled` (expose read
+    tools to MCP clients), `system_discovery_consent` — all default `false`.
+  </Accordion>
+
+  <Accordion title="PUT /api/memory/settings">
+    Update the flags above. Turning `system_discovery_consent` on also
+    persists it to `~/.gaia/memory_settings.json` and triggers an immediate
+    system-context refresh.
+  </Accordion>
+
+  <Accordion title="POST /api/memory/admin/clear">
+    **Eval-only**, gated by `GAIA_MEMORY_ADMIN=1` (403 otherwise). Wipes
+    memory for a scenario reset — `scope` is `all` / `knowledge` /
+    `conversations`.
+  </Accordion>
+
+  <Accordion title="POST /api/memory/admin/seed">
+    **Eval-only**, gated by `GAIA_MEMORY_ADMIN=1`. Bulk-inserts knowledge
+    items verbatim, bypassing dedup, to plant a known state for stress
+    scenarios.
+  </Accordion>
 </AccordionGroup>
+
+### Connectors
+
+OAuth and MCP-server connections for the Settings page and per-agent grants
+(issue #915). Every mutating route requires the `X-Gaia-UI: 1` header — see
+[Security](#security).
+
+<AccordionGroup>
+  <Accordion title="GET /api/connectors">
+    Catalog specs merged with live state for every connector.
+  </Accordion>
+
+  <Accordion title="GET /api/connectors/events">
+    Long-lived SSE stream of connector lifecycle events — configured,
+    disconnected, tested, enabled/disabled, OAuth completed/errored, grant
+    changed, activation changed.
+  </Accordion>
+
+  <Accordion title="GET /api/connectors/agent-mcps">
+    MCP servers declared by custom-Python agents (issue #1020).
+  </Accordion>
+
+  <Accordion title="GET /api/connectors/_debug">
+    Diagnostics dump, gated by `GAIA_DEBUG=1` (404 otherwise).
+  </Accordion>
+
+  <Accordion title="GET /api/connectors/{connector_id}">
+    Summary for one connector (type, configured/enabled state, account info).
+  </Accordion>
+
+  <Accordion title="GET /api/connectors/{connector_id}/grants">
+    Per-agent grant ledger for this connector — which agents may use it and
+    with what scopes.
+  </Accordion>
+
+  <Accordion title="GET /api/connectors/{connector_id}/activations">
+    Per-agent activation state for this connector. Type-agnostic — returns
+    `{}` for OAuth connectors, which have no MCP tool surface to activate.
+  </Accordion>
+
+  <Accordion title="POST /api/connectors/{connector_id}/configure">
+    Store credentials for a connector — for an `mcp_server` connector this
+    also writes `~/.gaia/mcp_servers.json`.
+  </Accordion>
+
+  <Accordion title="POST /api/connectors/{connector_id}/test">
+    Run the connector's health check.
+  </Accordion>
+
+  <Accordion title="DELETE /api/connectors/{connector_id}">
+    Disconnect a connector — removes stored credentials and, for `mcp_server`,
+    its `mcp_servers.json` entry.
+  </Accordion>
+
+  <Accordion title="POST /api/connectors/{connector_id}/enable">
+    Re-enable a previously-disabled `mcp_server` connector. Its tools
+    materialize live.
+  </Accordion>
+
+  <Accordion title="POST /api/connectors/{connector_id}/disable">
+    Disable a configured `mcp_server` connector without clearing its
+    credentials.
+  </Accordion>
+
+  <Accordion title="POST /api/connectors/{connector_id}/authorize">
+    Start an OAuth PKCE flow. Returns `{flow_id, authorization_url}` — the UI
+    opens the URL and polls for completion.
+  </Accordion>
+
+  <Accordion title="POST /api/connectors/{connector_id}/authorize-device">
+    Start a device-code flow (no browser redirect, no registered OAuth app
+    needed).
+  </Accordion>
+
+  <Accordion title="DELETE /api/connectors/_flows/{flow_id}">
+    Cancel a pending OAuth flow without waiting for the callback.
+  </Accordion>
+
+  <Accordion title="PUT /api/connectors/{connector_id}/grants/{agent_id}">
+    Write the per-agent grant ledger — the scope ceiling an activation may
+    request. Rejects an id the catalog doesn't publish (404) or scopes
+    outside the connector's ceiling (400).
+  </Accordion>
+
+  <Accordion title="DELETE /api/connectors/{connector_id}/grants/{agent_id}">
+    Revoke a grant.
+  </Accordion>
+
+  <Accordion title="PUT /api/connectors/{connector_id}/activations/{agent_id}">
+    Activate `agent_id` for `connector_id` (`mcp_server` only — OAuth
+    connectors 400). Auto-grants when no grant exists and the body supplies
+    scopes; 400 if it doesn't.
+  </Accordion>
+
+  <Accordion title="DELETE /api/connectors/{connector_id}/activations/{agent_id}">
+    Deactivate `agent_id` for `connector_id`. Idempotent, and non-destructive
+    — the grant is preserved so re-activating is one call; delete the grant
+    separately to wipe it.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  `/v1/connections/*` is a separate, related surface — pre-authenticated
+  connections forwarded from another process (issue #1292). See the
+  [Connectors infrastructure doc](/sdk/infrastructure/connectors) for it.
+</Note>
+
+### Goals
+
+Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
+
+<AccordionGroup>
+  <Accordion title="GET /api/goals">
+    List goals. Optional `status`, `source`, and `approved_only` query
+    filters.
+  </Accordion>
+
+  <Accordion title="POST /api/goals">
+    Create a user goal — starts queued and auto-approved (only
+    agent-inferred goals need approval).
+  </Accordion>
+
+  <Accordion title="GET /api/goals/stats">
+    Aggregate counts by status, for the dashboard header cards.
+  </Accordion>
+
+  <Accordion title="GET /api/goals/pending-approval">
+    Agent-inferred goals awaiting user review.
+  </Accordion>
+
+  <Accordion title="GET /api/goals/{goal_id}">
+    A single goal with its tasks.
+  </Accordion>
+
+  <Accordion title="DELETE /api/goals/{goal_id}">
+    Hard-delete a goal and all its tasks.
+  </Accordion>
+
+  <Accordion title="PUT /api/goals/{goal_id}/approve">
+    Approve an agent-inferred goal for autonomous execution.
+  </Accordion>
+
+  <Accordion title="PUT /api/goals/{goal_id}/reject">
+    Reject an agent-inferred goal.
+  </Accordion>
+
+  <Accordion title="PUT /api/goals/{goal_id}/cancel">
+    Cancel a queued or in-progress goal.
+  </Accordion>
+
+  <Accordion title="PUT /api/goals/{goal_id}/status">
+    Update goal status and optionally append progress notes.
+  </Accordion>
+
+  <Accordion title="POST /api/goals/{goal_id}/tasks">
+    Add a task to an existing goal.
+  </Accordion>
+
+  <Accordion title="PUT /api/goals/{goal_id}/tasks/{task_id}">
+    Update a task's status and optionally record its result.
+  </Accordion>
+</AccordionGroup>
+
+### Schedules
+
+Recurring prompts run on a cron-like interval — see [`gaia schedule`](/reference/cli#schedule) for the CLI equivalent. The scheduler runs *prompts* only; it cannot yet run a *skill* directly (`gaia schedule add --skill` is rejected — [#1019](https://github.com/amd/gaia/issues/1019)).
+
+<AccordionGroup>
+  <Accordion title="GET /api/schedules">
+    List all scheduled tasks.
+  </Accordion>
+
+  <Accordion title="POST /api/schedules">
+    Create a scheduled task from a name, interval, and prompt.
+  </Accordion>
+
+  <Accordion title="POST /api/schedules/parse">
+    Parse a natural-language schedule description (e.g. "every morning at
+    8am") into structured interval config, without creating anything.
+  </Accordion>
+
+  <Accordion title="GET /api/schedules/{name}">
+    A single scheduled task.
+  </Accordion>
+
+  <Accordion title="PUT /api/schedules/{name}">
+    Pause, resume, or cancel a scheduled task via `{"status": ...}`.
+  </Accordion>
+
+  <Accordion title="DELETE /api/schedules/{name}">
+    Delete a scheduled task.
+  </Accordion>
+
+  <Accordion title="GET /api/schedules/{name}/results">
+    Past execution results for a scheduled task.
+  </Accordion>
+</AccordionGroup>
+
+### Onboarding
+
+First-run hardware scan and setup-wizard state (issues #1726, #1727).
+
+<AccordionGroup>
+  <Accordion title="GET /api/onboarding/preflight">
+    Scan hardware (NPU/GPU via Lemonade's `/system-info`, RAM) and report
+    whether this machine can run the first-run model, with a coarse tier
+    recommendation.
+  </Accordion>
+
+  <Accordion title="GET /api/onboarding/status">
+    Whether first-run setup has already completed.
+  </Accordion>
+
+  <Accordion title="POST /api/onboarding/complete">
+    Write the `initialized` marker so the wizard never re-triggers.
+  </Accordion>
+</AccordionGroup>
+
+### Hub
+
+Install, update, and configure agents from the Agent Hub catalog — the
+backend for `gaia hub` and the Agent UI's Hub panel. Registered before the
+`Agents` router's `GET /api/agents/{agent_id}` so its literal paths
+(`catalog`, `setup-status`) win the match.
+
+<AccordionGroup>
+  <Accordion title="GET /api/agents/catalog">
+    Unified catalog: the remote hub merged with what's installed locally.
+  </Accordion>
+
+  <Accordion title="POST /api/agents/install">
+    Start an install in the background (body names the agent id). Poll
+    `install-status` for progress.
+  </Accordion>
+
+  <Accordion title="GET /api/agents/{agent_id}/install-status">
+    Progress of an in-flight or completed install.
+  </Accordion>
+
+  <Accordion title="DELETE /api/agents/{agent_id}">
+    Uninstall a hub-installed agent. Refuses a builtin (400).
+  </Accordion>
+
+  <Accordion title="POST /api/agents/{agent_id}/rollback">
+    Roll an agent back to its pre-update `.backup/` snapshot.
+  </Accordion>
+
+  <Accordion title="GET /api/agents/{agent_id}/config">
+    The persisted per-agent config (`{}` if none set).
+  </Accordion>
+
+  <Accordion title="POST /api/agents/{agent_id}/config">
+    Persist per-agent config (model preference, settings). Merges by
+    default.
+  </Accordion>
+
+  <Accordion title="GET /api/agents/{agent_id}/health">
+    Whether the installed agent loads and its entry point resolves.
+  </Accordion>
+
+  <Accordion title="GET /api/agents/{agent_id}/status">
+    Aggregated status: installed version, health, config summary.
+  </Accordion>
+
+  <Accordion title="POST /api/agents/setup">
+    Start a progressive multi-agent install. Poll `setup-status` for
+    progress.
+  </Accordion>
+
+  <Accordion title="GET /api/agents/setup-status">
+    Resumable per-step progress for a multi-agent install.
+  </Accordion>
+</AccordionGroup>
+
+## Security
+
+<Note>
+  The backend binds loopback and has no authentication while the tunnel is
+  off, so any web page the user's browser visits could otherwise drive it.
+  Three layers close that off — see
+  [`src/gaia/ui/security.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/security.py)
+  for the enforcing code.
+</Note>
+
+1. **CSRF header.** Every mutating (non-GET/HEAD/OPTIONS) request to `/api/*`
+   or `/v1/*` must carry `X-Gaia-UI: 1`. A cross-origin page cannot set a
+   custom header without triggering a CORS preflight, and the app's CORS
+   policy only approves preflights from its own first-party dev origins.
+   Missing the header is a `403`.
+2. **Origin allowlist.** A mutating request whose `Origin` names anything
+   other than this server, loopback, or the live tunnel is refused, so a CORS
+   misconfiguration alone isn't enough to get through.
+3. **Host allowlist.** DNS rebinding needs a *hostname* that resolves to
+   loopback, so a `Host` that is neither an IP literal, loopback, nor the
+   live tunnel is refused.
+
+`Origin: null` and a missing `Origin` are both accepted: the packaged
+Electron shell serves the SPA from `file://` (an opaque origin), and
+non-browser callers send no `Origin` at all. Neither can be produced by a
+cross-site page that also carries `X-Gaia-UI`, so layer 1 already stops
+those.
+
+`GAIA_UI_ALLOWED_ORIGINS` and `GAIA_UI_ALLOWED_HOSTS` (comma-separated) opt a
+reverse-proxied or named-host deployment in; neither is populated by
+default.
 
 ---
 

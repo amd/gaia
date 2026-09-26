@@ -1,13 +1,19 @@
 #!/usr/bin/env python
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Shared match-and-replace semantics for GAIA's file-editing tools.
+"""Shared rules for GAIA's file-changing tools.
 
-Every ``edit_*`` tool routes its match-and-replace through
-:func:`apply_unique_replacement`, so the separate implementations in
-``file_io_tools`` and ``file_tools`` cannot drift apart.
+Both rules live here so the separate implementations in ``file_io_tools`` and
+``file_tools`` cannot drift apart.
 
-The contract:
+**Read before edit.** :class:`FileReadRecord` is one agent's record of the
+files it has read. A tool that would change an existing file refuses when the
+file isn't in the record, or when its mtime or size moved since the read.
+Creating a file needs no read, and what the agent wrote or edited itself stays
+unlocked.
+
+**Match and replace.** Every ``edit_*`` tool routes through
+:func:`apply_unique_replacement`:
 
 - ``old_content`` must match **exactly once**. Two matches is an error naming
   the count and the line of each, not a first-match replacement — the model
@@ -15,21 +21,19 @@ The contract:
   the human reading the diff.
 - A rejected edit carries the file's current content around the region the
   caller was aiming at, so the retry lands without a separate re-read.
-- An edit against a file that changed since the agent read it is rejected by
-  :class:`FileStateTracker` rather than clobbering the newer contents.
-
-``FileStateTracker`` is a port of the C++ tracker in
-``cpp/include/gaia/file_tools.h``; the two trees keep the same ledger
-semantics deliberately.
 """
 
 import difflib
-import hashlib
 import os
 import re
+import stat
 import threading
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Lines of surrounding context returned with a rejected edit.
 CONTEXT_RADIUS = 12
@@ -46,156 +50,151 @@ MAX_EXCERPT_CHARS = 4000
 # Similarity a line needs against the probe line to anchor a not-found excerpt.
 _ANCHOR_THRESHOLD = 0.6
 
-_SHORT_HASH_CHARS = 12
+#: A regular file's ``(st_mtime_ns, st_size)``.
+Stamp = Tuple[int, int]
 
 
-def hash_content(content: str) -> str:
-    """Lowercase hex SHA-256 of ``content``."""
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+def _key(file_path: Any) -> str:
+    """Record key: one entry per file however the caller spelled the path."""
+    return os.path.normcase(os.path.realpath(os.fspath(file_path)))
 
 
-def short_hash(content_hash: str) -> str:
-    """First ``_SHORT_HASH_CHARS`` of a hash, for human-readable messages."""
-    return content_hash[:_SHORT_HASH_CHARS]
+def stamp_of(file_path: Any) -> Optional[Stamp]:
+    """The file's ``(mtime_ns, size)``, or ``None`` when no regular file is there."""
+    try:
+        st = os.stat(os.fspath(file_path))
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    return st.st_mtime_ns, st.st_size
 
 
-def _key(file_path: str) -> str:
-    """Ledger key: one entry per file however the caller spelled the path."""
-    return os.path.normcase(os.path.realpath(str(file_path)))
+def _read_required(message: str, file_path: Any, error_type: str) -> Dict[str, Any]:
+    return {
+        **NOT_EXECUTED,
+        "status": "error",
+        "error": message,
+        "error_type": error_type,
+        "file_path": os.fspath(file_path),
+    }
 
 
-@dataclass
-class Divergence:
-    """Result of comparing a file's current contents to what was read."""
+class FileReadRecord:
+    """The files one agent has read, with each one's mtime and size at the time.
 
-    diverged: bool = False
-    hash_at_read: str = ""
-    hash_now: str = ""
-    size_at_read: int = 0
-    size_now: int = 0
-    reason: str = ""
+    A patch written from a grep snippet or a guess is made blind: the model
+    never saw the code around the change. Holding the edit tools to this record
+    grounds "have you looked?" in what the read tools actually returned.
 
+    - A read records the file, a partial or line-range read included.
+    - Creating a file records it, and so does every successful edit or overwrite.
+    - Changing an existing file that isn't recorded, or whose mtime or size
+      differs from the record, is refused. That includes a bare ``touch``: the
+      stamp cannot tell it from a rewrite, and a fresh read is cheap.
 
-@dataclass
-class _Record:
-    content_hash: str
-    size: int
-
-
-class FileStateTracker:
-    """Content-hash ledger of every file an agent has read.
-
-    A later write can then tell "the model is editing what it saw" from "the
-    file moved under it". No system prompt can prevent a stale write: by the
-    time the model emits an edit, the read that justified it may be many turns
-    old and a build step, a formatter, another agent, or the user may have
-    changed the file since.
-
-    Semantics (matching the C++ tracker):
-
-    - A read records the SHA-256 of the file's **full** contents, so a
-      line-range read still anchors the whole file.
-    - An edit is rejected when a record exists and the contents now hash
-      differently.
-    - A file with **no** record is not blocked. Requiring a prior read would
-      make the tools unusable for creating files, and an agent that never read
-      the file has nothing stale to be wrong about.
-    - A successful edit re-records the new contents, so consecutive edits work
-      without an intervening read.
+    One per agent instance (see :func:`file_read_record`), for the agent's
+    lifetime: another agent's reads say nothing about what this one has seen.
     """
 
-    _instance = None
-    _instance_lock = threading.Lock()
-
     def __init__(self) -> None:
-        self._records: Dict[str, _Record] = {}
-        self._lock = threading.RLock()
+        self._seen: Dict[str, Stamp] = {}
+        self._lock = threading.Lock()
 
-    @classmethod
-    def instance(cls) -> "FileStateTracker":
-        """Process-wide tracker shared by every file tool."""
-        with cls._instance_lock:
-            if cls._instance is None:
-                cls._instance = cls()
-            return cls._instance
+    def note(self, file_path: Any, stamp: Optional[Stamp] = None) -> None:
+        """Record ``file_path`` as seen in state ``stamp`` (default: as it is now).
 
-    def record_read(self, file_path: str, content: str) -> str:
-        """Record the contents an agent has just seen. Returns the hash."""
-        digest = hash_content(content)
-        with self._lock:
-            self._records[_key(file_path)] = _Record(
-                digest, len(content.encode("utf-8"))
-            )
-        return digest
-
-    def record_write(self, file_path: str, content: str) -> str:
-        """Record contents an agent has just written.
-
-        Identical to :meth:`record_read` but named for the call site so intent
-        stays readable.
+        Read tools take the stamp *before* reading, so a write landing mid-read
+        leaves a record that no longer matches instead of one that hides it.
         """
-        return self.record_read(file_path, content)
+        if stamp is None:
+            stamp = stamp_of(file_path)
+            if stamp is None:
+                return  # no file there, so nothing for a later change to clobber
+        with self._lock:
+            self._seen[_key(file_path)] = stamp
 
-    def check(self, file_path: str, current_content: str) -> Divergence:
-        """Compare ``current_content`` against the recorded read.
+    def refusal(
+        self, file_path: Any, verb: str = "editing"
+    ) -> Optional[Dict[str, Any]]:
+        """Why changing ``file_path`` must wait for a read, or ``None`` to go ahead.
 
-        Returns ``diverged=False`` when there is no record for the path.
+        ``verb`` names the change in the message: "editing", "overwriting".
         """
+        now = stamp_of(file_path)
+        if now is None:
+            return None
         with self._lock:
-            record = self._records.get(_key(file_path))
-        if record is None:
-            return Divergence()
-
-        digest = hash_content(current_content)
-        size_now = len(current_content.encode("utf-8"))
-        if digest == record.content_hash:
-            return Divergence(
-                hash_at_read=short_hash(record.content_hash),
-                hash_now=short_hash(digest),
-                size_at_read=record.size,
-                size_now=size_now,
+            seen = self._seen.get(_key(file_path))
+        if seen is None:
+            return _read_required(
+                f"Read {file_path} with read_file before {verb} it; edits to a "
+                "file you haven't read are made blind. Nothing was written.",
+                file_path,
+                "not_read",
             )
-
-        return Divergence(
-            diverged=True,
-            hash_at_read=short_hash(record.content_hash),
-            hash_now=short_hash(digest),
-            size_at_read=record.size,
-            size_now=size_now,
-            reason=(
-                f"contents hashed {short_hash(record.content_hash)} when read "
-                f"and {short_hash(digest)} now "
-                f"({record.size} -> {size_now} bytes)"
-            ),
-        )
-
-    def has_record(self, file_path: str) -> bool:
-        with self._lock:
-            return _key(file_path) in self._records
-
-    def forget(self, file_path: str) -> None:
-        """Drop the record for a path (e.g. the file was deleted or renamed)."""
-        with self._lock:
-            self._records.pop(_key(file_path), None)
-
-    def clear(self) -> None:
-        """Drop every record. Intended for tests and session resets."""
-        with self._lock:
-            self._records.clear()
-
-    def size(self) -> int:
-        with self._lock:
-            return len(self._records)
+        if seen != now:
+            return _read_required(
+                f"{file_path} changed on disk since you read it; read it again "
+                f"with read_file before {verb} it. Nothing was written.",
+                file_path,
+                "changed_since_read",
+            )
+        return None
 
 
-def record_read(file_path: str, content: str) -> str:
-    """Record a read against the process-wide tracker."""
-    return FileStateTracker.instance().record_read(file_path, content)
+_ATTACH_LOCK = threading.Lock()
 
 
-def record_write(file_path: str, content: str) -> str:
-    """Record a write against the process-wide tracker."""
-    return FileStateTracker.instance().record_write(file_path, content)
+def file_read_record(host: Any) -> FileReadRecord:
+    """``host``'s record, attached on first use.
+
+    Lazy because a tool mixin cannot count on its ``__init__`` running:
+    ``Agent.__init__`` does not chain to ``super().__init__()``.
+    """
+    record = getattr(host, "_file_read_record", None)
+    if isinstance(record, FileReadRecord):
+        return record
+    with _ATTACH_LOCK:
+        record = getattr(host, "_file_read_record", None)
+        if not isinstance(record, FileReadRecord):
+            record = FileReadRecord()
+            host._file_read_record = record
+    return record
+
+
+def read_first_preflight(
+    host: Any,
+    target_of: Callable[[Dict[str, Any]], Any],
+    verb: str = "editing",
+) -> Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """A ``@tool(preflight=...)`` check: refuse a blind change before the prompt.
+
+    ``target_of`` maps the call's arguments to the path the tool would change,
+    resolved the way the tool resolves it. The tool body repeats the check,
+    because the file can change while a confirmation prompt waits.
+    """
+
+    def preflight(tool_args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            target = target_of(tool_args)
+            validator = getattr(host, "path_validator", None) or getattr(
+                host, "_path_validator", None
+            )
+            # Out of scope or write-blocked, the tool's own refusal is the true
+            # one, and it doesn't reveal whether a file exists there.
+            if validator is not None and (
+                not validator.is_path_allowed(str(target), prompt_user=False)
+                or validator.is_write_blocked(str(target))[0]
+            ):
+                return None
+            return file_read_record(host).refusal(target, verb)
+        except (KeyError, TypeError, ValueError, OSError) as e:
+            # Malformed arguments or an unstat-able path: the tool body reports it.
+            logger.debug("read-first preflight deferred to the tool: %s", e)
+            return None
+
+    return preflight
 
 
 def _line_of(content: str, offset: int) -> int:
@@ -335,8 +334,9 @@ def apply_unique_replacement(
     carry ``current_content`` and its line range, so the caller does not have
     to re-read the file to try again.
 
-    Callers own their own security checks (path allowlist, size limits,
-    backups) — this function only decides *what* the new contents should be.
+    Callers own their own checks (path allowlist, size limits, backups, and
+    :class:`FileReadRecord`) — this function only decides *what* the new
+    contents should be.
     """
     file_path = str(file_path)
 
@@ -349,28 +349,6 @@ def apply_unique_replacement(
             0,
             {},
         )
-
-    divergence = FileStateTracker.instance().check(file_path, current_content)
-    if divergence.diverged:
-        error = _error(
-            f"Edit rejected: {file_path} changed on disk after it was read — "
-            f"{divergence.reason}. Nothing was written. The file's current "
-            "content is included as `current_content`; reissue the edit against "
-            "that, not against what you read earlier.",
-            file_path,
-            len(_match_offsets(current_content, old_content)),
-            {
-                "stale": True,
-                "hash_at_read": divergence.hash_at_read,
-                "hash_now": divergence.hash_now,
-                **_excerpt(current_content, old_content),
-            },
-        )
-        # Returning the content *is* a read, so re-anchor. Without this the
-        # ledger still holds the superseded hash and the corrected retry is
-        # rejected as stale too — forever.
-        FileStateTracker.instance().record_read(file_path, current_content)
-        return None, error
 
     offsets = _match_offsets(current_content, old_content)
 

@@ -275,10 +275,19 @@ def _probe_lemonade_health(
     """
     import requests
 
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     probe_base = _resolve_probe_base(base_url)
     try:
+        # GAIA's own server answers 401 without its key, hiding the version.
         resp = requests.get(
             f"{probe_base}/health",
+            headers=lemonade_auth_headers(
+                resolve_lemonade_api_key(base_url=probe_base)
+            ),
             timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
         )
     except requests.exceptions.RequestException:
@@ -357,7 +366,7 @@ def _pull_model(probe_base: str, model_id: str) -> None:
     resp = requests.post(
         f"{probe_base}/pull",
         json={"model_name": model_id},
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=_LEMONADE_PULL_TIMEOUT,
     )
     resp.raise_for_status()
@@ -381,17 +390,20 @@ def _resolve_email_model_id(base_url: Optional[str] = None) -> str:
 def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     """Parse a dotted version string into a comparable int tuple.
 
-    Mirrors ``gaia.installer.init_command.InitCommand._parse_version`` (same
-    semantics: strip a leading ``v``, take the first three dotted parts as
-    ints). Kept LOCAL rather than imported because the frozen sidecar does not
-    bundle ``gaia.installer`` — importing it at runtime would ``ModuleNotFound``
-    in the binary this endpoint exists to serve. Returns ``None`` when the
-    string is missing or unparseable.
+    Same semantics as :func:`gaia.version.parse_version`: strip a leading ``v``,
+    take the first three dotted parts as ints, keeping each part's leading digits
+    so CalVer development builds (``2026.39.0~12.abc1234``) still compare.
+    Returns ``None`` when the string is missing or unparseable.
+
+    Vendored rather than imported: ``gaia.version`` does an
+    ``importlib.metadata`` lookup at import time that a frozen binary cannot
+    satisfy. ``tests/unit/test_lemonade_calver.py`` holds it equivalent.
     """
     if not version:
         return None
     try:
-        return tuple(int(p) for p in version.lstrip("v").split(".")[:3])
+        parts = str(version).strip().lstrip("v").split(".")[:3]
+        return tuple(int(re.match(r"\s*(\d+)", p).group(1)) for p in parts)
     except (ValueError, IndexError, AttributeError):
         return None
 
@@ -645,8 +657,9 @@ class EmailTriageService:
         except requests.exceptions.RequestException as exc:
             raise LLMTriageError(
                 f"Local Lemonade Server is not reachable at {probe_base} "
-                f"({type(exc).__name__}: {exc}). Start it with "
-                "`lemonade-server serve` (or run `gaia init`), then retry."
+                f"({type(exc).__name__}: {exc}). Run `gaia init` to set up and "
+                "start GAIA's Lemonade Server, or set LEMONADE_BASE_URL to a "
+                "running one, then retry."
             ) from exc
 
     def _assert_model_present(self, base_url: Optional[str]) -> None:

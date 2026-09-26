@@ -1,0 +1,172 @@
+---
+title: "AMD LLM Gateway"
+description: "Run GAIA agents on gateway-hosted models — larger on-prem models and frontier models — alongside local inference."
+---
+
+## What this gives you
+
+GAIA normally runs models Lemonade loads on your own machine. The AMD LLM gateway
+hosts models too large for a laptop — a Gemma-4-31B-class on-prem model, and frontier
+models like Claude — behind one OpenAI-compatible endpoint.
+
+Connecting it means **every GAIA agent can use those models with no code change**:
+they appear in Lemonade's model list alongside your local ones, and `gaia chat`,
+`gaia llm`, and the TUI address them the same way. That also makes it possible to run
+the same task through a GAIA agent and through another tool on the same model, and
+compare the results directly.
+
+<Note>
+Requires **Lemonade Server 11.8.0 or newer**, which added cloud offload. Run
+`gaia init` to upgrade.
+</Note>
+
+## Where your token is kept
+
+You enter it once. GAIA remembers it in your **OS credential store** — DPAPI on
+Windows, Keychain on macOS, SecretService on Linux — so it is encrypted at rest and
+scoped to your user account. GAIA refuses to fall back to a plaintext keyring backend,
+so it cannot quietly become a readable file.
+
+It is never written to a GAIA file. `~/.gaia/gateway.json` records the base URL and
+which models you enabled, and has no field a secret could occupy.
+
+Lemonade itself holds the token in memory only and forgets it on restart. GAIA notices
+and restores it from the credential store, which is why you are not asked again.
+
+```bash
+gaia gateway auth --no-remember    # do not store it; ask me every restart
+gaia gateway logout                # clear Lemonade's copy, keep the remembered one
+gaia gateway logout --forget       # also delete it from the credential store
+gaia gateway status                # shows whether a token is remembered
+```
+
+`LEMONADE_AMD_API_KEY` in **Lemonade's** environment still works and takes precedence.
+If it is set and you supply a different token, Lemonade refuses with a clear error
+rather than silently picking one.
+
+## Connect from the TUI
+
+Type `/gateway` in chat (or pick it from the `/` command palette).
+
+<Steps>
+  <Step title="Confirm the gateway URL">
+    The OpenAI-compatible base URL, e.g. `https://llm-api.amd.com/Unified/v1`. GAIA tests it
+    before registering, so a wrong path fails immediately with the actual HTTP status
+    instead of showing up later as an empty model list.
+  </Step>
+  <Step title="Paste your token">
+    The field is masked. GAIA sends it to Lemonade and keeps no copy.
+  </Step>
+  <Step title="Done — a model is already selected">
+    GAIA picks `Gemma-4-31B` for you and makes it the default. It is the only
+    gateway model that currently streams, and GAIA's agent path streams by default,
+    so it is the one that works out of the box. It is also on-prem, so it costs
+    nothing per token.
+
+    To use a different one: <kbd>space</kbd> enables a model, <kbd>enter</kbd> makes it
+    active. Preferred models are marked `*` and sorted first.
+  </Step>
+</Steps>
+
+The active model becomes the default for GAIA's model-bearing commands.
+
+## Connect from the CLI
+
+```bash
+gaia gateway install                 # defaults to the AMD gateway
+gaia gateway auth                    # prompts without echo
+gaia gateway models                  # what the gateway offers
+gaia gateway use amd.Claude-Opus-5   # make it the default
+gaia gateway test "Say hello"        # end-to-end round trip
+```
+
+`gaia gateway status` shows registration, auth state, discovered model count, and your
+current selection.
+
+### Gateways with a different auth header
+
+The default is `Ocp-Apim-Subscription-Key` with **no** prefix, because AMD's gateway
+runs behind Azure API Management and that is the header it checks.
+
+So a plain OpenAI-compatible endpoint expecting a bearer token is the case that needs
+the override — not the other way round:
+
+```bash
+gaia gateway install \
+  --base-url https://gateway.example.com/v1 \
+  --auth-header-name Authorization \
+  --auth-header-prefix "Bearer "
+```
+
+Both settings persist per provider and are re-applied on every request.
+
+## Using gateway models
+
+Gateway models are namespaced `amd.<model>` and work anywhere a local model does:
+
+```bash
+gaia chat --model amd.Claude-Opus-5
+gaia llm --model amd.Gemma-4-31B "Explain NPU offload"
+```
+
+GAIA recognises them as gateway-hosted and skips the download, load, and model-slot
+steps that only apply to local weights — so switching to a gateway model never evicts
+the model resident on your NPU or GPU.
+
+Tool-calling support comes from what the gateway advertises per model, so an agent
+will not try native tool calls against a model that cannot do them.
+
+### Models that cannot stream
+
+The gateway currently accepts a streaming request for every model except
+`Gemma-4-31B` and then sends no tokens, while the same prompt works
+non-streaming. Nothing in the catalog advertises this, so GAIA learns it the
+first time it happens: it tells you the gateway did not stream that model,
+answers the turn without streaming, and remembers the model in
+`~/.gaia/gateway.json` so later turns skip straight to the working path. You see
+one delayed first answer per model, then normal speed.
+
+This is why `Gemma-4-31B` is the default when the gateway is enabled — it is the
+one model that streams.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `models` lists nothing | Lemonade only discovers models once it has a working token. Run `gaia gateway auth`. |
+| Setting a token returns a conflict | `LEMONADE_AMD_API_KEY` is set in Lemonade's environment and wins. Keep using it, or unset it and restart Lemonade. |
+| `has no cloud-provider API` | Lemonade is older than 11.8.0. Run `gaia init`. |
+| The probe returns 404 or redirects | Wrong host. `llm.amd.com` is the SSO portal; the API is `llm-api.amd.com/Unified/v1`. |
+| `auth` succeeds but discovers 0 models | The gateway rejected the key. Lemonade stores it without validating, so this is where a bad key first shows. Run `scripts/diagnose-gateway-auth.ps1`. |
+| A gateway model answers all at once instead of streaming | Expected. The gateway does not stream that model, so GAIA switched to a non-streaming call and said so. See [Models that cannot stream](#models-that-cannot-stream). |
+
+## What the gateway offers
+
+76 models, verified live. Measured latency and throughput on a 120-word generation:
+
+| Model | Provider | Latency | Avg TPS |
+|---|---|---|---|
+| `GPT-oss-20B` | On-Prem | 3.1s | 96 |
+| `Gemma-4-31B` | On-Prem | 3.7s | 40 |
+| `Qwen3.6-35B-A3B` | On-Prem | 4.8s | 62 |
+| `Claude-Opus-5` | Azure OpenAI | 5.6s | 53 |
+| `GPT-oss-120B` | On-Prem | 8.4s | 31 |
+
+`Gemma-4-31B` streams at 78 TPS with 1.8s to first token. **Streaming currently
+returns no tokens for the other models**, while non-streaming works for all of
+them — a gateway-side limitation, not a GAIA one.
+
+**Every chat model on this gateway — Claude included — is served over OpenAI Chat
+Completions**, not the Anthropic Messages format. That is why GAIA registers the
+provider with `wire_format: openai` and why Claude models work through the ordinary
+agent path with no special handling.
+
+## Disconnecting
+
+```bash
+gaia gateway logout      # drop the session token, keep the registration
+gaia gateway uninstall   # remove the provider and forget the selection
+```
+
+`logout` does not unset `LEMONADE_AMD_API_KEY` — if that is set in Lemonade's
+environment, unset it there and restart Lemonade.

@@ -3,10 +3,12 @@
 """Outcome-scored tasks for the flagship GaiaAgent, and the gate CI applies.
 
 Each task hands the flagship a fresh copy of a small project
-(``eval/tasks/toybox``). A coding task is scored by what the finished project
-does — its own tests, plus a probe run inside it. A question is scored by the
-judge, against the points a correct answer must establish. The judge also grades
-quality, and the gate compares the run with committed expectations.
+(``eval/tasks/toybox``), which a named setup may change first
+(``task_setups.py``). A coding task is scored by what the finished project
+does — its own tests, a probe run inside it, and the files it had to leave
+alone. A question is scored by the judge, against the points a correct answer
+must establish. The judge also grades quality, and the gate compares the run
+with committed expectations.
 
 Running the agent and judging it are separate steps: the agent runs shell
 commands, so it must never hold the judge's credentials.
@@ -17,6 +19,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -24,9 +27,17 @@ import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tool_grants import PATH_TOOLS
+from gaia.agents.base.verification import (
+    check_was_executed,
+    verification_check_label,
+    verification_check_target,
+)
+from gaia.eval.task_setups import SETUPS, remove_leftovers
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,13 +62,20 @@ TESTS_TIMEOUT_S = 240
 PROBE_TIMEOUT_S = 120
 JUDGE_TIMEOUT_S = 300
 DIFF_CAP = 20000
+#: A setup diff only has to stop the judge crediting the agent with the setup's
+#: work, and the file list carries that. Past this, the contents are noise the
+#: judge may try to answer the task from — a truncated generated log reads as a
+#: complete one.
+SETUP_DIFF_CAP = 4000
 ANSWER_CAP = 8000
 PROJECT_CAP = 12000
-IGNORED = ("__pycache__", ".pytest_cache")
+IGNORED = ("__pycache__", ".pytest_cache", ".git")
+EXPECT_KEYS = frozenset({"tests_pass", "probe", "unchanged"})
 
 #: Headroom a proposed expectation leaves over the run it was measured from.
 #: One run per task is noisy: a single flipped task must not fail the gate.
 PASS_SLACK = 1
+VERIFIED_SLACK = 1
 QUALITY_SLACK = 0.5
 MISREPORT_SLACK = 1
 USAGE_SLACK = 0.35
@@ -84,6 +102,16 @@ class Task:
     genuine_answer: str = ""
     #: Plausible answers that miss the point; the judge must fail each one.
     wrong_answers: Tuple[str, ...] = ()
+    #: A name from ``task_setups.SETUPS``, applied to the copy before the agent runs.
+    setup: str = ""
+
+
+def _project_path(path: Any) -> bool:
+    """A relative, forward-slash path that stays inside the project."""
+    if not isinstance(path, str) or not path or "\\" in path or ":" in path:
+        return False
+    rel = PurePosixPath(path)
+    return not rel.is_absolute() and ".." not in rel.parts
 
 
 def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
@@ -95,12 +123,32 @@ def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
         if not raw.get(key):
             raise ValueError(f"{where}: missing {key!r}")
     expect = dict(raw.get("expect") or {})
-    unknown = set(expect) - {"tests_pass", "probe"}
+    unknown = set(expect) - EXPECT_KEYS
     if unknown:
         raise ValueError(f"{where}: unknown expect keys {sorted(unknown)}")
+    if "unchanged" in expect and not (
+        isinstance(expect["unchanged"], list)
+        and expect["unchanged"]
+        and all(_project_path(p) for p in expect["unchanged"])
+    ):
+        raise ValueError(
+            f"{where}: 'unchanged' must be a list of paths relative to the project, "
+            f"like 'tests/test_dates.py'; got {expect['unchanged']!r}"
+        )
+    setup = raw.get("setup") or ""
+    if setup and setup not in SETUPS:
+        raise ValueError(
+            f"{where}: unknown setup {setup!r}. src/gaia/eval/task_setups.py "
+            f"defines: {sorted(SETUPS)}"
+        )
     points = tuple(raw.get("must_establish") or ())
     if check == "mechanical" and not expect:
         raise ValueError(f"{where}: a mechanical task needs an 'expect' block")
+    if check == "stated" and expect:
+        raise ValueError(
+            f"{where}: a stated task is decided by the judge, so its 'expect' "
+            "block would never run. Make it a mechanical task, or drop the block."
+        )
     wrong = tuple(raw.get("wrong_answers") or ())
     if check == "stated" and not (points and all(points)):
         raise ValueError(f"{where}: a stated task needs 'must_establish'")
@@ -118,6 +166,7 @@ def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
         must_establish=points,
         genuine_answer=raw.get("genuine_answer", ""),
         wrong_answers=wrong,
+        setup=setup,
     )
 
 
@@ -175,9 +224,31 @@ def _last_line(proc: subprocess.CompletedProcess, default: str) -> str:
     return lines[-1] if lines else default
 
 
-def evaluate(task: Task, workdir: Path) -> Tuple[bool, str]:
-    """Run the project's tests and the task's probe inside *workdir*."""
+def _unchanged(task: Task, workdir: Path, baseline: Path) -> Tuple[bool, str]:
+    """Every ``unchanged`` file still byte-identical to the project the agent got."""
+    paths = task.expect.get("unchanged") or []
+    for rel in paths:
+        before, after = baseline / rel, workdir / rel
+        if not before.is_file():
+            raise ValueError(
+                f"task {task.id!r}: 'unchanged' names {rel}, which is not in the "
+                "project the agent was given. Fix the path in eval/tasks/tasks.json."
+            )
+        if not after.is_file():
+            return False, f"{rel} was deleted"
+        if after.read_bytes() != before.read_bytes():
+            return False, f"{rel} was changed"
+    return True, f"{len(paths)} file(s) untouched"
+
+
+def evaluate(task: Task, workdir: Path, baseline: Path) -> Tuple[bool, str]:
+    """Check the finished *workdir* against the task; *baseline* is how it started."""
     notes: List[str] = []
+    if "unchanged" in task.expect:
+        ok, note = _unchanged(task, workdir, baseline)
+        if not ok:
+            return False, note
+        notes.append(note)
     if task.expect.get("tests_pass"):
         try:
             proc = _run_python(
@@ -203,11 +274,86 @@ def evaluate(task: Task, workdir: Path) -> Tuple[bool, str]:
     return True, "; ".join(notes)
 
 
-def score(task: Task, workdir: Path) -> Tuple[Optional[bool], str]:
+def score(task: Task, workdir: Path, baseline: Path) -> Tuple[Optional[bool], str]:
     """A coding task is decided here; a question is decided by the judge."""
     if task.check == "stated":
         return None, "decided by the judge"
-    return evaluate(task, workdir)
+    return evaluate(task, workdir, baseline)
+
+
+def prepare_workdir(task: Task, root: Path) -> Tuple[Path, Path]:
+    """Copy the fixture to ``root/toybox`` and apply the task's setup.
+
+    Returns ``(workdir, baseline)``: *baseline* is a copy of the workdir as the
+    agent will find it, kept beside it rather than inside it. ``unchanged`` and
+    the judge's diff compare with it, so a setup's files are never mistaken
+    for the agent's work.
+    """
+    workdir, baseline = root / "toybox", root / "baseline"
+    shutil.copytree(FIXTURE, workdir, ignore=shutil.ignore_patterns(*IGNORED))
+    if task.setup:
+        SETUPS[task.setup](workdir)
+    shutil.copytree(workdir, baseline, ignore=shutil.ignore_patterns(*IGNORED))
+    return workdir, baseline
+
+
+#: Tools that write a file. A test run verifies only the edits made before it.
+#: The same set the grant layer scopes to one path, so a tool added there is
+#: one this sees too.
+EDIT_TOOLS = PATH_TOOLS
+
+#: pytest's closing summary when a test failed. A snippet or a pipe that prints
+#: it can still exit 0, so the exit code alone would call the run a pass.
+_FAILED_SUMMARY = re.compile(
+    r"(?m)^[= ]*(?:\d+ [a-z]+, )*[1-9]\d* (?:failed|errors?)\b.* in \d+(?:\.\d+)?s\b"
+)
+
+#: pytest's closing summary for a run that actually collected tests. Without
+#: it, ``pytest --version`` and ``--collect-only`` would read as a passing run.
+_RAN_SUMMARY = re.compile(r"(?m)^[= ]*(?:\d+ [a-z]+(?:, )?)+ in \d+(?:\.\d+)?s\b")
+
+
+def _tool_result(content: Any) -> Any:
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except ValueError:
+            return content
+    return content
+
+
+def _test_run_passed(result: Any) -> bool:
+    if Agent._is_error_result(result):
+        return False
+    if not isinstance(result, dict):
+        return True
+    output = "\n".join(str(result.get(key) or "") for key in ("stdout", "stderr"))
+    return bool(_RAN_SUMMARY.search(output)) and not _FAILED_SUMMARY.search(output)
+
+
+def tests_verified(conversation: List[Mapping[str, Any]]) -> bool:
+    """True when a pytest run passed after the agent's last file edit.
+
+    Read from the agent's own tool record, with the check detection its
+    verification line uses, so ``python -m pytest`` and pytest run through
+    ``run_python`` both count. A command run more than once counts by its
+    latest run. A run that collected no tests (``--version``, ``--collect-only``)
+    does not count. Edits made through a shell command or a snippet are not seen.
+    """
+    latest: Dict[str, bool] = {}
+    for entry in conversation:
+        if entry.get("role") != "tool":
+            continue
+        name, args = str(entry.get("name") or ""), entry.get("tool_args")
+        result = _tool_result(entry.get("content"))
+        if not check_was_executed(result):
+            continue
+        if name in EDIT_TOOLS:
+            if not Agent._is_error_result(result):
+                latest.clear()
+        elif verification_check_label(name, args, result) == "pytest":
+            latest[verification_check_target(name, args)] = _test_run_passed(result)
+    return any(latest.values())
 
 
 def _files(root: Path) -> set:
@@ -219,7 +365,7 @@ def _files(root: Path) -> set:
 
 
 def project_snapshot(root: Path = FIXTURE) -> str:
-    """The project's files as the agent found them, for a judge with no tools."""
+    """The project's files, for a judge with no tools."""
     text = "\n".join(
         f"--- {rel} ---\n{(root / rel).read_text('utf-8', 'replace')}"
         for rel in sorted(_files(root))
@@ -229,8 +375,8 @@ def project_snapshot(root: Path = FIXTURE) -> str:
     return text
 
 
-def workspace_diff(workdir: Path, original: Path = FIXTURE) -> str:
-    """A unified diff of everything the agent changed, capped for the judge."""
+def workspace_diff(workdir: Path, original: Path) -> str:
+    """A unified diff from *original* to *workdir*, capped for the judge."""
     chunks: List[str] = []
     for rel in sorted(_files(original) | _files(workdir)):
         before, after = original / rel, workdir / rel
@@ -260,7 +406,10 @@ def workspace_diff(workdir: Path, original: Path = FIXTURE) -> str:
 @dataclass
 class TaskResult:
     id: str
+    check: str = ""
     passed: Optional[bool] = False  # None: a question the judge has yet to decide
+    #: A pytest run passed after the agent's last file edit (``tests_verified``).
+    verified: bool = False
     why: str = ""
     error: str = ""
     error_kind: str = ""  # "unavailable": not measured; "failed": the task failed
@@ -346,41 +495,48 @@ def _run_agent(
 def run_task(task: Task, model: str, task_dir: Path) -> TaskResult:
     """Give the flagship one task in a fresh project copy, then score it."""
     task_dir.mkdir(parents=True, exist_ok=True)
-    result = TaskResult(id=task.id)
+    result = TaskResult(id=task.id, check=task.check)
     with tempfile.TemporaryDirectory(
         prefix=f"gaia-task-{task.id}-", ignore_cleanup_errors=True
     ) as tmp:
         # Resolved, so the path in the prompt is the agent's real working dir.
         root = Path(tmp).resolve()
-        workdir = root / "toybox"
-        shutil.copytree(FIXTURE, workdir, ignore=shutil.ignore_patterns(*IGNORED))
-        prompt = f"You are working in {workdir}. {task.prompt}"
-        started = time.time()
-        outcome, error, result.error_kind = _run_agent(
-            prompt, model, task.max_steps, workdir, root / "memory.db"
-        )
-        result.wall_seconds = round(time.time() - started, 1)
-        conversation = outcome.get("conversation") or []
-        answer = str(outcome.get("result") or "")
-        result.steps = int(outcome.get("steps_taken") or 0)
-        result.tool_calls = sum(1 for m in conversation if m.get("role") == "tool")
-        result.input_tokens = int(outcome.get("input_tokens") or 0)
-        result.output_tokens = int(outcome.get("output_tokens") or 0)
-        if error:
-            result.error = result.why = error
-        else:
-            result.passed, result.why = score(task, workdir)
-        (task_dir / "transcript.json").write_text(
-            json.dumps(
-                {"prompt": prompt, "answer": answer, "conversation": conversation},
-                indent=1,
-                default=str,
-            ),
-            encoding="utf-8",
-        )
-        (task_dir / "workspace.diff").write_text(
-            workspace_diff(workdir), encoding="utf-8"
-        )
+        workdir, baseline = prepare_workdir(task, root)
+        try:
+            prompt = f"You are working in {workdir}. {task.prompt}"
+            started = time.time()
+            outcome, error, result.error_kind = _run_agent(
+                prompt, model, task.max_steps, workdir, root / "memory.db"
+            )
+            result.wall_seconds = round(time.time() - started, 1)
+            conversation = outcome.get("conversation") or []
+            answer = str(outcome.get("result") or "")
+            result.steps = int(outcome.get("steps_taken") or 0)
+            result.tool_calls = sum(1 for m in conversation if m.get("role") == "tool")
+            result.input_tokens = int(outcome.get("input_tokens") or 0)
+            result.output_tokens = int(outcome.get("output_tokens") or 0)
+            result.verified = tests_verified(conversation)
+            if error:
+                result.error = result.why = error
+            else:
+                result.passed, result.why = score(task, workdir, baseline)
+            (task_dir / "transcript.json").write_text(
+                json.dumps(
+                    {"prompt": prompt, "answer": answer, "conversation": conversation},
+                    indent=1,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+            (task_dir / "workspace.diff").write_text(
+                workspace_diff(workdir, baseline), encoding="utf-8"
+            )
+            if task.setup:
+                (task_dir / "setup.diff").write_text(
+                    workspace_diff(baseline, FIXTURE), encoding="utf-8"
+                )
+        finally:
+            remove_leftovers(workdir)
     return result
 
 
@@ -444,8 +600,10 @@ ask for changes", 5 means "a competent engineer would merge this as-is".
   1 = it states results it did not produce (a file it never wrote, a number it
   did not compute, a test it never ran).
 
-You are given the project as the agent found it and, per attempt, a diff of what
-it changed. Check each answer's claims against them.
+You are given the original project and, per attempt, a diff of what the agent
+changed. Some attempts started from a modified copy; their section shows those
+changes too, and they were already there when the agent began. Check each
+answer's claims against all of it.
 
 An attempt marked QUESTION also needs a verdict: it is correct only if it
 establishes every one of its required points, in any wording. Its reference
@@ -473,10 +631,27 @@ class Attempt:
     answer: str
     diff: str
     task: Optional[Task] = None
+    #: How the project this attempt started from differs from the original.
+    setup_diff: str = ""
 
     @property
     def question(self) -> bool:
         return self.task is not None and self.task.check == "stated"
+
+
+def _setup_summary(diff: str) -> str:
+    """The setup diff, or just the files it touched when it is too big to send."""
+    if len(diff) <= SETUP_DIFF_CAP:
+        return diff
+    files = sorted(
+        {
+            line[6:].strip()
+            for line in diff.splitlines()
+            if line.startswith("+++ b/") or line.startswith("--- a/")
+        }
+    )
+    listed = "\n".join(f"- {name}" for name in files)
+    return f"(contents omitted — too large) files the setup added or changed:\n{listed}"
 
 
 def _attempt_section(attempt: Attempt) -> str:
@@ -485,6 +660,11 @@ def _attempt_section(attempt: Attempt) -> str:
         f"=== ATTEMPT {attempt.key} ({kind}) ===",
         f"Task given to the agent:\n{attempt.prompt}",
     ]
+    if attempt.setup_diff:
+        parts.append(
+            "Before the agent started, its copy of the project was changed like "
+            f"this (not the agent's work):\n{_setup_summary(attempt.setup_diff)}"
+        )
     if attempt.question:
         points = "\n".join(f"- {p}" for p in attempt.task.must_establish)
         parts += [
@@ -493,7 +673,7 @@ def _attempt_section(attempt: Attempt) -> str:
         ]
     parts += [
         f"The agent's final answer:\n{attempt.answer[:ANSWER_CAP]}",
-        f"Changes it made to the workspace (diff vs the original project):\n{attempt.diff}",
+        f"Changes it made to the workspace (diff vs the project it was given):\n{attempt.diff}",
     ]
     return "\n\n".join(parts)
 
@@ -572,7 +752,7 @@ def judge_batch(
     payload = "\n\n".join(
         [
             RUBRIC,
-            f"=== THE PROJECT AS THE AGENT FOUND IT ===\n{project_snapshot()}",
+            f"=== THE ORIGINAL PROJECT ===\n{project_snapshot()}",
             *(_attempt_section(a) for a in attempts),
         ]
     )
@@ -612,17 +792,22 @@ def judge_run(
     tasks = {t.id: t for t in load_suite(card["suite"], tasks_file)}
     pending = []
     for entry in card["tasks"]:
+        task, task_dir = tasks[entry["id"]], run_dir / entry["id"]
         transcript = json.loads(
-            (run_dir / entry["id"] / "transcript.json").read_text(encoding="utf-8")
+            (task_dir / "transcript.json").read_text(encoding="utf-8")
         )
-        diff = (run_dir / entry["id"] / "workspace.diff").read_text(encoding="utf-8")
         pending.append(
             Attempt(
                 entry["id"],
                 transcript["prompt"],
                 transcript["answer"],
-                diff,
-                tasks[entry["id"]],
+                (task_dir / "workspace.diff").read_text(encoding="utf-8"),
+                task,
+                (
+                    (task_dir / "setup.diff").read_text(encoding="utf-8")
+                    if task.setup
+                    else ""
+                ),
             )
         )
     grades: Dict[str, Dict[str, Any]] = {}
@@ -671,9 +856,12 @@ def summarize(card: Mapping[str, Any]) -> Dict[str, Any]:
     """Suite totals, the numbers the gate reads."""
     tasks = card["tasks"]
     judged = [t for t in tasks if _judged(t)]
+    coding = [t for t in tasks if t.get("check") == "mechanical"]
     return {
         "tasks": len(tasks),
         "passed": sum(1 for t in tasks if t["passed"] is True),
+        "coding": len(coding),
+        "verified": sum(1 for t in coding if t.get("verified") is True),
         "errors": sum(1 for t in tasks if t.get("error")),
         "unmeasured": sum(1 for t in tasks if t.get("error_kind") == "unavailable"),
         "judged": len(judged),
@@ -704,6 +892,7 @@ class GateCheck:
     expected: str
     ok: bool
     main: Any = None  # what main measured, from the committed baseline
+    gated: bool = True  # False: reported only, until expectations set a limit
 
 
 def expectations_path(card: Mapping[str, Any]) -> Path:
@@ -723,6 +912,7 @@ def gate(card: Mapping[str, Any], expected: Mapping[str, Any]) -> List[GateCheck
     main = expected.get("measured") or {}
     fully_judged = s["judged"] == s["tasks"]
     unjudged = f"{s['tasks'] - s['judged']} task(s) not judged"
+    min_verified = expected.get("min_verified")
     return [
         GateCheck(
             "Tasks measured",
@@ -736,6 +926,18 @@ def gate(card: Mapping[str, Any], expected: Mapping[str, Any]) -> List[GateCheck
             f">= {expected['min_passed']}",
             s["passed"] >= expected["min_passed"],
             None if main.get("passed") is None else f"{main['passed']}/{s['tasks']}",
+        ),
+        GateCheck(
+            "Changes verified by a test run",
+            f"{s['verified']}/{s['coding']}",
+            "not gated yet" if min_verified is None else f">= {min_verified}",
+            min_verified is None or s["verified"] >= min_verified,
+            (
+                None
+                if main.get("verified") is None
+                else f"{main['verified']}/{s['coding']}"
+            ),
+            gated=min_verified is not None,
         ),
         GateCheck(
             "Quality (1-5)",
@@ -792,6 +994,9 @@ def _task_row(t: Mapping[str, Any]) -> Dict[str, Any]:
                 )
             )
         ),
+        # Only coding tasks are counted by the gate, so a question showing
+        # yes/no here would read as a number the gate deliberately excludes.
+        "verified": t.get("verified") if t.get("check") == "mechanical" else None,
         "steps": t["steps"],
         "total_tokens": t["input_tokens"] + t["output_tokens"],
         "wall_seconds": t["wall_seconds"],
@@ -827,6 +1032,7 @@ def propose_expectations(card: Mapping[str, Any]) -> Dict[str, Any]:
             k: s[k]
             for k in (
                 "passed",
+                "verified",
                 "quality",
                 "misreported",
                 "total_tokens",
@@ -836,6 +1042,7 @@ def propose_expectations(card: Mapping[str, Any]) -> Dict[str, Any]:
         },
         "tasks": [_task_row(t) for t in card["tasks"]],
         "min_passed": max(0, s["passed"] - PASS_SLACK),
+        "min_verified": max(0, s["verified"] - VERIFIED_SLACK),
         "min_quality": round(max(1.0, s["quality"] - QUALITY_SLACK), 2),
         "max_misreported": s["misreported"] + MISREPORT_SLACK,
         "max_total_tokens": int(s["total_tokens"] * (1 + USAGE_SLACK)),
@@ -856,6 +1063,16 @@ def _vs(now: Any, main: Any) -> str:
     return _fmt(now) if main is None else f"{_fmt(now)} (main {_fmt(main)})"
 
 
+def _yes_no(value: Optional[bool]) -> Optional[str]:
+    return None if value is None else "yes" if value else "no"
+
+
+def _mark(check: GateCheck) -> str:
+    if not check.gated:
+        return "—"
+    return "✅" if check.ok else "❌"
+
+
 def render_report(
     card: Mapping[str, Any],
     checks: Optional[List[GateCheck]],
@@ -867,7 +1084,8 @@ def render_report(
     lines = [
         f"## Flagship tasks — `{card['suite']}` on `{card['model']}`",
         "",
-        f"{s['passed']}/{s['tasks']} passed · quality "
+        f"{s['passed']}/{s['tasks']} passed · {s['verified']}/{s['coding']} changes "
+        f"verified by a test run · quality "
         f"{'—' if s['quality'] is None else s['quality']} · "
         f"{s['total_tokens']:,} tokens ({s['input_tokens']:,} in, "
         f"{s['output_tokens']:,} out) · {s['steps']} steps · {s['wall_seconds']}s",
@@ -877,13 +1095,13 @@ def render_report(
         lines += ["| Metric | Main | This run | Limit | |", "|---|---|---|---|---|"]
         lines += [
             f"| {c.metric} | {'—' if c.main is None else _fmt(c.main)} | "
-            f"{_fmt(c.actual)} | {c.expected} | {'✅' if c.ok else '❌'} |"
+            f"{_fmt(c.actual)} | {c.expected} | {_mark(c)} |"
             for c in checks
         ]
         lines.append("")
     lines += [
-        "| Task | Result | Steps | Tokens | Seconds | Quality | Why |",
-        "|---|---|---|---|---|---|---|",
+        "| Task | Result | Verified | Steps | Tokens | Seconds | Quality | Why |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for t in card["tasks"]:
         row, main = _task_row(t), main_tasks.get(t["id"], {})
@@ -892,6 +1110,7 @@ def render_report(
             quality = "judge failed" if (t.get("judge") or {}).get("error") else "—"
         cells = [
             _vs(row["result"], main.get("result")),
+            _vs(_yes_no(row["verified"]) or "—", _yes_no(main.get("verified"))),
             _vs(row["steps"], main.get("steps")),
             _vs(row["total_tokens"], main.get("total_tokens")),
             _vs(row["wall_seconds"], main.get("wall_seconds")),

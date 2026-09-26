@@ -16,7 +16,7 @@ import secrets
 import threading
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +42,7 @@ try:
 except Exception:  # pylint: disable=broad-except
     faiss = None
 
+from gaia import config as gaia_config
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
@@ -83,6 +84,19 @@ class EmptyPDFError(PDFExtractionError):
     status = "empty"
 
 
+# Files the RAG cache writes: signed chunk caches, their sidecar signatures,
+# and extracted-text markdown. clear_cache() deletes nothing else.
+_CACHE_OWNED_FILE = re.compile(
+    r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)\.json(?:\.sig)?$"
+    r"|_extracted\.md$"
+)
+
+
+def default_rag_cache_dir() -> str:
+    """Absolute default RAG cache directory: ``<GAIA_CONFIG_DIR>/cache/rag``."""
+    return str(Path(gaia_config.GAIA_CONFIG_DIR) / "cache" / "rag")
+
+
 @dataclass
 class RAGConfig:
     """Configuration for RAG SDK."""
@@ -93,7 +107,7 @@ class RAGConfig:
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation
     max_chunks: int = 5  # Increased to retrieve more context
     embedding_model: str = DEFAULT_EMBEDDING_MODEL  # Lemonade GGUF embedding model
-    cache_dir: str = ".gaia"
+    cache_dir: str = field(default_factory=default_rag_cache_dir)
     show_stats: bool = False
     use_local_llm: bool = True
     base_url: str = "http://localhost:13305/api/v1"  # Lemonade server API URL
@@ -1395,28 +1409,32 @@ class RAGSDK:
 
         The LLM analyzes the text structure and suggests optimal split points
         that preserve semantic meaning and context.
+
+        Raises:
+            RuntimeError: If the LLM call fails or returns no usable split list.
         """
         self.log.info("🤖 Using LLM for intelligent text chunking...")
 
         chunks = []
 
-        # Process text in segments (to handle long documents)
         # Approximate: 1 token ≈ 4 characters
-        segment_size = chunk_size * 4 * 3  # Process 3 chunks worth at a time
+        max_chunk_chars = chunk_size * 4
+        segment_size = max_chunk_chars * 3
+        overlap_chars = overlap * 4
         text_length = len(text)
         position = 0
 
         while position < text_length:
-            # Get a segment to process
             segment_end = min(position + segment_size, text_length)
+            if segment_end < text_length:
+                boundary = self._last_whitespace(text, position + 1, segment_end)
+                if boundary > position:
+                    segment_end = boundary
             segment = text[position:segment_end]
 
-            # Ask LLM to identify good chunk boundaries
-            segment_preview = segment[:2000]
-            ellipsis = "..." if len(segment) > 2000 else ""
             prompt = f"""You are a document chunking expert. Your task is to identify optimal points to split the following text into chunks.
 
-The text should be split into chunks of approximately {chunk_size} tokens (roughly {chunk_size * 4} characters each).
+The text should be split into chunks of approximately {chunk_size} tokens (roughly {max_chunk_chars} characters each).
 
 IMPORTANT RULES:
 1. Keep semantic units together (complete thoughts, paragraphs, sections)
@@ -1425,10 +1443,9 @@ IMPORTANT RULES:
 4. Keep related information together (e.g., a heading with its content)
 5. For lists, try to keep the list introduction with at least some items
 
-Text to chunk:
+Text to chunk ({len(segment)} characters):
 ---
-{segment_preview}
-{ellipsis}
+{segment}
 ---
 
 Please identify the CHARACTER POSITIONS where the text should be split.
@@ -1436,65 +1453,70 @@ Return ONLY a JSON array of split positions, like: [245, 502, 847]
 These positions indicate where to split the text."""
 
             try:
-                # Get LLM response
-                response_data = self.llm_client.generate(  # pylint: disable=no-member
+                response_data = self.llm_client.completions(
                     model=self.config.model,
                     prompt=prompt,
                     temperature=0.0,  # Low temperature for deterministic chunking
                     max_tokens=500,
                 )
                 response = response_data["choices"][0]["text"]
-
-                # Parse the split positions
-                split_positions = json.loads(response)
-
-                # Create chunks based on LLM-suggested positions
-                last_pos = 0
-                for split_pos in split_positions:
-                    if split_pos > last_pos and split_pos < len(segment):
-                        chunk = segment[last_pos:split_pos].strip()
-                        if chunk:
-                            chunks.append(chunk)
-                        last_pos = split_pos
-
-                # Add remaining text
-                if last_pos < len(segment):
-                    chunk = segment[last_pos:].strip()
-                    if chunk:
-                        chunks.append(chunk)
-
+                split_positions = self._parse_split_positions(response)
             except Exception as e:
-                self.log.warning(f"LLM chunking failed for segment: {e}")
-                # Fall back to simple splitting for this segment
-                segment_chunks = self._fallback_chunk_segment(segment, chunk_size)
-                chunks.extend(segment_chunks)
+                raise RuntimeError(
+                    f"LLM chunking failed for characters {position}-{segment_end} "
+                    f"with model {self.config.model}: {type(e).__name__}: {e}. "
+                    "Check that Lemonade Server is running and the model is "
+                    "available, or disable use_llm_chunking."
+                ) from e
 
-            # Move to next segment with overlap
-            position = segment_end - (overlap * 4)  # Convert overlap tokens to chars
+            last_pos = 0
+            for split_pos in sorted(set(split_positions)) + [len(segment)]:
+                if last_pos < split_pos <= len(segment):
+                    chunks.extend(
+                        self._split_oversized_chunk(
+                            segment[last_pos:split_pos], max_chunk_chars
+                        )
+                    )
+                    last_pos = split_pos
 
-        return chunks
-
-    def _fallback_chunk_segment(self, text: str, chunk_size: int) -> List[str]:
-        """Simple fallback chunking for a text segment."""
-        chunks = []
-        words = text.split()
-        current_chunk = []
-        current_size = 0
-
-        for word in words:
-            word_size = len(word) // 4  # Rough token estimate
-            if current_size + word_size > chunk_size and current_chunk:
-                chunks.append(" ".join(current_chunk))
-                current_chunk = [word]
-                current_size = word_size
-            else:
-                current_chunk.append(word)
-                current_size += word_size
-
-        if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            if segment_end == text_length:
+                break
+            next_start = segment_end - overlap_chars
+            boundary = self._last_whitespace(text, next_start, segment_end)
+            if boundary >= next_start:
+                next_start = boundary + 1
+            position = max(next_start, position + 1)
 
         return chunks
+
+    @staticmethod
+    def _last_whitespace(text: str, start: int, end: int) -> int:
+        """Index of the last whitespace in text[start:end], or -1."""
+        return max(text.rfind(ws, max(start, 0), end) for ws in " \n\t")
+
+    @staticmethod
+    def _parse_split_positions(response: str) -> List[int]:
+        """Extract the JSON array of split positions from an LLM response."""
+        match = re.search(r"\[\s*-?\d+(?:\s*,\s*-?\d+)*\s*\]|\[\s*\]", response)
+        if match is None:
+            raise ValueError(f"no JSON array in LLM response: {response[:200]!r}")
+        positions = json.loads(match.group(0))
+        return [p for p in positions if isinstance(p, int) and not isinstance(p, bool)]
+
+    @staticmethod
+    def _split_oversized_chunk(text: str, max_chars: int) -> List[str]:
+        """Split text at whitespace so no piece exceeds max_chars."""
+        pieces = []
+        text = text.strip()
+        while len(text) > max_chars:
+            cut = RAGSDK._last_whitespace(text, 0, max_chars + 1)
+            if cut <= 0:
+                cut = max_chars
+            pieces.append(text[:cut].strip())
+            text = text[cut:].strip()
+        if text:
+            pieces.append(text)
+        return pieces
 
     def _extract_text_from_text_file(self, file_path: str) -> str:
         """Extract text from text-based file (txt, md, etc.)."""
@@ -2017,8 +2039,9 @@ These positions indicate where to split the text."""
         Split text into semantic chunks using LLM intelligence when available.
 
         Uses intelligent splitting that:
-        - Leverages LLM to identify natural semantic boundaries (if available)
-        - Falls back to structural heuristics if LLM is not available
+        - Leverages LLM to identify natural semantic boundaries when
+          use_llm_chunking is set (LLM failures raise; no heuristic fallback)
+        - Otherwise uses structural heuristics
         - Respects natural document boundaries (paragraphs, sections)
         - Keeps semantic units together
         - Maintains context with overlap
@@ -2031,31 +2054,16 @@ These positions indicate where to split the text."""
         chunk_size_tokens = self.config.chunk_size
         overlap_tokens = self.config.chunk_overlap
 
-        # Try to use LLM for intelligent chunking if available
         if self.config.use_llm_chunking:
-            # Ensure LLM client is initialized for chunking
             if self.llm_client is None:
-                try:
-                    from gaia.llm.lemonade_client import LemonadeClient
+                from gaia.llm.lemonade_client import LemonadeClient
 
-                    self.llm_client = LemonadeClient()
-                    self.log.info("✅ Initialized LLM client for intelligent chunking")
-                except Exception as e:
-                    self.log.warning(
-                        f"Failed to initialize LLM client for chunking: {e}"
-                    )
+                self.llm_client = LemonadeClient()
+                self.log.info("✅ Initialized LLM client for intelligent chunking")
 
-            if self.llm_client is not None:
-                try:
-                    return self._llm_based_chunking(
-                        text, chunk_size_tokens, overlap_tokens
-                    )
-                except Exception as e:
-                    self.log.warning(
-                        f"LLM chunking failed, falling back to heuristic: {e}"
-                    )
+            return self._llm_based_chunking(text, chunk_size_tokens, overlap_tokens)
 
-        # Fall back to heuristic-based chunking
+        # Heuristic-based chunking
 
         # STEP 1: Identify and protect VLM content blocks as atomic units
         # VLM content starts with "[Page X] ### 🖼️ IMAGE" and continues until next image or end
@@ -3432,14 +3440,38 @@ Answer:"""
             )
 
     def clear_cache(self):
-        """Clear the RAG cache."""
-        import shutil
+        """Delete the files this cache wrote from ``config.cache_dir``.
+
+        Only signed chunk caches, their ``.sig`` files and ``*_extracted.md``
+        are removed; anything else in the directory is left alone.
+
+        Raises:
+            ValueError: If ``cache_dir`` resolves to ``$HOME`` or the GAIA home
+                directory, which hold far more than the RAG cache.
+        """
+        cache_dir = Path(self.config.cache_dir).expanduser().resolve()
+        protected = {
+            Path.home().resolve(),
+            Path(gaia_config.GAIA_CONFIG_DIR).expanduser().resolve(),
+        }
+        if cache_dir in protected:
+            raise ValueError(
+                f"Refusing to clear RAG cache_dir {cache_dir}: it is your home or "
+                "GAIA home directory, not a dedicated cache. Point "
+                f"RAGConfig.cache_dir at its own folder (default: "
+                f"{default_rag_cache_dir()})."
+            )
 
         with self._state_lock:
-            if os.path.exists(self.config.cache_dir):
-                shutil.rmtree(self.config.cache_dir)
-                os.makedirs(self.config.cache_dir, exist_ok=True)
-            self.log.info("Cache cleared")
+            removed = 0
+            if cache_dir.is_dir():
+                for entry in cache_dir.iterdir():
+                    if entry.is_file() and _CACHE_OWNED_FILE.search(entry.name):
+                        entry.unlink()
+                        removed += 1
+            self.log.info(
+                "Cache cleared: removed %d file(s) from %s", removed, cache_dir
+            )
 
     def get_status(self) -> Dict[str, Any]:
         """Get RAG system status."""

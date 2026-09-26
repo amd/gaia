@@ -253,8 +253,8 @@ completes.
 <Note>
   **Prefer the CLI?** The whole flow works headless without opening the
   Agent UI — `gaia connectors configure google --client-id … --client-secret …`
-  then `gaia connectors connect google`. See the [Email Triage guide's CLI
-  tab](/guides/email#setup) for the exact commands.
+  then `gaia connectors connect google`. See the [Email guide's retired-agent
+  setup](/guides/email#setup) for the exact commands.
 </Note>
 
 ## Step 6 — Grant scopes to specific agents
@@ -310,7 +310,7 @@ gaia connectors grants grant google builtin:chat \
   hand-typed list that omits `openid` can still connect but resolve to
   `Connected as default` instead of your real address — one reason
   `--grant-agent` is the recommended path for any agent that supports it.
-  The [Email Triage guide's CLI tab](/guides/email#setup) has the full
+  The [Email guide's retired-agent setup](/guides/email#setup) has the full
   two-command sequence; a missing grant either way surfaces as
   `AGENT_NOT_GRANTED`.
 </Note>

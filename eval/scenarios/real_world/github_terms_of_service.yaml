@@ -1,7 +1,6 @@
 id: github_terms_of_service
 name: "GitHub Terms of Service Policy Lookup"
 category: real_world
-agent_type: doc
 severity: medium
 description: |
   Agent must retrieve platform policy details from the GitHub Terms of Service excerpt.

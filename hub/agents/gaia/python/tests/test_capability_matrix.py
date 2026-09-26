@@ -58,12 +58,15 @@ _spec.loader.exec_module(capability_matrix)
 # the flagship eval dataset §1/§3).
 # ---------------------------------------------------------------------------
 
-# 81: 69 after #3023's `remember_skill_lesson`, plus the email and image_gen
-# bundles and `run_python` from main, and this branch's `capture_skill`.
-_EXPECTED_TOOLS_TOTAL = 81
+# 83: 82 on main (69 after #3023's `remember_skill_lesson`, plus the email and
+# image_gen bundles, `run_python`, `capture_skill` and #3402's
+# `wait_for_condition`), plus this branch's `sleep`.
+_EXPECTED_TOOLS_TOTAL = 83
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
-_EXPECTED_CORE_COUNT = 15
+# 16 with this branch's `sleep`, which joins the core set rather than a bundle:
+# waiting out a rate limit is not a capability a query can be matched to.
+_EXPECTED_CORE_COUNT = 16
 _EXPECTED_BUNDLE_COUNT = 21
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
@@ -88,12 +91,15 @@ _EXPECTED_REST_OP_NAMES = {
     "query",
     "query/{run_id}/cancel",
     "query/{run_id}/respond",
+    "query/{run_id}/followup",
+    "query/{run_id}/tool_decision",
+    "sessions/{session_id}/bypass",
     "memory",
 }
-_EXPECTED_REST_FUNCTIONAL_COUNT = 4
+_EXPECTED_REST_FUNCTIONAL_COUNT = 7
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 8
+_EXPECTED_REST_IN_CONTRACT_COUNT = 11
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 
