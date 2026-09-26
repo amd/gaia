@@ -78,9 +78,9 @@ def test_does_not_call_electron_forge_the_current_builder():
     text = _text()
     assert "today uses `electron-forge`" not in text
     assert "Once that phase lands" not in text
-    assert "electron-builder" in text, (
-        "installer/README.md must name the builder the Agent UI actually uses"
-    )
+    assert (
+        "electron-builder" in text
+    ), "installer/README.md must name the builder the Agent UI actually uses"
 
 
 def test_documented_agent_ui_build_scripts_exist():
@@ -94,6 +94,6 @@ def test_documented_agent_ui_build_scripts_exist():
     assert documented, "no npm scripts found in installer/README.md — regex rotted"
 
     missing = sorted(documented - scripts)
-    assert not missing, (
-        f"installer/README.md documents npm scripts that don't exist: {missing}"
-    )
+    assert (
+        not missing
+    ), f"installer/README.md documents npm scripts that don't exist: {missing}"
