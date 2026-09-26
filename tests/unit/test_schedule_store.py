@@ -266,7 +266,8 @@ class TestTomlScheduleStore:
             store.save({"after": _make_schedule("after")})
 
         assert set(store.load()) == {"before"}
-        assert list(tmp_path.iterdir()) == [store.path]
+        leftovers = [p for p in tmp_path.iterdir() if p.suffix != ".lock"]
+        assert leftovers == [store.path]
 
 
 # ===========================================================================

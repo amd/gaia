@@ -20,7 +20,8 @@ SERVICE_ID = "gaia-daemon"
 # API and must restart it rather than silently attach to a stale host. MINOR 1
 # added the /daemon/v1/agents control plane (#2142) — clients that need it
 # floor-check MINOR >= 1 so a pre-#2142 daemon fails loudly instead of 404ing.
-DAEMON_API_VERSION = "1.1"
+# MINOR 2 added /daemon/v1/lemonade/ensure (the daemon owns embedded Lemonade).
+DAEMON_API_VERSION = "1.2"
 
 # Client-token auth: header name and scheme.
 AUTH_SCHEME = "Bearer"
