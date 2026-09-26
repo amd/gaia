@@ -348,10 +348,55 @@ def test_parent_conversation_grows_only_by_small_result_and_tokens(repo):
     ]
     assert len(delegated) == 1
     assert delegated[0]["content"]["performance_stats"]["input_tokens"] == 300
-    # The child's own tool results never reach the parent's conversation.
-    assert "notes.txt" not in json.dumps(
-        [m for m in outcome["conversation"] if m.get("role") != "tool"]
-    )
+    # The child's own tool results reach the parent's model only inside the
+    # bounded delegate result, never as messages of their own.
+    sent = _model_messages(parent)
+    assert "notes.txt" not in json.dumps([m for m in sent if m.get("role") != "tool"])
+    assert "delegated_transcript" not in json.dumps(sent)
+
+
+def _model_messages(agent: Kid) -> list:
+    """Every message list the parent's model was ever sent, flattened."""
+    return [
+        m
+        for call in agent.chat.send_messages.call_args_list
+        for m in call.kwargs["messages"]
+    ]
+
+
+def test_child_transcript_is_logged_for_audit_but_never_sent_to_the_model(repo):
+    SCRIPTS[0] = [_call("delegate_task", **_BRIEF, kind="verify"), _answer("ok")]
+    SCRIPTS[1] = [
+        _call("run_shell_command", command="pytest -q tests"),
+        _answer("1 passed"),
+    ]
+    parent = _approving_parent()
+    outcome = parent.process_query("verify it")
+
+    entries = [
+        m["content"]
+        for m in outcome["conversation"]
+        if m.get("role") == "system"
+        and isinstance(m.get("content"), dict)
+        and m["content"].get("type") == "delegated_transcript"
+    ]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["kind"] == "verify"
+    assert entry["brief"] == _BRIEF
+    assert entry["handle"] == _last_tool_result(parent)["transcript"]
+    assert entry["steps"] == 2
+    child_tools = [m for m in entry["conversation"] if m.get("role") == "tool"]
+    assert len(child_tools) == 1
+    assert "pytest -q tests" in json.dumps(entry["conversation"])
+    assert "1 passed in 0.01s" in json.dumps(entry["conversation"])
+    # The log entry is JSON, as a transcript writer needs it.
+    json.dumps(entry)
+
+    sent = _model_messages(parent)
+    assert "delegated_transcript" not in json.dumps(sent)
+    assert not any(isinstance(m.get("content"), dict) for m in sent)
+    assert "1 passed in 0.01s" in json.dumps(_last_tool_result(parent))
 
 
 def _paragraphs(total: int, seed: str) -> str:
@@ -496,6 +541,9 @@ def test_orchestrate_paragraph_replaces_the_tool_one_and_never_reaches_the_child
     for phrase in (
         "You are the orchestrator",
         "cannot read, search, run or edit anything",
+        "you never ran anything yourself",
+        'never "I ran"',
+        "evidence.tests.command",
         'kind="investigate"',
         'kind="implement"',
         'kind="verify"',

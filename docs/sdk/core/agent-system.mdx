@@ -570,6 +570,15 @@ token totals (as a `delegated` stats entry in the conversation) and kept
 separately in `agent.delegated_tokens`, so a saving is measured with the
 child's cost included.
 
+The child's whole conversation is also kept in the parent's turn log, as a
+`{"role": "system", "content": {"type": "delegated_transcript", "kind", "brief",
+"handle", "steps", "conversation": [...]}}` entry, so a transcript written from
+`outcome["conversation"]` shows every command a worker ran and what it saw.
+Like the `stats` entries, it is a log record: the model's messages are a
+separate list and never carry it. The prompt fragment tells the parent to
+report a worker's run as the worker's — which one ran what, quoting its
+`evidence.tests.command` and `summary` — never as its own.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>

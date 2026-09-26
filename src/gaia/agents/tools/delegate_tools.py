@@ -99,7 +99,9 @@ this conversation. Start with one kind="investigate" subtask that returns the \
 facts you need to plan: the files and symbols involved, and how the tests run. \
 Then one kind="implement" subtask per component, each including its tests. \
 Finish with one kind="verify" subtask that runs the full relevant test command \
-and reports the summary. Answer only from the workers' evidence."""
+and reports the summary. Answer only from the workers' evidence, and report \
+it as theirs: you never ran anything yourself, so say which worker ran what \
+and quote its evidence.tests.command and summary — never "I ran"."""
 
 _KIND_HINTS = {
     "investigate": "answer the question; do not change files.",
@@ -288,6 +290,10 @@ class DelegateToolsMixin:
             must carry every path, symbol, command and criterion it needs,
             including the exact test command that must pass.
 
+            The worker's run is the worker's, not yours: when reporting, say
+            which worker ran what and quote its evidence.tests.command and
+            summary; never present it as something you ran.
+
             Args:
                 goal: What to find out or change, in one or two sentences.
                 scope: Where to look or work: directories, files, symbols, commands.
@@ -395,6 +401,7 @@ class DelegateToolsMixin:
                 ensure_ascii=False,
             )
         )
+        self._record_child_transcript(kind, fields, handle, outcome)
         result: Dict[str, Any] = {
             "status": "error" if failure else "success",
             "kind": kind,
@@ -499,6 +506,31 @@ class DelegateToolsMixin:
                         "output_tokens": tokens["output"],
                         "cached_tokens": tokens["cached"],
                     },
+                },
+            }
+        )
+
+    def _record_child_transcript(
+        self, kind: str, fields: Dict[str, str], handle: str, outcome: Dict[str, Any]
+    ) -> None:
+        """Keep the child's whole conversation in the parent's turn log, for audit.
+
+        The turn log is what a transcript writer and the eval judge see; the
+        model's messages are a separate list, so this never reaches the model.
+        """
+        conversation = getattr(self, "_turn_conversation", None)
+        if conversation is None:
+            return
+        conversation.append(
+            {
+                "role": "system",
+                "content": {
+                    "type": "delegated_transcript",
+                    "kind": kind,
+                    "brief": dict(fields),
+                    "handle": handle,
+                    "steps": int(outcome.get("steps_taken") or 0),
+                    "conversation": list(outcome.get("conversation") or []),
                 },
             }
         )
