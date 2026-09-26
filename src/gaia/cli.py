@@ -1142,16 +1142,26 @@ def build_parser():
         help="Use Claude API instead of local Lemonade server",
     )
     claude_parser.add_argument(
-        "--use-chatgpt",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
-    claude_parser.add_argument(
         "--claude-model",
         default="claude-sonnet-4-20250514",
         help="Claude model to use when --use-claude is specified (default: claude-sonnet-4-20250514)",
     )
-    llm_backend_parents = [model_parser, base_url_parser, claude_parser]
+    # A removed provider, not a backend capability: it is parsed only so main()
+    # can answer with the migration guidance. It therefore belongs on every
+    # command that picks an LLM backend — not just the ones that can pick
+    # Claude — or `gaia llm --use-chatgpt` dies on "unrecognized arguments".
+    removed_provider_parser = argparse.ArgumentParser(add_help=False)
+    removed_provider_parser.add_argument(
+        "--use-chatgpt",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    llm_backend_parents = [
+        model_parser,
+        base_url_parser,
+        claude_parser,
+        removed_provider_parser,
+    ]
     trace_parser = argparse.ArgumentParser(add_help=False)
     trace_parser.add_argument(
         "--trace",
@@ -1365,7 +1375,13 @@ def build_parser():
             "all body inference running locally on Lemonade. Requires the "
             "Google connector to be configured (Settings → Connections)."
         ),
-        parents=[parent_parser, model_parser, base_url_parser, trace_parser],
+        parents=[
+            parent_parser,
+            model_parser,
+            base_url_parser,
+            trace_parser,
+            removed_provider_parser,
+        ],
     )
     email_parser.add_argument(
         "-q",
@@ -1971,7 +1987,13 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
     llm_parser = subparsers.add_parser(
         "llm",
         help="Run simple LLM queries using LLMClient wrapper",
-        parents=[parent_parser, model_parser, base_url_parser, config_path_parser],
+        parents=[
+            parent_parser,
+            model_parser,
+            base_url_parser,
+            config_path_parser,
+            removed_provider_parser,
+        ],
     )
     llm_parser.add_argument("query", help="The query/prompt to send to the LLM")
     llm_parser.add_argument(

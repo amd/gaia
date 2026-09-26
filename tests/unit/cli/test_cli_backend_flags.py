@@ -154,3 +154,37 @@ def test_prompt_use_claude_builds_claude_client(monkeypatch, capsys):
     )
     create.assert_called_once_with("claude", model="claude-sonnet-5")
     assert llm.generate.call_args.kwargs["model"] == "claude-sonnet-5"
+
+
+# Every command that picks an LLM backend. `--use-chatgpt` names a REMOVED
+# provider, so each must answer with the migration guidance — a bare
+# "unrecognized arguments" tells the user nothing about where the option went.
+_LLM_BACKEND_COMMANDS = [
+    ["chat"],
+    ["prompt", "hi"],
+    ["talk"],
+    ["llm", "hi"],
+    ["email"],
+]
+
+
+@pytest.mark.parametrize("argv", _LLM_BACKEND_COMMANDS, ids=" ".join)
+def test_removed_provider_flag_gets_migration_guidance(argv, monkeypatch, capsys):
+    import gaia.cli as cli_mod
+
+    monkeypatch.setattr(sys, "argv", ["gaia", *argv, "--use-chatgpt"])
+    with pytest.raises(SystemExit) as exc:
+        cli_mod.main()
+    assert exc.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "discarded tool calls" in stderr
+    assert "gateway-migration" in stderr
+    assert "unrecognized arguments" not in stderr
+
+
+@pytest.mark.parametrize(
+    "argv", [["kill", "--port", "1"], ["stats"], ["api", "status"]], ids=" ".join
+)
+def test_removed_provider_flag_stays_a_usage_error_elsewhere(argv, capsys):
+    """Commands that never pick a provider keep rejecting it outright."""
+    _assert_rejected([*argv, "--use-chatgpt"], capsys)
