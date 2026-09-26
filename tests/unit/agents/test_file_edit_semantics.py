@@ -86,12 +86,13 @@ def clean_tracker():
 
 
 @pytest.fixture(params=EDIT_TOOLS, ids=EDIT_TOOL_IDS)
-def edit_tool(request, tmp_path):
+def edit_tool(request, tmp_path, mock_home):
     """Every edit tool, behind one ``(path, old, new) -> dict`` signature.
 
     The two ``edit_file`` implementations register under the same name and
     overwrite each other in the registry, so each is registered and captured
-    on its own.
+    on its own. ``mock_home`` keeps ``edit_python_file``'s backup out of the
+    real ``~/.gaia``.
     """
     _, module_name, class_name, registrar, tool_name = request.param
     module = importlib.import_module(module_name)

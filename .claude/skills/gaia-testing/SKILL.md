@@ -111,13 +111,13 @@ Exercise cross-component behaviour through the **real CLI a user runs** — neve
 2. Run the eval, then diff its scorecard against the committed baseline. `--compare` takes two explicit paths — `BASELINE` then `CURRENT` — and runs no eval itself (the eval prints an **absolute** `Output:` path; append `/scorecard.json` to it for the CURRENT arg):
 
    ```bash
-   gaia eval agent --category <cat> --agent-type <type>   # prints an absolute path, e.g. Output: /…/gaia/eval/results/<run-id>/
+   gaia eval agent --category <cat>   # prints an absolute path, e.g. Output: /…/gaia/eval/results/<run-id>/
    gaia eval agent --compare \
-     tests/fixtures/eval_baselines/<model>-<hash>/scorecard_<cat>.json \
+     tests/fixtures/eval_baselines/gaia-flagship/scorecard_<cat>.json \
      <printed-output-path>/scorecard.json
    ```
 
-   Pick the BASELINE matching the model under test (the dirs are `<model>-<hash>`; `ls tests/fixtures/eval_baselines/*/scorecard_<cat>.json`) — do **not** sort by mtime (`ls -t`): a fresh clone stamps every baseline with the checkout time, so `-t` picks arbitrarily.
+   No flagship baseline is committed yet, so `--compare` has nothing to diff against; report the scores you measured and say the run had no baseline. Never hand-author or copy forward a number to fill the gap.
 3. **Regression rule:** a category dropping materially below baseline (beyond run-to-run noise) blocks; an *intentional* capability removal must be re-baselined (`--save-baseline`) and called out in the report. An invalid run (concurrent eval, wrong ctx, mid-run model swap) is "invalid — re-run", not a result.
 4. **Stop this backend before Phase 5** (kill the :4200 process) so the real-world tier brings up its own clean instance rather than inheriting integration-tier state.
 

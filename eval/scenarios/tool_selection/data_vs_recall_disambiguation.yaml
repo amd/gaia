@@ -1,7 +1,6 @@
 id: data_vs_recall_disambiguation
 name: "Data Tool vs Recall -- Disambiguation (#800)"
 category: tool_selection
-agent_type: doc
 severity: high
 description: |
   Live proof for #800: in the doc profile the structured-data tool

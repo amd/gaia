@@ -11,6 +11,27 @@ const API_BASE = getApiBase();
 
 // -- Helpers -------------------------------------------------------------------
 
+/**
+ * Pull a human-readable message out of an error response body.
+ *
+ * FastAPI's `detail` is a plain string for `HTTPException`, but a *list of
+ * error objects* for request-validation failures (422) — interpolating one of
+ * those into a message renders "[object Object]" in the UI.
+ */
+function parseErrorDetail(errorText: string): string {
+    try {
+        const parsed = JSON.parse(errorText).detail;
+        if (Array.isArray(parsed)) {
+            return parsed.map((e) => e?.msg ?? JSON.stringify(e)).join('; ') || errorText;
+        }
+        if (parsed && typeof parsed !== 'string') return JSON.stringify(parsed);
+        return parsed || errorText;
+    } catch {
+        // Body isn't JSON (proxy HTML, empty response) — the raw text is the useful thing.
+        return errorText;
+    }
+}
+
 function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
@@ -72,9 +93,7 @@ async function apiFetch<T>(
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
-        let detail = errorText;
-        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
-        throw new Error(getFriendlyError(res.status, detail));
+        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
     }
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
@@ -775,9 +794,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        let detail = errorText;
-        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
-        throw new Error(getFriendlyError(res.status, detail));
+        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
     }
 
     const data = await res.json();

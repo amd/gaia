@@ -165,7 +165,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message}` | progress line / spinner label |
+| `status` | `{message}` (the stdio transport adds model fields, §10.3) | progress line / spinner label |
 | `token` | `{delta}` | stream assistant text |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
@@ -392,6 +392,49 @@ whose options are Approve and Deny — so receivers should implement one questio
 UI, not two. That migration is a separate change: it alters the security
 behaviour above and must be made deliberately.
 
+### 5.2 Adding to a run already in flight (schema 2.15)
+
+**`POST /v1/<agent>/query/{run_id}/followup`**
+
+```json
+{ "text": "actually, only the unread ones" }
+```
+
+The third thing a host can send against a live `run_id`, and the only one that
+neither stops it nor waits on it. `cancel` ends the run; `respond` answers a
+question the run is parked on; this one adds to a run that is busy working, and
+the run never notices a pause: the agent folds the text into the turn's context
+at its next agent-loop step boundary (the same boundary the cooperative cancel
+is checked at) and answers it alongside the work already in progress. A turn
+that has already formed its answer takes one more step to address it, so a turn
+answering in a single step is not a hole in this — the one exception is a turn
+already at its step limit, which leaves the message queued rather than
+consuming it into a context no model call will read.
+
+Framing is part of the contract, not a detail of one agent: the text enters as a
+**user** message labelled as arriving mid-task. Unlabelled, a user message
+appearing in the middle of a tool sequence is indistinguishable from a new
+request, and the model abandons the work it was doing.
+
+| Status | Meaning |
+|---|---|
+| `200` | `{run_id, delivered: true}` — the run has it and keeps going on its ORIGINAL stream |
+| `404` | no run with that `run_id` is in flight (it finished or was cancelled) |
+| `409` | the run is live but its agent does not accept mid-turn input |
+
+Both refusals are loud for the same reason `respond`'s are: the host has already
+taken the message from the user, so a silent accept leaves them watching a
+conversation their words never entered.
+
+**The host still owns the transcript.** `/query` is stateless (§2.4) — the
+agent's copy of the conversation is overwritten by the `context` pushed on the
+next turn. A delivered follow-up therefore has to be recorded host-side, between
+that turn's question and its answer, or it vanishes from the conversation the
+moment the next turn starts.
+
+**Send only to a peer at contract ≥ 2.15**; an older sidecar 404s the path
+itself, which a client must not misread as "the run ended" (see §7).
+
 ---
 
 ## 6. Translation map — in-process handler → canonical contract
@@ -471,6 +514,11 @@ The seven types are the frozen v1 vocabulary. Evolution rules:
   often `true`. Not claiming an absent capability is **negotiation**, not a
   silent fallback; when the missing capability changes what the user can do, say
   so where they can act on it.
+- **A new ROUTE is negotiated like a new field.** A path the peer does not have
+  answers `404` — which is also what a live route says about a run that already
+  ended, so a client that has not probed cannot tell "this sidecar is old" from
+  "your run finished". Probe the version first and say which one it is; both
+  have a different thing for the user to do about them.
 - **Additive is MINOR; removal needs a sunset window.** Adding an event type,
   a `render` type, or a request field is a backward-compatible **MINOR**.
   Removing one requires a stated **deprecation/sunset window**, not a silent
@@ -530,3 +578,65 @@ canonical stream and never re-derive the mapping.
 - **Q4 — confirmation model (D1).** `confirm_url` presence in
   `needs_confirmation` depends on the stateless-vs-resume decision (§5), still
   pending epic sign-off.
+
+---
+
+## 10. The stdio transport (TUI ↔ flagship agent)
+
+Besides its HTTP `/query` surface, the flagship agent has a stdio transport: the
+TUI spawns it as a child process (`gaia_agent/stdio.py`) and talks
+newline-delimited JSON over its stdin/stdout. Events on stdout use the canonical vocabulary above. stdin and the
+`status` extension are specific to this transport and are defined here.
+
+The machine-readable twin of this section is
+[`tests/fixtures/stdio/gaia_stdio_wire.json`](../../tests/fixtures/stdio/gaia_stdio_wire.json).
+The Python agent (`hub/agents/gaia/python/tests/test_stdio_wire_contract.py`)
+and the Go TUI (`tui/internal/client/wire_contract_test.go`,
+`tui/internal/event/wire_contract_test.go`, `tui/test/mockagent/main_test.go`)
+are both tested against it. To change the protocol, edit the fixture and both
+sides in the same change.
+
+### 10.1 stdin: queries
+
+- A plain line is one query.
+- `{"gaia_query": "<text>"}` is one query whose text may contain newlines.
+- Two sentinel queries never reach the LLM:
+  - `"\u0000gaia:clear_conversation\u0000"` clears the agent's conversation
+    history. The agent answers with `{"type": "final", "answer": "conversation_cleared"}`,
+    and the TUI keeps the transcript on screen unless it gets exactly that answer.
+  - `"\u0000gaia:memory_dump\u0000"` returns a snapshot of the agent's memory
+    as JSON in the `answer` of a `final`.
+
+### 10.2 stdin: control messages
+
+A line is a control message only if it parses as a JSON object carrying
+`gaia_control`. The agent reads these on its own thread, so they land while a
+turn is running. A control message never writes to stdout.
+
+| `gaia_control` | Fields | Effect |
+|---|---|---|
+| `tool_decision` | `decision`, `confirm_id?` | Answers the pending `needs_confirmation`. `decision` is `allow`, `deny` or `always`; any other value is treated as `deny`. |
+| `bypass` | `enabled` | Turns unattended approval on or off for the session. |
+| `cancel` | — | Stops the running turn but keeps the process, so skills, grants and history survive. |
+| `clear_history` | — | Clears history after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |
+
+### 10.3 `status` extension fields
+
+The agent sends a model-state `status` event at startup and after every
+successful `/model` switch. It carries these fields in addition to `message`.
+They are not part of the frozen `/query` contract, so the §4.1 `status` schema
+does not list them. A plain progress `status` omits them.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `model_id` | string | The model actually resolved for chat. Its presence is how a receiver tells this ping from an ordinary progress line. |
+| `model_display` | string | Short name for the header, or `model_id` when there is none. |
+| `model_backend` | string | `lemonade`, `claude`, or the cloud provider serving the model. |
+| `model_remote` | bool | `true` while inference runs off the machine. |
+| `lemonade_reachable` | bool | Whether the local Lemonade server answered a health check. It is reported even for a remote chat model, because embeddings still run on Lemonade. A receiver must tell a missing field (an older agent) apart from `false`. |
+| `lemonade_version` | string? | The Lemonade version, when the health check reported one. |
+| `lemonade_base_url` | string | The Lemonade URL that was probed. |
+
+Over stdio the agent never sends `tool_result.render`,
+`needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
+other transports, and it sets `source` itself on an error it synthesizes.
