@@ -252,8 +252,9 @@ the same model `gaia init` would download.
 
 <Note>
 On the same big-memory PCs, `Qwen3-30B-A3B-Instruct-2507-GGUF` (a 17 GB Lemonade
-built-in) is the alternative: published Strix Halo measurements put its generation
-several times faster than Qwen3.8 Flash, but it reads text only. Switch to it with
+built-in) is the alternative: published Strix Halo benchmarks report it generating
+several times faster than Qwen3.8 Flash (not yet measured on GAIA's build), but it
+reads text only. Switch to it with
 `gaia config set default_model Qwen3-30B-A3B-Instruct-2507-GGUF`, or pick it in the
 terminal UI's model picker; Lemonade downloads it on first use. To measure both on your
 own PC, speed, tool calling and (with `--tasks core`) agent quality, run
