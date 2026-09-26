@@ -14,6 +14,7 @@ from ..lemonade_client import (
     active_profile_ctx_size,
     is_tool_calling_model,
 )
+from ..lemonade_launcher import describe_client_hint
 
 logger = logging.getLogger(__name__)
 
@@ -213,8 +214,7 @@ class LemonadeModelNotFoundError(LemonadeError):
     retryable = False
     user_message = (
         "The model this agent needs isn't installed on the local LLM server. "
-        "Run `gaia init` to set up a profile, or `gaia download <model>` to "
-        "install it, then try again."
+        "Run `gaia init` to set up a profile, then try again."
     )
 
     def __init__(
@@ -225,10 +225,11 @@ class LemonadeModelNotFoundError(LemonadeError):
         self.model_id = model_id
         message = None
         if model_id:
+            pull = describe_client_hint("pull", model_id).instruction.rstrip(".")
             message = (
                 f"The model this agent needs (`{model_id}`) isn't installed on "
-                f"the local LLM server. Install it with `gaia download {model_id}`, "
-                f"or run `gaia init` to set up a profile, then try again."
+                f"the local LLM server. {pull}. Or run `gaia init` "
+                "to set up a profile, then try again."
             )
         super().__init__(user_message=message, payload=payload)
 

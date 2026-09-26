@@ -22,6 +22,14 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- `/v1/gaia/query` now honours `provider` on an existing session. It used to
+  matter only when the session was created, so `provider: "lemonade"` could keep
+  sending a Claude session's conversation to Anthropic, and `provider: "claude"`
+  could run locally. A different provider now switches the session in place.
+  Naming a `model` that belongs to the other provider is a 400, on new and
+  existing sessions alike. Omitting `provider` and naming a Claude `model` now
+  starts a Claude session, the way it already switched an existing one — it used
+  to point the local backend at an id it cannot serve.
 - "Lemonade is not reachable" errors no longer tell users to run
   `lemonade-server serve`, a command current Lemonade installs don't have. The
   `GET /v1/gaia/init` hint, run errors, and `/model` now say how to start
