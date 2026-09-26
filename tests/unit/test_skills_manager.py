@@ -641,6 +641,33 @@ def test_agent_load_skill_logs_unavailable_tools_required(roots, caplog):
     assert "query_documents" in caplog.text
 
 
+def test_agent_load_skill_puts_a_missing_commands_substitute_in_the_prompt(
+    roots, caplog, monkeypatch
+):
+    """A manifest-loaded skill never passes through the load_skill tool, so the
+    substitute has to reach the model from the loader and stay in the prompt."""
+    import logging
+
+    write_skill_dir(
+        roots["user"],
+        "needs-pytest",
+        "---\nname: needs-pytest\ndescription: Runs the project's tests.\n"
+        "version: 1.0.0\nmetadata:\n  gaia:\n    security_tier: community\n"
+        "    permissions:\n      - shell:execute:pytest\n---\n\nRun the suite.\n",
+    )
+    monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
+    agent = _StubAgent()
+
+    with caplog.at_level(logging.WARNING, logger="gaia.skills.binaries"):
+        agent.load_skill("needs-pytest", manager=make_manager(roots))
+
+    assert "pytest" not in agent.granted_binaries.binaries()
+    assert "without its 'pytest' grant" in caplog.text
+    prompt = agent.get_skills_system_prompt()
+    assert "Run the suite." in prompt
+    assert "pytest.main" in prompt
+
+
 def test_agent_load_skill_instruction_only(roots):
     copy_fixture("bare-standard", roots["user"])
     agent = _StubAgent()

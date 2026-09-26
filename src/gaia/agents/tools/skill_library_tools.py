@@ -539,8 +539,8 @@ class SkillLibraryToolsMixin:
 
             Returns:
                 The skill's tier, its directory (resolve relative paths
-                against it), the tools it registered, and a warning when it
-                needs tools this agent lacks.
+                against it), the tools it registered, and a warning if a
+                needed tool or command is missing.
             """
             from gaia.skills.errors import SkillError
             from gaia.skills.manager import ROOT_CLAUDE_IMPORT
@@ -631,6 +631,14 @@ class SkillLibraryToolsMixin:
                 payload["warning"] = (
                     f"{existing} {unmet_warning}" if existing else unmet_warning
                 )
+
+            from gaia.skills import unavailable_binaries
+
+            missing = unavailable_binaries(skill.parsed_permissions())
+            if missing:
+                payload["unavailable_commands"] = [p.binary for p in missing]
+                notes = " ".join(p.unavailable_note() for p in missing)
+                payload["warning"] = f"{payload.get('warning', '')} {notes}".strip()
             return payload
 
         @tool
