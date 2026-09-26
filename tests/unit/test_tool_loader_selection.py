@@ -467,6 +467,32 @@ def test_load_bundle_emits_same_turn_loaded_superset_line():
     assert {"a1", "a2"} <= set(events[0]["loaded"])
 
 
+def test_load_bundle_reports_evictions_from_the_selection_not_a_literal():
+    """The eviction fields must read from the scratch object.
+
+    load_bundle is add-only today, so a hardcoded ``[]`` looks correct — and
+    would keep claiming "nothing evicted" if eviction returned to this path.
+    """
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+
+    real_admit = loader._admit
+
+    def _admit_and_evict(name, sel):
+        sel.evicted.append(f"victim_of_{name}")
+        sel.skipped_at_cap.append(f"skipped_for_{name}")
+        return real_admit(name, sel)
+
+    loader._admit = _admit_and_evict
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.load_bundle("A", reg)
+
+    events = [p for p in _loader_payloads(records) if p.get("event") == "load_tools"]
+    assert events, "no load_tools TOOL_LOADER line captured"
+    assert events[0]["evicted"] == ["victim_of_a1", "victim_of_a2"]
+    assert events[0]["skipped_at_cap"] == ["skipped_for_a1", "skipped_for_a2"]
+
+
 def test_escape_hatch_and_load_counters_increment():
     loader, reg = _loader_with_bundles()
     loader.select("q", reg)

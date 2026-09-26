@@ -488,8 +488,10 @@ class ToolLoader:
             "event": "load_tools",
             "bundle": resolved_name,
             "admitted": sorted(sel.admitted),
-            "evicted": [],
-            "skipped_at_cap": [],
+            # Read from sel, not hardcoded empty: this path is add-only today,
+            # but a literal would keep reporting "none evicted" if that changed.
+            "evicted": sorted(sel.evicted),
+            "skipped_at_cap": sorted(sel.skipped_at_cap),
             "loaded": list(self._loaded),
         }
         over_cap = len(self._loaded) - self._max_tools
