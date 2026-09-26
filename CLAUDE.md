@@ -717,6 +717,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
+- `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
 
