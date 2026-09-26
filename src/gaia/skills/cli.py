@@ -57,6 +57,7 @@ from gaia.skills.migrate import (
 from gaia.skills.naming import skill_directory, validated_skill_name
 from gaia.skills.signing import ROLE_AMD, ROLE_PUBLISHER
 from gaia.skills.tiers import LOWEST_TIER
+from gaia.utils.archive import ArchiveError, safe_extract
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Runtime imports of drift stay inside the two verbs that need it, to keep
@@ -1359,21 +1360,14 @@ def _download(url: str, destination: Path) -> Path:
 
 
 def _unpack(archive: Path, destination: Path) -> Path:
-    """Extract a skill .zip, rejecting path traversal, and return its root."""
-    destination.mkdir(parents=True, exist_ok=True)
+    """Extract a skill .zip, refusing unsafe entries, and return its root."""
     try:
-        with zipfile.ZipFile(archive) as bundle:
-            for member in bundle.namelist():
-                resolved = (destination / member).resolve()
-                if (
-                    destination.resolve() not in resolved.parents
-                    and resolved != destination.resolve()
-                ):
-                    raise SkillValidationError(
-                        f"Refusing to extract {archive}: entry {member!r} escapes the "
-                        "destination directory. The bundle is malformed or hostile."
-                    )
-            bundle.extractall(destination)
+        safe_extract(archive, destination, kind="zip")
+    except ArchiveError as exc:
+        raise SkillValidationError(
+            f"Refusing to extract {archive}: {exc}. The bundle is malformed or "
+            "hostile."
+        ) from exc
     except zipfile.BadZipFile as exc:
         raise SkillValidationError(
             f"{archive} is not a valid .zip bundle: {exc}. Export it with "

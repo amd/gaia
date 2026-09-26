@@ -35,14 +35,14 @@ function status(over: Partial<SystemStatus>): SystemStatus {
         tokens_per_second: null,
         time_to_first_token: null,
         processor_name: null,
-        device_supported: true,
         context_size_sufficient: true,
         model_downloaded: null,
         default_model_name: MODEL,
         default_model_size_gb: 6,
-        lemonade_url: null,
+        lemonade_url: 'http://localhost:13305',
         expected_model_loaded: false,
         download_progress: null,
+        active_profile: 'chat',
         ...over,
     };
 }

@@ -14,11 +14,19 @@ These tests use mocks to verify interface contracts without requiring:
 If these tests fail, the SDK interface is broken and external agents will break.
 """
 
-from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import Mock, patch
 
 import pytest
+
+
+def _stub_chat(text: str) -> Mock:
+    """Stand-in for Agent.chat (an AgentSDK) that answers without Lemonade."""
+    chat = Mock()
+    chat.send_messages.return_value = Mock(text=text, stats=None)
+    chat.get_stats.return_value = None
+    return chat
+
 
 # ============================================================================
 # 1. CORE AGENT SYSTEM TESTS
@@ -64,24 +72,24 @@ class TestAgentBaseClass:
                 pass
 
         agent = TestAgent(silent_mode=True)
+        agent.chat = _stub_chat("Test response")
 
-        # Mock the chat SDK to avoid real LLM calls
-        with patch.object(agent, "chat") as mock_chat:
-            mock_chat.complete.return_value = "Test response"
+        result = agent.process_query(
+            user_input="test query", max_steps=5, trace=False, filename=None
+        )
 
-            # Test process_query interface
-            result = agent.process_query(
-                user_input="test query", max_steps=5, trace=False, filename=None
-            )
+        assert isinstance(result, dict)
+        assert agent.chat.send_messages.called
 
-            # Should return dict
-            assert isinstance(result, dict)
+    def test_agent_registered_tool_is_callable(self):
+        """A tool registered in _register_tools is exposed and callable.
 
-    def test_agent_execute_tool_interface(self):
-        """Verify execute_tool method signature."""
+        Agent has no public execute_tool(); docs/sdk/testing.mdx tells SDK
+        users to call the registered function through the tool registry.
+        """
         from gaia.agents.base.agent import Agent
         from gaia.agents.base.console import SilentConsole
-        from gaia.agents.base.tools import tool
+        from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
         class TestAgent(Agent):
             def _get_system_prompt(self) -> str:
@@ -98,10 +106,8 @@ class TestAgentBaseClass:
 
         agent = TestAgent(silent_mode=True)
 
-        # Execute tool
-        result = agent.execute_tool("test_tool", {"param": "value"})
-
-        # Should return result
+        assert any(t["name"] == "test_tool" for t in agent.get_tools())
+        result = _TOOL_REGISTRY["test_tool"]["function"](param="value")
         assert result["result"] == "value"
 
     def test_agent_list_tools_interface(self):
@@ -227,7 +233,6 @@ class TestApiAgent:
         assert hasattr(agent, "get_model_id")
         assert hasattr(agent, "get_model_info")
         assert hasattr(agent, "estimate_tokens")
-        assert hasattr(agent, "format_for_api")
 
         # Test they return expected types
         assert isinstance(agent.get_model_id(), str)
@@ -388,12 +393,11 @@ class TestRAGSDK:
 
         # Check methods exist (even if we can't instantiate)
         assert hasattr(RAGSDK, "index_document")
-        assert hasattr(RAGSDK, "index_documents")
-        assert hasattr(RAGSDK, "query")
-        assert hasattr(RAGSDK, "get_indexed_files")
-        assert hasattr(RAGSDK, "clear_index")
+        assert hasattr(RAGSDK, "reindex_document")
         assert hasattr(RAGSDK, "remove_document")
-        assert hasattr(RAGSDK, "get_stats")
+        assert hasattr(RAGSDK, "query")
+        assert hasattr(RAGSDK, "get_status")
+        assert hasattr(RAGSDK, "clear_cache")
 
     def test_quick_rag_exists(self):
         """Verify quick_rag convenience function exists."""
@@ -410,14 +414,14 @@ class TestRAGSDK:
 class TestLLMClient:
     """Test LLMClient interface."""
 
-    @patch("gaia.llm.LLMClient.__init__")
-    def test_llm_client_can_be_imported(self, mock_init):
-        """Verify LLMClient can be imported."""
+    def test_llm_client_is_the_abstract_provider_base(self):
+        """LLMClient is the ABC every provider implements."""
+        import inspect
+
         from gaia.llm import LLMClient
 
-        mock_init.return_value = None
-        client = LLMClient.__new__(LLMClient)
-        assert client is not None
+        assert inspect.isabstract(LLMClient)
+        assert {"chat", "generate", "provider_name"} <= LLMClient.__abstractmethods__
 
     def test_llm_client_interface_methods(self):
         """Verify LLMClient has required methods."""
@@ -488,8 +492,9 @@ class TestAudioClient:
         # Check methods exist
         assert hasattr(AudioClient, "start_voice_chat")
         assert hasattr(AudioClient, "initialize_tts")
-        assert hasattr(AudioClient, "play_audio")
-        assert hasattr(AudioClient, "get_device_list")
+        assert hasattr(AudioClient, "speak_text")
+        assert hasattr(AudioClient, "process_voice_input")
+        assert hasattr(AudioClient, "halt_generation")
 
 
 class TestWhisperASR:
@@ -528,8 +533,10 @@ class TestKokoroTTS:
         from gaia.audio.kokoro_tts import KokoroTTS
 
         # Check methods exist
-        assert hasattr(KokoroTTS, "synthesize")
-        assert hasattr(KokoroTTS, "list_voices")
+        assert hasattr(KokoroTTS, "generate_speech")
+        assert hasattr(KokoroTTS, "generate_speech_streaming")
+        assert hasattr(KokoroTTS, "list_available_voices")
+        assert hasattr(KokoroTTS, "set_voice")
 
 
 # ============================================================================
@@ -540,25 +547,13 @@ class TestKokoroTTS:
 class TestAPIComponents:
     """Test API server components."""
 
-    def test_create_app_exists(self):
-        """Verify create_app function exists."""
-        from gaia.api.openai_server import create_app
+    def test_openai_server_app_is_fastapi(self):
+        """The OpenAI-compatible server exposes a module-level FastAPI app."""
+        from fastapi import FastAPI
 
-        # Should be callable
-        assert callable(create_app)
+        from gaia.api.openai_server import app
 
-    @patch("gaia.api.openai_server.FastAPI")
-    def test_create_app_returns_fastapi(self, mock_fastapi):
-        """Verify create_app returns FastAPI app."""
-        from gaia.api.openai_server import create_app
-
-        mock_app = Mock()
-        mock_fastapi.return_value = mock_app
-
-        app = create_app()
-
-        # Should return app instance
-        assert app is not None
+        assert isinstance(app, FastAPI)
 
     def test_agent_registry_exists(self):
         """Verify AgentRegistry can be imported."""
@@ -698,19 +693,11 @@ class TestUtilities:
 class TestAgentIntegration:
     """Test full agent integration with mocked components."""
 
-    @patch("gaia.chat.sdk.AgentSDK")
-    def test_agent_with_mocked_llm(self, mock_chat_sdk):
+    def test_agent_with_mocked_llm(self):
         """Test agent can process queries with mocked LLM."""
         from gaia.agents.base.agent import Agent
         from gaia.agents.base.console import SilentConsole
         from gaia.agents.base.tools import tool
-
-        # Mock LLM response
-        mock_chat_instance = Mock()
-        mock_chat_instance.complete.return_value = (
-            '{"tool": "test_tool", "args": {"param": "value"}}'
-        )
-        mock_chat_sdk.return_value = mock_chat_instance
 
         class TestAgent(Agent):
             def _get_system_prompt(self) -> str:
@@ -726,12 +713,12 @@ class TestAgentIntegration:
                     return {"result": param}
 
         agent = TestAgent(silent_mode=True)
+        agent.chat = _stub_chat("done")
 
-        # Process query
         result = agent.process_query("test", max_steps=1)
 
-        # Verify LLM was called
-        assert mock_chat_instance.complete.called
+        assert isinstance(result, dict)
+        assert agent.chat.send_messages.called
 
     def test_agent_with_multiple_mixins(self):
         """Test agent can inherit from multiple mixins."""
@@ -822,13 +809,6 @@ class TestBackwardCompatibility:
 class TestSDKDocumentation:
     """Validate SDK documentation examples."""
 
-    def test_sdk_examples_are_syntactically_valid(self):
-        """Verify code examples in SDK.md are valid Python."""
-        # This would parse SDK.md and extract code blocks
-        # For now, just verify the file exists
-        sdk_path = Path(__file__).parent.parent / "docs" / "sdk.md"
-        assert sdk_path.exists(), "SDK.md should exist in docs/"
-
     def test_all_imports_in_sdk_are_valid(self):
         """Verify all import statements documented in SDK work."""
         # Core imports from SDK.md
@@ -874,7 +854,7 @@ class TestSDKDocumentation:
         # API
         try:
             from gaia.api.agent_registry import AgentRegistry  # noqa: F401
-            from gaia.api.openai_server import create_app  # noqa: F401
+            from gaia.api.openai_server import app  # noqa: F401
             from gaia.api.sse_handler import SSEOutputHandler  # noqa: F401
         except ImportError as e:
             pytest.fail(f"API import failed: {e}")
@@ -933,20 +913,16 @@ class TestInterfaceContracts:
 
     def test_agent_states_are_defined(self):
         """Verify agent state constants exist."""
-        from gaia.agents.base.agent import (
-            STATE_COMPLETION,
-            STATE_DIRECT_EXECUTION,
-            STATE_ERROR_RECOVERY,
-            STATE_EXECUTING_PLAN,
-            STATE_PLANNING,
-        )
+        from gaia.agents.base.agent import Agent
 
-        # All states should be strings
-        assert isinstance(STATE_PLANNING, str)
-        assert isinstance(STATE_EXECUTING_PLAN, str)
-        assert isinstance(STATE_DIRECT_EXECUTION, str)
-        assert isinstance(STATE_ERROR_RECOVERY, str)
-        assert isinstance(STATE_COMPLETION, str)
+        for name in (
+            "STATE_PLANNING",
+            "STATE_EXECUTING_PLAN",
+            "STATE_DIRECT_EXECUTION",
+            "STATE_ERROR_RECOVERY",
+            "STATE_COMPLETION",
+        ):
+            assert isinstance(getattr(Agent, name), str), name
 
 
 # ============================================================================
@@ -980,7 +956,7 @@ class TestNoRegressions:
         """Verify agent with one tool works."""
         from gaia.agents.base.agent import Agent
         from gaia.agents.base.console import SilentConsole
-        from gaia.agents.base.tools import tool
+        from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
         class SingleToolAgent(Agent):
             def _get_system_prompt(self) -> str:
@@ -997,9 +973,8 @@ class TestNoRegressions:
 
         agent = SingleToolAgent(silent_mode=True)
 
-        # Tool should be registered
-        result = agent.execute_tool("only_tool", {})
-        assert result["status"] == "ok"
+        assert any(t["name"] == "only_tool" for t in agent.get_tools())
+        assert _TOOL_REGISTRY["only_tool"]["function"]() == {"status": "ok"}
 
 
 # ============================================================================
@@ -1015,18 +990,14 @@ class TestErrorHandling:
         from gaia.agents.base.agent import Agent
 
         class IncompleteAgent(Agent):
-            # Missing _get_system_prompt
+            # Missing _register_tools, the one abstract method
             def _create_console(self):
                 from gaia.agents.base.console import SilentConsole
 
                 return SilentConsole()
 
-            def _register_tools(self):
-                pass
-
-        # Should raise TypeError
         with pytest.raises(TypeError):
-            agent = IncompleteAgent()
+            IncompleteAgent()  # pylint: disable=abstract-class-instantiated
 
     def test_tool_with_invalid_signature_still_works(self):
         """Verify @tool handles functions without type hints."""
@@ -1133,33 +1104,6 @@ class TestPackageStructure:
         import gaia.mcp
 
         assert gaia.mcp is not None
-
-
-# ============================================================================
-# 20. FUTURE SDK FEATURES TESTS (Expected to Fail)
-# ============================================================================
-
-
-@pytest.mark.xfail(reason="DatabaseMixin not yet implemented - Issue #1")
-class TestDatabaseMixin:
-    """Test DatabaseMixin interface (when implemented)."""
-
-    def test_database_mixin_will_exist(self):
-        """Verify DatabaseMixin will be importable."""
-        from gaia.agents.base.database_mixin import DatabaseMixin
-
-        assert DatabaseMixin is not None
-
-    def test_database_mixin_will_have_methods(self):
-        """Verify DatabaseMixin will have required methods."""
-        from gaia.agents.base.database_mixin import DatabaseMixin
-
-        # Expected interface
-        assert hasattr(DatabaseMixin, "initialize_database")
-        assert hasattr(DatabaseMixin, "execute_query")
-        assert hasattr(DatabaseMixin, "execute_insert")
-        assert hasattr(DatabaseMixin, "execute_update")
-        assert hasattr(DatabaseMixin, "transaction")
 
 
 class TestFileChangeHandler:

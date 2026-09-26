@@ -244,6 +244,72 @@ jobs:
           echo "  - DatabaseMixin + Agent: Full agent lifecycle with database"
           echo "  - DatabaseAgent: Auto-registered database tools"
 
+  # Integration suites that need no Lemonade, no live account and no AMD
+  # hardware. Files are named one by one so util/check_test_lane_coverage.py
+  # can see them; a new offline integration file belongs in this list.
+  offline-integration:
+    name: Offline Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # tests/integration/test_tui_control_e2e.py builds and drives the real TUI.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          # The unit job's test deps, plus [mcp]: tests/test_sdk.py and the
+          # tests/mcp/ files import the MCP server SDK.
+          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
+                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
+                                  faiss-cpu pypdf
+          uv pip install --system -e ".[api,mcp]"
+
+      - name: Run offline integration tests
+        # No GAIA_MEMORY_DISABLED: test_memory_eval.py exercises the memory mixin.
+        run: |
+          pytest \
+            tests/test_sdk.py \
+            tests/test_hardware_advisor_agent.py \
+            tests/installer/test_installer_scenarios.py \
+            tests/integration/test_chat_hub_wheel_journey.py \
+            tests/integration/test_chat_ui_integration.py \
+            tests/integration/test_documents_router.py \
+            tests/integration/test_email_thin_client.py \
+            tests/integration/test_files_router.py \
+            tests/integration/test_files_search_budget.py \
+            tests/integration/test_folder_indexing.py \
+            tests/integration/test_governed_agent_workflow.py \
+            tests/integration/test_governed_canonical_name.py \
+            tests/integration/test_governed_real_agent.py \
+            tests/integration/test_governed_review_flow.py \
+            tests/integration/test_governed_workflow_binding.py \
+            tests/integration/test_lemonade_embedded_lifecycle.py \
+            tests/integration/test_memory_api_integration.py \
+            tests/integration/test_memory_eval.py \
+            tests/integration/test_memory_integration.py \
+            tests/integration/test_multi_caller_equivalence.py \
+            tests/integration/test_scheduler_e2e.py \
+            tests/integration/test_tui_control_e2e.py \
+            tests/mcp/test_agent_mcp_server_stdio.py \
+            tests/mcp/test_mcp_cli_to_agent_workflow.py \
+            tests/mcp/test_mcp_sdk_integration.py \
+            tests/mcp/test_port_map.py \
+            -v --tb=short --timeout=600
+
   # Experimental macOS smoke test — validates core SDK imports and pure-Python
   # unit tests on Darwin. continue-on-error until the full suite is macOS-clean.
   unit-tests-macos:

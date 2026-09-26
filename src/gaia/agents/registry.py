@@ -8,7 +8,6 @@ import importlib
 import importlib.metadata
 import importlib.util
 import inspect
-import os
 import platform
 import re
 import sys
@@ -43,6 +42,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "file_search": ("gaia.agents.tools.file_tools", "FileSearchToolsMixin"),
     "file_io": ("gaia.agents.tools.file_io_tools", "FileIOToolsMixin"),
     "shell": ("gaia.agents.tools.shell_tools", "ShellToolsMixin"),
+    "cli_setup": ("gaia.agents.tools.cli_setup_tools", "CliSetupToolsMixin"),
     "screenshot": ("gaia.agents.tools.screenshot_tools", "ScreenshotToolsMixin"),
     "filesystem": ("gaia.agents.tools.filesystem_tools", "FileSystemToolsMixin"),
     "scratchpad": ("gaia.agents.tools.scratchpad_tools", "ScratchpadToolsMixin"),
@@ -56,6 +56,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
         "SkillLearningToolsMixin",
     ),
     "audio": ("gaia.agents.tools.audio_tools", "AudioToolsMixin"),
+    "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
 }
 
 # Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading
@@ -1449,7 +1450,9 @@ class AgentRegistry:
         ):
             return []
 
-        base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+        from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+        base_url = resolve_lemonade_base_url()
         models = get_lemonade_models(base_url)
         if models is not None:
             self._lemonade_models = models

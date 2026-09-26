@@ -484,8 +484,9 @@ python -m pytest tests/ --hybrid   # Cloud + local testing
 
 ### Running GAIA
 ```bash
-gaia init                          # Install Lemonade Server + models, and start it (first run)
-gaia llm "Hello"                   # Test LLM
+gaia init                          # Install Lemonade Server + models (first run)
+gaia daemon start                  # Starts and supervises the LLM backend
+gaia llm "Hello"                   # Test LLM (starts the backend on its own)
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
 ```
@@ -493,10 +494,11 @@ gaia chat --ui                     # Agent UI (browser-based)
 **Never tell anyone to run `lemonade-server serve`** — Lemonade 10.7/10.8 removed that
 CLI, so the binary does not exist on a current install. There is no portable command to
 substitute: how the server starts depends on the install (Windows tray, macOS app, Linux
-`systemctl --user start lemond`, legacy CLI). `gaia init` is the only thing in the tree
-that auto-starts the server; the normal runtime path (`LemonadeManager.ensure_ready`)
-merely *checks*, and errors out on a stopped server rather than launching one. When you
-need to print a start instruction, call `describe_start_hint()`
+`systemctl --user start lemond`, legacy CLI). The daemon starts and supervises the
+server, and `LemonadeManager.ensure_ready` auto-starts it through that supervisor, so
+the runtime path no longer errors out on a stopped server. A start instruction is still
+needed whenever GAIA cannot own the process — a non-default port or a remote
+`LEMONADE_BASE_URL`. To print one, call `describe_start_hint()`
 ([`src/gaia/llm/lemonade_launcher.py`](src/gaia/llm/lemonade_launcher.py)) instead of
 hard-coding a command — it resolves the installed tooling and never names a binary the
 host lacks.
@@ -552,7 +554,6 @@ gaia/
 │   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
 │   ├── scratchpad/     # Scratchpad tables backend
-│   ├── shell/          # Shell integration
 │   ├── sidecar/        # Shared building blocks for local agent sidecars
 │   ├── skills/         # Skill backend (gaia skill): loader, install, audit, signing
 │   ├── talk/           # Voice interaction SDK
@@ -647,6 +648,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | Fuzzy/glob file search |
 | `file_io` | `gaia.agents.tools.file_io_tools.FileIOToolsMixin` | Read/write/edit files |
 | `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
+| `cli_setup` | `gaia.agents.tools.cli_setup_tools.CliSetupToolsMixin` | Install and sign in to a skill's CLI |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | Screen capture |
 | `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
@@ -657,6 +659,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
@@ -717,6 +720,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
+- `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
 

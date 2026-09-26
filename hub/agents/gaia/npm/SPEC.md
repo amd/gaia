@@ -347,7 +347,20 @@ that differs from the one its `session_id` was built with **switches the retaine
 agent in place** (≥ 2.14), so the conversation and any loaded skills survive the
 change; the same machinery the stdio transport's `/model` uses. A switch that
 fails — a missing Claude credential, an unknown local model — is a `409` naming
-the reason, and leaves the session on its previous model.
+the reason, and leaves the session on its previous model. The session records its
+`provider` too: a turn naming a different `provider` switches it the same way,
+onto that turn's `model` or, if it names none, the provider's default model. A
+`model` from the other provider than the one named (a `claude-*` id with
+`"lemonade"`, or a non-Claude id with `"claude"`) is a `400` on a new session and
+an existing one alike, before anything is built or switched.
+
+`provider` is optional, and an omitted one is **not** read as `"lemonade"` — it
+means "whatever the `model` implies", so a `claude-*` id alone reaches Anthropic
+and any other id runs locally. The `400` above therefore fires only when a
+request names a `provider` that disagrees with its `model`; there is no pair to
+disagree when only one is given. On a retained session, omitting both leaves the
+session on the provider it is already using, so an ordinary follow-up turn never
+moves a Claude conversation back to Lemonade.
 
 ### 5.3 Version gate
 
@@ -455,11 +468,15 @@ The host can toggle bypass mid-session over `gaia_control`, and the shell gates
 follow on the very next command.
 
 `--use-claude` is the one with a reach beyond the machine, and it cannot be
-turned on for what this package delivers: the terminal UI **refuses** it for a
-daemon-transport agent, with an error saying so, because the daemon relay has no
-way to switch inference backends. So the local-only claim in the README holds
-for every path this package installs — it is a property of the transport, not a
-default someone can flip.
+turned on for what this package delivers: the terminal UI **refuses** the launch
+flag for a daemon-transport agent, with an error saying so, because it pins the
+backend for the life of the process and the daemon relay has no such lever.
+
+That is a limit on the *launch flag*, not on the agent. Since contract 2.14 a
+caller can ask for Anthropic per request with `/query`'s `provider` field (§5.2),
+so local inference is this package's **default**, not a property of the transport
+that nobody can change. Anything reaching Anthropic is named by the request that
+asked for it.
 
 ---
 

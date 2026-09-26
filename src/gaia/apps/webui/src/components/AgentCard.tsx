@@ -146,7 +146,7 @@ export const AgentCard = memo(function AgentCard({ agent, status, installProgres
           <span>{statusText}</span>
           {isRunning && agent.toolsCount > 0 && (
             <>
-              <span className="meta-sep">·</span>
+              <span aria-hidden="true">·</span>
               <span title="Available tools">
                 <Wrench size={10} className="meta-icon" />
                 {agent.toolsCount} tools
@@ -155,7 +155,7 @@ export const AgentCard = memo(function AgentCard({ agent, status, installProgres
           )}
           {isRunning && status?.uptime != null && (
             <>
-              <span className="meta-sep">·</span>
+              <span aria-hidden="true">·</span>
               <span title="Uptime">
                 <Clock size={10} className="meta-icon" />
                 {formatDuration(status.uptime)}
@@ -164,7 +164,7 @@ export const AgentCard = memo(function AgentCard({ agent, status, installProgres
           )}
           {agent.categories.length > 0 && (
             <>
-              <span className="meta-sep">·</span>
+              <span aria-hidden="true">·</span>
               <span>{agent.categories[0]}</span>
             </>
           )}
