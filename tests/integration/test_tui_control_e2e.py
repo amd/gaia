@@ -117,6 +117,12 @@ def live_tui(tui_binary, tmp_path, monkeypatch):
     env[tui_mcp.ENV_TUI_HOME] = str(home)
     # Like a real terminal; CI runners leave TERM unset, so the TUI would render no color.
     env["TERM"] = "xterm-256color"
+    # termenv calls any environment with CI set "not a TTY" before it looks at
+    # TERM or the pty, dropping lipgloss to the Ascii profile, which strips every
+    # escape. CLICOLOR_FORCE is the documented override; NO_COLOR outranks it.
+    env["CLICOLOR_FORCE"] = "1"
+    env.pop("NO_COLOR", None)
+    env.pop("CLICOLOR", None)
 
     proc = subprocess.Popen(
         [str(tui_binary), "--control", "--debug"],
