@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from gaia.llm.lemonade_launcher import get_installed_version, resolve_lemonade
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = logging.getLogger(__name__)
 
@@ -123,16 +123,14 @@ class LemonadeInfo:
 
     @property
     def version_tuple(self) -> Optional[tuple]:
-        """Parse version string into tuple for comparison."""
-        if not self.version:
-            return None
-        try:
-            # Handle versions like "9.1.4" or "v9.1.4"
-            ver = self.version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
-            return None
+        """Comparable tuple for the INSTALLED version, or None.
+
+        ``check_installation`` fills ``version`` from ``get_installed_version``,
+        which already strips a CalVer dev suffix — but that invariant lives two
+        files away and callers build ``LemonadeInfo`` directly, so this does not
+        lean on it.
+        """
+        return parse_version(self.version)
 
 
 @dataclass
@@ -143,6 +141,11 @@ class InstallResult:
     version: Optional[str] = None
     message: str = ""
     error: Optional[str] = None
+    restart_required: bool = False
+
+
+# msiexec exit codes for a successful install that still needs a reboot.
+_MSI_SUCCESS_REBOOT_REQUIRED = (3010, 1641)
 
 
 class LemonadeInstaller:
@@ -294,13 +297,8 @@ class LemonadeInstaller:
         return current < target
 
     def _parse_version(self, version: str) -> Optional[tuple]:
-        """Parse version string into tuple."""
-        try:
-            ver = version.lstrip("v")
-            parts = ver.split(".")
-            return tuple(int(p) for p in parts[:3])
-        except (ValueError, IndexError):
-            return None
+        """Parse version string into tuple. See :func:`gaia.version.parse_version`."""
+        return parse_version(version)
 
     @property
     def release_page_url(self) -> str:
@@ -705,6 +703,16 @@ class LemonadeInstaller:
                     version=self.target_version,
                     message=f"Installed Lemonade v{self.target_version}",
                 )
+            elif result.returncode in _MSI_SUCCESS_REBOOT_REQUIRED:
+                return InstallResult(
+                    success=True,
+                    version=self.target_version,
+                    message=(
+                        f"Installed Lemonade v{self.target_version}. "
+                        "Restart Windows to finish the installation."
+                    ),
+                    restart_required=True,
+                )
             elif result.returncode == 1602:
                 return InstallResult(
                     success=False, error="Installation was cancelled by user"
@@ -712,7 +720,7 @@ class LemonadeInstaller:
             elif result.returncode == 1603:
                 return InstallResult(
                     success=False,
-                    error="Installation failed. Check Windows Event Log for details.",
+                    error=f"Installation failed (error 1603). See the MSI log: {msi_log}",
                 )
             elif result.returncode == 1618:
                 return InstallResult(
@@ -723,7 +731,10 @@ class LemonadeInstaller:
             else:
                 return InstallResult(
                     success=False,
-                    error=f"msiexec failed with code {result.returncode}: {result.stderr}",
+                    error=(
+                        f"msiexec failed with code {result.returncode}: "
+                        f"{result.stderr} See the MSI log: {msi_log}"
+                    ),
                 )
 
         except subprocess.TimeoutExpired:

@@ -32,13 +32,20 @@ class ScheduleLockError(RuntimeError):
     """A schedule lock is held by another process."""
 
 
-def daemon_lock_path(store_path: Path) -> Path:
-    return Path(store_path).with_suffix(".lock")
-
-
 def store_lock_path(store_path: Path) -> Path:
     store_path = Path(store_path)
     return store_path.with_name(store_path.name + ".lock")
+
+
+def daemon_lock_path(store_path: Path) -> Path:
+    store_path = Path(store_path)
+    candidate = store_path.with_suffix(".lock")
+    # A suffix-less store (`schedules`) makes both helpers return
+    # `schedules.lock`: the daemon would then hold the STORE lock for its whole
+    # life, and every write — including its own mark_run — would time out.
+    if candidate in (store_lock_path(store_path), store_path):
+        return store_path.with_name(store_path.name + ".daemon.lock")
+    return candidate
 
 
 def _open(path: Path) -> int:
@@ -82,7 +89,9 @@ def daemon_lock(store_path: Path) -> Iterator[None]:
 def _read_pid(fd: int) -> str:
     try:
         os.lseek(fd, 0, os.SEEK_SET)
-        pid = os.read(fd, 32).decode().strip()
+        # errors="replace": a pre-existing or half-written lock file must not
+        # turn the actionable refusal into a UnicodeDecodeError traceback.
+        pid = os.read(fd, 32).decode(errors="replace").strip()
     except OSError:
         # Windows refuses reads of the holder's locked byte; name no pid then.
         return ""
