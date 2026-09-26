@@ -49,7 +49,8 @@ A local AI model has to be running before triage or drafting works:
    until that local model is up. Call `client.init()` to check readiness.
 
 You'll need about 8 GB of RAM for the default model, and one of: Windows x64,
-Linux x64, or macOS Apple Silicon.
+Linux x64, macOS Apple Silicon, or Intel macOS (best-effort: a release that
+couldn't build the Intel binary says so at install).
 
 ## Install
 

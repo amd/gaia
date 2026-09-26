@@ -176,7 +176,15 @@ export function resolvePlaygroundPort(
   raw: string | boolean | undefined,
 ): { port: number } | { error: string } {
   // Strict digits: Number() accepts "0x1f90", "1e3", and " 80 ".
-  const port = typeof raw === "string" ? (/^\d+$/.test(raw) ? Number(raw) : NaN) : 8131;
+  // `raw === true` is unreachable while `port` is in VALUE_FLAGS (parseArgs
+  // rejects a bare `--port`), but it resolves to NaN rather than a silent
+  // 8131 so removing it from that set can never quietly bind the default.
+  const port =
+    raw === undefined
+      ? 8131
+      : typeof raw === "string" && /^\d+$/.test(raw)
+        ? Number(raw)
+        : NaN;
   if (!Number.isInteger(port) || port <= 0 || port > 65535 || port === 4001) {
     return {
       error: `--port must be a port in 1..65535 and not 4001 (got ${String(raw)})`,

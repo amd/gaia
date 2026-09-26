@@ -243,6 +243,45 @@ def test_the_closing_banner_only_promises_an_agent_that_installed(sh_text, ps1_t
     assert "-FlagshipInstalled" in ps1_text
 
 
+PALETTE_GO = REPO_ROOT / "tui" / "internal" / "ui" / "chat" / "palette.go"
+
+
+def _tui_commands() -> set[str]:
+    source = PALETTE_GO.read_text(encoding="utf-8")
+    block = re.search(
+        r"^var paletteCommands = \[\]paletteCommand\{$(.*?)^\}$",
+        source,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert block, f"paletteCommands not found in {PALETTE_GO}"
+    commands = set(re.findall(r'\{"(/[a-z-]+)",', block.group(1)))
+    assert commands, "paletteCommands parsed as empty"
+    return commands
+
+
+def _banner_commands(text: str, start: str, end: str) -> set[str]:
+    banner = text[text.index(start) : text.index(end, text.index(start))]
+    # printf wraps the command in colour placeholders: '%s/agents%s'.
+    banner = banner.replace("%s", " ")
+    # A `/word` not glued to a URL, path, or variable.
+    return set(re.findall(r"(?<![\w/.:~$%-])/[a-z][a-z-]*\b", banner))
+
+
+@pytest.mark.parametrize("script", ["sh", "ps1"])
+def test_banner_slash_commands_exist_in_the_tui(sh_text, ps1_text, script):
+    """An unknown `/command` is sent to the model as a question, not run."""
+    if script == "sh":
+        banner = _banner_commands(sh_text, "show_next_steps() {", "\n}\n")
+    else:
+        banner = _banner_commands(ps1_text, "function Show-NextSteps {", "\n}\n")
+    assert banner, f"no /command found in the install.{script} closing banner"
+    unknown = banner - _tui_commands()
+    assert not unknown, (
+        f"install.{script} tells users to type {sorted(unknown)}, which "
+        f"paletteCommands in {PALETTE_GO.relative_to(REPO_ROOT)} does not define"
+    )
+
+
 def test_elevation_is_announced_before_it_is_needed(sh_text, ps1_text):
     assert "announce_elevation" in sh_text
     assert sh_text.index("announce_elevation\n") < sh_text.index("install_uv\n\n")

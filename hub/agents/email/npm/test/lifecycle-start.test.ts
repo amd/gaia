@@ -23,7 +23,8 @@ import {
   PortInUseError,
   SidecarExitedError,
 } from "../src/errors.js";
-import { startSidecar } from "../src/lifecycle.js";
+import { assertOurs, startSidecar } from "../src/lifecycle.js";
+import type { Sidecar } from "../src/lifecycle.js";
 import { SCHEMA_VERSION } from "../src/types.js";
 
 let tmp: string;
@@ -186,4 +187,52 @@ posixOnly("startSidecar when its own child dies", () => {
       }
     }
   }, 40_000);
+});
+
+/**
+ * Which error a dead child produces must follow a probe, not an assumption. In a
+ * real `startSidecar` run the two branches are separated by whether the port is
+ * still answering at one instant, which races the child reap — so drive the
+ * decision directly, with a real listener on one side and a closed port on the
+ * other.
+ */
+describe("a dead child is diagnosed by who answers the port", () => {
+  /** A sidecar handle whose child is already dead, pointed at `port`. */
+  const deadChildOn = (port: number): Sidecar =>
+    ({
+      child: { exitCode: 7, signalCode: null },
+      host: "127.0.0.1",
+      port,
+      baseUrl: `http://127.0.0.1:${port}`,
+    }) as unknown as Sidecar;
+
+  it("names a port conflict only when something really answers", async () => {
+    const port = await foreignServer();
+
+    const e = await assertOurs(deadChildOn(port)).catch((err: unknown) => err);
+
+    expect(e).toBeInstanceOf(SidecarExitedError);
+    expect((e as Error).message).toMatch(/another process is already bound/);
+  }, 20_000);
+
+  it("blames the crash, not an incumbent, when nothing answers", async () => {
+    const port = await freePort(); // nothing is listening here
+
+    const e = await assertOurs(deadChildOn(port)).catch((err: unknown) => err);
+
+    expect(e).toBeInstanceOf(SidecarExitedError);
+    expect((e as Error).message).toMatch(/became healthy and then exited/);
+    expect((e as Error).message).toMatch(/no other process holds/);
+    // The old code claimed a conflict here, sending users after a process that
+    // never existed.
+    expect((e as Error).message).not.toMatch(/another process is already bound/);
+    expect((e as Error).message).not.toMatch(/lsof|netstat/);
+  }, 20_000);
+
+  it("stays silent while the child is alive", async () => {
+    const port = await freePort();
+    const alive = { ...deadChildOn(port), child: { exitCode: null, signalCode: null } };
+
+    await expect(assertOurs(alive as unknown as Sidecar)).resolves.toBeUndefined();
+  }, 20_000);
 });
