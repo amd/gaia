@@ -35,6 +35,16 @@ _SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout")
 MAX_TOOL_DESCRIPTION_CHARS = 400
 MAX_TOOL_PARAM_DESCRIPTION_CHARS = 160
 
+# Named exceptions to MAX_TOOL_DESCRIPTION_CHARS, not a general escape hatch.
+# Both are already trimmed to safety-relevant facts only (no examples, no
+# rationale) — the overage is what it costs to state which shell operators
+# run vs. refuse, and the exact skill-correction contract, without which the
+# model cannot use either tool safely.
+TOOL_DESCRIPTION_ALLOWANCES = {
+    "run_shell_command": 600,
+    "remember_skill_lesson": 450,
+}
+
 
 # Annotation -> registry type name. Anything absent stays "unknown", which
 # downstream consumers read as "no declared type" rather than a contradiction.

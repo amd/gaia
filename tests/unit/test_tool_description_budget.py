@@ -81,6 +81,23 @@ class TestDescriptionBudget:
         }
         assert _violations([_schema("search_thing", "Find a thing.", params)]) == []
 
+    def test_allowance_raises_the_ceiling_for_the_named_tool_only(self):
+        over_default = "x" * (MAX_TOOL_DESCRIPTION_CHARS + 50)
+        schemas = [
+            _schema("run_shell_command", over_default),
+            _schema("some_other_tool", over_default),
+        ]
+
+        messages = find_violations(
+            schemas,
+            MAX_TOOL_DESCRIPTION_CHARS,
+            MAX_TOOL_PARAM_DESCRIPTION_CHARS,
+            allowances={"run_shell_command": MAX_TOOL_DESCRIPTION_CHARS + 100},
+        )
+
+        assert len(messages) == 1
+        assert "some_other_tool" in messages[0]
+
 
 class TestSchemaDescription:
     """What the registry ships: the docstring, cleaned, without ``Args:``."""

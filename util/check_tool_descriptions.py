@@ -22,18 +22,28 @@ from typing import List
 
 
 def find_violations(
-    schemas: List[dict], max_description: int, max_param: int
+    schemas: List[dict],
+    max_description: int,
+    max_param: int,
+    allowances: dict[str, int] | None = None,
 ) -> List[str]:
-    """Return one message per over-budget description, in schema order."""
+    """Return one message per over-budget description, in schema order.
+
+    ``allowances`` raises the description ceiling for named tools that have
+    already been trimmed to safety-relevant facts and still can't fit —
+    see ``TOOL_DESCRIPTION_ALLOWANCES`` in ``gaia.agents.base.tools``.
+    """
+    allowances = allowances or {}
     violations: List[str] = []
     for schema in schemas:
         fn = schema["function"]
         name = fn["name"]
         description = fn.get("description", "")
-        if len(description) > max_description:
+        budget = allowances.get(name, max_description)
+        if len(description) > budget:
             violations.append(
                 f"{name}: description is {len(description)} chars "
-                f"(budget {max_description})"
+                f"(budget {budget})"
             )
         for param, spec in fn["parameters"]["properties"].items():
             param_description = spec.get("description", "")
@@ -54,11 +64,15 @@ def run_check() -> int:
     from gaia.agents.base.tools import (
         MAX_TOOL_DESCRIPTION_CHARS,
         MAX_TOOL_PARAM_DESCRIPTION_CHARS,
+        TOOL_DESCRIPTION_ALLOWANCES,
     )
 
     schemas = flagship_tool_schemas()
     violations = find_violations(
-        schemas, MAX_TOOL_DESCRIPTION_CHARS, MAX_TOOL_PARAM_DESCRIPTION_CHARS
+        schemas,
+        MAX_TOOL_DESCRIPTION_CHARS,
+        MAX_TOOL_PARAM_DESCRIPTION_CHARS,
+        TOOL_DESCRIPTION_ALLOWANCES,
     )
 
     if violations:
