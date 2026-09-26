@@ -33,6 +33,23 @@ from gaia.daemon.sidecars.errors import (
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec, builtin_specs
 
+_REAL_POPEN = mgr.subprocess.Popen
+_REAL_SIGNAL_TREE = mgr.AgentSidecarManager._signal_tree
+
+
+@pytest.fixture(autouse=True)
+def _never_signal_a_fake_pid(monkeypatch):
+    """Tree-kill only real children: a fake proc's pid belongs to a stranger."""
+
+    def _signal_tree(proc, sig):
+        if isinstance(proc, _REAL_POPEN):
+            _REAL_SIGNAL_TREE(proc, sig)
+
+    monkeypatch.setattr(
+        mgr.AgentSidecarManager, "_signal_tree", staticmethod(_signal_tree)
+    )
+
+
 # ---------------------------------------------------------------------------
 # spec.py — AgentSidecarSpec + builtin_specs()
 # ---------------------------------------------------------------------------
