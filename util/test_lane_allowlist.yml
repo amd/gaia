@@ -35,6 +35,7 @@ files:
   tests/integration/test_daemon_broker_lemonade.py: Drives concurrent real model loads through the broker; needs a live Lemonade Server with downloaded models.
   tests/integration/test_lemonade_model_residency.py: Checks an LLM and an embedder stay co-resident; needs a live Lemonade Server with both loaded.
   tests/integration/test_lemonade_predownload_checks.py: Proves the real /models, /system-info and /health shapes the unit test mocks; needs a live Lemonade Server.
+  tests/integration/test_gateway_lemonade.py: Proves Lemonade accepts the gateway's cloud-provider registration and discovery calls, not just that GAIA sent them; needs a live Lemonade Server 11.8.0+, skips otherwise.
   tests/test_lemonade_health.py: Reads context_size from the real health endpoint; needs a live Lemonade Server.
   tests/mcp/test_email_mcp_stdio_parity.py: Both the REST and MCP-stdio surfaces triage with the local LLM; needs a live Lemonade Server with the email model.
 

@@ -78,6 +78,14 @@ class TestParseLLMResponseRaisesOnMalformed:
             target.write_text("value = 1\n")
             responses = iter(
                 [
+                    # The edit tools refuse a file the agent hasn't read.
+                    json.dumps(
+                        {
+                            "thought": "Read the file.",
+                            "tool": "read_file",
+                            "tool_args": {"file_path": str(target)},
+                        }
+                    ),
                     json.dumps(
                         {
                             "thought": "Edit the file.",
@@ -103,7 +111,7 @@ class TestParseLLMResponseRaisesOnMalformed:
             chat.send_messages.side_effect = send_messages
             agent.chat = chat
             with patch.object(agent, "_tool_requires_confirmation", return_value=False):
-                result = agent.process_query("Edit the file", max_steps=2)
+                result = agent.process_query("Edit the file", max_steps=3)
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved_registry)

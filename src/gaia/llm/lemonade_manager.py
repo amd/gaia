@@ -7,7 +7,6 @@ Provides singleton initialization shared by CLI and SDK flows.
 Operates at the LLM level (not agent level) for flexibility with community agents.
 """
 
-import os
 import sys
 import threading
 import time
@@ -21,9 +20,11 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    configured_lemonade_url,
     is_llm_model_entry,
     resolve_ctx_size,
     resolve_effective_ctx_size,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
@@ -253,9 +254,6 @@ class HardwareRequirementError(Exception):
 # ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
 # in ``gaia.llm.lemonade_client``.
 __all__ = ["DEFAULT_CONTEXT_SIZE", "LemonadeManager", "MessageType"]
-# Lemonade v10.1.0+ default port (was 8000 in v10.0.x). PR #865 bumped the
-# minimum supported version, so 13305 is the right default everywhere.
-DEFAULT_LEMONADE_URL = "http://localhost:13305"
 
 
 class MessageType(Enum):
@@ -300,6 +298,9 @@ class LemonadeManager:
     # keep reporting the old model's cap forever (#2992).
     _context_ceiling_model: Optional[str] = None
     _lock = threading.Lock()
+    # Set while an idle-server preload runs with ``_lock`` released; other
+    # callers wait on it instead of sending a second /load.
+    _preload_in_flight: Optional[threading.Event] = None
     _log = get_logger(__name__)
 
     # Rate-limit the per-turn context re-check that fires when context_size==0.
@@ -320,6 +321,35 @@ class LemonadeManager:
         """Check if Lemonade server is installed."""
         client = LemonadeClient(verbose=False)
         return client.get_lemonade_version() is not None
+
+    @classmethod
+    def start_embedded_if_stopped(cls) -> bool:
+        """Have the daemon start GAIA's embedded Lemonade when it is stopped.
+
+        Does nothing when ``LEMONADE_BASE_URL`` names another server, when GAIA's
+        own server is not installed (``gaia init`` installs it), or when it is
+        already running -- so only a machine that set GAIA up ever talks to the
+        daemon here.
+
+        Returns:
+            True if the daemon started the server.
+
+        Raises:
+            DaemonError: The daemon could not start it; the message names why.
+        """
+        if configured_lemonade_url():
+            return False
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+        embedded = EmbeddedLemonade()
+        if not embedded.is_installed() or embedded.status().running:
+            return False
+        from gaia.daemon.client import ensure_lemonade
+
+        cls._log.info(
+            "GAIA's Lemonade Server is stopped; asking the daemon to start it"
+        )
+        return bool(ensure_lemonade().get("started"))
 
     @classmethod
     def print_server_error(cls, min_context_size: int = DEFAULT_CONTEXT_SIZE):
@@ -367,7 +397,7 @@ class LemonadeManager:
                     file=sys.stderr,
                 )
                 print("", file=sys.stderr)
-            base_url = os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1")
+            base_url = resolve_lemonade_base_url()
             print(
                 f"The server should be accessible at {base_url}/health",
                 file=sys.stderr,
@@ -658,6 +688,16 @@ class LemonadeManager:
             if port is None:
                 port = parsed.port
         with cls._lock:
+            # A preload in flight will change what the server reports, so wait
+            # for it and read the state it leaves behind.
+            while cls._preload_in_flight is not None:
+                preload_done = cls._preload_in_flight
+                cls._lock.release()
+                try:
+                    preload_done.wait()
+                finally:
+                    cls._lock.acquire()
+
             # Validate the requested device first — runs on every call (not just
             # first init) so a UI device switch after the manager is warm is
             # still checked. Memoised per tier, so this is at most one probe per
@@ -814,6 +854,20 @@ class LemonadeManager:
                     return True
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
+
+            if base_url is None and host is None and port is None:
+                from gaia.daemon.errors import DaemonError
+
+                try:
+                    cls.start_embedded_if_stopped()
+                except DaemonError as e:
+                    cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
+                    if not quiet:
+                        print(
+                            f"❌ Could not start GAIA's Lemonade Server: {e}",
+                            file=sys.stderr,
+                        )
+                    return False
 
             try:
                 # When base_url is provided, pass it directly to LemonadeClient
@@ -1089,8 +1143,10 @@ class LemonadeManager:
         Releases `lock` for the duration of the blocking `load_model` call —
         important because `auto_download=True` means a first-run user pays a
         full model-download window (potentially minutes), and we must not
-        block other threads (status pollers, parallel `ensure_ready` callers)
-        for that long.  Mirrors the lock discipline of `_try_reload_with_ctx`.
+        block other threads (status pollers) for that long.  Parallel
+        `ensure_ready` callers wait on `_preload_in_flight` rather than
+        sending a second /load.  Mirrors the lock discipline of
+        `_try_reload_with_ctx`.
 
         Returns:
             A ``(ctx_size, status)`` pair: the ctx_size actually in force
@@ -1147,6 +1203,8 @@ class LemonadeManager:
         # concurrent callers and status-pollers are not stalled.  The
         # `finally` block re-acquires before any exception propagates back
         # up to the surrounding `with cls._lock:` context manager.
+        preload_done = threading.Event()
+        cls._preload_in_flight = preload_done
         lock.release()
         try:
             client.load_model(
@@ -1168,6 +1226,8 @@ class LemonadeManager:
             ) from e
         finally:
             lock.acquire()
+            cls._preload_in_flight = None
+            preload_done.set()
 
         # Honest post-load report (#2992): loading resolves the model's
         # metadata, so a ceiling unknown before download (the common
@@ -1366,4 +1426,9 @@ class LemonadeManager:
             cls._context_ceiling_model = None
             cls._last_recheck_time = 0.0
             cls._validated_min_devices = set()
+            # Signal before dropping it: waiters hold their own reference, and
+            # the preload that would have set it is gone.
+            if cls._preload_in_flight is not None:
+                cls._preload_in_flight.set()
+                cls._preload_in_flight = None
             cls._log.debug("LemonadeManager state reset")
