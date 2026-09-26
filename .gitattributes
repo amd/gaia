@@ -33,3 +33,7 @@ tests/fixtures/gaia/fake_gh/gh eol=lf
 # them — which silently sends the TUI to the last INSTALLED agent instead.
 scripts/dev/run-tui.sh text eol=lf
 scripts/dev/bin/gaia-agent text eol=lf
+
+# Every shell script is run by a POSIX shell, which reads a CRLF line ending as
+# part of the word (`case ... in\r` is a syntax error), so keep them LF.
+*.sh text eol=lf
