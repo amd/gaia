@@ -56,7 +56,7 @@ var robotArt = []string{
 func artStyles() map[rune]lipgloss.Style {
 	return map[rune]lipgloss.Style{
 		'%': lipgloss.NewStyle().Foreground(theme.ArtBright), // body highlights
-		'#': lipgloss.NewStyle().Foreground(theme.ArtBody),   // solid green
+		'#': lipgloss.NewStyle().Foreground(theme.ArtBody),   // solid body
 		'*': lipgloss.NewStyle().Foreground(theme.ArtMid),    // mid-tone
 		'+': lipgloss.NewStyle().Foreground(theme.ArtDetail), // detail
 		'=': lipgloss.NewStyle().Foreground(theme.ArtShadow), // shading

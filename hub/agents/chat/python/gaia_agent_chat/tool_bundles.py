@@ -131,6 +131,20 @@ DOC_BUNDLES = [
         description="Run shell commands, wait on a condition, and query the system.",
     ),
     ToolBundle(
+        name="cli_setup",
+        members=frozenset(
+            {
+                "check_cli_setup",
+                "install_cli",
+                "sign_in_cli",
+            }
+        ),
+        description=(
+            "Check whether a command-line tool a skill needs (e.g. the GitHub "
+            "CLI 'gh') is installed and signed in, install it, and sign in to it."
+        ),
+    ),
+    ToolBundle(
         name="clipboard",
         members=frozenset({"read_clipboard", "write_clipboard"}),
         description="Read from and write to the system clipboard.",
@@ -172,10 +186,11 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (15 tools). Deliberately a smaller share of the registry than
+# Always-on set (16 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
-# signalling), the ``load_tools`` escape hatch, ``read_tool_output`` to page
+# signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
+# runs), the ``load_tools`` escape hatch, ``read_tool_output`` to page
 # through a result that was cut short, ``load_skill`` for the skill
 # catalogue, two universal entry points -- ``read_file`` and
 # ``query_documents`` -- that answer "what is in this file / what do my
@@ -207,6 +222,7 @@ FULL_CORE_TOOLS = frozenset(
         # loop control -- autonomous-turn signalling
         "set_loop_state",
         "request_user_input",
+        "sleep",
         # escape hatch (#1450)
         "load_tools",
         "read_tool_output",
@@ -387,6 +403,20 @@ FULL_BUNDLES = [
         ),
     ),
     ToolBundle(
+        name="cli_setup",
+        members=frozenset(
+            {
+                "check_cli_setup",
+                "install_cli",
+                "sign_in_cli",
+            }
+        ),
+        description=(
+            "Check whether a command-line tool a skill needs (e.g. the GitHub "
+            "CLI 'gh') is installed and signed in, install it, and sign in to it."
+        ),
+    ),
+    ToolBundle(
         name="clipboard",
         members=frozenset({"read_clipboard", "write_clipboard"}),
         description="Read from and write to the system clipboard.",
@@ -428,8 +458,11 @@ FULL_BUNDLES = [
     ),
     ToolBundle(
         name="loop_control",
-        members=frozenset({"set_loop_state", "request_user_input"}),
-        description="Control the autonomous loop and ask the user questions.",
+        members=frozenset({"set_loop_state", "request_user_input", "sleep"}),
+        description=(
+            "Control the autonomous loop, wait before retrying, and ask the "
+            "user questions."
+        ),
     ),
     ToolBundle(
         name="email",

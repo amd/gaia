@@ -80,7 +80,7 @@
     @apply font-mono;
   }
   .g-eyebrow {
-    @apply font-mono text-[12px] uppercase tracking-[0.16em] text-g-gold-text;
+    @apply font-mono text-[12px] uppercase tracking-[0.16em] text-g-accent-text;
   }
   .g-label {
     @apply font-mono text-[11px] uppercase tracking-[0.12em] text-g-faint;
@@ -98,16 +98,16 @@
   }
   /* Interactive card: lifts and warms on hover. Applied to <a>/<button> cards. */
   .g-card-hover {
-    @apply hover:-translate-y-1 hover:border-g-gold-dim hover:bg-g-surface2 hover:shadow-g-card;
+    @apply hover:-translate-y-1 hover:border-g-accent-dim hover:bg-g-surface2 hover:shadow-g-card;
   }
   /* The three "ways in" cards also scale a touch. */
   .g-card-lift {
-    @apply hover:-translate-y-1.5 hover:scale-[1.015] hover:border-g-gold-dim hover:bg-g-surface2 hover:shadow-g-card;
+    @apply hover:-translate-y-1.5 hover:scale-[1.015] hover:border-g-accent-dim hover:bg-g-surface2 hover:shadow-g-card;
   }
 
   /* Icon chip — the small bordered square that holds a 24px glyph. */
   .g-chip {
-    @apply flex flex-none items-center justify-center rounded-g-chip border border-g-border bg-g-surface2 text-g-gold-text;
+    @apply flex flex-none items-center justify-center rounded-g-chip border border-g-border bg-g-surface2 text-g-accent-text;
   }
 
   /* --------------------------------------------------------------- buttons */
@@ -115,16 +115,18 @@
   .g-btn {
     @apply inline-flex items-center justify-center gap-2 rounded-g-btn px-5 py-2.5 text-[14px] font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-[250ms] ease-g-out;
   }
+  /* The fill is the same copper in both themes so it can carry white; the
+     themed --g-accent is a text/mark colour and white on its dark value is 1.9:1. */
   .g-btn-primary {
-    @apply bg-g-gold text-g-on-gold hover:-translate-y-0.5 hover:bg-g-gold2 hover:shadow-g-btn;
+    @apply bg-g-accent-fill text-g-on-accent hover:-translate-y-0.5 hover:bg-g-accent-fill2 hover:shadow-g-btn;
   }
   .g-btn-secondary {
-    @apply border border-g-border2 text-g-text hover:-translate-y-0.5 hover:border-g-gold-dim hover:text-g-gold-text;
+    @apply border border-g-border2 text-g-text hover:-translate-y-0.5 hover:border-g-accent-dim hover:text-g-accent-text;
   }
 
   /* Text CTA whose arrow gap opens on hover. */
   .g-cta-link {
-    @apply inline-flex items-center gap-1.5 text-[13px] font-medium text-g-gold-text transition-[gap,color] duration-[250ms] ease-g-out hover:gap-2.5 hover:text-g-gold2;
+    @apply inline-flex items-center gap-1.5 text-[13px] font-medium text-g-accent-text transition-[gap,color] duration-[250ms] ease-g-out hover:gap-2.5 hover:text-g-accent2;
   }
 
   /* -------------------------------------------------------- pills & badges */
@@ -133,23 +135,23 @@
     @apply font-mono rounded-g-pill border border-g-border px-3.5 py-1.5 text-[11px] uppercase tracking-[0.08em] text-g-muted transition-colors hover:border-g-border2 hover:text-g-text;
   }
   .g-pill-active {
-    @apply border-g-gold bg-g-gold text-g-on-gold hover:text-g-on-gold;
+    @apply border-g-accent-fill bg-g-accent-fill text-g-on-accent hover:text-g-on-accent;
   }
   /* Static descriptive pill (tags on the agent page). */
   .g-pill-static {
     @apply font-mono rounded-g-pill border border-g-border px-3 py-1 text-[11px] text-g-muted;
   }
-  /* Eyebrow pill with a glowing gold dot. */
+  /* Eyebrow pill with a solid accent dot. No halo — the design language has no
+     glow treatment. */
   .g-pill-eyebrow {
     @apply inline-flex items-center gap-2.5 rounded-g-pill border border-g-border bg-g-surface py-1.5 pl-3 pr-4;
   }
   .g-dot {
-    @apply h-1.5 w-1.5 flex-none rounded-full bg-g-gold;
-    box-shadow: 0 0 10px rgb(var(--g-gold));
+    @apply h-1.5 w-1.5 flex-none rounded-full bg-g-accent;
   }
 
   .g-badge {
-    @apply font-mono rounded-g-badge border border-g-gold-dim px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-gold-text;
+    @apply font-mono rounded-g-badge border border-g-accent-dim px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-accent-text;
   }
   .g-badge-muted {
     @apply font-mono rounded-g-badge border border-g-border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-faint;
@@ -160,33 +162,41 @@
   .g-code-panel {
     @apply overflow-hidden rounded-g-panel border border-g-border bg-g-code-bg;
   }
-  /* Window chrome strip above a terminal / code panel. */
+  /* Window chrome strip above a terminal / code panel. The divider sits between
+     two --g-code-bg areas, so it is drawn from the code palette — the themed
+     --g-border is a light-on-dark/dark-on-light value and vanishes on one of them. */
   .g-code-chrome {
-    @apply flex items-center gap-2 border-b border-g-border px-3.5 py-2.5;
+    @apply flex items-center gap-2 border-b px-3.5 py-2.5;
+    border-bottom-color: rgb(var(--g-code-text) / 0.14);
   }
-  /* Inline `$ command` chip with a gold hairline. */
+  /* Inline `$ command` chip with a copper hairline. The panel is dark in both
+     themes, so its hairline comes from the pinned code accent, not the themed
+     one — otherwise the same panel gets two different borders. */
   .g-cmd {
-    @apply font-mono flex items-center gap-2 rounded-g-panel border border-g-gold-dim bg-g-code-bg px-3.5 py-2.5 text-[12.5px] text-g-code-text;
+    @apply font-mono flex items-center gap-2 rounded-g-panel border bg-g-code-bg px-3.5 py-2.5 text-[12.5px] text-g-code-text;
+    border-color: rgb(var(--g-code-accent) / 0.35);
   }
   /* Plain `$ command` block pinned to the bottom of a card. */
   .g-cmd-plain {
-    @apply font-mono flex items-center gap-2 rounded-g-panel border border-g-border bg-g-code-bg px-3 py-2.5 text-[12.5px] text-g-code-text;
+    @apply font-mono flex items-center gap-2 rounded-g-panel border bg-g-code-bg px-3 py-2.5 text-[12.5px] text-g-code-text;
+    border-color: rgb(var(--g-code-text) / 0.14);
   }
 
-  /* Syntax colors for hand-authored code panels (Terminal). Prism handles
-     rendered markdown separately in the agent detail page. */
-  .g-code-panel .tok-key { color: rgb(var(--g-gold)); }
-  .g-code-panel .tok-str { color: #9bd07a; }
-  .g-code-panel .tok-fn { color: #f4c46b; }
-  .g-code-panel .tok-num { color: #79b8ff; }
+  /* Syntax and severity colours for hand-authored code panels (Terminal). Prism
+     handles rendered markdown separately in the agent detail page, off the same
+     tokens. The panel ground is --g-code-bg in BOTH themes, so every role here
+     is pinned rather than themed and is measured only against that ground. */
+  .g-code-panel .tok-key { color: rgb(var(--g-code-accent)); }
+  .g-code-panel .tok-str { color: rgb(var(--g-code-green)); }
+  .g-code-panel .tok-fn { color: rgb(var(--g-code-amber)); }
+  .g-code-panel .tok-num { color: rgb(var(--g-code-blue)); }
   .g-code-panel .tok-com { color: rgb(var(--g-code-faint)); }
 
-  /* Terminal log severity colors. */
-  .g-code-panel .log-urgent { color: #e0824a; }
-  .g-code-panel .log-needs { color: #e7a33c; }
-  .g-code-panel .log-fyi { color: #79b8ff; }
+  .g-code-panel .log-urgent { color: rgb(var(--g-code-danger)); }
+  .g-code-panel .log-needs { color: rgb(var(--g-code-amber)); }
+  .g-code-panel .log-fyi { color: rgb(var(--g-code-blue)); }
   .g-code-panel .log-dim { color: rgb(var(--g-code-faint)); }
-  .g-code-panel .log-ok { color: #9bd07a; }
+  .g-code-panel .log-ok { color: rgb(var(--g-code-green)); }
 }
 
 @tailwind utilities;

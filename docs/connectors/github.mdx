@@ -65,7 +65,7 @@ GAIA will:
 
 1. Store the token in your OS keyring (single slot, distinct from any
    other connector).
-2. Write `~/.gaia/mcp_servers.json` with a `$keyring:gaia.connections:mcp-github:GITHUB_TOKEN`
+2. Write `~/.gaia/mcp_servers.json` with a `$keyring:gaia.connections:mcp-github:GITHUB_PERSONAL_ACCESS_TOKEN`
    reference — the actual token never lives in plaintext on disk.
 3. Hot-reload the MCP client manager so the GitHub tools are
    immediately available to agents.
@@ -111,6 +111,14 @@ why visibility and credential access are gated separately.
 
 The token in your keyring is wrong, expired, or revoked. Click
 **Disconnect** on the tile and re-paste a fresh token.
+
+### Private repos are missing, or you hit the anonymous rate limit
+
+Connections saved before GAIA passed the token as
+`GITHUB_PERSONAL_ACCESS_TOKEN` still hand it to the server under the old
+name, so the server calls GitHub without it. Click **Disconnect** on the
+tile and paste the token again, or run
+`gaia connectors configure mcp-github --set GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…`.
 
 ### `npx: command not found`
 

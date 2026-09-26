@@ -124,6 +124,7 @@ from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import iterate_in_threadpool
 
+from gaia.agents.base.readiness import start_advice
 from gaia.connectors.api import connected_mailbox_providers
 from gaia.connectors.errors import (
     AuthRequiredError,
@@ -275,10 +276,19 @@ def _probe_lemonade_health(
     """
     import requests
 
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     probe_base = _resolve_probe_base(base_url)
     try:
+        # GAIA's own server answers 401 without its key, hiding the version.
         resp = requests.get(
             f"{probe_base}/health",
+            headers=lemonade_auth_headers(
+                resolve_lemonade_api_key(base_url=probe_base)
+            ),
             timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
         )
     except requests.exceptions.RequestException:
@@ -357,7 +367,7 @@ def _pull_model(probe_base: str, model_id: str) -> None:
     resp = requests.post(
         f"{probe_base}/pull",
         json={"model_name": model_id},
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=_LEMONADE_PULL_TIMEOUT,
     )
     resp.raise_for_status()
@@ -648,8 +658,7 @@ class EmailTriageService:
         except requests.exceptions.RequestException as exc:
             raise LLMTriageError(
                 f"Local Lemonade Server is not reachable at {probe_base} "
-                f"({type(exc).__name__}: {exc}). Start it with "
-                "`lemonade-server serve` (or run `gaia init`), then retry."
+                f"({type(exc).__name__}: {exc}). {start_advice()}"
             ) from exc
 
     def _assert_model_present(self, base_url: Optional[str]) -> None:
@@ -3028,8 +3037,8 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
             lemonade=lemonade,
             model=InitModelStatus(id=model_id, present=False, loadable=None),
             hint=(
-                f"Local Lemonade Server is not reachable at {probe_base} — start "
-                "it with `lemonade-server serve` (or run `gaia init`), then retry."
+                f"Local Lemonade Server is not reachable at {probe_base}. "
+                f"{start_advice()}"
             ),
         )
 
@@ -3214,10 +3223,7 @@ async def email_provision() -> StreamingResponse:
         # Fail loudly BEFORE streaming so the status code is a truthful 503.
         def _unreachable() -> Iterator[str]:
             yield f"✗ Local Lemonade Server is not reachable at {probe_base}.\n"
-            yield (
-                "✗ Start it with `lemonade-server serve` (or run `gaia init`), "
-                "then POST /v1/email/init again.\n"
-            )
+            yield f"✗ {start_advice()} Then POST /v1/email/init again.\n"
             yield (
                 "✗ The sidecar can't install Lemonade itself — that's a host "
                 "prerequisite.\n"

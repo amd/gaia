@@ -15,7 +15,7 @@
 }
 
 [data-theme="dark"] .sidebar {
-    background: rgba(8, 8, 13, 0.92);
+    background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
     backdrop-filter: blur(24px) saturate(1.2);
     -webkit-backdrop-filter: blur(24px) saturate(1.2);
 }
@@ -80,7 +80,7 @@
     font-family: var(--font-display);
     letter-spacing: 2px;
     text-transform: uppercase;
-    background: linear-gradient(135deg, var(--accent), #ff6b35);
+    background: var(--accent);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -179,14 +179,12 @@
     border-color: var(--border-light);
 }
 .sidebar-search input:focus {
-    /* Tone-down: was 0.4 alpha border + 12 px red glow which looked
-       alarming. Soft brand-red ring at lower intensity reads as
-       focus without the "warning" vibe. */
-    border-color: rgba(226, 163, 62, 0.35);
+    /* Low-intensity ring: a full-strength brand-red glow here reads as a warning. */
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
     background: var(--bg-secondary);
     box-shadow:
         inset 0 1px 1px rgba(0, 0, 0, 0.04),
-        0 0 0 3px rgba(226, 163, 62, 0.08);
+        0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .sidebar-search input::placeholder { color: var(--text-muted); font-family: var(--font-sans); }
 
@@ -238,13 +236,6 @@
     outline: none;
 }
 
-/* Removed: the ::before red indicator bar.
- * Selection used to be a vertical AMD-red gradient strip on the left
- * edge — same visual vocabulary as .msg-error, so the active row
- * read as "this row is broken" rather than "this row is selected".
- * Active state is now communicated purely via elevation + bg lift,
- * matching the GAIA message-card design language. */
-
 .session-item:hover {
     background: var(--bg-hover);
     border-color: var(--border-light);
@@ -256,24 +247,12 @@
     transition-duration: 80ms;
 }
 
-/* Active session — neutral elevated card.
- *
- * Matches the GAIA message bubble's 3D treatment exactly:
- *   (1) inset 1-px top-edge highlight     → "lit from above"
- *   (2) crisp 1-px contact shadow         → defines bottom edge
- *   (3) soft mid-distance shadow          → the actual elevation
- *   (4) wider ambient shadow              → grounds the card
- * Plus a neutral background lift (--bg-active) — no red hue at all.
- *
- * The selected row now reads as "this card is in front" instead of
- * "this row is on fire", which is the design vocabulary the user
- * asked for. Brand red is reserved for actual errors (.msg-error)
- * and for the small "GAIA" name text in message headers. */
+/* Selection reads as elevation, never hue — brand red means error, not "selected". */
 .session-item.active {
     background: var(--bg-active);
     border-color: var(--border);
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent),
         0 1px 1px rgba(0, 0, 0, 0.04),
         0 4px 10px -2px rgba(0, 0, 0, 0.10),
         0 8px 20px -8px rgba(0, 0, 0, 0.08);
@@ -286,16 +265,11 @@
 }
 
 [data-theme="dark"] .session-item.active {
-    /* Dark mode active: NO red tint anywhere. The previous version
-       had `rgba(226, 163, 62, 0.06)` background + `rgba(226, 163, 62, 0.12)`
-       border + an inset 28-px red glow which collectively made every
-       selected row look like a tinted warning band. Now it's a
-       neutral white-tinted card sitting forward on the dark sidebar,
-       same visual logic as the assistant message card in dark mode. */
-    background: rgba(255, 255, 255, 0.04);
-    border-color: rgba(255, 255, 255, 0.08);
+    /* Tint off --text-primary, not --accent: a red wash here reads as a warning band. */
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    border-color: color-mix(in srgb, var(--text-primary) 8%, transparent);
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent),
         0 1px 2px rgba(0, 0, 0, 0.30),
         0 6px 16px -2px rgba(0, 0, 0, 0.45),
         0 12px 28px -10px rgba(0, 0, 0, 0.30);
@@ -312,7 +286,7 @@
 }
 
 .session-item:focus-visible {
-    outline: 2px solid var(--terminal-green);
+    outline: 2px solid var(--accent);
     outline-offset: -2px;
 }
 
@@ -340,7 +314,7 @@
 .session-running-spinner {
     flex-shrink: 0;
     margin-right: 4px;
-    color: var(--accent, var(--text-muted));
+    color: var(--accent);
     vertical-align: middle;
     animation: spin 1s linear infinite;
 }
@@ -374,7 +348,7 @@
 .session-hash.copied {
     opacity: 1 !important;
     color: var(--accent-green);
-    background: rgba(78, 201, 50, 0.1);
+    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
 }
 
 .session-time {
@@ -400,7 +374,7 @@
 }
 .session-item:hover .session-delete,
 .session-item:focus-within .session-delete { display: flex; }
-.session-delete:hover { background: var(--danger); color: white; }
+.session-delete:hover { background: var(--danger); color: var(--text-inverse); }
 
 /* Delete confirmation state */
 .session-delete.confirm {
@@ -409,7 +383,7 @@
     gap: 4px;
     padding: 3px 10px;
     background: var(--danger);
-    color: white;
+    color: var(--text-inverse);
     border-radius: var(--radius-sm);
     font-size: 10px;
     font-weight: 600;
@@ -468,7 +442,7 @@
 .sidebar-bottom {
     padding: 12px 14px;
     border-top: 1px solid var(--border);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 2%, transparent);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -494,7 +468,6 @@
     background: var(--accent-green);
     animation: pulse 2s infinite;
     flex-shrink: 0;
-    box-shadow: 0 0 6px rgba(78, 201, 50, 0.4);
 }
 
 .version-badge {
@@ -526,7 +499,6 @@
     height: 6px;
     border-radius: 50%;
     background: var(--accent-green);
-    box-shadow: 0 0 8px rgba(78, 201, 50, 0.6);
     animation: pulse 2s infinite;
 }
 
@@ -624,7 +596,7 @@
 }
 .session-agent-group-icon {
     flex-shrink: 0;
-    color: var(--accent, var(--text-muted));
+    color: var(--accent);
 }
 .session-agent-group-name {
     flex: 1;
@@ -633,7 +605,7 @@
     white-space: nowrap;
     font-size: 11px;
     font-weight: 700;
-    color: var(--text-secondary, var(--text-muted));
+    color: var(--text-secondary);
 }
 .session-agent-group-count {
     flex-shrink: 0;
@@ -665,7 +637,7 @@
 }
 .session-agent-chip-icon {
     flex-shrink: 0;
-    color: var(--accent, var(--text-muted));
+    color: var(--accent);
 }
 .session-agent-chip-name {
     overflow: hidden;

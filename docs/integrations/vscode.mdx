@@ -46,11 +46,12 @@ The GAIA VSCode extension integrates GAIA agents as selectable language models i
     Install GAIA with API support. See [API Server Prerequisites](/reference/api#prerequisites)
   </Step>
 
-  <Step title="Start Lemonade Server">
-    Ensure the LLM backend is running with extended context:
+  <Step title="Install the LLM backend">
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
+
+    Installs Lemonade Server and pulls the model. `gaia daemon` starts and supervises it, and sizes the context window from your machine's device profile.
   </Step>
 
   <Step title="Install Node.js v20.19.x">
@@ -101,23 +102,12 @@ The GAIA VSCode extension integrates GAIA agents as selectable language models i
 ### Getting Started
 
 <Warning>
-GAIA Code requires **three services** running simultaneously:
-1. Lemonade Server (LLM backend on port 13305)
-2. GAIA API Server (REST API on port 8080)
-3. VSCode Extension (installed in VSCode)
+GAIA Code needs two things you start yourself — the GAIA API Server (REST API on port 8080) and the VSCode extension. The LLM backend on port 13305 is supervised by `gaia daemon`, so it isn't your job to launch.
 </Warning>
 
 Follow these steps in order:
 
 <Steps>
-  <Step title="Start Lemonade Server (LLM Backend)">
-    ```bash
-    lemonade-server serve --ctx-size 32768
-    ```
-
-    <Info>Keep this terminal running and open a new terminal for the next step</Info>
-  </Step>
-
   <Step title="Start the GAIA API Server">
     ```bash
     gaia api start
@@ -236,7 +226,7 @@ VSCode language model provider.
 
     **Solutions**:
     - The picker should list `gaia`. If it is empty, check that the `gaia-agent-gaia` package is installed — the server logs the import error it hit
-    - Ensure Lemonade Server is running: `lemonade-server serve --ctx-size 32768`
+    - Check the model server is up: `gaia daemon status`. If no daemon is running, `gaia daemon start`
     - The API server needs to be running before selecting models
     - Check the GAIA output channel for error messages (View > Output > GAIA)
     - Try restarting VSCode
@@ -269,8 +259,8 @@ VSCode can also integrate with GAIA through the Model Context Protocol (MCP) ser
     Install GAIA
   </Step>
 
-  <Step title="Start Lemonade Server">
-    Running with appropriate context size
+  <Step title="Install the LLM backend">
+    Run `gaia init` once — `gaia daemon` starts and supervises the model server from then on
   </Step>
 
   <Step title="Start GAIA MCP Server">
@@ -281,12 +271,6 @@ VSCode can also integrate with GAIA through the Model Context Protocol (MCP) ser
 ### Getting Started
 
 <Steps>
-  <Step title="Start Lemonade Server">
-    ```bash
-    lemonade-server serve --ctx-size 32768
-    ```
-  </Step>
-
   <Step title="Start the GAIA MCP Server">
     ```bash
     gaia mcp start
@@ -416,16 +400,14 @@ src/vscode/gaia/
 ### Testing the Extension
 
 <Steps>
-  <Step title="Start Backend Services">
-    Before testing, ensure the GAIA backend is running:
+  <Step title="Start the API Server">
+    Before testing, start the GAIA API server:
 
     ```bash
-    # Terminal 1: Start Lemonade Server
-    lemonade-server serve --ctx-size 32768
-
-    # Terminal 2: Start GAIA API Server
     gaia api start
     ```
+
+    The model server behind it is supervised by `gaia daemon` — check it with `gaia daemon status` if requests fail.
   </Step>
 
   <Step title="Launch Extension Development Host">

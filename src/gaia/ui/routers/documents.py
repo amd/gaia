@@ -39,6 +39,7 @@ from ..utils import (
     compute_file_hash_from_fd,
     doc_to_response,
     ensure_within_home,
+    managed_documents_dir,
     safe_open_document,
 )
 
@@ -47,11 +48,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["documents"])
 
 # ── Blob upload configuration ────────────────────────────────────────────────
-
-# Server-managed location for documents uploaded as blobs (drag-and-drop in
-# browser mode, or any flow that can't provide a real filesystem path).
-# Files stored here are owned by the server and cleaned up on doc deletion.
-MANAGED_DOCS_DIR = Path.home() / ".gaia" / "documents"
 
 # Maximum size for a blob-uploaded document. Matches /api/files/upload for
 # consistency; path-based uploads (where the user already owns the file)
@@ -112,7 +108,7 @@ def _is_server_owned(filepath: str) -> bool:
     """
     try:
         resolved = Path(filepath).resolve()
-        managed = MANAGED_DOCS_DIR.resolve()
+        managed = managed_documents_dir().resolve()
         return resolved.is_relative_to(managed)
     except (OSError, ValueError):
         return False
@@ -354,7 +350,7 @@ async def upload_document_blob(
     required because browser File objects do not expose an absolute
     filesystem path.
 
-    The blob is streamed to ``MANAGED_DOCS_DIR`` with an abort-on-overflow
+    The blob is streamed to ``managed_documents_dir()`` with an abort-on-overflow
     size check, deduplicated by SHA-256 content hash, then indexed via the
     standard RAG pipeline. Files are capped at ``MAX_DOCUMENT_UPLOAD_SIZE``.
 
@@ -383,10 +379,11 @@ async def upload_document_blob(
         )
 
     # 3. Ensure the managed directory exists
+    managed_dir = managed_documents_dir()
     try:
-        MANAGED_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+        managed_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        logger.error("Failed to create managed docs dir %s: %s", MANAGED_DOCS_DIR, e)
+        logger.error("Failed to create managed docs dir %s: %s", managed_dir, e)
         raise HTTPException(
             status_code=500, detail="Failed to prepare document storage"
         )
@@ -394,7 +391,7 @@ async def upload_document_blob(
     # 4. Stream-write to a .partial file, hashing as we go, aborting on
     # oversize. try/finally ensures the partial is cleaned up on any exit
     # path (including ClientDisconnect and CancelledError).
-    partial_path: Path | None = MANAGED_DOCS_DIR / f"{_short_id()}.partial"
+    partial_path: Path | None = managed_dir / f"{_short_id()}.partial"
     final_path: Path | None = None
     hasher = hashlib.sha256()
     bytes_written = 0
@@ -449,7 +446,7 @@ async def upload_document_blob(
         # `partial_path` is cleared so the finally block won't unlink our
         # now-final file.
         safe_stem = _sanitize_stem(Path(display_name).stem)
-        final_path = MANAGED_DOCS_DIR / f"{_short_id()}_{safe_stem}{ext}"
+        final_path = managed_dir / f"{_short_id()}_{safe_stem}{ext}"
         try:
             os.replace(partial_path, final_path)
         except OSError as e:
@@ -504,8 +501,8 @@ async def upload_document_blob(
                 returned_path,
             )
             _cleanup_temp(final_path)
-    except (OSError, KeyError):
-        pass
+    except (OSError, KeyError) as e:
+        logger.warning("Could not check %s for an upload race: %s", final_path, e)
 
     logger.info(
         "Blob upload indexed: %s (%d bytes, %d chunks)",
@@ -629,7 +626,7 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     """Remove a document from the library.
 
     For blob-uploaded documents (files the server owns under
-    ``MANAGED_DOCS_DIR``), the on-disk file is also unlinked as a
+    ``managed_documents_dir()``), the on-disk file is also unlinked as a
     best-effort cleanup. User-owned files from ``upload-path`` are left
     alone.
     """

@@ -18,8 +18,9 @@ GAIA Agent UI requires the Python backend running locally:
 # Install the GAIA Python package
 pip install amd-gaia
 
-# Start the LLM backend (AMD Ryzen AI accelerated)
-lemonade-server serve
+# The LLM backend (AMD Ryzen AI accelerated) starts automatically with the
+# GAIA daemon; start it explicitly only if it isn't already running.
+gaia daemon start
 ```
 
 ## Usage

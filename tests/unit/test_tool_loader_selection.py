@@ -486,17 +486,28 @@ def test_load_bundle_skips_members_absent_from_registry():
     assert "a1" in loaded and "ghost" not in loaded
 
 
-def test_load_bundle_is_cap_aware_and_protects_just_loaded():
-    """At cap, load_bundle evicts an LRU non-CORE tool, never CORE or just-loaded."""
+def test_load_bundle_overshoots_the_cap_then_the_next_turn_trims():
+    """Mid-turn load_bundle is add-only; the cap is restored at the turn boundary.
+
+    Evicting mid-turn would drop a tool from the middle of the offered list and
+    re-prefill everything after it, so the overshoot rides until the next
+    ``select``, which trims LRU-first.
+    """
     tools = ["c1", "d1", "a1", "a2"]
-    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0}})
+    embed = _make_embed_fn(
+        tools,
+        {
+            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
+            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
+        },
+    )
     bundles = [ToolBundle(name="A", members=frozenset({"a1", "a2"}), description="A")]
     loader = ToolLoader(frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=3)
     reg = _registry(tools)
     assert loader.select("q", reg) == ["c1", "d1"]  # CORE + matched d1 (2 of 3)
-    loaded = loader.load_bundle("A", reg)  # wants a1,a2 with 1 slot free → evict
-    assert set(loaded) == {"c1", "a1", "a2"}  # cap held; d1 evicted
-    assert "d1" not in loaded
+    loaded = loader.load_bundle("A", reg)  # wants a1,a2 with 1 slot free
+    assert loaded == ["c1", "d1", "a1", "a2"]  # add-only: d1 keeps its slot
+    assert loader.select("q2", reg) == ["c1", "a1", "a2"]  # cap restored, d1 LRU
 
 
 def test_load_bundle_emits_same_turn_loaded_superset_line():
@@ -508,6 +519,32 @@ def test_load_bundle_emits_same_turn_loaded_superset_line():
     assert events, "no load_tools TOOL_LOADER line captured"
     assert events[0]["turn"] == loader._turn
     assert {"a1", "a2"} <= set(events[0]["loaded"])
+
+
+def test_load_bundle_reports_evictions_from_the_selection_not_a_literal():
+    """The eviction fields must read from the scratch object.
+
+    load_bundle is add-only today, so a hardcoded ``[]`` looks correct — and
+    would keep claiming "nothing evicted" if eviction returned to this path.
+    """
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+
+    real_admit = loader._admit
+
+    def _admit_and_evict(name, sel):
+        sel.evicted.append(f"victim_of_{name}")
+        sel.skipped_at_cap.append(f"skipped_for_{name}")
+        return real_admit(name, sel)
+
+    loader._admit = _admit_and_evict
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.load_bundle("A", reg)
+
+    events = [p for p in _loader_payloads(records) if p.get("event") == "load_tools"]
+    assert events, "no load_tools TOOL_LOADER line captured"
+    assert events[0]["evicted"] == ["victim_of_a1", "victim_of_a2"]
+    assert events[0]["skipped_at_cap"] == ["skipped_for_a1", "skipped_for_a2"]
 
 
 def test_escape_hatch_and_load_counters_increment():
@@ -540,6 +577,86 @@ def test_reset_session_emits_no_summary_when_no_turns():
     with _capture("gaia.agents.base.tool_loader") as records:
         loader.reset_session()  # turn == 0 → nothing to summarize
     assert not any("TOOL_LOADER_SESSION" in r.getMessage() for r in records)
+
+
+# ── admit_tools (a skill loaded mid-turn) ──────────────────────────────────
+
+
+def test_admit_tools_admits_exact_names_in_order():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)  # turn 1: CORE only (c1)
+    loaded = loader.admit_tools(["b1", "a1"], reg)
+    # Admission order, not sorted: a re-sorted list voids the cached prefix.
+    assert loaded == ["c1", "b1", "a1"]
+
+
+def test_admit_tools_skips_names_absent_from_the_registry():
+    """A skill may name a tool this agent lacks; the loader must not invent it."""
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    assert loader.admit_tools(["a1", "no_such_tool"], reg) == ["c1", "a1"]
+
+
+def test_admit_tools_is_idempotent_for_already_loaded_names():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    loader.admit_tools(["a1", "a1"], reg)
+    assert loader.admit_tools(["a1"], reg) == ["c1", "a1"]
+
+
+def test_admit_tools_overshoots_the_cap_then_the_next_turn_trims():
+    """Add-only like ``load_bundle`` — it runs mid-turn, where eviction costs a re-prefill.
+
+    Evicting here would drop a tool the current prompt already offers: the model
+    could still call it, which would register as a spurious escape hatch, and
+    the next turn's list would have a hole in the middle.
+    """
+    tools = ["c1", "d1", "a1", "a2"]
+    embed = _make_embed_fn(
+        tools,
+        {
+            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
+            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
+        },
+    )
+    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=3)
+    reg = _registry(tools)
+    assert loader.select("q", reg) == ["c1", "d1"]
+
+    loaded = loader.admit_tools(["a1", "a2"], reg)  # two names, one free slot
+
+    assert loaded == ["c1", "d1", "a1", "a2"]  # d1 keeps its slot
+    assert loader.select("q2", reg) == ["c1", "a1", "a2"]  # cap restored, d1 LRU
+
+
+def test_admit_tools_does_not_count_as_an_escape_hatch():
+    """The point of the feature: the skill's tools arrive without a recovery event."""
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    loader.admit_tools(["a1"], reg)
+    assert loader._load_tools_count == 0
+
+
+def test_admit_tools_logs_the_loaded_set_in_admission_order():
+    """The recall parser reads ``loaded`` from this line; sorting it would lie."""
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.admit_tools(["b1", "a1"], reg)
+    events = [
+        p for p in _loader_payloads(records) if p.get("event") == "admit_skill_tools"
+    ]
+    assert events and events[0]["loaded"] == ["c1", "b1", "a1"]
+
+
+def test_admit_tools_stays_quiet_when_there_is_nothing_to_admit():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.admit_tools(["c1", "ghost"], reg)  # already loaded / unknown
+    assert not [
+        p for p in _loader_payloads(records) if p.get("event") == "admit_skill_tools"
+    ]
 
 
 # ── embedder failure ─────────────────────────────────────────────────────

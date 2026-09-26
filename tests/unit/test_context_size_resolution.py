@@ -26,6 +26,13 @@ def isolated_config(monkeypatch):
 
     monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
     monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="gpu"))
+    # initialize_lemonade_for_agent calls this once at startup to make sure a
+    # daemon owns the model server (#3122) — a real front-end concern this
+    # file's tests never exercise, and left unmocked it tries to spawn an
+    # actual GAIA daemon from a unit test.
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_service.ensure_daemon_owns_lemonade", lambda: None
+    )
 
 
 @pytest.mark.parametrize(

@@ -94,7 +94,7 @@ def _probe_model_present(probe_base: str, model_id: str) -> bool:
 
     resp = requests.get(
         f"{probe_base}/models",
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
     )
     resp.raise_for_status()
@@ -119,7 +119,7 @@ def _probe_npu_available(probe_base: str) -> bool:
 
     resp = requests.get(
         f"{probe_base}/system-info",
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
     )
     resp.raise_for_status()

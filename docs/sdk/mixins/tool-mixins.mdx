@@ -38,12 +38,14 @@ Each row is the exact `name → module.Class` mapping the registry resolves:
 | `file_search` | `from gaia.agents.tools.file_tools import FileSearchToolsMixin` | Fuzzy/glob file search |
 | `file_io` | `from gaia.agents.tools.file_io_tools import FileIOToolsMixin` | Read/write/edit files |
 | `shell` | `from gaia.agents.tools.shell_tools import ShellToolsMixin` | Sandboxed shell commands |
+| `cli_setup` | `from gaia.agents.tools.cli_setup_tools import CliSetupToolsMixin` | Install and sign in to a skill's CLI ([how it works](/guides/gaia#setting-up-a-cli-a-skill-needs)) |
 | `screenshot` | `from gaia.agents.tools.screenshot_tools import ScreenshotToolsMixin` | Screen capture |
 | `filesystem` | `from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
 | `browser` | `from gaia.agents.tools.browser_tools import BrowserToolsMixin` | Web search, page fetch, download |
 | `sd` | `from gaia.sd.mixin import SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `from gaia.vlm.mixin import VLMToolsMixin` | Vision LLM / structured extraction |
+| `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 
 The sections below show usage patterns for the most common mixins; the
 `file_io` mixin has its own spec at [FileIOToolsMixin](/spec/file-io-tools-mixin).
