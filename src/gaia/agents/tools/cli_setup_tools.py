@@ -171,12 +171,11 @@ class CliSetupToolsMixin:
         def check_cli_setup(binary: str) -> Dict[str, Any]:
             """Check whether a skill's CLI is installed and signed in.
 
-            Call this BEFORE telling the user anything is missing, and before
-            install_cli or sign_in_cli. Returns a state of ready (nothing to
-            do), missing (not installed), unauthenticated (needs sign-in),
-            insufficient_scopes (signed in but lacking a permission), or
-            env_token (signed in via an environment variable and NOT fixable
-            by signing in). Read-only; it never changes anything.
+            Call this BEFORE install_cli, sign_in_cli, or telling the user
+            anything is missing. State is ready, missing (not installed),
+            unauthenticated, insufficient_scopes (signed in, lacking a
+            permission), or env_token (signed in via an env var, which
+            signing in will NOT fix). Read-only.
 
             Args:
                 binary: The CLI to check, e.g. 'gh'.
@@ -294,11 +293,11 @@ class CliSetupToolsMixin:
             """Sign a CLI in to the user's account through their browser.
 
             Only call this after check_cli_setup reports 'unauthenticated' or
-            'insufficient_scopes'; this is NOT the fix for 'env_token'. GAIA
-            cannot complete sign-in alone: it shows the user a one-time code
-            to enter in their browser and waits for them. The user must approve
-            the command before the flow starts. Copy check_cli_setup's
-            sign_in_command verbatim into command; a mismatch is refused.
+            'insufficient_scopes'; it is NOT the fix for 'env_token'. GAIA
+            shows the user a one-time code to enter in their browser and
+            waits. The user must approve the command first. Copy
+            check_cli_setup's sign_in_command verbatim into command; a
+            mismatch is refused.
 
             Args:
                 binary: The CLI to sign in, e.g. 'gh'.

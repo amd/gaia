@@ -121,33 +121,42 @@ def _forbidden(label: str):
 
 
 @pytest.mark.parametrize(
-    "tool_name, expected_timeout, description_fragments",
+    "tool_name, expected_timeout, description_fragments, documented_args",
     [
         (
             "check_cli_setup",
             None,
-            ("BEFORE", "env_token", "Read-only", "binary:"),
+            ("BEFORE", "env_token", "Read-only"),
+            ("binary",),
         ),
         (
             "install_cli",
             cli_setup_tools._INSTALL_TOOL_TIMEOUT_S,
-            ("'missing'", "approve", "install_command", "command:"),
+            ("'missing'", "approve", "install_command"),
+            ("binary", "command"),
         ),
         (
             "sign_in_cli",
             cli_setup_tools._SIGN_IN_TOOL_TIMEOUT_S,
-            ("'unauthenticated'", "'env_token'", "one-time code", "command:"),
+            ("'unauthenticated'", "'env_token'", "one-time code"),
+            ("binary", "command"),
         ),
     ],
 )
 def test_registered_setup_tools_keep_budgets_and_model_instructions(
-    tools, tool_name, expected_timeout, description_fragments
+    tools, tool_name, expected_timeout, description_fragments, documented_args
 ):
     """Decorator migration must retain watchdog budgets and model guidance."""
     registered = _TOOL_REGISTRY[tool_name]
     assert registered["timeout"] == expected_timeout
     for fragment in description_fragments:
         assert fragment in registered["description"]
+    # ``Args:`` text rides in properties.<arg>.description, which is what the
+    # model reads as it fills the argument in — not the schema description.
+    for arg in documented_args:
+        assert registered["parameters"][arg].get(
+            "description"
+        ), f"{tool_name}({arg}=...) lost its per-argument guidance"
 
 
 # ---------------------------------------------------------------------------
@@ -269,8 +278,11 @@ def test_a_binary_with_no_policy_is_refused_not_executed(
     assert result["status"] == "error"
     assert result["has_errors"] is True
     assert "no setup policy" in result["error"]
-    # Says what it CAN set up, so the model retries with a real one.
-    assert "gh, pytest" in result["error"]
+    # Says what it CAN set up, so the model retries with a real one. Asserted
+    # as membership: BINARY_POLICIES grows, and the order is alphabetical.
+    offered = result["error"].split("Tools GAIA can set up:")[1]
+    for settable in ("gh", "pytest"):
+        assert settable in {name.strip(" .") for name in offered.split(",")}
 
 
 def test_the_binary_name_is_matched_case_and_whitespace_insensitively(
