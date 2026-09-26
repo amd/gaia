@@ -204,9 +204,8 @@ route promotions through `bug` unless you deliberately widen the auto-fix `if`.
 
 ## Cost & safety invariants
 
-- **Model** is `AUDIT_MODEL` (top-level env, `claude-opus-5` — ~half the token burn of
-  Fable for comparable static-review quality, and the same $5/$25 as the Opus 4.8 it
-  replaced). One place to change it; swap to `claude-fable-5` for maximum depth at ~2x
+- **Model** is `AUDIT_MODEL` (top-level env, `claude-opus-5-5` — $4/$20 per MTok, under half
+  Fable's price for comparable static-review quality, run at its default `medium` effort). One place to change it; swap to `claude-fable-5` for maximum depth at ~2x
   cost. A measured Fable deep run was ~$45 of API-equivalent subscription usage; Opus
   roughly halves that.
   ⚠️ **Model support is gated by the pinned `claude-code-action` version** — the action

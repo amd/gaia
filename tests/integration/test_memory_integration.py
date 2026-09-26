@@ -1372,13 +1372,13 @@ class TestSchemaMigration:
     """Test that the current schema features work on fresh databases."""
 
     def test_fresh_install_gets_current_schema(self, memory_store):
-        """Fresh install creates schema version 3 (procedures table, #887)."""
+        """Fresh install creates schema version 5 (synthesis marks, #887)."""
         with memory_store._lock:
             cursor = memory_store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             version = cursor.fetchone()[0]
-        assert version == 3
+        assert version == 5
 
     def test_embedding_column_exists(self, memory_store):
         """The embedding BLOB column exists in the knowledge table."""

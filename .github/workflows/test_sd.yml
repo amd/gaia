@@ -191,6 +191,10 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          # gaia init starts GAIA's own Lemonade Server; stop it so this
+          # self-hosted runner is left without a server or its record.
+          Write-Host "Stopping GAIA's Lemonade Server..."
+          & gaia lemonade embedded stop
           Write-Host "Stopping Lemonade Server..."
           try {
               Stop-Process -Name "lemonade-server" -Force -ErrorAction SilentlyContinue
