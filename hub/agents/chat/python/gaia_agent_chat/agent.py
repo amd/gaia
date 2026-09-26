@@ -36,6 +36,11 @@ from gaia.agents.base.checks import (
     snippet_target,
 )
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.context_eviction import (
+    DEFAULT_EVICT_KEEP_STEPS,
+    DEFAULT_EVICT_MIN_BATCH_TOKENS,
+    DEFAULT_EVICT_THRESHOLD_TOKENS,
+)
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.project_map import resolve_project_root
 
@@ -162,6 +167,17 @@ class ChatAgentConfig:
     min_context_size: Optional[int] = None
     # None = per-model default (larger for Lemonade cloud models).
     max_output_tokens: Optional[int] = None
+
+    # Evict tool results older than ``keep_steps`` from the context sent to
+    # the model (never from the log) once the measured prompt is over the
+    # threshold and the batch is worth a cache break; each stays readable via
+    # read_tool_output. "auto" is on only for a cloud model whose cached-input
+    # price ratio (gaia.llm.cache_pricing) makes it pay. GAIA_CONTEXT_EVICTION,
+    # GAIA_EVICT_THRESHOLD, GAIA_EVICT_KEEP and GAIA_EVICT_MIN_BATCH win.
+    context_eviction: str = "off"
+    context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS
+    context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS
+    context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS
 
     # Debug/output settings
     debug: bool = False
@@ -514,6 +530,10 @@ class ChatAgent(
                 else 32768
             ),
             max_output_tokens=config.max_output_tokens,
+            context_eviction=config.context_eviction,
+            context_eviction_threshold_tokens=config.context_eviction_threshold_tokens,
+            context_eviction_keep_steps=config.context_eviction_keep_steps,
+            context_eviction_min_batch_tokens=config.context_eviction_min_batch_tokens,
         )
 
         # Without this, throwaway scripts land in the user's project. One path

@@ -489,6 +489,51 @@ the NPU budget. A cloud model reached through Lemonade gets the conservative
 30,000/20,000 without reading the local device profile. The Claude path uses its existing larger window. These are
 per-result character budgets, not measured remaining tokens.
 
+
+## Evicting stale tool results
+
+On a large repository the context an agent re-sends each step grows to
+130–195K tokens, and most of it is old tool results the model has already
+acted on. Context eviction replaces such results, in the list sent to the
+model only, with a one-line stub that names where the full text is:
+
+```
+[evicted: read_file path=src/gaia/cli.py; 41203 chars; read_tool_output(artifact=output_…, entry=1) fetches it]
+```
+
+This is not the context compaction GAIA's roadmap rules out ("memory + RAG
+handles long conversations"): nothing is summarised and nothing is lost. Every
+evicted result is archived whole in the agent's artifact store and stays
+fetchable through `read_tool_output`; a result that already arrived as a chunk
+index keeps its handle and index. The turn's conversation log — what
+transcripts and the Agent UI show — is never touched. It is **off by default**.
+
+Whether eviction saves money depends on the provider's cached-versus-uncached
+input price: every eviction changes the prompt prefix, so the next call
+re-reads everything after the eviction point uncached once. Simulated on real
+per-step counts, Kimi K2.7 (cached $0.19/M vs $0.95/M) saves 27%, GLM-5.3
+Flash 11%, and DeepSeek V4.1 Flash (0.006 vs 0.30) loses. So the policy fires
+rarely and in batches:
+
+- `context_eviction` — `off` (default), `on`, or `auto`. `auto` is on only for
+  a cloud model whose cached/uncached input price ratio, from the table in
+  `gaia.llm.cache_pricing`, is at least 0.1; a local model or one not in the
+  table is off, said once at info level, never guessed.
+- `context_eviction_threshold_tokens` (60,000) — nothing is evicted until the
+  last measured prompt (`prompt_tokens` from the previous step) is over this.
+- `context_eviction_keep_steps` (8) — results from the last this-many steps are
+  never evicted.
+- `context_eviction_min_batch_tokens` (30,000) — the evictable results must add
+  up to at least this (chars / 3.6) before they go, all in one batch.
+
+`GAIA_CONTEXT_EVICTION`, `GAIA_EVICT_THRESHOLD`, `GAIA_EVICT_KEEP` and
+`GAIA_EVICT_MIN_BATCH` override the four settings; a malformed value is an
+error at construction. Once evicted, a result stays evicted, so the prefix is
+deterministic afterwards. `read_tool_output` pages and `delegate_task` results
+are never evicted, and user and assistant messages are never changed. Each
+batch adds `evicted_results` and `evicted_tokens_est` to that step's `stats`
+entry in the conversation log and logs one info line.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>
