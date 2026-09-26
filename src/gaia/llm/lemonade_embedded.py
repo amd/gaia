@@ -98,6 +98,23 @@ _LEMOND_CONFIG = {
     "broadcast": False,
 }
 
+
+def _lemond_config(ctx_size: Optional[int] = None) -> Dict[str, object]:
+    """The config GAIA writes for its private instance.
+
+    ``global_timeout`` is the per-request budget. Lemonade 11.9.0 made it
+    configurable, defaulting to 600s, which is short for the window GAIA pins: a
+    long document is one large prefill, and 65536 tokens on a slow machine does
+    not finish in ten minutes — the request dies and the answer is truncated.
+
+    The value comes from ``request_budget_seconds`` so the server and the client
+    that talks to it cannot be set to disagree.
+    """
+    from gaia.llm.lemonade_client import request_budget_seconds
+
+    return {**_LEMOND_CONFIG, "global_timeout": request_budget_seconds(ctx_size)}
+
+
 _HEALTH_PATH = "/api/v1/health"
 _START_TIMEOUT = 60.0
 _STOP_TIMEOUT = 20.0
@@ -664,7 +681,9 @@ class EmbeddedLemonade:
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         path = self.config_dir / "config.json"
-        path.write_text(json.dumps(_LEMOND_CONFIG, indent=2), encoding="utf-8")
+        # Rewritten on every start(), so a device-profile or GAIA_CTX_SIZE change
+        # moves the request budget with it rather than leaving a stale number.
+        path.write_text(json.dumps(_lemond_config(), indent=2), encoding="utf-8")
         return path
 
     # -- state ------------------------------------------------------------
