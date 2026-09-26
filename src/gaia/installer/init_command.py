@@ -937,6 +937,8 @@ class InitCommand:
                 self._print("   Stopping Lemonade Server to reinstall it...")
                 embedded.stop()
 
+            # is_installed() checks this version's own dist dir, so an older
+            # binary left on disk after a version change does not count.
             if self.force_reinstall or not embedded.is_installed():
                 self._print(f"   Downloading Lemonade Server v{embedded.version}...")
                 embedded.install(force=self.force_reinstall)
