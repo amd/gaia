@@ -1,0 +1,321 @@
+---
+title: "Adaptive Memory"
+description: "Learning what works and what fails: outcome records, attributed lessons with evidence, and an agent that maintains its own memory"
+icon: "brain"
+---
+
+# Adaptive memory: learning what works and what fails
+
+> **Status:** Proposed — nothing below is implemented unless marked *exists today*
+>
+> **Priority:** P1
+>
+> **Related:** [Adaptive Skills](/plans/adaptive-skills) (the learned overlay on an
+> authored skill), [Skill Synthesis](/plans/skill-synthesis), the verification
+> footer (#3376, #3677, #3989), the self-healing error store (`_forget_errors_for_operation`)
+
+---
+
+## 1. The problem
+
+**The agent repeats its mistakes across sessions, and it does not learn which
+approaches worked.**
+
+Today a session ends and the only things that survive are facts, preferences and
+the raw text of tool errors. A run that took 60 steps because the agent explored the
+wrong directory first, tried `pytest` from the wrong cwd, and finally succeeded with
+a different approach leaves behind... a `fact` or two. The next session starts the
+same way. The benchmark campaigns saw exactly this: on identical tasks the same
+model re-derives the same dead ends run after run, and the spread between runs
+(37–61 steps on one TheRock task, ~30% on steps generally) is mostly *rediscovery*,
+not model randomness.
+
+Two halves are missing:
+
+- **Nothing records outcomes.** The memory extractor
+  (`_EXTRACTION_PROMPT`, [`memory.py:234`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py))
+  is asked for knowledge "useful in future conversations" and is explicitly told to
+  skip "what the assistant did or changed". That is the right rule for facts and the
+  wrong rule for lessons — the *approach* is what the next session needs.
+- **Nothing attributes.** When a task passes or fails, no record says which stored
+  memory, skill delta or approach was in play, so there is no signal to raise or
+  lower confidence on. `use_count` and the +0.02 confidence bump on recall
+  (`memory_store.py:1264`) count *retrieval*, not *effect*.
+
+The one mechanism that does learn from failure — auto-stored `error` rows — is
+one-directional and coarse: a failed call becomes "Known errors to avoid" in the
+system prompt (`memory.py:2395`), and a later success on the same operation deletes
+it (`_forget_errors_for_operation`, `memory.py:2841`). There is no "this worked",
+no "this worked *instead*", and no memory of *why* the first attempt failed.
+
+## 2. What exists today
+
+Everything in this table is on `main` and is what the design builds on. Nothing
+here is new work.
+
+| Piece | Where | What it gives the design |
+|---|---|---|
+| Knowledge rows with `category`, `context`, `confidence`, `use_count`, `created_at`/`updated_at`/`last_used`, `superseded_by` | `memory_store.py:274` (schema) | The row shape a lesson can reuse — lineage and scoping are already columns |
+| Categories `fact, preference, error, skill, note, reminder` (+ privileged `system, profile, permission`) | `VALID_CATEGORIES`, `EXTRACTABLE_CATEGORIES`, `memory_store.py:99–129` | Where a new `lesson` category slots in, and the privileged/extractable split it must respect |
+| Contexts (`global` default, `work`, `personal`, ...) with a per-agent active context | `memory_context` / `set_memory_context`, `memory.py:1024` | The scoping axis; every store and recall already filters on it |
+| Extraction ops `add` / `update` / `delete` (update = store new + supersede old) | `_execute_extraction_operations`, `memory.py:1729` | The write path; supersede-not-delete already exists for `update` |
+| `remember`, `recall`, `update_memory`, `forget` tools | `memory.py:3016`, `:3140`, `:3323`, `:3427` | The model's own hands on memory |
+| Auto-stored errors keyed by operation, dropped on later success | `_operation_key` `:2828`, error store `:2885`, `_forget_errors_for_operation` `:2841` | The only outcome-driven learning today, and the pattern (scope to the *operation*, not the tool) to keep |
+| Per-turn tool record for grounding (`outcome` ∈ ok/failed/refused) | `_record_tool_call`, `memory.py:1692` | Evidence the extractor already sees |
+| Per-turn verification record: `check_label`, `check_target`, `check_kind`, `failed`, `ran`, `mutated` | `verification_record`, [`verification.py:747`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/verification.py); logged in `Agent._turn_tool_executions` (`agent.py:1304`, `:5729`) | The pass/fail evidence for an outcome record, free of any extra model call |
+| Claim check: does the answer's test claim match what ran? | `unsupported_test_claim`, `verification.py:785` | The honesty bit — a lesson learned from a run that lied about its tests is not a lesson |
+| Reconciliation (reinforce / contradict / weaken / neutral over >0.85-similar pairs) | `reconcile_memory`, `memory.py:2102` | The conflict detector a contradicted lesson goes through |
+| Consolidation of old sessions into knowledge | `consolidate_old_sessions`, `memory.py:1882` | The batch pass that can distil lessons from history |
+| Skill deltas with `success_count` / `attempt_count`, `status`, `provenance`, `superseded_by` | `skill_deltas` table, `memory_store.py:366` | Proof the repo already accepted "confidence from measured attempts" and "keep the row, never delete" — the lesson store copies both |
+| Flagship composition | `GaiaAgent(ProjectMapMixin, ChatAgent, SkillLibraryToolsMixin, SkillLearningToolsMixin, ...)`, [`agent.py:235`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/agent.py) | Memory is on by default in the base; the flagship is where the loop is wired |
+
+## 3. Design
+
+Four stages, each a small addition to a module that exists.
+
+### 3.1 Outcome record — one per task, derived, not asked for
+
+At the end of every turn the loop already holds `_turn_tool_executions` (the
+verification records) and `_turn_tool_record` (the grounding record). An
+**outcome record** is those two folded into one row, written by the loop, never by
+the model:
+
+```
+outcome {
+  session_id, turn_index, project_root, memory_context,
+  goal_digest            -- first ~200 chars of the user request
+  approach               -- ordered list of (operation_key, outcome) from the tool record
+  checks                 -- verification records with check_kind == "test" | "lint" | "build"
+  passed                 -- the latest run of each check passed AND nothing mutated after it
+  claim_ok               -- unsupported_test_claim() returned None
+  steps, tokens, wall_s
+  in_play                -- see 3.2
+}
+```
+
+`passed` is computed the way the footer computes it — a repeated check counts by
+its latest run (#3989), a check that ran before the last edit is stale, a refused
+check did not run (#3677). That is the whole point of deriving it from
+`verification.py`: the outcome record cannot be more optimistic than the footer.
+
+Where it lives: a new `outcomes` table in `memory_store.py` next to `knowledge`.
+It is *not* a knowledge row — it is evidence, and evidence is never recalled into
+the prompt directly.
+
+### 3.2 Attribution — what was in play
+
+Attribution answers "which memory shaped this run?". It is cheap because recall
+already tells us: every knowledge row the dynamic context injected
+(`_build_dynamic_memory_context`, `memory.py:2491`), every row a `recall()` call
+returned, every active skill delta, and every stored `error` that matched an
+operation key the run attempted. Those ids go into `outcome.in_play`.
+
+No model call, no guessing. If a lesson was in the prompt and the task passed, the
+lesson gets a confirmation; if it was in the prompt and the task failed *on the
+operation the lesson is about*, it gets a contradiction. A lesson about `pytest` is
+not blamed for a failed web fetch — attribution is scoped by `_operation_key`, the
+same scoping `_forget_errors_for_operation` already uses.
+
+### 3.3 Lessons — scoped, weighted, with evidence
+
+A **lesson** is a new knowledge category, `lesson`, in `EXTRACTABLE_CATEGORIES`
+(the model may write one) but with a write path that refuses a row without
+evidence:
+
+```
+lesson {
+  content        -- one sentence, imperative: "Run pytest from the repo root, not tests/"
+  operation      -- metadata.operation, an _operation_key; the thing the lesson is about
+  context        -- 'project:<digest of project_root>' or 'global'
+  confidence     -- 0.5 at birth; +0.15 per confirmation, -0.25 per contradiction, clamped [0.05, 0.95]
+  metadata.evidence -- [outcome_id, ...]  at least one; the row is refused without it
+  superseded_by  -- lineage, as for every other row
+}
+```
+
+Two scopes only. **Project-scoped** lessons carry the project root's digest as
+their `context` and are recalled only when the agent is in that project.
+**Global** lessons are those confirmed in two or more distinct projects — promotion
+is automatic on the second confirmation from a different `project_root`, never on
+the model's say-so. Anything else (`work`, `personal`) stays what it is today: a
+user-chosen context for facts, not a lesson scope.
+
+Confidence moves only on attributed outcomes. A lesson nobody used decays at
+`reconcile_memory` time — 0.02 per pass, the mirror of the recall bump — so an
+unused lesson fades and a contradicted one falls out fast. Below 0.2 the row is
+superseded by nothing (`status`-style: still in the table, out of every active
+query), never deleted.
+
+Where lessons come from, in order of trust:
+
+1. **The loop, mechanically.** A failed operation followed in the same turn by a
+   passing alternative on the same target is the cleanest signal there is:
+   `error(op A) → ok(op B, same target) → passed` writes "prefer B over A for
+   `<target>`" with the outcome as evidence. No model call.
+2. **The extractor**, given one new instruction: when the outcome record says
+   `passed` and the approach contains a failed-then-succeeded pair, propose a
+   `lesson` op. The op is refused if its `evidence` does not name this turn's outcome
+   id.
+3. **The model's own `remember(category="lesson")`** — allowed, but stored at
+   confidence 0.3 with evidence `[]` marked *claimed*, and never injected into the
+   prompt until one attributed confirmation gives it evidence. A claim is a
+   hypothesis, not a lesson.
+
+### 3.4 Application — plan time and decision time
+
+**Plan time.** Before the first tool call of a turn, recall lessons for the
+active project scope plus global, ranked by confidence × recency, capped at five,
+and inject them as a `Lessons:` section next to `Known errors to avoid:` in
+`_build_dynamic_memory_context`. Five lines, ~300 tokens; the NPU window is 32K and
+the section is bounded the way the errors section is.
+
+**Decision time.** Before a *risky* action — a mutating tool (`is_mutating_tool`,
+`verification.py:566`), or any operation whose `_operation_key` has a stored
+`error` or a low-confidence lesson — the loop checks the lesson store for that key.
+A hit is surfaced as a one-line tool-result preamble ("A previous run of `pytest
+tests/` here failed with ...; the lesson on file says ...") rather than a block:
+the model keeps the decision, the evidence is in front of it. This is the same
+seam `_forget_errors_for_operation` and the confirmation gate already sit on, so
+it is one hook, not a new loop.
+
+## 4. The agent maintains its own memory
+
+Lessons are only useful if they stay true, and the agent is the one who finds out
+they are not. It needs three operations, all of which exist in some form:
+
+| Operation | Today | Adaptive memory |
+|---|---|---|
+| Insert | `remember()`; extractor `add` | Unchanged, plus the evidence rule for `lesson` |
+| Edit | `update_memory()`; extractor `update` = new row + `superseded_by` on the old | Same mechanism; an edit to a lesson *inherits* the old row's evidence and confidence, and the old row is kept as history |
+| Delete | `forget()` and extractor `delete` hard-delete; `_forget_errors_for_operation` hard-deletes stale errors | **Supersede, not delete.** `forget()` on a lesson sets `superseded_by = 'retired:<reason>'`; the row stays queryable as history. Hard delete remains a user action only |
+
+That last row is the one behavior change to existing code: `forget()` and the
+`delete` op become a supersede for `lesson` rows (facts keep today's semantics — a
+wrong phone number should be gone). The `skill_deltas` table already commits to
+"the row is KEPT, never deleted" (`memory_store.py:382`); this extends the same
+rule to lessons.
+
+**Edit history** falls out of `superseded_by`: walking the chain backwards from
+the active row gives every prior version with its `created_at` and evidence. No new
+table — one query.
+
+**The user has to be able to see and change this.** Today the surfaces are uneven:
+
+- The Agent UI has full CRUD (`GET/POST/PUT/DELETE /api/memory/knowledge`,
+  `src/gaia/ui/routers/memory.py:327–476`) and a review flow.
+- The TUI's `/memory` is **view-only** — a snapshot (`tui/internal/ui/chat/memoryview.go`).
+- The CLI's `gaia memory` has **only `status` and `bootstrap`** (`src/gaia/cli.py:2933`).
+
+The plan adds `gaia memory list [--category lesson] [--context ...]`,
+`gaia memory edit <id>`, `gaia memory retire <id>` and `gaia memory history <id>`,
+all thin wrappers on the store methods the UI router already calls, and gives the
+TUI `/memory` an edit/retire action on the selected row through the same daemon
+route. A lesson the user retires gets `superseded_by = 'retired:user'` and is never
+re-learned from the same evidence: the write path checks the retired chain's
+evidence ids before inserting.
+
+## 5. Safety
+
+- **Evidence, never a claim.** A `lesson` row must carry at least one outcome id or
+  it is stored as *claimed* at 0.3 and kept out of the prompt. The extractor's
+  existing "Knowledge that only the assistant's answer asserts is not grounded" rule
+  applies verbatim; the outcome record is the grounding.
+- **Cross-project leakage guard.** A project-scoped lesson is filtered by
+  `context` at recall, the same filter facts use today. Promotion to global requires
+  confirmations from two distinct `project_root`s, and a global lesson whose next
+  contradiction comes from a *third* project is demoted back to the project that
+  last confirmed it. The digest, not the path, is stored: paths are user data.
+- **No self-granted autonomy.** `lesson` is extractable, not privileged. It can
+  never say "skip confirmation" — the confirmation gate reads
+  `CONFIRMATION_REQUIRED_TOOLS`, not memory, and the `permission` category stays
+  privileged exactly as `memory_store.py:117` describes.
+- **Caps.** At most 5 lessons in the prompt, at most 200 active lessons per
+  project scope and 200 global; the lowest-confidence rows beyond the cap are
+  superseded at reconcile time. Outcome rows are pruned with the session they
+  belong to (`prune()` already holds turns for the retention window).
+- **Credential refusal** stays in front of every write (`_looks_like_credential`),
+  and lessons go through the same secret scan as transcripts before they reach an
+  eval artifact.
+- **Incognito** (`_incognito`) skips outcome recording as it skips `remember()`.
+
+## 6. Proving it: a benchmark series
+
+The claim is behavioral, so the proof is a run, judged and metered by the same
+tools as every other benchmark (`gaia eval tasks`, the Opus judge, Fireworks
+metering — see the harness in [#4335](https://github.com/amd/gaia/pull/4335)). Three scenarios,
+each a pair of sessions on one task with memory carried between them:
+
+1. **Seed a mistake → avoid it.** Session A runs a task whose fixture makes the
+   obvious approach fail (`pytest` from `tests/` finds no `conftest`; the repo root
+   works). Session B runs a *different* task in the same project that needs the
+   same check. **Pass:** session B never issues the failing form, and the transcript
+   shows the lesson in the prompt. **Metric:** steps and tokens in B versus a
+   memory-off B.
+2. **Learn what worked.** Session A solves a task by a non-obvious route (a helper
+   script in `scripts/`). Session B, a related task, uses the route on the first
+   attempt. **Metric:** first-tool-call-to-success distance.
+3. **Unlearn when the environment changes.** After scenario 1, the fixture is
+   flipped so the once-failing form now works and the once-working form fails.
+   Session C must contradict the lesson (confidence falls), succeed anyway, and
+   session D must not carry the stale lesson. **Pass:** D's prompt shows the
+   superseded lesson gone and the new one present, with both outcome ids in the
+   history.
+
+Each scenario runs with `--repeats 3`, because one run cannot resolve a 20–30%
+step effect. The judge sees the same tool record it sees today; the new fields are
+in the transcript, so `gaia.eval.bench.transcripts.tool_calls()` needs no change.
+A **planted control** — a lesson stored with fabricated evidence — must be refused
+at write time, the same way `gaia eval tasks controls` proves the judge separates
+honest from fabricated work.
+
+The series ships as an `adaptive_memory` suite in `eval/tasks/tasks.json` and joins
+the [nightly benchmarks](/plans/nightly-benchmarks) once the everyday suite is
+green there.
+
+## 7. Phased rollout
+
+**Phase 1 — record, don't act.** Outcome rows written by the loop; attribution
+filled from what was recalled; `gaia memory status` reports outcome counts and
+pass rate. No lesson is created and nothing enters the prompt.
+*Must not break:* the verification footer's text, the extractor's existing ops, any
+memory eval category (`gaia eval agent --category memory` and `--category gaia_memory`, whose baselines stay
+byte-identical because the prompt is unchanged).
+
+**Phase 2 — mechanical lessons, project-scoped.** Source 1 only (failed-then-
+succeeded pairs). Lessons injected at plan time, capped at five. `forget()` becomes
+supersede for lessons. CLI `list/edit/retire/history`. Scenario 1 and 3 of the
+benchmark series must pass.
+*Must not break:* prompt size on the NPU profile (assert the section is ≤ 300
+tokens in the unit test); the confirmation gate.
+
+**Phase 3 — extractor lessons and decision-time checks.** Source 2, the
+decision-time preamble on risky operations, global promotion on two-project
+confirmation. Scenario 2 must pass and scenario 1's step saving must clear the
+run spread.
+*Must not break:* the rag_quality and tool_selection eval baselines — a prompt
+change means a full `gaia eval agent` comparison per CLAUDE.md.
+
+**Phase 4 — model-claimed lessons and the TUI editor.** Source 3, TUI `/memory`
+edit/retire, consolidation distilling lessons from old sessions.
+
+## 8. Open questions
+
+- **Which project digest?** `project_root` realpath is the obvious key, but a
+  worktree of the same repo is a different path and the same project. A git
+  `remote.origin.url` digest with the path as fallback is the current proposal.
+- **Is a step saving the right primary metric?** Steps vary ~30% run to run on
+  identical config. Pass rate and first-attempt success are more stable; steps
+  may only be reportable as a band.
+- **Confidence constants.** +0.15 / −0.25 / −0.02 are starting points; the
+  benchmark series should tune them, not a review thread.
+- **Consolidation of lessons.** Ten project lessons about `pytest` invocation want
+  to become one. The `reconcile_memory` reinforce path can merge them, but the
+  merged row's evidence list grows without bound — a cap or a summary count is
+  needed.
+- **Sharing.** A global lesson looks like the seed of a skill delta. Whether
+  lessons can graduate into [Adaptive Skills](/plans/adaptive-skills) deltas — and
+  through what consent gate — is deliberately out of scope here.
+- **The email agent.** It lists `Agent` ahead of `MemoryMixin`, which shadows the
+  per-turn tool record (`memory.py:1697`). Outcome recording would fail safe there
+  (no evidence, no lessons) but that is not coverage; the base order needs fixing
+  before it can learn.

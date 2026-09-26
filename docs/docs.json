@@ -432,6 +432,7 @@
               "plans/skill-format",
               "plans/skill-synthesis",
               "plans/adaptive-skills",
+              "plans/adaptive-memory",
               "plans/oem-bundling"
             ]
           },
@@ -443,7 +444,8 @@
               "plans/mcp-docs",
               "plans/desktop-installer",
               "plans/tool-loader",
-              "plans/code-index-review"
+              "plans/code-index-review",
+              "plans/nightly-benchmarks"
             ]
           },
           {
