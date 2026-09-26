@@ -4052,13 +4052,16 @@ Do NOT wrap conversational replies in JSON.
         like :meth:`_call_is_pre_authorized` — a host that implements
         ``policy_refusal_for_call``.
         """
-        if not tool_args:
-            return None
+        # Before the falsy-args guard: a tool whose arguments all default
+        # (``update_gaia_md()``) still has a target, and must not be approved
+        # only to be refused by its own body a moment later.
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         if preflight is not None:
-            refusal = preflight(tool_args)
+            refusal = preflight(tool_args or {})
             if refusal is not None:
                 return refusal
+        if not tool_args:
+            return None
         refuses = getattr(self, "policy_refusal_for_call", None)
         if not callable(refuses):
             return None

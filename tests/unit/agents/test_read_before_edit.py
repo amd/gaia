@@ -450,6 +450,20 @@ class TestRefusedBeforeConfirmation:
         assert result["status"] == "success", result
         assert agent.console.asked == ["write_file"]
 
+    def test_a_call_with_no_arguments_is_still_refused_before_the_prompt(
+        self, agent, tmp_path, monkeypatch
+    ):
+        """``update_gaia_md()`` defaults every argument, and still has a target."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "GAIA.md").write_text("# existing\n", encoding="utf-8")
+
+        result = agent._execute_tool("update_gaia_md", {})
+
+        assert result["status"] == "error"
+        assert check_was_executed(result) is False
+        assert agent.console.asked == []
+        assert (tmp_path / "GAIA.md").read_text(encoding="utf-8") == "# existing\n"
+
     def test_a_path_outside_the_sandbox_gets_the_scope_refusal(
         self, agent, tmp_path_factory
     ):

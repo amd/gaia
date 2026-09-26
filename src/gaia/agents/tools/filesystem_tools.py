@@ -999,7 +999,9 @@ class FileSystemToolsMixin:
                             {7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100))
                         )
                         nontext = sum(1 for byte in sample if byte not in text_chars)
-                        if nontext / len(sample) > 0.30:
+                        # stat can report a size a read does not deliver — a
+                        # pseudo-file, or a truncation between the two calls.
+                        if sample and nontext / len(sample) > 0.30:
                             mime, _ = mimetypes.guess_type(str(resolved))
                             hex_preview = sample[:64].hex(" ")
                             return (
