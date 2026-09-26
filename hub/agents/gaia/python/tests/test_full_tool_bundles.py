@@ -106,8 +106,8 @@ def test_escape_hatch_is_registered_and_core(flagship_registry):
     assert "load_tools" in flagship_registry
 
 
-def test_skill_discovery_loader_is_registered_and_core(flagship_registry):
-    """A shortlist must be able to call the tool its prompt advertises."""
+def test_load_skill_is_registered_and_core(flagship_registry):
+    """The skill catalogue must be able to call the tool its prompt advertises."""
     assert "load_skill" in FULL_CORE_TOOLS
     assert "load_skill" in flagship_registry
 
@@ -122,6 +122,17 @@ def test_run_python_is_core(flagship_registry):
     """Without it the model guesses a number or leaves a script in the repo."""
     assert "run_python" in FULL_CORE_TOOLS
     assert "run_python" in flagship_registry
+
+
+def test_skill_catalogue_renders_for_the_flagship():
+    """A skill the model cannot see is a skill it never loads (#3764)."""
+    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.delenv("GAIA_SKILL_DISCOVERY", raising=False)
+        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        prompt = agent.system_prompt
+    assert "==== SKILLS ====" in prompt
+    assert "- github-triage: " in prompt
 
 
 def test_bundle_menu_renders_for_the_flagship():

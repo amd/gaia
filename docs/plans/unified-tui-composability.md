@@ -307,7 +307,8 @@ different times. The existing handling is good and should be extended, not repla
 `Instance.CheckVersion()` refuses to attach on a daemon MAJOR mismatch
 (`tui/internal/daemon/instance.go`); the sidecar manager probes `/version` and raises
 `VersionMismatchError` on MAJOR mismatch; and `negotiate.go:36-62` feature-gates optional
-request fields by contract version (2.6 questions, 2.11 pre-scan, 2.12 session).
+request fields by contract version (2.6 questions, 2.11 pre-scan, 2.12 session,
+2.13 memory, 2.14 tool decisions and bypass).
 
 Every new surface in §3 adds a contract. Skill listing, skill install, connector-connect,
 and memory-toggle each need a negotiated capability so an older TUI hides the tab instead

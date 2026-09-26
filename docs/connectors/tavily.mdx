@@ -13,7 +13,8 @@ description: "Give GAIA agents web search and content extraction via Tavily."
 [Tavily](https://tavily.com) is a web-search API built for AI agents. The
 connector is an **MCP server** — GAIA spawns the
 [`tavily-mcp`](https://github.com/tavily-ai/tavily-mcp) process on demand via
-`npx` and routes tool calls (`tavily-search`, `tavily-extract`) through it, so
+`npx` (pinned to `tavily-mcp@0.2.22`) and routes tool calls (`tavily_search`,
+`tavily_extract`, `tavily_crawl`, `tavily_map`, `tavily_research`) through it, so
 the tools become available to **all** GAIA agents.
 
 It needs a single secret: a **Tavily API key**. You'll create one, paste it
@@ -50,8 +51,8 @@ other connectors) and writes a `$keyring` reference into
 
 ## Step 3 — Use it
 
-Once configured, grant **and** activate the `tavily-search` /
-`tavily-extract` MCP tools for each agent that should use them. For MCP
+Once configured, grant **and** activate the `tavily_search` /
+`tavily_extract` MCP tools for each agent that should use them. For MCP
 servers a grant covers credential access, but the agent won't see the
 tools until you also activate them (activation defaults to OFF):
 

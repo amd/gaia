@@ -1,7 +1,6 @@
 id: search_empty_fallback
 name: "Search Empty -- Fallback Strategy"
 category: error_recovery
-agent_type: doc
 severity: high
 description: |
   No documents are pre-indexed. Agent must discover and index a file on its own.
