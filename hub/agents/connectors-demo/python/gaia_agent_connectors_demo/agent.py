@@ -35,7 +35,6 @@ make the grant flow more obvious.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, time
 from typing import Any, ClassVar, Dict, List, Optional
@@ -46,10 +45,10 @@ from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.connectors.formatting import format_connector_error as _format_connector_error
 from gaia.connectors.handler import get_credential_sync
 from gaia.connectors.providers.base import ConnectorRequirement
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, resolve_lemonade_base_url
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -143,10 +142,10 @@ def _github_pat() -> str:
         required_scopes=[SCOPE_MCP_USE],
     )
     env = cred.get("env") or {}
-    token = env.get("GITHUB_TOKEN")
+    token = env.get("GITHUB_PERSONAL_ACCESS_TOKEN")
     if not token:
         raise ConnectorsError(
-            "GitHub MCP credential resolved but GITHUB_TOKEN was empty. "
+            "GitHub MCP credential resolved but GITHUB_PERSONAL_ACCESS_TOKEN was empty. "
             "Re-run Settings → Connectors → GitHub → Configure to set the "
             "Personal Access Token."
         )
@@ -341,7 +340,7 @@ class ConnectorsDemoAgent(Agent):
         effective_base_url = (
             config.base_url
             if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+            else resolve_lemonade_base_url()
         )
 
         self.response_mode = "conversational"
