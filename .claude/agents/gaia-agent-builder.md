@@ -77,7 +77,7 @@ Fastest path for end users: `gaia chat --ui` → "+" → **BuilderAgent** (inter
 
 **Optional:**
 - `_create_console(self) -> AgentConsole` — only override if you need a custom console; the base class provides a default
-- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — required *only* for agents exposed through the registry/BuilderAgent flow (see `src/gaia/agents/builder/agent.py`). `ChatAgent` doesn't declare them; `GaiaAgent` and `hub/agents/hello-world` do.
+- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — required *only* for agents exposed through the registry/BuilderAgent flow (see `src/gaia/agents/builder/agent.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `hub/agents/hello-world`, `hub/agents/word-count` and `hub/agents/email` do declare them.
 
 ### 2. Tools
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope
