@@ -10,6 +10,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   to stop the sidecar.** A failed shutdown was thrown away and the command
   exited 0. It now prints the error and exits 1.
 
+- **A second Ctrl+C while the playground is stopping no longer orphans the
+  sidecar.** The handler was registered with `once`, so a repeat Ctrl+C during a
+  slow teardown hit Node's default disposition and killed the process mid-stop —
+  leaving the detached sidecar still holding port 8131, which is exactly the
+  stuck state this release set out to remove. Repeats are now absorbed and
+  reported while the shutdown finishes.
+
 - **`agent-email` now understands `--port=9000` and refuses malformed flags
   instead of quietly using the default port.** `--port=9000` was read as an
   unknown switch, a bare `--port` or `--out` printed "ignoring" and carried on,
@@ -26,6 +33,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   anything (use `connectSidecar` to reuse a running server), or
   `SidecarExitedError` if the port is taken mid-start. A sidecar that crashes
   at startup now fails straight away instead of after the full 30 s wait.
+  A sidecar that becomes healthy and *then* crashes says so, instead of
+  blaming a port conflict and sending you to hunt for a process that was
+  never there.
+
+- **Intel Macs can now install the agent.** Every release publishes an Intel
+  macOS binary, but the hub manifest didn't list Intel macOS as supported, so
+  `gaia hub install email` refused it before downloading anything.
 
 - **Asking a content question about your mail ("who signed this?", "what
   date was agreed?") now actually gets an answer when the answer is in the

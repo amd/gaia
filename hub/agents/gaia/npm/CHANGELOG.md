@@ -18,6 +18,13 @@ the terminal UI meant building it from source.
   error naming the surviving process and how to kill it was discarded, so the
   next `serve` hit an unexplained port conflict. It now prints that error and
   exits 1.
+- Conversation state is saved under `~/.gaia/sessions` instead of the directory
+  the agent was started from. A `session_id` must be 1–128 characters from
+  `A-Z a-z 0-9 . _ -`; any other value is a 400 on `/query` and
+  `/sessions/{session_id}/bypass` instead of a 500. A corrupt saved session fails
+  the request instead of being silently replaced.
+- `gaia hub install gaia` no longer refuses Intel Macs: the hub manifest now
+  lists `darwin-x64`, which the release already builds and the lock already ships.
 - The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.
@@ -31,6 +38,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Say something while the agent is still working.** `POST
+  /v1/gaia/query/{run_id}/followup` hands a live run a message the user typed
+  after it started (contract **2.15**). The run is not interrupted and no
+  second turn starts — the agent folds the text into the turn already running
+  at its next step boundary, so a correction during a five-minute task changes
+  that task instead of arriving after it finished. Unknown run → `404`, an
+  agent that cannot take one → `409`; both loud, because the caller has already
+  taken the message from the user. See SPEC §5.6 and SKILL §7.
 - **Approve a gated tool over HTTP.** `write_file`, `run_shell_command` and the
   seven other confirmation-gated tools can now run through `/v1/gaia/query`:
   the stream stays open on `needs_confirmation` and
@@ -93,6 +108,24 @@ the terminal UI meant building it from source.
   starts one in the background; `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns that off,
   and `GAIA_PROJECT_ROOT` picks the project when the working directory is not
   it. See SKILL §11.
+- **`--bypass-permissions` now lifts the shell guardrails too.** It used to skip
+  only the confirmation prompt, which left the agent unable to run a build or a
+  test suite even with the user's blanket consent: no interpreter, test runner
+  or package manager was reachable, and nothing could write its output anywhere.
+  Under bypass, redirection (`>`, `>>`, `<`), backgrounding (`&`), substitution
+  (`` ` ``, `$()`) and the newline now parse and run — chaining with `&&` / `||`
+  / `;` / `|` already worked by default — the
+  read-only allowlist is replaced by a developer set (`node`, `npm`, `make`,
+  `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`, `timeout`, `export`,
+  `cp`, `mv`, plus `python` / `python3` / `pytest` / `gh` / `git`), and the
+  shell rate limit is dropped. Off by default and byte-identical to before when
+  off. `git` in that set means its policy's outright refusals — push, reset,
+  rebase — also stop applying under bypass. `rm` stays excluded. Every command run this way is audit-logged with its full
+  arguments. Stdio only — an HTTP session's `/bypass` stops its approval prompts
+  but never lifts the shell gates, and the request body cannot ask for it.
+  Redirection has one exception: a command that
+  is nothing but a skill-granted CLI runs argv-only, so `>` there is refused
+  with an explanation instead of reaching the binary as text. See SPEC §5.5.
 - **`503` from `/query` at session capacity.** When every retained session
   slot is busy and none is idle enough to evict, starting a new session
   returns `503` with the reason in `detail` — retryable, distinct from a
@@ -299,9 +332,9 @@ the terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI 0.23.1+ on `PATH` for the daemon the TUI
-  starts. 0.23.1 is the first core whose daemon knows how to supervise this
-  agent; on 0.23.0 the UI starts with nothing behind it.
+  inference, and the `gaia` Python CLI 0.24.1+ on `PATH` for the daemon the TUI
+  starts. 0.24.1 is the first core whose daemon knows how to supervise this
+  agent; on an earlier core the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.
