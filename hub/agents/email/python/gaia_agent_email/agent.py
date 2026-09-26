@@ -32,7 +32,6 @@ Phase I prompt-injection defense:
 
 from __future__ import annotations
 
-import os
 import re
 import uuid
 from pathlib import Path
@@ -104,6 +103,7 @@ from gaia.connectors.providers.microsoft import (
     ACCOUNT_TYPE_WORK,
 )
 from gaia.database.mixin import DatabaseMixin
+from gaia.llm.lemonade_client import resolve_lemonade_base_url
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -918,7 +918,7 @@ class EmailTriageAgent(
         effective_base_url = (
             config.base_url
             if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+            else resolve_lemonade_base_url()
         )
         effective_model_id = config.model_id or resolve_default_email_model(
             effective_base_url

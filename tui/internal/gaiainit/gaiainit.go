@@ -39,10 +39,13 @@ import (
 // agent — the `chat` wheel, which cannot serve this TUI.
 const Profile = "gaia"
 
-// CheckTimeout bounds the read-only readiness probe. It runs a fresh Python
-// interpreter plus one Lemonade health check, so a few seconds is normal; this
-// only guards against a wedged network call hanging a caller forever.
-const CheckTimeout = 30 * time.Second
+// CheckTimeout bounds the readiness probe. It runs a fresh Python interpreter
+// plus one Lemonade health check, so a few seconds is normal -- but after a
+// reboot it also starts the daemon (up to 30s) and has it start GAIA's
+// Lemonade Server (up to 85s, _LEMONADE_ENSURE_TIMEOUT in
+// gaia/daemon/client.py). It must stay above that sum, or the TUI reports
+// "could not be checked" for a start that succeeded.
+const CheckTimeout = 150 * time.Second
 
 // notReadyExitCode is the ONLY exit code that means "not set up yet".
 // Anything else — notably 2, which an installed gaia older than `--check`
@@ -119,8 +122,9 @@ func RunCommand(claudeMode bool) string {
 	return "gaia init --profile " + Profile + SkipSuffix(claudeMode)
 }
 
-// Check reports whether the flagship profile is ready, without installing,
-// starting, or downloading anything.
+// Check reports whether the flagship profile is ready, without installing or
+// downloading anything. A stopped GAIA Lemonade Server is started on the way,
+// as every GAIA entry point does.
 //
 // Three outcomes, and conflating any two of them is a bug: ready, not ready,
 // and — wrapped in ErrUnanswered — the question was never answered.

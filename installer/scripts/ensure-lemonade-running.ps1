@@ -43,6 +43,15 @@ param(
     [switch]$ForceRestart
 )
 
+# In CI, name this server for every later GAIA client in the job, so none of
+# them follows a leftover record of GAIA's own Lemonade to a dead port.
+if ($env:GITHUB_ACTIONS -eq "true") {
+    $env:LEMONADE_BASE_URL = "http://localhost:$Port/api/v1"
+    if ($env:GITHUB_ENV) {
+        "LEMONADE_BASE_URL=http://localhost:$Port/api/v1" >> $env:GITHUB_ENV
+    }
+}
+
 $ErrorActionPreference = "Continue"
 $TaskName = "GaiaLemonadeServer"
 # Bump whenever the task ACTION below changes (launch environment, args,

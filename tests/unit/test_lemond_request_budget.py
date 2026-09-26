@@ -14,6 +14,8 @@ which is how a second number that drifts from the window gets reintroduced while
 looking fixed. One helper feeds lemond's config and the client's timeout.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from gaia.llm.lemonade_client import (
@@ -21,6 +23,7 @@ from gaia.llm.lemonade_client import (
     GPU_CTX_SIZE,
     NPU_CTX_SIZE,
     REQUEST_BUDGET_ENV,
+    LemonadeClient,
     LemonadeClientError,
     request_budget_seconds,
 )
@@ -68,6 +71,40 @@ def test_the_server_config_carries_the_same_number_the_client_uses():
     assert _lemond_config(GPU_CTX_SIZE)["global_timeout"] == request_budget_seconds(
         GPU_CTX_SIZE
     )
+
+
+@patch.object(LemonadeClient, "_ensure_model_loaded")
+@patch("gaia.llm.lemonade_client.requests.post")
+def test_the_client_spends_the_budget_on_a_non_streaming_turn(mock_post, _ensure):
+    """Agreeing on the number is worthless if the request does not carry it.
+
+    The provider every agent goes through passes no timeout, so this default is
+    the only thing standing between a 2048s server budget and a 900s cut-off.
+    """
+    mock_post.return_value = MagicMock(status_code=200, **{"json.return_value": {}})
+
+    LemonadeClient(host="localhost", port=13305).chat_completions(
+        model="test-model", messages=[{"role": "user", "content": "hi"}]
+    )
+
+    assert mock_post.call_args.kwargs["timeout"] == request_budget_seconds()
+
+
+@patch.object(LemonadeClient, "_ensure_model_loaded")
+@patch("gaia.llm.lemonade_client.OpenAI")
+def test_the_client_spends_the_budget_on_a_streamed_turn(mock_openai, _ensure):
+    """A streamed turn prefills the same document, so it needs the same budget."""
+    mock_openai.return_value.chat.completions.create.return_value = iter([])
+
+    list(
+        LemonadeClient(host="localhost", port=13305).chat_completions(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+    )
+
+    assert mock_openai.call_args.kwargs["timeout"] == request_budget_seconds()
 
 
 def test_the_written_config_keeps_the_private_instance_settings():

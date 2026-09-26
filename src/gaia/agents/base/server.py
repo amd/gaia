@@ -203,7 +203,12 @@ class AgentServer:
                 json_type = _REGISTRY_TYPE_TO_JSON.get(
                     param_info.get("type", "string"), "string"
                 )
-                properties[param_name] = {"type": json_type}
+                prop: Dict[str, Any] = {"type": json_type}
+                # Argument text rides here, not in the tool description.
+                param_description = param_info.get("description", "")
+                if param_description:
+                    prop["description"] = param_description
+                properties[param_name] = prop
                 if param_info.get("required"):
                     required.append(param_name)
             definitions.append(

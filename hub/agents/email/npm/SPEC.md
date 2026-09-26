@@ -523,13 +523,22 @@ for (const m of messages) console.log(m.subject, "—", m.from);
 ## Lifecycle helpers
 
 `startSidecar(opts)` does spawn → `waitForHealth` → `checkVersion` in one call and
-shuts down on any failure so a failed start never leaks a process. For finer
-control, the steps are exported individually:
+shuts down on any failure so a failed start never leaks a process. It refuses to
+attach to a server it did not start: if something already listens on the port it
+throws `PortInUseError` before spawning (use `connectSidecar` to reuse a running
+server), and if its own child exits while another process answers the port it
+throws `SidecarExitedError`. That port-conflict claim follows a `/health` probe,
+never the bare fact that the child died: when the child exits and **nothing**
+answers the port, the same `SidecarExitedError` reports a sidecar that became
+healthy and then crashed, and does not send the caller looking for an incumbent
+that was never there. A child that dies during startup ends the health wait
+at once instead of running out the timeout. For finer control, the steps are
+exported individually:
 
 - `fetchBinary(opts)` → download + verify + install; returns `{ binaryPath, sha256, cached, ... }`.
 - `resolveBinaryPath({ resourcesDir })` → locate a fetched binary (throws `BinaryNotFoundError` if absent).
 - `spawnSidecar({ binaryPath, host?, port?, extraArgs? })` → spawn with `--host 127.0.0.1 --port <p>` (default port **8131**).
-- `waitForHealth(baseUrl, { timeoutMs })` → poll `/health`; throws `HealthTimeoutError` on timeout (never assumes ready).
+- `waitForHealth(baseUrl, { timeoutMs, signal })` → poll `/health`; throws `HealthTimeoutError` on timeout or when `signal` aborts (never assumes ready).
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child.
@@ -580,8 +589,16 @@ npx @amd-gaia/agent-email help
 (`--out` to override), `startSidecar`s on `--port` (default 8131), opens the default
 browser to `/v1/email/playground` (`--no-open` to skip), and runs until Ctrl+C.
 The command owns the sidecar lifecycle itself (`autoCleanup: false`) and shuts it
-down on `SIGINT`/`SIGTERM`/`SIGHUP` or on any startup error. Lemonade still has to
-be running for live triage — the page itself reports if it isn't.
+down on `SIGINT`/`SIGTERM`/`SIGHUP` or on any startup error. If that shutdown
+fails, `playground` prints the error and exits 1 rather than 0. A second Ctrl+C
+while the teardown is in flight is absorbed and reported, not acted on — acting
+on it would kill the process mid-shutdown and orphan the sidecar still holding
+the port. Lemonade still has to be running for live triage — the page itself
+reports if it isn't.
+
+Flags accept both `--flag value` and `--flag=value`. A value flag with no value,
+an empty `--flag=`, a value on a boolean switch, or an unknown command exits **2**
+with the usage text; `--port` must be plain digits (no `0x`/`1e3`/padding).
 
 `fetch` is the supported, build-time path. It resolves
 `${process.platform}-${process.arch}`, downloads that platform's artifact from the

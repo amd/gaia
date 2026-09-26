@@ -182,8 +182,8 @@ env:
   # scorecard under different conditions than the release gate. Disable it.
   GAIA_MEMORY_DISABLED: "1"
   # Loopback Lemonade — bypass any runner proxy so Python requests reaches it.
-  # Bare host (no /api/v1): the LemonadeClient normalizes it, and gen_scorecard.py
-  # appends /api/v1/health itself — a suffixed value would double to /api/v1/api/v1.
+  # Bare host or /api/v1 both work: every client, gen_scorecard.py included,
+  # normalizes it through gaia's resolver.
   LEMONADE_BASE_URL: "http://127.0.0.1:13305"
   NO_PROXY: "localhost,127.0.0.1"
 
