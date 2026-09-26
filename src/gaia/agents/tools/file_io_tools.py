@@ -1100,10 +1100,10 @@ class FileIOToolsMixin:
 
             The default way to edit any text file — .md, .py, .yml, .go, .json
             — ahead of rewriting it with write_file or shelling out to sed.
-            The file must have been read with read_file first. edit_python_file
-            is the variant that refuses a syntax-breaking edit. old_content
-            must match exactly one location; zero or several matches return
-            the file's current content, so a retry needs no re-read.
+            Requires a prior read_file. edit_python_file refuses a
+            syntax-breaking edit. old_content must match exactly one
+            location; zero or several matches return the current content,
+            so a retry needs no re-read.
 
             Args:
                 file_path: Path to the file to edit.
