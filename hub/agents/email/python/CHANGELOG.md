@@ -9,6 +9,21 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The agent finds GAIA's own Lemonade Server.** The default base URL, the
+  readiness probe and the model pull now go through core's resolver, and the
+  `/health` probe sends the API key, so GAIA's embedded server no longer reads
+  as unreachable or version-unknown.
+- **The readiness check no longer goes blind on a Lemonade development build.**
+  `GET /v1/email/init` compares the running server's version against the agent's
+  minimum. Lemonade v2026.39.1 changed that version to a date-based format whose
+  development builds look like `2026.39.0~12.abc1234`, which the parser could not
+  read — so it reported "cannot tell" and the compatibility check silently stopped
+  running, rather than passing or failing. It now parses the new format, and a
+  version with stray leading whitespace parses again as it did before.
+
+- **`gaia hub install email` no longer refuses Intel Macs (#4218).**
+  `requirements.platforms` now includes `darwin-x64`, matching the Intel binary
+  every release already builds and `binaries.lock.json` already lists.
 - **Received-invite grounding now recognizes Google events with omitted
   organizer flags (#2787).** Calendar tools preserve the provider's explicit
   organizer signal and treat the authenticated attendee as externally invited

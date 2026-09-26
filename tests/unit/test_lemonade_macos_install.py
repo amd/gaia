@@ -36,7 +36,9 @@ def installer():
 @pytest.fixture(autouse=True)
 def _non_root():
     """Pin euid — a root CI container would otherwise skip every sudo branch."""
-    with patch("os.geteuid", return_value=501):
+    # create=True: os.geteuid is POSIX-only, so patching it needs to invent it
+    # on a Windows host. That is the euid the code under test would see anyway.
+    with patch("os.geteuid", return_value=501, create=True):
         yield
 
 
@@ -109,7 +111,7 @@ class TestSudoHandling:
 
     def test_root_does_not_prefix_sudo(self, installer, installed_ok):
         with (
-            patch("os.geteuid", return_value=0),
+            patch("os.geteuid", return_value=0, create=True),
             patch("subprocess.run", return_value=_completed(0)) as run,
             patch.object(
                 type(installer), "check_installation", return_value=installed_ok

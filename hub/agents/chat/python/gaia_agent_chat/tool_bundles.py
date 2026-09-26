@@ -125,8 +125,10 @@ DOC_BUNDLES = [
     ),
     ToolBundle(
         name="shell",
-        members=frozenset({"run_shell_command", "get_system_info"}),
-        description="Run shell commands and query the system.",
+        members=frozenset(
+            {"run_shell_command", "wait_for_condition", "get_system_info"}
+        ),
+        description="Run shell commands, wait on a condition, and query the system.",
     ),
     ToolBundle(
         name="clipboard",
@@ -170,12 +172,13 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (15 tools). Deliberately a smaller share of the registry than
+# Always-on set (16 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
-# signalling), the ``load_tools`` escape hatch, ``read_tool_output`` to page
-# through a result that was cut short, ``load_skill`` for proactive
-# skill discovery, two universal entry points -- ``read_file`` and
+# signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
+# runs), the ``load_tools`` escape hatch, ``read_tool_output`` to page
+# through a result that was cut short, ``load_skill`` for the skill
+# catalogue, two universal entry points -- ``read_file`` and
 # ``query_documents`` -- that answer "what is in this file / what do my
 # documents say" without a round trip, ``run_python`` so a number is computed
 # rather than guessed, and the two file-edit tools. Editing is
@@ -205,11 +208,12 @@ FULL_CORE_TOOLS = frozenset(
         # loop control -- autonomous-turn signalling
         "set_loop_state",
         "request_user_input",
+        "sleep",
         # escape hatch (#1450)
         "load_tools",
         "read_tool_output",
-        # proactive skill discovery (#3235) — the shortlist prompt tells the
-        # model to call this even when the skills bundle was not selected.
+        # the skill catalogue (#3764) tells the model to call this even when
+        # the skills bundle was not selected.
         "load_skill",
     }
 )
@@ -349,7 +353,8 @@ FULL_BUNDLES = [
         ),
         description=(
             "List, load, and unload the skills installed on this machine, and "
-            "correct a loaded skill's instructions when they are wrong."
+            "change a loaded skill's instructions — when they are wrong, or "
+            "when the user wants its output a different way."
         ),
     ),
     ToolBundle(
@@ -358,22 +363,30 @@ FULL_BUNDLES = [
             {
                 "search_skill_hub",
                 "install_skill",
+                "capture_skill",
                 "remove_skill",
             }
         ),
-        description="Search the Agent Hub for new skills, install and remove them.",
+        description=(
+            "Search the Agent Hub for new skills, install, capture "
+            "(paste/URL/folder), and remove them."
+        ),
     ),
     ToolBundle(
         name="shell",
         members=frozenset(
             {
                 "run_shell_command",
+                "wait_for_condition",
                 "execute_python_file",
                 "run_python",
                 "get_system_info",
             }
         ),
-        description="Run shell commands, Python scripts and snippets, and query the system.",
+        description=(
+            "Run shell commands and Python scripts, wait on a condition, and "
+            "query the system."
+        ),
     ),
     ToolBundle(
         name="clipboard",
@@ -417,8 +430,11 @@ FULL_BUNDLES = [
     ),
     ToolBundle(
         name="loop_control",
-        members=frozenset({"set_loop_state", "request_user_input"}),
-        description="Control the autonomous loop and ask the user questions.",
+        members=frozenset({"set_loop_state", "request_user_input", "sleep"}),
+        description=(
+            "Control the autonomous loop, wait before retrying, and ask the "
+            "user questions."
+        ),
     ),
     ToolBundle(
         name="email",
@@ -505,6 +521,7 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "remember_skill_lesson",
         "search_skill_hub",
         "install_skill",
+        "capture_skill",
         "remove_skill",
         "check_mailbox_access",
         "list_inbox",

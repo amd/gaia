@@ -249,9 +249,11 @@ class MicrosoftOAuthProvider:
             if route is not None:
                 console_steps = render_console_steps(route)
             else:
-                # D10: no authored walkthrough for this connector (e.g.
-                # microsoft_work) — generic-but-actionable guidance rather
-                # than showing the OTHER connector's console steps.
+                # No authored walkthrough for this connector — generic-but-
+                # actionable guidance rather than showing another
+                # connector's console steps. Both registered Microsoft
+                # connectors have a route today; this covers a future spec
+                # that shares oauth_impl="microsoft" without one.
                 console_steps = (
                     "  1. Register an app at https://portal.azure.com -> "
                     "Microsoft Entra ID -> App registrations\n"

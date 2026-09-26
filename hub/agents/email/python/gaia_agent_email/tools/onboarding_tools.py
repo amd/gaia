@@ -323,12 +323,12 @@ def _run_connect(agent: Any, provider: str) -> None:
     (#2590) — no client secret, no browser required. Personal Google goes
     through the guided Cloud Console walkthrough (#2594) — it DOES need a
     client secret and a browser, but the steps and FAQ still come from
-    ``setup_routes`` instead of an ad hoc prompt. ``microsoft_work`` and
-    ``google_workspace`` deliberately fall through to the generic
-    browser-loopback path instead (``setup_routes.ROUTES`` has no entry for
-    either): a work/Workspace tenant registers its own app and consent
-    policy, so the personal walkthroughs' assumptions don't hold. Every
-    other provider uses the same generic path.
+    ``setup_routes`` instead of an ad hoc prompt. ``microsoft_work`` falls
+    through to the generic browser-loopback path: it has an authored route
+    (#4090) that already drives its not-configured console error, but
+    driving it interactively also needs device-code sign-in wired here, and
+    that is a separate change. Every other provider uses the same generic
+    path.
     """
     if provider == "microsoft":
         _run_microsoft_setup(agent)
@@ -357,8 +357,8 @@ def _run_microsoft_setup(agent: Any) -> Dict[str, Any]:
     if gap is not None:
         route = get_route("microsoft")
         if route is None:
-            # Defensive — unreachable while setup_routes.ROUTES is exactly
-            # {"microsoft": MS_PERSONAL}. A future route removal must still
+            # Defensive — unreachable while setup_routes.ROUTES has a
+            # "microsoft" entry. A future route removal must still
             # fail as a legible message, never a crash or a silent no-op.
             raise RuntimeError(
                 "No guided walkthrough exists for Microsoft yet. Connect from "

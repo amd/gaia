@@ -58,8 +58,13 @@ MIN_SUCCESS_RATE: float = 0.80
 #: Cosine threshold on goal embeddings, for clustering (and, in Phase 2, recall).
 SIMILARITY_TAU: float = 0.82
 
-#: Caps LLM distillation calls per synthesis pass — bounds cost.
+#: Caps how many clusters one pass considers — bounds the candidate set.
 MAX_CLUSTERS_PER_PASS: int = 10
+
+#: Caps the distillation LLM calls one pass may actually spend.  Each call
+#: occupies the single local model slot the user's own turn needs, so a pass
+#: takes a small bite and leaves the rest for the next one.
+MAX_DISTILL_CALLS_PER_PASS: int = 2
 
 #: Per-body cap on the recall-time injection (Phase 2 consumer; defined here so
 #: the threshold lives with its siblings).  Full body always stays in the row.
@@ -102,6 +107,7 @@ class SynthesisConfig:
     min_success_rate: float = MIN_SUCCESS_RATE
     similarity_tau: float = SIMILARITY_TAU
     max_clusters_per_pass: int = MAX_CLUSTERS_PER_PASS
+    max_distill_calls_per_pass: int = MAX_DISTILL_CALLS_PER_PASS
     max_recall_body_chars: int = MAX_RECALL_BODY_CHARS
 
 
@@ -147,6 +153,9 @@ def load_synthesis_config(settings: Optional[Dict] = None) -> SynthesisConfig:
         min_success_rate=_num("min_success_rate", MIN_SUCCESS_RATE, float),
         similarity_tau=_num("similarity_tau", SIMILARITY_TAU, float),
         max_clusters_per_pass=_num("max_clusters_per_pass", MAX_CLUSTERS_PER_PASS, int),
+        max_distill_calls_per_pass=_num(
+            "max_distill_calls_per_pass", MAX_DISTILL_CALLS_PER_PASS, int
+        ),
         max_recall_body_chars=_num("max_recall_body_chars", MAX_RECALL_BODY_CHARS, int),
     )
 
@@ -652,6 +661,37 @@ def _nearest_enabled_procedure(
     return best if best_score >= similarity_tau else None
 
 
+@dataclass(frozen=True)
+class _LineageRecord:
+    """The track record of a procedure lineage, counting each session once."""
+
+    from_sessions: List[str]
+    success_count: int
+    attempt_count: int
+
+
+def _lineage_record(prior: Dict, cluster: GoalCluster) -> _LineageRecord:
+    """Fold ``cluster`` into the matched row's record without double-counting.
+
+    Keyed on session id rather than on the numbers, so re-reading history — a
+    ``force=True`` pass, or the first pass after ``reset_synthesis_progress`` —
+    adds nothing for episodes the row was already built from.
+    """
+    seen = set()
+    provenance = prior.get("provenance")
+    if isinstance(provenance, dict):
+        seen = {str(s) for s in (provenance.get("from_sessions") or [])}
+
+    fresh = [m for m in cluster.members if str(m.get("session_id")) not in seen]
+    return _LineageRecord(
+        from_sessions=sorted(seen) + [str(m["session_id"]) for m in fresh],
+        success_count=int(prior.get("success_count") or 0)
+        + sum(int(m.get("success_count", 0)) for m in fresh),
+        attempt_count=int(prior.get("attempt_count") or 0)
+        + sum(int(m.get("attempt_count", 0)) for m in fresh),
+    )
+
+
 def reconcile_and_store(
     candidate: DistilledProcedure,
     cluster: GoalCluster,
@@ -667,15 +707,25 @@ def reconcile_and_store(
     passes and a name match would ADD a duplicate instead of superseding (#1818).
 
     * no match (nothing clears ``similarity_tau``) -> **ADD** a new row (Mem0 ADD).
-    * the candidate's cluster has a higher ``success_count`` than the matched
-      row -> **UPDATE**: store a new row and mark the old one ``superseded_by`` it
-      (Zep lineage — the same insert-new-then-supersede shape #606 uses for a
-      knowledge UPDATE).  The old row is kept, never deleted.
+    * the cluster brings episodes the matched row was not built from, lifting the
+      **lineage's** ``success_count`` above the stored one -> **UPDATE**: store a
+      new row and mark the old one ``superseded_by`` it (Zep lineage — the same
+      insert-new-then-supersede shape #606 uses for a knowledge UPDATE).  The old
+      row is kept, never deleted.
     * otherwise -> **NOOP**.
 
     No path ever DELETEs.  ``success_count`` is the dominance signal because it is
     the procedure's empirical track record (the issue's stated supersede rule);
     only the *match key* moved from name to meaning — dominance is unchanged.
+
+    **The counts are the lineage's, not one window's.**  Passes are incremental,
+    so a cluster carries only the episodes no earlier pass consumed — typically
+    the same ``min_occurrences``-sized batch each time.  Comparing that against a
+    row a wider window wrote can never win, which would leave a drifted procedure
+    frozen forever.  The stored record is therefore the prior row's plus the
+    episodes it was *not* built from (``provenance.from_sessions`` carries the
+    lineage's session set), so re-reading history — ``force=True``, or a pass
+    after ``reset_synthesis_progress`` — counts each session exactly once.
 
     Args:
         candidate: The distilled ``DistilledProcedure`` (intermediate fields).
@@ -689,31 +739,35 @@ def reconcile_and_store(
     Returns:
         A ``ReconcileResult`` describing the action taken.
     """
-    provenance = {"source": "synthesized", "from_sessions": cluster.from_sessions}
     prior = _nearest_enabled_procedure(store, embedding, similarity_tau)
 
-    def _insert() -> str:
+    def _insert(sessions: List[str], successes: int, attempts: int) -> str:
         return store.put_skill(
             name=candidate.name,
             when_to_use=candidate.when_to_use,
             markdown_body=candidate.body,
             tools_required=candidate.tools_required,
             tool_sequence=cluster.tool_sequence(),
-            success_count=cluster.success_count,
-            attempt_count=cluster.attempt_count,
-            provenance=provenance,
+            success_count=successes,
+            attempt_count=attempts,
+            provenance={"source": "synthesized", "from_sessions": sessions},
             embedding=embedding,
         )
 
     if prior is None:
-        new_id = _insert()
+        new_id = _insert(
+            cluster.from_sessions, cluster.success_count, cluster.attempt_count
+        )
         logger.info(
             "[skill_synthesis] ADD procedure %s name=%s", new_id, candidate.name
         )
         return ReconcileResult(action="add", skill_id=new_id)
 
-    if cluster.success_count > int(prior.get("success_count", 0)):
-        new_id = _insert()
+    lineage = _lineage_record(prior, cluster)
+    if lineage.success_count > int(prior.get("success_count") or 0):
+        new_id = _insert(
+            lineage.from_sessions, lineage.success_count, lineage.attempt_count
+        )
         store.supersede_skill(prior["id"], new_id)
         logger.info(
             "[skill_synthesis] UPDATE procedure %s supersedes %s "

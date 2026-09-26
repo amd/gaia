@@ -52,11 +52,12 @@ def run():
 
 
 @pytest.fixture
-def replace(tmp_path):
+def replace(tmp_path, mock_home):
     """The registered ``replace_function`` tool on a correctly-wired host.
 
     The host must bind ``path_validator`` (#3316) — a write tool without one
     reports the missing setup instead of running the span logic under test.
+    ``mock_home`` keeps the backup out of the real ``~/.gaia``.
     """
     mixin = FileIOToolsMixin()
     mixin.console = None
@@ -66,8 +67,15 @@ def replace(tmp_path):
     _TOOL_REGISTRY.clear()
     try:
         mixin.register_file_io_tools()
+        read = _TOOL_REGISTRY["read_file"]["function"]
         fn = _TOOL_REGISTRY["replace_function"]["function"]
-        yield fn
+
+        def read_then_replace(file_path, *args, **kwargs):
+            # replace_function refuses a file the agent hasn't read.
+            read(file_path)
+            return fn(file_path, *args, **kwargs)
+
+        yield read_then_replace
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
@@ -242,10 +250,15 @@ def test_a_missing_function_is_still_reported_as_not_found(replace, module):
     assert module.read_text(encoding="utf-8") == MODULE
 
 
-def test_the_backup_holds_the_original(replace, module):
+def test_the_backup_holds_the_original_outside_the_repo(replace, module, mock_home):
     result = replace(str(module), "foo", "def foo():\n    return 99", backup=True)
 
-    assert Path(result["backup_path"]).read_text(encoding="utf-8") == MODULE
+    backup = Path(result["backup_path"])
+    assert backup.read_text(encoding="utf-8") == MODULE
+    assert backup.is_relative_to(mock_home / ".gaia" / "cache" / "backups")
+    assert [p.name for p in module.parent.iterdir() if p.name != ".gaia"] == [
+        module.name
+    ]
 
 
 def test_a_host_without_a_path_validator_is_refused(module):

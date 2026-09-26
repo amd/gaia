@@ -29,6 +29,7 @@ from ..database import (
     resolved_default_model,
 )
 from ..dependencies import get_db
+from ..email_sidecar.profiles import profile_for
 from ..models import (
     AttachDocumentRequest,
     CreateSessionRequest,
@@ -37,11 +38,23 @@ from ..models import (
     SessionResponse,
     UpdateSessionRequest,
 )
+from ..run_manager import run_manager
 from ..utils import message_to_response, session_to_response
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sessions"])
+
+
+def _reject_if_turn_running(http_request: Request, session_id: str) -> None:
+    """409 when a turn is using the session's cached agent, which eviction would break."""
+    lock = http_request.app.state.session_locks.get(session_id)
+    if (lock is not None and lock.locked()) or run_manager.is_running(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A chat request is in progress for this session. "
+            "Wait for it to finish (or stop it), then try again.",
+        )
 
 
 def _is_gaia_config_error(exc: Exception) -> bool:
@@ -110,9 +123,14 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     registry = get_agent_registry()
     if not _agent_type_unknown(agent_type, registry):
         return
-    # Every id _agent_type_unknown accepts, legacy aliases aside.
+    # Every id _agent_type_unknown accepts, legacy aliases aside. Only the
+    # ALWAYS-relay sidecars are added unconditionally: since #4161 the others
+    # must resolve in the registry like any agent, so listing every sidecar id
+    # here told the user 'gaia' was both unknown and registered.
     valid_ids = sorted(
-        {reg.id for reg in registry.list()} | {"chat"} | _SIDECAR_AGENT_TYPES
+        {reg.id for reg in registry.list()}
+        | {"chat"}
+        | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
     )
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
@@ -223,6 +241,7 @@ async def get_session(session_id: str, db: ChatDatabase = Depends(get_db)):
 async def update_session(
     session_id: str,
     request: UpdateSessionRequest,
+    http_request: Request,
     db: ChatDatabase = Depends(get_db),
 ):
     """Update session title, system prompt, or linked documents."""
@@ -232,6 +251,7 @@ async def update_session(
         or request.device is not None
         or request.mail_provider is not None
     ):
+        _reject_if_turn_running(http_request, session_id)
         evict_session_agent(session_id)
 
     # On a device switch, rewrite the session's model to that device's
@@ -297,20 +317,22 @@ async def delete_session(
     http_request: Request,
     db: ChatDatabase = Depends(get_db),
 ):
-    """Delete a session and its messages."""
-    if not db.delete_session(session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
-    # Cancel any background run for this session before tearing it down —
-    # runs now outlive the SSE connection (#1580), so a run left going would
-    # try to persist its answer to a session that no longer exists.
-    from ..run_manager import run_manager
+    """Delete a session and its messages.
 
+    A turn still running on the session is stopped first, and the delete waits
+    for it to finish: the turn is still using the session's agent and will
+    persist its answer to the session row.
+    """
+    if db.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
     run_manager.cancel(session_id)
-    # Remove the per-session lock to prevent memory leaks
-    http_request.app.state.session_locks.pop(session_id, None)
-    # Evict the cached ChatAgent for this session so a fresh one is created
-    # if the session is ever recreated with the same ID.
-    evict_session_agent(session_id)
+    session_locks = http_request.app.state.session_locks
+    # Every turn and goal tick holds this lock for its whole run.
+    async with session_locks.setdefault(session_id, asyncio.Lock()):
+        if not db.delete_session(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        session_locks.pop(session_id, None)
+        evict_session_agent(session_id)
     return {"deleted": True}
 
 
@@ -448,9 +470,13 @@ async def attach_document(
 
 @router.delete("/api/sessions/{session_id}/documents/{doc_id}")
 async def detach_document(
-    session_id: str, doc_id: str, db: ChatDatabase = Depends(get_db)
+    session_id: str,
+    doc_id: str,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
 ):
     """Detach a document from a session."""
+    _reject_if_turn_running(http_request, session_id)
     db.detach_document(session_id, doc_id)
     evict_session_agent(session_id)
     return {"detached": True}

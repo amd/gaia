@@ -10,7 +10,7 @@ Covers:
 - Negative (b): granted mail scopes but missing calendar.events → scope-guard
   path reports CONNECTION_MISSING_SCOPES; triage/draft/send mail-only still pass.
 - Negative (c): no mailbox connected → 503 from get_send_backend
-  (the fail-loud guard on the #1768-mounted /v1/email surface).
+  (the fail-loud guard in the email agent's REST routes).
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("gaia_agent_email")
 
-from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
 from gaia_agent_email.outlook_scopes import (  # noqa: E402
     OUTLOOK_CALENDAR_SCOPES,
@@ -144,7 +143,11 @@ class TestScopeResolution:
         email_entry = next(
             r for r in all_regs if r.namespaced_agent_id == "installed:email"
         )
-        assert len(email_entry.required_connections) == 2  # Google + Microsoft
+        assert {r.connector_id for r in email_entry.required_connections} == {
+            "google",
+            "microsoft",
+            "microsoft_work",
+        }
 
         google_req = next(
             r for r in email_entry.required_connections if r.connector_id == "google"
@@ -156,20 +159,15 @@ class TestScopeResolution:
         assert set(google_req.scopes) == set(ALL_SCOPES)
         assert set(ms_req.scopes) == set(OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES)
 
-    def test_required_connectors_has_both_providers(self):
-        """REQUIRED_CONNECTORS declares exactly two providers: google and microsoft."""
+    def test_required_connectors_has_every_provider(self):
+        """REQUIRED_CONNECTORS declares Google, personal Microsoft, and work Microsoft."""
         reqs = _email_required_connections()
-        connector_ids = {r.connector_id for r in reqs}
-        assert (
-            "google" in connector_ids
-        ), "Google provider missing from REQUIRED_CONNECTORS"
-        assert (
-            "microsoft" in connector_ids
-        ), "Microsoft provider missing from REQUIRED_CONNECTORS"
-        assert len(reqs) == 2, (
-            f"Expected exactly 2 REQUIRED_CONNECTORS entries (google + microsoft), "
-            f"got {len(reqs)}: {[r.connector_id for r in reqs]}"
-        )
+        connector_ids = [r.connector_id for r in reqs]
+        assert sorted(connector_ids) == [
+            "google",
+            "microsoft",
+            "microsoft_work",
+        ], f"Unexpected REQUIRED_CONNECTORS entries: {connector_ids}"
 
 
 # ---------------------------------------------------------------------------
@@ -398,21 +396,12 @@ class TestMissingCalendarScope:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def ui_client():
-    """TestClient for the UI backend without lifespan startup (#1297 hang guard)."""
-    from gaia.ui.server import create_app
-
-    app = create_app(db_path=":memory:")
-    # Skip lifespan (connectors sync / MCP reload) — it hangs in bare test env (#1297)
-    yield TestClient(app, raise_server_exceptions=True)
-
-
 class TestNoMailboxConnected:
     """Absence of any connected mailbox → 503 (fail-loud, not 500/200/empty).
 
-    Tests the get_send_backend guard in the email REST surface mounted at
-    /v1/email by the #1768 router.
+    Tests the get_send_backend guard in the email agent's REST routes. The
+    Agent UI no longer mounts those routes in-process; it forwards /v1/email to
+    the daemon-supervised sidecar (see tests/unit/test_email_sidecar_*).
     """
 
     def test_get_send_backend_raises_http_503_no_mailbox(self):
@@ -433,61 +422,3 @@ class TestNoMailboxConnected:
         assert (
             "mailbox" in detail.lower() or "connect" in detail.lower()
         ), f"503 detail should be actionable, got: {detail!r}"
-
-    def test_email_health_always_200_via_ui_backend(self, ui_client):
-        """GET /v1/email/health is always 200 — not gated by mailbox connection."""
-        resp = ui_client.get("/v1/email/health")
-        assert resp.status_code == 200
-        assert resp.json().get("status") == "ok"
-
-    def test_triage_does_not_require_mailbox(self, ui_client):
-        """POST /v1/email/triage works without a connected mailbox (analyzes payload only).
-
-        Triage is pass-by-value — it receives the email in the request body
-        and never reads from a live mailbox. A 503 here would be a regression.
-        """
-        from unittest.mock import patch
-
-        from gaia_agent_email.contract import (
-            EmailCategory,
-            EmailTriageResponse,
-            EmailTriageResult,
-        )
-
-        stub_resp = EmailTriageResponse(
-            request_kind="single",
-            result=EmailTriageResult(
-                category=EmailCategory.FYI,
-                summary="Test summary.",
-                action_items=[],
-            ),
-        )
-
-        with patch(
-            "gaia_agent_email.api_routes.EmailTriageService.triage_request",
-            return_value=stub_resp,
-        ):
-            payload = {
-                "schema_version": "2.0",
-                "payload": {
-                    "kind": "single",
-                    "principal": {"name": "User", "email": "user@example.com"},
-                    "message": {
-                        "message_id": "msg-001",
-                        "from": {"name": "Sender", "email": "sender@example.com"},
-                        "subject": "Hello",
-                        "body": "Just a quick note.",
-                    },
-                },
-            }
-            resp = ui_client.post("/v1/email/triage", json=payload)
-
-        assert (
-            resp.status_code == 200
-        ), f"Triage should succeed without a mailbox connection, got {resp.status_code}: {resp.text}"
-
-    def test_email_routes_mounted_at_ui_backend(self, ui_client):
-        """The #1768 email router is mounted at /v1/email on the UI backend."""
-        resp = ui_client.get("/v1/email/version")
-        assert resp.status_code == 200
-        assert "apiVersion" in resp.json()

@@ -1,7 +1,6 @@
 id: raspberry_pi4_datasheet
 name: "Raspberry Pi 4 Product Datasheet Lookup"
 category: real_world
-agent_type: doc
 severity: medium
 description: |
   Agent must retrieve product specifications from the Raspberry Pi 4 Model B datasheet.

@@ -60,7 +60,9 @@ class TestParseLLMResponseRaisesOnMalformed:
         with pytest.raises(ValueError, match="Malformed native tool_calls"):
             agent._parse_llm_response(bad)
 
-    def test_empty_response_lists_files_modified_before_failure(self, agent, tmp_path):
+    def test_empty_response_lists_files_modified_before_failure(
+        self, agent, tmp_path, mock_home
+    ):
         """Empty-turn recovery reports files tracked from a successful edit."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
         from gaia.agents.tools.file_tools import FileSearchToolsMixin
@@ -76,6 +78,14 @@ class TestParseLLMResponseRaisesOnMalformed:
             target.write_text("value = 1\n")
             responses = iter(
                 [
+                    # The edit tools refuse a file the agent hasn't read.
+                    json.dumps(
+                        {
+                            "thought": "Read the file.",
+                            "tool": "read_file",
+                            "tool_args": {"file_path": str(target)},
+                        }
+                    ),
                     json.dumps(
                         {
                             "thought": "Edit the file.",
@@ -101,7 +111,7 @@ class TestParseLLMResponseRaisesOnMalformed:
             chat.send_messages.side_effect = send_messages
             agent.chat = chat
             with patch.object(agent, "_tool_requires_confirmation", return_value=False):
-                result = agent.process_query("Edit the file", max_steps=2)
+                result = agent.process_query("Edit the file", max_steps=3)
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved_registry)
