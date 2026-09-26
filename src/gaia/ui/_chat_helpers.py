@@ -47,6 +47,7 @@ from .sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
+from .utils import managed_documents_dir
 
 logger = logging.getLogger(__name__)
 
@@ -928,12 +929,8 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
 
 
 def _managed_documents_dir() -> Path:
-    """The Agent UI's own documents folder — the session's writable scratch space.
-
-    Resolved late rather than imported as a constant so a test that relocates
-    ``Path.home()`` gets the relocated directory.
-    """
-    return (Path.home() / ".gaia" / "documents").resolve()
+    """The Agent UI's own documents folder — the session's writable scratch space."""
+    return managed_documents_dir().resolve()
 
 
 def _unsafe_directory_grant_reason(directory: Path) -> str:
