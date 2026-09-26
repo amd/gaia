@@ -27,6 +27,26 @@ GAIA_CONFIG_FILE = Path(
 )
 
 
+def gaia_home() -> Path:
+    """Return the directory that holds GAIA's on-disk state.
+
+    Precedence:
+
+    1. ``GAIA_HOME`` relocates the whole tree.
+    2. ``GAIA_CONFIG_DIR`` keeps the existing config-directory override.
+    3. ``~/.gaia``.
+    """
+    for env_var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+        raw = os.environ.get(env_var)
+        if raw is None:
+            continue
+        raw = raw.strip()
+        if not raw:
+            continue
+        return Path(os.path.expandvars(os.path.expanduser(raw)))
+    return Path.home() / ".gaia"
+
+
 class GaiaConfigError(Exception):
     """Raised when the persistent config exists but cannot be used.
 
