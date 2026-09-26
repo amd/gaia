@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia.config import gaia_home
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
 
@@ -77,7 +78,7 @@ class ScratchpadService(DatabaseMixin):
         Args:
             db_path: Path to SQLite database. Defaults to ~/.gaia/scratchpad.db
         """
-        path = db_path or self.DEFAULT_DB_PATH
+        path = db_path or str(gaia_home() / "scratchpad.db")
         resolved = str(Path(path).expanduser())
         self.init_db(resolved)
         # Open path: try PRAGMAs, and if anything complains about a

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
 
+from gaia.config import gaia_home
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,7 +32,7 @@ class Context7Cache:
         Args:
             cache_dir: Optional custom cache directory (defaults to ~/.gaia/cache/context7)
         """
-        self.cache_dir = cache_dir or Path.home() / ".gaia" / "cache" / "context7"
+        self.cache_dir = cache_dir or (gaia_home() / "cache" / "context7")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.docs_dir = self.cache_dir / "documentation"
         self.docs_dir.mkdir(exist_ok=True)
@@ -208,7 +209,7 @@ class Context7RateLimiter:
             state_file: Optional custom state file path
         """
         self.state_file = state_file or (
-            Path.home() / ".gaia" / "cache" / "context7" / "rate_state.json"
+            gaia_home() / "cache" / "context7" / "rate_state.json"
         )
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state = self._load_state()
