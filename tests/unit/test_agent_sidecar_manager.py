@@ -692,8 +692,8 @@ def test_health_rejects_foreign_server_on_port(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
-    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
-    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
     m = mgr.AgentSidecarManager(
         _email_spec_with_src(src),
         cache_dir=tmp_path,
@@ -717,8 +717,8 @@ def test_pinned_version_with_missing_apiversion_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
-    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
-    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
     m = mgr.AgentSidecarManager(
         _email_spec_with_src(src),
         cache_dir=tmp_path,
@@ -821,8 +821,8 @@ def test_start_retries_on_early_exit_then_succeeds(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
     # killpg must be a no-op for the fake procs on the early-exit shutdown.
-    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
-    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
 
     m = mgr.AgentSidecarManager(
         _email_spec_with_src(src), cache_dir=tmp_path, log_dir=tmp_path / "logs"
@@ -857,8 +857,8 @@ def test_start_does_not_retry_on_health_timeout(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
-    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
-    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
 
     m = mgr.AgentSidecarManager(
         _email_spec_with_src(src),
