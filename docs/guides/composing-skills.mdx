@@ -75,9 +75,11 @@ widened return types, and changed defaults all qualify.
 ```
 
 `tools_required` names registry tools the skill's recipe *consumes* — it does not
-grant anything. A name your agent has not registered is logged at load time, so a
-skill that cannot execute its own recipe is diagnosable rather than silently
-useless.
+grant anything, but on an agent with dynamic tool selection a loaded skill's
+`tools_required` are admitted into the prompt on each turn its instructions are
+active (and unloading it stops that). A name your agent has not registered is
+logged at load time, so a skill that cannot execute its own recipe is diagnosable
+rather than silently useless.
 
 ## 2. Declare the sets
 

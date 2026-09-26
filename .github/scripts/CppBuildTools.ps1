@@ -28,6 +28,21 @@ function Get-CMakeExeName {
     return 'cmake'
 }
 
+function Get-W64DevkitToolNames {
+    <#
+    .SYNOPSIS
+        Every binary CMake invokes when it builds through w64devkit.
+
+    .DESCRIPTION
+        g++ is the compiler driver; mingw32-make is the build program a
+        "MinGW Makefiles" generator shells out to. Probing the compiler alone
+        lets a toolchain whose make cannot launch pass setup and then die inside
+        try_compile as a bare "unknown error" (issue #4113).
+    #>
+    if (Test-IsWindowsHost) { return @('g++.exe', 'mingw32-make.exe') }
+    return @('g++', 'mingw32-make')
+}
+
 function Get-CppToolsRoot {
     <#
     .SYNOPSIS
@@ -254,6 +269,28 @@ function Install-CMake {
     return $binDir
 }
 
+function Test-W64DevkitInstallation {
+    <#
+    .SYNOPSIS
+        True when every binary CMake will drive is present AND actually launches.
+
+    .DESCRIPTION
+        The compiler-only check this replaced accepted a tree whose
+        mingw32-make.exe could not be executed, so the job spent eight minutes
+        on setup before CMake reported "unknown error" from try_compile with no
+        hint which binary failed (issue #4113).
+    #>
+    param([Parameter(Mandatory)][string]$BinDir)
+
+    foreach ($name in (Get-W64DevkitToolNames)) {
+        if (-not (Test-ToolInstallation -BinDir $BinDir -ExecutableName $name)) {
+            Write-Host "  probe: $name in $BinDir is missing or could not be launched"
+            return $false
+        }
+    }
+    return $true
+}
+
 function Install-W64Devkit {
     <#
     .SYNOPSIS
@@ -280,9 +317,13 @@ function Install-W64Devkit {
     & $installer "-o$ToolsRoot" -y | Out-Null
     Remove-Item -LiteralPath $installer -Force
 
-    if (-not (Test-ToolInstallation -BinDir $binDir -ExecutableName 'g++.exe')) {
-        throw ("w64devkit v$Version was downloaded and extracted to $installDir but g++ is " +
-               "missing or not runnable. Delete that directory on the runner and re-run.")
+    foreach ($name in (Get-W64DevkitToolNames)) {
+        if (-not (Test-ToolInstallation -BinDir $binDir -ExecutableName $name)) {
+            throw ("w64devkit v$Version was downloaded and extracted to $installDir but $name " +
+                   "could not be launched. If the file is present on disk this runner is blocking " +
+                   "it from executing (same pattern as amd/gaia#2826) and needs its execution " +
+                   "policy fixed; otherwise delete $installDir on the runner and re-run.")
+        }
     }
     Write-Host "w64devkit v$Version installed at $binDir"
     return $binDir

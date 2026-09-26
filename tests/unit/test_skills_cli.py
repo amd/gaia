@@ -491,6 +491,7 @@ def test_real_cli_help_lists_the_authoring_and_marketplace_verbs(tmp_path):
         "search",
         "install",
         "remove",
+        "lock",
         "publish",
         "keygen",
         "trust",
@@ -505,3 +506,22 @@ def test_real_cli_missing_skill_exit_code(tmp_path):
     result = _real_cli("info", "ghost", home=tmp_path, cwd=tmp_path)
     assert result.returncode == 3
     assert "No skill named 'ghost'" in result.stderr
+
+
+def test_the_staleness_banner_a_user_reads_is_a_sentence(monkeypatch, capsys):
+    """``age_text`` is a phrase ("93 days ago"), so the banner has to fit it."""
+    from gaia.skills import cli as skills_cli
+    from gaia.skills.hub import SkillSearchResult
+
+    monkeypatch.setattr(
+        "gaia.skills.hub.search_skills",
+        lambda *a, **k: SkillSearchResult(
+            entries=[], offline=True, age_seconds=93 * 86400, stale=True
+        ),
+    )
+
+    skills_cli.handle(
+        argparse.Namespace(skill_action="search", query="", hub_url=None, as_json=False)
+    )
+
+    assert "was last refreshed 93 days ago — over 7 days old" in capsys.readouterr().err
