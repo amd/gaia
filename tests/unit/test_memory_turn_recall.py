@@ -254,6 +254,58 @@ class TestWhatIsNeverSurfaced:
         assert "Stored memories" not in ctx
 
 
+class TestTruncatedItemsStayRecallable:
+    """A memory the 4000-char cap cut is missing from the stable prompt.
+
+    It must not also be suppressed from per-turn recall, or it becomes
+    invisible on both paths -- worse than before the ages were added.
+    """
+
+    @staticmethod
+    def _saturate(host, store):
+        """Fill the stable prompt past its cap; return the cut error memory.
+
+        Every line needs its own vocabulary -- ``MemoryStore.store`` dedupes on
+        >80% word overlap, so repeated filler would collapse into one row.
+        """
+        for i in range(10):
+            words = " ".join(f"w{i}x{n}" for n in range(60))
+            _remember(
+                store,
+                host.vectors,
+                f"Preference {i}: {words}",
+                _axis(4 + (i % 3)),
+                category="preference",
+            )
+        return _remember(
+            store,
+            host.vectors,
+            "toybox CI fails without TOYBOX_CLOCK=frozen",
+            _axis(0, lean=0.3),
+            category="error",
+        )
+
+    def test_a_cut_memory_is_still_offered_to_the_turn(self, host, store):
+        self._saturate(host, store)
+        host._rebuild_faiss_index()
+        host._memory_turn_query = QUERY
+
+        stable = host.get_memory_system_prompt()
+        ctx = host.get_memory_dynamic_context()
+
+        assert "... (memory truncated)" in stable
+        assert "toybox CI fails without TOYBOX_CLOCK=frozen" not in stable
+        assert "toybox CI fails without TOYBOX_CLOCK=frozen" in ctx
+
+    def test_only_surviving_lines_are_suppressed(self, host, store):
+        cut = self._saturate(host, store)
+
+        host.get_memory_system_prompt()
+
+        assert cut not in host._stable_memory_ids
+        assert host._stable_memory_ids, "items that survived the cap must be recorded"
+
+
 class TestStablePromptAges:
     def test_each_personal_item_carries_its_dates(self, host, store):
         fact = store.store(

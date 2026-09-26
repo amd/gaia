@@ -43,7 +43,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import numpy as np
@@ -2244,7 +2244,6 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         ctx = self._memory_context
         sections = []
-        shown_ids: set = set()
 
         # 0a. System context (global only — always included first so the agent
         #     has self-awareness about the host system from day 0)
@@ -2265,10 +2264,14 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # 1-4. User-created sections (preference, fact, skill, error)
         user_sections: list = []
+        # (rendered line, memory id) so the truncation below can tell which
+        # memories the model actually ends up seeing.
+        rendered: List[Tuple[str, Any]] = []
 
         prefs = self._get_context_items("preference", ctx, limit=10)
         if prefs:
             pref_lines = [f"  - {p['content']} ({self._memory_age(p)})" for p in prefs]
+            rendered.extend(zip(pref_lines, (p["id"] for p in prefs)))
             user_sections.append("Preferences:\n" + "\n".join(pref_lines))
 
         facts = self._get_context_items("fact", ctx, limit=5)
@@ -2278,6 +2281,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 f"{self._memory_age(f)})"
                 for f in facts
             ]
+            rendered.extend(zip(fact_lines, (f["id"] for f in facts)))
             user_sections.append("Known facts:\n" + "\n".join(fact_lines))
 
         skills = self._get_context_items("skill", ctx, limit=3)
@@ -2287,6 +2291,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 f"{self._memory_age(s)})"
                 for s in skills
             ]
+            rendered.extend(zip(skill_lines, (s["id"] for s in skills)))
             user_sections.append("Skills:\n" + "\n".join(skill_lines))
 
         errors = self._get_context_items("error", ctx, limit=5)
@@ -2294,11 +2299,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             error_lines = [
                 f"  - {e['content']} ({self._memory_age(e)})" for e in errors
             ]
+            rendered.extend(zip(error_lines, (e["id"] for e in errors)))
             user_sections.append("Known errors to avoid:\n" + "\n".join(error_lines))
 
-        for group in (prefs, facts, skills, errors):
-            shown_ids.update(item["id"] for item in group)
-        self._stable_memory_ids = shown_ids
         sections.extend(user_sections)
 
         # Always include memory instructions — even when 0 memories exist.
@@ -2343,6 +2346,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         # crowding the actual conversation context.
         if len(result) > 4000:
             result = result[:4000] + "\n... (memory truncated)"
+        # Suppress per-turn recall only for memories the cap actually left in.
+        self._stable_memory_ids = {mid for line, mid in rendered if line in result}
         return result
 
     @staticmethod
