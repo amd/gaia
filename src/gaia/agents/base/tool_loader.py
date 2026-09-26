@@ -510,6 +510,53 @@ class ToolLoader:
         logger.info("TOOL_LOADER %s", json.dumps(payload))
         return list(self._loaded)
 
+    def admit_tools(self, names: Sequence[str], registry: Dict[str, dict]) -> List[str]:
+        """Admit exact *names* into the loaded set (the SKILL tier, mid-turn).
+
+        The loaded-skill counterpart to :meth:`load_bundle`: a skill's recipe
+        names exact tools, not a bundle, and a namespaced skill tool belongs to
+        no bundle at all, so ``load_bundle`` would raise ``KeyError`` on it.
+        Add-only for the same reason :meth:`load_bundle` is: this runs mid-turn,
+        and evicting to stay under ``max_tools`` would drop a tool from the
+        middle of the already-offered list and re-prefill every tool after it.
+        The overshoot is bounded (one skill's recipe per call) and :meth:`select`
+        trims it back at the next turn boundary.
+
+        Names absent from *registry* are dropped rather than raised, mirroring
+        the SKILL tier: a skill may name a tool this agent does not have, and
+        the loader must not invent capability.
+
+        Args:
+            names: Exact tool names from the skill's recipe.
+            registry: The live tool registry (same object passed to
+                :meth:`select`).
+
+        Returns:
+            The loaded set after admission, in admission order like
+            :meth:`select` and :meth:`load_bundle` — re-sorting it would move
+            already-offered tools and void the model's cached prompt prefix.
+        """
+        sel = _Selection()
+        for name in names:
+            if name in self._loaded or name not in registry:
+                continue
+            sel.skill.append(name)
+            self._admit(name, sel)
+
+        if sel.skill:
+            payload = {
+                "turn": self._turn,
+                "event": "admit_skill_tools",
+                "skill": sorted(sel.skill),
+                "admitted": sorted(sel.admitted),
+                "loaded": list(self._loaded),
+            }
+            over_cap = len(self._loaded) - self._max_tools
+            if over_cap > 0:
+                payload["over_cap"] = over_cap
+            logger.info("TOOL_LOADER %s", json.dumps(payload))
+        return list(self._loaded)
+
     # ── internals ────────────────────────────────────────────────────────
 
     def _resolve_bundle_members(self, bundle: str) -> tuple["FrozenSet[str]", str]:

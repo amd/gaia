@@ -945,23 +945,34 @@ def _claims_file_write(answer: str) -> bool:
     return False
 
 
+def _skill_tool_names(skill: Any) -> List[str]:
+    """Every tool name *skill* needs: its recipe's plus its own namespaced ones."""
+    return [
+        *skill.gaia.tools_required,
+        *(skill.namespaced_tool_name(tool) for tool in skill.tool_names),
+    ]
+
+
 def _offer_skill_tools(agent: Any, skill: Any) -> None:
     """Add *skill*'s tools to the turn's tool subset so the next step can call them.
 
     The subset is picked from the user's message before the first model call, so
     a skill loaded mid-turn otherwise names tools the model cannot call until the
     next turn — and a one-turn task has no next turn.
+
+    Admits into the dynamic tool loader first, so the loader's own loaded set —
+    the thing the *next* turn rebuilds the subset from — knows about the tools
+    too. Widening only the filter would last exactly one turn, and every call of
+    a skill's tool would count against the escape-hatch signal.
     """
     current = getattr(agent, "_active_tool_filter", None)
     if current is None:
         return
-    wanted = [
-        *skill.gaia.tools_required,
-        *(skill.namespaced_tool_name(tool) for tool in skill.tool_names),
-    ]
+    wanted = _skill_tool_names(skill)
     missing = [
         tool for tool in wanted if tool in agent._tools_registry and tool not in current
     ]
+    agent._admit_skill_tools(wanted)
     if missing:
         # Appended, never re-sorted: a reshuffled list breaks the cached prefix.
         agent._apply_tool_filter([*current, *missing])
@@ -2006,6 +2017,13 @@ Do NOT wrap conversational replies in JSON.
         so this never gates execution.
         """
 
+    def _admit_skill_tools(self, names: List[str]) -> None:
+        """Tell the dynamic tool loader a loaded skill needs *names*.
+
+        Default: no-op — an agent without a loader has no second owner of the
+        turn's tool set to keep in sync. ChatAgent overrides it.
+        """
+
     def _refresh_active_tool_filter(self, user_input: str) -> None:
         """Update the active tool filter for this turn, recomputing on change.
 
@@ -2432,12 +2450,14 @@ Do NOT wrap conversational replies in JSON.
             self.loaded_skills[name] = skill
             self._note_skill_active(name)
             self.rebuild_system_prompt()
+            # Inside the guard: it recomposes the prompt and mutates loader
+            # state, so a failure must roll the skill back like any other.
+            _offer_skill_tools(self, skill)
         except Exception:
             unregister_skill_tools(skill.name)
             self.granted_binaries.revoke_skill(skill.name)
             self.loaded_skills.pop(name, None)
             raise
-        _offer_skill_tools(self, skill)
 
         # tools_required names registry tools the skill CONSUMES. A name that is
         # valid but not active in this agent is scoping, not a defect — log it so
