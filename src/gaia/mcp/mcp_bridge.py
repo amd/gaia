@@ -52,6 +52,12 @@ PUBLIC_PATHS = frozenset({"/health"})
 # origins are always allowed; everything else is refused, token or not.
 ALLOWED_ORIGINS_ENV_VAR = "GAIA_MCP_ALLOWED_ORIGINS"
 
+# Handshake-era MCP revisions; 2026-07-28 dropped `initialize`, so it is not offered.
+SUPPORTED_PROTOCOL_VERSIONS = frozenset(
+    {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
+)
+MCP_PROTOCOL_VERSION = "2025-11-25"
+
 
 class GAIAMCPBridge:
     """HTTP-native MCP Bridge for GAIA - no WebSockets needed!"""
@@ -83,69 +89,51 @@ class GAIAMCPBridge:
 
     def _initialize_agents(self):
         """Initialize all GAIA agents."""
-        try:
-            # LLM agent
-            self.agents["llm"] = {
-                "module": "gaia.apps.llm.app",
-                "function": "main",
-                "description": "Direct LLM interaction",
-                "capabilities": ["query", "stream", "model_selection"],
-            }
-
-            # Chat agent
-            self.agents["chat"] = {
-                "module": "gaia.chat.app",
-                "function": "main",
-                "description": "Interactive chat",
-                "capabilities": ["conversation", "history", "context_management"],
-            }
-
-            logger.info(f"Initialized {len(self.agents)} agents")
-
-        except Exception as e:
-            logger.error(f"Agent initialization error: {e}")
+        self.agents["llm"] = {
+            "module": "gaia.apps.llm.app",
+            "function": "main",
+            "description": "Direct LLM interaction",
+            "capabilities": ["query", "stream", "model_selection"],
+        }
+        self.agents["chat"] = {
+            "module": "gaia.chat.app",
+            "function": "main",
+            "description": "Interactive chat",
+            "capabilities": ["conversation", "history", "context_management"],
+        }
+        logger.info(f"Initialized {len(self.agents)} agents")
 
     def _register_tools(self):
         """Register available tools."""
-        # Load from mcp.json if available
-        try:
-            mcp_config_path = os.path.join(os.path.dirname(__file__), "mcp.json")
-            if os.path.exists(mcp_config_path):
-                with open(mcp_config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-                    tools_config = config.get("tools", {})
-                    # Convert tool config to proper MCP format with name field
-                    self.tools = {}
-                    for tool_name, tool_data in tools_config.items():
-                        self.tools[tool_name] = {
-                            "name": tool_name,
-                            "description": tool_data.get("description", ""),
-                            "servers": tool_data.get("servers", []),
-                            "parameters": tool_data.get("parameters", {}),
-                        }
-                    logger.info(f"Loaded {len(self.tools)} tools from mcp.json")
-        except Exception as e:
-            logger.warning(f"Could not load mcp.json: {e}")
-
-        if "gaia.chat" not in self.tools:
-            self.tools["gaia.chat"] = {
-                "name": "gaia.chat",
-                "description": "Conversational chat with context",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                },
-            }
-
-        if "gaia.query" not in self.tools:
-            self.tools["gaia.query"] = {
+        self.tools = {
+            "gaia.query": {
                 "name": "gaia.query",
-                "description": "Direct LLM queries (no conversation context)",
+                "description": "Direct LLM query with no conversation context",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"query": {"type": "string"}},
+                    "properties": {
+                        "query": {"type": "string", "description": "Prompt text"},
+                        "model": {
+                            "type": "string",
+                            "description": "Model id; defaults to the server's",
+                        },
+                        "max_tokens": {"type": "integer", "default": 500},
+                    },
+                    "required": ["query"],
                 },
-            }
+            },
+            "gaia.chat": {
+                "name": "gaia.chat",
+                "description": "Conversational chat that keeps history across calls",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "User message"},
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
 
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool and return results."""
@@ -426,11 +414,16 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Not found"})
 
     def handle_jsonrpc(self, data):
-        """Handle JSON-RPC requests."""
+        """Handle JSON-RPC requests.
+
+        Protocol-level errors ride a 200 with a JSON-RPC error body: Streamable
+        HTTP reads any non-2xx as a TRANSPORT failure, so a 4xx makes an SDK
+        client raise instead of surfacing the error code it knows how to report.
+        """
         # Validate that data is a dict (JSON-RPC requires an object)
         if not isinstance(data, dict):
             self.send_json(
-                400,
+                200,
                 {
                     "jsonrpc": "2.0",
                     "error": {
@@ -444,7 +437,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         # Validate JSON-RPC
         if "jsonrpc" not in data or data["jsonrpc"] != "2.0":
             self.send_json(
-                400,
+                200,
                 {
                     "jsonrpc": "2.0",
                     "error": {"code": -32600, "message": "Invalid Request"},
@@ -457,23 +450,52 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         params = data.get("params", {})
         request_id = data.get("id")
 
+        # Notifications carry no id and must not get a JSON-RPC reply.
+        if isinstance(method, str) and method.startswith("notifications/"):
+            self.send_accepted()
+            return
+
         # Route methods
         if method == "initialize":
+            requested = params.get("protocolVersion")
             result = {
-                "protocolVersion": "1.0.0",
+                "protocolVersion": (
+                    requested
+                    if requested in SUPPORTED_PROTOCOL_VERSIONS
+                    else MCP_PROTOCOL_VERSION
+                ),
                 "serverInfo": {"name": "GAIA MCP Bridge", "version": "2.0.0"},
-                "capabilities": {"tools": True, "resources": True, "prompts": True},
+                "capabilities": {"tools": {}},
             }
+        elif method == "ping":
+            result = {}
         elif method == "tools/list":
             result = {"tools": list(self.bridge.tools.values())}
         elif method == "tools/call":
             tool_name = params.get("name")
+            if tool_name not in self.bridge.tools:
+                self.send_json(
+                    200,
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": f"Unknown tool: {tool_name}",
+                        },
+                        "id": request_id,
+                    },
+                )
+                return
             arguments = params.get("arguments", {})
             tool_result = self.bridge.execute_tool(tool_name, arguments)
-            result = {"content": [{"type": "text", "text": json.dumps(tool_result)}]}
+            result = {
+                "content": [{"type": "text", "text": json.dumps(tool_result)}],
+                "isError": "error" in tool_result
+                or tool_result.get("success") is False,
+            }
         else:
             self.send_json(
-                400,
+                200,
                 {
                     "jsonrpc": "2.0",
                     "error": {"code": -32601, "message": f"Method not found: {method}"},
@@ -494,6 +516,13 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         self._send_cors_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.end_headers()
+
+    def send_accepted(self):
+        """Send 202 with no body, the Streamable HTTP reply to a notification."""
+        self.send_response(202)
+        self._send_cors_headers()
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def send_json(self, status, data):
