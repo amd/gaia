@@ -23,6 +23,9 @@ on:
       - 'util/check_test_lane_coverage.py'
       - 'util/test_lane_allowlist.yml'
       - 'installer/tui/**'
+      # tests/integration/test_tui_control_e2e.py builds and drives the real Go
+      # TUI, so a TUI-only change has to run the offline-integration job.
+      - 'tui/**'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
@@ -48,6 +51,9 @@ on:
       - 'util/check_test_lane_coverage.py'
       - 'util/test_lane_allowlist.yml'
       - 'installer/tui/**'
+      # tests/integration/test_tui_control_e2e.py builds and drives the real Go
+      # TUI, so a TUI-only change has to run the offline-integration job.
+      - 'tui/**'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
@@ -288,8 +294,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # The unit job's test deps, plus [mcp]: tests/test_sdk.py and
-          # tests/mcp/test_agent_mcp_server_stdio.py import the MCP server.
+          # The unit job's test deps, plus [mcp]: tests/test_sdk.py and the
+          # tests/mcp/ files import the MCP server SDK.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
                                   faiss-cpu pypdf
@@ -310,6 +316,7 @@ jobs:
             tests/integration/test_documents_router.py \
             tests/integration/test_email_thin_client.py \
             tests/integration/test_files_router.py \
+            tests/integration/test_files_search_budget.py \
             tests/integration/test_folder_indexing.py \
             tests/integration/test_governed_agent_workflow.py \
             tests/integration/test_governed_canonical_name.py \
@@ -324,6 +331,8 @@ jobs:
             tests/integration/test_scheduler_e2e.py \
             tests/integration/test_tui_control_e2e.py \
             tests/mcp/test_agent_mcp_server_stdio.py \
+            tests/mcp/test_mcp_cli_to_agent_workflow.py \
+            tests/mcp/test_mcp_sdk_integration.py \
             tests/mcp/test_port_map.py \
             -v --tb=short --timeout=600
 

@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <iostream>
-#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -706,53 +705,6 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
 
 json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     return tools_.executeTool(toolName, toolArgs);
-}
-
-json Agent::resolvePlanParameters(const json& toolArgs, const std::vector<json>& stepResults) {
-    if (toolArgs.is_object()) {
-        json resolved = json::object();
-        for (auto& [key, value] : toolArgs.items()) {
-            resolved[key] = resolvePlanParameters(value, stepResults);
-        }
-        return resolved;
-    }
-
-    if (toolArgs.is_array()) {
-        json resolved = json::array();
-        for (const auto& item : toolArgs) {
-            resolved.push_back(resolvePlanParameters(item, stepResults));
-        }
-        return resolved;
-    }
-
-    if (toolArgs.is_string()) {
-        std::string val = toolArgs.get<std::string>();
-
-        // Handle $PREV.field
-        if (val.substr(0, 6) == "$PREV." && !stepResults.empty()) {
-            std::string field = val.substr(6);
-            const auto& prev = stepResults.back();
-            if (prev.is_object() && prev.contains(field)) {
-                return prev[field];
-            }
-        }
-
-        // Handle $STEP_N.field
-        std::regex stepRe(R"(\$STEP_(\d+)\.(.+))");
-        std::smatch match;
-        if (std::regex_match(val, match, stepRe) && !stepResults.empty()) {
-            int idx = std::stoi(match[1].str());
-            std::string field = match[2].str();
-            if (idx >= 0 && idx < static_cast<int>(stepResults.size())) {
-                const auto& stepResult = stepResults[static_cast<size_t>(idx)];
-                if (stepResult.is_object() && stepResult.contains(field)) {
-                    return stepResult[field];
-                }
-            }
-        }
-    }
-
-    return toolArgs;
 }
 
 // ---- MCP Integration ----

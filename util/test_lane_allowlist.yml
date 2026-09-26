@@ -34,15 +34,13 @@ files:
   tests/integration/test_email_bench_throughput.py: Benchmarks triage throughput; needs a live Lemonade Server with the email model.
   tests/integration/test_daemon_broker_lemonade.py: Drives concurrent real model loads through the broker; needs a live Lemonade Server with downloaded models.
   tests/integration/test_lemonade_model_residency.py: Checks an LLM and an embedder stay co-resident; needs a live Lemonade Server with both loaded.
+  tests/integration/test_lemonade_predownload_checks.py: Proves the real /models, /system-info and /health shapes the unit test mocks; needs a live Lemonade Server.
+  tests/integration/test_gateway_lemonade.py: Proves Lemonade accepts the gateway's cloud-provider registration and discovery calls, not just that GAIA sent them; needs a live Lemonade Server 11.8.0+, skips otherwise.
   tests/test_lemonade_health.py: Reads context_size from the real health endpoint; needs a live Lemonade Server.
   tests/mcp/test_email_mcp_stdio_parity.py: Both the REST and MCP-stdio surfaces triage with the local LLM; needs a live Lemonade Server with the email model.
 
   # A live third-party account.
   tests/integration/test_email_agent_live_gmail.py: Reads a real Gmail inbox; needs GAIA_GMAIL_LIVE_ACCOUNT credentials, never available in CI.
-
-  # Servers fetched from package registries at test time.
-  tests/mcp/test_mcp_cli_to_agent_workflow.py: Starts unpinned MCP servers with npx/uvx at test time, and still asserts the pre-#977 `gaia mcp add` config flow, which fails today.
-  tests/mcp/test_mcp_sdk_integration.py: Starts unpinned MCP servers with npx at test time; an upstream tool rename in server-sequential-thinking already breaks it.
 
   # Manual runs against running services.
   tests/stress/test_agent_ui_stress.py: A hand-run stress script against a running Agent UI and Lemonade Server; not a pytest suite.
@@ -120,7 +118,7 @@ module_skips:
       Broken, and fixing it needs an owner's decision. With the chat wheel
       installed, 11 of its 17 tests fail: the golden tool sets and prompts predate
       tools added since (write_clipboard, read_tool_output, ...). The file says a
-      golden update needs sign-off, so it is not updated here.
+      golden update needs sign-off, so it is not updated here. Tracked in #4390.
     paths:
       - tests/unit/test_profilespec_characterization.py
 
@@ -129,6 +127,6 @@ module_skips:
       installed, 4 of its 10 tests fail: the doc profile has 38 tools (pinned 37)
       and 6498 native tokens (pinned 5128), and the worst-case loaded set (4257
       tokens) is over its 65% ratio even of the new total, so re-pinning alone
-      would not pass.
+      would not pass. Tracked in #4391.
     paths:
       - tests/unit/test_tool_loader_token_budget.py

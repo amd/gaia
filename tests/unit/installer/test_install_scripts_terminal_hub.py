@@ -243,6 +243,45 @@ def test_the_closing_banner_only_promises_an_agent_that_installed(sh_text, ps1_t
     assert "-FlagshipInstalled" in ps1_text
 
 
+PALETTE_GO = REPO_ROOT / "tui" / "internal" / "ui" / "chat" / "palette.go"
+
+
+def _tui_commands() -> set[str]:
+    source = PALETTE_GO.read_text(encoding="utf-8")
+    block = re.search(
+        r"^var paletteCommands = \[\]paletteCommand\{$(.*?)^\}$",
+        source,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert block, f"paletteCommands not found in {PALETTE_GO}"
+    commands = set(re.findall(r'\{"(/[a-z-]+)",', block.group(1)))
+    assert commands, "paletteCommands parsed as empty"
+    return commands
+
+
+def _banner_commands(text: str, start: str, end: str) -> set[str]:
+    banner = text[text.index(start) : text.index(end, text.index(start))]
+    # printf wraps the command in colour placeholders: '%s/agents%s'.
+    banner = banner.replace("%s", " ")
+    # A `/word` not glued to a URL, path, or variable.
+    return set(re.findall(r"(?<![\w/.:~$%-])/[a-z][a-z-]*\b", banner))
+
+
+@pytest.mark.parametrize("script", ["sh", "ps1"])
+def test_banner_slash_commands_exist_in_the_tui(sh_text, ps1_text, script):
+    """An unknown `/command` is sent to the model as a question, not run."""
+    if script == "sh":
+        banner = _banner_commands(sh_text, "show_next_steps() {", "\n}\n")
+    else:
+        banner = _banner_commands(ps1_text, "function Show-NextSteps {", "\n}\n")
+    assert banner, f"no /command found in the install.{script} closing banner"
+    unknown = banner - _tui_commands()
+    assert not unknown, (
+        f"install.{script} tells users to type {sorted(unknown)}, which "
+        f"paletteCommands in {PALETTE_GO.relative_to(REPO_ROOT)} does not define"
+    )
+
+
 def test_elevation_is_announced_before_it_is_needed(sh_text, ps1_text):
     assert "announce_elevation" in sh_text
     assert sh_text.index("announce_elevation\n") < sh_text.index("install_uv\n\n")
@@ -306,6 +345,70 @@ def test_ps1_parses_without_errors():
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ── install.ps1 runs inside the user's own session under `irm | iex` ───────
+#
+# Off Windows the script refuses to run, which is a real failure path that
+# needs no stubbing. On Windows the same run would install for real, so skip.
+
+needs_pwsh = pytest.mark.skipif(shutil.which("pwsh") is None, reason="no pwsh")
+off_windows = pytest.mark.skipif(sys.platform == "win32", reason="would install")
+
+
+def _run_pwsh(args):
+    return subprocess.run(
+        ["pwsh", "-NoProfile", "-NonInteractive", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
+@needs_pwsh
+@off_windows
+def test_a_failed_iex_install_leaves_the_session_alive_and_clean():
+    """`exit 1` under iex closed the user's terminal along with the Fix: hint,
+    and a run left Stop and a shadowed Write-Error behind in their session."""
+    script = (
+        f"$src = Get-Content -Raw -LiteralPath '{INSTALL_PS1}';"
+        'try { Invoke-Expression $src } catch { Write-Host "caught: $_" };'
+        "Write-Host 'alive';"
+        'Write-Host "eap=$ErrorActionPreference";'
+        'Write-Host "write-error=$((Get-Command Write-Error).CommandType)";'
+        'Write-Host "write-warning=$((Get-Command Write-Warning).CommandType)";'
+        'Write-Host "leaked=$([bool](Get-Command Install-Gaia -ErrorAction Ignore))"'
+    )
+    result = _run_pwsh(["-Command", script])
+    out = result.stdout + result.stderr
+
+    assert "This installer is for Windows" in out
+    assert "alive" in result.stdout, out
+    assert "caught: " in result.stdout
+    assert "eap=Continue" in result.stdout
+    assert "write-error=Cmdlet" in result.stdout
+    assert "write-warning=Cmdlet" in result.stdout
+    assert "leaked=False" in result.stdout
+
+
+@needs_pwsh
+@off_windows
+def test_a_failed_file_install_still_exits_non_zero():
+    """`pwsh -File install.ps1` must keep reporting failure to its caller."""
+    result = _run_pwsh(["-File", str(INSTALL_PS1)])
+    assert result.returncode != 0
+    assert "This installer is for Windows" in result.stdout + result.stderr
+
+
+def test_ps1_never_calls_exit(ps1_text):
+    """Under iex, `exit` ends the user's PowerShell session, not the script."""
+    code = [
+        line
+        for line in ps1_text.splitlines()
+        if re.match(r"^\s*exit\b", line) or re.search(r"[;{]\s*exit\b", line)
+    ]
+    assert not code, code
 
 
 # ── functional: run install_tui against a fake Agent Hub ───────────────────

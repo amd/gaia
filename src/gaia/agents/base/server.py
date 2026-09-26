@@ -203,7 +203,12 @@ class AgentServer:
                 json_type = _REGISTRY_TYPE_TO_JSON.get(
                     param_info.get("type", "string"), "string"
                 )
-                properties[param_name] = {"type": json_type}
+                prop: Dict[str, Any] = {"type": json_type}
+                # Argument text rides here, not in the tool description.
+                param_description = param_info.get("description", "")
+                if param_description:
+                    prop["description"] = param_description
+                properties[param_name] = prop
                 if param_info.get("required"):
                     required.append(param_name)
             definitions.append(
@@ -432,6 +437,7 @@ class AgentServer:
             ModelInfo,
             ModelListResponse,
             UsageInfo,
+            message_text,
         )
 
         # App-wide, so a route mounted later (``/v1/<id>/init``) is guarded too.
@@ -450,9 +456,10 @@ class AgentServer:
             return len(text) // 4
 
         def _last_user_message(messages) -> Optional[str]:
-            return next(
-                (m.content for m in reversed(messages) if m.role == "user"), None
-            )
+            # Flattened, not read raw: ``content`` is a string OR a content-part
+            # array, and the array would otherwise reach process_query as a list.
+            last = next((m for m in reversed(messages) if m.role == "user"), None)
+            return message_text(last) if last is not None else None
 
         @app.get("/health")
         async def health_check():

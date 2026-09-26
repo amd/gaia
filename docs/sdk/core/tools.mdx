@@ -69,7 +69,7 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
 ```python
 {
     "name": "get_weather",
-    "description": "Get current weather for a city.\n\nUse this tool when ...",  # whole docstring
+    "description": "Get current weather for a city.\n\nUse this tool when ...",  # docstring, minus Args:
     "parameters": {
         "city":  {"type": "string", "required": True,
                   "description": "City name, e.g. \"Austin\"."},
@@ -80,20 +80,52 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
     "atomic": False,
     "display_label": None,  # optional user-facing label for UI progress strips
     "timeout": None,        # optional per-tool timeout (seconds); None = global default
+    "preflight": None,      # optional check run before the confirmation prompt
 }
 ```
 
 <Note>
-**What's actually captured:** The function name, the full docstring (as
-`description`), and a `{type, required, description}` entry per parameter. The
-type comes from the annotation (`str`, `int`, `float`, `bool`, `tuple`, `set`,
-`dict`, plus generics like `List[str]` and `Optional[...]`); an unannotated or
-unrecognised parameter falls back to `"unknown"`. The per-parameter
-`description` is parsed from the docstring's Google-style `Args:` block, so the
-model reads the constraint at the slot it is filling — write one line per
-argument. Parameter **default values** are still not stored; `required` is
-derived from whether a default exists.
+**What's actually captured:** The function name, the docstring **without its
+`Args:` block** (as `description`), and a `{type, required, description}` entry
+per parameter. The type comes from the annotation (`str`, `int`, `float`,
+`bool`, `tuple`, `set`, `dict`, plus generics like `List[str]` and
+`Optional[...]`); an unannotated or unrecognised parameter falls back to
+`"unknown"`. The per-parameter `description` is parsed from the docstring's
+Google-style `Args:` block, so the model reads the constraint at the slot it is
+filling — write one line per argument, and don't repeat it in the prose.
+Parameter **default values** are still not stored; `required` is derived from
+whether a default exists.
 </Note>
+
+### The description budget
+
+Every model call re-sends the schema of every offered tool, so this text is
+billed on each step of each turn. Two caps, defined in
+`src/gaia/agents/base/tools.py`:
+
+| Field | Budget |
+|-------|--------|
+| `description` (the docstring, minus `Args:`) | 400 characters |
+| Each parameter description (one `Args:` entry) | 160 characters |
+
+`python util/lint.py --tool-descriptions` fails the build when a tool exceeds
+either, naming the tool and its length; `python util/tool_schema_tokens.py`
+shows where the characters go.
+
+Keep what the model needs to call the tool correctly — what it does, when to
+use it instead of a neighbouring tool, what it refuses, what it returns.
+Rationale, history, and worked examples belong in a code comment, not the
+schema.
+
+<Warning>
+**What the check does not cover.** It measures the flagship agent's tool
+surface only: MCP tools are excluded, and a hub agent outside the flagship is
+unchecked — so a packaged agent can still ship a multi-thousand-character
+description without failing lint. The flagship skeleton also picks up whatever
+the host environment offers, so the tool count it sees can differ between a dev
+box and CI. Treat a green run as "the flagship is in budget", not "every tool
+in the repo is".
+</Warning>
 
 ---
 
@@ -887,7 +919,7 @@ import inspect
 _TOOL_REGISTRY = {}
 
 def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
-         timeout: float | None = None):
+         timeout: float | None = None, preflight=None):
     """Decorator that registers a function in the global tool registry."""
 
     def decorator(f):
@@ -908,12 +940,14 @@ def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
 
         _TOOL_REGISTRY[f.__name__] = {
             "name": f.__name__,
-            "description": f.__doc__ or "",  # whole docstring
+            # Cleaned docstring, minus the Args: block (it ships per-parameter)
+            "description": _schema_description(f.__doc__),
             "parameters": params,
             "function": f,
             "atomic": atomic,
             "display_label": display_label,
             "timeout": timeout,
+            "preflight": preflight,
         }
         return f
 
@@ -922,10 +956,12 @@ def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
 
 Notable implementation details:
 
-- The full docstring is stored once as `description`, **and** each argument's
-  line from the `Args:` block is stored on that argument's entry. Wrapped
-  continuation lines are joined into one string. An argument with no `Args:`
-  entry simply has no `description` key.
+- `description` is the docstring with its leading indentation and its `Args:`
+  block removed — each argument's line is stored on that argument's entry
+  instead, so the same text is not billed twice per call. Wrapped continuation
+  lines are joined into one string. An argument with no `Args:` entry simply
+  has no `description` key. Sections after `Args:` (`Returns:`, `Raises:`, …)
+  stay in `description`.
 - Default values are **not** stored on the parameter entries. `required` is a
   boolean derived from whether the parameter has a default.
 - Generic annotations are specialised: `list[str]` / `List[str]` → `array`,
@@ -937,6 +973,11 @@ Notable implementation details:
 - `@tool(display_label=...)` sets a user-facing label for UI progress strips, and
   `@tool(timeout=...)` overrides the global per-tool execution limit (seconds).
   Both default to `None` and are stored on the registry entry.
+- `@tool(preflight=...)` takes a function of the call's arguments that returns
+  the refusal the call has already earned, or `None`. The agent runs it before
+  the confirmation prompt, so nobody is asked to approve a call that is going to
+  be refused. The tool body must enforce the same rule itself; the file-editing
+  tools use this for their read-before-edit check.
 - Unsupported decorator keywords raise `TypeError` at decoration time and
   identify the invalid argument, tool name, and accepted keyword set.
 

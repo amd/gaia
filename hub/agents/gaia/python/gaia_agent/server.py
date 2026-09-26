@@ -32,6 +32,7 @@ import contextlib
 import json
 import os
 import queue
+import re
 import threading
 import time
 import uuid
@@ -41,8 +42,15 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
-from gaia_agent.session_registry import SessionCapacityError, close_agent
+from gaia_agent.session_registry import (
+    PROVIDER_CLAUDE,
+    PROVIDER_LOCAL,
+    SessionCapacityError,
+    close_agent,
+)
 from gaia_agent.session_registry import registry as session_registry
+from gaia_agent.stdio import lemonade_start_instruction
+from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
@@ -59,7 +67,8 @@ AGENT_ID = "gaia"
 #: the stdio ``MEMORY_DUMP_QUERY`` sentinel.
 #: 2.14 added ``/query/{run_id}/tool_decision`` and ``/sessions/{id}/bypass``,
 #: and the ``claude`` provider value.
-API_VERSION = "2.14"
+#: 2.15 (#3620) added ``POST /query/{run_id}/followup`` for mid-turn messages.
+API_VERSION = "2.15"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -71,10 +80,10 @@ _HEARTBEAT_SECONDS = 10.0
 #: made the daemon transport a downgrade rather than a move (see
 #: docs/plans/daemon-convergence.mdx §3.2). Anything outside this set is still
 #: refused loudly rather than quietly falling back to the default.
-_ALLOWED_PROVIDERS = frozenset({"lemonade", "claude"})
+_ALLOWED_PROVIDERS = frozenset({PROVIDER_LOCAL, PROVIDER_CLAUDE})
 
 #: Provider value that means "not local".
-_CLAUDE_PROVIDER = "claude"
+_CLAUDE_PROVIDER = PROVIDER_CLAUDE
 
 _DOCS_URL = "https://amd-gaia.ai/docs/guides/gaia"
 
@@ -163,6 +172,24 @@ class QueryRespondResponse(_Strict):
     delivered: bool
 
 
+class QueryFollowUpRequest(_Strict):
+    """Body of ``POST /v1/gaia/query/{run_id}/followup`` (contract >= 2.15)."""
+
+    text: str = Field(
+        min_length=1,
+        description=(
+            "What the user typed while this run was still working. The agent "
+            "folds it into the running turn at its next step boundary; it does "
+            "not start a new turn and does not interrupt the current one."
+        ),
+    )
+
+
+class QueryFollowUpResponse(_Strict):
+    run_id: str
+    delivered: bool
+
+
 #: The three answers a tool confirmation accepts, matching the stdio control
 #: channel's vocabulary exactly (``gaia_agent.stdio.DECISION_*``). A fourth
 #: spelling would be refused here rather than guessed at.
@@ -227,6 +254,9 @@ class _QueryRun:
         self.agent = agent
         self.handler = handler
         self.cancel_event = threading.Event()
+        #: Mid-turn follow-ups (contract >= 2.15). The agent drains this at its
+        #: step boundary; see Agent._drain_followups.
+        self.followups: "queue.Queue[str]" = queue.Queue()
         self.result: Optional[Dict[str, Any]] = None
 
 
@@ -354,8 +384,8 @@ def _terminal_error_detail(exc: BaseException) -> str:
         )
     ):
         return (
-            "Local Lemonade Server is not reachable. Start it, then retry — "
-            f"run `lemonade-server serve`, or see {_DOCS_URL}. "
+            "Local Lemonade Server is not reachable. "
+            f"{lemonade_start_instruction()} See {_DOCS_URL}. "
             f"(underlying error: {text})"
         )
     return text
@@ -425,7 +455,12 @@ def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
     if not version:
         return None
     try:
-        got = tuple(int(p) for p in str(version).strip().lstrip("v").split(".")[:3])
+        # Leading digits per part: this reads /api/v1/health verbatim, and
+        # Lemonade's CalVer dev builds look like "2026.39.0~12.abc1234".
+        got = tuple(
+            int(re.match(r"\s*(\d+)", p).group(1))
+            for p in str(version).strip().lstrip("v").split(".")[:3]
+        )
         want = tuple(int(p) for p in minimum.split(".")[:3])
     except (ValueError, AttributeError):
         return None
@@ -434,17 +469,18 @@ def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
 
 def _probe_lemonade() -> Dict[str, Any]:
     """Read-only probe of the local model server. Never pulls or loads."""
-    import os
-
     import requests
     from gaia_agent.agent import GaiaAgentConfig
 
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_NAME,
+        configured_lemonade_url,
+        resolve_lemonade_base_url,
+    )
 
     # Already ends in /api/v1 — the requests below must not append it again.
     base = resolve_lemonade_base_url(
-        os.environ.get("LEMONADE_BASE_URL")
-        or getattr(GaiaAgentConfig(), "base_url", None)
+        configured_lemonade_url() or getattr(GaiaAgentConfig(), "base_url", None)
     ).rstrip("/")
     model_id = DEFAULT_MODEL_NAME
 
@@ -531,9 +567,11 @@ async def init() -> Dict[str, Any]:
 
     hint: Optional[str] = None
     if not probe["reachable"]:
+        start = await asyncio.to_thread(lemonade_start_instruction)
         hint = (
-            f"Local Lemonade Server is not reachable at {probe['base_url']} — start it "
-            f"with `lemonade-server serve`, or set LEMONADE_BASE_URL to a running server."
+            f"Local Lemonade Server is not reachable at {probe['base_url']}. "
+            f"{start} Or set LEMONADE_BASE_URL to a running server. "
+            f"See {_DOCS_URL}."
         )
     elif compatible is False:
         hint = (
@@ -541,9 +579,13 @@ async def init() -> Dict[str, Any]:
             f"{MIN_LEMONADE_VERSION}. Update it, then re-check."
         )
     elif not probe["present"]:
+        # `gaia download` takes no positional model — argparse exits 2 on it.
+        from gaia.llm.lemonade_launcher import describe_client_hint
+
+        pull = describe_client_hint("pull", probe["model_id"]).instruction
         hint = (
-            f"The model {probe['model_id']} is not downloaded. Run "
-            f"`gaia download {probe['model_id']}`, then re-check."
+            f"The model {probe['model_id']} is not downloaded. "
+            f"{pull.rstrip('.')}, then re-check."
         )
 
     ready = bool(probe["reachable"] and probe["present"] and compatible is not False)
@@ -596,6 +638,84 @@ async def memory() -> Dict[str, Any]:
             close_agent(agent)
 
 
+def _require_valid_session_id(session_id: str) -> None:
+    """Reject a session_id the agent could not persist, as the caller's error."""
+    try:
+        validate_session_id(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _check_model_matches_provider(provider: str, model: str) -> None:
+    """400 when *model* belongs to the other backend than *provider* names.
+
+    Either reading of such a request is wrong: honouring ``model`` sends a
+    conversation the caller asked to keep local to Anthropic, and honouring
+    ``provider`` points a backend at an id it cannot serve.
+    """
+    from gaia_agent.stdio import is_claude_model
+
+    if is_claude_model(model) == (provider == PROVIDER_CLAUDE):
+        return
+    owner = PROVIDER_CLAUDE if is_claude_model(model) else PROVIDER_LOCAL
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"model {model!r} is a {owner} model, but provider is {provider!r}. "
+            f"Send provider {owner!r} with this model, or a {provider} model "
+            f"id with provider {provider!r}."
+        ),
+    )
+
+
+def _effective_provider(request: "QueryRequest") -> str:
+    """The backend a request targets when it does not name one.
+
+    ``provider`` is optional, so an absent one is decided by the model: a Claude
+    id means Anthropic. That is already how a RETAINED session resolves it —
+    ``switch_model`` reads the id and sets the session's provider from it — but a
+    NEW session put the id straight into ``model_id`` and pointed the local
+    client at something it cannot serve.
+
+    Note this answers "which backend", not "did the caller ask to move". A
+    retained session is left where it is unless the turn says otherwise, so
+    ``_switch_target`` deliberately reads ``request.provider`` raw instead.
+    """
+    from gaia_agent.stdio import is_claude_model
+
+    if request.provider is not None:
+        return request.provider
+    if request.model and is_claude_model(request.model):
+        return PROVIDER_CLAUDE
+    return PROVIDER_LOCAL
+
+
+def _default_model_for(provider: str) -> str:
+    """The model a new session on *provider* gets when the request names none."""
+    if provider == PROVIDER_CLAUDE:
+        from gaia_agent.agent import GaiaAgentConfig
+
+        return GaiaAgentConfig.claude_model
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return DEFAULT_MODEL_NAME
+
+
+def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
+    """The model a retained session must move to this turn, or ``None``.
+
+    An absent ``provider`` means "leave this session where it is", NOT the
+    default backend — resolving it here would drag a Claude session back to
+    Lemonade on every ordinary follow-up turn. A bare ``model`` still moves the
+    session, and ``switch_model`` sets the provider from the id it is given.
+    """
+    if request.provider is not None and request.provider != session.provider:
+        return request.model or _default_model_for(request.provider)
+    if request.model and request.model != session.model_id:
+        return request.model
+    return None
+
+
 @router.post("/query")
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
@@ -609,8 +729,19 @@ async def query(request: QueryRequest):
                 f"{AGENT_ID} agent. Allowed: {sorted(_ALLOWED_PROVIDERS)}."
             ),
         )
+    if request.provider is not None and request.model:
+        _check_model_matches_provider(request.provider, request.model)
+    if request.session_id:
+        _require_valid_session_id(request.session_id)
 
     handler = SSEOutputHandler()
+    # Bypass permissions are a stdio-transport affordance and must stay one
+    # (#3373). The stdio parent is one local process on a private pipe; this
+    # endpoint is a bound socket, and an unguarded shell reachable over it is
+    # remote code execution rather than a relaxed permission model. There is no
+    # request field that could ask for it — this pins that, so adding one
+    # without also revisiting the reasoning fails a test instead of shipping.
+    handler.bypass_permissions = False
     session = None
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
@@ -631,7 +762,7 @@ async def query(request: QueryRequest):
 
     try:
         kwargs: Dict[str, Any] = {}
-        if request.provider == _CLAUDE_PROVIDER:
+        if _effective_provider(request) == _CLAUDE_PROVIDER:
             # ``model`` names a CLAUDE model here, not a Lemonade one — putting
             # it in model_id would point the local client at an id it cannot
             # serve, which fails much later and much less clearly.
@@ -659,14 +790,15 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
-            if request.model and request.model != session.model_id:
+            target = _switch_target(session, request)
+            if target is not None:
                 # Switched in place rather than refused. Rebuilding the agent
                 # (or making the caller start a new session_id, which is what
                 # this used to say) throws away the conversation and every
                 # loaded skill — the two things a retained session exists to
                 # keep. run_lock is held here, so no turn is mid-inference.
                 try:
-                    display = session.switch_model(request.model)
+                    display = session.switch_model(target)
                 except RuntimeError as exc:
                     # The switch is all-or-nothing: the session is still on its
                     # previous model, so this is a failed request, not a broken
@@ -675,7 +807,7 @@ async def query(request: QueryRequest):
                         status_code=409,
                         detail=(
                             f"could not switch session {request.session_id} to "
-                            f"{request.model!r}: {exc}. The session is still "
+                            f"{target!r}: {exc}. The session is still "
                             f"running {session.model_id or 'its previous model'}."
                         ),
                     ) from exc
@@ -734,6 +866,7 @@ async def query(request: QueryRequest):
         precancelled = _registry.add(run)
         registered = True
         agent._cancel_event = run.cancel_event
+        agent._followup_queue = run.followups
         if precancelled:
             # A /cancel for this run_id landed before it registered. The loop
             # checks the flag at its first step boundary, so it stops without
@@ -772,6 +905,19 @@ async def query(request: QueryRequest):
             handler.print_error(_terminal_error_detail(exc))
         finally:
             handler.signal_done()
+            # Unwire the follow-up queue the moment the loop stops draining it.
+            # Left wired, a follow-up arriving in the window before the run
+            # leaves the run table would be accepted with a 200 and then never
+            # read by anything — the exact silent drop this route exists to
+            # rule out. Guarded on identity: a retained session's NEXT turn may
+            # already own the attribute, and clearing that one would disarm a
+            # live run. (A narrower race survives: a POST that wins the lookup
+            # microseconds before this line. The caller records a delivered
+            # follow-up in its own transcript and pushes it as context on the
+            # next turn, so the words stay in the conversation — they are
+            # answered a turn later than asked, not lost.)
+            if getattr(agent, "_followup_queue", None) is run.followups:
+                agent._followup_queue = None
             # Release only after the agent is done touching the instance, so the
             # next turn on this session cannot start mid-run.
             if session is not None:
@@ -931,6 +1077,43 @@ async def respond_to_query(
     )
 
 
+@router.post("/query/{run_id}/followup", response_model=QueryFollowUpResponse)
+async def followup_to_query(
+    run_id: str, body: QueryFollowUpRequest
+) -> QueryFollowUpResponse:
+    """Hand a live run something the user typed after it started.
+
+    The run keeps going on its existing SSE stream — this neither interrupts it
+    nor starts a second turn. The agent folds the text in at its next agent-loop
+    step boundary, so a follow-up sent during a five-minute turn is answered in
+    that turn instead of waiting it out.
+
+    An unknown run is a loud 404, not a quiet accept: the caller has to know the
+    message did not land so it can hold it for the next turn instead of showing
+    the user a message that went nowhere.
+    """
+    run = _registry.get(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No run {run_id!r} is in flight, so the follow-up was not "
+                "delivered. It may have already finished or been cancelled — "
+                "send it as a new query instead."
+            ),
+        )
+    enqueue = getattr(run.agent, "queue_followup", None)
+    if not callable(enqueue) or not enqueue(body.text):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Run {run_id!r} cannot take a follow-up — its agent is not "
+                "accepting mid-turn input. Send it as a new query instead."
+            ),
+        )
+    return QueryFollowUpResponse(run_id=run_id, delivered=True)
+
+
 @router.post("/query/{run_id}/tool_decision", response_model=ToolDecisionResponse)
 async def tool_decision(run_id: str, body: ToolDecisionRequest):
     """Answer a ``needs_confirmation`` while the agent is still parked on it.
@@ -983,6 +1166,7 @@ async def set_bypass(session_id: str, body: BypassRequest):
     agent as a side effect of a settings toggle, and would silently succeed
     against a typo'd session id.
     """
+    _require_valid_session_id(session_id)
     session = session_registry.get(session_id)
     if session is None:
         raise HTTPException(

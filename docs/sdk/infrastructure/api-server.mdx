@@ -35,6 +35,22 @@ uvicorn.run(app, host="127.0.0.1", port=8080)
 # )
 ```
 
+### What a request delivers to the agent
+
+Each request gets a fresh agent, loaded with the conversation the client sent:
+
+- **History** — every message before the final one becomes the agent's
+  conversation history. The final message must be from the user, or the
+  request fails with 400.
+- **System instructions** — `system` and `developer` messages are added after
+  the agent's own system prompt; they don't replace it.
+- **Content parts** — `content` may be a string or an array of parts. Text
+  parts are joined with newlines. Other part types (`image_url`, `input_audio`,
+  `file`) fail with a 400 that names the type.
+- **Sampling** — `temperature`, `top_p`, and `max_tokens` apply to every model
+  call the agent makes while answering, so `max_tokens` caps each call, not
+  the whole answer. Omit them to keep the agent's defaults.
+
 ### CORS
 
 Browser (cross-origin) access is limited to `localhost` / `127.0.0.1` origins
@@ -229,6 +245,22 @@ both surfaces.
 {"event": "tool_result", "data": {"name": "generate_code", "result": {...}}}
 {"event": "answer", "data": {"text": "Here's the code..."}}
 ```
+
+### Disconnects and failures
+
+If the client disconnects mid-stream, the agent is told to stop and quits at
+its next step instead of finishing the turn. If the agent fails after streaming
+has started, the stream ends with an
+`{"error": {"message": ..., "type": "server_error"}}` chunk and then
+`data: [DONE]`, since the HTTP status has already been sent.
+
+<Note>
+  The stop takes effect at the agent's next step or tool, so a model call that
+  is **already in flight** runs to completion and keeps its worker thread until
+  it returns. Agent runs execute on the default thread pool, so a client that
+  repeatedly starts and cancels long requests can keep those workers busy and
+  delay unrelated requests.
+</Note>
 
 ### Confirmation-gated tools are denied on this surface
 

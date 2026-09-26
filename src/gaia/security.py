@@ -6,6 +6,7 @@ Handles path validation, user prompting, persistent allow-lists,
 blocked path enforcement, write guardrails, and audit logging.
 """
 
+import contextlib
 import datetime
 import hashlib
 import json
@@ -26,11 +27,67 @@ logger = logging.getLogger(__name__)
 # Audit logger — separate from main logger for file operation tracking
 audit_logger = logging.getLogger("gaia.security.audit")
 
+
+def ensure_audit_log_handler(cache_dir: Optional[Path] = None) -> None:
+    """Attach the rotating audit-log handler once, creating the file if needed.
+
+    Uses ``RotatingFileHandler`` (10 MB x 3 backups) so the audit log cannot
+    grow unbounded on a developer's machine over months of use. Total cap:
+    ~40 MB of audit history.
+    """
+    if audit_logger.handlers:
+        return
+
+    from logging.handlers import RotatingFileHandler
+
+    cache_dir = cache_dir or (Path.home() / ".gaia" / "cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        str(cache_dir / "file_audit.log"),
+        maxBytes=10 * 1024 * 1024,  # 10 MB per file
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    audit_logger.addHandler(handler)
+    audit_logger.setLevel(logging.INFO)
+
+
+def audit_shell_command(
+    command: str, cwd: str, segments: List[List[str]], mode: str
+) -> None:
+    """Record a shell command the agent executed, with its full arguments.
+
+    Called on the bypass path, where the confirmation prompt is skipped: consent
+    was granted in advance, which is exactly when this record is the only
+    evidence of what the agent actually ran. Every pipeline/sequence segment is
+    listed separately, so ``a && b`` is two auditable invocations rather than
+    one opaque string.
+
+    Arguments are recorded verbatim, so a secret passed on a command line lands
+    in ``~/.gaia/cache/file_audit.log``. That is the trade the audit trail
+    makes; treat the file as sensitive.
+    """
+    ensure_audit_log_handler()
+    audit_logger.info(
+        "SHELL | %s | cwd=%s | %s | segments=%s",
+        mode,
+        cwd,
+        command,
+        json.dumps(segments),
+    )
+
+
 # Maximum file size the agent is allowed to write (10 MB)
 MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
 
 # Backups kept per edited file; older ones are removed as new ones land.
 BACKUP_GENERATIONS = 5
+
+
+class BackupError(RuntimeError):
+    """A file that exists could not be backed up, so it must not be modified."""
+
 
 # Sensitive file names that should never be written to by the agent
 SENSITIVE_FILE_NAMES: Set[str] = {
@@ -454,27 +511,8 @@ class PathValidator:
         self._load_persisted_paths()
 
     def _setup_audit_logging(self):
-        """Configure audit logging to file for write operations.
-
-        Uses ``RotatingFileHandler`` (10 MB x 3 backups) so the audit
-        log cannot grow unbounded on a developer's machine over months
-        of use.  Total cap: ~40 MB of audit history.
-        """
-        from logging.handlers import RotatingFileHandler
-
-        audit_log_file = self.cache_dir / "file_audit.log"
-        if not audit_logger.handlers:
-            handler = RotatingFileHandler(
-                str(audit_log_file),
-                maxBytes=10 * 1024 * 1024,  # 10 MB per file
-                backupCount=3,
-                encoding="utf-8",
-            )
-            handler.setFormatter(
-                logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-            )
-            audit_logger.addHandler(handler)
-            audit_logger.setLevel(logging.INFO)
+        """Configure audit logging to file for write operations."""
+        ensure_audit_log_handler(self.cache_dir)
 
     def _load_persisted_paths(self):
         """Load allowed paths from cache file, unless this scope was host-supplied."""
@@ -965,8 +1003,10 @@ class PathValidator:
         In non-interactive environments auto-approve the overwrite — the
         write already passed allowlist + blocklist + size checks, and a
         timestamped ``.bak`` backup is created separately in ``create_backup``,
-        so data loss is recoverable. Blocking on ``input()`` in a server
-        context would hang the request instead.
+        so data loss is recoverable. When no backup can be made,
+        ``create_backup`` raises :class:`BackupError` and the write is refused.
+        Blocking on ``input()`` in a server context would hang the request
+        instead.
 
         Args:
             path: Path to the existing file.
@@ -998,7 +1038,11 @@ class PathValidator:
                 print("Please answer 'y' or 'n'.")
 
     def create_backup(self, path: str) -> Optional[str]:
-        """Back up *path* under this validator's cache dir; see :func:`backup_file`."""
+        """Back up *path* under this validator's cache dir; see :func:`backup_file`.
+
+        Raises:
+            BackupError: *path* exists but could not be backed up.
+        """
         return backup_file(path, self.cache_dir)
 
     def audit_write(
@@ -1039,25 +1083,34 @@ def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
         cache_dir: GAIA's cache directory; defaults to ``~/.gaia/cache``.
 
     Returns:
-        Backup file path if successful, None if file doesn't exist or backup failed.
+        Backup file path, or None if the file doesn't exist.
+
+    Raises:
+        BackupError: The file exists but could not be copied. Callers must
+            not modify it — the overwrite was approved on the promise of a
+            backup.
     """
     real_path = Path(os.path.realpath(path)).resolve()
     if not real_path.exists():
         return None
 
     root = (cache_dir or Path.home() / ".gaia" / "cache") / "backups"
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp_time = datetime.datetime.now()
     # A drive or UNC share becomes one plain folder name under backups/.
     drive = re.sub(r"[:\\/]+", "_", real_path.drive).strip("_")
     parts = ([drive] if drive else []) + list(
         real_path.parent.relative_to(real_path.anchor).parts
     )
     mirror = root.joinpath(*parts)
+
     # ".bak" goes LAST. Keeping the original extension made a backup of
     # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
     # collects and cannot import, so editing a test file broke the whole
     # suite (#3747). Nothing globs *.bak.
-    backup_path = mirror / f"{real_path.name}.{timestamp}.bak"
+    def _backup_at(moment: datetime.datetime) -> Path:
+        return mirror / f"{real_path.name}.{moment:%Y%m%d_%H%M%S_%f}.bak"
+
+    backup_path = _backup_at(stamp_time)
 
     try:
         root.parent.mkdir(parents=True, exist_ok=True)
@@ -1066,19 +1119,27 @@ def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
             root.joinpath(*parts[:depth]).mkdir(mode=0o700, exist_ok=True)
         # mkdir's mode does not narrow a directory that already exists.
         root.chmod(0o700)
+        # Two edits on one clock tick must not share (and clobber) a backup.
+        while backup_path.exists():
+            stamp_time += datetime.timedelta(microseconds=1)
+            backup_path = _backup_at(stamp_time)
         shutil.copy2(str(real_path), str(backup_path))
     except OSError as e:
-        logger.warning(
-            "Failed to back up %s to %s: %s. The edit goes ahead without a backup.",
-            real_path,
-            backup_path,
-            e,
-        )
-        return None
+        logger.error("Failed to back up %s to %s: %s", real_path, backup_path, e)
+        # A copy that died mid-stream leaves a truncated .bak that still counts
+        # as a generation, so it can evict a good backup from the rotation.
+        with contextlib.suppress(OSError):
+            backup_path.unlink(missing_ok=True)
+        raise BackupError(
+            f"Refused to modify {real_path}: backing it up to {backup_path} "
+            f"failed ({e}). Nothing was written. Free disk space or make "
+            f"{root} writable, then retry."
+        ) from e
     audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")
     logger.debug(f"Created backup: {backup_path}")
 
-    stamped = re.compile(re.escape(real_path.name) + r"\.\d{8}_\d{6}\.bak")
+    # The optional microseconds keep pruning backups named before they existed.
+    stamped = re.compile(re.escape(real_path.name) + r"\.\d{8}_\d{6}(_\d{6})?\.bak")
     try:
         # The timestamp format sorts chronologically by name.
         generations = sorted(p for p in mirror.iterdir() if stamped.fullmatch(p.name))
