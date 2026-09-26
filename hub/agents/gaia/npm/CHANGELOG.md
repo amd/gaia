@@ -240,6 +240,13 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The agent has to read a file before it changes it.** `edit_file`, and
+  `write_file` on an existing file, now refuse a file the agent hasn't read with
+  `read_file` in this session, or one that changed on disk since it did. Benchmark
+  runs caught the agent patching files it had never opened, from a grep snippet
+  or a guess; now it has to look first. A partial read counts, creating a file
+  needs no read, and the refusal comes before any approval prompt. It applies
+  with confirmations bypassed too.
 - **The agent sees every installed skill and loads the one that fits.**
   Previously a per-turn matcher scored the request against skill descriptions
   and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never

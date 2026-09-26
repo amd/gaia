@@ -4235,9 +4235,18 @@ Do NOT wrap conversational replies in JSON.
         merely destructive rather than not permitted. Validate first, confirm
         second; only a call that could actually run should ever ask.
 
-        Duck-typed like :meth:`_call_is_pre_authorized`: a host that can refuse
-        a call up front implements ``policy_refusal_for_call``.
+        Two sources: a tool's own ``@tool(preflight=...)`` check, and — duck-typed
+        like :meth:`_call_is_pre_authorized` — a host that implements
+        ``policy_refusal_for_call``.
         """
+        # Before the falsy-args guard: a tool whose arguments all default
+        # (``update_gaia_md()``) still has a target, and must not be approved
+        # only to be refused by its own body a moment later.
+        preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+        if preflight is not None:
+            refusal = preflight(tool_args or {})
+            if refusal is not None:
+                return refusal
         if not tool_args:
             return None
         refuses = getattr(self, "policy_refusal_for_call", None)

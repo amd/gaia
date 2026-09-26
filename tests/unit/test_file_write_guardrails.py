@@ -41,6 +41,26 @@ from gaia.security import (
     _get_blocked_directories,
 )
 
+
+def _reading_first(read_fn, change_fn):
+    """``change_fn`` the way an agent calls it: an existing target is read first.
+
+    The write and edit tools refuse an existing file the agent hasn't read
+    (``tests/unit/agents/test_read_before_edit.py``). These tests cover the
+    guardrails behind that check.
+    """
+
+    def call(file_path, *args, project_dir=None, **kwargs):
+        target = Path(project_dir, file_path) if project_dir else Path(file_path)
+        if target.exists():
+            read_fn(file_path=str(target))
+        if project_dir is not None:
+            kwargs["project_dir"] = project_dir
+        return change_fn(file_path, *args, **kwargs)
+
+    return call
+
+
 # ============================================================================
 # 1. BLOCKED_DIRECTORIES CONSTANT TESTS
 # ============================================================================
@@ -866,7 +886,7 @@ class TestChatAgentWriteFileGuardrails:
             mixin.register_file_search_tools()
             write_fn = _TOOL_REGISTRY.get("write_file", {}).get("function")
             assert write_fn is not None, "write_file tool not registered"
-            yield write_fn
+            yield _reading_first(_TOOL_REGISTRY["read_file"]["function"], write_fn)
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved_registry)
@@ -974,7 +994,9 @@ class TestChatAgentEditFileGuardrails:
             mixin.register_file_search_tools()
             edit_fn = _TOOL_REGISTRY.get("edit_file", {}).get("function")
             assert edit_fn is not None, "edit_file tool not registered"
-            yield mixin, edit_fn
+            yield mixin, _reading_first(
+                _TOOL_REGISTRY["read_file"]["function"], edit_fn
+            )
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved_registry)
@@ -1209,7 +1231,9 @@ class TestFileIOToolsMixinWriteFileGuardrails:
             mixin.register_file_io_tools()
             write_fn = _TOOL_REGISTRY.get("write_file", {}).get("function")
             assert write_fn is not None, "write_file tool not registered"
-            yield mixin, write_fn
+            yield mixin, _reading_first(
+                _TOOL_REGISTRY["read_file"]["function"], write_fn
+            )
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved_registry)
@@ -1323,7 +1347,9 @@ class TestFileIOToolsMixinEditFileGuardrails:
             mixin.register_file_io_tools()
             edit_fn = _TOOL_REGISTRY.get("edit_file", {}).get("function")
             assert edit_fn is not None, "edit_file tool not registered"
-            yield mixin, edit_fn
+            yield mixin, _reading_first(
+                _TOOL_REGISTRY["read_file"]["function"], edit_fn
+            )
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved_registry)
@@ -1642,6 +1668,7 @@ class TestEditingLeavesTheWorkspaceClean:
 
     @staticmethod
     def _tool(mixin_cls, register, name, repo, validated=True):
+        """*name* on a fresh host, reading an existing target first like an agent."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
         mixin = mixin_cls()
@@ -1654,7 +1681,11 @@ class TestEditingLeavesTheWorkspaceClean:
         _TOOL_REGISTRY.clear()
         try:
             getattr(mixin, register)()
-            return _TOOL_REGISTRY[name]["function"], mixin.path_validator
+            change = _TOOL_REGISTRY[name]["function"]
+            read = _TOOL_REGISTRY.get("read_file", {}).get("function")
+            return (_reading_first(read, change) if read else change), (
+                mixin.path_validator
+            )
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved)
