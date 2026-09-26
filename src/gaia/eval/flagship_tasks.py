@@ -42,7 +42,7 @@ from gaia.agents.base.verification import (
     verification_check_target,
 )
 from gaia.eval.bench import config as bench_config
-from gaia.eval.bench import ghstub, harness, metering, therock, transcripts
+from gaia.eval.bench import ghstub, harness, metering, swebench, therock, transcripts
 from gaia.eval.bench.config import BenchConfig
 from gaia.eval.bench.gateway import Gateway
 from gaia.eval.bench.leaks import Scrubber
@@ -128,6 +128,8 @@ class Task:
     closed_book: str = ""
     #: A "diff" task's TheRock commits and the files the upstream fix touches.
     therock: Dict[str, Any] = field(default_factory=dict)
+    #: A "swebench" task's instance: repository, base commit and eval image.
+    swebench: Dict[str, Any] = field(default_factory=dict)
 
 
 def _project_path(path: Any) -> bool:
@@ -141,6 +143,11 @@ def _project_path(path: Any) -> bool:
 def _parse_task(raw: Mapping[str, Any], source: Path) -> Task:
     where = f"task {raw.get('id')!r} in {source}"
     check = raw.get("check")
+    if check == swebench.CHECK:
+        raise ValueError(
+            f"{where}: SWE-bench tasks are built from the dataset at run time, "
+            "never listed in a tasks file. Run `--suite swebench --instances ...`."
+        )
     if check not in CHECKS:
         raise ValueError(f"{where}: check must be one of {', '.join(CHECKS)}")
     for key in ("id", "prompt", "max_steps"):
@@ -220,14 +227,59 @@ def suite_names(tasks_file: Optional[Path] = None) -> List[str]:
     return sorted(json.loads(tasks_file.read_text(encoding="utf-8"))["suites"])
 
 
-def load_suite(name: str, tasks_file: Optional[Path] = None) -> List[Task]:
-    """The tasks of suite *name*, in run order."""
+def _swebench_task(raw: Mapping[str, Any]) -> Task:
+    return Task(
+        id=raw["id"],
+        check=swebench.CHECK,
+        prompt=raw["prompt"],
+        max_steps=int(raw["max_steps"]),
+        closed_book=raw["closed_book"],
+        swebench=dict(raw["swebench"]),
+    )
+
+
+def swebench_suite(
+    instances: Optional[Sequence[str]] = None, work_root: Optional[Path] = None
+) -> List[Task]:
+    """The ``swebench`` suite: one task per instance, built from the dataset.
+
+    *instances* defaults to the pilot; *work_root* holds the instance cache
+    (default: the configured work root, so a judge step finds what the run
+    fetched).
+    """
+    root = work_root or bench_config.resolve().work_root
+    records = swebench.load_instances(
+        list(instances or swebench.PILOT), swebench.cache_dir(root)
+    )
+    return [_swebench_task(swebench.task_for(r)) for r in records]
+
+
+def load_suite(
+    name: str,
+    tasks_file: Optional[Path] = None,
+    *,
+    instances: Optional[Sequence[str]] = None,
+    work_root: Optional[Path] = None,
+) -> List[Task]:
+    """The tasks of suite *name*, in run order.
+
+    ``swebench`` is not in the tasks file: its tasks come from the dataset,
+    for the instance ids in *instances* (``--instances``; the pilot when
+    empty). *work_root* is where those instances are cached.
+    """
+    if name == swebench.SUITE:
+        return swebench_suite(instances, work_root)
+    if instances:
+        raise ValueError(
+            f"--instances names SWE-bench instances; suite {name!r} takes --tasks"
+        )
     tasks_file = tasks_file or TASKS_FILE
     data = json.loads(tasks_file.read_text(encoding="utf-8"))
     suites = data.get("suites") or {}
     if name not in suites:
         raise ValueError(
-            f"Unknown task suite {name!r}. {tasks_file} defines: {sorted(suites)}"
+            f"Unknown task suite {name!r}. {tasks_file} defines: {sorted(suites)}; "
+            f"{swebench.SUITE!r} is built from the dataset at run time."
         )
     by_id: Dict[str, Task] = {}
     for raw in data.get("tasks") or []:
@@ -382,6 +434,9 @@ def score(
     if task.check == "diff":
         ok, why = diff_gate(task, diff)
         return (None, f"{why}; the judge decides") if ok else (False, why)
+    if task.check == swebench.CHECK:
+        files = len(therock.touched_files(diff))
+        return None, f"patch captured ({files} files); the official harness decides"
     return evaluate(task, workdir, baseline)
 
 
@@ -396,8 +451,9 @@ def prepare_workdir(
     Returns ``(workdir, baseline)``. For a toybox task, *baseline* is a copy of
     the workdir as the agent will find it, kept beside it rather than inside
     it. ``unchanged`` and the judge's diff compare with it, so a setup's files
-    are never mistaken for the agent's work. For a TheRock task the baseline
-    is the checkout's own ``HEAD``, and *baseline* is the workdir itself.
+    are never mistaken for the agent's work. For a TheRock or SWE-bench task
+    the baseline is the checkout's own ``HEAD``, and *baseline* is the workdir
+    itself.
     """
     ghstub.install(root / "harness", task.gh)
     if task.check == "diff":
@@ -411,6 +467,10 @@ def prepare_workdir(
             task.therock["merge"],
             work_root or root,
         )
+        return workdir, workdir
+    if task.check == swebench.CHECK:
+        workdir = root / task.swebench["repo"].split("/")[-1]
+        swebench.checkout(task.swebench, workdir, work_root or root)
         return workdir, workdir
     workdir, baseline = root / "toybox", root / "baseline"
     shutil.copytree(FIXTURE, workdir, ignore=shutil.ignore_patterns(*IGNORED))
@@ -789,13 +849,32 @@ def run_task(
                     result.error_kind = "unavailable"
             _task_cost(result, model)
             # Diffed before scoring: a probe may write into the project.
+            no_patch = ""
             if task.check == "diff":
                 diff = therock.agent_diff(workdir)
+                shown = diff or "(no changes to the workspace)"
+            elif task.check == swebench.CHECK:
+                # A run that errored is shown to the judge, never submitted:
+                # grading it would spend a 3 GB pull on a task already lost.
+                if ran.error:
+                    diff = swebench.agent_patch(workdir)
+                else:
+                    try:
+                        diff = swebench.capture_prediction(
+                            workdir,
+                            task.id,
+                            prediction_model_name(ctx.config.harness, model),
+                            task_dir.parent / PREDICTIONS_FILE,
+                        )
+                    except swebench.SweBenchError as exc:
+                        diff, no_patch = "", str(exc)
                 shown = diff or "(no changes to the workspace)"
             else:
                 diff, shown = "", workspace_diff(workdir, baseline)
             if ran.error:
                 result.error = result.why = ran.error
+            elif no_patch:
+                result.passed, result.why = False, no_patch
             else:
                 result.passed, result.why = score(task, workdir, baseline, diff)
             ctx.scrubber.write_json(task_dir / "transcript.json", ran.transcript)
@@ -805,9 +884,17 @@ def run_task(
                     task_dir / "setup.diff", workspace_diff(baseline, FIXTURE)
                 )
         finally:
-            if task.check != "diff":
+            if task.check not in ("diff", swebench.CHECK):
                 remove_leftovers(workdir)
     return result
+
+
+PREDICTIONS_FILE = "predictions.jsonl"
+
+
+def prediction_model_name(harness_name: str, model: str) -> str:
+    """The ``model_name_or_path`` of a run's predictions; the harness names a directory by it."""
+    return f"{harness_name}-{model}".replace("/", "__")
 
 
 def _revision() -> Optional[str]:
@@ -897,10 +984,19 @@ def run_suite(
     config: Optional[BenchConfig] = None,
     repeat: int = 1,
     only: Optional[Sequence[str]] = None,
+    instances: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    """Run the tasks of *suite* (or those in *only*) once; write ``scorecard.json``."""
+    """Run the tasks of *suite* (or those in *only*) once; write ``scorecard.json``.
+
+    *instances* are the SWE-bench instance ids a ``swebench`` run is built
+    from; the scorecard records them so the judge and grader rebuild the
+    same suite.
+    """
     config = config or bench_config.resolve()
-    tasks = select(load_suite(suite, tasks_file), only)
+    tasks = select(
+        load_suite(suite, tasks_file, instances=instances, work_root=config.work_root),
+        only,
+    )
     # Read before anything leaves the environment: every credential this
     # process can see is redacted from what the run writes.
     scrubber = Scrubber.from_environment(
@@ -934,6 +1030,8 @@ def run_suite(
         "therock_url": config.therock_url,
         "tasks": [asdict(r) for r in results],
     }
+    if suite == swebench.SUITE:
+        card["swebench_instances"] = [t.id for t in tasks]
     card["cost"] = run_cost(card)
     if before is not None:
         logger.info("Waiting %ss for the billing meter to catch up", config.meter_lag_s)
@@ -1029,8 +1127,8 @@ it fails to establish, or "") only for QUESTION attempts.
 """
 
 
-THEROCK_RUBRIC = """You are grading an AI agent that was asked to fix a real problem in
-TheRock, AMD's ROCm build system, a large Python codebase. The agent was given
+UPSTREAM_RUBRIC = """You are grading an AI agent that was asked to fix a real problem in
+{project}. The agent was given
 only the problem statement, never the solution. Each attempt below is
 independent: grade each on its own merits.
 
@@ -1053,6 +1151,15 @@ not evidence, so never mark it down for a result listed there.
 Score strictly. Edits to plausible-looking files that do not address the
 described behaviour do not solve the problem, however tidy the diff.
 """
+
+THEROCK_RUBRIC = UPSTREAM_RUBRIC.replace(
+    "{project}", "TheRock, AMD's ROCm build system, a large Python codebase"
+)
+SWEBENCH_RUBRIC = UPSTREAM_RUBRIC.replace(
+    "{project}",
+    "a public open-source Python project (an instance of SWE-bench Verified)",
+)
+UPSTREAM_RUBRICS = {"diff": THEROCK_RUBRIC, swebench.CHECK: SWEBENCH_RUBRIC}
 
 
 class JudgeError(RuntimeError):
@@ -1083,7 +1190,12 @@ class Attempt:
 
     @property
     def upstream_fix(self) -> bool:
-        return self.task is not None and self.task.check == "diff"
+        return self.task is not None and self.task.check in UPSTREAM_RUBRICS
+
+    @property
+    def batch_key(self) -> str:
+        """Attempts graded by one rubric share a call; the toybox ones are ``""``."""
+        return self.task.check if self.upstream_fix else ""
 
 
 def attempt_from(
@@ -1259,13 +1371,14 @@ def judge_batch(
 ) -> Dict[str, Dict[str, Any]]:
     """Grade every attempt in one judge call; the project is sent once.
 
-    TheRock attempts are graded against the upstream fix instead, so a batch
-    is either all TheRock or none of it (``judge_run`` splits them).
+    TheRock and SWE-bench attempts are graded against the upstream fix
+    instead, each kind by its own rubric, so a batch holds one kind
+    (``judge_run`` splits them).
     """
-    if len({a.upstream_fix for a in attempts}) > 1:
-        raise ValueError("TheRock attempts are judged in their own batch")
+    if len({a.batch_key for a in attempts}) > 1:
+        raise ValueError("TheRock and SWE-bench attempts are judged in their own batch")
     if attempts and attempts[0].upstream_fix:
-        head = [THEROCK_RUBRIC]
+        head = [UPSTREAM_RUBRICS[attempts[0].batch_key]]
     else:
         head = [RUBRIC, f"=== THE ORIGINAL PROJECT ===\n{project_snapshot()}"]
     payload = "\n\n".join([*head, *(_attempt_section(a) for a in attempts)])
@@ -1302,9 +1415,13 @@ def judge_run(
     or fail is the judge's verdict; without one it stays undecided.
     """
     card = read_scorecard(run_dir)
-    tasks = {t.id: t for t in load_suite(card["suite"], tasks_file)}
+    ids = card.get("swebench_instances")
+    tasks = {t.id: t for t in load_suite(card["suite"], tasks_file, instances=ids)}
     scrubber = Scrubber.from_environment(extra=_secret_extras())
     url = card.get("therock_url") or bench_config.DEFAULT_THEROCK_URL
+    # The gold patches, read from the cache the run filled, only now that the
+    # agent has exited.
+    gold = {i["instance_id"]: i["patch"] for i in _swebench_records(card)}
     pending = []
     for entry in card["tasks"]:
         task, task_dir = tasks[entry["id"]], run_dir / entry["id"]
@@ -1317,6 +1434,9 @@ def judge_run(
             reference = therock.reference_diff(
                 url, task.therock["base"], task.therock["merge"]
             )
+            scrubber.write_text(task_dir / "reference.diff", reference)
+        elif task.check == swebench.CHECK:
+            reference = gold[task.id]
             scrubber.write_text(task_dir / "reference.diff", reference)
         pending.append(
             attempt_from(
@@ -1336,10 +1456,8 @@ def judge_run(
     for _ in range(attempts):
         if not pending:
             break
-        for group in (
-            [a for a in pending if not a.upstream_fix],
-            [a for a in pending if a.upstream_fix],
-        ):
+        for key in ("", *UPSTREAM_RUBRICS):
+            group = [a for a in pending if a.batch_key == key]
             if not group:
                 continue
             try:
@@ -1362,7 +1480,11 @@ def judge_run(
 
 
 def _apply_verdict(entry: Dict[str, Any], task: Task) -> None:
-    """A question passes on the judge's verdict; so does a fix that passed its gate."""
+    """A question passes on the judge's verdict; so does a fix that passed its gate.
+
+    A SWE-bench task is not the judge's to pass: the official harness decides
+    it (``swebench_grade_run``); the judge grades its quality only.
+    """
     if entry.get("error"):
         return
     grade = entry["judge"]
@@ -1383,6 +1505,60 @@ def _apply_verdict(entry: Dict[str, Any], task: Task) -> None:
             if grade["solves_problem"]
             else f"judge: does not solve it: {grade.get('one_line', '')}"
         )
+
+
+def _swebench_records(
+    card: Mapping[str, Any], work_root: Optional[Path] = None
+) -> List[Dict[str, Any]]:
+    ids = card.get("swebench_instances")
+    if not ids:
+        return []
+    root = work_root or bench_config.resolve().work_root
+    return swebench.load_instances(ids, swebench.cache_dir(root))
+
+
+def swebench_grade_run(
+    run_dir: Path,
+    work_root: Optional[Path] = None,
+    *,
+    docker_platform: str = swebench.DOCKER_PLATFORM,
+    pull_then_remove: bool = True,
+    on_progress: Optional[Callable[[str, swebench.Verdict], None]] = None,
+) -> Dict[str, Any]:
+    """Grade a ``swebench`` run's predictions with the official harness; update the scorecard.
+
+    A task the agent left without a patch, or that errored, keeps its result;
+    every other task's pass is the harness's ``resolved``.
+    """
+    card = read_scorecard(run_dir)
+    if card.get("suite") != swebench.SUITE:
+        raise ValueError(
+            f"{run_dir} is a {card.get('suite')!r} run; only a swebench run has "
+            "predictions to grade"
+        )
+    records = _swebench_records(card, work_root)
+    verdicts = swebench.evaluate(
+        run_dir / PREDICTIONS_FILE,
+        records,
+        run_dir / "swebench",
+        docker_platform=docker_platform,
+        pull_then_remove=pull_then_remove,
+    )
+    for entry in card["tasks"]:
+        verdict = verdicts.get(entry["id"]) or swebench.Verdict(
+            entry["id"], error="the harness returned no verdict"
+        )
+        entry["swebench"] = verdict.as_dict()
+        if entry.get("error") or entry.get("passed") is False:
+            continue
+        if verdict.resolved is None:
+            entry["passed"], entry["why"] = None, f"not graded: {verdict.error}"
+        else:
+            entry["passed"], entry["why"] = verdict.resolved, verdict.why
+        if on_progress:
+            on_progress(entry["id"], verdict)
+    write_scorecard(run_dir, card, Scrubber.from_environment(extra=_secret_extras()))
+    return card
 
 
 def run_dirs(path: Path) -> List[Path]:

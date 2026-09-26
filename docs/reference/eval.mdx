@@ -1469,6 +1469,7 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 | `full` | `core` and `adversarial`, plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
 | `everyday` | The 14 tasks a developer actually asks for: explain a file · code review · refactor · bug fix · triage issues · find the duplicate · issue to fix · draft a reply · review a patch · write tests · weekly CSV report · fix a shell injection · label two issues · config from an environment variable | The harness × model comparison |
 | `therock` | Four real merged fixes in [TheRock](https://github.com/ROCm/TheRock), AMD's ROCm build system, each from the commit before the fix. Two of them also forbid the internet in the prompt. | The harness × model comparison |
+| `swebench` | Instances of [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), built from the dataset at run time (`--instances`; default: a five-instance pilot) and graded by the official harness in Docker. Not in `tasks.json`. | The harness × model comparison, against the public yardstick |
 
 The hanging suite stays out of `core`: every test run the agent tries costs a full command timeout.
 
@@ -1490,6 +1491,7 @@ Tasks and suites live in `eval/tasks/tasks.json`. Every task is checked in both 
 | `gaia eval tasks report DIR... --out DIR` | The harness × model table from finished runs, as markdown and HTML (and a PNG where a headless Chrome is found). |
 | `gaia eval tasks controls` | Checks the judge itself on three planted attempts with known verdicts. |
 | `gaia eval tasks gateway --port N` | Runs the model gateway in the foreground, for a matrix that reuses one gateway. |
+| `gaia eval tasks swebench DIR [--keep-images] [--docker-platform P] [--work-root DIR]` | Grades a finished `swebench` run's `predictions.jsonl` with the official harness and writes each instance's verdict into `scorecard.json`. `run --suite swebench` does this itself unless `--no-evaluate`. |
 
 ### Comparing harnesses and models
 
@@ -1522,6 +1524,10 @@ gaia eval tasks report runs/cc-opus runs/gaia-glm runs/cc-glm --out runs/report
 | `--full-access` | Gives GAIA no path boundary, the reach Claude Code has with its permissions skipped. |
 | `--meter fireworks` | Reads the run's real cost from the provider's billing meter. |
 | `--therock-url URL` | Where the `therock` suite clones from (default `https://github.com/ROCm/TheRock`). |
+| `--instances a,b` | The SWE-bench Verified instance ids the `swebench` suite is built from (default: the pilot). Only with `--suite swebench`. |
+| `--no-evaluate` | `swebench`: capture the predictions and stop; grade later with `gaia eval tasks swebench DIR`. |
+| `--docker-platform P` | The platform the SWE-bench images are pulled for (default `linux/amd64`; they exist for no other). |
+| `--keep-images` | `swebench`: do not pull each image just before its run and remove it after (about 3 GB each). |
 
 Every setting also has an environment variable (`GAIA_BENCH_WORK_ROOT`,
 `GAIA_BENCH_RUN_TIMEOUT`, `GAIA_BENCH_GATEWAY_URL`, `GAIA_BENCH_THEROCK_URL`,
@@ -1587,6 +1593,40 @@ Nothing of TheRock is committed here — only the two commits each task pins:
 Two of the four tasks say in the prompt not to use the internet. The network is
 left open: the detector reads any web use out of the tool record, the same way
 for both harnesses, and reports it as a compliance finding.
+
+### SWE-bench suite
+
+Nothing of SWE-bench is committed here either. `--suite swebench` is built when
+the run starts:
+
+- Each instance named by `--instances` (the pilot when it is omitted) is read
+  from the Hugging Face dataset `SWE-bench/SWE-bench_Verified` — the `datasets`
+  package when it is installed, the datasets-server REST API otherwise — and
+  cached as `<work root>/swebench/<instance_id>.json`. The judge and the grader
+  read the same cache. The cache holds the gold patch, so the fence denies it
+  along with the rest of the work root.
+- The agent gets the repository at `base_commit`, built as the TheRock checkout
+  is: a bare cache per repository fetched by commit to depth 200 (never the fix),
+  a single-branch `file://` clone of it, detached, remote removed, and `git fsck
+  --unreachable --no-reflogs` must find nothing. A plain local path would make
+  git ignore `--depth` and copy every object.
+- The prompt is the issue text plus a fixed paragraph: work only in the checkout,
+  minimal change, no internet, the tests cannot be run here. Web use is reported
+  from the tool record as for the `therock` no-internet tasks.
+- After the agent exits, its diff (new files included) becomes a row of
+  `<out>/predictions.jsonl` — `instance_id`, `model_name_or_path`, `model_patch` —
+  the official harness's input. An empty diff fails the task at once.
+- Grading is `python -m swebench.harness.run_evaluation` on one instance at a
+  time, in Docker, with the image pulled for `linux/amd64` just before and
+  removed just after (they are amd64-only and about 3 GB each). It needs the
+  `swebench` package in GAIA's interpreter and a running Docker daemon; a
+  missing one is an error before anything runs. The per-instance `report.json`
+  the harness writes under `<out>/swebench/logs/run_evaluation/` is read back
+  into the scorecard: `resolved`, whether the patch applied, and the
+  `FAIL_TO_PASS` / `PASS_TO_PASS` counts.
+- The judge grades a SWE-bench attempt's quality against the gold patch, read
+  from the cache only in the `judge` step, but it never decides the pass: that
+  is the harness's verdict alone.
 
 ### Keeping credentials out of published artifacts
 

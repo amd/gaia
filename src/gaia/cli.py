@@ -2382,14 +2382,19 @@ Examples:
   gaia eval tasks run --suite everyday --harness claude-code --model fireworks.glm-5p3-flash --repeats 3
   gaia eval tasks report runs/gaia-glm runs/cc-glm --out runs/report
   gaia eval tasks controls
+  gaia eval tasks run --suite swebench --instances psf__requests-1921,pallets__flask-5014
+  gaia eval tasks swebench eval/results/eval-tasks-swebench
 
-`run` gives the agent a fresh copy of eval/tasks/toybox (or a TheRock checkout)
-per task and scores what the project does afterwards. `--harness` picks the
-flagship GaiaAgent or Claude Code; both get the same time limit, toolchain,
-gh stand-in and model gateway. `judge` grades every task with Claude (no
-tools) and decides the question and TheRock tasks. `gate` compares the run
-with eval/tasks/expectations/<model>.<suite>.json. `report` builds the
-harness x model table. `controls` checks the judge on planted attempts.
+`run` gives the agent a fresh copy of eval/tasks/toybox (or a TheRock or
+SWE-bench checkout) per task and scores what the project does afterwards.
+`--harness` picks the flagship GaiaAgent or Claude Code; both get the same
+time limit, toolchain, gh stand-in and model gateway. `judge` grades every
+task with Claude (no tools) and decides the question and TheRock tasks.
+`gate` compares the run with eval/tasks/expectations/<model>.<suite>.json.
+`report` builds the harness x model table. `controls` checks the judge on
+planted attempts. The `swebench` suite is built from SWE-bench Verified at
+run time; `run` grades its predictions with the official harness in Docker
+afterwards (or `swebench <run_dir>` does, later).
 """,
     )
     tasks_actions = tasks_eval_parser.add_subparsers(dest="tasks_action")
@@ -2420,6 +2425,18 @@ harness x model table. `controls` checks the judge on planted attempts.
         "--tasks",
         default=None,
         help="Comma-separated task ids: run only these tasks of the suite",
+    )
+    tasks_run_parser.add_argument(
+        "--instances",
+        default=None,
+        help="Comma-separated SWE-bench Verified instance ids the swebench suite "
+        "is built from (default: the five-instance pilot); only with --suite swebench",
+    )
+    tasks_run_parser.add_argument(
+        "--no-evaluate",
+        action="store_true",
+        help="swebench: capture the predictions but do not grade them in Docker "
+        "(`gaia eval tasks swebench <run_dir>` does it later)",
     )
     tasks_run_parser.add_argument(
         "--harness",
@@ -2542,6 +2559,32 @@ harness x model table. `controls` checks the judge on planted attempts.
     )
     tasks_report_parser.add_argument(
         "--no-png", action="store_true", help="Skip the PNG even when Chrome is found"
+    )
+    tasks_swebench_parser = tasks_actions.add_parser(
+        "swebench",
+        help="Grade a swebench run's predictions with the official harness (Docker)",
+    )
+    tasks_swebench_parser.add_argument(
+        "run_dir", help="Directory `run --suite swebench` wrote"
+    )
+    for grading in (tasks_run_parser, tasks_swebench_parser):
+        grading.add_argument(
+            "--docker-platform",
+            default="linux/amd64",
+            help="Platform the SWE-bench images are pulled for (they are amd64-only; "
+            "default: linux/amd64)",
+        )
+        grading.add_argument(
+            "--keep-images",
+            action="store_true",
+            help="Do not pull each SWE-bench image just before its run and remove "
+            "it after (about 3 GB each)",
+        )
+    tasks_swebench_parser.add_argument(
+        "--work-root",
+        default=None,
+        help="The run's work root, where its instances are cached (default: "
+        "$GAIA_BENCH_WORK_ROOT or <tmp>/gaia-bench)",
     )
     tasks_gateway_parser = tasks_actions.add_parser(
         "gateway",
@@ -3407,8 +3450,38 @@ def _handle_eval_tasks(args):
             )
         return card
 
+    from gaia.eval.bench.swebench import SweBenchError
+
+    def _swebench_progress(task_id, verdict):
+        mark = "ERROR" if verdict.error else ("PASS" if verdict.resolved else "FAIL")
+        print(f"  {mark} {task_id} | {verdict.why}")
+
+    def _grade_swebench(run_dir, work_root):
+        print("[SWEBENCH] grading with the official harness")
+        try:
+            card = ft.swebench_grade_run(
+                run_dir,
+                work_root,
+                docker_platform=args.docker_platform,
+                pull_then_remove=not args.keep_images,
+                on_progress=_swebench_progress,
+            )
+        except (SweBenchError, ValueError) as exc:
+            print(f"❌ {exc}")
+            sys.exit(1)
+        return card
+
     if args.tasks_action == "gateway":
         _serve_gateway(args)
+        return
+    if args.tasks_action == "swebench":
+        run_dir = Path(args.run_dir)
+        for each in ft.run_dirs(run_dir):
+            card = _grade_swebench(
+                each, Path(args.work_root) if args.work_root else None
+            )
+            print()
+            print(ft.render_report(card, None))
         return
     if args.tasks_action == "controls":
         _run_controls(args, judge_model)
@@ -3457,9 +3530,15 @@ def _handle_eval_tasks(args):
             sys.exit(2)
         model = args.model or DEFAULT_MODEL_NAME
         only = [t.strip() for t in (args.tasks or "").split(",") if t.strip()]
+        instances = [i.strip() for i in (args.instances or "").split(",") if i.strip()]
         try:
-            ft.select(ft.load_suite(args.suite), only)
-        except ValueError as exc:
+            ft.select(
+                ft.load_suite(
+                    args.suite, instances=instances, work_root=config.work_root
+                ),
+                only,
+            )
+        except (ValueError, SweBenchError) as exc:
             print(f"❌ {exc}")
             sys.exit(2)
         out_dir = Path(
@@ -3496,9 +3575,12 @@ def _handle_eval_tasks(args):
                 config=config,
                 repeat=repeat,
                 only=only,
+                **({"instances": instances} if instances else {}),
             )
             if not args.no_judge:
                 card = _judge(run_dir, judge_env)
+            if args.suite == "swebench" and not args.no_evaluate:
+                card = _grade_swebench(run_dir, config.work_root)
             print()
             print(ft.render_report(card, None))
         print(f"[OUTPUT] {out_dir.resolve()}")
