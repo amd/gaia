@@ -251,6 +251,10 @@ def test_a_coloured_vitest_summary_still_reads():
         "Tests: pending\n",
         "3 failed attempts to connect\n",
         "test result: pending\n",
+        # A snippet's own print, not a go test package line — no duration trailer.
+        "ok done\n",
+        "ok 200\n",
+        "FAIL something\n",
     ],
 )
 def test_a_runner_that_ran_nothing_is_not_a_check(stdout):

@@ -173,10 +173,14 @@ _MOCHA_SUMMARY_RE = re.compile(
     r"(?m)^[ \t]*\d+ passing \(\d+(?:\.\d+)?m?s\)[ \t]*$"
     r"(?:\n[ \t]*\d+ pending[ \t]*$)?(?:\n[ \t]*[1-9]\d* failing[ \t]*$)?"
 )
-#: go test: one ``ok`` / ``FAIL`` line per package.
+#: go test: one ``ok`` / ``FAIL`` line per package. The duration, ``(cached)``
+#: or ``[...]`` trailer is required — without it ``print("ok done")`` reads as a
+#: passing run.
 _GO_SUMMARY_RE = re.compile(
-    r"(?m)^(?:ok|FAIL)[ \t]+\S+(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s))?"
-    r"(?:[ \t]+\[[^\]\n]*\])?(?:[ \t]+coverage:[^\n]*)?[ \t]*$"
+    r"(?m)^(?:ok|FAIL)[ \t]+\S+"
+    r"(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s)(?:[ \t]+\[[^\]\n]*\])?"
+    r"|[ \t]+\[[^\]\n]*\])"
+    r"(?:[ \t]+coverage:[^\n]*)?[ \t]*$"
 )
 _GO_RAN_RE = re.compile(r"^(?:ok|FAIL)\b(?![^\n]*\[no tests to run\])")
 #: cargo test: one ``test result:`` line per target (unit, integration, doc).
@@ -306,7 +310,9 @@ def check_from_command(
     failure is a failure whatever the pipeline returned. ``return_code`` is
     ``None`` when the run never finished (timed out).
     """
-    label = next((found for seg in segments if (found := argv_check_label(seg))), None)
+    label = next(
+        (matched for seg in segments if (matched := argv_check_label(seg))), None
+    )
     if label is None:
         return None
     found = runner_summary(_output(stdout, stderr))
