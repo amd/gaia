@@ -414,6 +414,117 @@ def test_interrupted_native_tool_history_fails_loudly(fake_anthropic):
         )
 
 
+# ── tool_choice ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "tool_choice, expected",
+    [("none", {"type": "none"}), ("auto", {"type": "auto"})],
+)
+def test_tool_choice_maps_to_anthropic_shape(fake_anthropic, tool_choice, expected):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("ok")])
+    provider.chat(
+        [{"role": "user", "content": "hi"}], tools=OPENAI_TOOLS, tool_choice=tool_choice
+    )
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["tool_choice"] == expected
+
+
+def test_tool_choice_absent_unless_set(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("ok")])
+    provider.chat([{"role": "user", "content": "hi"}], tools=OPENAI_TOOLS)
+    assert "tool_choice" not in provider._client.messages.create.call_args.kwargs
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_no_call_request_keeps_tool_history_and_tools(fake_anthropic, stream):
+    """The agent's step-limit call: tool history, tools, and no calls allowed.
+
+    Anthropic rejects tool_use/tool_result blocks on a request that defines no
+    tools, so the tools stay and ``{"type": "none"}`` forbids calling one.
+    """
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = (
+        iter([]) if stream else _response([_text_block("Here is what I found.")])
+    )
+    result = provider.chat(
+        [
+            {"role": "system", "content": "You are GAIA."},
+            {"role": "user", "content": "read a.txt"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "toolu_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "a.txt"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "alpha"},
+            {"role": "user", "content": "Give the user your final answer now."},
+        ],
+        tools=OPENAI_TOOLS,
+        tool_choice="none",
+        stream=stream,
+    )
+    if stream:
+        list(result)
+
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["tool_choice"] == {"type": "none"}
+    assert [t["name"] for t in call["tools"]] == ["read_file"]
+    assert call["messages"] == [
+        {"role": "user", "content": "read a.txt"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "read_file",
+                    "input": {"path": "a.txt"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "alpha"}
+            ],
+        },
+        {"role": "user", "content": "Give the user your final answer now."},
+    ]
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", "any", {"type": "none"}, {"type": "function", "name": "read_file"}],
+)
+def test_unsupported_tool_choice_fails_loudly(fake_anthropic, tool_choice):
+    provider = _provider(fake_anthropic)
+    with pytest.raises(ValueError, match="does not support tool_choice"):
+        provider.chat(
+            [{"role": "user", "content": "hi"}],
+            tools=OPENAI_TOOLS,
+            tool_choice=tool_choice,
+        )
+    provider._client.messages.create.assert_not_called()
+
+
+def test_tool_choice_without_tools_fails_loudly(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    with pytest.raises(ValueError, match="without tools"):
+        provider.chat([{"role": "user", "content": "hi"}], tool_choice="none")
+    provider._client.messages.create.assert_not_called()
+
+
 # ── response → sentinel envelope ────────────────────────────────────────
 
 
@@ -751,6 +862,19 @@ def test_sdk_forwards_tools_when_present(claude_sdk):
     sdk, fake = claude_sdk
     sdk.send_messages([{"role": "user", "content": "hi"}], tools=OPENAI_TOOLS)
     assert fake.calls[-1]["kwargs"]["tools"] == OPENAI_TOOLS
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_sdk_forwards_tool_choice_with_the_tools(claude_sdk, stream):
+    sdk, fake = claude_sdk
+    messages = [{"role": "user", "content": "hi"}]
+    if stream:
+        list(sdk.send_messages_stream(messages, tools=OPENAI_TOOLS, tool_choice="none"))
+    else:
+        sdk.send_messages(messages, tools=OPENAI_TOOLS, tool_choice="none")
+    sent = fake.calls[-1]["kwargs"]
+    assert sent["tools"] == OPENAI_TOOLS
+    assert sent["tool_choice"] == "none"
 
 
 def test_sdk_no_chatml_stop_tokens_for_claude(monkeypatch):
