@@ -2336,7 +2336,8 @@ class LemonadeClient:
             Result of api_call()
 
         Raises:
-            ModelDownloadCancelledError: If user cancels download
+            ModelDownloadCancelledError: If a corrupt-download repair is
+                cancelled (the download itself never prompts here)
             InsufficientDiskSpaceError: If not enough disk space
             LemonadeClientError: If download/load fails, or if *error* is
                 not a missing-model error (re-raised unchanged)
@@ -2359,8 +2360,10 @@ class LemonadeClient:
             f"attempting auto-download and load..."
         )
 
-        # Load model with auto-download (includes prompt, validation, etc.)
-        self.load_model(model, timeout=60, auto_download=True)
+        # Load at GAIA's ctx, or the next request cold-reloads it at that size.
+        # force: the caller's request already failed, so a "still loaded" status
+        # is stale here and would make this recovery a no-op.
+        self._ensure_model_loaded(model, auto_download=True, force=True)
 
         # Retry the API call
         self.log.info(
@@ -4222,7 +4225,9 @@ class LemonadeClient:
 
         return model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
 
-    def _ensure_model_loaded(self, model: str, auto_download: bool = True) -> None:
+    def _ensure_model_loaded(
+        self, model: str, auto_download: bool = True, *, force: bool = False
+    ) -> None:
         """Ensure a model is loaded on the server before making requests.
 
         This method proactively checks if the model is loaded and loads it if not,
@@ -4237,6 +4242,9 @@ class LemonadeClient:
         Args:
             model: Model name to ensure is loaded
             auto_download: If True, download the model if not present (without prompting)
+            force: Load even when the server reports the model already resident
+                at a sufficient ctx. Only for error-recovery callers, where that
+                report has just been contradicted by a failed request.
 
         Note:
             This method is called at the start of streaming methods to ensure
@@ -4254,9 +4262,9 @@ class LemonadeClient:
             return
 
         with self._model_slot_lease(model):
-            self._ensure_model_loaded_locked(model)
+            self._ensure_model_loaded_locked(model, force=force)
 
-    def _ensure_model_loaded_locked(self, model: str) -> None:
+    def _ensure_model_loaded_locked(self, model: str, *, force: bool = False) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while
         holding the broker lease (when configured)."""
         # Reset every call: only set below when THIS call actually performs a
@@ -4346,12 +4354,20 @@ class LemonadeClient:
                     loaded_ctx = (
                         loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
                     )
-                    if loaded_ctx >= expected_ctx:
+                    if loaded_ctx >= expected_ctx and not force:
                         self.log.debug(
                             f"Model '{model}' already loaded at ctx={loaded_ctx} "
                             f"(expected >= {expected_ctx})"
                         )
                         return
+                    if force and loaded_ctx >= expected_ctx:
+                        # The caller's request just failed against this
+                        # "resident" model, so the report is stale (dead
+                        # llama-server child). Reload instead of trusting it.
+                        self.log.info(
+                            f"Model '{model}' reported loaded at ctx={loaded_ctx} "
+                            f"but a request against it failed; reloading."
+                        )
                     # Loaded but under-sized — fall through to the reload path
                     # which calls /load with explicit ctx_size.
                     self.log.info(

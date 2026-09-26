@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import stat
 import zipfile
@@ -277,6 +278,74 @@ def test_too_many_entries_rejected(tmp_path, fake_home):
 
     with pytest.raises(ValueError, match="too many entries"):
         import_agent_bundle(bundle)
+
+
+# ---------------------------------------------------------------------------
+# 6b. Caps hold while writing, and extraction goes through safe_extract
+# ---------------------------------------------------------------------------
+
+
+def _one_agent_bundle(path: Path, files: dict[str, bytes]) -> None:
+    _write_bundle(
+        path,
+        manifest={
+            "format_version": BUNDLE_FORMAT_VERSION,
+            "exported_at": "now",
+            "gaia_version": "test",
+            "agent_ids": ["a"],
+        },
+        files=files,
+    )
+
+
+def _serve_more_than_declared(monkeypatch, name: str, data: bytes) -> None:
+    real_open = zipfile.ZipFile.open
+
+    def lying_open(self, member, *args, **kwargs):
+        if getattr(member, "filename", member) == name:
+            return io.BytesIO(data)
+        return real_open(self, member, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", lying_open)
+
+
+@pytest.mark.parametrize(
+    "cap,message",
+    [
+        (
+            "MAX_UNCOMPRESSED_PER_FILE",
+            "entry a/agent.py exceeds per-file limit during extraction",
+        ),
+        (
+            "MAX_UNCOMPRESSED_TOTAL",
+            "bundle exceeds total uncompressed size limit during extraction",
+        ),
+    ],
+)
+def test_entry_larger_than_its_header_stopped_while_writing(
+    tmp_path, fake_home, agents_root, monkeypatch, cap, message
+):
+    bundle = tmp_path / "lying.zip"
+    _one_agent_bundle(bundle, {"a/agent.py": b"x"})
+    monkeypatch.setattr(f"gaia.installer.export_import.{cap}", 1000)
+    _serve_more_than_declared(monkeypatch, "a/agent.py", b"x" * 5000)
+
+    with pytest.raises(ValueError, match=message):
+        import_agent_bundle(bundle)
+    assert list(agents_root.iterdir()) == []
+
+
+def test_special_file_entry_rejected(tmp_path, fake_home, agents_root):
+    bundle = tmp_path / "fifo.zip"
+    fifo = zipfile.ZipInfo("a/pipe")
+    fifo.external_attr = (stat.S_IFIFO | 0o644) << 16
+    _one_agent_bundle(bundle, {"a/agent.py": b"# a\n"})
+    with zipfile.ZipFile(bundle, "a") as zf:
+        zf.writestr(fifo, b"")
+
+    with pytest.raises(ValueError, match="device or special file"):
+        import_agent_bundle(bundle)
+    assert list(agents_root.iterdir()) == []
 
 
 # ---------------------------------------------------------------------------
