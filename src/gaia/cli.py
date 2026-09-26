@@ -25,6 +25,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     _get_lemonade_config,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
@@ -665,7 +666,7 @@ async def async_main(action, **kwargs):
                 claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
                 base_url=kwargs.get(
                     "base_url",
-                    os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+                    resolve_lemonade_base_url(),
                 ),
                 model_id=explicit_model,
                 device=effective_device,
@@ -920,7 +921,7 @@ def _launch_interactive_cli(log=None):
             ) from e
 
         config = ChatAgentConfig(
-            base_url=base_url or os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+            base_url=base_url or resolve_lemonade_base_url(),
             silent_mode=True,
         )
         agent = ChatAgent(config)
@@ -3209,12 +3210,7 @@ Examples:
     init_parser.add_argument(
         "--skip-models",
         action="store_true",
-        help="Skip model downloads (only install Lemonade)",
-    )
-    init_parser.add_argument(
-        "--skip-lemonade",
-        action="store_true",
-        help="Skip Lemonade installation check (for CI with pre-installed Lemonade)",
+        help="Skip model downloads (only set up Lemonade Server)",
     )
     init_parser.add_argument(
         "--skip-webui-build",
@@ -3224,7 +3220,7 @@ Examples:
     init_parser.add_argument(
         "--force-reinstall",
         action="store_true",
-        help="Force reinstall even if compatible version exists",
+        help="Reinstall GAIA's embedded Lemonade Server",
     )
     init_parser.add_argument(
         "--force-models",
@@ -3245,7 +3241,9 @@ Examples:
     init_parser.add_argument(
         "--remote",
         action="store_true",
-        help="Use remote Lemonade Server (skip local install/start; downloads models via API). Auto-detected when LEMONADE_BASE_URL points to a non-localhost URL.",
+        help="Use the Lemonade Server LEMONADE_BASE_URL names instead of GAIA's "
+        "own (checks it; downloads models via its API). Implied by a non-localhost "
+        "LEMONADE_BASE_URL.",
     )
     init_parser.add_argument(
         "--skip-chat-model",
@@ -3260,8 +3258,9 @@ Examples:
         "--check",
         action="store_true",
         help="Report whether this profile is already set up and exit — no "
-        "install, no download, no side effects. Exit code 0 means ready, "
-        "1 means `gaia init` still has work to do.",
+        "install, no download. A stopped GAIA Lemonade Server is started through "
+        "the GAIA daemon (started too if needed), as any GAIA command would. "
+        "Exit code 0 means ready, 1 means `gaia init` still has work to do.",
     )
 
     # Install command (install specific components)
@@ -3524,7 +3523,13 @@ def _handle_schedule(args):
         return
 
     if action == "daemon":
-        schedule_daemon.run_daemon()
+        from gaia.schedule.lock import ScheduleLockError
+
+        try:
+            schedule_daemon.run_daemon()
+        except ScheduleLockError as exc:
+            print(f"❌ {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     print(
@@ -4792,7 +4797,6 @@ Let me know your answer!
         exit_code = run_init(
             profile=profile,
             skip_models=args.skip_models,
-            skip_lemonade=getattr(args, "skip_lemonade", False),
             force_reinstall=args.force_reinstall,
             force_models=args.force_models,
             yes=args.yes,
@@ -7616,7 +7620,9 @@ def _handle_daemon_stop():
     except DaemonError as e:
         print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
         terminate_instance(inst)
-    if client.wait_until_gone(inst, timeout=10.0):
+    # Shutdown drains requests, waits out a Lemonade start in flight and stops
+    # the Lemonade Server it started — see client.STOP_WAIT_TIMEOUT.
+    if client.wait_until_gone(inst, timeout=client.STOP_WAIT_TIMEOUT):
         remove_instance(only_pid=inst.pid)
         print(f"✅ GAIA daemon stopped (pid {inst.pid})")
     else:
@@ -8007,8 +8013,8 @@ def handle_lemonade_embedded_command(args):
             print(f"✅ Embedded Lemonade {status.version} running on {status.base_url}")
             print(f"   pid {status.pid}   logs: {manager.log_path}")
             print("")
-            print("   The instance is private. Load its URL and API key with:")
-            print(f"   {manager.env_load_command()}")
+            print("   GAIA finds it on its own. For other tools, load its URL and")
+            print(f"   API key with: {manager.env_load_command()}")
         elif action == "stop":
             if manager.stop():
                 print("✅ Embedded Lemonade stopped")

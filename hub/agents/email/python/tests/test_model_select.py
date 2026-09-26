@@ -411,9 +411,11 @@ def test_system_info_probe_uses_pinned_timeout_tuple(monkeypatch):
 
 
 def test_resolve_default_email_model_with_no_args_uses_default_probe_base(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    # No GAIA server recorded; one would be probed instead of the default.
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
     probe_base = "http://localhost:13305/api/v1"
     fake, calls = _fake_get_factory(
         probe_base, system_info_body=_system_info_body(npu_available=False)
