@@ -7,7 +7,6 @@ Provides singleton initialization shared by CLI and SDK flows.
 Operates at the LLM level (not agent level) for flexibility with community agents.
 """
 
-import os
 import sys
 import threading
 import time
@@ -21,9 +20,11 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    configured_lemonade_url,
     is_llm_model_entry,
     resolve_ctx_size,
     resolve_effective_ctx_size,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
@@ -253,9 +254,6 @@ class HardwareRequirementError(Exception):
 # ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
 # in ``gaia.llm.lemonade_client``.
 __all__ = ["DEFAULT_CONTEXT_SIZE", "LemonadeManager", "MessageType"]
-# Lemonade v10.1.0+ default port (was 8000 in v10.0.x). PR #865 bumped the
-# minimum supported version, so 13305 is the right default everywhere.
-DEFAULT_LEMONADE_URL = "http://localhost:13305"
 
 
 class MessageType(Enum):
@@ -325,6 +323,35 @@ class LemonadeManager:
         return client.get_lemonade_version() is not None
 
     @classmethod
+    def start_embedded_if_stopped(cls) -> bool:
+        """Have the daemon start GAIA's embedded Lemonade when it is stopped.
+
+        Does nothing when ``LEMONADE_BASE_URL`` names another server, when GAIA's
+        own server is not installed (``gaia init`` installs it), or when it is
+        already running -- so only a machine that set GAIA up ever talks to the
+        daemon here.
+
+        Returns:
+            True if the daemon started the server.
+
+        Raises:
+            DaemonError: The daemon could not start it; the message names why.
+        """
+        if configured_lemonade_url():
+            return False
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+        embedded = EmbeddedLemonade()
+        if not embedded.is_installed() or embedded.status().running:
+            return False
+        from gaia.daemon.client import ensure_lemonade
+
+        cls._log.info(
+            "GAIA's Lemonade Server is stopped; asking the daemon to start it"
+        )
+        return bool(ensure_lemonade().get("started"))
+
+    @classmethod
     def print_server_error(cls, min_context_size: int = DEFAULT_CONTEXT_SIZE):
         """Print informative error when Lemonade server is not running.
 
@@ -370,7 +397,7 @@ class LemonadeManager:
                     file=sys.stderr,
                 )
                 print("", file=sys.stderr)
-            base_url = os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1")
+            base_url = resolve_lemonade_base_url()
             print(
                 f"The server should be accessible at {base_url}/health",
                 file=sys.stderr,
@@ -827,6 +854,20 @@ class LemonadeManager:
                     return True
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
+
+            if base_url is None and host is None and port is None:
+                from gaia.daemon.errors import DaemonError
+
+                try:
+                    cls.start_embedded_if_stopped()
+                except DaemonError as e:
+                    cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
+                    if not quiet:
+                        print(
+                            f"❌ Could not start GAIA's Lemonade Server: {e}",
+                            file=sys.stderr,
+                        )
+                    return False
 
             try:
                 # When base_url is provided, pass it directly to LemonadeClient

@@ -103,6 +103,14 @@ def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
     port = state.get("port")
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         return None
+    pid = state.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        from gaia.llm.lemonade_embedded import pid_exists
+
+        # A server killed without `stop` (a CI job ending, a crash) leaves its
+        # record behind; following it would send every client to a dead port.
+        if not pid_exists(pid):
+            return None
     return state
 
 
@@ -118,8 +126,9 @@ def _get_lemonade_config() -> tuple:
     """
     from urllib.parse import urlparse
 
-    configured_url = os.getenv("LEMONADE_BASE_URL", "").strip()
-    base_url = resolve_lemonade_base_url(configured_url or _embedded_lemonade_url())
+    base_url = resolve_lemonade_base_url(
+        configured_lemonade_url() or _embedded_lemonade_url()
+    )
     # Parse the URL to extract host and port for backwards compatibility
     parsed = urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
@@ -132,6 +141,19 @@ def _get_lemonade_config() -> tuple:
     else:
         port = DEFAULT_PORT
     return (host, port, base_url)
+
+
+def configured_lemonade_url() -> Optional[str]:
+    """The Lemonade server the user chose with ``LEMONADE_BASE_URL``, if any.
+
+    Values exported by GAIA's own credentials file (marked with
+    ``GAIA_LEMONADE_EMBEDDED``) describe GAIA's server, whose port and key
+    change on every restart, so they are not a choice: GAIA follows its
+    recorded state instead.
+    """
+    if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1":
+        return None
+    return os.getenv("LEMONADE_BASE_URL", "").strip() or None
 
 
 def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
@@ -213,7 +235,8 @@ def resolve_lemonade_api_key(
     if api_key is not None:
         return api_key
     env_value = os.getenv("LEMONADE_API_KEY")
-    if env_value is not None and env_value.strip():
+    own_credentials = os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1"
+    if env_value is not None and env_value.strip() and not own_credentials:
         return env_value.strip()
     return _embedded_lemonade_api_key(base_url)
 
@@ -561,9 +584,7 @@ class LemonadeStatus:
     """Status of Lemonade Server"""
 
     running: bool = False
-    url: str = field(
-        default_factory=lambda: os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
-    )
+    url: str = field(default_factory=resolve_lemonade_base_url)
     version: Optional[str] = None
     context_size: int = 0
     loaded_models: list = field(default_factory=list)

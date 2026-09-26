@@ -130,6 +130,10 @@ def test_build_register_starts_refresher_then_clock_and_writes_instance(daemon_h
     refresher.start.side_effect = lambda: calls.append("refresher.start")
     clock = mock.Mock()
     clock.start.side_effect = lambda: calls.append("clock.start")
+    lemonade_owner = mock.Mock()
+    lemonade_owner.ensure_in_background.side_effect = lambda: calls.append(
+        "lemonade.ensure"
+    )
 
     register = daemon_server._build_register(
         specs={},
@@ -140,10 +144,11 @@ def test_build_register_starts_refresher_then_clock_and_writes_instance(daemon_h
         started_at=100.0,
         refresher=refresher,
         clock=clock,
+        lemonade_owner=lemonade_owner,
     )
     register()
 
-    assert calls == ["refresher.start", "clock.start"]
+    assert calls == ["refresher.start", "clock.start", "lemonade.ensure"]
     inst = instance_mod.read_instance()
     assert inst is not None
     assert inst.pid == 4242
@@ -169,6 +174,7 @@ def test_build_register_rolls_back_refresher_and_instance_on_clock_start_failure
         started_at=200.0,
         refresher=refresher,
         clock=clock,
+        lemonade_owner=mock.Mock(),
     )
 
     with pytest.raises(RuntimeError, match="clock exploded"):
@@ -197,6 +203,7 @@ def test_build_register_rolls_back_instance_on_refresher_start_failure(daemon_ho
         started_at=300.0,
         refresher=refresher,
         clock=clock,
+        lemonade_owner=mock.Mock(),
     )
 
     with pytest.raises(RuntimeError, match="refresher exploded"):
@@ -224,6 +231,8 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
     registry.shutdown_all.side_effect = lambda: calls.append("registry.shutdown_all")
     custody_store = mock.Mock()
     custody_store.close.side_effect = lambda: calls.append("custody_store.close")
+    lemonade_owner = mock.Mock()
+    lemonade_owner.stop.side_effect = lambda: calls.append("lemonade.stop")
 
     deregister = daemon_server._build_deregister(
         registry=registry,
@@ -231,15 +240,40 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
         pid=555,
         refresher=refresher,
         clock=clock,
+        lemonade_owner=lemonade_owner,
     )
     deregister()
 
+    # Lemonade stops only after the sidecars that load models from it.
     assert calls == [
         "refresher.stop",
         "clock.stop",
         "registry.shutdown_all",
+        "lemonade.stop",
         "custody_store.close",
     ]
+    assert instance_mod.read_instance() is None
+
+
+def test_build_deregister_still_deregisters_when_lemonade_will_not_stop(daemon_home):
+    from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+    instance_mod.write_instance(instance_mod.DaemonInstance(pid=556, port=1, token="t"))
+    lemonade_owner = mock.Mock()
+    lemonade_owner.stop.side_effect = EmbeddedLemonadeError("still alive")
+    custody_store = mock.Mock()
+
+    deregister = daemon_server._build_deregister(
+        registry=mock.Mock(),
+        custody_store=custody_store,
+        pid=556,
+        refresher=mock.Mock(),
+        clock=mock.Mock(),
+        lemonade_owner=lemonade_owner,
+    )
+    deregister()
+
+    custody_store.close.assert_called_once()
     assert instance_mod.read_instance() is None
 
 

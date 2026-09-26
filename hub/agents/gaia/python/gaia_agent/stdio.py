@@ -76,10 +76,10 @@ from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 from gaia.llm import create_client
 from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
-    DEFAULT_LEMONADE_URL,
     LemonadeClient,
     LemonadeClientError,
     cloud_model_provider,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
@@ -151,6 +151,8 @@ CONTROL_CLEAR_HISTORY = "clear_history"
 
 class _ClearHistory:
     """Queue sentinel: the turn loop (which owns the agent) performs the clear."""
+
+
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and the bypass mode all survive it.
 CONTROL_CANCEL = "cancel"
@@ -426,7 +428,7 @@ def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
         # A malformed base_url reads to the user as "Lemonade isn't running",
         # so name it rather than reporting a bare unreachable. The client
         # resolves an omitted URL the same way, so report that, not None.
-        tried = base_url or os.environ.get("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+        tried = base_url or resolve_lemonade_base_url()
         logger.warning("[lemonade] client construction failed for %r: %s", tried, exc)
         return {"lemonade_base_url": tried, "lemonade_reachable": False}
     state: Dict[str, Any] = {"lemonade_base_url": client.base_url}

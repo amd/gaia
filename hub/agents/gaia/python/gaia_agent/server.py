@@ -464,17 +464,18 @@ def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
 
 def _probe_lemonade() -> Dict[str, Any]:
     """Read-only probe of the local model server. Never pulls or loads."""
-    import os
-
     import requests
     from gaia_agent.agent import GaiaAgentConfig
 
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_NAME,
+        configured_lemonade_url,
+        resolve_lemonade_base_url,
+    )
 
     # Already ends in /api/v1 — the requests below must not append it again.
     base = resolve_lemonade_base_url(
-        os.environ.get("LEMONADE_BASE_URL")
-        or getattr(GaiaAgentConfig(), "base_url", None)
+        configured_lemonade_url() or getattr(GaiaAgentConfig(), "base_url", None)
     ).rstrip("/")
     model_id = DEFAULT_MODEL_NAME
 
