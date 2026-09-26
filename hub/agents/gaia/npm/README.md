@@ -11,8 +11,10 @@ verifies both against a checksum manifest that ships inside this package, and dr
 you into the terminal UI. No Python to install, no repo to clone, no build step.
 Local inference is the default. The TUI can explicitly select Fireworks AI or AMD
 LLM Gateway through Lemonade; remote chat sends conversation history to that provider. The
-terminal UI's `--use-claude` flag, which would send a conversation to the
-Anthropic API, is refused for the agent this package installs — see
+terminal UI's *launch* flag `--use-claude`, which would pin the Anthropic API for
+the life of the process, is refused for the agent this package installs. That is a
+limit on the launch flag, not on the agent: a caller can still ask for Anthropic
+per request with `/query`'s `provider` field (contract ≥ 2.14) — see
 [`SPEC.md` §5.5](./SPEC.md#55-other-transports).
 
 The terminal UI you get here is the published **`terminal-hub`** component — the
@@ -37,7 +39,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI **0.23.1 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.24.1 or newer** on `PATH` for the daemon the terminal
   UI starts. Earlier cores start a daemon that has no entry for this agent, so the
   UI comes up with nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -182,7 +184,8 @@ await shutdown(proc);
 **Reuse the same `session_id` for every turn in a conversation.** It is what
 lets a document you had it index, or a skill you had it load, survive to the
 next question — drop it (or mint a new one per call) and the agent still
-answers, but it forgets everything from the previous turn. See
+answers, but it forgets everything from the previous turn. An id must be 1–128
+characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 [`SPEC.md` §5.2](./SPEC.md#52-session_id-and-agent-retention) for the retry
 and eviction behavior.
 
@@ -211,11 +214,14 @@ what it must hash to. The release pipeline regenerates it from the artifacts
 actually being served — the sidecars it just published, and the terminal-hub
 artifacts it downloaded and cross-checked against the hub's own recorded hashes.
 
-Between releases the lock carries `PENDING-replace-with-real-sha256` placeholders.
-**A placeholder blocks the fetch outright** — before any network call — so an
-unverifiable binary can never be downloaded, let alone executed. If you need to run
-against a locally built binary, build it yourself and point the lifecycle helpers
-at it directly; the fetcher will not be talked into it.
+A committed release's lock, like this one, always carries real hashes — the
+regenerate step in the release pipeline never publishes placeholders. Between
+releases, an unreleased working tree's lock instead carries
+`PENDING-replace-with-real-sha256` placeholders, and **a placeholder blocks the
+fetch outright** — before any network call — so an unverifiable binary can never
+be downloaded, let alone executed. If you need to run against a locally built
+binary, build it yourself and point the lifecycle helpers at it directly; the
+fetcher will not be talked into it.
 
 ## Links
 
