@@ -55,14 +55,20 @@ from gaia.eval.tool_cost import (  # noqa: E402
 )
 
 # --- Pinned baseline (#1448, doc profile, deterministic tool set) ----------
-# 38 since #3670 added `read_tool_output` to the doc profile. The char/token
-# pins below stay as they are: #4038 trims the docstrings they measure, so a
-# value re-pinned here is wrong the moment it lands.
-EXPECTED_DOC_TOOL_COUNT = 38
-BASELINE_TEXT_CHARS = 4863
-BASELINE_NATIVE_CHARS = 21957
-BASELINE_TEXT_TOKENS = 1014
-BASELINE_NATIVE_TOKENS = 5128
+# All five re-measured together at this commit. The set used to straddle two
+# trees — the text pair was measured at 37 tools and never refreshed, so it
+# drifted 12-15% while the native pair was re-pinned — which is what happens
+# while nothing runs the file. This PR puts it in a CI lane, so the numbers
+# start being enforced from here.
+#
+# Reproducible, not machine-local: these are identical on Linux CI and on a
+# Windows dev box, measured through the loader-OFF `doc_agent` fixture below.
+# Measuring with `dynamic_tools=True` instead gives a different tool count.
+EXPECTED_DOC_TOOL_COUNT = 39
+BASELINE_TEXT_CHARS = 5456
+BASELINE_NATIVE_CHARS = 21726
+BASELINE_TEXT_TOKENS = 1162
+BASELINE_NATIVE_TOKENS = 5525
 # Band tolerates trivial wording edits; a real tool add/remove blows past it
 # and should bump the baseline deliberately.
 TOLERANCE = 0.10

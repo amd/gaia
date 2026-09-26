@@ -52,32 +52,31 @@ class TestSafeOpenDocument:
             or "symbolic" in exc_info.value.detail.lower()
         )
 
-    def test_safe_open_rejects_symlinked_directory_escape(self, home_tmp_dir):
+    def test_safe_open_rejects_symlinked_directory_escape(self, tmp_path, monkeypatch):
         """An intermediate symlinked dir inside home must not open files outside.
 
-        The lexical (abspath) home check passes for
-        ``~/.gaia_test_toctou/esc/secret.txt`` while the physical path lives
-        outside home — the realpath containment check must reject it with 403.
-        O_NOFOLLOW alone cannot catch this: it only guards the final component.
+        The lexical (abspath) home check passes for ``<home>/esc/secret.txt``
+        while the physical path lives outside home — the realpath containment
+        check must reject it with 403. O_NOFOLLOW alone cannot catch this: it
+        only guards the final component.
         """
-        import tempfile
-
-        outside_dir = Path(tempfile.mkdtemp(prefix="gaia_toctou_outside_"))
+        # A private home: on Windows the system temp dir sits inside the real one.
+        home = tmp_path / "home"
+        outside_dir = tmp_path / "outside"
+        home.mkdir()
+        outside_dir.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv(DOCUMENT_ROOTS_ENV, raising=False)
+        (outside_dir / "secret.txt").write_text("outside-home content")
+        escape_link = home / "esc"
         try:
-            secret = outside_dir / "secret.txt"
-            secret.write_text("outside-home content")
-            escape_link = home_tmp_dir / "esc"
-            try:
-                escape_link.symlink_to(outside_dir, target_is_directory=True)
-            except OSError:
-                pytest.skip("Symlink creation requires elevated privileges on Windows")
-            attack_path = escape_link / "secret.txt"
-            with pytest.raises(HTTPException) as exc_info:
-                with safe_open_document(str(attack_path)):
-                    pass
-            assert exc_info.value.status_code == 403
-        finally:
-            shutil.rmtree(outside_dir, ignore_errors=True)
+            escape_link.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("Symlink creation requires elevated privileges on Windows")
+        with pytest.raises(HTTPException) as exc_info:
+            with safe_open_document(str(escape_link / "secret.txt")):
+                pass
+        assert exc_info.value.status_code == 403
 
     def test_safe_open_rejects_missing_file(self, home_tmp_dir):
         """Non-existent file must return 404."""
@@ -159,6 +158,10 @@ class TestSafeOpenDocument:
 
     def test_declared_root_still_rejects_symlink_escape(self, tmp_path, monkeypatch):
         """realpath containment applies to declared roots too, not just home."""
+        # Pin home: on Windows tmp_path sits inside it, so `outside` would pass.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
         corpus = tmp_path / "corpus"
         corpus.mkdir()
         outside_dir = tmp_path / "outside"

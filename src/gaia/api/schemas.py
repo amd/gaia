@@ -7,16 +7,32 @@ These schemas define the request and response structures for the
 OpenAI-compatible API endpoints.
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ContentPart(BaseModel):
+    """
+    One element of an OpenAI content-part array.
+
+    Only ``text`` parts are served; other types are accepted by the schema so
+    the endpoint can reject them with a message naming the type.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    text: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
     """
     Chat message in OpenAI format.
 
-    Supports standard chat roles plus 'tool' for tool call results.
+    Supports standard chat roles, 'developer' (treated as 'system'), and
+    'tool' for tool call results. ``content`` is a string or an array of
+    content parts.
 
     Example:
         >>> msg = ChatMessage(role="user", content="Hello")
@@ -28,8 +44,8 @@ class ChatMessage(BaseModel):
         {'role': 'tool', 'content': 'Result', 'tool_call_id': 'call_123'}
     """
 
-    role: Literal["system", "user", "assistant", "tool"]
-    content: Optional[str] = None
+    role: Literal["system", "developer", "user", "assistant", "tool"]
+    content: Union[str, List[ContentPart], None] = None
     tool_calls: Optional[List[Dict[str, Any]]] = Field(
         default=None, description="Tool calls in the message (for assistant messages)"
     )
@@ -52,14 +68,15 @@ class ChatCompletionRequest(BaseModel):
     model: str = Field(..., description="Model ID (e.g., gaia)")
     messages: List[ChatMessage] = Field(..., description="Array of chat messages")
     stream: bool = Field(default=False, description="Enable SSE streaming")
+    # Unset means the agent's own default, not the OpenAI one.
     temperature: Optional[float] = Field(
-        default=0.7, ge=0, le=2, description="Sampling temperature"
+        default=None, ge=0, le=2, description="Sampling temperature"
     )
     max_tokens: Optional[int] = Field(
-        default=None, gt=0, description="Maximum tokens to generate"
+        default=None, gt=0, description="Maximum tokens per model call"
     )
     top_p: Optional[float] = Field(
-        default=1.0, ge=0, le=1, description="Nucleus sampling parameter"
+        default=None, ge=0, le=1, description="Nucleus sampling parameter"
     )
 
 

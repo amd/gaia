@@ -195,6 +195,8 @@ class ClaudeProvider(LLMClient):
             )
         self._system_prompt = system_prompt
         self._last_usage: Optional[dict] = None
+        self._last_finish_reason: Optional[str] = None
+        self._last_ttft_seconds: Optional[float] = None
         # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
 
     @property
@@ -523,6 +525,8 @@ class ClaudeProvider(LLMClient):
         **kwargs,
     ) -> Union[str, Iterator[str]]:
         self._last_usage = None
+        self._last_finish_reason = None
+        self._last_ttft_seconds = None
         params, name_map = self._build_params(
             self._resolve_model(model), messages, tools, kwargs, tool_choice
         )
@@ -568,6 +572,7 @@ class ClaudeProvider(LLMClient):
                 "query or check stop_details in the Anthropic console logs."
             )
         finish_reason = _FINISH_REASON_MAP.get(stop_reason, stop_reason)
+        self._last_finish_reason = finish_reason or None
         if tool_calls:
             return json.dumps(
                 {
@@ -609,6 +614,8 @@ class ClaudeProvider(LLMClient):
                             },
                         }
                 elif etype == "content_block_delta":
+                    if self._last_ttft_seconds is None:
+                        self._last_ttft_seconds = time.monotonic() - start
                     delta = event.delta
                     if delta.type == "text_delta":
                         text_parts.append(delta.text)
@@ -628,6 +635,9 @@ class ClaudeProvider(LLMClient):
             raise  # unreachable — _raise_actionable always raises
 
         self._capture_usage(usage_totals, time.monotonic() - start)
+        self._last_finish_reason = (
+            _FINISH_REASON_MAP.get(stop_reason, stop_reason) or None
+        )
 
         if stop_reason == "refusal":
             raise RuntimeError(
@@ -682,6 +692,12 @@ class ClaudeProvider(LLMClient):
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent ``chat()`` call, or ``None``."""
         return self._last_usage
+
+    def get_last_finish_reason(self) -> Optional[str]:
+        return self._last_finish_reason
+
+    def get_last_ttft_seconds(self) -> Optional[float]:
+        return self._last_ttft_seconds
 
     # embed() inherited from ABC - raises NotSupportedError (Anthropic has no
     # embeddings API; Lemonade keeps serving embeddings under --use-claude).
