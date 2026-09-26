@@ -411,6 +411,16 @@ def _install_fake_spawn(monkeypatch, tmp_path, *, spec=None, version_payload=Non
         return _FakeProc()
 
     monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
+    # The fake pid is not ours: never signal it (killpg/taskkill) or probe it.
+    captured["signals"] = []
+    monkeypatch.setattr(
+        mgr.AgentSidecarManager,
+        "_signal_tree",
+        staticmethod(lambda proc, sig: captured["signals"].append(sig)),
+    )
+    monkeypatch.setattr(
+        mgr.AgentSidecarManager, "_group_alive", lambda self, pgid: False
+    )
     monkeypatch.setattr(
         mgr.atexit, "register", lambda fn: captured["atexit"].append(fn)
     )
