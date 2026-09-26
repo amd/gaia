@@ -274,7 +274,7 @@ export function SettingsPage() {
                                     <StatusRow
                                         label="Processor"
                                         value={status.processor_name}
-                                        ok={status.device_supported !== false}
+                                        ok={true}
                                     />
                                 )}
                             </div>

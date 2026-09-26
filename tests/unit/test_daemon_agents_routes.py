@@ -71,7 +71,8 @@ def test_daemon_api_version_is_at_least_1_1():
     """#2142's contract is a FLOOR, not a pin.
 
     The agents control plane needs MINOR >= 1; later additive routes (MINOR 2
-    is ``/daemon/v1/lemonade/start``) keep satisfying it. Pinning the exact
+    is ``/daemon/v1/lemonade/ensure``, MINOR 3 is ``/daemon/v1/lemonade/start``
+    and ``/daemon/v1/lemonade/status``) keep satisfying it. Pinning the exact
     string here would turn every additive route into a test failure and push
     the next author toward not bumping MINOR at all — which is what actually
     breaks a client's floor check.

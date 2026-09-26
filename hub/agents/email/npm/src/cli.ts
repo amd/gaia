@@ -34,21 +34,33 @@ interface ParsedArgs {
 // the next flag as a value (or drops the value).
 const VALUE_FLAGS = new Set(["out", "base-url", "platform", "port", "python", "cmd"]);
 
-function parseArgs(argv: string[]): ParsedArgs {
+/** Raised for a malformed command line; the entry point turns it into exit 2. */
+export class UsageError extends Error {}
+
+export function parseArgs(argv: string[]): ParsedArgs {
   const out: ParsedArgs = { _: [], flags: {} };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a.startsWith("--")) {
-      const key = a.slice(2);
+      const eq = a.indexOf("=");
+      const key = eq === -1 ? a.slice(2) : a.slice(2, eq);
+      const inline = eq === -1 ? undefined : a.slice(eq + 1);
       if (VALUE_FLAGS.has(key)) {
+        if (inline !== undefined) {
+          if (inline === "") throw new UsageError(`--${key} was given an empty value`);
+          out.flags[key] = inline;
+          continue;
+        }
         const next = argv[i + 1];
         if (next === undefined || next.startsWith("--")) {
-          process.stderr.write(`warning: --${key} expects a value; ignoring\n`);
-          continue;
+          throw new UsageError(`--${key} expects a value`);
         }
         out.flags[key] = next;
         i++;
       } else {
+        if (inline !== undefined) {
+          throw new UsageError(`--${key} does not take a value (got '${a}')`);
+        }
         out.flags[key] = true;
       }
     } else {
@@ -163,7 +175,16 @@ function openBrowser(url: string): void {
 export function resolvePlaygroundPort(
   raw: string | boolean | undefined,
 ): { port: number } | { error: string } {
-  const port = typeof raw === "string" ? Number(raw) : 8131;
+  // Strict digits: Number() accepts "0x1f90", "1e3", and " 80 ".
+  // `raw === true` is unreachable while `port` is in VALUE_FLAGS (parseArgs
+  // rejects a bare `--port`), but it resolves to NaN rather than a silent
+  // 8131 so removing it from that set can never quietly bind the default.
+  const port =
+    raw === undefined
+      ? 8131
+      : typeof raw === "string" && /^\d+$/.test(raw)
+        ? Number(raw)
+        : NaN;
   if (!Number.isInteger(port) || port <= 0 || port > 65535 || port === 4001) {
     return {
       error: `--port must be a port in 1..65535 and not 4001 (got ${String(raw)})`,
@@ -174,6 +195,8 @@ export function resolvePlaygroundPort(
 
 /** Default cache dir for the fetched binary (keeps a throwaway run out of cwd). */
 export const DEFAULT_PLAYGROUND_CACHE = path.join(os.tmpdir(), "amd-gaia-agent-email");
+
+const PLAYGROUND_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 async function cmdPlayground(args: ParsedArgs): Promise<number> {
   const parsed = resolvePlaygroundPort(args.flags.port);
@@ -211,20 +234,45 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
 
     // Stay alive until interrupted, then shut the sidecar down cleanly. We own all
     // the signals the auto-reaper would have handled (it's off, above).
-    await new Promise<void>((resolve) => {
+    let stop!: () => void;
+    const stopped = new Promise<Error | undefined>((resolve) => {
       let stopping = false;
-      const stop = (): void => {
-        if (stopping) return; // a second signal shouldn't re-enter shutdown
+      stop = (): void => {
+        if (stopping) {
+          // Absorbed, so say what is happening — otherwise a repeat Ctrl+C
+          // during a slow teardown just looks like a frozen terminal.
+          process.stderr.write(
+            `[agent-email] already stopping the sidecar (pid ${String(sidecar.child.pid)}); ` +
+              "waiting for its process tree to exit ...\n",
+          );
+          return;
+        }
         stopping = true;
         process.stdout.write("\n[agent-email] stopping the sidecar ...\n");
-        void shutdown(sidecar)
-          .catch(() => undefined)
-          .finally(resolve);
+        shutdown(sidecar).then(
+          () => resolve(undefined),
+          (e: unknown) => resolve(e instanceof Error ? e : new Error(String(e))),
+        );
       };
-      for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-        process.once(sig, stop);
-      }
+      // process.on, not once: a second Ctrl+C during the shutdown would
+      // otherwise hit Node's default disposition and kill us mid-teardown,
+      // orphaning the detached sidecar tree on the port. The `stopping` guard
+      // absorbs the repeats.
+      for (const sig of PLAYGROUND_SIGNALS) process.on(sig, stop);
     });
+    let stopError: Error | undefined;
+    try {
+      stopError = await stopped;
+    } finally {
+      // Left installed, they would swallow every later signal AND suppress
+      // Node's default disposition, so Ctrl+C would stop working entirely.
+      for (const sig of PLAYGROUND_SIGNALS) process.removeListener(sig, stop);
+    }
+    // A surviving sidecar keeps the port bound; its error names the pid to kill.
+    if (stopError) {
+      process.stderr.write(`[agent-email] ${stopError.message}\n`);
+      return 1;
+    }
     return 0;
   } catch (e) {
     await shutdown(sidecar).catch(() => undefined);
@@ -374,8 +422,8 @@ function cmdVersion(): number {
   return 0;
 }
 
-async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+export async function main(argv: string[]): Promise<number> {
+  const args = parseArgs(argv);
   const cmd = args._[0] ?? "help";
   switch (cmd) {
     case "playground":
@@ -391,8 +439,7 @@ async function main(): Promise<number> {
       process.stdout.write(HELP);
       return 0;
     default:
-      process.stderr.write(`error: unknown command '${cmd}'\n\n${HELP}`);
-      return 2;
+      throw new UsageError(`unknown command '${cmd}'`);
   }
 }
 
@@ -407,10 +454,14 @@ function invokedDirectly(): boolean {
 }
 
 if (invokedDirectly()) {
-  main()
+  main(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((e) => {
       // Fail loudly with an actionable message; never swallow.
+      if (e instanceof UsageError) {
+        process.stderr.write(`error: ${e.message}\n\n${HELP}`);
+        process.exit(2);
+      }
       if (e instanceof AgentEmailError) {
         process.stderr.write(`[agent-email] ${e.name}: ${e.message}\n`);
       } else {

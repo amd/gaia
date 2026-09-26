@@ -11,6 +11,7 @@ inherited by agents that need file manipulation capabilities.
 import ast
 import difflib
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
@@ -18,13 +19,34 @@ from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
-    check_file_state,
-    record_read,
-    record_write,
+    file_read_record,
+    read_first_preflight,
+    stamp_of,
 )
 from gaia.logger import get_logger
+from gaia.security import BackupError
 
 logger = get_logger(__name__)
+
+
+def _resolve_target(file_path: str, project_dir: Optional[str] = None) -> Path:
+    """Where write_file / edit_file act: ``file_path``, under ``project_dir``."""
+    path = Path(file_path)
+    if project_dir and not path.is_absolute():
+        path = Path(project_dir).resolve() / path
+    return path.resolve()
+
+
+def _project_target(args: Dict[str, Any]) -> Path:
+    return _resolve_target(args["file_path"], args.get("project_dir"))
+
+
+def _file_path_target(args: Dict[str, Any]) -> str:
+    return args["file_path"]
+
+
+def _gaia_md_target(args: Dict[str, Any]) -> str:
+    return os.path.join(args.get("project_root", "."), "GAIA.md")
 
 
 def _directory_path_error(file_path: str) -> Dict[str, Any]:
@@ -254,7 +276,10 @@ class FileIOToolsMixin:
             "Do not shell out to sed, awk, python or a heredoc to rewrite a file: "
             "the edit tools validate the path, keep a backup and report what "
             "changed, and a shell rewrite does none of that.\n"
-            "Do not re-read a file whose content you already hold — edit it directly."
+            "Read a file with read_file before you change it. The edit tools "
+            "refuse a file you have not read this way — content you already "
+            "hold from a search hit or a shell command does not count, and the "
+            "file may have changed since."
         )
 
     def register_file_io_tools(self) -> None:
@@ -292,16 +317,17 @@ class FileIOToolsMixin:
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
+                reads = file_read_record(self)
+                seen = stamp_of(file_path)
+
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
 
-                    return {
-                        "status": "success",
-                        "file_path": file_path,
-                        **read_text_page(
-                            file_path, offset, 8000 if limit is None else limit
-                        ),
-                    }
+                    page = read_text_page(
+                        file_path, offset, 8000 if limit is None else limit
+                    )
+                    reads.note(file_path, seen)
+                    return {"status": "success", "file_path": file_path, **page}
 
                 # Read file content
                 try:
@@ -311,6 +337,8 @@ class FileIOToolsMixin:
                     # Binary file
                     with open(file_path, "rb") as f:
                         content_bytes = f.read()
+                    # Recorded too: this is all a read can show of it.
+                    reads.note(file_path, seen)
                     return {
                         "status": "success",
                         "file_path": file_path,
@@ -320,8 +348,7 @@ class FileIOToolsMixin:
                         "size_bytes": len(content_bytes),
                     }
 
-                # Anchor later edits to what the agent actually saw.
-                record_read(file_path, content)
+                reads.note(file_path, seen)
 
                 # Detect file type by extension
                 ext = os.path.splitext(file_path)[1].lower()
@@ -407,7 +434,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
         def write_python_file(
             file_path: str,
             content: str,
@@ -415,6 +442,8 @@ class FileIOToolsMixin:
             create_dirs: bool = True,
         ) -> Dict[str, Any]:
             """Write Python code to a file.
+
+            Overwriting an existing file requires reading it with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -460,12 +489,17 @@ class FileIOToolsMixin:
                     )
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                stale_error = check_file_state(str(file_path))
-                if stale_error is not None:
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path, "overwriting")
+                if refusal is not None:
                     path_validator.audit_write(
-                        "write", str(file_path), content_size, "denied", "stale"
+                        "write",
+                        str(file_path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
                     )
-                    return stale_error
+                    return refusal
 
                 # Backup existing file before overwrite
                 backup_path = None
@@ -479,7 +513,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                record_write(str(file_path), content)
+                reads.note(file_path)
 
                 # Audit successful write
                 detail = f"backup={backup_path}" if backup_path else ""
@@ -496,13 +530,24 @@ class FileIOToolsMixin:
                 if backup_path:
                     result["backup_path"] = backup_path
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target))
         def edit_python_file(
             file_path: str,
             old_content: str,
@@ -511,6 +556,8 @@ class FileIOToolsMixin:
             dry_run: bool = False,
         ) -> Dict[str, Any]:
             """Edit a Python file by replacing content.
+
+            The file must have been read with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -577,6 +624,11 @@ class FileIOToolsMixin:
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path)
+                if refusal is not None:
+                    return refusal
+
                 with open(file_path, "r", encoding="utf-8") as f:
                     current_content = f.read()
 
@@ -629,7 +681,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
-                record_write(str(file_path), modified_content)
+                reads.note(file_path)
 
                 # Audit successful edit
                 detail = (
@@ -652,6 +704,17 @@ class FileIOToolsMixin:
                     "diff": diff,
                     "backup_created": backup_path is not None,
                     "backup_path": backup_path,
+                }
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
                 }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
@@ -730,7 +793,8 @@ class FileIOToolsMixin:
 
                                 if len(results) >= max_results:
                                     break
-                        except Exception:
+                        except (OSError, UnicodeDecodeError) as e:
+                            logger.warning("search_code skipped %s: %s", file_path, e)
                             continue
 
                     if len(results) >= max_results:
@@ -809,11 +873,13 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
         def write_markdown_file(
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
             """Write content to a markdown file.
+
+            Overwriting an existing file requires reading it with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -844,12 +910,17 @@ class FileIOToolsMixin:
                     )
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                stale_error = check_file_state(str(file_path))
-                if stale_error is not None:
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path, "overwriting")
+                if refusal is not None:
                     path_validator.audit_write(
-                        "write", str(file_path), content_size, "denied", "stale"
+                        "write",
+                        str(file_path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
                     )
-                    return stale_error
+                    return refusal
 
                 # Backup existing file before overwrite
                 backup_path = None
@@ -865,7 +936,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                record_write(str(file_path), content)
+                reads.note(file_path)
 
                 # Audit successful write
                 detail = f"backup={backup_path}" if backup_path else ""
@@ -882,13 +953,24 @@ class FileIOToolsMixin:
                 if backup_path:
                     result["backup_path"] = backup_path
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _project_target, "overwriting"))
         def write_file(
             file_path: str,
             content: str,
@@ -897,35 +979,22 @@ class FileIOToolsMixin:
         ) -> Dict[str, Any]:
             """Create a text file, or replace one wholesale, without validation.
 
-            Any text file: documentation (.md, .mdx), source (.py, .go, .ts,
-            .js), configuration (.yml, .json, .toml), plain text.
-
-            Prefer edit_file when changing PART of a file that already exists —
-            this replaces the whole thing. Use write_python_file instead only
-            when you want the write REFUSED if the content is not valid Python.
-
-            Includes security guardrails: path validation, blocked directory
-            enforcement, sensitive file protection, size limits, backup
-            creation, and audit logging.
+            Any text file — .md, .py, .yml, .go, .json. Prefer edit_file to
+            change PART of an existing file; this replaces the whole thing.
+            write_python_file is the variant that refuses invalid Python.
+            Overwriting an existing file requires reading it with read_file first.
 
             Args:
-                file_path: Path where to write the file
-                content: Content to write to the file
-                create_dirs: Whether to create parent directories if they don't exist
-                project_dir: Project root directory for resolving relative paths
+                file_path: Path where to write the file.
+                content: Content to write to the file.
+                create_dirs: Create missing parent directories.
+                project_dir: Project root for resolving a relative file_path.
 
             Returns:
-                dict: Status and file information
+                Status, the resolved path, size, and any backup made.
             """
             try:
-                from pathlib import Path
-
-                path = Path(file_path)
-                if project_dir:
-                    base = Path(project_dir).resolve()
-                    if not path.is_absolute():
-                        path = base / path
-                path = path.resolve()
+                path = _resolve_target(file_path, project_dir)
                 content_size = len(content.encode("utf-8"))
 
                 # Security: validate write access.
@@ -943,12 +1012,17 @@ class FileIOToolsMixin:
                     )
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                stale_error = check_file_state(str(path))
-                if stale_error is not None:
+                reads = file_read_record(self)
+                refusal = reads.refusal(path, "overwriting")
+                if refusal is not None:
                     path_validator.audit_write(
-                        "write", str(path), content_size, "denied", "stale"
+                        "write",
+                        str(path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
                     )
-                    return stale_error
+                    return refusal
 
                 # Backup existing file before overwrite
                 backup_path = None
@@ -961,7 +1035,7 @@ class FileIOToolsMixin:
 
                 # Write content to file
                 path.write_text(content, encoding="utf-8")
-                record_write(str(path), content)
+                reads.note(path)
 
                 console = getattr(self, "console", None)
                 if content.strip():
@@ -998,13 +1072,24 @@ class FileIOToolsMixin:
                 if display_error:
                     result["display_error"] = display_error
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _project_target))
         def edit_file(
             file_path: str,
             old_content: str,
@@ -1013,41 +1098,21 @@ class FileIOToolsMixin:
         ) -> Dict[str, Any]:
             """Change part of a text file in place, without rewriting the rest.
 
-            The default way to edit anything: documentation (.md, .mdx, .rst),
-            source (.py, .go, .ts, .js, .rs, .cpp), configuration (.yml, .json,
-            .toml), plain text. Prefer it over rewriting a file with write_file,
-            and over shelling out to sed or a here-doc.
-
-            Use edit_python_file instead only when you want the edit REFUSED if
-            it would break Python syntax.
-
-            Includes security guardrails: path validation, blocked directory
-            enforcement, sensitive file protection, backup creation, and audit
-            logging.
-
-            old_content must match exactly one location. Zero or several matches
-            are errors that carry the file's current content, so a retry does not
-            need a separate read.
+            The default way to edit any text file — .md, .py, .yml, .go, .json
+            — ahead of rewriting it with write_file or shelling out to sed.
+            Requires a prior read_file. edit_python_file refuses a
+            syntax-breaking edit. old_content must match exactly one
+            location; zero or several matches return the current content,
+            so a retry needs no re-read.
 
             Args:
-                file_path: Path to the file to edit
-                old_content: Exact content to find and replace; must be unique
-                    in the file
-                new_content: New content to replace with
-                project_dir: Project root directory for resolving relative paths
-
-            Returns:
-                dict: Status and edit information
+                file_path: Path to the file to edit.
+                old_content: Exact text to replace; must be unique in the file.
+                new_content: Text to put in its place.
+                project_dir: Project root for resolving a relative file_path.
             """
             try:
-                from pathlib import Path
-
-                path = Path(file_path)
-                if project_dir:
-                    base = Path(project_dir).resolve()
-                    if not path.is_absolute():
-                        path = base / path
-                path = path.resolve()
+                path = _resolve_target(file_path, project_dir)
 
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -1092,6 +1157,11 @@ class FileIOToolsMixin:
                 if not path.exists():
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(path)
+                if refusal is not None:
+                    return refusal
+
                 # Read current content
                 current_content = path.read_text(encoding="utf-8")
 
@@ -1121,7 +1191,7 @@ class FileIOToolsMixin:
 
                 # Write updated content
                 path.write_text(updated_content, encoding="utf-8")
-                record_write(str(path), updated_content)
+                reads.note(path)
 
                 console = getattr(self, "console", None)
                 if diff.strip():
@@ -1164,13 +1234,24 @@ class FileIOToolsMixin:
                 if display_error:
                     result["display_error"] = display_error
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _gaia_md_target, "overwriting"))
         def update_gaia_md(
             project_root: str = ".",
             project_name: str = None,
@@ -1179,6 +1260,8 @@ class FileIOToolsMixin:
             instructions: str = None,
         ) -> Dict[str, Any]:
             """Create or update GAIA.md file for project context.
+
+            Updating an existing GAIA.md requires reading it with read_file first.
 
             Args:
                 project_root: Root directory of the project
@@ -1204,6 +1287,18 @@ class FileIOToolsMixin:
                         "error": f"Access denied: {gaia_path} is not in allowed paths."
                         f"{path_validator.scratch_hint(gaia_path)}",
                     }
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(gaia_path, "overwriting")
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        gaia_path,
+                        0,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
 
                 # Start building content
                 content = "# GAIA.md\n\n"
@@ -1252,20 +1347,10 @@ class FileIOToolsMixin:
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
 
-                stale_error = check_file_state(gaia_path)
-                if stale_error is not None:
-                    path_validator.audit_write(
-                        "write",
-                        gaia_path,
-                        len(content.encode("utf-8")),
-                        "denied",
-                        "stale",
-                    )
-                    return stale_error
                 # Write the file
                 with open(gaia_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                record_write(gaia_path, content)
+                reads.note(gaia_path)
 
                 return {
                     "status": "success",
@@ -1276,7 +1361,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target))
         def replace_function(
             file_path: str,
             function_name: str,
@@ -1286,7 +1371,7 @@ class FileIOToolsMixin:
             """Replace one function definition in a Python file.
 
             Replaces the definition and its decorators, leaving the code around
-            it untouched.
+            it untouched. The file must have been read with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -1348,15 +1433,21 @@ class FileIOToolsMixin:
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path)
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "edit",
+                        str(file_path),
+                        new_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
+
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
 
-                stale_error = check_file_state(str(file_path), content)
-                if stale_error is not None:
-                    path_validator.audit_write(
-                        "edit", str(file_path), new_size, "denied", "stale"
-                    )
-                    return stale_error
                 # Parse the file to find the function
                 try:
                     tree = ast.parse(content)
@@ -1413,7 +1504,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
-                record_write(str(file_path), modified_content)
+                reads.note(file_path)
 
                 # Generate diff
                 diff = "\n".join(
@@ -1443,6 +1534,17 @@ class FileIOToolsMixin:
                     "function_replaced": function_name,
                     "backup_path": backup_path if backup else None,
                     "diff": diff,
+                }
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
                 }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)

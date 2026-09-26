@@ -126,6 +126,29 @@ def test_health_probe_extracts_server_version_from_body():
     assert kwargs["timeout"] == _EXPECTED_TIMEOUT
 
 
+def test_health_probe_sends_gaias_own_key(monkeypatch, tmp_path):
+    """GAIA's own server answers 401 without its key, hiding the version."""
+    import json
+    import os
+
+    (tmp_path / "lemonade").mkdir()
+    (tmp_path / "lemonade" / "state.json").write_text(
+        json.dumps({"pid": os.getpid(), "port": 51234, "api_key": "own-key"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"version": "11.8.1", "all_models_loaded": []}
+    with patch("requests.get", return_value=resp) as mock_get:
+        _, base, version, _ = _probe_lemonade_health(None)
+
+    assert base == "http://localhost:51234/api/v1"
+    assert version == "11.8.1"
+    assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer own-key"}
+
+
 def test_health_probe_version_none_when_not_advertised():
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"all_models_loaded": []}  # no 'version' key

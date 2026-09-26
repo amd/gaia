@@ -77,15 +77,17 @@ from gaia.agents.base.readiness import start_advice
 from gaia.llm import create_client
 from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
-    DEFAULT_LEMONADE_URL,
     LemonadeClient,
     LemonadeClientError,
     cloud_model_provider,
+    resolve_lemonade_base_url,
 )
+from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
 logger = get_logger(__name__)
+
 
 #: Level the permission audit trail is pinned at, independent of --dev.
 AUDIT_LEVEL = logging.INFO
@@ -143,6 +145,8 @@ CONTROL_CLEAR_HISTORY = "clear_history"
 
 class _ClearHistory:
     """Queue sentinel: the turn loop (which owns the agent) performs the clear."""
+
+
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and the bypass mode all survive it.
 CONTROL_CANCEL = "cancel"
@@ -418,7 +422,7 @@ def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
         # A malformed base_url reads to the user as "Lemonade isn't running",
         # so name it rather than reporting a bare unreachable. The client
         # resolves an omitted URL the same way, so report that, not None.
-        tried = base_url or os.environ.get("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+        tried = base_url or resolve_lemonade_base_url()
         logger.warning("[lemonade] client construction failed for %r: %s", tried, exc)
         return {"lemonade_base_url": tried, "lemonade_reachable": False}
     state: Dict[str, Any] = {"lemonade_base_url": client.base_url}
@@ -605,7 +609,7 @@ def _apply_local_switch(agent: Any, target: str) -> str:
             + (
                 ", ".join(available)
                 if available
-                else "(none — run `lemonade-server pull <model>` first)"
+                else f"(none — {describe_client_hint('pull', target).instruction.rstrip('.')})"
             )
             + "."
         )
@@ -632,6 +636,11 @@ def _apply_local_switch(agent: Any, target: str) -> str:
     return target
 
 
+def is_claude_model(model_id: str) -> bool:
+    """Whether *model_id* names a Claude model, i.e. goes to Anthropic."""
+    return model_id.startswith("claude-")
+
+
 def switch_model(agent: Any, target: str) -> str:
     """Swap the agent's live LLM client to *target*.
 
@@ -648,7 +657,7 @@ def switch_model(agent: Any, target: str) -> str:
     machinery it depends on already is — moving 200 working lines to improve a
     filename is not worth the risk.
     """
-    if target.startswith("claude-"):
+    if is_claude_model(target):
         return _apply_claude_switch(agent, target)
     return _apply_local_switch(agent, target)
 

@@ -146,7 +146,7 @@ def _build_clock(
 
 
 def _build_register(
-    *, specs, pid, port, token, host, started_at, refresher, clock
+    *, specs, pid, port, token, host, started_at, refresher, clock, lemonade_owner
 ) -> Callable[[], None]:
     """The daemon's ``on_startup`` hook: reap stale sidecars, publish
     instance.json, then start the connector-token refresher and the job clock.
@@ -186,15 +186,19 @@ def _build_register(
             remove_instance(only_pid=pid)
             raise
         logger.info("daemon: registered instance pid=%s port=%s", pid, port)
+        # Up by the time anything needs a model, without delaying registration.
+        lemonade_owner.ensure_in_background()
 
     return _register
 
 
 def _build_deregister(
-    *, registry, custody_store, pid, refresher, clock, lemonade
+    *, registry, custody_store, pid, refresher, clock, lemonade, lemonade_owner
 ) -> Callable[[], None]:
     """The daemon's ``on_shutdown`` hook: stop the refresher and the clock
-    BEFORE tearing down sidecars, so neither races a sidecar mid-teardown."""
+    BEFORE tearing down sidecars, so neither races a sidecar mid-teardown, and
+    stop embedded Lemonade only after the sidecars that use it."""
+    from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
 
     def _deregister() -> None:
         refresher.stop()
@@ -207,6 +211,11 @@ def _build_deregister(
         # launched from the tray is left running.
         lemonade.shutdown()
         install_supervisor(None)
+        try:
+            lemonade_owner.stop()
+        except EmbeddedLemonadeError as e:
+            # Still deregister: a daemon that cannot exit cleanly is worse.
+            logger.error("daemon: could not stop embedded Lemonade: %s", e)
         custody_store.close()
         remove_instance(only_pid=pid)
         logger.info("daemon: deregistered instance pid=%s", pid)
@@ -287,6 +296,14 @@ def run(host: str = HOST) -> None:
     lemonade = LemonadeSupervisor()
     install_supervisor(lemonade)
 
+    # GAIA's own private, self-contained Lemonade instance (#3121) — a second,
+    # independent model server the daemon also owns, separate from the
+    # supervisor above which starts/attaches whatever Lemonade install the
+    # host already has.
+    from gaia.daemon.lemonade import EmbeddedLemonadeOwner
+
+    lemonade_owner = EmbeddedLemonadeOwner()
+
     _register = _build_register(
         specs=specs,
         pid=pid,
@@ -296,6 +313,7 @@ def run(host: str = HOST) -> None:
         started_at=started_at,
         refresher=refresher,
         clock=clock,
+        lemonade_owner=lemonade_owner,
     )
     _deregister = _build_deregister(
         registry=registry,
@@ -304,6 +322,7 @@ def run(host: str = HOST) -> None:
         refresher=refresher,
         clock=clock,
         lemonade=lemonade,
+        lemonade_owner=lemonade_owner,
     )
 
     app = create_app(
@@ -320,6 +339,7 @@ def run(host: str = HOST) -> None:
         custody_store=custody_store,
         clock=clock,
         lemonade=lemonade,
+        lemonade_owner=lemonade_owner,
     )
 
     config = uvicorn.Config(

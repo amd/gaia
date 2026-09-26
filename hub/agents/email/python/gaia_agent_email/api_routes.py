@@ -276,10 +276,19 @@ def _probe_lemonade_health(
     """
     import requests
 
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     probe_base = _resolve_probe_base(base_url)
     try:
+        # GAIA's own server answers 401 without its key, hiding the version.
         resp = requests.get(
             f"{probe_base}/health",
+            headers=lemonade_auth_headers(
+                resolve_lemonade_api_key(base_url=probe_base)
+            ),
             timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
         )
     except requests.exceptions.RequestException:
@@ -358,7 +367,7 @@ def _pull_model(probe_base: str, model_id: str) -> None:
     resp = requests.post(
         f"{probe_base}/pull",
         json={"model_name": model_id},
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=_LEMONADE_PULL_TIMEOUT,
     )
     resp.raise_for_status()
