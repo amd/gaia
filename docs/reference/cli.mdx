@@ -1466,6 +1466,7 @@ gaia gateway auth                     # prompts for the token without echo
 gaia gateway status                   # registration, auth state, active model
 gaia gateway models                   # what the gateway offers
 gaia gateway enable amd.Claude-Opus-5 # add it to your enabled set
+gaia gateway disable amd.Claude-Opus-5 # remove it from your enabled set
 gaia gateway use amd.Claude-Opus-5    # make it the default for chat/llm/prompt
 gaia gateway test "Say hello"         # end-to-end round trip
 gaia gateway auth --no-remember       # ask me every restart instead
@@ -3484,9 +3485,9 @@ The bundle includes:
 
 Most commands support these options. They come from a shared parent parser, so
 despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
-`gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia hub`,
-`gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory` or `gaia skill` —
-passing one there fails with `unrecognized arguments`.
+`gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia gateway`,
+`gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory` or
+`gaia skill` — passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
