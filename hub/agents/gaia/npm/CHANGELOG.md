@@ -14,6 +14,24 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- `/v1/gaia/query` now honours `provider` on an existing session. It used to
+  matter only when the session was created, so `provider: "lemonade"` could keep
+  sending a Claude session's conversation to Anthropic, and `provider: "claude"`
+  could run locally. A different provider now switches the session in place.
+  Naming a `model` that belongs to the other provider is a 400, on new and
+  existing sessions alike. Omitting `provider` and naming a Claude `model` now
+  starts a Claude session, the way it already switched an existing one — it used
+  to point the local backend at an id it cannot serve.
+- "Lemonade is not reachable" errors no longer tell users to run
+  `lemonade-server serve`, a command current Lemonade installs don't have. The
+  `GET /v1/gaia/init` hint, run errors, and `/model` now say how to start
+  Lemonade on the user's own install (tray app, macOS app, service, or CLI).
+  `/model <unknown>` with nothing downloaded likewise names the download command
+  the host actually has, instead of the removed `lemonade-server pull`.
+- `gaia serve` no longer exits 0 when Ctrl+C fails to stop the sidecar. The
+  error naming the surviving process and how to kill it was discarded, so the
+  next `serve` hit an unexplained port conflict. It now prints that error and
+  exits 1.
 - Conversation state is saved under `~/.gaia/sessions` instead of the directory
   the agent was started from. A `session_id` must be 1–128 characters from
   `A-Z a-z 0-9 . _ -`; any other value is a 400 on `/query` and
@@ -22,6 +40,8 @@ the terminal UI meant building it from source.
 - `gaia hub install gaia` no longer refuses Intel Macs: the hub manifest now
   lists `darwin-x64`, which the release already builds and the lock already ships.
 - The hub install card advertises the declared npm package instead of an unpublished PyPI wheel.
+- The readiness check (`GET /v1/gaia/init`) and the terminal session's health
+  report name GAIA's own Lemonade Server instead of Lemonade's default port.
 - Clearing a TUI conversation now also clears the flagship stdio agent’s prior
   conversation context, while preserving the selected model, skills, and permissions.
 - Internal session deletion (not yet exposed by a route) refuses busy agents instead of closing them mid-turn.
@@ -85,6 +105,12 @@ the terminal UI meant building it from source.
   printed, instead of a throwaway script left in your repository. It joins the
   always-on tool set (about 250 more prompt tokens per call) and the `shell`
   bundle.
+- **`sleep`, always on.** The agent can now wait before retrying, e.g. until a
+  rate limit resets, instead of giving up; before, its only way to wait was
+  `time.sleep` inside a confirmation-gated `run_python`. Up to five minutes per
+  call, no approval needed, and Stop ends the wait within a second. It joins the
+  always-on tool set (about 190 more prompt tokens per call) and the
+  `loop_control` bundle (80 tools → 81).
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it
@@ -140,10 +166,12 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 28 of its 81 tools on any one call — a
+  profile.** The model is sent about 28 of its 81 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
-  hatch the model calls mid-turn to pull in a bundle the selector missed.
+  hatch the model calls mid-turn to pull in a bundle the selector missed; that
+  bundle is appended for the rest of the turn (briefly above the cap, which the
+  next turn restores) so the prompt already sent stays cached.
   `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
   moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
 - **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`
@@ -212,6 +240,13 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The agent has to read a file before it changes it.** `edit_file`, and
+  `write_file` on an existing file, now refuse a file the agent hasn't read with
+  `read_file` in this session, or one that changed on disk since it did. Benchmark
+  runs caught the agent patching files it had never opened, from a grep snippet
+  or a guess; now it has to look first. A partial read counts, creating a file
+  needs no read, and the refusal comes before any approval prompt. It applies
+  with confirmations bypassed too.
 - **The agent sees every installed skill and loads the one that fits.**
   Previously a per-turn matcher scored the request against skill descriptions
   and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never

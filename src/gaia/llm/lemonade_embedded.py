@@ -7,9 +7,9 @@ Upstream ships an "embeddable" Lemonade build: a ``lemond`` daemon plus a
 state. This module downloads that artifact, unpacks it under ``~/.gaia``, and
 runs it on a private port behind a generated API key.
 
-The point is a GAIA that carries its own inference server. The system-wide
-Lemonade install keeps working and stays the fallback -- see
-``gaia.llm.lemonade_launcher`` for that path.
+The point is a GAIA that carries its own inference server: ``gaia init``
+installs and starts this one, and a system-wide Lemonade install is never
+used unless ``LEMONADE_BASE_URL`` points at it.
 
 Layout under ``$GAIA_HOME/lemonade`` (``~/.gaia/lemonade`` by default)::
 
@@ -51,6 +51,10 @@ from gaia.version import LEMONADE_VERSION
 log = get_logger(__name__)
 
 GITHUB_RELEASE_BASE = "https://github.com/lemonade-sdk/lemonade/releases/download"
+
+#: Set by GAIA's credentials file: LEMONADE_BASE_URL/LEMONADE_API_KEY in this
+#: environment describe GAIA's own server, not one the user runs.
+EMBEDDED_ENV_MARKER = "GAIA_LEMONADE_EMBEDDED"
 RELEASES_PAGE = "https://github.com/lemonade-sdk/lemonade/releases"
 
 # (platform.system(), normalized machine) -> asset name template.
@@ -87,11 +91,44 @@ EMBEDDABLE_SHA256: Dict[str, str] = {
 # Deliberately absent: no_fetch_executables. Setting it true collapses the
 # advertised catalogue from 204 models to the 4 runnable by built-in backends,
 # which would break `gaia download` for everything else.
+# auto_evict=false is pinned rather than inherited. Lemonade v2026.39.1 added
+# VRAM auto-eviction and defaults it off today, but it is a new knob and GAIA's
+# residency model rests on which way it points.
+#
+# GAIA assumes a chat model and an embedder stay co-resident: RAGSDK scopes its
+# embedder unload so a global /unload cannot take the chat model with it (#1544),
+# and ModelSlotBroker serialises sidecar loads so they do not race the slot.
+# Eviction under VRAM pressure is that same failure arriving from underneath.
+# Under pressure the choice is a loud load failure or a silent eviction that
+# resurfaces as a cold reload or a truncated answer; fail-loudly takes the loud
+# one. Turning it on is a real option for VRAM-constrained machines, but it needs
+# measurement on AMD GPU hardware first (#4170).
+#
+# auto_evict_threshold_pct is inert while this is false, so it is left unset
+# rather than stated and ignored.
 _LEMOND_CONFIG = {
     "config_version": 2,
     "host": "localhost",
     "broadcast": False,
+    "auto_evict": False,
 }
+
+
+def _lemond_config(ctx_size: Optional[int] = None) -> Dict[str, object]:
+    """The config GAIA writes for its private instance.
+
+    ``global_timeout`` is the per-request budget. Lemonade 11.9.0 made it
+    configurable, defaulting to 600s, which is short for the window GAIA pins: a
+    long document is one large prefill, and 65536 tokens on a slow machine does
+    not finish in ten minutes — the request dies and the answer is truncated.
+
+    The value comes from ``request_budget_seconds`` so the server and the client
+    that talks to it cannot be set to disagree.
+    """
+    from gaia.llm.lemonade_client import request_budget_seconds
+
+    return {**_LEMOND_CONFIG, "global_timeout": request_budget_seconds(ctx_size)}
+
 
 _HEALTH_PATH = "/api/v1/health"
 _START_TIMEOUT = 60.0
@@ -134,6 +171,40 @@ class EmbeddedStatus:
     unresponsive_pid: Optional[int] = None
 
 
+def pid_exists(pid: int) -> bool:
+    """Whether a process with *pid* is running. Standard library only.
+
+    Cheap enough for every URL resolution, unlike the image-name check in
+    :meth:`EmbeddedLemonade._daemon_alive`, so it can be wrong only for a
+    recycled pid -- which then fails to connect, as before.
+    """
+    if pid <= 0:
+        return False
+    if platform.system() == "Windows":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong(0)
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def gaia_home() -> Path:
     """Return GAIA's state directory.
 
@@ -160,8 +231,9 @@ def _normalized_machine() -> str:
     if normalized is None:
         raise UnsupportedPlatformError(
             f"Unsupported CPU architecture '{platform.machine()}' for embedded "
-            f"Lemonade. Install Lemonade Server system-wide instead ("
-            f"`gaia init`), or see {RELEASES_PAGE} for the published assets."
+            f"Lemonade. Run Lemonade Server on a supported machine and set "
+            f"LEMONADE_BASE_URL to it, or see {RELEASES_PAGE} for the published "
+            f"assets."
         )
     return normalized
 
@@ -184,8 +256,8 @@ def asset_name(version: str = LEMONADE_VERSION) -> str:
         supported = ", ".join(f"{s}/{m}" for s, m in sorted(_ASSET_TEMPLATES))
         raise UnsupportedPlatformError(
             f"Embedded Lemonade is not published for {key[0]}/{key[1]}. "
-            f"Supported: {supported}. Install Lemonade Server system-wide "
-            f"instead (`gaia init`), or check {RELEASES_PAGE}."
+            f"Supported: {supported}. Run Lemonade Server on a supported "
+            f"machine and set LEMONADE_BASE_URL to it, or check {RELEASES_PAGE}."
         )
     return template.format(version=version)
 
@@ -504,7 +576,9 @@ class EmbeddedLemonade:
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         path = self.config_dir / "config.json"
-        path.write_text(json.dumps(_LEMOND_CONFIG, indent=2), encoding="utf-8")
+        # Rewritten on every start(), so a device-profile or GAIA_CTX_SIZE change
+        # moves the request budget with it rather than leaving a stale number.
+        path.write_text(json.dumps(_lemond_config(), indent=2), encoding="utf-8")
         return path
 
     # -- state ------------------------------------------------------------
@@ -708,15 +782,19 @@ class EmbeddedLemonade:
             Path to the written file.
         """
         base_url = self.base_url_for(port)
+        # The marker lets GAIA recognise these values as its own server's and
+        # follow the live state file once this port and key go stale.
         if platform.system() == "Windows":
             body = (
                 f'$env:LEMONADE_BASE_URL = "{base_url}"\n'
                 f'$env:LEMONADE_API_KEY = "{api_key}"\n'
+                f'$env:{EMBEDDED_ENV_MARKER} = "1"\n'
             )
         else:
             body = (
                 f'export LEMONADE_BASE_URL="{base_url}"\n'
                 f'export LEMONADE_API_KEY="{api_key}"\n'
+                f'export {EMBEDDED_ENV_MARKER}="1"\n'
             )
 
         self.root.mkdir(parents=True, exist_ok=True)
