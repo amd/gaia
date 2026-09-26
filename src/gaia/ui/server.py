@@ -22,6 +22,7 @@ import asyncio
 import logging
 import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
+import sys
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -34,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.config import UnsafeGaiaHomeError
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
 # Tests use @patch("gaia.ui.server._get_chat_response") etc., so we must
@@ -908,7 +910,13 @@ def main():
 
     log_level = "debug" if args.debug else "info"
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
-    server_app = create_app(webui_dist=args.ui_dist)
+    try:
+        server_app = create_app(webui_dist=args.ui_dist)
+    except UnsafeGaiaHomeError as exc:
+        # A misconfigured GAIA_HOME is the user's to fix, so print the remedy
+        # rather than a traceback. 64 is EX_USAGE, as gaia uninstall uses.
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(64) from exc
     uvicorn.run(
         server_app,
         host=args.host,

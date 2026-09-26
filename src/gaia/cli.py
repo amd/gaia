@@ -830,6 +830,8 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
 
     _ensure_webui_built(log=log)
 
+    from gaia.config import UnsafeGaiaHomeError
+
     try:
         from gaia.ui.server import create_app
 
@@ -862,6 +864,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log_level="debug" if debug else "info",
             access_log=debug,
         )
+    except UnsafeGaiaHomeError as e:
+        # The user's misconfiguration to fix: print the remedy, not a traceback.
+        # 64 is EX_USAGE, matching gaia uninstall's exit code for the same fault.
+        print(f"\nError: {e}")
+        sys.exit(64)
     except ImportError as e:
         print(f"\nMissing dependencies for Agent UI: {e}")
         print("\n   The Agent UI requires extra dependencies that are not installed.")

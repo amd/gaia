@@ -22,6 +22,11 @@ from typing import Generator, List, Optional, Sequence, Tuple
 
 from fastapi import HTTPException
 
+from gaia.config import (
+    GAIA_HOME_IS_FS_ROOT,
+    UnsafeGaiaHomeError,
+    unsafe_gaia_home_reason,
+)
 from gaia.llm.lemonade_embedded import gaia_home
 
 from .models import (
@@ -399,26 +404,37 @@ DOCUMENT_ROOTS_ENV = "GAIA_DOCUMENT_ROOTS"
 
 
 def _ui_gaia_home() -> Path:
-    """Return the GAIA home, refusing one that is the user's home or above it.
+    """Return the GAIA home, refusing one GAIA must not own files under.
 
     The server deletes files under ``<GAIA_HOME>/documents`` as its own, and
     with ``GAIA_HOME=$HOME`` that is the real Documents folder on Windows and
     macOS (case-insensitive filesystems).
+
+    Raises:
+        UnsafeGaiaHomeError: ``GAIA_HOME`` is a filesystem root, the user's
+            home directory, or an ancestor of it. Not an ``HTTPException``:
+            ``uploads_dir()`` is called from ``create_app()``, where one would
+            surface as a raw traceback rather than something a user can act on.
     """
     home = gaia_home()
     resolved = home.resolve()
     user_home = Path.home().resolve()
-    if resolved == user_home or user_home.is_relative_to(resolved):
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"GAIA_HOME resolves to {resolved}, which is your home directory "
-                f"or contains it, so GAIA would treat {resolved / 'documents'} "
-                f"as its own storage. Point GAIA_HOME at a dedicated directory "
-                f"(the default is {user_home / '.gaia'}) and restart the Agent UI."
-            ),
-        )
-    return home
+
+    reason = unsafe_gaia_home_reason(resolved, user_home)
+    if reason is None:
+        return home
+
+    problem = (
+        f"is the filesystem root"
+        if reason == GAIA_HOME_IS_FS_ROOT
+        else "is your home directory or contains it"
+    )
+    raise UnsafeGaiaHomeError(
+        f"The Agent UI cannot start: GAIA_HOME resolves to {resolved}, which "
+        f"{problem}, so GAIA would treat {resolved / 'documents'} as its own "
+        f"storage and delete from it. Point GAIA_HOME at a dedicated directory "
+        f"(the default is {user_home / '.gaia'}) and restart the Agent UI."
+    )
 
 
 def managed_documents_dir() -> Path:

@@ -11,11 +11,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from gaia.config import UnsafeGaiaHomeError
 from gaia.ui._chat_helpers import _managed_documents_dir
 from gaia.ui.server import create_app
+from gaia.ui.server import main as server_main
 from gaia.ui.utils import (
     DOCUMENT_ROOTS_ENV,
     document_roots,
@@ -94,8 +95,33 @@ def test_relocated_documents_dir_is_a_document_root(homes):
 def test_gaia_home_at_or_above_user_home_is_refused(homes, monkeypatch, pick):
     fake_home, _ = homes
     monkeypatch.setenv("GAIA_HOME", str(pick(fake_home)))
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(UnsafeGaiaHomeError) as exc_info:
         managed_documents_dir()
-    assert "GAIA_HOME" in exc_info.value.detail
-    with pytest.raises(HTTPException):
+    assert "GAIA_HOME" in str(exc_info.value)
+    with pytest.raises(UnsafeGaiaHomeError):
         uploads_dir()
+
+
+def test_unsafe_gaia_home_is_an_actionable_startup_error_not_a_traceback(
+    homes, monkeypatch, capsys
+):
+    """uploads_dir() runs in create_app(), so an HTTPException there would
+    reach the user as a raw traceback instead of the remedy."""
+    fake_home, _ = homes
+    monkeypatch.setenv("GAIA_HOME", str(fake_home))
+    monkeypatch.setattr(
+        "sys.argv", ["gaia.ui.server", "--host", "127.0.0.1", "--port", "4200"]
+    )
+    # If the guard ever stops firing, fail instead of binding a real port.
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda *a, **k: pytest.fail("create_app() should have refused GAIA_HOME"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        server_main()
+
+    assert exc_info.value.code == 64
+    err = capsys.readouterr().err
+    assert "GAIA_HOME" in err and str(fake_home / ".gaia") in err
+    assert "Traceback" not in err
