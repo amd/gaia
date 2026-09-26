@@ -14,6 +14,12 @@
 #   bundled fixture fallback (website/src/data/catalog.ts), so the build FAILS
 #   LOUDLY if this is unset. Set it on the website service in Railway → Variables.
 #
+#   Railway variable GITHUB_TOKEN — OPTIONAL. The homepage stats row
+#   (website/src/data/github.ts) fetches public GitHub data at build time;
+#   unauthenticated is fine for a once-per-deploy build (well under the 60/hr
+#   cap), so this is not required. Add a GitHub PAT with no scopes only if the
+#   build starts hitting rate limits.
+#
 # The service is built by Railway from website/railway.json, served by `serve
 # dist` from website/dependencies. Nixpacks runs `npm ci` itself as its install
 # phase (auto-detected from package-lock.json), so buildCommand is only
