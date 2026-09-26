@@ -15,16 +15,28 @@ from enum import Enum
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 from gaia.llm.lemonade_client import (
+    CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
     is_llm_model_entry,
+    resolve_ctx_size,
     resolve_effective_ctx_size,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
+
+
+def _is_cloud_entry(entry: dict) -> bool:
+    """True when a ``loaded_models`` entry is gateway-routed rather than local.
+
+    Checked on both the recipe and the labels because the two Lemonade
+    surfaces that populate this list do not agree on which one they set.
+    """
+    return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
+
 
 # Allow-list mapping from detected device -> Lemonade recipe
 # TODO: Confirm full recipe vocabulary with the Lemonade specialist
@@ -585,7 +597,7 @@ class LemonadeManager:
     @classmethod
     def ensure_ready(
         cls,
-        min_context_size: int = DEFAULT_CONTEXT_SIZE,
+        min_context_size: Optional[int] = None,
         quiet: bool = True,
         base_url: Optional[str] = None,
         host: Optional[str] = None,
@@ -601,7 +613,7 @@ class LemonadeManager:
         unset config value) means "the default floor", never a crash.
 
         Args:
-            min_context_size: Minimum context size required (default: 32768).
+            min_context_size: Minimum context size; unset resolves the configured device and override.
             quiet: Suppress output (default: True for SDK, set False for CLI)
             base_url: Full base URL (e.g., "http://localhost:13305/api/v1").
                      If provided, host and port are parsed from it.
@@ -631,7 +643,7 @@ class LemonadeManager:
         # Callers thread config values through verbatim — an unset (None)
         # floor means the default, never a TypeError at the ctx comparison.
         if min_context_size is None:
-            min_context_size = DEFAULT_CONTEXT_SIZE
+            min_context_size = resolve_ctx_size(device=device)
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
@@ -732,9 +744,10 @@ class LemonadeManager:
 
                         # Only LLM entries carry a meaningful ctx_size; an
                         # embedding, image, or transcription model says nothing
-                        # about chat capacity.
+                        # about chat capacity — and neither does a gateway
+                        # model, which is resident nowhere local.
                         llm_models_loaded = any(
-                            is_llm_model_entry(model)
+                            is_llm_model_entry(model) and not _is_cloud_entry(model)
                             for model in (status.loaded_models or [])
                         )
 
@@ -850,7 +863,10 @@ class LemonadeManager:
 
                 # Detect LLM-loaded state once for the branch decisions below.
                 llm_models_loaded = any(
-                    is_llm_model_entry(model) for model in status.loaded_models
+                    # A gateway model is resident nowhere local, so it must
+                    # not count as "an LLM is loaded" for context-size decisions.
+                    is_llm_model_entry(model) and not _is_cloud_entry(model)
+                    for model in status.loaded_models
                 )
 
                 # Idle server (no model loaded, no ctx reported): proactively
@@ -872,7 +888,8 @@ class LemonadeManager:
                     if status.loaded_models is None:
                         status.loaded_models = []
                     llm_models_loaded = any(
-                        is_llm_model_entry(model) for model in status.loaded_models
+                        is_llm_model_entry(model) and not _is_cloud_entry(model)
+                        for model in status.loaded_models
                     )
 
                 # Cache server state for subsequent calls.  Setting
@@ -1197,8 +1214,16 @@ class LemonadeManager:
 
         Returns True if reload succeeded and context is now sufficient.
         """
-        # Same predicate get_status() uses for context_size — one source of truth.
-        llm_models = [m for m in status.loaded_models if is_llm_model_entry(m)]
+        # Same predicate get_status() uses for context_size — one source of
+        # truth. A gateway-routed model has no local weights and no context to
+        # pin — its window is whatever the gateway serves. Reloading one is a
+        # no-op that reports back the default 4096 and then tells the user to
+        # restart Lemonade over a size it does not control.
+        llm_models = [
+            m
+            for m in status.loaded_models
+            if is_llm_model_entry(m) and not _is_cloud_entry(m)
+        ]
         if not llm_models:
             return False
 

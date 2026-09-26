@@ -56,6 +56,9 @@ _MIN_MAX_TOKENS = 8192
 #: keeps that segment readable whenever the tools themselves are unchanged.
 _CACHE_CONTROL = {"type": "ephemeral"}
 
+#: OpenAI ``tool_choice`` strings with a direct Anthropic equivalent.
+_TOOL_CHOICE_MAP = {"none": {"type": "none"}, "auto": {"type": "auto"}}
+
 _FINISH_REASON_MAP = {
     "tool_use": "tool_calls",
     "end_turn": "stop",
@@ -424,6 +427,7 @@ class ClaudeProvider(LLMClient):
         messages: List[dict],
         tools: Optional[List[dict]],
         kwargs: dict,
+        tool_choice: Optional[str] = None,
     ) -> tuple[dict, Dict[str, str]]:
         system, cleaned = self._split_system(messages)
         if not cleaned:
@@ -446,6 +450,19 @@ class ClaudeProvider(LLMClient):
         anthropic_tools, name_map = self._to_anthropic_tools(tools)
         if anthropic_tools:
             params["tools"] = _cache_last_tool(anthropic_tools)
+        if tool_choice is not None:
+            if not isinstance(tool_choice, str) or tool_choice not in _TOOL_CHOICE_MAP:
+                raise ValueError(
+                    f"The Claude provider does not support tool_choice="
+                    f"{tool_choice!r}. Use one of: {', '.join(_TOOL_CHOICE_MAP)}."
+                )
+            if not anthropic_tools:
+                raise ValueError(
+                    f"tool_choice={tool_choice!r} was passed without tools; it "
+                    "only applies to a request that offers tools. Pass tools= "
+                    "as well, or drop tool_choice."
+                )
+            params["tool_choice"] = dict(_TOOL_CHOICE_MAP[tool_choice])
         if system:
             params["system"] = _cached_system(system)
         return params, name_map
@@ -504,13 +521,14 @@ class ClaudeProvider(LLMClient):
         model: str | None = None,
         stream: bool = False,
         tools: Optional[List[dict]] = None,
+        tool_choice: Optional[str] = None,
         **kwargs,
     ) -> Union[str, Iterator[str]]:
         self._last_usage = None
         self._last_finish_reason = None
         self._last_ttft_seconds = None
         params, name_map = self._build_params(
-            self._resolve_model(model), messages, tools, kwargs
+            self._resolve_model(model), messages, tools, kwargs, tool_choice
         )
 
         if stream:

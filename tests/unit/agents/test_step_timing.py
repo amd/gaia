@@ -434,9 +434,11 @@ class TestLemonadeClientStreamUsage:
         assert sent["stream_options"] == {"include_usage": True}
         assert chunks[-1]["usage"] == {"completion_tokens": 7}
 
-    def test_local_stream_request_is_unchanged(self, monkeypatch):
+    def test_local_stream_also_asks_for_usage(self, monkeypatch):
+        """#3739 made the ask unconditional: a local stream's /stats is the
+        server's last request, not necessarily this one."""
         _chunks, sent = self._stream(monkeypatch, "Gemma-4-E4B-it-GGUF")
-        assert "stream_options" not in sent
+        assert sent["stream_options"] == {"include_usage": True}
 
 
 # ─────────────────────────── the agent loop ────────────────────────────────
