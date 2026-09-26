@@ -43,7 +43,7 @@ def test_quota_expiry_and_invalid_paging_fail_loudly(monkeypatch):
     handle = store.put("λ" * 4)
     with pytest.raises(ValueError, match="full"):
         store.put("x")
-    for offset, limit in [(-1, 1), (0, 8001), (0, 0), (True, 1), (5, 1)]:
+    for offset, limit in [(-1, 1), (0, 0), (True, 1), (5, 1)]:
         with pytest.raises(ValueError):
             store.read(handle, offset, limit)
     clock[0] = 11
@@ -177,11 +177,26 @@ def test_empty_agents_never_inherit_another_sessions_reader(monkeypatch):
 def test_reader_advertises_valid_native_parameter_types():
     agent = make_agent(model_id="Gemma-4-E4B-it-GGUF")
     agent._register_output_reader()
+    tools = agent._openai_tools
+    assert tools is not None
     schema = next(
         t["function"]
-        for t in agent._openai_tools
+        for t in tools  # pylint: disable=not-an-iterable
         if t["function"]["name"] == "read_tool_output"
     )
     assert schema["parameters"]["properties"]["artifact"]["type"] == "string"
     assert schema["parameters"]["properties"]["offset"]["type"] == "integer"
     assert schema["parameters"]["properties"]["limit"]["type"] == "integer"
+
+
+def test_a_span_longer_than_a_page_continues_at_next_offset():
+    store = ArtifactStore()
+    text = "".join(f"line {i}\n" for i in range(3000))
+    handle = store.put(text)
+    page = store.read(handle, 10, 20000)
+    assert len(page["content"]) == 8000
+    assert page["next_offset"] == 8010
+    assert page["remaining"] == 20000 - 8000
+    rest = store.read(handle, page["next_offset"], page["remaining"])
+    assert page["content"] + rest["content"] == text[10:20010][: 8000 + 8000]
+    assert "remaining" not in store.read(handle, 0, 100)

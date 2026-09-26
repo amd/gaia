@@ -453,19 +453,42 @@ provider.
 
 ## Large tool results
 
-The agent applies a character budget to plain-string tool results as well as
-structured results before sending them to the model. Strings at or below the
-threshold remain unchanged. Oversized strings become a JSON envelope containing
-`head`, `tail`, `original_chars`, `omitted_chars`, and `truncated: true`. The
-serialized envelope, including escaping, fits the target budget, so long logs
-retain both their initial context and final diagnostic lines.
+Every tool result passes through one character budget before it reaches the
+model. A result at or below the threshold is sent unchanged. A larger one is
+archived whole and reaches the model as a chunk index:
+
+- `shown` — the parts kept verbatim, as `{offset, text}` segments.
+- `index` — one `{n, label, offset, length}` per part left out, numbered from 1
+  in document order. `read_tool_output(artifact, entry=n)` returns exactly that
+  part; the result's `fetch` field says so.
+- `artifact`, `continuation`, `total_chars`, `truncated`, `original_chars`,
+  `omitted_chars` — as before. `archived_field` names the field the archive
+  holds (`content`, `stdout`, `matches`); every other field is kept, including
+  `check_result`.
+
+Parts follow the result's own structure, never fixed windows:
+
+| Result | Split at |
+|--------|----------|
+| Python source (`read_file` on `.py`) | module header, each top-level `def`/`class`, each method; labels carry line range, signature and first docstring line |
+| Markdown | headings |
+| JSON | top-level keys; lists in groups of 20 records |
+| `search_file_content` | each file's first match, then the rest of its matches (archived as grep-style text) |
+| Test / shell output | pytest and section markers (`FAILURES`, `___ test ___`, `FAILED`, tracebacks); failing sections and the final summary are shown first |
+| Diffs | each file and hunk |
+| Other text | paragraphs, then lines |
+
+Shown holds the closing part when the result marks it a lead (a run's summary
+line), then the first part, then the other parts marked as leads or named by
+the call's arguments, then the rest in order, while they fit. Text with no structure
+at all (a single long line) keeps a `head`/`tail` excerpt, with the middle as
+its one index entry.
 
 Local thresholds/targets are 30,000/20,000 characters for NPU and 60,000/40,000
 for GPU/CPU. An omitted device follows the configured profile; FLM models retain
-the NPU budget. The Claude path uses its existing larger window. These are
-per-result character budgets, not measured remaining tokens. The envelope includes
-an artifact handle and continuation instructions for recovering the omitted
-middle with `read_tool_output`. Structured results retain complete records.
+the NPU budget. A cloud model reached through Lemonade gets the conservative
+30,000/20,000 without reading the local device profile. The Claude path uses its existing larger window. These are
+per-result character budgets, not measured remaining tokens.
 
 ## Common Pitfalls and Solutions
 
@@ -1094,13 +1117,19 @@ SPDX-License-Identifier: MIT
 
 ## Recovering large tool outputs
 
-When a result exceeds the model budget, the excerpt includes an `artifact`
-handle and `continuation: read_tool_output`. Call
-`read_tool_output(artifact, offset=0, limit=2000)` to retrieve exact text;
-`next_offset` is the next character offset, or `null` at the end. Pages are
-limited to 8,000 characters. Unicode offsets count characters, not bytes.
-The archived text is the original string, or JSON for a structured result.
-Small results remain unchanged. Structured excerpts retain whole records.
+When a result exceeds the model budget, it carries an `artifact` handle, a
+numbered `index` of the parts left out, and `continuation: read_tool_output`.
+Call `read_tool_output(artifact, entry=n)` to get entry `n` verbatim. The index
+names every omitted part, so paging through a whole output is almost never
+needed. A part longer than 8,000 characters comes back in pages: the page sets
+`remaining`, and `read_tool_output(artifact, offset=next_offset,
+limit=remaining)` continues it. Without an entry, `offset` and `limit` (default
+2,000) read any span. An entry number outside the index is an error that names
+the valid range. Unicode offsets count characters, not bytes.
+
+The archived text is the original string, the field named by
+`archived_field`, or JSON (one record per line) for a structured result. Small
+results remain unchanged. Structured excerpts retain whole records.
 
 Shell, Python execution and browser excerpts retain omitted output before
 applying their own display limits. File readers accept `offset` and `limit`

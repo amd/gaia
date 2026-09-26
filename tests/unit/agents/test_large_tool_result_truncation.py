@@ -261,7 +261,7 @@ class TestLoggerReceivesWarning:
         conversation: list = []
 
         notices = []
-        agent.console.print_info = lambda msg: notices.append(msg)
+        agent.console.print_info = notices.append
 
         agent._handle_large_tool_result("list_inbox", payload, conversation)
 
@@ -499,14 +499,14 @@ class TestSecondGateDoesNotUndoTheFirst:
     def test_the_backstop_tracks_the_device_profile(self, device):
         agent = make_agent()
         agent.device = device
-        _, target = truncation_budget(device)
-        payload = _messages_payload(min_chars=target * 3)
+        threshold, _ = truncation_budget(device)
+        payload = _messages_payload(min_chars=threshold * 3)
 
         text = agent._create_tool_message("list_messages", payload)["content"][0][
             "text"
         ]
 
-        assert len(text) <= target, "the backstop stopped capping anything at all"
+        assert len(text) <= threshold, "the backstop stopped capping anything at all"
         assert (
             len(text) > 2000
         ), f"device={device!r} still capped near the old hardcoded 2,000 chars"
