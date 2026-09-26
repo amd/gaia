@@ -42,10 +42,6 @@ files:
   # A live third-party account.
   tests/integration/test_email_agent_live_gmail.py: Reads a real Gmail inbox; needs GAIA_GMAIL_LIVE_ACCOUNT credentials, never available in CI.
 
-  # Servers fetched from package registries at test time.
-  tests/mcp/test_mcp_cli_to_agent_workflow.py: Starts unpinned MCP servers with npx/uvx at test time, and still asserts the pre-#977 `gaia mcp add` config flow, which fails today.
-  tests/mcp/test_mcp_sdk_integration.py: Starts unpinned MCP servers with npx at test time; an upstream tool rename in server-sequential-thinking already breaks it.
-
   # Manual runs against running services.
   tests/stress/test_agent_ui_stress.py: A hand-run stress script against a running Agent UI and Lemonade Server; not a pytest suite.
   tests/test_sd_model_sweep.py: A hand-run sweep over every SD model and resolution on a live Lemonade Server, writing an image report; not a pytest suite.

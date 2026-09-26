@@ -271,8 +271,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # The unit job's test deps, plus [mcp]: tests/test_sdk.py and
-          # tests/mcp/test_agent_mcp_server_stdio.py import the MCP server.
+          # The unit job's test deps, plus [mcp]: tests/test_sdk.py and the
+          # tests/mcp/ files import the MCP server SDK.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
                                   faiss-cpu pypdf
@@ -304,6 +304,8 @@ jobs:
             tests/integration/test_scheduler_e2e.py \
             tests/integration/test_tui_control_e2e.py \
             tests/mcp/test_agent_mcp_server_stdio.py \
+            tests/mcp/test_mcp_cli_to_agent_workflow.py \
+            tests/mcp/test_mcp_sdk_integration.py \
             tests/mcp/test_port_map.py \
             -v --tb=short --timeout=600
 
