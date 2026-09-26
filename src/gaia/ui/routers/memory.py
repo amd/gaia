@@ -765,10 +765,12 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         try:
             return _reconcile_fn()
         except Exception as exc:
-            logger.warning(
-                "[memory router] agent reconcile failed, falling back to standalone: %s",
-                exc,
-            )
+            logger.error("[memory router] agent reconcile failed: %s", exc)
+            raise HTTPException(
+                500,
+                f"Agent reconciliation failed: {type(exc).__name__}: {exc}. "
+                "Check the GAIA server log for the traceback.",
+            ) from exc
 
     # Standalone path — build a temporary FAISS index from stored embeddings
     try:
@@ -845,6 +847,25 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             return result
 
         llm = create_client()
+        # One metadata dict per id for the whole run: a memory in several
+        # pairs must keep every marker, not just the last pair's.
+        metas: Dict[str, Dict[str, Any]] = {}
+
+        def _meta(knowledge_id: str) -> Dict[str, Any]:
+            if knowledge_id not in metas:
+                raw_meta = item_map[knowledge_id].get("metadata") or {}
+                if isinstance(raw_meta, str):
+                    try:
+                        raw_meta = json.loads(raw_meta) if raw_meta else {}
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"memory {knowledge_id} has unreadable metadata "
+                            f"({exc}); fix or delete that entry, then retry"
+                        ) from exc
+                meta = dict(raw_meta)
+                meta["reconciled_with"] = list(meta.get("reconciled_with") or [])
+                metas[knowledge_id] = meta
+            return metas[knowledge_id]
 
         for id_a, id_b, _sim in pairs:
             item_a = item_map.get(id_a)
@@ -853,21 +874,9 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                 continue
 
             # Skip already-reconciled pairs
-            meta_a = item_a.get("metadata") or {}
-            meta_b = item_b.get("metadata") or {}
-            if isinstance(meta_a, str):
-                try:
-                    meta_a = json.loads(meta_a) if meta_a else {}
-                except Exception:
-                    meta_a = {}
-            if isinstance(meta_b, str):
-                try:
-                    meta_b = json.loads(meta_b) if meta_b else {}
-                except Exception:
-                    meta_b = {}
-            if id_b in meta_a.get("reconciled_with", []) or id_a in meta_b.get(
-                "reconciled_with", []
-            ):
+            meta_a = _meta(id_a)
+            meta_b = _meta(id_b)
+            if id_b in meta_a["reconciled_with"] or id_a in meta_b["reconciled_with"]:
                 continue
 
             try:
@@ -915,13 +924,15 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             else:
                 result["neutral"] += 1
 
-            # Mark pair as reconciled in metadata to avoid re-checking
-            try:
-                new_meta_a = dict(meta_a)
-                new_meta_a.setdefault("reconciled_with", []).append(id_b)
-                store.update(id_a, metadata=new_meta_a)
-            except Exception:
-                pass
+            # An unrecorded pair is re-classified, and re-penalised, next run.
+            meta_a["reconciled_with"].append(id_b)
+            meta_b["reconciled_with"].append(id_a)
+            for knowledge_id, meta in ((id_a, meta_a), (id_b, meta_b)):
+                if not store.update(knowledge_id, metadata=meta):
+                    raise RuntimeError(
+                        f"could not mark memory {knowledge_id} as reconciled: "
+                        "the entry no longer exists"
+                    )
 
         logger.info("[memory router] standalone reconcile: %s", result)
         return result

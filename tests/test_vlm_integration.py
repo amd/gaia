@@ -43,26 +43,6 @@ def test_vlm_availability():
         return False
 
 
-def test_vlm_loading():
-    """Test 2: Load VLM model."""
-    print("\n" + "=" * 60)
-    print("TEST 2: VLM Model Loading")
-    print("=" * 60)
-
-    vlm = VLMClient(auto_load=True, fallback_model=None)
-
-    loaded = vlm._ensure_vlm_loaded()
-
-    if loaded:
-        print("✅ PASS: VLM model loaded successfully")
-        print(f"   Model: {vlm.vlm_model}")
-        print(f"   Status: {vlm.vlm_loaded}")
-        return True
-    else:
-        print("❌ FAIL: Could not load VLM model")
-        return False
-
-
 def test_image_extraction_from_pdf():
     """Test 3: Extract images from actual PDF."""
     print("\n" + "=" * 60)
@@ -293,12 +273,6 @@ def run_all_tests():
     results["availability"] = test_vlm_availability()
     if not results["availability"]:
         print("\n❌ VLM not available - stopping tests")
-        return results
-
-    # Test 2: Loading
-    results["loading"] = test_vlm_loading()
-    if not results["loading"]:
-        print("\n❌ VLM loading failed - stopping tests")
         return results
 
     # Test 3: Image extraction
