@@ -28,6 +28,7 @@ from gaia.agents.tools.command_timeouts import (
     resolve_timeout,
     terminate_process_tree,
 )
+from gaia.agents.tools.file_edit import file_read_record
 from gaia.tool_cancellation import tool_cancelled
 
 logger = logging.getLogger(__name__)
@@ -610,6 +611,62 @@ _IN_PLACE_FLAGS = ("-i", "--in-place")
 
 #: These write by definition — there is no read-only invocation to protect.
 _ALWAYS_WRITES = frozenset({"tee", "patch", "dd", "truncate", "ed"})
+
+#: Commands whose output shows a file's lines; the file counts as read.
+_FILE_VIEWERS = frozenset({"cat", "head", "tail", "less", "more"})
+#: Viewers whose first non-flag argument is a script or pattern, not a file.
+_VIEWERS_WITH_LEADING_OPERAND = frozenset({"sed", "grep"})
+#: Per program, the flags that take a separate value, which is never a file.
+_VIEWER_VALUE_FLAGS = {
+    "head": frozenset({"-n", "-c"}),
+    "tail": frozenset({"-n", "-c"}),
+    "sed": frozenset({"-e", "-f", "--expression", "--file"}),
+    "grep": frozenset({"-e", "-f", "--regexp", "--file", "-A", "-B", "-C", "-m"}),
+}
+_INLINE_OPERAND_FLAGS = frozenset({"-e", "-f", "--expression", "--file", "--regexp"})
+
+
+def viewed_paths(segment: list, cwd: str) -> list:
+    """Files *segment* showed the model, resolved against *cwd*.
+
+    A model that ran ``sed -n '1,80p' f`` or ``head f`` has seen the file as
+    surely as through ``read_file``; the edit tools' read-first check should
+    say so. Only a ``sed -n`` and a ``grep -n`` count: both print the lines
+    they matched with the file, whereas ``grep`` alone shows a snippet.
+    """
+    if not segment:
+        return []
+    program = os.path.basename(segment[0]).lower()
+    program = program[:-4] if program.endswith(".exe") else program
+    args = segment[1:]
+    if program in _VIEWERS_WITH_LEADING_OPERAND:
+        if "-n" not in args or "-i" in args or "--in-place" in args:
+            return []
+    elif program not in _FILE_VIEWERS:
+        return []
+    value_flags = _VIEWER_VALUE_FLAGS.get(program, frozenset())
+    operands = []
+    skip_value = False
+    for arg in args:
+        if skip_value:
+            skip_value = False
+            continue
+        if arg.startswith("-") and arg != "-":
+            skip_value = arg in value_flags
+            continue
+        operands.append(arg)
+    # ``sed 'script' f`` / ``grep pat f``: the script or pattern comes first
+    # unless a flag already carried it.
+    if program in _VIEWERS_WITH_LEADING_OPERAND and not any(
+        a in _INLINE_OPERAND_FLAGS for a in args
+    ):
+        operands = operands[1:]
+    paths = []
+    for operand in operands:
+        candidate = Path(cwd).joinpath(os.path.expanduser(operand))
+        if candidate.is_file():
+            paths.append(str(candidate.resolve()))
+    return paths
 
 
 def _rewrites_in_place(cmd_base: str, cmd_parts: list) -> bool:
@@ -2790,6 +2847,11 @@ class ShellToolsMixin:
                     last_code = result.returncode
                     unhandled_failure = unhandled_failure or last_code != 0
                     ran.append({"command": step.text, "return_code": last_code})
+                    if last_code == 0:
+                        reads = file_read_record(self)
+                        for segment in step.segments:
+                            for viewed in viewed_paths(segment, step_cwd):
+                                reads.note(viewed)
 
                 duration = time.monotonic() - start_time
 

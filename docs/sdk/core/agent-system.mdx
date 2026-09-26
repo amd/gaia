@@ -509,6 +509,13 @@ default; `drop` omits it from what is sent while the conversation log keeps
 every step's reasoning, and the first `stats` entry of a turn records the
 setting as `reasoning_history`.
 
+## Editing what the agent has seen
+
+An edit or write tool refuses an existing file the agent has not read, or one
+that changed on disk since; a file the model showed itself through the shell
+(`cat`, `head`, `tail`, `less`, `more`, `sed -n` or `grep -n` on the path,
+relative to the directory the command ran in) counts as read.
+
 ## Delegating a subtask
 
 On a real repository, most of an agent's tool calls before its first edit are
