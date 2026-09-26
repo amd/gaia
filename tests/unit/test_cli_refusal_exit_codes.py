@@ -30,6 +30,8 @@ def _run_gaia(*argv):
         "PYTHONPATH": str(REPO_ROOT / "src"),
         # Keep the refusal paths from touching a real server.
         "LEMONADE_BASE_URL": "http://localhost:1/api/v1",
+        # The refusal prints emoji; Windows' default codepage cannot carry it.
+        "PYTHONIOENCODING": "utf-8",
     }
     # Windows resolves the home dir from USERPROFILE, not HOME, and Python
     # there needs SYSTEMROOT to start at all.
@@ -40,6 +42,7 @@ def _run_gaia(*argv):
         [sys.executable, "-m", "gaia.cli", *argv],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         cwd=str(REPO_ROOT),
         env=env,
         timeout=120,
