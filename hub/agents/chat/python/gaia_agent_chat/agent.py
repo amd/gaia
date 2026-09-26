@@ -57,6 +57,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     RAGToolsMixin,
     ScreenshotToolsMixin,
     ShellToolsMixin,
+    WaitToolsMixin,
 )
 from gaia.llm.inference_location import (
     InferenceLocation,
@@ -268,6 +269,7 @@ class ChatAgent(
     ScreenshotToolsMixin,
     SDToolsMixin,
     AudioToolsMixin,
+    WaitToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -2455,6 +2457,7 @@ No documents are currently indexed.
     # - BrowserToolsMixin (shared): Web browsing, content extraction, download
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
+    # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from ~/.gaia/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:
