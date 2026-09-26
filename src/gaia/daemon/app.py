@@ -193,6 +193,13 @@ def create_app(
             except EmbeddedLemonadeError as e:
                 raise HTTPException(status_code=503, detail=str(e)) from e
 
+    # The Go TUI cannot reach the Python credential store, and the two keyring
+    # libraries do not interoperate, so it persists a gateway token through
+    # here instead of losing it on every Lemonade restart.
+    from gaia.daemon.gateway_routes import build_gateway_router
+
+    app.include_router(build_gateway_router(token))
+
     if registry is not None:
         from gaia.daemon.relay import build_relay_router
         from gaia.daemon.sidecars.routes import build_agents_router
