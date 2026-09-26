@@ -101,6 +101,9 @@ def fake_home(fs, monkeypatch):
     home = Path("/fake/home/user")
     fs.create_dir(home)
     monkeypatch.setattr(Path, "home", lambda: home)
+    # Keep every cache under the fake home; Windows would use the real AppData.
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
     # Auto-yes path: default to interactive-tty FALSE so prompts never block.
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     return home
