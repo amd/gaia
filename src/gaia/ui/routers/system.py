@@ -6,7 +6,6 @@
 import asyncio
 import json
 import logging
-import os
 import shutil
 import sys
 import threading
@@ -59,8 +58,10 @@ _MIN_CONTEXT_SIZE = DEFAULT_CONTEXT_SIZE
 
 
 def _get_lemonade_base_url() -> str:
-    """Return the Lemonade Server API base URL from environment or default."""
-    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+    """Return the Lemonade Server API base URL: configured, else GAIA's own."""
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    return resolve_lemonade_base_url()
 
 
 async def _lemonade_post(

@@ -21,6 +21,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only on 3.10
 
 import tomli_w
 
+from gaia.schedule.lock import store_lock
+
 DEFAULT_STORE_PATH = Path(os.path.expanduser("~/.gaia/schedules.toml"))
 
 
@@ -152,24 +154,26 @@ class TomlScheduleStore:
                 pending.unlink(missing_ok=True)
 
     def add(self, schedule: Schedule) -> None:
-        schedules = self.load()
-        if schedule.name in schedules:
-            raise ValueError(
-                f"schedule {schedule.name!r} already exists in {self.path}; "
-                f"remove it first or pick a different --name"
-            )
-        schedules[schedule.name] = schedule
-        self.save(schedules)
+        with store_lock(self.path):
+            schedules = self.load()
+            if schedule.name in schedules:
+                raise ValueError(
+                    f"schedule {schedule.name!r} already exists in {self.path}; "
+                    f"remove it first or pick a different --name"
+                )
+            schedules[schedule.name] = schedule
+            self.save(schedules)
 
     def remove(self, name: str) -> None:
-        schedules = self.load()
-        if name not in schedules:
-            raise KeyError(
-                f"no schedule named {name!r} in {self.path}; "
-                f"run `gaia schedule list` to see registered schedules"
-            )
-        del schedules[name]
-        self.save(schedules)
+        with store_lock(self.path):
+            schedules = self.load()
+            if name not in schedules:
+                raise KeyError(
+                    f"no schedule named {name!r} in {self.path}; "
+                    f"run `gaia schedule list` to see registered schedules"
+                )
+            del schedules[name]
+            self.save(schedules)
 
     def get(self, name: str) -> Schedule:
         schedules = self.load()
@@ -181,27 +185,29 @@ class TomlScheduleStore:
         return schedules[name]
 
     def set_enabled(self, name: str, enabled: bool) -> Schedule:
-        schedules = self.load()
-        if name not in schedules:
-            raise KeyError(
-                f"no schedule named {name!r} in {self.path}; "
-                f"run `gaia schedule list` to see registered schedules"
-            )
-        schedules[name].enabled = enabled
-        self.save(schedules)
-        return schedules[name]
+        with store_lock(self.path):
+            schedules = self.load()
+            if name not in schedules:
+                raise KeyError(
+                    f"no schedule named {name!r} in {self.path}; "
+                    f"run `gaia schedule list` to see registered schedules"
+                )
+            schedules[name].enabled = enabled
+            self.save(schedules)
+            return schedules[name]
 
     def mark_run(
         self, name: str, last_run: str, next_run: Optional[str] = None
     ) -> Schedule:
-        schedules = self.load()
-        if name not in schedules:
-            raise KeyError(
-                f"no schedule named {name!r} in {self.path}; "
-                f"run `gaia schedule list` to see registered schedules"
-            )
-        schedules[name].last_run = last_run
-        if next_run is not None:
-            schedules[name].next_run = next_run
-        self.save(schedules)
-        return schedules[name]
+        with store_lock(self.path):
+            schedules = self.load()
+            if name not in schedules:
+                raise KeyError(
+                    f"no schedule named {name!r} in {self.path}; "
+                    f"run `gaia schedule list` to see registered schedules"
+                )
+            schedules[name].last_run = last_run
+            if next_run is not None:
+                schedules[name].next_run = next_run
+            self.save(schedules)
+            return schedules[name]

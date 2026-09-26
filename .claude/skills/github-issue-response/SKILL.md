@@ -106,10 +106,12 @@ and weigh security implications against [`docs/sdk/security.mdx`](../../../docs/
 
 **✅ Feature request** — scope call first, then concrete building blocks:
 
-> Interesting idea. GAIA doesn't have built-in Slack integration today, but you could build it
-> from existing pieces: the Agent SDK for message handling (`docs/sdk/sdks/chat.mdx`), MCP for
-> Slack connectivity (`docs/sdk/infrastructure/mcp.mdx`), following the Jira agent's shape
-> (`hub/agents/jira/python/`). Running it on the local LLM backend keeps conversations private.
+> Interesting idea. GAIA already ships Slack (`gaia slack`, `docs/guides/slack.mdx`); if this is
+> about a *different* integration, you could build it from existing pieces: a connector under
+> `src/gaia/connectors/` for auth + API access, or a `SKILL.md` under `hub/skills/` if it's a
+> capability the flagship agent can drive with tools it already has
+> (`docs/guides/composing-skills.mdx`). Running it on the local LLM backend keeps conversations
+> private.
 >
 > Interested in contributing it? `CONTRIBUTING.md` has the setup.
 
