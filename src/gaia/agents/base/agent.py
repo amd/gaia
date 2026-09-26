@@ -67,6 +67,7 @@ from gaia.llm.lemonade_client import (
     resolve_default_chat_model,
     truncation_budget,
 )
+from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -8297,17 +8298,9 @@ Do NOT wrap conversational replies in JSON.
         )
 
     _RATE_LIMIT_WAIT_CAP_S = 15.0
-    _LOOP_CONNECTION_RE = re.compile(
-        r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
-        r"|unreachable|could not connect|failed to establish|max retries exceeded"
-        r"|name or service not known|getaddrinfo|connect(?:ion)? timed out"
-        # Windows words a refused connection as "no connection could be made
-        # because the target machine actively refused it" (WinError 10061) —
-        # without these a dead service reads as a permissions problem.
-        r"|no connection could be made|actively refused|connection attempt failed"
-        r"|winerror 1006\d",
-        re.IGNORECASE,
-    )
+    # Without the Windows wordings in here a dead service reads as a
+    # permissions problem.
+    _LOOP_CONNECTION_RE = CONNECTION_FAILURE_RE
     _LOOP_NOT_PERMITTED_RE = re.compile(
         r"not allowed|not permitted|not in (?:the )?allowed|access denied"
         # "blocked" only as a verdict, not as a word in unrelated output

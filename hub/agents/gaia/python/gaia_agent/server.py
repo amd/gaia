@@ -44,6 +44,7 @@ from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
 from gaia_agent.session_registry import SessionCapacityError, close_agent
 from gaia_agent.session_registry import registry as session_registry
+from gaia_agent.stdio import lemonade_start_instruction
 from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
@@ -378,8 +379,8 @@ def _terminal_error_detail(exc: BaseException) -> str:
         )
     ):
         return (
-            "Local Lemonade Server is not reachable. Start it, then retry — "
-            f"run `lemonade-server serve`, or see {_DOCS_URL}. "
+            "Local Lemonade Server is not reachable. "
+            f"{lemonade_start_instruction()} See {_DOCS_URL}. "
             f"(underlying error: {text})"
         )
     return text
@@ -463,21 +464,19 @@ def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
 
 def _probe_lemonade() -> Dict[str, Any]:
     """Read-only probe of the local model server. Never pulls or loads."""
-    import os
-
     import requests
     from gaia_agent.agent import GaiaAgentConfig
 
     from gaia.llm.lemonade_client import (
         _model_ids_match,
+        configured_lemonade_url,
         resolve_default_chat_model,
         resolve_lemonade_base_url,
     )
 
     # Already ends in /api/v1 — the requests below must not append it again.
     base = resolve_lemonade_base_url(
-        os.environ.get("LEMONADE_BASE_URL")
-        or getattr(GaiaAgentConfig(), "base_url", None)
+        configured_lemonade_url() or getattr(GaiaAgentConfig(), "base_url", None)
     ).rstrip("/")
     model_id = resolve_default_chat_model()
 
@@ -564,9 +563,11 @@ async def init() -> Dict[str, Any]:
 
     hint: Optional[str] = None
     if not probe["reachable"]:
+        start = await asyncio.to_thread(lemonade_start_instruction)
         hint = (
-            f"Local Lemonade Server is not reachable at {probe['base_url']} — start it "
-            f"with `lemonade-server serve`, or set LEMONADE_BASE_URL to a running server."
+            f"Local Lemonade Server is not reachable at {probe['base_url']}. "
+            f"{start} Or set LEMONADE_BASE_URL to a running server. "
+            f"See {_DOCS_URL}."
         )
     elif compatible is False:
         hint = (

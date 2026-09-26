@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -59,7 +58,9 @@ _INIT_MARKER = Path.home() / ".gaia" / "chat" / "initialized"
 
 
 def _get_lemonade_base_url() -> str:
-    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    return resolve_lemonade_base_url()
 
 
 async def _probe_lemonade_devices() -> Dict[str, Any]:
