@@ -217,3 +217,109 @@ def test_the_prompt_forbids_session_narration_and_refusals():
 
     assert "where the user is working, the current" in _EXTRACTION_PROMPT
     assert "Never store a refused call or a permission limit" in _EXTRACTION_PROMPT
+
+
+class TestGroundingGoesDarkLoudly:
+    """Grounding fails closed, so a model that drops the field stores nothing.
+
+    That is indistinguishable from "nothing worth storing" unless it says so.
+    """
+
+    UNLABELLED = [
+        {"op": "add", "category": "fact", "content": "alpha"},
+        {"op": "add", "category": "fact", "content": "beta", "grounded": "vibes"},
+    ]
+
+    def test_every_write_dropped_for_grounding_warns(self, store, caplog):
+        host = _Host(store, self.UNLABELLED)
+
+        with caplog.at_level("WARNING", logger="gaia.agents.base.memory"):
+            host.process_query(USER_TEXT)
+
+        assert _extracted(store) == []
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("extraction stored nothing" in m for m in warnings), warnings
+        assert any("all 2 proposed writes" in m for m in warnings), warnings
+
+    def test_a_turn_with_nothing_to_store_stays_quiet(self, store, caplog):
+        host = _Host(store, [{"op": "noop"}])
+
+        with caplog.at_level("WARNING", logger="gaia.agents.base.memory"):
+            host.process_query(USER_TEXT)
+
+        assert not any(
+            "extraction stored nothing" in r.getMessage() for r in caplog.records
+        )
+
+    def test_one_good_write_among_unlabelled_ones_stays_quiet(self, store, caplog):
+        host = _Host(
+            store,
+            self.UNLABELLED
+            + [
+                {
+                    "op": "add",
+                    "category": "preference",
+                    "content": "User prefers tabs",
+                    "grounded": "user",
+                }
+            ],
+        )
+
+        with caplog.at_level("WARNING", logger="gaia.agents.base.memory"):
+            host.process_query(USER_TEXT)
+
+        assert _extracted(store) == [
+            {"category": "preference", "content": "User prefers tabs"}
+        ]
+        assert not any(
+            "extraction stored nothing" in r.getMessage() for r in caplog.records
+        )
+
+
+class TestToolRecordStaysBounded:
+    def test_older_calls_are_dropped_and_counted(self, store):
+        from gaia.agents.base.memory import EXTRACTION_TOOL_RECORD_MAX_CALLS as CAP
+
+        host = _Host(store, [])
+        extra = 5
+        host.queued_calls = [
+            ("read_file", {"file_path": f"f{i}.py"}, {"status": "success"})
+            for i in range(CAP + extra)
+        ]
+
+        host.process_query(USER_TEXT)
+
+        record = host.prompts[0].split("Tool record")[1]
+        assert f"({extra} earlier calls omitted)" in record
+        assert record.count("- read_file ") == CAP
+        # The oldest are the ones dropped; the newest survive.
+        assert "f0.py" not in record
+        assert f"f{CAP + extra - 1}.py" in record
+
+    def test_a_huge_result_is_truncated_without_splitting_all_of_it(self, store):
+        from gaia.agents.base.memory import (
+            EXTRACTION_TOOL_RECORD_DETAIL_CHARS as DETAIL,
+        )
+
+        host = _Host(store, [])
+        huge = "word " * 400_000  # ~2 MB
+        host.queued_calls = [("read_file", {"file_path": "big.py"}, huge)]
+
+        host.process_query(USER_TEXT)
+
+        entry = host._turn_tool_record[0]
+        assert len(entry["detail"]) <= DETAIL
+        assert entry["detail"].startswith("word word")
+
+
+def test_bookkeeping_failure_never_replaces_the_tool_result(store, monkeypatch):
+    """A crash in the turn record must not turn a good call into a failure."""
+    host = _Host(store, [])
+    host.queued_calls = [("read_file", {"file_path": "a.py"}, {"status": "success"})]
+    monkeypatch.setattr(
+        _Host,
+        "_record_tool_call",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bookkeeping exploded")),
+    )
+
+    host.process_query(USER_TEXT)  # must not raise

@@ -204,6 +204,12 @@ EXTRACTION_TOOL_RECORD_DETAIL_CHARS = 240
 #: Sources an extracted op may cite. Anything else is the answer's own claim.
 _EXTRACTION_GROUNDS = frozenset({"user", "tool"})
 
+#: ``_record_tool_call`` outcomes. Load-bearing: ``_extract_via_llm`` gates
+#: tool-grounded ops on OUTCOME_OK appearing in the turn's record.
+OUTCOME_OK = "ok"
+OUTCOME_FAILED = "failed"
+OUTCOME_REFUSED = "refused, did not run"
+
 #: Consolidation age threshold in days.
 CONSOLIDATION_AGE_DAYS = 14
 
@@ -1542,7 +1548,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             user_input=user_input[:2000],
             assistant_response=assistant_response[:2000],
         )
-        a_tool_succeeded = any(entry["outcome"] == "ok" for entry in tool_record)
+        # Only OUTCOME_OK counts. A refused call never ran, and a failed one
+        # returned an error rather than a finding — neither establishes a fact
+        # worth replaying as truth in every later prompt.
+        a_tool_succeeded = any(entry["outcome"] == OUTCOME_OK for entry in tool_record)
 
         try:
             # Use the agent's AgentSDK for LLM calls
@@ -1593,11 +1602,17 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # Validate each operation has required fields
             valid_ops = []
+            writes = 0
+            unlabelled = 0
             for op in operations:
                 if not isinstance(op, dict) or "op" not in op:
                     continue
                 op_type = op["op"]
                 grounded = str(op.get("grounded", "")).strip().lower()
+                if op_type in ("add", "update", "delete"):
+                    writes += 1
+                    if grounded not in _EXTRACTION_GROUNDS:
+                        unlabelled += 1
                 if op_type in ("add", "update", "delete") and (
                     grounded not in _EXTRACTION_GROUNDS
                     or (grounded == "tool" and not a_tool_succeeded)
@@ -1635,6 +1650,20 @@ class MemoryMixin(ProceduralMemoryMixin):
                     valid_ops.append(op)
                 # noop is excluded from output per spec
 
+            # Grounding fails closed, so a model that ignores the field stores
+            # nothing — indistinguishable at a glance from "nothing worth
+            # storing". Say so out loud when every write was dropped for a
+            # missing or unrecognised label; that is the model, not the turn.
+            if writes and unlabelled == writes:
+                logger.warning(
+                    "[MemoryMixin] extraction stored nothing: all %d proposed "
+                    "writes lacked a recognised 'grounded' value (expected one "
+                    "of %s). If this repeats, the model is dropping the field "
+                    "and memory is no longer learning.",
+                    writes,
+                    sorted(_EXTRACTION_GROUNDS),
+                )
+
             return valid_ops
 
         except json.JSONDecodeError as e:
@@ -1663,15 +1692,27 @@ class MemoryMixin(ProceduralMemoryMixin):
     def _record_tool_call(
         self, tool_name: str, tool_args: Any, result: Any, error_msg: Optional[str]
     ) -> None:
-        """Note a call in this turn's tool record, for extraction to check against."""
+        """Note a call in this turn's tool record, for extraction to check against.
+
+        Only reached when ``_execute_tool`` resolves to this mixin. An agent
+        listing ``Agent`` ahead of ``MemoryMixin`` — ``EmailTriageAgent`` does,
+        and documents it on its ``process_query`` — shadows both that override
+        and the per-turn reset, so its extractor always sees "no tools ran"
+        and drops every tool-grounded op. That fails safe (it stores less, not
+        wrong things) but it is not coverage: fixing it means reordering that
+        agent's bases, not patching here.
+        """
         if isinstance(result, dict) and not check_was_executed(result):
-            outcome = "refused, did not run"
+            outcome = OUTCOME_REFUSED
         elif error_msg is not None:
-            outcome = "failed"
+            outcome = OUTCOME_FAILED
         else:
-            outcome = "ok"
+            outcome = OUTCOME_OK
         cap = EXTRACTION_TOOL_RECORD_DETAIL_CHARS
         detail = error_msg if error_msg is not None else str(result)
+        # Slice before splitting: a multi-MB read_file result would otherwise
+        # build a million-element word list to keep 240 characters.
+        detail = " ".join(detail[: cap * 8].split())
         args = json.dumps(tool_args, default=str, ensure_ascii=False)
         record = getattr(self, "_turn_tool_record", None)
         if record is None:
@@ -1681,7 +1722,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "tool": tool_name,
                 "args": args[:cap],
                 "outcome": outcome,
-                "detail": " ".join(detail.split())[:cap],
+                "detail": detail[:cap],
             }
         )
 
@@ -2603,7 +2644,15 @@ class MemoryMixin(ProceduralMemoryMixin):
             is_error = True
             error_msg = str(exc)
             result = {"status": "error", "error": error_msg}
-            self._record_tool_call(tool_name, tool_args, None, error_msg)
+            # Bookkeeping must never replace the tool's own exception.
+            try:
+                self._record_tool_call(tool_name, tool_args, None, error_msg)
+            except Exception as record_error:
+                logger.warning(
+                    "[MemoryMixin] failed to record tool exception in the turn "
+                    "record: %s",
+                    record_error,
+                )
 
             # Log to tool_history before re-raising
             try:
@@ -2626,7 +2675,14 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             raise
 
-        self._record_tool_call(tool_name, tool_args, result, error_msg)
+        # Bookkeeping must never turn a successful tool call into a failure.
+        try:
+            self._record_tool_call(tool_name, tool_args, result, error_msg)
+        except Exception as record_error:
+            logger.warning(
+                "[MemoryMixin] failed to record tool call in the turn record: %s",
+                record_error,
+            )
 
         # Truncate result summary
         result_str = str(result)
