@@ -277,6 +277,39 @@ describe("agent config persistence", () => {
     expect(cfg.agents).toEqual({});
   });
 
+  test("a malformed agents section on disk keeps the tray settings", async () => {
+    disk = JSON.stringify({
+      tray: { minimizeToTray: false, startMinimized: true },
+      agents: { "email-agent": { autoStart: "yes" } },
+    });
+    const errors = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    freshManager();
+    const cfg = await invoke("tray:get-config");
+
+    expect(cfg.tray.minimizeToTray).toBe(false);
+    expect(cfg.tray.startMinimized).toBe(true);
+    expect(cfg.agents).toEqual({});
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringMatching(/Ignoring invalid agents section/)
+    );
+    errors.mockRestore();
+  });
+
+  test("a non-object tray section falls back without losing agents", async () => {
+    disk = JSON.stringify({ tray: "on", agents: { a: AGENT_CFG } });
+
+    freshManager();
+    const cfg = await invoke("tray:get-config");
+
+    expect(cfg.tray).toEqual({
+      minimizeToTray: true,
+      startMinimized: false,
+      startOnLogin: false,
+    });
+    expect(cfg.agents).toEqual({ a: AGENT_CFG });
+  });
+
   test("a failed write rejects and leaves the in-memory config unchanged", async () => {
     freshManager();
     fs.writeFileSync.mockImplementation(() => {

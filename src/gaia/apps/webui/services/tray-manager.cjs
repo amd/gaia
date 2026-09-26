@@ -266,21 +266,39 @@ class TrayManager {
   // ── Private: Config persistence ──────────────────────────────────────
 
   _loadConfig() {
+    let loaded = null;
     try {
       if (fs.existsSync(CONFIG_PATH)) {
-        const raw = fs.readFileSync(CONFIG_PATH, "utf8");
-        const loaded = JSON.parse(raw);
-        return {
-          ...DEFAULT_CONFIG,
-          ...loaded,
-          tray: { ...DEFAULT_CONFIG.tray, ...(loaded.tray || {}) },
-          agents: validateAgents(loaded.agents ?? {}, CONFIG_PATH),
-        };
+        loaded = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
       }
     } catch (err) {
       console.warn("[tray] Could not load tray config:", err.message);
     }
-    return { ...DEFAULT_CONFIG };
+    if (!isPlainObject(loaded)) {
+      return { ...DEFAULT_CONFIG, tray: { ...DEFAULT_CONFIG.tray }, agents: {} };
+    }
+
+    // Scoped to the agents section: one bad entry must not cost the user their
+    // tray settings, which the next save would then overwrite with defaults.
+    let agents = {};
+    try {
+      agents = validateAgents(loaded.agents ?? {}, CONFIG_PATH);
+    } catch (err) {
+      console.error(
+        `[tray] Ignoring invalid agents section in ${CONFIG_PATH}: ${err.message}. ` +
+          "Agent settings fall back to defaults; tray settings are kept."
+      );
+    }
+
+    return {
+      ...DEFAULT_CONFIG,
+      ...loaded,
+      tray: {
+        ...DEFAULT_CONFIG.tray,
+        ...(isPlainObject(loaded.tray) ? loaded.tray : {}),
+      },
+      agents,
+    };
   }
 
   _saveConfig(config) {
