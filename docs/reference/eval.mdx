@@ -7,10 +7,12 @@ icon: "flask-vial"
   **Source Code:** [`src/gaia/eval/`](https://github.com/amd/gaia/tree/main/src/gaia/eval)
 </Info>
 
-GAIA's live evaluation surface is three commands: `gaia eval sessions` (replay
+GAIA's live evaluation surface is five commands: `gaia eval sessions` (replay
 real Claude Code sessions), `gaia eval agent` (the scenario-based Agent UI
-benchmark), and `gaia eval tasks` (the flagship's coding-task gate). The
-batch-experiment / ground-truth-generation / visualizer workflow this page
+benchmark), `gaia eval tasks` (the flagship's coding-task gate), `gaia eval
+code` (a code-editing benchmark scored by running the tests, not by a judge),
+and `gaia eval benchmark` (email-triage throughput: TTFT, tokens/sec, latency).
+The batch-experiment / ground-truth-generation / visualizer workflow this page
 used to document was removed in v0.18.0; git history has it if you need it.
 
 - [Getting Started](/guides/eval) — run your first `gaia eval agent` scenario in 5 minutes
@@ -112,10 +114,9 @@ failures are the part worth reading.
 
 ## Agent Eval Benchmark
 
-For the new scenario-based eval framework that tests the live Agent UI end-to-end, see:
-- [Getting Started Guide](/guides/eval) — run your first eval in 5 minutes
-- [Scenario Authoring](/guides/eval-scenarios) — write custom YAML scenarios
-- [CI/CD Integration](/guides/eval-ci) — regression detection in GitHub Actions
+`gaia eval agent` tests the live Agent UI end-to-end against YAML scenarios. The
+guides linked at the top of this page cover running it, authoring scenarios, and
+wiring it into CI.
 
 ### Require a complete comparison
 
