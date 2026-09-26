@@ -226,7 +226,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.14**; the stream is
+package — call it with plain `fetch`. Contract version **2.15**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -236,7 +236,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `query` | yes | Non-empty. |
 | `run_id` | yes | **You mint it**, and it must be a UUID (non-UUID → 422). It is the cancel handle, valid from the instant the request is sent. |
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
-| `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. |
+| `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (default) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. Under `"claude"`, `model` names a Claude model. |
@@ -321,6 +321,14 @@ Rules a client must respect:
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
   Dropping the HTTP connection also cancels the run.
+- **Add to a running turn with `POST /v1/gaia/query/{run_id}/followup`**
+  (contract ≥ 2.15, body `{ text }`). The run is not interrupted and no second
+  turn starts: the agent folds the text in at its next step boundary and
+  answers it alongside what it was already doing. Unknown run → **404**, an
+  agent that cannot take one → **409**; both are loud, so hold the message
+  rather than telling the user it was sent. `/query` is stateless, so put a
+  delivered follow-up into the next turn's `context` yourself, between that
+  turn's question and its answer.
 
 ## 8. Over `/v1/gaia/query`, a gated tool asks — when you can answer
 
@@ -367,7 +375,17 @@ POST /v1/gaia/sessions/{session_id}/bypass
 ```
 
 It applies to the very next gated tool, including one in a turn already running,
-and an unknown session is a **404** rather than a new one.
+and an unknown session is a **404** rather than a new one. A malformed
+`session_id` is a **400**, same as on `/query`.
+
+**That bypass stops the prompts; it does not open the shell.** The stdio
+transport's `--bypass-permissions` does both — it runs gated tools unasked *and*
+lifts the shell tool's guardrails (redirection and the other shell-only
+operators, the read-only binary allowlist, the rate limit). That second half is
+arbitrary code execution, appropriate for one local parent on a private pipe and
+not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
+gates, and the request body rejects unknown fields so a client cannot ask. See
+SPEC §5.5.
 
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
@@ -544,7 +562,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.23.1+**: an older core's daemon starts fine but
+  comes up. It must also be **0.24.1+**: an older core's daemon starts fine but
   has no sidecar entry for this agent, which reads as a UI with a dead agent
   rather than as a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
@@ -575,7 +593,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.14","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.15","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

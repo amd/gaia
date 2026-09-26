@@ -269,21 +269,11 @@ def _ms_forward_body(**overrides):
 # ─── New test classes ─────────────────────────────────────────────────────────
 
 
-@pytest.mark.skip(
-    reason=(
-        "Microsoft OAuth provider not in this branch — requires the Outlook backend "
-        "from PR #1358/#1275.  End-to-end Microsoft forward is validated against "
-        "strx-halo once that PR is merged into the integration branch."
-    )
-)
 class TestMicrosoftForward:
     """Microsoft connections must forward without demanding Gmail scopes.
 
-    Skipped in this branch because the MicrosoftOAuthProvider is not yet
-    registered in ``gaia.connectors.providers`` here — it lives in PR #1358.
-    The unit-level proof (``TestProviderAwareScopeDefaults`` in
-    ``test_forwarded_import.py``) covers the scope-default logic without needing
-    the provider; this class covers the full HTTP path and should run after merge.
+    ``TestProviderAwareScopeDefaults`` in ``test_forwarded_import.py`` covers the
+    scope-default logic; this class covers the full HTTP path.
     """
 
     def test_microsoft_forward_returns_201(self, ui_api_client, ms_provider):
