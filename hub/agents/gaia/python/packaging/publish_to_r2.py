@@ -37,7 +37,7 @@ Idempotency (re-running a published release is a no-op):
     neither Go nor PyInstaller is byte-reproducible, so a rebuild of a released
     version always differs. ``--strict-immutable`` restores the hard failure.
   * Any other 409 (``artifact_mismatch`` / ``artifact_unverifiable`` /
-    ``id_conflict``) means the catalog was NOT modified, and stays a failure.
+    ``id_conflict`` / ``manifest_mismatch``) means the catalog was NOT modified, and stays a failure.
 
 NO silent fallback: any other non-2xx, a SHA mismatch, or a missing token raises
 with an actionable message.
@@ -371,9 +371,9 @@ def publish_one(
             flush=True,
         )
     elif resp.status_code == 409:
-        # Only ONE of the Worker's four 409s means "already published":
+        # Only ONE of the Worker's five 409s means "already published":
         # version_exists. artifact_mismatch / artifact_unverifiable / id_conflict
-        # all say "the catalog was NOT modified" -- reconciling those against the
+        # / manifest_mismatch all say "the catalog was NOT modified" -- reconciling those against the
         # R2 object would report success for a release the hub never recorded.
         error_code = ""
         try:

@@ -546,12 +546,12 @@ gaia eval agent --audit-only
 
 Runs a static analysis of the Agent UI's internal constraints without making any LLM calls:
 
-- **History window size** (`_MAX_HISTORY_PAIRS` in `_chat_helpers.py`)
-- **Message truncation limits** (`_MAX_MSG_CHARS`)
+- **History window size** (`_MAX_PAIRS` in `_chat_helpers.py`)
+- **Message truncation limits** (`_MAX_CHARS`)
 - **Tool result persistence** in conversation history
 - **Agent persistence model** (stateless per-message vs. persistent)
 
-The audit flags which scenarios will be automatically `BLOCKED_BY_ARCHITECTURE` and provides recommendations (e.g., "increase `_MAX_HISTORY_PAIRS` to 10+"). Run this before the full benchmark to understand expected failures due to architecture limits rather than AI quality.
+The audit flags which scenarios will be automatically `BLOCKED_BY_ARCHITECTURE` and provides recommendations (e.g., "increase `_MAX_PAIRS` to 10+"). Run this before the full benchmark to understand expected failures due to architecture limits rather than AI quality.
 
 ---
 
