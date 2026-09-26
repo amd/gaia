@@ -103,3 +103,44 @@ def test_allowlist_has_no_stale_entries():
         if path not in leaves or f"gaia {' '.join(path)}" in cli_text
     ]
     assert not stale, f"Allowlist entries no longer belong there: {stale}"
+
+
+def test_global_options_exclusion_list_matches_the_parser():
+    """The "Global Options" table names the commands that reject its flags.
+
+    ``--logging-level`` / ``--claude-model`` / ``--no-lemonade-check`` live on the
+    shared ``parent_parser``, which only some top-level subparsers pull in. The
+    section used to claim "All commands support these", so a user hit
+    ``unrecognized arguments`` on a third of the CLI. Pin the real list here — a
+    subcommand gaining or losing ``parents=[parent_parser]`` must update the doc.
+    """
+    from gaia.cli import build_parser
+
+    top = next(
+        a
+        for a in build_parser()._actions
+        if isinstance(a, argparse._SubParsersAction)
+    )
+    rejecting = {
+        name
+        for name, sub in top.choices.items()
+        if "--no-lemonade-check"
+        not in {opt for action in sub._actions for opt in action.option_strings}
+    }
+    assert rejecting, "no subcommand rejects the flag — parent_parser wiring changed"
+
+    cli_text = CLI_DOC.read_text(encoding="utf-8")
+    section = cli_text.split("## Global Options", 1)[1].split("\n---", 1)[0]
+
+    missing = sorted(n for n in rejecting if f"`gaia {n}`" not in section)
+    assert not missing, (
+        "Commands reject the shared flags but aren't listed as exceptions in the "
+        f"'Global Options' section of docs/reference/cli.mdx: {missing}"
+    )
+
+    accepting = set(top.choices) - rejecting
+    overclaimed = sorted(n for n in accepting if f"`gaia {n}`" in section)
+    assert not overclaimed, (
+        "Listed as rejecting the shared flags, but the parser accepts them: "
+        f"{overclaimed}"
+    )

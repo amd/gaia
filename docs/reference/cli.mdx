@@ -3322,14 +3322,26 @@ The bundle includes:
 
 ## Global Options
 
-All commands support these global options:
+Most commands support these options. They come from a shared parent parser, so
+despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
+`gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia hub`,
+`gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory` or `gaia skill` —
+passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--logging-level` | string | INFO | Logging verbosity [DEBUG, INFO, WARNING, ERROR, CRITICAL] |
 | `-v, --version` | flag | - | Show program's version and exit |
-| `--claude-model <name>` | string | `claude-sonnet-4-20250514` | Claude model to use when `--use-claude` is set |
+| `--claude-model` | string | `claude-sonnet-4-20250514` | Claude model to use when `--use-claude` is set |
 | `--no-lemonade-check` | flag | - | Skip the Lemonade server reachability check (CI/testing without Lemonade) |
+
+<Note>
+  On commands with a nested subcommand, put these **before** the subcommand —
+  `gaia eval --no-lemonade-check agent`, not `gaia eval agent --no-lemonade-check` —
+  because the nested parsers don't inherit the shared parent. `gaia mcp start` is
+  the one exception: it declares them itself, so there they must come *after*
+  (`gaia mcp start --no-lemonade-check`).
+</Note>
 
 ---
 
