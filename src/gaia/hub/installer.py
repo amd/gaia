@@ -40,10 +40,8 @@ import stat
 import subprocess
 import sys
 import sysconfig
-import tarfile
 import tempfile
 import threading
-import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -55,6 +53,7 @@ from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
+from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 logger = get_logger(__name__)
@@ -475,77 +474,36 @@ def _install_python_artifact(
     return site_packages
 
 
-def _assert_member_within(install_dir: Path, member_name: str) -> None:
-    """Refuse an archive member whose path escapes *install_dir* (CWE-22).
-
-    ``_sanitize_artifact_filename`` only checks the *archive's* own filename, not
-    the paths of members inside it. ``tarfile`` follows ``..`` in member names and
-    would write outside the install dir, so every member is validated here before
-    anything is extracted (a self-consistent malicious archive whose checksum
-    matches the manifest still cannot escape the agent's install dir).
-    """
-    base = install_dir.resolve()
-    dest = (base / member_name).resolve()
-    if dest != base and not dest.is_relative_to(base):
-        raise InstallError(
-            f"Archive member {member_name!r} would extract outside the agent "
-            f"install directory. Refusing to install; report this hub artifact "
-            f"as malicious (path traversal, CWE-22)."
-        )
-
-
 def _install_cpp_artifact(
     artifact_bytes: bytes, filename: str, install_dir: Path
 ) -> Path:
     """Extract a C++ agent archive into ``install_dir``.
 
-    Every archive member is validated against ``install_dir`` before extraction
-    and links / non-regular entries are refused, so a malicious archive cannot
-    write outside the agent's install dir via ``../`` traversal or a symlink.
+    Extraction goes through :func:`gaia.utils.archive.safe_extract` with links
+    refused, so a malicious archive cannot write outside the agent's install
+    dir via ``../`` traversal, an absolute path, a link, or a special file.
     """
+    lower = filename.lower()
+    if lower.endswith(".zip"):
+        kind = "zip"
+    elif lower.endswith((".tar.gz", ".tgz", ".tar")):
+        kind = "tar"
+    else:
+        raise InstallError(
+            f"Unsupported C++ artifact format '{filename}'. Expected a .zip "
+            f"or .tar.gz archive."
+        )
     install_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="gaia-hub-") as tmp:
         archive_path = Path(tmp) / filename
         archive_path.write_bytes(artifact_bytes)
-        lower = filename.lower()
-        if lower.endswith(".zip"):
-            with zipfile.ZipFile(archive_path) as zf:
-                infos = zf.infolist()
-                for info in infos:
-                    if stat.S_ISLNK(info.external_attr >> 16):
-                        raise InstallError(
-                            f"Archive member {info.filename!r} is a symlink; "
-                            f"symlinks are not allowed in hub artifacts."
-                        )
-                    _assert_member_within(install_dir, info.filename)
-                # Members validated above — extract one at a time so this stays
-                # clear of ZipFile.extractall (S202).
-                for info in infos:
-                    zf.extract(info, install_dir)
-        elif lower.endswith((".tar.gz", ".tgz", ".tar")):
-            with tarfile.open(archive_path) as tf:
-                members = tf.getmembers()
-                for member in members:
-                    if member.issym() or member.islnk():
-                        raise InstallError(
-                            f"Archive member {member.name!r} is a link; links "
-                            f"are not allowed in hub artifacts (path traversal)."
-                        )
-                    if not (member.isfile() or member.isdir()):
-                        raise InstallError(
-                            f"Archive member {member.name!r} is not a regular "
-                            f"file or directory; refusing to install."
-                        )
-                    _assert_member_within(install_dir, member.name)
-                # Members validated above (no traversal, no links) — extract one
-                # at a time so this stays clear of tarfile.extractall (S202).
-                for member in members:
-                    tf.extract(member, install_dir)
-        else:
+        try:
+            safe_extract(archive_path, install_dir, kind=kind)
+        except ArchiveError as e:
             raise InstallError(
-                f"Unsupported C++ artifact format '{filename}'. Expected a .zip "
-                f"or .tar.gz archive."
-            )
+                f"Refusing to install '{filename}' into {install_dir}: {e}. "
+                f"Report this hub artifact as malicious."
+            ) from e
     return install_dir
 
 

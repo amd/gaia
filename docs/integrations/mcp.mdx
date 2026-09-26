@@ -183,6 +183,18 @@ The MCP Server acts as an HTTP bridge between external applications and GAIA's n
 | `/llm` | POST | Direct LLM queries (no context) |
 | `/` | POST | JSON-RPC 2.0 endpoint |
 
+### JSON-RPC Methods
+
+`POST /` speaks MCP over JSON-RPC 2.0, so standard MCP clients (including the official SDKs) can connect to it directly.
+
+| Method | Behavior |
+|--------|----------|
+| `initialize` | Echoes the client's `protocolVersion` if it is `2024-11-05`, `2025-03-26`, `2025-06-18`, or `2025-11-25`; otherwise answers `2025-11-25`. Advertises only `{"tools": {}}` |
+| `notifications/*` | Accepted with HTTP `202` and an empty body (no JSON-RPC reply) |
+| `ping` | Returns `{}` |
+| `tools/list` | Each tool includes a JSON Schema `inputSchema` |
+| `tools/call` | Returns `content` plus `isError`; `isError: true` means the tool ran but failed (for example, Lemonade Server is unreachable). An unknown tool name is a JSON-RPC `-32602` error |
+
 ### Example API Calls
 
 <Tabs>
@@ -338,7 +350,7 @@ The MCP server exposes the following GAIA agents as tools:
 | Tool | Description | Example Arguments |
 |------|-------------|-------------------|
 | `gaia.chat` | Conversational chat with context | `{"query": "Hello GAIA"}` |
-| `gaia.query` | Direct LLM queries (no context) | `{"query": "What is AI?"}` |
+| `gaia.query` | Direct LLM queries (no context); optional `model` and `max_tokens` | `{"query": "What is AI?"}` |
 
 ## Troubleshooting
 
