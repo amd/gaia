@@ -724,6 +724,46 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 # One correction — a second disagreement is better than a loop, and the
 # verification footer states the truth either way.
 _MAX_TEST_CLAIM_CORRECTIONS = 1
+_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# Anchored: only a reply that *opens* with an unclosed block was cut off
+# mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
+# reasoning silently deletes everything the model said after it.
+_CUT_OFF_THINK_PATTERN = re.compile(r"\A<think>(?!.*</think>)(.*)\Z", re.DOTALL)
+
+
+def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
+    """Split inline ``<think>`` reasoning out of a reply.
+
+    Returns ``(answer_text, reasoning)``. A reply that *opens* with an unclosed
+    ``<think>`` was cut off mid-thought and is reasoning to the end, and text
+    before a lone ``</think>`` (the template opened the block in the prompt) is
+    reasoning.
+    """
+    parts: List[str] = []
+    if "</think>" in text and "<think>" not in text.split("</think>", 1)[0]:
+        head, _, text = text.partition("</think>")
+        parts.append(head.strip())
+    cut_off = _CUT_OFF_THINK_PATTERN.match(text.lstrip())
+    if cut_off:
+        parts.append(cut_off.group(1).strip())
+        text = ""
+    parts.extend(m.strip() for m in _THINK_BLOCK_PATTERN.findall(text))
+    answer = _THINK_BLOCK_PATTERN.sub("", text).strip()
+    return answer, "\n\n".join(p for p in parts if p) or None
+
+
+def _response_reasoning(response: Any) -> Optional[str]:
+    """The model's reasoning off a chat response, or ``None`` when it has none.
+
+    ``AgentResponse.reasoning`` is declared ``Optional[str]``, but this reads it
+    with ``getattr`` because older responses and test doubles may not carry the
+    attribute at all. Anything that is not a non-empty string is "no reasoning":
+    it would otherwise ride into the request history as ``reasoning_content``
+    and into the trace file, neither of which can serialise it.
+    """
+    value = getattr(response, "reasoning", None)
+    return value if isinstance(value, str) and value else None
+
 
 # Unfinished-answer guard (#3887): a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
@@ -1233,6 +1273,7 @@ Do NOT wrap conversational replies in JSON.
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
+        resend_reasoning_across_requests: bool = False,
         max_output_tokens: Optional[int] = None,
     ):
         """
@@ -1270,6 +1311,10 @@ Do NOT wrap conversational replies in JSON.
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
+            resend_reasoning_across_requests: If True, reasoning stored on
+                          ``conversation_history`` from earlier user requests
+                          is sent back to the model. Within one request it is
+                          always sent back (default: False).
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
@@ -1292,6 +1337,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_output_tokens = max_output_tokens
         self.device = device
+        self.resend_reasoning_across_requests = resend_reasoning_across_requests
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
         self._requested_skill_set = skill_set
@@ -5328,8 +5374,24 @@ Do NOT wrap conversational replies in JSON.
                     break
         return msg
 
+    def _history_for_request(self) -> List[Dict[str, Any]]:
+        """``conversation_history``, with earlier requests' reasoning stripped.
+
+        Every subclass that prepopulates a request from history must go through
+        here, or ``resend_reasoning_across_requests`` only holds for some of them.
+        """
+        history = getattr(self, "conversation_history", None) or []
+        if self.resend_reasoning_across_requests:
+            return list(history)
+        return [
+            {k: v for k, v in m.items() if k != "reasoning_content"} for m in history
+        ]
+
     def _build_assistant_message(
-        self, raw_response: str, parsed: Dict[str, Any]
+        self,
+        raw_response: str,
+        parsed: Dict[str, Any],
+        reasoning: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Construct the assistant message to append to the LLM context.
@@ -5345,11 +5407,16 @@ Do NOT wrap conversational replies in JSON.
 
         For embedded-JSON / plain-text responses we keep passing the raw
         response text through unchanged.
+
+        ``reasoning`` rides along as ``reasoning_content`` so the model keeps
+        its own reasoning across the steps of one request.
         """
+        extra = {"reasoning_content": reasoning} if reasoning else {}
         tc_list = parsed.get("tool_calls")
         if not tc_list:
-            return {"role": "assistant", "content": raw_response}
+            return {"role": "assistant", "content": raw_response, **extra}
         return {
+            **extra,
             "role": "assistant",
             "content": parsed.get("content"),
             "tool_calls": [
@@ -5925,7 +5992,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self.conversation_history)
+            messages.extend(self._history_for_request())
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
@@ -6411,6 +6478,7 @@ Do NOT wrap conversational replies in JSON.
             # Handle streaming or non-streaming LLM response
             # Initialize response_stats so it's always in scope
             response_stats = None
+            response_reasoning = None
 
             if self.streaming:
                 # Streaming mode - raw response will be streamed
@@ -6461,6 +6529,7 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
+                                response_reasoning = _response_reasoning(chunk_response)
                                 # Non-empty complete chunk = tool_calls sentinel from
                                 # native tool-calling path (no streaming for tool calls)
                                 if chunk_response.text:
@@ -6620,6 +6689,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
+                        response_reasoning = _response_reasoning(chat_response)
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
@@ -6747,14 +6817,9 @@ Do NOT wrap conversational replies in JSON.
                 # Stop the progress indicator
                 self.console.stop_progress()
 
-            # Strip <think>...</think> blocks emitted by reasoning models
-            # (e.g. Qwen3.5).  Must happen before parsing so the JSON extractor
-            # finds clean input, and before the response is stored in
-            # conversation_history so the thinking text never bleeds into the
-            # next turn and confuses the model about the current user message.
-            response = re.sub(
-                r"<think>.*?</think>", "", response, flags=re.DOTALL
-            ).strip()
+            # Reasoning is kept as reasoning: never parsed, never the answer.
+            response, inline_reasoning = _split_reasoning(response)
+            reasoning = response_reasoning or inline_reasoning
 
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")
@@ -6845,12 +6910,15 @@ Do NOT wrap conversational replies in JSON.
                 steps_taken += 1
                 continue
             logger.debug(f"Parsed response: {parsed}")
-            conversation.append({"role": "assistant", "content": parsed})
+            conversation.append(
+                {"role": "assistant", "content": parsed}
+                | ({"reasoning": reasoning} if reasoning else {})
+            )
 
             # Add assistant response to messages for chat history (OpenAI
             # shape for native tool_calls, raw text otherwise — see
             # ``_build_assistant_message`` for the why).
-            messages.append(self._build_assistant_message(response, parsed))
+            messages.append(self._build_assistant_message(response, parsed, reasoning))
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -6901,6 +6969,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Handle streaming as before
                     full_response = ""
+                    plan_reasoning = None
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
 
@@ -6914,6 +6983,7 @@ Do NOT wrap conversational replies in JSON.
 
                     for chunk_response in stream_gen:
                         if chunk_response.is_complete:
+                            plan_reasoning = _response_reasoning(chunk_response)
                             if chunk_response.text:
                                 full_response = chunk_response.text
                         else:
@@ -6955,12 +7025,11 @@ Do NOT wrap conversational replies in JSON.
                         max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
+                    plan_reasoning = _response_reasoning(chat_response)
                     self.console.stop_progress()
 
-                # Strip <think> blocks before parsing (same reason as main path)
-                plan_response = re.sub(
-                    r"<think>.*?</think>", "", plan_response, flags=re.DOTALL
-                ).strip()
+                plan_response, inline_plan_reasoning = _split_reasoning(plan_response)
+                plan_reasoning = plan_reasoning or inline_plan_reasoning
 
                 # Parse the plan response
                 try:
@@ -7000,7 +7069,10 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken += 1
                     continue
                 logger.debug(f"Parsed plan response: {parsed_plan}")
-                conversation.append({"role": "assistant", "content": parsed_plan})
+                conversation.append(
+                    {"role": "assistant", "content": parsed_plan}
+                    | ({"reasoning": plan_reasoning} if plan_reasoning else {})
+                )
 
                 # Add plan response to messages for chat history. Same
                 # OpenAI-shape rule as the main-response append (issue
@@ -7010,7 +7082,9 @@ Do NOT wrap conversational replies in JSON.
                 # assistant turn so the fan-out below can correlate
                 # results back via ``tool_call_id``.
                 messages.append(
-                    self._build_assistant_message(plan_response, parsed_plan)
+                    self._build_assistant_message(
+                        plan_response, parsed_plan, plan_reasoning
+                    )
                 )
 
                 # Display the agent's reasoning for the plan

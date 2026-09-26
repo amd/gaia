@@ -70,7 +70,10 @@ def _make_agent(tmp_path, **kwargs) -> _TraceAgent:
             **kwargs,
         )
     agent.chat = MagicMock()
-    agent.chat.send_messages.return_value = MagicMock(text="all done", stats=None)
+    # reasoning=None or MagicMock auto-creates it and the trace JSON won't encode.
+    agent.chat.send_messages.return_value = MagicMock(
+        text="all done", stats=None, reasoning=None
+    )
     agent.chat.get_stats.return_value = None
     return agent
 
@@ -126,7 +129,7 @@ class TestSchemaPresentInTrace:
 
         def _send(*_args, **kwargs):
             sent["tools"] = kwargs.get("tools")
-            return MagicMock(text="all done", stats=None)
+            return MagicMock(text="all done", stats=None, reasoning=None)
 
         agent.chat.send_messages.side_effect = _send
 

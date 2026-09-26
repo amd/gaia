@@ -57,6 +57,8 @@ class AgentResponse:
     # as it was (the polled ``/stats`` measurement). ``None`` for providers/
     # calls that don't expose per-call usage.
     usage: Optional[Dict[str, Any]] = None
+    # The model's reasoning for this reply, kept apart from ``text``.
+    reasoning: Optional[str] = None
 
 
 class AgentSDK:
@@ -215,12 +217,17 @@ class AgentSDK:
         """
         role = msg.get("role", "user")
         content = self._normalize_message_content(msg.get("content", ""))
-        if role == "assistant" and msg.get("tool_calls"):
-            return {
-                "role": "assistant",
-                "content": content if msg.get("content") else None,
-                "tool_calls": msg["tool_calls"],
-            }
+        if role == "assistant":
+            entry: Dict[str, Any] = {"role": "assistant", "content": content}
+            if msg.get("tool_calls"):
+                entry["content"] = content if msg.get("content") else None
+                entry["tool_calls"] = msg["tool_calls"]
+            if (
+                msg.get("reasoning_content")
+                and self.llm_client.accepts_reasoning_history
+            ):
+                entry["reasoning_content"] = msg["reasoning_content"]
+            return entry
         if role == "tool":
             entry = {
                 "role": "tool",
@@ -276,9 +283,8 @@ class AgentSDK:
                 if calls:
                     out.append({**msg, "tool_calls": calls})
                 else:
-                    out.append(
-                        {"role": "assistant", "content": msg.get("content") or ""}
-                    )
+                    bare = {k: v for k, v in msg.items() if k != "tool_calls"}
+                    out.append({**bare, "content": msg.get("content") or ""})
                 answered = set()
                 leftover = []
                 for k in block:
@@ -482,7 +488,11 @@ class AgentSDK:
             usage = self.llm_client.get_last_usage()
 
             return AgentResponse(
-                text=response, stats=stats, usage=usage, is_complete=True
+                text=response,
+                stats=stats,
+                usage=usage,
+                is_complete=True,
+                reasoning=self.llm_client.get_last_reasoning(),
             )
 
         except ConnectionError as e:
@@ -564,7 +574,10 @@ class AgentSDK:
                     tool_call_stats = self.get_stats()
                     self._recorder_end(tool_call_stats)
                     yield AgentResponse(
-                        text=chunk, stats=tool_call_stats, is_complete=True
+                        text=chunk,
+                        stats=tool_call_stats,
+                        is_complete=True,
+                        reasoning=self.llm_client.get_last_reasoning(),
                     )
                     return
                 yield AgentResponse(text=chunk, is_complete=False)
@@ -577,7 +590,12 @@ class AgentSDK:
             stats = self.get_stats()
             self._recorder_end(stats)
 
-            yield AgentResponse(text="", stats=stats, is_complete=True)
+            yield AgentResponse(
+                text="",
+                stats=stats,
+                is_complete=True,
+                reasoning=self.llm_client.get_last_reasoning(),
+            )
 
         except ConnectionError as e:
             # Re-raise connection errors with additional context

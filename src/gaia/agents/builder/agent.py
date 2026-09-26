@@ -304,7 +304,7 @@ class BuilderAgent(Agent):
 
         messages: list = []
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self.conversation_history)
+            messages.extend(self._history_for_request())
 
         messages.append({"role": "user", "content": user_input})
 
