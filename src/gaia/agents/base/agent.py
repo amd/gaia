@@ -1821,26 +1821,39 @@ Do NOT wrap conversational replies in JSON.
             Pass the result's artifact and the n of the index entry you need.
             The index already names every omitted part, so paging through a
             whole output is almost never needed.
-
-            Args:
-                artifact: The condensed result's artifact handle.
-                entry: The n of an index entry; returns exactly that part.
-                offset: Character offset, only when reading without an entry.
-                limit: Characters to return; defaults to the entry's length.
-                    A part longer than 8000 characters comes back in pages:
-                    when remaining is set, call again with offset=next_offset
-                    and limit=remaining.
             """
+            # Per-argument detail lives in the schema below, not here: this
+            # docstring is the tool description and is re-sent every call.
             return store_for(self).read(artifact, offset, limit, entry)
 
         self._output_reader_entry = {
             "name": "read_tool_output",
             "description": read_tool_output.__doc__,
             "parameters": {
-                "artifact": {"type": "string", "required": True},
-                "entry": {"type": "integer", "required": False},
-                "offset": {"type": "integer", "required": False},
-                "limit": {"type": "integer", "required": False},
+                "artifact": {
+                    "type": "string",
+                    "required": True,
+                    "description": "The condensed result's artifact handle.",
+                },
+                "entry": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "The n of an index entry; returns exactly that part.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "Character offset, only when reading without an entry.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "required": False,
+                    "description": (
+                        "Characters to return; defaults to the entry's length. A part "
+                        "over 8000 chars pages: set offset=next_offset and "
+                        "limit=remaining."
+                    ),
+                },
             },
             "function": read_tool_output,
             "atomic": True,

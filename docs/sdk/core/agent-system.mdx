@@ -478,8 +478,9 @@ Parts follow the result's own structure, never fixed windows:
 | Diffs | each file and hunk |
 | Other text | paragraphs, then lines |
 
-Shown holds the first part, then parts the result marks as leads or the call's
-arguments name, then the rest in order, while they fit. Text with no structure
+Shown holds the closing part when the result marks it a lead (a run's summary
+line), then the first part, then the other parts marked as leads or named by
+the call's arguments, then the rest in order, while they fit. Text with no structure
 at all (a single long line) keeps a `head`/`tail` excerpt, with the middle as
 its one index entry.
 

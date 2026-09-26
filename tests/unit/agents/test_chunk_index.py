@@ -376,6 +376,17 @@ def test_search_groups_by_file_and_leads_with_each_files_first_match():
         assert all(f"    | {line}\n" in text for line in match["context"])
 
 
+def test_search_labels_keep_the_separator_the_paths_used():
+    """A POSIX path must not be renamed with backslashes on Windows."""
+    matches = [
+        {"file": "/repo/src/a/one.py", "line": 1, "content": "hit"},
+        {"file": "/repo/src/b/two.py", "line": 2, "content": "hit"},
+    ]
+    _, chunks = chunk_index.render_search(matches)
+    assert [c.label.split(":")[0] for c in chunks] == ["a/one.py", "b/two.py"]
+    assert not any("\\" in c.label for c in chunks)
+
+
 def test_output_sections_follow_test_markers_and_failures_lead():
     log = pytest_log()
     chunks = chunk_index.chunk_output(log)
@@ -512,6 +523,21 @@ def test_check_result_survives_condensation_verbatim():
             read_back(agent, result, entry)
             == original["stdout"][entry["offset"] : entry["offset"] + entry["length"]]
         )
+
+
+@pytest.mark.parametrize("copies", [3, 20, 60, 200])
+def test_a_long_run_keeps_its_closing_summary_in_view(copies):
+    """The one line that says whether the run passed is never indexed away."""
+    agent = small_budget_agent()
+    log = pytest_log() * copies
+    last_line = log.rstrip("\n").rsplit("\n", 1)[-1]
+    original = shell_result(log)
+
+    result = agent._handle_large_tool_result("run_shell_command", original, [], {})
+
+    shown = "".join(s["text"] for s in result["shown"])
+    assert last_line in shown, f"{len(log)}-char log lost its summary line"
+    assert len(json.dumps(result, ensure_ascii=False)) <= TARGET
 
 
 def test_shell_output_already_archived_by_the_tool_is_indexed_whole():
@@ -1025,9 +1051,20 @@ def test_a_bad_entry_number_says_what_to_do():
 def test_the_reader_advertises_entry_first_and_no_fixed_page_size():
     agent = small_budget_agent()
     agent._register_output_reader()
+    from gaia.agents.base.tools import (
+        MAX_TOOL_DESCRIPTION_CHARS,
+        MAX_TOOL_PARAM_DESCRIPTION_CHARS,
+    )
+
     doc = agent._tools_registry["read_tool_output"]["description"]
-    assert doc.index("entry") < doc.index("offset")
     assert "1 to 8000" not in doc
     assert "almost never needed" in doc
     params = agent._tools_registry["read_tool_output"]["parameters"]
-    assert params["entry"] == {"type": "integer", "required": False}
+    assert list(params) == ["artifact", "entry", "offset", "limit"]
+    assert params["entry"]["type"] == "integer" and not params["entry"]["required"]
+    # Re-sent on every call, so it answers to the same budget as every tool.
+    assert len(doc) <= MAX_TOOL_DESCRIPTION_CHARS
+    assert all(
+        len(p.get("description", "")) <= MAX_TOOL_PARAM_DESCRIPTION_CHARS
+        for p in params.values()
+    )
