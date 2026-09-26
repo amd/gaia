@@ -127,7 +127,7 @@ def is_adapter_process(pid: int) -> bool:
     if not pid_alive(pid):
         return False
     try:
-        cmdline = " ".join(psutil.Process(pid).cmdline())
+        argv = psutil.Process(pid).cmdline()
     except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return False
     except psutil.AccessDenied as e:
@@ -135,7 +135,9 @@ def is_adapter_process(pid: int) -> bool:
             f"cannot read the command line of pid {pid} to confirm it is the "
             "Telegram adapter"
         ) from e
-    return "telegram" in cmdline and "start" in cmdline
+    # Adjacent argv entries, not substrings of the joined line: Telegram
+    # Desktop's `telegram-desktop -startintray` contains both words.
+    return any(a == "telegram" and b == "start" for a, b in zip(argv, argv[1:]))
 
 
 class TelegramAdapter:

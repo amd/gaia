@@ -204,3 +204,61 @@ def test_background_polling_exit_removes_pid(mock_home, monkeypatch):
 
     assert not adapter._poll_thread.is_alive()
     assert not (mock_home / ".gaia" / "telegram.pid").exists()
+
+
+@pytest.mark.parametrize(
+    "argv_suffix",
+    [
+        # Telegram Desktop's standard autostart invocation. Both "telegram" and
+        # "start" appear in the joined command line, neither as its own argument.
+        pytest.param(["telegram-desktop", "-startintray"], id="telegram-desktop"),
+        # The two words present but not adjacent.
+        pytest.param(["telegram", "--chat", "start"], id="non-adjacent"),
+    ],
+)
+def test_stop_does_not_signal_a_lookalike_cmdline(
+    mock_home, monkeypatch, capsys, argv_suffix
+):
+    """A cmdline that merely contains both words is not the adapter."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", *argv_suffix]
+    )
+    try:
+        pid_path = mock_home / ".gaia" / "telegram.pid"
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
+        pid_path.write_text(str(proc.pid), encoding="utf-8")
+
+        _run_cli(monkeypatch, "stop")
+
+        assert proc.poll() is None, "stop signalled a non-adapter process"
+        assert "not a Telegram adapter" in capsys.readouterr().out
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+@pytest.mark.parametrize(
+    "contents", [pytest.param("", id="empty"), pytest.param("garbage", id="garbage")]
+)
+def test_status_reports_an_unreadable_pid_file(
+    mock_home, monkeypatch, capsys, contents
+):
+    """A crash mid-write leaves a file `status` must report, not crash on."""
+    pid_path = mock_home / ".gaia" / "telegram.pid"
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(contents, encoding="utf-8")
+
+    _run_cli(monkeypatch, "status", "--health-port", "1")
+
+    assert "unreadable PID file" in capsys.readouterr().out
+
+
+def test_stop_removes_an_unreadable_pid_file(mock_home, monkeypatch, capsys):
+    pid_path = mock_home / ".gaia" / "telegram.pid"
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text("", encoding="utf-8")
+
+    _run_cli(monkeypatch, "stop")
+
+    assert not pid_path.exists()
+    assert "Unreadable PID file" in capsys.readouterr().out

@@ -3588,6 +3588,15 @@ def main():
             try:
                 with open(pid_path, "r", encoding="utf-8") as f:
                     pid = int(f.read().strip())
+            except (OSError, ValueError):
+                # The file is written non-atomically, so a crash mid-write
+                # leaves one that names no process worth signalling.
+                print(f"Unreadable PID file {pid_path}; removing it.")
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(pid_path)
+                return
+
+            try:
                 if not is_adapter_process(pid):
                     print(
                         f"PID {pid} is not a Telegram adapter; removing stale PID file."
@@ -3637,12 +3646,21 @@ def main():
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
             pid = None
             if os.path.exists(pid_path):
-                with open(pid_path, "r", encoding="utf-8") as f:
-                    pid = int(f.read().strip())
+                try:
+                    with open(pid_path, "r", encoding="utf-8") as f:
+                        pid = int(f.read().strip())
+                except (OSError, ValueError):
+                    print(
+                        f"Telegram adapter: not running (unreadable PID file {pid_path})"
+                    )
+                    return
             try:
                 running = pid is not None and is_adapter_process(pid)
             except (PermissionError, RuntimeError) as e:
-                print(f"❌ Telegram adapter: cannot verify pid {pid}: {e}")
+                print(
+                    f"❌ Telegram adapter: cannot verify pid {pid}: {e}",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             if running:
                 print(
