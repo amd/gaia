@@ -52,22 +52,23 @@ exists.
 
 ### Building the Agent UI installer locally
 
-The current local build path is the `build-ui-installer` scripts. From the repo root:
+Phase C landed, so `src/gaia/apps/webui/` builds with `electron-builder` driven by
+`electron-builder.yml` — `forge.config.cjs` is gone. Build from that directory:
 
 ```bash
-# Linux / macOS
-./installer/scripts/build-ui-installer.sh
+cd src/gaia/apps/webui
 
-# Windows (PowerShell)
-.\installer\scripts\build-ui-installer.ps1
+npm run package          # current host platform
+npm run package:win      # or :mac / :linux
 ```
 
-This wraps `npm run make` in `src/gaia/apps/webui/`, which today uses `electron-forge`.
+`npm run make` is kept as an alias for `npm run package`.
 
-> **Note:** Phase C of the desktop installer plan migrates the Agent UI from
-> `electron-forge` to `electron-builder` and introduces `npm run package:{win,mac,linux}`.
-> Once that phase lands, the commands above will move to the `package:*` npm scripts.
-> See [§7 Phase C](../docs/plans/desktop-installer.mdx) for the migration plan.
+> **Note:** the `build-ui-installer.ps1` / `.sh` scripts in `scripts/` still shell out
+> to `npx electron-forge package` / `make`, which no longer matches this tree —
+> `electron-forge` isn't a dependency any more. Use the `package:*` npm scripts above
+> until those two scripts are migrated.
+> See [§7 Phase C](../docs/plans/desktop-installer.mdx) for the migration history.
 
 ## `version/` — version helpers
 
