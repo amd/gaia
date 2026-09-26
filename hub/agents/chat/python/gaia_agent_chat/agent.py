@@ -1527,21 +1527,18 @@ No documents are currently indexed.
             def load_tools(bundle: str) -> dict:
                 """Load a bundle of tools so you can call them on your next step.
 
-                Call this when the capability you need is not in your current
-                tool list. If a "Loadable tool bundles" menu is shown in your
-                instructions, pick a bundle name from it; otherwise pass the name
-                of the specific tool you need and its bundle is loaded. The
-                bundle's tools become available on your **next** step; then call
-                the one you need.
+                Call when the capability you need is not in your current tool
+                list. The bundle's tools become available on your **next**
+                step; then call the one you need.
 
                 Args:
-                    bundle: A bundle name (e.g. "file_search", "rag_index") — from
-                        the menu when one is shown — or a specific tool name to
-                        load its owning bundle.
+                    bundle: A bundle name from the "Loadable tool bundles" menu
+                        when one is shown (e.g. "file_search", "rag_index"), or
+                        a specific tool name to load its owning bundle.
 
                 Returns:
-                    Dictionary with status, the resolved bundle, and the full
-                    loaded_tools list now available to call.
+                    The resolved bundle and the full loaded_tools list now
+                    available to call.
                 """
                 # load_tools is registered only inside ``if self.tool_loader is
                 # not None`` and the loader is never re-nulled after construction,
@@ -1610,12 +1607,10 @@ No documents are currently indexed.
             ) -> dict:
                 """Execute a Python file as a subprocess and capture its output.
 
-                A script inside the agent's project runs from the project root,
-                with it on PYTHONPATH, so a test file such as tests/test_x.py
-                can import the project's own packages. Any other script — and
-                every script when there is no project — runs from its own
-                folder. Relative paths in the script resolve against that
-                working directory.
+                A script inside the agent's project runs from the project root
+                with it on PYTHONPATH, so tests/test_x.py can import the
+                project's packages. Any other script runs from its own folder.
+                Relative paths resolve against that working directory.
 
                 Args:
                     file_path: Path to the .py file to run
@@ -1623,7 +1618,7 @@ No documents are currently indexed.
                     timeout: Max seconds to wait (default 60)
 
                 Returns:
-                    Dictionary with stdout, stderr, return_code, and duration
+                    stdout, stderr, return_code, and duration
                 """
                 import shlex
                 import subprocess
@@ -1697,22 +1692,19 @@ No documents are currently indexed.
             def run_python(code: str, timeout: int = 60) -> dict:
                 """Run a Python snippet and return what it prints.
 
-                Use this to compute, transform data, or run a quick check
-                without creating a file. It runs from the project root, so
-                relative paths reach the user's files, and the snippet itself is
-                never saved in the workspace. Report numbers from its printed
-                output — do not work them out in your head.
+                Compute or check something without creating a file. Runs
+                from the project root, so relative paths reach the user's
+                files. Report numbers from its output — do not work them
+                out in your head.
 
-                This runs a plain Python process with no access to your own
-                tools. `from gaia import <tool>` does not work — to use another
-                tool, call it directly as a tool instead of from here.
+                No access to your tools: `from gaia import <tool>` fails.
 
                 Args:
                     code: Python source to run; print() whatever you need back.
                     timeout: Max seconds to wait (default 60)
 
                 Returns:
-                    Dictionary with stdout, stderr, return_code, and duration
+                    stdout, stderr, return_code, and duration.
                 """
                 import subprocess
                 import sys

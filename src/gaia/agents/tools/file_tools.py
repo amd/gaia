@@ -225,9 +225,8 @@ class FileSearchToolsMixin:
             Args:
                 file_pattern: name, substring, glob ("*.go") or regex to match.
                 directory: WHERE to look. Pass it whenever the user names a
-                    folder ("in tui/internal", "under docs") — without it the
-                    search covers the whole workspace and common document
-                    folders, which is slower and can match the wrong file.
+                    folder ("under docs"); without it the search covers the
+                    whole workspace and can match the wrong file.
                 deep_search: search entire drives. Slow; only after a normal
                     search found nothing.
                 file_types: comma-separated extensions to restrict to, e.g.
@@ -2060,11 +2059,9 @@ class FileSearchToolsMixin:
                 columns: Comma-separated column names to focus on (optional)
                 group_by: Column name to group rows by; numeric columns are
                     summed per group, largest first (optional)
-                date_range: Keep only rows whose date column falls in this
-                    period (optional). Accepts a quarter ('2025-Q1',
-                    'Q1 2025', "Q1'25"), year ('2025'), month ('2025-03'),
-                    day ('2025-03-15'), or a range ('2025-01 to 2025-06').
-                    Unsupported formats return an error.
+                date_range: Keep only rows dated in this period (optional).
+                    A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
+                    day, or range ('2025-01 to 2025-06'). Else an error.
 
             Returns:
                 Dictionary with analysis results based on the requested type
