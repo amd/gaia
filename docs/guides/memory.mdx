@@ -387,12 +387,14 @@ The same mechanism powers **accountability** -- commit to something ("I'll exerc
 
 ## Intelligent Extraction
 
-After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory alongside the new conversation and decides whether to **ADD** new knowledge, **UPDATE** a changed fact (old version preserved with lineage), or **DELETE** something you've contradicted.
+After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory, the new conversation, and what the tools returned during the turn, and decides whether to **ADD** new knowledge, **UPDATE** a changed fact (old version preserved with lineage), or **DELETE** something you've contradicted.
 
-It extracts information useful in future conversations -- facts, preferences, project details, people, deadlines -- and skips greetings, confirmations, and ephemeral details. For example, "we standardized on Python 3.12 and I'm using a Ryzen 9 9950X" stores two facts but ignores subjective asides like "it's much faster."
+It extracts information useful in future conversations -- facts, preferences, project details, people, deadlines -- and skips greetings, confirmations, ephemeral details, and narration of the current session (where you're working, what was just changed). For example, "we standardized on Python 3.12 and I'm using a Ryzen 9 9950X" stores two facts but ignores subjective asides like "it's much faster."
+
+Only what you said or what a tool showed is stored. A claim that appears only in the agent's own answer is not, because the answer can be wrong, and a permission refusal is not, because permissions change.
 
 <Tip>
-  Intelligent extraction kicks in for messages of 20+ words. Short messages like "yes" or "thanks" are skipped. The LLM's explicit memory tools (`remember`, `update_memory`, `forget`) still handle anything the auto-extraction misses.
+  Intelligent extraction kicks in for messages of 5+ words. Short messages like "yes" or "thanks" are skipped. The LLM's explicit memory tools (`remember`, `update_memory`, `forget`) still handle anything the auto-extraction misses.
 </Tip>
 
 ---

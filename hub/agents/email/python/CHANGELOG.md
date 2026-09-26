@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The agent finds GAIA's own Lemonade Server.** The default base URL, the
+  readiness probe and the model pull now go through core's resolver, and the
+  `/health` probe sends the API key, so GAIA's embedded server no longer reads
+  as unreachable or version-unknown.
 - **The readiness check no longer goes blind on a Lemonade development build.**
   `GET /v1/email/init` compares the running server's version against the agent's
   minimum. Lemonade v2026.39.1 changed that version to a date-based format whose

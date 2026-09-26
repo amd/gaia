@@ -176,7 +176,15 @@ export function resolvePlaygroundPort(
   raw: string | boolean | undefined,
 ): { port: number } | { error: string } {
   // Strict digits: Number() accepts "0x1f90", "1e3", and " 80 ".
-  const port = typeof raw === "string" ? (/^\d+$/.test(raw) ? Number(raw) : NaN) : 8131;
+  // `raw === true` is unreachable while `port` is in VALUE_FLAGS (parseArgs
+  // rejects a bare `--port`), but it resolves to NaN rather than a silent
+  // 8131 so removing it from that set can never quietly bind the default.
+  const port =
+    raw === undefined
+      ? 8131
+      : typeof raw === "string" && /^\d+$/.test(raw)
+        ? Number(raw)
+        : NaN;
   if (!Number.isInteger(port) || port <= 0 || port > 65535 || port === 4001) {
     return {
       error: `--port must be a port in 1..65535 and not 4001 (got ${String(raw)})`,
@@ -187,6 +195,8 @@ export function resolvePlaygroundPort(
 
 /** Default cache dir for the fetched binary (keeps a throwaway run out of cwd). */
 export const DEFAULT_PLAYGROUND_CACHE = path.join(os.tmpdir(), "amd-gaia-agent-email");
+
+const PLAYGROUND_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 async function cmdPlayground(args: ParsedArgs): Promise<number> {
   const parsed = resolvePlaygroundPort(args.flags.port);
@@ -224,10 +234,19 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
 
     // Stay alive until interrupted, then shut the sidecar down cleanly. We own all
     // the signals the auto-reaper would have handled (it's off, above).
-    const stopError = await new Promise<Error | undefined>((resolve) => {
+    let stop!: () => void;
+    const stopped = new Promise<Error | undefined>((resolve) => {
       let stopping = false;
-      const stop = (): void => {
-        if (stopping) return; // a second signal shouldn't re-enter shutdown
+      stop = (): void => {
+        if (stopping) {
+          // Absorbed, so say what is happening — otherwise a repeat Ctrl+C
+          // during a slow teardown just looks like a frozen terminal.
+          process.stderr.write(
+            `[agent-email] already stopping the sidecar (pid ${String(sidecar.child.pid)}); ` +
+              "waiting for its process tree to exit ...\n",
+          );
+          return;
+        }
         stopping = true;
         process.stdout.write("\n[agent-email] stopping the sidecar ...\n");
         shutdown(sidecar).then(
@@ -235,10 +254,20 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
           (e: unknown) => resolve(e instanceof Error ? e : new Error(String(e))),
         );
       };
-      for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-        process.once(sig, stop);
-      }
+      // process.on, not once: a second Ctrl+C during the shutdown would
+      // otherwise hit Node's default disposition and kill us mid-teardown,
+      // orphaning the detached sidecar tree on the port. The `stopping` guard
+      // absorbs the repeats.
+      for (const sig of PLAYGROUND_SIGNALS) process.on(sig, stop);
     });
+    let stopError: Error | undefined;
+    try {
+      stopError = await stopped;
+    } finally {
+      // Left installed, they would swallow every later signal AND suppress
+      // Node's default disposition, so Ctrl+C would stop working entirely.
+      for (const sig of PLAYGROUND_SIGNALS) process.removeListener(sig, stop);
+    }
     // A surviving sidecar keeps the port bound; its error names the pid to kill.
     if (stopError) {
       process.stderr.write(`[agent-email] ${stopError.message}\n`);
