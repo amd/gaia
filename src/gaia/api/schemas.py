@@ -9,6 +9,7 @@ OpenAI-compatible API endpoints.
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -52,6 +53,34 @@ class ChatMessage(BaseModel):
     tool_call_id: Optional[str] = Field(
         default=None, description="Tool call ID (for tool role messages)"
     )
+
+
+def message_text(message: ChatMessage) -> str:
+    """The message's text, with a content-part array joined into one string.
+
+    Lives beside the schema because every server that accepts
+    :class:`ChatCompletionRequest` has to flatten ``content`` the same way —
+    the widened type reaches all of them, so a second reading of it is a bug.
+    """
+    content = message.content
+    if content is None or isinstance(content, str):
+        return content or ""
+    texts = []
+    for part in content:
+        if part.type != "text":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Content part type '{part.type}' is not supported: gaia api "
+                    "accepts text only. Send the content as text parts."
+                ),
+            )
+        if part.text is None:
+            raise HTTPException(
+                status_code=400, detail="A 'text' content part has no 'text' field."
+            )
+        texts.append(part.text)
+    return "\n".join(texts)
 
 
 class ChatCompletionRequest(BaseModel):

@@ -39,6 +39,7 @@ from .schemas import (
     ChatMessage,
     ModelListResponse,
     UsageInfo,
+    message_text,
 )
 
 # Configure logging
@@ -86,29 +87,6 @@ def _log_request_parameter_summary(request: ChatCompletionRequest) -> None:
         logger.debug("  %s: %s", field_name, "set" if value is not None else "not set")
 
 
-def _message_text(message: ChatMessage) -> str:
-    """The message's text, with a content-part array joined into one string."""
-    content = message.content
-    if content is None or isinstance(content, str):
-        return content or ""
-    texts = []
-    for part in content:
-        if part.type != "text":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Content part type '{part.type}' is not supported: gaia api "
-                    "accepts text only. Send the content as text parts."
-                ),
-            )
-        if part.text is None:
-            raise HTTPException(
-                status_code=400, detail="A 'text' content part has no 'text' field."
-            )
-        texts.append(part.text)
-    return "\n".join(texts)
-
-
 def _split_conversation(messages: List[ChatMessage]) -> Tuple[str, list, str]:
     """Split a request into (query, prior turns, caller system text).
 
@@ -120,7 +98,7 @@ def _split_conversation(messages: List[ChatMessage]) -> Tuple[str, list, str]:
     turns = []
     for message in messages:
         if message.role in ("system", "developer"):
-            text = _message_text(message)
+            text = message_text(message)
             if text:
                 system_texts.append(text)
         else:
@@ -138,13 +116,13 @@ def _split_conversation(messages: List[ChatMessage]) -> Tuple[str, list, str]:
                 "gaia api answers the final user turn."
             ),
         )
-    query = _message_text(turns[-1])
+    query = message_text(turns[-1])
     if not query:
         raise HTTPException(status_code=400, detail="The last user message is empty")
 
     history = []
     for message in turns[:-1]:
-        entry = {"role": message.role, "content": _message_text(message)}
+        entry = {"role": message.role, "content": message_text(message)}
         if message.tool_calls:
             entry["tool_calls"] = message.tool_calls
         if message.tool_call_id is not None:
@@ -170,6 +148,10 @@ def _prepare_agent(
     if request.top_p is not None:
         config.top_p = request.top_p
     if request.max_tokens is not None:
+        # Both: the agent loop passes ``_max_output_tokens()`` explicitly on
+        # every call, which wins over ``config.max_tokens``; other call sites
+        # fall back to the config.
+        agent.max_output_tokens = request.max_tokens
         config.max_tokens = request.max_tokens
 
 
