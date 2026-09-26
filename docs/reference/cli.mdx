@@ -70,7 +70,7 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--ui-dist <path>` | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the installed package |
 | `--cli` | Launch interactive CLI chat |
-| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `email`, `api`, `stats`, and `mcp start`. |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, and `mcp start`. `gaia email` rejects it — see [Email Command](#email-command). |
 
 **Examples:**
 
@@ -928,6 +928,7 @@ gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
 | `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
 | `--spec` | flag | false | Generate the HTML endpoint spec page, write it to disk, and open it in a browser. No LLM or Lemonade required. |
 | `--output PATH` | path | `~/.gaia/email/endpoint-spec.html` | Where to write the HTML spec (only used with `--spec`). |
+| `--base-url` | – | – | Rejected (exit 2). The email agent runs inside the GAIA daemon and uses the daemon's `LEMONADE_BASE_URL`; to switch servers, run `gaia daemon stop`, set `LEMONADE_BASE_URL`, and re-run `gaia email`. |
 
 **Setup:** requires the Google connector. Run `gaia connectors connect google` first; you'll be asked to grant Gmail and Calendar scopes.
 
