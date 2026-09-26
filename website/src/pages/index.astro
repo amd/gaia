@@ -13,8 +13,31 @@ import Footer from '../components/Footer.astro';
 import InstallCommand from '../components/InstallCommand.astro';
 import TuiDownload from '../components/TuiDownload.astro';
 import Feature from '../components/Feature.astro';
+import StatBlock from '../components/StatBlock.astro';
+import ReleaseStream from '../components/ReleaseStream.astro';
+import { formatCount, getNpmDownloadStats, getReleaseStats, getRepoStats } from '../data/github';
 
 const DOCS = 'https://amd-gaia.ai/docs';
+
+const repoStats = await getRepoStats();
+const releaseStats = await getReleaseStats();
+const npmStats = await getNpmDownloadStats();
+
+// Labels are deliberately specific ("GitHub release downloads", "npm
+// downloads") rather than a bare "downloads" — the site's own install button
+// downloads from an R2 bucket with no tracking at all, so a number here that
+// implied "everyone who's ever installed GAIA" would overclaim. See
+// docs/plans/website-admin-dashboard.md for the real, all-source count.
+const STATS = [
+  { value: formatCount(repoStats.stars), label: 'GitHub stars' },
+  { value: formatCount(repoStats.forks), label: 'GitHub forks' },
+  { value: formatCount(releaseStats.totalDownloadCount), label: 'GitHub release downloads' },
+  { value: String(releaseStats.totalReleaseCount), label: 'Releases' },
+  { value: formatCount(npmStats.weekly), label: 'npm downloads / week' },
+  { value: formatCount(npmStats.lifetime), label: 'npm downloads total' },
+];
+
+const RECENT_RELEASES = releaseStats.releases.slice(0, 8);
 
 // Three things you can do with the one agent — not three products.
 const PATHS = [
@@ -130,6 +153,27 @@ const ARCHITECTURE = [
       </p>
 
       <TuiDownload align="center" class="animate-g-rise mt-10 [animation-delay:0.14s]" />
+    </section>
+
+    <!-- Traction, right under the install — stars/forks/downloads, then
+         shipping cadence. Both come from live GitHub/npm data, fetched at
+         build time (website/src/data/github.ts); no bundled fixture. -->
+    <section id="stats" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
+      <div class="g-label mb-8">Live from GitHub &amp; npm</div>
+      <StatBlock stats={STATS} />
+    </section>
+
+    <section id="releases" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
+      <div class="g-label mb-8">Releases</div>
+      <ReleaseStream releases={RECENT_RELEASES} class="max-w-[560px]" />
+      <a
+        href="https://github.com/amd/gaia/releases"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="g-label mt-6 inline-block text-g-gold-text hover:underline"
+      >
+        View all releases on GitHub →
+      </a>
     </section>
 
     <!-- 2. The whole product, in three boxes. -->

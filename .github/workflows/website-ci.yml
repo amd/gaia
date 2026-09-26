@@ -47,6 +47,11 @@ jobs:
       # Same source the Railway production build uses; the live catalog is the
       # real dependency (no fixture fallback). A hub outage fails the build loudly.
       HUB_CATALOG_URL: https://hub.amd-gaia.ai
+      # Optional — the homepage stats row (website/src/data/github.ts) fetches
+      # public GitHub data at build time. Unauthenticated works fine (60
+      # req/hr); this just raises it to 5,000/hr. Actions provides it for
+      # free, so there's no reason to omit it even though it isn't required.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
