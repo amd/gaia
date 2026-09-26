@@ -5948,7 +5948,10 @@ Do NOT wrap conversational replies in JSON.
         # Set when the person at the prompt declines more steps. Distinct from
         # cancelled_by_console, which only the Agent UI Stop button sets.
         user_stopped = False
+        # Diagnostic only — no threshold reads this; it just numbers the warnings.
         error_count = 0
+        # Malformed replies get their own budget: failed tool calls are ordinary work.
+        parse_failures = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
         # Repeated calls already sent one correction; the next repeat ends the turn.
         loop_corrected_calls: set = set()
@@ -6777,6 +6780,8 @@ Do NOT wrap conversational replies in JSON.
             # nudge the model to retry with simpler args, and continue the loop.
             try:
                 parsed = self._parse_llm_response(response)
+                # Budget is consecutive: a clean parse gives the retries back.
+                parse_failures = 0
             except ValueError as parse_exc:
                 logger.warning(
                     "Tool-call parse failed (step %d): %s — recovering with retry prompt",
@@ -6791,6 +6796,7 @@ Do NOT wrap conversational replies in JSON.
                     }
                 )
                 error_count += 1
+                parse_failures += 1
                 # Issue #1023: pull the most recent successful image path
                 # out of step_results so both the recovery prompt and the
                 # give-up fallback can surface it.  When the SD two-step
@@ -6811,7 +6817,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 # If we've already retried several times, give up gracefully and
                 # answer in plain text rather than spamming the user.
-                if error_count >= 3:
+                if parse_failures >= 3:
                     if _last_image_path:
                         final_answer = (
                             f"I generated your image at `{_last_image_path}`, "
@@ -6975,6 +6981,8 @@ Do NOT wrap conversational replies in JSON.
                 # Parse the plan response
                 try:
                     parsed_plan = self._parse_llm_response(plan_response)
+                    # Budget is consecutive: a clean parse gives the retries back.
+                    parse_failures = 0
                 except ValueError as plan_parse_exc:
                     logger.warning(
                         "Plan parse failed (step %d): %s — recovering with retry prompt",
@@ -6989,7 +6997,8 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     error_count += 1
-                    if error_count >= 3:
+                    parse_failures += 1
+                    if parse_failures >= 3:
                         final_answer = (
                             "I had trouble formatting my plan. Could you "
                             "rephrase or break the request into smaller pieces?"
