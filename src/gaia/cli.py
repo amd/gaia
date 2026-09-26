@@ -3742,29 +3742,46 @@ def main():
             return
 
         if action == "stop":
+            import contextlib
             import signal
 
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
             if not os.path.exists(pid_path):
                 print("Telegram adapter is not running (no PID file).")
                 return
+            from gaia.messaging.telegram import is_adapter_process
+
             try:
                 with open(pid_path, "r", encoding="utf-8") as f:
                     pid = int(f.read().strip())
+            except (OSError, ValueError):
+                # The file is written non-atomically, so a crash mid-write
+                # leaves one that names no process worth signalling.
+                print(f"Unreadable PID file {pid_path}; removing it.")
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(pid_path)
+                return
+
+            try:
+                if not is_adapter_process(pid):
+                    print(
+                        f"PID {pid} is not a Telegram adapter; removing stale PID file."
+                    )
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(pid_path)
+                    return
+                # The adapter removes its own PID file once polling stops.
                 os.kill(pid, signal.SIGTERM)
                 print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
-                try:
-                    os.remove(pid_path)
-                except OSError:
-                    pass
             except ProcessLookupError:
                 print("Process not found; removing stale PID file.")
-                try:
+                with contextlib.suppress(FileNotFoundError):
                     os.remove(pid_path)
-                except OSError:
-                    pass
             except PermissionError:
                 print("Permission denied when attempting to stop process. Try sudo.")
+                sys.exit(1)
+            except RuntimeError as e:
+                print(f"❌ {e}", file=sys.stderr)
                 sys.exit(1)
             except OSError as e:
                 print(f"Failed to stop Telegram adapter: {e}")
@@ -3790,11 +3807,33 @@ def main():
                 # is not a URLError - see AbstractHTTPHandler.do_open.
                 pass
 
+            from gaia.messaging.telegram import is_adapter_process
+
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
+            pid = None
             if os.path.exists(pid_path):
+                try:
+                    with open(pid_path, "r", encoding="utf-8") as f:
+                        pid = int(f.read().strip())
+                except (OSError, ValueError):
+                    print(
+                        f"Telegram adapter: not running (unreadable PID file {pid_path})"
+                    )
+                    return
+            try:
+                running = pid is not None and is_adapter_process(pid)
+            except (PermissionError, RuntimeError) as e:
                 print(
-                    "Telegram adapter: PID file exists, but health check failed (may be starting or unhealthy)."
+                    f"❌ Telegram adapter: cannot verify pid {pid}: {e}",
+                    file=sys.stderr,
                 )
+                sys.exit(1)
+            if running:
+                print(
+                    "Telegram adapter: running, but health check failed (may be starting or unhealthy)."
+                )
+            elif pid is not None:
+                print(f"Telegram adapter: not running (stale PID file {pid_path})")
             else:
                 print("Telegram adapter: not running")
             return
