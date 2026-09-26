@@ -18,7 +18,42 @@ import (
 )
 
 const FireworksURL = "https://api.fireworks.ai/inference/v1"
-const FireworksModel = "fireworks.gemma-4-31b-it"
+
+// Recommendation is a Fireworks model worth steering users to, with the reason.
+type Recommendation struct {
+	ID   string
+	Note string
+}
+
+// RecommendedModels is ranked by the agent task benchmark (September 2026). It
+// is the Fireworks section of recommended_models.json, in file order; refresh
+// it there as models change.
+var RecommendedModels []Recommendation
+
+func TopRecommendation() Recommendation { return RecommendedModels[0] }
+
+// rankKey reduces a cloud id to provider + trailing name segment, so that
+// "fireworks.accounts/fireworks/models/glm-5p3-flash" and
+// "fireworks.glm-5p3-flash" — both forms Lemonade reports — compare equal. The
+// provider stays in the key so amd.<name> never matches a Fireworks entry.
+func rankKey(id string) string {
+	provider, name, found := strings.Cut(id, ".")
+	if !found {
+		return id
+	}
+	return provider + "." + name[strings.LastIndex(name, "/")+1:]
+}
+
+// Rank returns a model's 1-based rank and note, or ok=false when it is not recommended.
+func Rank(id string) (rank int, note string, ok bool) {
+	key := rankKey(id)
+	for i, r := range RecommendedModels {
+		if rankKey(r.ID) == key {
+			return i + 1, r.Note, true
+		}
+	}
+	return 0, "", false
+}
 
 type Provider struct {
 	Name       string `json:"name"`

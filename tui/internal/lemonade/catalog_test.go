@@ -125,12 +125,12 @@ func TestUnreadableMachineBlocksEveryDownload(t *testing.T) {
 }
 
 func TestFireworksKeepsItsSuggestionFirstAndHidesWhatTheAccountLacks(t *testing.T) {
-	entries := BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: FireworksModel, Recipe: "cloud"}}, Capacity{}, nil)
-	if len(entries) != 2 || entries[0].Model.ID != FireworksModel || !entries[0].Selectable() {
+	entries := BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: TopRecommendation().ID, Recipe: "cloud"}}, Capacity{}, nil)
+	if len(entries) != 2 || entries[0].Model.ID != TopRecommendation().ID || !entries[0].Selectable() {
 		t.Fatalf("suggested Fireworks model should lead: %+v", entries)
 	}
 	for _, e := range BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}}, Capacity{}, nil) {
-		if e.Model.ID == FireworksModel {
+		if e.Model.ID == TopRecommendation().ID {
 			t.Fatal("a Fireworks model the account lacks was listed")
 		}
 	}

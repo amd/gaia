@@ -32,9 +32,13 @@ type Recommended struct {
 	MinLemonade string `json:"min_lemonade_version"`
 }
 
-// Matches reports whether a catalog id is this recommendation.
+// Matches reports whether a catalog id is this recommendation. A cloud id also
+// matches its account-path form (fireworks.accounts/fireworks/models/<name>).
 func (r Recommended) Matches(id string) bool {
-	return id == r.ID || (r.RegisterAs != "" && id == r.RegisterAs)
+	if id == r.ID || (r.RegisterAs != "" && id == r.RegisterAs) {
+		return true
+	}
+	return r.Provider != "local" && rankKey(id) == rankKey(r.ID)
 }
 
 type fitConstants struct {
@@ -62,6 +66,12 @@ func init() {
 		panic("recommended_models.json: fit.memory_overhead_factor must be positive")
 	}
 	recommended, fitRule = doc.Models, doc.Fit
+	for _, r := range RecommendedFor("fireworks") {
+		RecommendedModels = append(RecommendedModels, Recommendation{ID: r.ID, Note: r.Note})
+	}
+	if len(RecommendedModels) == 0 {
+		panic("recommended_models.json: no Fireworks recommendations")
+	}
 }
 
 // RecommendedFor returns the recommendations for one provider, in list order.

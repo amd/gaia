@@ -540,7 +540,8 @@ func (m Model) View() string {
 				lines = append(lines, "Usage may incur charges.")
 			}
 		} else if m.chosen() == "fireworks" {
-			lines = append(lines, "Chat history is sent to Fireworks AI. Usage may incur charges.", "Suggested model: Gemma 4 31B IT", "Endpoint: "+lemonade.FireworksURL)
+			top := lemonade.TopRecommendation()
+			lines = append(lines, "Chat history is sent to Fireworks AI. Usage may incur charges.", "Recommended model: "+strings.TrimPrefix(top.ID, "fireworks.")+" · "+top.Note, "Endpoint: "+lemonade.FireworksURL)
 		} else {
 			lines = append(lines, "Chat history is sent to your configured AMD gateway.")
 		}
@@ -603,13 +604,18 @@ func (m Model) View() string {
 			if i == m.focus {
 				marker = "› "
 			}
-			label := marker + entryName(e, m.chosen())
+			label := entryName(e, m.chosen())
 			if e.Recommended != nil {
-				label = marker + "★ " + entryName(e, m.chosen())
+				label = "★ " + label
+			}
+			if rank, note, ok := lemonade.Rank(e.Model.ID); ok {
+				label += fmt.Sprintf(" · #%d %s", rank, note)
 			}
 			if status := entryStatus(e); status != "" {
 				label += " · " + status
 			}
+			// One row per model: a wrapped row would push the rows above it out of the budget.
+			label = ansi.Truncate(marker+label, w, "…")
 			switch {
 			case i == m.focus:
 				lines = append(lines, title.Render(label))
