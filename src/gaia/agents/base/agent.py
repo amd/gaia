@@ -52,6 +52,14 @@ from gaia.agents.base.context_eviction import (
     evict_threshold_from_env,
     resolve_context_eviction,
 )
+from gaia.agents.base.duplicate_guard import (
+    DEFAULT_DUPLICATE_LIMIT,
+    DEFAULT_DUPLICATE_WINDOW,
+    DuplicateCallGuard,
+    duplicate_guard_from_env,
+    duplicate_limit_from_env,
+    duplicate_window_from_env,
+)
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.reasoning_policy import (
@@ -1333,6 +1341,9 @@ Do NOT wrap conversational replies in JSON.
         resend_reasoning_across_requests: bool = False,
         reasoning_policy: str = "off",
         reasoning_history: str = "send",
+        duplicate_call_guard: bool = True,
+        duplicate_window: int = DEFAULT_DUPLICATE_WINDOW,
+        duplicate_limit: int = DEFAULT_DUPLICATE_LIMIT,
     ):
         """
         Initialize the Agent with LLM client.
@@ -1410,6 +1421,19 @@ Do NOT wrap conversational replies in JSON.
                           "drop" omits it from what is sent; the conversation
                           log keeps every step's reasoning either way.
                           GAIA_REASONING_HISTORY overrides.
+            duplicate_call_guard: True (default): a call identical to one that
+                          already ran this turn, within the last
+                          ``duplicate_window`` steps, with no error and no
+                          change to a file it references since, is not run
+                          again; the model gets the step it ran at and a
+                          ``read_tool_output`` handle to its output. After
+                          ``duplicate_limit`` short-circuits in a turn the
+                          message warns; after twice that the loop guard ends
+                          the turn. GAIA_DUPLICATE_GUARD, GAIA_DUPLICATE_WINDOW
+                          and GAIA_DUPLICATE_LIMIT override the three settings.
+            duplicate_window: Steps a result stays current for (default: 6).
+            duplicate_limit: Short-circuits per turn before the warning
+                          (default: 3); the turn ends at twice this.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
@@ -1626,6 +1650,15 @@ Do NOT wrap conversational replies in JSON.
         self._step_reasoning_effort: Optional[str] = None
         self.reasoning_history = validate_reasoning_history(
             reasoning_history_from_env() or reasoning_history
+        )
+        from gaia.agents.base.artifacts import store_for
+
+        env_guard = duplicate_guard_from_env()
+        self._duplicate_guard = DuplicateCallGuard(
+            enabled=duplicate_call_guard if env_guard is None else env_guard,
+            window=duplicate_window_from_env() or duplicate_window,
+            limit=duplicate_limit_from_env() or duplicate_limit,
+            store=lambda: store_for(self),
         )
 
         chat_config = AgentConfig(
@@ -4564,15 +4597,26 @@ Do NOT wrap conversational replies in JSON.
         """
         recorder = getattr(self, "_turn_recorder", None)
         step_timer = getattr(self, "_step_timer", None)
+        outermost = not getattr(self, "_tool_timing_depth", 0)
+        if outermost:
+            duplicate = self._duplicate_guard.check(tool_name, tool_args)
+            if duplicate is not None:
+                logger.info(
+                    "Duplicate call short-circuited: %s already ran at step %s",
+                    tool_name,
+                    duplicate["previous_step"],
+                )
+                self._note_verification_signal(tool_name, tool_args, duplicate)
+                self._reasoning_policy.observe(tool_name, duplicate)
+                return duplicate
         # Only the outermost call is timed. A tool body may call another tool
         # (CodeAgent's orchestration does); timing both would count the inner
         # one's seconds twice and push tool_s past the turn's own total.
-        if (recorder is None and step_timer is None) or getattr(
-            self, "_tool_timing_depth", 0
-        ):
+        if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result)
-            if not getattr(self, "_tool_timing_depth", 0):
+            if outermost:
+                self._duplicate_guard.record(tool_name, tool_args, result)
                 self._reasoning_policy.observe(tool_name, result)
             return result
 
@@ -4586,6 +4630,7 @@ Do NOT wrap conversational replies in JSON.
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             self._note_verification_signal(tool_name, tool_args, result)
+            self._duplicate_guard.record(tool_name, tool_args, result)
             self._reasoning_policy.observe(tool_name, result)
             return result
         finally:
@@ -6382,6 +6427,7 @@ Do NOT wrap conversational replies in JSON.
         self._pending_eviction = None
         self._reasoning_policy.begin_turn()
         self._step_reasoning_effort = None
+        self._duplicate_guard.begin_turn()
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -6454,6 +6500,7 @@ Do NOT wrap conversational replies in JSON.
                     messages, steps_taken, store_for(self)
                 )
             self._step_reasoning_effort = self._reasoning_policy.decide()
+            self._duplicate_guard.begin_step(steps_taken)
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
 
@@ -6588,6 +6635,19 @@ Do NOT wrap conversational replies in JSON.
                     messages.append(
                         self._create_tool_message(tool_name, truncated_result)
                     )
+
+                    if self._duplicate_guard.turn_should_end:
+                        final_answer, steps_taken = self._end_turn_on_duplicates(
+                            tool_name,
+                            tool_args,
+                            previous_outputs,
+                            messages,
+                            conversation,
+                            steps_taken,
+                        )
+                        if final_answer is None:
+                            cancelled_by_console = True
+                        break
 
                     # Check for error (support multiple error formats)
                     is_error = isinstance(tool_result, dict) and (
@@ -7718,6 +7778,20 @@ Do NOT wrap conversational replies in JSON.
                         )
                     )
 
+                    if self._duplicate_guard.turn_should_end:
+                        final_answer, steps_taken = self._end_turn_on_duplicates(
+                            tool_name,
+                            tool_args,
+                            previous_outputs,
+                            messages,
+                            conversation,
+                            steps_taken,
+                        )
+                        if final_answer is None:
+                            cancelled_by_console = True
+                        fanout_repeat_break = True
+                        break
+
                     # Track errors but DON'T break early — drain all N
                     # tool calls first so conversation history reflects
                     # the full set, per #944 acceptance criterion (b).
@@ -7980,6 +8054,19 @@ Do NOT wrap conversational replies in JSON.
                 # Share tool output with subsequent LLM calls
                 messages.append(self._create_tool_message(tool_name, truncated_result))
 
+                if self._duplicate_guard.turn_should_end:
+                    final_answer, steps_taken = self._end_turn_on_duplicates(
+                        tool_name,
+                        tool_args,
+                        previous_outputs,
+                        messages,
+                        conversation,
+                        steps_taken,
+                    )
+                    if final_answer is None:
+                        cancelled_by_console = True
+                    break
+
                 # For single-step plans, we still need to let the LLM process the result
                 # This is especially important for RAG queries where the LLM needs to
                 # synthesize the retrieved information into a coherent answer
@@ -8050,6 +8137,7 @@ Do NOT wrap conversational replies in JSON.
                     )
                 if steps_taken == 1:
                     stats_record["reasoning_history"] = self.reasoning_history
+                stats_record.update(self._duplicate_guard.step_stats())
                 if self._context_evictor is not None:
                     self._context_evictor.note_prompt_tokens(perf_stats)
                 conversation.append({"role": "system", "content": stats_record})
@@ -9050,6 +9138,26 @@ Do NOT wrap conversational replies in JSON.
         # Raw, like the summary branches above — the caller finalizes once.
         # Subclass hooks append corrections, so a second pass duplicates them.
         return answer, steps_taken
+
+    def _end_turn_on_duplicates(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        previous_outputs: list,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+    ) -> Tuple[Optional[str], int]:
+        """End the turn the loop-guard way once the duplicate guard gives up."""
+        self.console.print_repeated_tool_warning()
+        return self._answer_after_repeated_calls(
+            tool_name,
+            self._duplicate_guard.repeats(tool_name, tool_args),
+            [o.get("result") for o in previous_outputs],
+            messages,
+            conversation,
+            steps_taken,
+        )
 
     def _dedup_mutation_call(
         self,

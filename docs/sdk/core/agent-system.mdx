@@ -509,6 +509,30 @@ default; `drop` omits it from what is sent while the conversation log keeps
 every step's reasoning, and the first `stats` entry of a turn records the
 setting as `reasoning_history`.
 
+## Repeated tool calls
+
+With reasoning off, one model repeated the identical shell command 101 times
+in a row, and its twin 101 times: 281 calls in 43 steps, no edit, until the
+step budget ran out, and every call ran. The duplicate-call guard is on by
+default and model-agnostic: a call identical to one that already ran this turn
+(same tool, same arguments after JSON canonicalisation) within the last
+`duplicate_window` steps (6) does not run again. The model gets
+`{"status": "duplicate", "executed": false, ...}` naming the step that ran it
+and a `read_tool_output(artifact=..., entry=1)` handle to the archived output,
+so nothing is lost. A call still runs when its previous execution errored or
+was refused (a retry is legitimate), when an edit or write tool has since
+touched a file it references — the path itself, its basename, or a directory
+above it, in any argument — when it is a shell or Python command and any file
+changed since, and for `read_tool_output`, `session_findings`,
+`delegate_task`, `sleep` and `request_user_input`. After `duplicate_limit` (3)
+short-circuits in a turn the message warns that the loop guard will end the
+turn, and that step's `stats` entry records `loop_suspected`; after twice that
+the turn ends the way the loop guard ends it, with one closing call to answer
+from the work done. Every step with a short-circuit records
+`duplicates_short_circuited`. `GAIA_DUPLICATE_GUARD` (`0` disables),
+`GAIA_DUPLICATE_WINDOW` and `GAIA_DUPLICATE_LIMIT` override the three
+settings; a malformed value is an error at construction.
+
 ## Editing what the agent has seen
 
 An edit or write tool refuses an existing file the agent has not read, or one

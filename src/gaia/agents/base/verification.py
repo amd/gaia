@@ -569,6 +569,11 @@ def _changed_paths(execution: Dict[str, Any]) -> Optional[List[str]]:
     return paths
 
 
+def paths_changed_by(tool_name: str, tool_args: Any) -> List[str]:
+    """Paths a successful call of *tool_name* with *tool_args* changed, by name."""
+    return _changed_paths({"tool": tool_name, "args": tool_args}) or []
+
+
 def _is_project_change(execution: Dict[str, Any], project_root: str) -> bool:
     import os
 

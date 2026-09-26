@@ -76,6 +76,12 @@ class _DummyAgent(Agent):
             del command, timeout
             return agent.shell_result
 
+        @tool
+        def write_scratch_file(file_path: str, content: str) -> dict:
+            """Write a file, so a repeated check after it is a fresh run."""
+            del content
+            return {"status": "success", "file_path": file_path}
+
     def _create_console(self):
         from gaia.agents.base.console import AgentConsole
 
@@ -440,14 +446,21 @@ def test_loop_reports_a_fixed_test_as_verified(agent):
 
 
 def test_loop_reports_a_newly_broken_test_as_not_passing(agent):
+    # The write between the runs is what breaks the test; without a change
+    # the duplicate-call guard would not run the same check again.
     _scripted_runs(
         agent,
         ({"status": "success", "return_code": 0, "stdout": "3 passed"}, "pytest -q"),
+        ({"status": "success", "file_path": "a.py"}, _WRITE),
         ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
     )
     line = _scope_line(agent.process_query("refactor", max_steps=5)["result"])
     assert "pytest ran and did not pass" in line
     assert "pytest passed" not in line
+
+
+#: Stands for a write_scratch_file call in a scripted run; the shell result is unused.
+_WRITE = object()
 
 
 def _scripted_runs(agent_, *runs):
@@ -458,7 +471,20 @@ def _scripted_runs(agent_, *runs):
     def _next_result():
         return results.pop(0) if results else real_tool_result
 
-    responses = [_tool_call(command) for _, command in runs] + [_answer("Done.")]
+    responses = [
+        (
+            _tool_call(command)
+            if command is not _WRITE
+            else json.dumps(
+                {
+                    "thought": "changing",
+                    "tool": "write_scratch_file",
+                    "tool_args": {"file_path": "a.py", "content": "x"},
+                }
+            )
+        )
+        for _, command in runs
+    ] + [_answer("Done.")]
     chat = _stub_chat(agent_, *responses)
     send = chat.send_messages.side_effect
 
