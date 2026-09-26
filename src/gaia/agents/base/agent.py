@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import queue
 import re
 import subprocess
 import threading
@@ -120,6 +121,13 @@ CHUNK_TRUNCATION_SIZE = 2500
 # override every agent at once. Agents that genuinely need more (e.g. CodeAgent
 # for multi-file generation) override it explicitly in their own config.
 DEFAULT_MAX_STEPS = 50
+
+# Per-reply output caps. A local model's 32K ctx must also hold a ~7.7K-token
+# system prompt plus history, so 8K is the most output it can spare.
+LOCAL_MAX_OUTPUT_TOKENS = 8192
+# A cloud reasoning model spends output tokens on thinking too; its window is
+# the provider's, not local hardware's.
+CLOUD_MAX_OUTPUT_TOKENS = 32768
 
 
 def effective_skill_body(agent, skill) -> str:
@@ -331,6 +339,9 @@ class ToolExecutionTimeout(Exception):
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
+    # Re-runs a shell command until it succeeds; gated for the same reason as
+    # the command it polls with.
+    "wait_for_condition",
     # Runs a .py file in a subprocess — arbitrary code execution, and unlike
     # run_shell_command there is no read-only allowlist behind it.
     "execute_python_file",
@@ -392,6 +403,13 @@ _CONTEXT_STILL_OVERFLOWING_MESSAGE = (
     "after trimming older results. Try narrowing it — fewer results, a "
     "shorter date range, or a more specific query — or start a fresh "
     "conversation and ask again."
+)
+
+# Sent once, with no tools offered, when the step limit runs out unanswered.
+_STEP_CAP_ANSWER_PROMPT = (
+    "You have used all {steps} steps and can't call more tools. Give the user "
+    "your final answer now, using only what the tool results above show: what "
+    "you found, what you couldn't finish and why, and what they can do next."
 )
 
 
@@ -528,6 +546,31 @@ def _sum_conversation_tokens(
             usage.get("completion_tokens") or usage.get("output_tokens")
         )
     return total_input, total_output
+
+
+def _sum_cached_tokens(conversation: List[Dict[str, Any]]) -> int:
+    """Prompt tokens the backend served from its own cache this turn.
+
+    Reported by a cloud-routed step (Fireworks puts it in
+    ``prompt_tokens_details.cached_tokens``); a local llama.cpp run reports
+    nothing and sums to 0, which is the truth there rather than a gap — the
+    prompt genuinely was not served from a provider-side cache.
+
+    Worth its own total because it is the one token class that is billed
+    differently, and because a turn whose prompt is mostly cache is a very
+    different cost from one that is not.
+    """
+    total = 0
+    for entry in conversation:
+        if entry.get("role") != "system" or not isinstance(entry.get("content"), dict):
+            continue
+        content = entry["content"]
+        if content.get("type") != "stats" or "performance_stats" not in content:
+            continue
+        stats = content["performance_stats"]
+        if isinstance(stats, dict):
+            total += _safe_number(stats.get("cached_tokens"))
+    return total
 
 
 def _query_tok_per_s(conversation: List[Dict[str, Any]]) -> Optional[float]:
@@ -990,16 +1033,11 @@ class Agent(abc.ABC):
     #: skill name -> ids of the deltas currently applied to it.
     _overlaid_skills: Optional[Dict[str, List[str]]] = None
 
-    #: Proactive skill discovery: matches the user's turn against skills that
-    #: are INSTALLED BUT NOT LOADED and activates the winner, so a user never
-    #: has to know a skill's name. ``None`` (the default) leaves every existing
-    #: agent's behavior and composed prompt byte-identical; GaiaAgent builds one.
-    #: See :mod:`gaia.agents.base.skill_discovery`.
-    _skill_discovery: Optional[Any] = None
-
-    #: This turn's discovery note, rendered by
-    #: ``get_skill_discovery_system_prompt``. Cleared and recomputed per turn.
-    _skill_discovery_result: Optional[Any] = None
+    #: List every installed skill in the system prompt so the model can load one
+    #: when the work fits. ``False`` (the default) keeps every other agent's
+    #: composed prompt byte-identical; GaiaAgent turns it on.
+    #: See :mod:`gaia.agents.base.skill_catalog`.
+    _skill_catalog_enabled: bool = False
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -1165,17 +1203,18 @@ Do NOT wrap conversational replies in JSON.
         output_handler=None,
         max_plan_iterations: int = 3,
         max_consecutive_repeats: int = 4,
-        min_context_size: int = 32768,
+        min_context_size: Optional[int] = None,
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
+        max_output_tokens: Optional[int] = None,
     ):
         """
         Initialize the Agent with LLM client.
 
         Args:
             use_claude: If True, uses Claude API (default: False)
-            use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
+            use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
@@ -1191,8 +1230,8 @@ Do NOT wrap conversational replies in JSON.
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
-            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4)
-            min_context_size: Minimum context size required for this agent (default: 32768).
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
+            min_context_size: Minimum context size required; unset uses the model/device resolver.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
             skill_set: Explicit skill set to activate (the generic
@@ -1205,9 +1244,27 @@ Do NOT wrap conversational replies in JSON.
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
+            max_output_tokens: Output-token cap for each LLM reply, thinking
+                          included. None (default) picks per model:
+                          CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
+                          LOCAL_MAX_OUTPUT_TOKENS otherwise.
 
-        Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
+        Note: Uses local LLM server by default unless use_claude is True.
         """
+        if use_chatgpt:
+            from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
+
+            raise ValueError(REMOVED_PROVIDER_MESSAGE)
+        if max_output_tokens is not None and (
+            isinstance(max_output_tokens, bool)
+            or not isinstance(max_output_tokens, int)
+            or max_output_tokens <= 0
+        ):
+            raise ValueError(
+                f"max_output_tokens must be a positive integer or None, got "
+                f"{max_output_tokens!r}."
+            )
+        self.max_output_tokens = max_output_tokens
         self.device = device
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -1234,6 +1291,12 @@ Do NOT wrap conversational replies in JSON.
         self.debug = debug
         self.last_result = None  # Store the most recent result
         self.max_plan_iterations = max_plan_iterations
+        if max_consecutive_repeats < 2:
+            raise ValueError(
+                f"max_consecutive_repeats must be at least 2, got "
+                f"{max_consecutive_repeats}: the guard counts the call being made, "
+                "so below 2 every tool call is a repeat of itself and none runs."
+            )
         self.max_consecutive_repeats = max_consecutive_repeats
         self._current_query: Optional[str] = (
             None  # Store current query for error context
@@ -1249,6 +1312,10 @@ Do NOT wrap conversational replies in JSON.
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
         self._cancel_event: Optional[threading.Event] = None
+        # Optional queue of follow-ups the user sent WHILE this turn was
+        # running. Drained at the step boundary beside the cancel check, so a
+        # second thought reaches the model without waiting out the turn.
+        self._followup_queue: Optional["queue.Queue[str]"] = None
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         if base_url is None:
@@ -1258,8 +1325,12 @@ Do NOT wrap conversational replies in JSON.
 
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
-        if not (use_claude or use_chatgpt or skip_lemonade):
-            from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+        if not (use_claude or skip_lemonade):
+            from gaia.llm.lemonade_client import (
+                LemonadeClient,
+                cloud_model_provider,
+                resolve_ctx_size,
+            )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
@@ -1270,6 +1341,11 @@ Do NOT wrap conversational replies in JSON.
                 # The local manager preloads a chat model even on an idle server.
                 LemonadeClient(base_url=base_url, verbose=False).health_check()
             else:
+                if (
+                    min_context_size is None
+                    or os.environ.get("GAIA_CTX_SIZE", "").strip()
+                ):
+                    min_context_size = resolve_ctx_size(model_id, device)
                 LemonadeManager.ensure_ready(
                     min_context_size=min_context_size,
                     quiet=silent_mode,
@@ -1350,20 +1426,24 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent shares DEFAULT_MODEL_NAME so switching agents never evicts
         # and cold-reloads the resident model.
+        from gaia.llm.lemonade_client import cloud_model_provider
+
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
-            use_chatgpt=use_chatgpt,
             claude_model=claude_model,
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking
             max_history_length=20,  # Keep more history for agent conversations
-            # Output token cap. With our 32K ctx_size and a ~7.7K-token system
-            # prompt + history, leaving 8K for output gives plenty of headroom
-            # for both prose answers and long tool-call arg blobs (the eval
-            # surfaced 4K cutting off mid-tool-call on Qwen 4B). Going much
-            # higher would steal from the input-history budget.
-            max_tokens=8192,
+            max_tokens=(
+                max_output_tokens
+                if max_output_tokens is not None
+                else (
+                    CLOUD_MAX_OUTPUT_TOKENS
+                    if not use_claude and cloud_model_provider(model_id)
+                    else LOCAL_MAX_OUTPUT_TOKENS
+                )
+            ),
         )
         self.chat = AgentSDK(chat_config)
         # ``self.model_id`` was set earlier (before ``_register_tools``) so the
@@ -1379,6 +1459,20 @@ Do NOT wrap conversational replies in JSON.
 
         if self.show_prompts:
             self.console.print_prompt(self.system_prompt, "Initial System Prompt")
+
+    def _max_output_tokens(self) -> int:
+        """Output-token cap for the next LLM call, re-read per call so a model
+        switch mid-session takes effect."""
+        if self.max_output_tokens is not None:
+            return self.max_output_tokens
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        backend = getattr(getattr(self.chat, "llm_client", None), "_backend", None)
+        if isinstance(backend, LemonadeClient) and backend.cloud_model_provider(
+            self.chat.effective_model
+        ):
+            return CLOUD_MAX_OUTPUT_TOKENS
+        return LOCAL_MAX_OUTPUT_TOKENS
 
     def _get_mixin_prompts(self) -> list[str]:
         """
@@ -1889,89 +1983,25 @@ Do NOT wrap conversational replies in JSON.
         """
         return None
 
-    def _discover_skills_for_turn(self, user_input: str) -> None:
-        """Match this turn against installed-but-unloaded skills and act on it.
+    def get_skill_catalog_system_prompt(self) -> str:
+        """Sourcing rule + one line per installed skill, for agents that opt in.
 
-        No-op unless a subclass built a
-        :class:`~gaia.agents.base.skill_discovery.SkillDiscovery` — every other
-        agent's composed prompt stays byte-identical.
-
-        Runs BEFORE :meth:`_refresh_active_tool_filter` so tools the loaded skill
-        registers are visible on the same turn, and BEFORE
-        :meth:`_refresh_active_skill_filter` so the skill is in ``loaded_skills``
-        when the body filter is computed. Pinned via :meth:`_pin_skill_body` so
-        that filter cannot immediately hide the body of the skill it just decided
-        the turn was about.
+        Auto-discovered by :meth:`_get_mixin_prompts`. It depends only on what is
+        installed, so it stays in the static, cached head of the prompt.
         """
-        discovery = self._skill_discovery
-        if discovery is None:
-            return
-
-        previous = self._skill_discovery_result
-        query = self._build_skill_discovery_query(user_input)
-        result = discovery.run(
-            query, loaded=self.loaded_skills, load_fn=self.load_skill
-        )
-        self._skill_discovery_result = result
-        if result.loaded:
-            self._pin_skill_body(result.loaded)
-
-        # Rebuild whenever the note changed, INCLUDING after a successful load.
-        # ``load_skill`` rebuilds too, but it runs before the line above, so the
-        # prompt it composed still carries the *previous* turn's note — the
-        # "SKILL ACTIVATED" line would be missing on exactly the turns that
-        # earned it. The later ``_refresh_active_skill_filter`` only recomposes
-        # when the body filter changes, so it cannot be relied on to fix this.
-        before = previous.prompt_fragment() if previous is not None else ""
-        if result.prompt_fragment() != before:
-            self.rebuild_system_prompt()
-
-    def _build_skill_discovery_query(self, user_input: str) -> str:
-        """The text discovery matches on — previous + current user message.
-
-        Reuses ChatAgent's tool-selection query when the agent has one, so a
-        follow-up ("and the one before that?") still carries the prior turn's
-        subject instead of matching on four pronouns.
-
-        ``user_input`` may already carry ``MemoryMixin``'s per-turn dynamic
-        context (current time, upcoming/overdue items) prepended to it —
-        ``process_query`` augments the message before this ever runs. That
-        preamble is real content to the LLM but pure noise to a lexical BM25
-        matcher: "Current time: 2026-09-18T00:14 (Friday)" dilutes a genuine
-        match enough to drop it below the auto-load floor on turn 1 of every
-        session (measured: a workout-video request scored 0.61 clean, 0.27
-        augmented — the difference between auto-loading and merely being
-        shortlisted). ``self._original_user_input`` is the clean text
-        ``MemoryMixin.process_query`` saved before augmenting; prefer it here
-        so discovery scores what the user actually said.
-        """
-        clean = getattr(self, "_original_user_input", None) or user_input
-        builder = getattr(self, "_build_tool_selection_query", None)
-        if callable(builder):
-            return builder(clean)
-        return clean
-
-    def get_skill_discovery_system_prompt(self) -> str:
-        """Sourcing rule + this turn's discovery note.
-
-        Auto-discovered by :meth:`_get_mixin_prompts`. Returns "" for any agent
-        without discovery enabled, so no existing prompt changes.
-        """
-        if self._skill_discovery is None:
+        if not self._skill_catalog_enabled:
             return ""
-        from gaia.agents.base.skill_discovery import GROUNDING_RULE
+        from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        result = self._skill_discovery_result
-        note = result.prompt_fragment() if result is not None else ""
-        return f"{GROUNDING_RULE}\n\n{note}" if note else GROUNDING_RULE
+        catalog = render_catalog(self.skill_manager.discover())
+        return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
 
     def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
         """Keep *name*'s body rendered for the next few filter refreshes.
 
-        Unlike :meth:`_note_skill_active` this works before any filter exists —
-        proactive discovery runs before the first refresh of a session, and
-        without the pin the very next selection could hide the body of the skill
-        that was just loaded *because* this turn needed it.
+        Unlike :meth:`_note_skill_active` this works before any filter exists,
+        so the next selection cannot hide the body of a skill that was just
+        loaded *because* this turn needed it.
         """
         # getattr throughout: test stubs copy these methods onto a plain class
         # without inheriting the class attributes they read.
@@ -2059,6 +2089,13 @@ Do NOT wrap conversational replies in JSON.
         recipe. Empty for an agent with no manifest or no always-on entries.
         """
         return frozenset(ref.name for ref in self.skill_sets.always)
+
+    def _active_skill_names(self) -> Optional[FrozenSet[str]]:
+        """Loaded skills whose body renders this turn; ``None`` means all of them."""
+        active_filter = getattr(self, "_active_skill_filter", None)
+        if active_filter is None:
+            return None
+        return frozenset(active_filter) | self._always_on_skill_names
 
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
@@ -2148,6 +2185,41 @@ Do NOT wrap conversational replies in JSON.
             self._loaded_skills = {}
         return self._loaded_skills
 
+    #: The tool a ``shell:execute:<binary>`` grant is exercised through.
+    _SKILL_SHELL_TOOL: ClassVar[str] = "run_shell_command"
+
+    def _loaded_skill_tools(self) -> List[str]:
+        """Tools this turn's active skills need in the prompt, deduped, in load order.
+
+        Each active skill's ``tools_required``, plus the shell tool when it holds
+        a ``shell:execute:<binary>`` grant — a granted binary is useless without
+        the tool that runs it. Tools a skill *provides* through its own
+        ``tools.py`` are not included; they still reach the prompt by semantic
+        match. Only skills whose body renders this turn count (see
+        :meth:`_active_skill_names`), so a loaded skill the turn is not about
+        holds no tool slots. Feeds the tool loader's SKILL signal, so an active
+        skill's tools arrive without a separate ``load_tools`` round trip.
+        """
+        skills = getattr(self, "_loaded_skills", None)
+        if not skills:
+            return []
+        active = self._active_skill_names()
+        grant_holders = self.granted_binaries.holders()
+
+        tools: List[str] = []
+        seen: set = set()
+        for skill in skills.values():
+            if active is not None and skill.name not in active:
+                continue
+            names = list(skill.gaia.tools_required)
+            if skill.name in grant_holders:
+                names.append(self._SKILL_SHELL_TOOL)
+            for name in names:
+                if name not in seen:
+                    seen.add(name)
+                    tools.append(name)
+        return tools
+
     @property
     def granted_binaries(self) -> "BinaryGrants":
         """CLIs this **instance's** loaded skills may run (``shell:execute:gh``).
@@ -2183,11 +2255,17 @@ Do NOT wrap conversational replies in JSON.
         Raises:
             SkillNotFoundError: no discovery root contains that skill.
             SkillValidationError: the manifest is invalid or contradicts
-                ``tools.py``. Nothing is registered.
+                ``tools.py``, or ``~/.gaia/skills/skill-lock.json`` is unreadable
+                — an unreadable lock cannot tell an attested skill from a local
+                one, so no user-root skill loads until it is fixed or deleted.
+                Nothing is registered.
             SkillPermissionError: the skill declares a local-capability
                 permission (``filesystem``/``shell``/``database``/``desktop``/
                 ``env``), which this phase refuses rather than loading
                 unenforced.
+            SkillDriftError: the skill was installed from the hub at
+                ``community`` / ``verified`` and its files no longer match
+                ``skill-lock.json`` — the signature covered different bytes.
 
         Example:
             class WebAgent(Agent):
@@ -2775,7 +2853,7 @@ Do NOT wrap conversational replies in JSON.
                 return ""
             return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
 
-        active = set(active_filter) | self._always_on_skill_names
+        active = self._active_skill_names()
         body_sections = []
         menu_lines = []
         for skill in sorted(skills.values(), key=lambda s: s.name):
@@ -3541,14 +3619,15 @@ Do NOT wrap conversational replies in JSON.
                 # context window — those are separate limits and conflating
                 # them led to misleading error messages telling users to
                 # raise ``--ctx-size`` when their ctx was already 32K. The
-                # actual fix is bumping the output budget in
-                # ``AgentConfig.max_tokens`` (or, for one-off long tool calls,
+                # actual fix is bumping the output budget via the agent's
+                # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
                 raise ValueError(
                     f"Tool call truncated mid-arguments (finish_reason=length). "
                     f"Model {self.model_id} ran out of output tokens before "
-                    f"finishing the call — increase AgentConfig.max_tokens."
+                    f"finishing the call ({self._max_output_tokens()} max) — "
+                    f"pass a larger max_output_tokens to the agent."
                 )
             if not raw_tool_calls:
                 raise ValueError(
@@ -4498,18 +4577,13 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Informative message about what was accomplished
         """
-        # Analyze what was done
-        tool_calls = [
-            msg
+        # Every executed call leaves one ``role: tool`` entry, whatever loop
+        # path ran it; assistant entries also hold calls that never ran.
+        tools_used = [
+            msg["name"]
             for msg in conversation
-            if msg.get("role") == "assistant" and "tool_calls" in msg
+            if msg.get("role") == "tool" and msg.get("name")
         ]
-
-        tools_used = []
-        for msg in tool_calls:
-            for tool_call in msg.get("tool_calls", []):
-                if "function" in tool_call:
-                    tools_used.append(tool_call["function"]["name"])
 
         message = f"⚠️ Reached maximum steps limit ({steps_limit} steps)\n\n"
         message += f"Completed {steps_taken} steps using these tools:\n"
@@ -4527,6 +4601,103 @@ Do NOT wrap conversational replies in JSON.
         message += "3. Or complete remaining tasks manually\n"
 
         return message
+
+    def _answer_at_step_cap(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        steps_limit: int,
+        step: int,
+    ) -> Optional[str]:
+        """Ask for the final answer once the step limit is spent, no tool calls.
+
+        Same model path and tools as the loop (streaming or not), plus
+        ``tool_choice="none"``. Returns the answer, or ``None`` when the user
+        pressed Stop. Raises when the call fails or the reply is not an answer;
+        the caller says why.
+        """
+        cancel_event = getattr(self, "_cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("the request was cancelled")
+        if self._console_cancelled():
+            return None
+
+        request = messages + [
+            {
+                "role": "user",
+                "content": _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+            }
+        ]
+        # Tool history needs the tools on some providers; the model may not call one.
+        tools = self._openai_tools
+        no_calls = {"tool_choice": "none"} if tools else {}
+        stats = None
+        if self.streaming:
+            stream = self.chat.send_messages_stream(
+                messages=request,
+                system_prompt=self.system_prompt,
+                tools=tools,
+                **no_calls,
+            )
+            response = ""
+            for chunk in stream:
+                if self._console_cancelled():
+                    stream.close()
+                    return None
+                if chunk.is_complete:
+                    stats = chunk.stats
+                    response = chunk.text or response
+                else:
+                    self.console.print_streaming_text(chunk.text)
+                    response += chunk.text
+            self.console.print_streaming_text("", end_of_stream=True)
+        else:
+            self.console.start_progress(self._progress_label())
+            try:
+                reply = self.chat.send_messages(
+                    messages=request,
+                    system_prompt=self.system_prompt,
+                    tools=tools,
+                    **no_calls,
+                )
+            finally:
+                self.console.stop_progress()
+            response, stats = reply.text, reply.stats
+
+        perf_stats = stats or self.chat.get_stats()
+        if perf_stats:
+            conversation.append(
+                {
+                    "role": "system",
+                    "content": {
+                        "type": "stats",
+                        "step": step,
+                        "performance_stats": perf_stats,
+                    },
+                }
+            )
+
+        response = re.sub(
+            r"<think>.*?</think>", "", response or "", flags=re.DOTALL
+        ).strip()
+        if not response:
+            raise ValueError("the model returned an empty reply")
+        parsed = self._parse_llm_response(response)
+        answer = parsed.get("answer")
+        if not isinstance(answer, str):
+            answer = ""
+        requested = [c["name"] for c in parsed.get("tool_calls") or []]
+        if not requested and parsed.get("tool"):
+            requested = [parsed["tool"]]
+        if requested or _unfinished_answer_kind(answer) == "tool_markup":
+            raise ValueError(
+                f"the model asked to run {', '.join(requested) or 'another tool'} "
+                "instead of answering"
+            )
+        if not answer.strip():
+            raise ValueError("the model's reply had no answer in it")
+        conversation.append({"role": "assistant", "content": parsed})
+        return answer
 
     def _write_json_to_file(self, data: Dict[str, Any], filename: str = None) -> str:
         """
@@ -5557,6 +5728,60 @@ Do NOT wrap conversational replies in JSON.
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
 
+    #: How a mid-turn follow-up is framed for the model. It is the user
+    #: speaking, so it goes in as a user message — but unlabelled, a user
+    #: message appearing in the middle of a tool sequence is indistinguishable
+    #: from a new request, and the model abandons the work already done. This
+    #: says "as well", and says finish first.
+    FOLLOWUP_PREAMBLE = (
+        "The user sent this while you were still working on their previous "
+        "request. Finish that request first, then address this as well — do "
+        "not discard the work already done:\n\n"
+    )
+
+    def queue_followup(self, text: str) -> bool:
+        """Hand the running turn something the user typed after it started.
+
+        Returns whether it was accepted. False means this agent has no run in
+        flight that could pick it up — the caller must say so rather than let
+        the message disappear, which is the whole failure this exists to avoid.
+        """
+        text = (text or "").strip()
+        if not text:
+            return False
+        pending = self._followup_queue
+        if pending is None:
+            return False
+        pending.put(text)
+        return True
+
+    def _drain_followups(self, messages: List[Dict], conversation: List[Dict]) -> int:
+        """Fold any queued mid-turn follow-ups into this turn's context.
+
+        Called at the agent-loop step boundary, so the additions are visible to
+        the very next model call. Returns how many were folded in.
+        """
+        pending = self._followup_queue
+        if pending is None:
+            return 0
+        taken = 0
+        while True:
+            try:
+                text = pending.get_nowait()
+            except queue.Empty:
+                break
+            framed = self.FOLLOWUP_PREAMBLE + text
+            # Two dicts, not one shared object: every other append in this loop
+            # builds its own, and downstream code edits entries in place.
+            messages.append({"role": "user", "content": framed})
+            conversation.append({"role": "user", "content": framed})
+            taken += 1
+            # The user is owed visible proof their message landed — silence here
+            # is indistinguishable from the message being dropped.
+            self.console.print_info(f"Picked up your follow-up: {text}")
+            logger.info("Folded a mid-turn follow-up into the running turn")
+        return taken
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -5581,25 +5806,21 @@ Do NOT wrap conversational replies in JSON.
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
 
-        # Proactive skill discovery: a skill the user never named can become
-        # loaded here, registering its tools — so it must run BEFORE the tool
-        # filter, or those tools are invisible on the very turn that loaded the
-        # skill, and before the body filter for the same reason.
-        self._discover_skills_for_turn(user_input)
+        # Lazy skill-body activation (#2848 follow-up): re-selected every turn,
+        # so a stale skill match never survives into a turn that no longer
+        # needs it. Before the tool filter, which admits active skills' tools.
+        self._refresh_active_skill_filter(user_input)
 
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
 
-        # Lazy skill-body activation (#2848 follow-up): same per-turn timing
-        # as the tool filter above, so a stale skill match never survives
-        # into a turn that no longer needs it.
-        self._refresh_active_skill_filter(user_input)
-
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        messages = []
+        from gaia.agents.base.history import TurnMessages
+
+        messages = TurnMessages()
 
         # Per-turn performance record (dev mode; no-op unless GAIA_TURN_LOG is
         # set). Built here so it spans the whole turn — the total it reports is
@@ -5620,8 +5841,13 @@ Do NOT wrap conversational replies in JSON.
         # Set when the Agent-UI Stop is observed mid-generation (per-token) so
         # the turn ends with empty text instead of a completed answer (#2157).
         cancelled_by_console = False
+        # Set when the person at the prompt declines more steps. Distinct from
+        # cancelled_by_console, which only the Agent UI Stop button sets.
+        user_stopped = False
         error_count = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
+        # Repeated calls already sent one correction; the next repeat ends the turn.
+        loop_corrected_calls: set = set()
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
@@ -5669,6 +5895,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
+        messages.recorded.clear()
         messages.append({"role": "user", "content": user_input})
 
         # Use provided max_steps or fall back to class default
@@ -5713,6 +5940,13 @@ Do NOT wrap conversational replies in JSON.
                     "into smaller steps."
                 )
                 break
+
+            # Anything the user sent mid-turn joins the context here, where the
+            # loop is between steps and nothing is half-applied. AFTER the
+            # cancel check above, deliberately: a cancelled turn breaks out
+            # without running another step, and draining first would consume a
+            # message this turn can no longer answer.
+            self._drain_followups(messages, conversation)
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
@@ -6106,6 +6340,7 @@ Do NOT wrap conversational replies in JSON.
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -6194,7 +6429,7 @@ Do NOT wrap conversational replies in JSON.
                             )
                             raise
                         if is_ctx_overflow and not _retried_after_trim_stream:
-                            messages = self._shrink_messages_for_overflow(messages)
+                            messages[:] = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -6284,6 +6519,7 @@ Do NOT wrap conversational replies in JSON.
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -6352,7 +6588,7 @@ Do NOT wrap conversational replies in JSON.
                             # model still sees its tool-call history, but cap
                             # any single tool-result content to 500 chars and
                             # drop all-but-last-2 tool results entirely.
-                            messages = self._shrink_messages_for_overflow(messages)
+                            messages[:] = self._shrink_messages_for_overflow(messages)
                             self.error_history.append(
                                 {
                                     "step": steps_taken,
@@ -6576,6 +6812,7 @@ Do NOT wrap conversational replies in JSON.
                         messages=messages,
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
                     )
 
                     for chunk_response in stream_gen:
@@ -6618,6 +6855,7 @@ Do NOT wrap conversational replies in JSON.
                         messages=messages,
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
                     self.console.stop_progress()
@@ -6842,8 +7080,21 @@ Do NOT wrap conversational replies in JSON.
                         # ``result`` field so the helper sees actual tool
                         # results, not the wrapper dicts.
                         recent_results = [o.get("result") for o in previous_outputs]
+                        if current_call not in loop_corrected_calls:
+                            loop_corrected_calls.add(current_call)
+                            # Sent as this call's result so tool_call_id pairing holds.
+                            messages.append(
+                                self._create_tool_message(
+                                    tool_name,
+                                    self._loop_correction_result(
+                                        tool_name, consecutive_count - 1, recent_results
+                                    ),
+                                    tool_call_id=tool_call_id,
+                                )
+                            )
+                            continue
                         final_answer = self._build_loop_break_summary(
-                            tool_name, consecutive_count, recent_results
+                            tool_name, consecutive_count - 2, recent_results
                         )
                         self.console.print_repeated_tool_warning()
                         fanout_repeat_break = True
@@ -6852,6 +7103,11 @@ Do NOT wrap conversational replies in JSON.
                     # Execute
                     tool_result = self._execute_tool_timed(tool_name, tool_args)
                     self.console.stop_progress()
+                    if self._is_throttled_result(tool_result):
+                        # Never ran, so not a repeat. Bounded: the shell
+                        # limiter's windows drain within a few capped waits.
+                        tool_call_history.pop()
+                        self._wait_out_rate_limit(tool_result)
 
                     # Result-based dedup for query family tools
                     _QUERY_TOOLS = (
@@ -7062,11 +7318,25 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
+                    # Not ``step_results``: error recovery clears it before each retry.
+                    recent_results = [o.get("result") for o in previous_outputs]
+                    if current_call not in loop_corrected_calls:
+                        loop_corrected_calls.add(current_call)
+                        messages.append(
+                            self._create_tool_message(
+                                tool_name,
+                                self._loop_correction_result(
+                                    tool_name, consecutive_count - 1, recent_results
+                                ),
+                            )
+                        )
+                        continue
+
                     # Force a final answer if the same tool is called repeatedly.
                     # Branches on whether the recent calls were errors so we
                     # never claim success on a loop of failures.
                     final_answer = self._build_loop_break_summary(
-                        tool_name, consecutive_count, step_results
+                        tool_name, consecutive_count - 2, recent_results
                     )
 
                     self.console.print_repeated_tool_warning()
@@ -7077,6 +7347,11 @@ Do NOT wrap conversational replies in JSON.
 
                 # Stop progress indicator
                 self.console.stop_progress()
+                if self._is_throttled_result(tool_result):
+                    # Never ran, so not a repeat. Bounded: the shell limiter's
+                    # windows drain within a few capped waits.
+                    tool_call_history.pop()
+                    self._wait_out_rate_limit(tool_result)
 
                 # Issue #1023: record success/failure of capability tools so
                 # the verbose-failure override downstream fires only when the
@@ -7767,6 +8042,20 @@ Do NOT wrap conversational replies in JSON.
                         )
                         continue
 
+                # A message that landed DURING this model call was never seen
+                # by it, and the step-boundary drain above has already run —
+                # sealing here would drop words the route reported delivered.
+                # Cancel check mirrors that drain's: a turn told to stop leaves
+                # the message queued rather than consuming it. Bounded by
+                # steps_limit, which also makes the last step seal normally.
+                _cancel = getattr(self, "_cancel_event", None)
+                if (
+                    steps_taken < steps_limit
+                    and not (_cancel is not None and _cancel.is_set())
+                    and self._drain_followups(messages, conversation)
+                ):
+                    continue
+
                 # Scope line goes on AFTER the subclass hook: a subclass that
                 # rewrites the answer must not be able to drop it (#3376).
                 final_answer = self._with_verification_scope(
@@ -7791,6 +8080,8 @@ Do NOT wrap conversational replies in JSON.
                     final_answer,
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
+                    input_tokens=_pre_input_tokens,
+                    cached_tokens=_sum_cached_tokens(conversation),
                     ttft_seconds=_query_ttft_seconds(conversation),
                     tok_per_s=_query_tok_per_s(conversation),
                 )
@@ -7825,13 +8116,59 @@ Do NOT wrap conversational replies in JSON.
                             )
                         else:
                             self.console.print_info("Stopping at user request.")
+                            user_stopped = True
                             break
                     except (EOFError, KeyboardInterrupt):
                         self.console.print_info("\nStopping at user request.")
+                        user_stopped = True
                         break
                 else:
                     # Silent mode - just stop
                     break
+
+        # Out of steps with no answer: one more call, tools withheld, so the
+        # user hears what was found rather than only the canned note.
+        max_steps_reached = (
+            final_answer is None and not cancelled_by_console and not user_stopped
+        )
+        if max_steps_reached:
+            tool_steps = steps_taken
+            steps_taken += 1
+            if self._turn_recorder is not None and self.chat is not None:
+                self.chat.turn_step = steps_taken
+            self.execution_state = self.STATE_COMPLETION
+            try:
+                cap_answer = self._answer_at_step_cap(
+                    messages, conversation, steps_limit, steps_taken
+                )
+            except Exception as e:  # noqa: BLE001 - the reason goes in the answer
+                logger.warning("Could not write the step-limit summary: %s", e)
+                final_answer = (
+                    self._generate_max_steps_message(
+                        conversation, tool_steps, steps_limit
+                    ).rstrip()
+                    + f"\n\nThe summary of what I found couldn't be written: {e}"
+                )
+            else:
+                if cap_answer is None:
+                    cancelled_by_console = True
+                else:
+                    final_answer = self._with_verification_scope(
+                        self.finalize_answer(cap_answer, conversation)
+                    )
+                    verification_scope_applied = True
+                    _cap_input_tokens, cap_output_tokens = _sum_conversation_tokens(
+                        conversation, self._tool_reported_usage
+                    )
+                    turn_record = self._finish_turn_record(final_answer, steps_taken)
+                    self._publish_turn_metrics(turn_record)
+                    self.console.print_final_answer(
+                        final_answer,
+                        streaming=self.streaming,
+                        total_tokens=cap_output_tokens,
+                        ttft_seconds=_query_ttft_seconds(conversation),
+                        tok_per_s=_query_tok_per_s(conversation),
+                    )
 
         # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn
         # with empty text so it doesn't rehydrate as a completed answer and the
@@ -7850,6 +8187,7 @@ Do NOT wrap conversational replies in JSON.
                 "error_count": len(self.error_history),
                 "error_history": self.error_history,
             }
+            self.last_result["model_messages"] = messages.finish("")
             # Returns before the tail seal below.
             self._finish_turn_record("", steps_taken)
             return self.last_result
@@ -7871,8 +8209,8 @@ Do NOT wrap conversational replies in JSON.
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
-        # overflow, typed Lemonade error, parse give-up, loop-break summary —
-        # or leaves it None for the max-steps message below. Those are
+        # overflow, typed Lemonade error, parse give-up, loop-break summary,
+        # step-limit note when the closing call failed. Those are
         # disproportionately the runs that went wrong, so they need the scope
         # line most (#3376). The console-cancellation path returns above with a
         # deliberately empty result and is excluded (#3386).
@@ -7887,7 +8225,7 @@ Do NOT wrap conversational replies in JSON.
         result = {
             "status": (
                 "success"
-                if has_valid_answer and not has_errors
+                if has_valid_answer and not has_errors and not max_steps_reached
                 else ("failed" if has_errors else "incomplete")
             ),
             "result": (
@@ -7902,6 +8240,7 @@ Do NOT wrap conversational replies in JSON.
             "system_prompt": self.system_prompt,  # Include system prompt in the result
             "conversation": conversation,
             "steps_taken": steps_taken,
+            "max_steps_reached": max_steps_reached,
             "duration": total_duration,  # Total query processing time in seconds
             "input_tokens": total_input_tokens,  # Total input tokens across all steps
             "output_tokens": total_output_tokens,  # Total output tokens across all steps
@@ -7911,6 +8250,8 @@ Do NOT wrap conversational replies in JSON.
             "error_history": self.error_history,  # Include the full error history
             "tool_schema": self._trace_tool_schema(),
         }
+
+        result["model_messages"] = messages.finish(result["result"])
 
         # Catches the exits that never printed an answer (max steps). Sealed
         # BEFORE the trace write — attached after, the artifact never saw it.
@@ -7956,30 +8297,133 @@ Do NOT wrap conversational replies in JSON.
             or result.get("return_code", 0) != 0
         )
 
+    _RATE_LIMIT_WAIT_CAP_S = 15.0
+    _LOOP_CONNECTION_RE = re.compile(
+        r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
+        r"|unreachable|could not connect|failed to establish|max retries exceeded"
+        r"|name or service not known|getaddrinfo|connect(?:ion)? timed out"
+        # Windows words a refused connection as "no connection could be made
+        # because the target machine actively refused it" (WinError 10061) —
+        # without these a dead service reads as a permissions problem.
+        r"|no connection could be made|actively refused|connection attempt failed"
+        r"|winerror 1006\d",
+        re.IGNORECASE,
+    )
+    _LOOP_NOT_PERMITTED_RE = re.compile(
+        r"not allowed|not permitted|not in (?:the )?allowed|access denied"
+        # "blocked" only as a verdict, not as a word in unrelated output
+        # ("unblocked", "blocked ports", "IO blocked").
+        r"|permission denied|\bblocked by\b|\b(?:is|are|was|were|been) blocked\b"
+        r"|\bedit blocked\b|refused (?:by|to)"
+        r"|refus(?:ed|es) (?:the )?(?:request|access|operation)",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _is_throttled_result(result: Any) -> bool:
+        """True when the tool refused the call for rate limiting — it never ran."""
+        return isinstance(result, dict) and result.get("rate_limited") is True
+
+    def _wait_out_rate_limit(self, result: Dict[str, Any]) -> None:
+        """Sleep the throttle's reported wait (capped) so the retry can run."""
+        try:
+            seconds = float(result.get("wait_time_seconds") or 0.0)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Rate-limited result has a non-numeric wait_time_seconds: %r",
+                result.get("wait_time_seconds"),
+            )
+            return
+        seconds = min(max(seconds, 0.0), self._RATE_LIMIT_WAIT_CAP_S)
+        if seconds <= 0:
+            return
+        logger.info("Tool call was rate-limited; waiting %.1fs", seconds)
+        cancel = getattr(self, "_cancel_event", None)
+        if cancel is not None:
+            cancel.wait(seconds)
+        else:
+            time.sleep(seconds)
+
+    @staticmethod
+    def _loop_error_brief(result: Any) -> str:
+        """The error a failed result reports: ``error``, else last stderr line."""
+        if isinstance(result, dict):
+            err = result.get("error")
+            if err:
+                return str(err).strip()
+            stderr = result.get("stderr")
+            if isinstance(stderr, str):
+                lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+                if lines:
+                    return lines[-1]
+            return_code = result.get("return_code")
+            if return_code not in (None, 0):
+                return f"it exited with return code {return_code}"
+        return "the tool returned an error"
+
+    def _loop_correction_result(
+        self, tool_name: str, executed_count: int, recent_results: list
+    ) -> Dict[str, Any]:
+        """The tool result sent in place of a repeated call, asking for a new approach."""
+        last = recent_results[-1] if recent_results else None
+        if Agent._is_error_result(last):
+            brief = " ".join(self._loop_error_brief(last).split())
+            if len(brief) > 200:
+                brief = brief[:197] + "..."
+            outcome = f"the same error ({brief})"
+        else:
+            outcome = "no new progress"
+        correction = (
+            f"You have called {tool_name} {executed_count} times with the same "
+            f"arguments and it returned {outcome}. Do not repeat it — try a "
+            "different approach, or give your final answer."
+        )
+        logger.warning("Loop guard correction: %s", correction)
+        return {**NOT_EXECUTED, "status": "error", "error": correction}
+
     def _build_loop_break_summary(
         self,
         tool_name: str,
-        consecutive_count: int,
-        step_results: list,
+        executed_count: int,
+        recent_results: list,
     ) -> str:
-        """Final-answer text when the loop breaks on repeats; honest on errors."""
-        last = step_results[-1] if step_results else None
-        if Agent._is_error_result(last):
-            err = (last or {}).get("error") or "the tool returned an error"
+        """Final-answer text when the loop breaks on repeats; names the real cause."""
+        last = recent_results[-1] if recent_results else None
+        denied = isinstance(last, dict) and last.get("status") == "denied"
+        if not (denied or Agent._is_error_result(last)):
+            # A loop break is evidence of neither outcome: the work may be done
+            # (the model kept re-verifying it) or never started (it had no tool
+            # for the job). Say which is unknown instead of claiming either,
+            # which is what "Task completed with ..." used to do here (#3750).
             return (
-                f"I tried calling `{tool_name}` {consecutive_count} times "
-                f"and it kept failing: {err}\n\n"
+                f"I stopped after calling `{tool_name}` {executed_count} "
+                "times in a row without making progress, so I can't confirm "
+                "the task is finished. Please check the result before relying "
+                "on it, or rephrase the request."
+            )
+        err = self._loop_error_brief(last)
+        attempts = f"I tried calling `{tool_name}` {executed_count} times"
+        if self._is_throttled_result(last):
+            return (
+                f"{attempts}, but it was rate-limited and did not run: {err}\n\n"
+                "Wait a moment and ask again, or ask for a different approach."
+            )
+        if self._LOOP_CONNECTION_RE.search(err):
+            return (
+                f"{attempts} and it kept failing: {err}\n\n"
                 "I couldn't recover from this — please rephrase the request "
                 "or check that the underlying service is running."
             )
-        # A loop break is evidence of neither outcome: the work may be done
-        # (the model kept re-verifying it) or never started (it had no tool for
-        # the job). Say which is unknown instead of claiming either (#3750).
+        if denied or self._LOOP_NOT_PERMITTED_RE.search(err):
+            return (
+                f"{attempts}, but it is not permitted here: {err}\n\n"
+                "Try a different approach — for example, split it into separate "
+                "steps or use another tool."
+            )
         return (
-            f"I stopped after calling `{tool_name}` {consecutive_count} times "
-            "in a row without making progress, so I can't confirm the task is "
-            "finished. Please check the result before relying on it, or "
-            "rephrase the request."
+            f"{attempts} and it kept failing: {err}\n\n"
+            "I couldn't recover from this — please rephrase the request "
+            "or try a different approach."
         )
 
     def _dedup_mutation_call(

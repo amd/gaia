@@ -226,6 +226,9 @@ class TestLemonadeInstaller(unittest.TestCase):
         Drives the REAL resolver through injected platform + filesystem probes
         — patching resolve_lemonade here would only prove it was called, not
         that macOS detection works.
+
+        Paths are compared as POSIX: a Windows host renders `Path("/usr/...")`
+        with backslashes, which would otherwise match nothing.
         """
         from pathlib import Path
 
@@ -238,7 +241,7 @@ class TestLemonadeInstaller(unittest.TestCase):
             patch.dict("os.environ", {}, clear=True),
             patch("shutil.which", return_value=None),
             patch.object(
-                Path, "exists", lambda self: str(self.expanduser()) in present
+                Path, "exists", lambda self: self.expanduser().as_posix() in present
             ),
         ):
             info = LemonadeInstaller().check_installation()
@@ -246,7 +249,7 @@ class TestLemonadeInstaller(unittest.TestCase):
         self.assertIs(Path.exists, real_exists, "Path.exists must be restored")
         self.assertTrue(info.installed, f"macOS install missed: {info.error}")
         self.assertEqual(info.version, "10.10.0")
-        self.assertEqual(info.path, "/usr/local/bin/lemonade")
+        self.assertEqual(Path(info.path).as_posix(), "/usr/local/bin/lemonade")
         self.assertIsNone(info.error)
 
 
@@ -521,7 +524,9 @@ class TestStartRemedyIsRunnable(unittest.TestCase):
 
         profile = next(p for p, c in INIT_PROFILES.items() if c.get("min_context_size"))
         cmd, buf = self._capturing_cmd(profile)
-        min_ctx = INIT_PROFILES[profile]["min_context_size"]
+        from gaia.llm.lemonade_client import resolve_ctx_size
+
+        min_ctx = resolve_ctx_size()
 
         with (
             patch("platform.system", return_value="Linux"),
@@ -1436,7 +1441,11 @@ class TestLegacyFallback(unittest.TestCase):
 
 
 class TestInstallViaPpa(unittest.TestCase):
-    """Tests for _install_via_ppa — the Linux PPA-based install path."""
+    """Tests for _install_via_ppa — the Linux PPA-based install path.
+
+    The `os.geteuid` patches carry `create=True` because the attribute is
+    POSIX-only; without it these never reach their assertions on a Windows host.
+    """
 
     def _make_linux_installer(self):
         with patch("platform.system", return_value="Linux"):
@@ -1456,7 +1465,7 @@ class TestInstallViaPpa(unittest.TestCase):
         result.stderr = stderr
         return result
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_runs_commands_in_order(
@@ -1495,7 +1504,7 @@ class TestInstallViaPpa(unittest.TestCase):
         for call in calls:
             self.assertEqual(call[1].get("stdin"), _sub.DEVNULL)
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_noninteractive_sets_env_and_devnull_stdin(
@@ -1524,7 +1533,7 @@ class TestInstallViaPpa(unittest.TestCase):
             if call[0][0] != ["sudo", "-n", "true"]:
                 self.assertEqual(env.get("DEBIAN_FRONTEND"), "noninteractive")
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_sudo_password_required_returns_clear_error(
@@ -1542,7 +1551,7 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("passwordless", result.error.lower())
         mock_run.assert_called_once()
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_apt_install_failure_returns_actionable_error(
@@ -1562,7 +1571,7 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("lemonade-server", result.error)
         self.assertIn("amd-gaia.ai", result.error)
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_unsupported_distro_returns_clear_error(
@@ -1581,7 +1590,7 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("Ubuntu 22.04", result.error)
         mock_run.assert_not_called()
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
     def test_install_via_ppa_missing_add_apt_repository_clear_error(
@@ -1597,7 +1606,7 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertIn("software-properties-common", result.error)
         mock_run.assert_not_called()
 
-    @patch("os.geteuid", return_value=1000)
+    @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
     @patch("subprocess.run")
     def test_install_via_ppa_returns_real_version_from_check_installation(
@@ -1617,6 +1626,87 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.version, "10.3.0")
         self.assertNotEqual(result.version, installer.target_version)
+
+    # Log text below is copied verbatim from the GAIA CLI Tests (Linux) runs that
+    # went red during the 2026-09-21 Launchpad outage.
+    APT_UPDATE_503 = (
+        "Get:1 http://azure.archive.ubuntu.com/ubuntu noble InRelease [256 kB]\n"
+        "Err:8 https://ppa.launchpadcontent.net/lemonade-team/stable/ubuntu "
+        "noble InRelease\n"
+        "  503  Service Unavailable [IP: 185.125.189.187 443]\n"
+        "Reading package lists...\n"
+        "W: Failed to fetch https://ppa.launchpadcontent.net/lemonade-team/stable/"
+        "ubuntu/dists/noble/InRelease  503  Service Unavailable "
+        "[IP: 185.125.189.187 443]\n"
+        "W: Some index files failed to download. They have been ignored, "
+        "or old ones used instead.\n"
+    )
+
+    ADD_APT_GPG_500 = (
+        "Traceback (most recent call last):\n"
+        '  File "/usr/bin/add-apt-repository", line 367, in <module>\n'
+        "    sys.exit(0 if addaptrepo.main() else 1)\n"
+        "urllib.error.HTTPError: HTTP Error 500: Internal Server Error\n"
+        "ERROR: b'GPGKeyTemporarilyNotFoundError'\n"
+    )
+
+    # create=True: os.geteuid does not exist on Windows dev machines.
+    @patch("os.geteuid", create=True, return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_launchpad_index_outage_is_named(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """A 503 on the PPA index stops the install and blames Launchpad, not apt."""
+        installer = self._make_linux_installer()
+
+        # apt-get update exits 0 when only *some* indexes fail -- that is the trap.
+        update = self._ok_run()
+        update.stdout = self.APT_UPDATE_503
+        mock_run.side_effect = [self._ok_run(), update]
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertFalse(result.success)
+        self.assertIn("Launchpad", result.error)
+        self.assertIn("503", result.error)
+        # The old message sent users to repair a dpkg state that was never broken.
+        self.assertNotIn("dpkg --configure", result.error)
+        # Negative control: without the check, apt-get install would have run and
+        # failed with "Unable to locate package lemonade-server".
+        self.assertEqual(mock_run.call_count, 2)
+
+    # create=True: os.geteuid does not exist on Windows dev machines.
+    @patch("os.geteuid", create=True, return_value=1000)
+    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
+    @patch("subprocess.run")
+    def test_install_via_ppa_launchpad_key_outage_is_named(
+        self, mock_run, mock_which, mock_geteuid
+    ):
+        """A failed signing-key fetch reports the outage, not a raw Python traceback."""
+        installer = self._make_linux_installer()
+        mock_run.side_effect = [self._fail_run(stderr=self.ADD_APT_GPG_500)]
+
+        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
+            result = installer._install_via_ppa(non_interactive=False)
+
+        self.assertFalse(result.success)
+        self.assertIn("Launchpad", result.error)
+        self.assertIn("signing key", result.error)
+        self.assertNotIn("Traceback", result.error)
+
+    def test_diagnose_launchpad_outage_ignores_unrelated_repositories(self):
+        """Another PPA failing must not be blamed on Launchpad's Lemonade archive."""
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        unrelated = (
+            "W: Failed to fetch https://ppa.launchpadcontent.net/deadsnakes/ppa/"
+            "ubuntu/dists/noble/InRelease  404  Not Found\n"
+        )
+        self.assertIsNone(diagnose_launchpad_outage(unrelated))
+        self.assertIsNone(diagnose_launchpad_outage("Reading package lists... Done\n"))
+        self.assertIsNotNone(diagnose_launchpad_outage(self.APT_UPDATE_503))
 
     @patch("platform.system", return_value="Linux")
     def test_install_dispatches_to_ppa_on_linux(self, mock_system):

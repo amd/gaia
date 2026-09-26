@@ -207,3 +207,34 @@ def test_a_wait_is_a_receipt_not_external_content(agent):
 
 def test_registered_as_a_composable_mixin():
     assert KNOWN_TOOLS["wait"] == ("gaia.agents.tools.wait_tools", "WaitToolsMixin")
+
+
+def test_a_host_without_the_stop_channels_is_refused_before_waiting(clock):
+    """KNOWN_TOOLS invites any host; a wait nothing can stop must not start."""
+
+    class _BareHost(WaitToolsMixin):
+        pass
+
+    with pytest.raises(TypeError) as excinfo:
+        _BareHost()._sleep(60, "")
+
+    message = str(excinfo.value)
+    assert "_cancel_event" in message and "_console_cancelled" in message
+    assert "Agent" in message
+    assert clock.naps == [], "refused, so nothing should have been waited"
+
+
+def test_registration_does_not_need_the_stop_channels():
+    """The registry is also built by skeletons that only count tools."""
+
+    class _BareHost(WaitToolsMixin):
+        pass
+
+    saved = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    try:
+        _BareHost().register_wait_tools()
+        assert "sleep" in _TOOL_REGISTRY
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)

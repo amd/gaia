@@ -31,9 +31,14 @@ class WaitToolsMixin:
     Tools provided:
     - sleep: Wait up to MAX_SLEEP_SECONDS, ending early when the turn is stopped
 
-    Compose it with ``Agent``, whose ``_cancel_event`` and console carry the
-    stop requests the wait listens for.
+    Requires an ``Agent`` host: the wait listens for stop on ``_cancel_event``
+    and ``_console_cancelled()``, which ``Agent`` owns. ``KNOWN_TOOLS``
+    advertises this mixin to any host, so a host missing either channel is
+    refused by name before a single second is waited.
     """
+
+    #: Host attributes the wait needs to notice a Stop.
+    _WAIT_HOST_ATTRS = ("_cancel_event", "_console_cancelled")
 
     def register_wait_tools(self) -> None:
         """Register the wait tool into _TOOL_REGISTRY."""
@@ -51,7 +56,13 @@ class WaitToolsMixin:
             return self._sleep(seconds, reason)
 
     def _sleep(self, seconds: float, reason: str) -> Dict[str, Any]:
-        """Wait in short naps so a Stop is honoured within one of them."""
+        """Wait in short naps so a Stop is honoured within one of them.
+
+        Raises:
+            TypeError: The host lacks a stop channel, so the wait could not be
+                interrupted. Raised before waiting, never part-way through.
+        """
+        self._require_stop_channels()
         if not math.isfinite(seconds) or seconds <= 0:
             return {
                 "status": "error",
@@ -108,6 +119,22 @@ class WaitToolsMixin:
             "finished_at": finished_at,
         }
 
+    def _require_stop_channels(self) -> None:
+        """Refuse to start a wait nothing could interrupt.
+
+        Registration stays permissive because the registry is also built by
+        skeletons that only count tools and never call one.
+        """
+        missing = [a for a in self._WAIT_HOST_ATTRS if not hasattr(self, a)]
+        if missing:
+            raise TypeError(
+                f"{type(self).__name__} cannot run the sleep tool: it is "
+                f"missing {', '.join(missing)}, so a Stop could not end the "
+                "wait and nothing was waited. Inherit from "
+                "gaia.agents.base.agent.Agent (which owns both) and list Agent "
+                "before WaitToolsMixin in the bases."
+            )
+
     def _wait_interrupted(self) -> bool:
         """True once the turn this wait belongs to has been asked to stop.
 
@@ -115,6 +142,9 @@ class WaitToolsMixin:
         cancel set ``console.cancelled``; the flagship's ``/cancel`` and the
         UI's stream teardown set ``_cancel_event``; ``tool_cancelled()`` fires
         once the agent has given up on this tool call.
+
+        Both host attributes are guaranteed present — ``_sleep`` refuses a host
+        that lacks either before it waits.
         """
         cancel_event = self._cancel_event
         return (

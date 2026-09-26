@@ -273,8 +273,8 @@ cannot run, they are left out, with the specific blocker named:
 
 | Proposed | Blocker |
 |---|---|
-| `morning-brief` (scheduled voice digest to Telegram) | Four at once: the scheduler cannot run skills; there is no Gmail/Calendar/Weather connector in the catalog; text-to-speech is not exposed as an agent tool; the Telegram adapter has no voice-note path. `daily-brief` covers the composition half. |
-| `voice-research` (voice in, voice out) | The Telegram adapter handles photos and documents but not voice messages, and TTS is CLI-only (`gaia talk`), not a tool an agent can call. |
+| `morning-brief` (scheduled voice digest to Telegram) | Three at once: the scheduler cannot run skills; there is no Gmail/Calendar/Weather connector in the catalog; the Telegram adapter has no voice-note path. `daily-brief` covers the composition half; the `text_to_speech` tool already covers the voice half. |
+| `voice-research` (voice in, voice out) | The Telegram adapter handles photos and documents but not voice messages, so there is no way to get a spoken question in even though `text_to_speech` can speak the answer back out. |
 | `trading-alert` (RSI / unusual volume) | No finance connector in the catalog, and no historical price source to compute an indicator from. Alerting on a number the agent cannot actually obtain would be theatre. |
 | `email-triage` (Gmail triage over MCP) | There is no `gmail` connector id — Gmail is a *scope* of the `google` OAuth connector, not an MCP server with tools. Email triage ships instead as a full agent: see the [Email guide](/guides/email). `github-triage` covers the same backlog-triage shape over a CLI grant. |
 

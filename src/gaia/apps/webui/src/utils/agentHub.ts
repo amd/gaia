@@ -24,6 +24,25 @@ export function formatBytes(bytes?: number | null): string {
     return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
+/**
+ * The version to display, read off the fields the catalog really sends (#2970):
+ * installed entries carry ``installed_version``, not-yet-installed ones only
+ * ``latest_version``. ``version`` exists only after ``mergeCatalogStatus``, so
+ * reading it alone leaves every raw catalog entry blank.
+ */
+export function displayVersion(agent: AgentInfo): string | undefined {
+    const installed = agent.installed_version ?? agent.version;
+    if (installed) return installed;
+    // Never badge an installed card with a version the user doesn't have —
+    // ``latest_version`` is what's on offer, not what's on disk.
+    return isInstalledStatus(agent) ? undefined : agent.latest_version;
+}
+
+/** True when the catalog reports this agent as already present on disk. */
+export function isInstalledStatus(agent: AgentInfo): boolean {
+    return agent.status === 'installed' || agent.status === 'update_available';
+}
+
 /** True when an install-status snapshot represents an in-flight install. */
 export function isInstalling(status?: InstallStatus | null): boolean {
     if (!status) return false;

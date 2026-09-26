@@ -13,16 +13,21 @@ the mainline llamacpp/Vulkan catalog. Every test here therefore SKIPS unless the
 live server actually advertises the model, so the suite is safe on CPU/GPU boxes
 and in Vulkan CI while still executing for real on an NPU runner.
 
+Set ``GAIA_REQUIRE_FLM=1`` to turn that skip into a failure. CI does, because a
+runner that is meant to have the FLM backend and silently skips reports green
+while validating nothing.
+
 Run on NPU hardware with:
     python -m pytest tests/test_npu_flm_embedder_hw.py -v -rs
 """
 
 import math
+import os
 
 import pytest
 
 from gaia.agents.registry import get_embedding_model_for_device
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_client import LemonadeClient
 
 pytestmark = [pytest.mark.integration, pytest.mark.real_model]
 
@@ -37,17 +42,34 @@ EXPECTED_DIM = 768
 
 
 def _catalog_ids(client: LemonadeClient) -> set:
-    """Model ids the live server advertises (empty set if unreachable)."""
-    try:
-        catalog = client.list_models(show_all=True)
-    except LemonadeClientError:
-        return set()
+    """Model ids the live server advertises.
+
+    Deliberately does not swallow the error: an unreachable server must not be
+    reported as "the FLM backend is missing", which is what an empty set would
+    make the caller say.
+    """
+    catalog = client.list_models(show_all=True)
     data = catalog.get("data", catalog) if isinstance(catalog, dict) else catalog
     ids = set()
     for entry in data or []:
         if isinstance(entry, dict) and entry.get("id"):
             ids.add(entry["id"])
     return ids
+
+
+def _require_in_catalog(client: LemonadeClient, model: str) -> None:
+    """Skip when the server has no FLM backend -- or fail, if CI asked us to."""
+    if model in _catalog_ids(client):
+        return
+    reason = (
+        f"{model} not in the live Lemonade catalog -- FLM models are contributed "
+        "by the flm:npu backend, which is not installed on this server"
+    )
+    # Fail closed on any truthy spelling: a gate meant to stop silent passes
+    # must not revert to skipping because someone wrote "true" instead of "1".
+    if os.getenv("GAIA_REQUIRE_FLM", "").strip().lower() in {"1", "true", "yes", "on"}:
+        pytest.fail(reason)
+    pytest.skip(f"{reason}; requires an FLM/NPU-enabled server on Ryzen AI hardware")
 
 
 @pytest.fixture(scope="module")
@@ -62,11 +84,7 @@ def npu_embedder(client, require_lemonade):
     ``require_lemonade`` skips when no server is up; this then skips when the
     server is up but not FLM/NPU-enabled (the Vulkan-catalog case).
     """
-    if FLM_EMBEDDER not in _catalog_ids(client):
-        pytest.skip(
-            f"{FLM_EMBEDDER} not in the live Lemonade catalog -- requires an "
-            "FLM/NPU-enabled server on Ryzen AI hardware"
-        )
+    _require_in_catalog(client, FLM_EMBEDDER)
     # Built-in FLM model: pull/load by name, no recipe (#1655-safe).
     client.load_model(FLM_EMBEDDER, auto_download=True, prompt=False)
     return FLM_EMBEDDER
@@ -127,10 +145,7 @@ class TestFlmCoresidency:
     versa) the way the Vulkan GGUF embedder did on a shared-memory APU."""
 
     def test_chat_and_embedder_coresident(self, client, npu_embedder):
-        if FLM_CHAT_MODEL not in _catalog_ids(client):
-            pytest.skip(
-                f"{FLM_CHAT_MODEL} not in the live catalog -- cannot test co-residency"
-            )
+        _require_in_catalog(client, FLM_CHAT_MODEL)
 
         client.load_model(
             FLM_CHAT_MODEL, auto_download=True, prompt=False, ctx_size=32768
