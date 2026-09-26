@@ -579,9 +579,13 @@ async def init() -> Dict[str, Any]:
             f"{MIN_LEMONADE_VERSION}. Update it, then re-check."
         )
     elif not probe["present"]:
+        # `gaia download` takes no positional model — argparse exits 2 on it.
+        from gaia.llm.lemonade_launcher import describe_client_hint
+
+        pull = describe_client_hint("pull", probe["model_id"]).instruction
         hint = (
-            f"The model {probe['model_id']} is not downloaded. Run "
-            f"`gaia download {probe['model_id']}`, then re-check."
+            f"The model {probe['model_id']} is not downloaded. "
+            f"{pull.rstrip('.')}, then re-check."
         )
 
     ready = bool(probe["reachable"] and probe["present"] and compatible is not False)
