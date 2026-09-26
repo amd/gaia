@@ -21,7 +21,12 @@ timeout case correctly.
 
 from __future__ import annotations
 
-from gaia.llm.lemonade_client import _cloud_request_error
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_LOAD_TIMEOUT,
+    LemonadeStatus,
+    _cloud_request_error,
+    resolve_ctx_size,
+)
 from gaia.llm.providers.lemonade import (
     LemonadeCloudAccountError,
     LemonadeModelNotFoundError,
@@ -756,7 +761,11 @@ class TestExecuteWithAutoDownloadNarrowing:
             )
 
         assert result == {"choices": [{"message": {"content": "ok"}}]}
-        mock_ensure.assert_called_once_with("gemma4-it-e2b-FLM", auto_download=True)
+        # force=True: the request already failed, so a "still loaded" status
+        # would make this recovery a no-op (#4292 follow-up).
+        mock_ensure.assert_called_once_with(
+            "gemma4-it-e2b-FLM", auto_download=True, force=True
+        )
         api_call.assert_called_once()
 
     def test_auto_download_disabled_re_raises_even_for_missing_model(self) -> None:
@@ -834,13 +843,6 @@ class TestExecuteWithAutoDownloadNarrowing:
 # ── #4292: the auto-download retry must load at GAIA's ctx, not Lemonade's ──
 
 
-from gaia.llm.lemonade_client import (
-    DEFAULT_MODEL_LOAD_TIMEOUT,
-    LemonadeStatus,
-    resolve_ctx_size,
-)
-
-
 def _cold_server(client: LemonadeClient):
     """Patch the status probes to report an empty server, with no HTTP."""
     return (
@@ -898,3 +900,66 @@ class TestAutoDownloadLoadsAtResolvedCtx:
 
         load.assert_called_once()
         assert load.call_args.kwargs["ctx_size"] == pin
+
+    def test_stale_loaded_status_still_reloads(self, monkeypatch) -> None:
+        """#4292 follow-up: the recovery must not trust a "still loaded" /health.
+
+        The caller only reaches this path because its request just failed
+        against that supposedly-resident model — the classic shape being a
+        health entry whose llama-server child is gone. Short-circuiting on the
+        status probe would make the recovery a guaranteed no-op and replay the
+        identical failing request, the #2513 behaviour this helper exists to
+        prevent.
+        """
+        monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+        model = "Gemma-4-E4B-it-GGUF"
+        client = _client()
+        api_call = MagicMock(return_value={"ok": True})
+
+        warm = LemonadeStatus(
+            running=True,
+            loaded_models=[
+                {
+                    "id": model,
+                    "recipe_options": {"ctx_size": resolve_ctx_size(model=model)},
+                }
+            ],
+        )
+
+        with (
+            patch.object(client, "get_status", return_value=warm),
+            patch.object(client, "list_models", return_value={"data": []}),
+            patch.object(client, "load_model") as load,
+        ):
+            result = client._execute_with_auto_download(
+                api_call, model, True, error=LemonadeClientError("model not found")
+            )
+
+        assert result == {"ok": True}
+        load.assert_called_once()
+        assert load.call_args.kwargs["ctx_size"] == resolve_ctx_size(model=model)
+        api_call.assert_called_once()
+
+    def test_preflight_still_short_circuits_on_a_warm_server(self) -> None:
+        """``force`` is scoped to the recovery — the normal pre-flight path
+        must keep skipping a redundant /load when the model really is there."""
+        model = "Gemma-4-E4B-it-GGUF"
+        client = _client()
+        warm = LemonadeStatus(
+            running=True,
+            loaded_models=[
+                {
+                    "id": model,
+                    "recipe_options": {"ctx_size": resolve_ctx_size(model=model)},
+                }
+            ],
+        )
+
+        with (
+            patch.object(client, "get_status", return_value=warm),
+            patch.object(client, "list_models", return_value={"data": []}),
+            patch.object(client, "load_model") as load,
+        ):
+            client._ensure_model_loaded(model, auto_download=True)
+
+        load.assert_not_called()
