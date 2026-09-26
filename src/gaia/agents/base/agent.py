@@ -8710,9 +8710,9 @@ Do NOT wrap conversational replies in JSON.
                 f"written: {e}",
                 steps_taken,
             )
-        if answer is None:
-            return None, steps_taken
-        return self.finalize_answer(answer, conversation), steps_taken
+        # Raw, like the summary branches above — the caller finalizes once.
+        # Subclass hooks append corrections, so a second pass duplicates them.
+        return answer, steps_taken
 
     def _dedup_mutation_call(
         self,

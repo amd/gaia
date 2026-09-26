@@ -432,3 +432,43 @@ def test_stop_during_the_closing_reply_cancels_the_turn():
 
     assert result["status"] == "cancelled"
     assert result["result"] == ""
+
+
+# ---------------------------------------------------------------------------
+# finalize_answer runs once, on every branch
+# ---------------------------------------------------------------------------
+
+
+def _count_finalize(agent) -> list:
+    """Record each ``finalize_answer`` pass and mark the text it returned."""
+    seen = []
+
+    def _finalize(answer, conversation):
+        del conversation
+        seen.append(answer)
+        return f"{answer}\n[finalized]"
+
+    agent.finalize_answer = _finalize
+    return seen
+
+
+@pytest.mark.parametrize(
+    "tool_result",
+    [_DONE, {"status": "error", "error": "boom"}],
+    ids=["repeats-worked", "repeats-failed"],
+)
+def test_the_loop_break_answer_is_finalized_exactly_once(agent, tool_result):
+    """Subclasses append corrections here, so a second pass duplicates them.
+
+    ``EmailTriageAgent`` grounds its answer in ``finalize_answer`` and four of
+    its guards append a correction rather than replacing the text — running
+    them twice over one answer repeats every correction it made.
+    """
+    agent.tool_result = tool_result
+    _stub_chat(agent, *_repeat_then(_ANSWER))
+    seen = _count_finalize(agent)
+
+    result = agent.process_query("fix the loader and run the tests")
+
+    assert len(seen) == 1
+    assert result["result"].count("[finalized]") == 1
