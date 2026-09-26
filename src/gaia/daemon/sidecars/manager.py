@@ -73,6 +73,9 @@ _MAX_SIDECAR_LOGS = 5
 # scheduling jitter, and short enough that a wedged sidecar is reported as such
 # instead of stalling the caller behind the relay's own read timeout.
 _READINESS_TIMEOUT = 2.0
+# Shutdown-time survivor probe budget: short, because it runs on the stop path
+# after a kill and only has to tell "port still served" from "port dead".
+_PROBE_TIMEOUT = 1.5
 
 
 def find_free_port(host: str = _HOST) -> int:
@@ -221,6 +224,9 @@ class AgentSidecarManager:
         )
         self.expected_api_version = expected_api_version
         self._proc: Optional[subprocess.Popen] = None
+        # Latch: set once our process group has been observed empty. A group
+        # never comes back, so a later hit on that number is a recycled pgid.
+        self._group_gone = False
         self._log_handle = None
         self._log_path: Optional[Path] = None
         self._atexit_registered = False
@@ -281,7 +287,7 @@ class AgentSidecarManager:
         if self._proc is None:
             return False
         # A dead PyInstaller bootloader can leave its server child on the port.
-        return self._proc.poll() is None or self._group_alive(self._proc.pid)
+        return self._proc.poll() is None or self._tree_survives(self._proc.pid)
 
     @staticmethod
     def _group_alive(pgid: int) -> bool:
@@ -299,6 +305,52 @@ class AgentSidecarManager:
         except PermissionError:
             return True
         return True
+
+    def _group_survives(self, pgid: int) -> bool:
+        """``_group_alive`` behind a monotonic latch.
+
+        Once the leader is reaped the OS may hand its number to an unrelated
+        process, so an unlatched probe would resurrect a dead sidecar and aim
+        our SIGKILL at a stranger.
+        """
+        if self._group_gone:
+            return False
+        if self._group_alive(pgid):
+            return True
+        self._group_gone = True
+        return False
+
+    def _port_survivor(self) -> bool:
+        """True only when our port answers /health as OUR service.
+
+        Windows keeps no process group to probe, so after the bootloader exits
+        the port is the only evidence its server child is still running.
+        Positive identification is required: anything that is not a 200 naming
+        our ``service_id`` means no survivor was confirmed, never "assume gone
+        and hope" — the caller treats an unconfirmed survivor as a clean stop,
+        so this must not report one it cannot prove.
+        """
+        if self.port is None or self.base_url is None:
+            return False
+        import requests
+
+        try:
+            r = self._http_get(f"{self.base_url}/health", timeout=_PROBE_TIMEOUT)
+        except requests.exceptions.RequestException:
+            return False
+        if r is None or getattr(r, "status_code", None) != 200:
+            return False
+        try:
+            body = r.json()
+        except ValueError:
+            return False
+        return isinstance(body, dict) and body.get("service") == self.spec.service_id
+
+    def _tree_survives(self, pid: int) -> bool:
+        """True while anything our spawn started is still alive."""
+        if os.name == "nt":
+            return self._port_survivor()
+        return self._group_survives(pid)
 
     @property
     def pid(self) -> Optional[int]:
@@ -512,6 +564,7 @@ class AgentSidecarManager:
             raise SidecarSpawnError(
                 f"failed to launch the {self.spec.agent_id} sidecar ({argv[0]}): {e}"
             ) from e
+        self._group_gone = False
         self.spawn_argv = list(argv)
         self.started_at = time.time()
         if self.on_process_spawned is not None:
@@ -851,7 +904,7 @@ class AgentSidecarManager:
         pid = proc.pid
         # POSIX signals the group even when the leader is gone: pgid == pid.
         leader_alive = proc.poll() is None
-        if leader_alive or self._group_alive(pid):
+        if leader_alive or self._tree_survives(pid):
             logger.info("%s sidecar: tree-killing pid=%s", self.spec.agent_id, pid)
             self._signal_tree(proc, 15)
             if not self._wait_tree_gone(proc, timeout):
@@ -864,18 +917,35 @@ class AgentSidecarManager:
                 self._wait_tree_gone(proc, timeout)
         self._close_log()
         self._cleanup_secret_file()
-        if proc.poll() is None or self._group_alive(pid):
+        if proc.poll() is None or self._tree_survives(pid):
             # Keep _proc (and so the ledger entry) — crash-reap needs it.
-            logger.warning(
-                "%s sidecar: pid=%s or a child in its process group is still "
-                "alive after SIGKILL -- not reporting it as shut down. Kill "
-                "process group %s manually, then run "
-                "`gaia daemon stop-agent %s`.",
-                self.spec.agent_id,
-                pid,
-                pid,
-                self.spec.agent_id,
-            )
+            if os.name == "nt" and proc.poll() is not None:
+                # The bootloader is gone, so there is no tree left to taskkill —
+                # the orphan is reachable only by the port it still serves.
+                logger.warning(
+                    "%s sidecar: pid=%s has exited but a child it left behind "
+                    "is still serving %s -- not reporting it as shut down. "
+                    "Windows keeps no process group to kill through. Stop the "
+                    "listener manually (`netstat -ano | findstr :%s`, then "
+                    "`taskkill /PID <pid> /F`), then run "
+                    "`gaia daemon stop-agent %s`.",
+                    self.spec.agent_id,
+                    pid,
+                    self.base_url,
+                    self.port,
+                    self.spec.agent_id,
+                )
+            else:
+                logger.warning(
+                    "%s sidecar: pid=%s or a child in its process group is still "
+                    "alive after SIGKILL -- not reporting it as shut down. Kill "
+                    "process group %s manually, then run "
+                    "`gaia daemon stop-agent %s`.",
+                    self.spec.agent_id,
+                    pid,
+                    pid,
+                    self.spec.agent_id,
+                )
             return
         self._proc = None
         self._fire_reaped()
@@ -908,7 +978,7 @@ class AgentSidecarManager:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             return False
-        while self._group_alive(proc.pid):
+        while self._group_survives(proc.pid):
             if time.monotonic() >= deadline:
                 return False
             time.sleep(0.05)
