@@ -251,15 +251,19 @@ def _strip_installer_rc_blocks(text: str, allowed_dirs: set) -> tuple:
 
 
 def _rc_edit_candidates(home: Optional[Path] = None) -> tuple:
-    """Return ``(files_to_edit, hand_edited_files)`` among the shell rc files.
+    """Return ``(files_to_edit, hand_edited_files, unreadable_messages)``.
 
-    Raises:
-        UninstallPlanError: an rc file exists but cannot be read.
+    An rc file that cannot be read is reported rather than raised: tidying up
+    PATH is a side task, and failing it must not strand the user data the
+    purge was asked to delete. The caller records the message and the run
+    still exits non-zero — the same shape :func:`_edit_rc_file` already uses
+    when the *write* fails.
     """
     user_home = home if home is not None else Path.home()
     allowed = _installer_posix_path_dirs(home)
     to_edit: List[Path] = []
     hand_edited: List[Path] = []
+    unreadable: List[str] = []
     for name in _RC_FILES:
         rc = user_home / name
         if not rc.is_file():
@@ -267,17 +271,18 @@ def _rc_edit_candidates(home: Optional[Path] = None) -> tuple:
         try:
             text = rc.read_bytes().decode("utf-8", errors="surrogateescape")
         except OSError as exc:
-            raise UninstallPlanError(
+            unreadable.append(
                 f"could not read {rc} to check for the GAIA installer's PATH "
                 f"line: {exc}. Fix its permissions or remove the "
-                f"'{RC_MARKER}' block by hand, then re-run."
-            ) from exc
+                f"'{RC_MARKER}' block by hand."
+            )
+            continue
         _, removed, unrecognized = _strip_installer_rc_blocks(text, allowed)
         if removed:
             to_edit.append(rc)
         if unrecognized:
             hand_edited.append(rc)
-    return to_edit, hand_edited
+    return to_edit, hand_edited, unreadable
 
 
 def _edit_rc_file(
@@ -379,24 +384,24 @@ def _broadcast_environment_change() -> bool:
     )
 
 
-def _windows_path_entries_to_remove(home: Optional[Path] = None) -> List[str]:
-    """Installer entries currently on the user PATH.
+def _windows_path_entries_to_remove(home: Optional[Path] = None) -> tuple:
+    """Return ``(entries_to_remove, unreadable_messages)`` for the user PATH.
 
-    Raises:
-        UninstallPlanError: the registry value cannot be read.
+    A registry value that cannot be read is reported rather than raised, for
+    the same reason as :func:`_rc_edit_candidates`.
     """
     user_home = home if home is not None else Path.home()
     try:
         raw, _ = _read_user_path()
     except OSError as exc:
-        raise UninstallPlanError(
+        return [], [
             f"could not read the user PATH from HKCU\\Environment: {exc}. "
             "Remove the ~\\.gaia\\venv\\Scripts and ~\\.gaia\\bin entries by "
             "hand (Settings > System > About > Advanced system settings > "
-            "Environment Variables), then re-run."
-        ) from exc
+            "Environment Variables)."
+        ]
     _, removed = _strip_user_path_entries(raw, _installer_windows_path_dirs(user_home))
-    return removed
+    return removed, []
 
 
 def _remove_windows_path_entries(
@@ -456,11 +461,6 @@ class UnsafeGaiaHomeError(RuntimeError):
     Raised before any plan is built, so a misconfigured ``GAIA_HOME`` can
     never reach :func:`_remove_path`.
     """
-
-
-class UninstallPlanError(RuntimeError):
-    """Something the plan must inspect (a shell rc file, the user PATH) could
-    not be read, so nothing is deleted."""
 
 
 # Entries only GAIA creates. At least one must exist before any tier deletes
@@ -583,6 +583,9 @@ class UninstallPlan:
     rc_files: List[Path] = field(default_factory=list)
     windows_path_entries: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    # PATH edits that could not even be inspected. Reported, and the run exits
+    # non-zero — but they must not block the deletions the user asked for.
+    blocked_edits: List[str] = field(default_factory=list)
 
     def unique_paths(self) -> List[Path]:
         """Return deduplicated paths preserving the order they were added."""
@@ -625,8 +628,6 @@ def build_plan(
         UnsafeGaiaHomeError: when a tier would delete inside a GAIA home that
             is really the user's home directory, a drive root, or a directory
             with no sign that GAIA owns it.
-        UninstallPlanError: when a shell rc file or the Windows user PATH
-            cannot be read.
     """
     plan = UninstallPlan()
 
@@ -672,14 +673,16 @@ def _plan_installer_leftovers(plan: UninstallPlan, home: Optional[Path]) -> None
 
     if not _purges_installer_home(home):
         return
-    plan.rc_files, hand_edited = _rc_edit_candidates(home)
+    plan.rc_files, hand_edited, unreadable = _rc_edit_candidates(home)
+    plan.blocked_edits.extend(unreadable)
     for rc in hand_edited:
         plan.notes.append(
             f"{rc} has a '{RC_MARKER}' line whose PATH export was changed by "
             "hand, so it is left alone. Remove it by hand if you no longer need it."
         )
     if _is_windows():
-        plan.windows_path_entries = _windows_path_entries_to_remove(home)
+        plan.windows_path_entries, unreadable = _windows_path_entries_to_remove(home)
+        plan.blocked_edits.extend(unreadable)
 
 
 # ---------------------------------------------------------------------------
@@ -1225,6 +1228,10 @@ def execute_plan(
     """
     all_ok = True
 
+    for message in plan.blocked_edits:
+        _print(f"  [error] {message}", printer=printer)
+        all_ok = False
+
     def _remove(path: Path) -> None:
         nonlocal all_ok
         try:
@@ -1361,9 +1368,6 @@ def run(
     except UnsafeGaiaHomeError as exc:
         _print(f"error: {exc}", printer=printer)
         return EXIT_USAGE
-    except UninstallPlanError as exc:
-        _print(f"error: {exc}", printer=printer)
-        return EXIT_FS_ERROR
 
     if plan.is_empty() and dry_run:
         _print("[dry-run] Nothing to do — no tier or extras selected.", printer=printer)

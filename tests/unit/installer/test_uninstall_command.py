@@ -1730,3 +1730,63 @@ class TestWindowsUserPath:
 
         assert exit_code == uc.EXIT_OK
         assert fake.writes == []
+
+
+# ---------------------------------------------------------------------------
+# An unreadable shell rc file must not strand the user's data
+# ---------------------------------------------------------------------------
+
+
+class TestUnreadablePathEditDoesNotBlockThePurge:
+    """Tidying up PATH is a side task of ``--purge``.
+
+    Failing to *read* one shell rc file used to abort the plan before a single
+    path was deleted, so a root-owned ``~/.profile`` kept ``~/.gaia/chat`` and
+    ``documents`` on disk — data the unreadable file has nothing to do with.
+    The write side already reported and carried on; the read side now matches.
+    """
+
+    @staticmethod
+    def _unreadable_profile(fake_home: Path) -> Path:
+        rc = fake_home / ".profile"
+        rc.write_text("export PATH=\"$PATH:/usr/local/bin\"\n")
+        return rc
+
+    def test_the_unreadable_file_is_reported_not_raised(self, fake_home, monkeypatch):
+        rc = self._unreadable_profile(fake_home)
+
+        def _explode(self, *_args, **_kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        # Patch the concrete class of the path object the function will build:
+        # under pyfakefs that is not this module's ``Path``.
+        monkeypatch.setattr(type(rc), "read_bytes", _explode)
+
+        to_edit, hand_edited, unreadable = uc._rc_edit_candidates(fake_home)
+
+        assert to_edit == []
+        assert hand_edited == []
+        assert len(unreadable) == 1
+        assert ".profile" in unreadable[0]
+        assert "by hand" in unreadable[0], "the message must say what to do"
+
+    def test_the_purge_still_deletes_and_still_exits_non_zero(
+        self, fake_home, monkeypatch
+    ):
+        _seed_gaia_tree(fake_home)
+        gaia = fake_home / ".gaia"
+
+        plan = uc.UninstallPlan()
+        plan.tiered_paths.append(("--purge", gaia / "chat"))
+        plan.tiered_paths.append(("--purge", gaia / "venv"))
+        plan.blocked_edits.append("could not read /home/u/.profile: denied")
+
+        captured = _Capture()
+        exit_code = uc.execute_plan(
+            plan, allowed_roots=uc._safe_roots(home=fake_home), printer=captured
+        )
+
+        assert exit_code == uc.EXIT_FS_ERROR, captured.text
+        assert "could not read" in captured.text
+        assert not (gaia / "chat").exists(), "the user's data must still go"
+        assert not (gaia / "venv").exists()
