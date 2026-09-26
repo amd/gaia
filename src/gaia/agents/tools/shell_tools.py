@@ -2518,6 +2518,10 @@ class ShellToolsMixin:
             # inside its own (correct) timeout.
             timeout=MAX_COMMAND_TIMEOUT + 60,
         )
+        # The class table leads the docstring because the prompt renders a tool
+        # by its FIRST LINE; anything below is seen only by models using native
+        # tool calls. ``test_the_docstring_states_every_class`` keeps that line
+        # honest when the table changes.
         def run_shell_command(
             command: str,
             working_directory: Optional[str] = None,
@@ -2527,19 +2531,13 @@ class ShellToolsMixin:
             # to send "60". None still means "use the class default".
             timeout: int = None,
         ) -> Dict[str, Any]:
-            """Execute a shell command. Leave timeout unset: it defaults to what the command needs — 900s for test runners, 1800s for builds and installs, 300s for git/network calls, 30s for everything else.
+            """Execute a shell command. Leave timeout unset — it defaults by class: 900s test runners, 1800s builds and installs, 300s git/network, 30s everything else.
 
-            The class table leads because the prompt renders a tool by the FIRST
-            LINE of its docstring; anything below is seen only by models using
-            native tool calls. ``test_the_docstring_states_every_class`` keeps
-            that line honest when the table changes.
-
-            Chain on one line: 'a && b' on success, 'a || b' on failure,
-            'a; b' always, 'a | b' pipes, 'cd <dir> && b' runs b there. Each
-            is allowlist-checked; one approval covers the line. '2>&1' keeps
-            stderr and '2>/dev/null' drops it; 'PYTHONPATH=. pytest -q' scopes
-            a variable to one command. Other redirections and ` $() &
-            newline are refused.
+            Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
+            'cd <dir> && b'. One approval covers the line; every part is
+            allowlist-checked. '2>&1' keeps stderr, '2>/dev/null' drops it,
+            'VAR=x cmd' scopes a variable. Other redirections and
+            ` $() & newline are refused.
 
             Args:
                 command: Shell command to execute
@@ -2549,11 +2547,9 @@ class ShellToolsMixin:
                     ceiling it is refused, not clamped.
 
             Returns:
-                Dictionary with status, combined output, the last command's
-                exit code, and 'steps' (each command with its own code). The
-                applied timeout and the class it came from are in ``timeout``
-                and ``timeout_class``; a command killed at the limit carries
-                ``timed_out`` plus whatever it printed first.
+                status, output, the last exit code, 'steps' (each with its own
+                code), the applied 'timeout' and 'timeout_class'; one killed at
+                the limit carries 'timed_out'.
             """
             try:
                 bypass = self.bypass_gates_active()
@@ -2870,11 +2866,9 @@ class ShellToolsMixin:
             timeout: int = WAIT_DEFAULT_TIMEOUT,
             poll_interval: int = WAIT_DEFAULT_POLL_INTERVAL,
         ) -> Dict[str, Any]:
-            """Wait until a shell command succeeds, instead of sleeping and re-checking: give it a command that exits 0 once the thing you are waiting for is ready (a file written, a server answering, a run finished) and it polls every 5s until then, giving up at 120s by default and 600s at most.
+            """Wait until a shell command succeeds instead of sleeping and re-checking: give it a command that exits 0 once the thing is ready, and it polls every 5s, giving up at 120s by default, 600s at most.
 
-            One agent step covers the whole wait. The polling happens inside
-            this call against a monotonic deadline, so the loop's step budget is
-            spent on work rather than on re-asking whether the thing is ready.
+            One agent step covers the whole wait — don't re-poll in the loop.
 
             Args:
                 command: The predicate — exits 0 once the condition holds,
@@ -2884,9 +2878,8 @@ class ShellToolsMixin:
                 poll_interval: Seconds between checks (5-60)
 
             Returns:
-                A result dict carrying ``condition_met``, how many probes ran and
-                the last probe's output. Deadline expiry is an error, not a
-                quiet False.
+                'condition_met', the probe count, and the last probe's output.
+                Deadline expiry is an error, not a quiet False.
             """
             try:
                 timeout = int(timeout)

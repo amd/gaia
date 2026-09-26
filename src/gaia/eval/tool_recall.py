@@ -54,6 +54,10 @@ _TOOL_LOADER_RE = re.compile(r"TOOL_LOADER (\{.*\})\s*$")
 _SESSION_RE = re.compile(r"TOOL_LOADER_SESSION (\{.*\})\s*$")
 _ESCAPE_HATCH_RE = re.compile(r'"event"\s*:\s*"TOOL_LOADER_ESCAPE_HATCH"')
 
+# Events that widen an in-flight turn's loaded set. They carry a "turn" and a
+# "loaded" like a selection line, so without this they read as extra turns.
+_MIDLOOP_EVENTS = frozenset({"load_tools", "admit_skill_tools"})
+
 # Tools that never count as a recall miss: ``load_tools`` is the always-on
 # escape hatch (CORE), so calling it is always satisfiable by construction.
 _ALWAYS_SATISFIED = frozenset({"load_tools"})
@@ -151,12 +155,13 @@ def parse_loaded_sets_from_log(text: str) -> List[List[List[str]]]:
     """Extract per-scenario, per-turn loaded sets from server-log TOOL_LOADER lines.
 
     A new scenario begins at each ``"turn": 1`` *selection* line (the loader
-    resets its turn counter per conversation). A mid-loop ``load_tools`` line
-    (Part 2) shares its turn's number but carries ``"event": "load_tools"``; it
-    is **unioned** into that turn's loaded set rather than opening a new turn, so
-    a within-turn recovery shows the loaded set as it stood *after* the load.
-    Only ``event``-less selection lines move the turn/scenario cursor, so two
-    consecutive single-turn scenarios still split correctly.
+    resets its turn counter per conversation). A mid-loop expansion line
+    (``load_tools``, ``admit_skill_tools``) shares its turn's number but carries
+    an ``event``; it is **unioned** into that turn's loaded set rather than
+    opening a new turn, so a within-turn recovery shows the loaded set as it
+    stood *after* the load. Only ``event``-less selection lines move the
+    turn/scenario cursor, so two consecutive single-turn scenarios still split
+    correctly.
 
     Assumption: every scenario emits a ``turn == 1`` line. A turn-1 *embedder
     failure* session-disables the loader before ``_log_selection`` runs, so that
@@ -176,10 +181,10 @@ def parse_loaded_sets_from_log(text: str) -> List[List[List[str]]]:
         if "loaded" not in payload or "turn" not in payload:
             continue  # not a selection line (e.g. escape-hatch event)
         loaded = list(payload["loaded"])
-        if payload.get("event") == "load_tools":
-            # Mid-loop expansion: union into the current turn's loaded set. A
-            # load_tools line always follows its turn's selection line, so
-            # ``current`` is non-empty in a well-formed log; tolerate the start.
+        if payload.get("event") in _MIDLOOP_EVENTS:
+            # Mid-loop expansion: union into the current turn's loaded set. Such
+            # a line always follows its turn's selection line, so ``current`` is
+            # non-empty in a well-formed log; tolerate the start.
             if current:
                 current[-1] = sorted(set(current[-1]) | set(loaded))
             else:

@@ -36,6 +36,43 @@ class GaiaConfigError(Exception):
     """
 
 
+class UnsafeGaiaHomeError(RuntimeError):
+    """The resolved GAIA home is not a directory GAIA may own files in.
+
+    Every caller that creates, serves or deletes files under the GAIA home
+    raises this, so one ``except`` covers the uninstaller and the Agent UI
+    alike.
+    """
+
+
+# Why a GAIA home is structurally unsafe, as returned by
+# :func:`unsafe_gaia_home_reason`.
+GAIA_HOME_IS_FS_ROOT = "fs_root"
+GAIA_HOME_HOLDS_USER_HOME = "user_home"
+
+
+def unsafe_gaia_home_reason(resolved: Path, user_home: Path) -> Optional[str]:
+    """Return why owning files under ``resolved`` is unsafe, or None if it isn't.
+
+    Shared so the uninstaller and the Agent UI cannot drift on the question,
+    while each keeps its own wording and its own remedy. Both paths treat
+    ``<GAIA_HOME>/documents`` as GAIA's to delete, and under ``GAIA_HOME=$HOME``
+    that resolves onto the real ``Documents`` folder on Windows and APFS.
+
+    Args:
+        resolved: The GAIA home, already resolved to an absolute path.
+        user_home: The user's home directory, already resolved.
+
+    Returns:
+        ``GAIA_HOME_IS_FS_ROOT``, ``GAIA_HOME_HOLDS_USER_HOME``, or None.
+    """
+    if resolved == resolved.parent:
+        return GAIA_HOME_IS_FS_ROOT
+    if resolved == user_home or user_home.is_relative_to(resolved):
+        return GAIA_HOME_HOLDS_USER_HOME
+    return None
+
+
 @dataclass
 class GaiaConfig:
     """Persistent GAIA configuration.

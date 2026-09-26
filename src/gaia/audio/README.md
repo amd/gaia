@@ -2,72 +2,14 @@
 
 This guide helps diagnose and fix audio-related issues with GAIA's voice features (talk mode, voice chat, etc.).
 
-## Test Utilities
-
-The `tests/` folder contains diagnostic tools for troubleshooting:
-
-- **`test_mic_simple.py`** - Basic microphone test showing real-time audio levels
-- **`test_talk_basic.py`** - Simple 3-second recording and transcription loop  
-- **`test_audio_pipeline.py`** - Comprehensive test of all audio components
-
 ## Quick Diagnostics
 
-### 1. Test Your Microphone (Basic Level)
-
-First, verify your microphone is working at the hardware level:
-
-```bash
-# Run the simple microphone test
-python src/gaia/audio/tests/test_mic_simple.py
-```
-
-**Expected Output:** You should see energy bars (█████) when you speak:
-```
-███████████                                        0.011151
-█████████████████                                  0.017035
-██████████████████████████                         0.026203
-```
-
-If you see only "(silence)" or very low values, your microphone isn't being captured properly.
-
-### 2. Test Basic Whisper Transcription
-
-Test if Whisper can transcribe your audio in a simple loop:
-
-```bash
-# Run the basic talk test (3-second recordings)
-python src/gaia/audio/tests/test_talk_basic.py
-```
-
-This will record 3 seconds of audio, transcribe it, and show the result. You should see:
-```
-Recording for 3 seconds... SPEAK NOW!
-Audio captured: 49152 samples, energy: 0.025000
-Transcribing...
-✅ TRANSCRIBED: Hello, this is a test
-```
-
-### 3. Comprehensive Audio Pipeline Test
-
-For a complete diagnostic of all components:
-
-```bash
-# Run the full audio pipeline test
-python src/gaia/audio/tests/test_audio_pipeline.py
-```
-
-This tests:
-- Basic microphone functionality
-- AudioRecorder class with voice activity detection  
-- Raw recording visualization
-- Full WhisperAsr integration
-
-### 4. Test Whisper ASR Module Directly
+### Test Whisper ASR Module Directly
 
 Test the Whisper ASR module with streaming:
 
 ```bash
-python src/gaia/audio/whisper_asr.py --mode mic --stream --duration 20
+python src/gaia/audio/whisper_asr.py --stream --duration 20
 ```
 
 ## Logging and Verbosity
@@ -86,8 +28,7 @@ python src/gaia/audio/whisper_asr.py --mode mic --stream --duration 20
 ### Issue 1: No Audio Detected
 
 **Symptoms:**
-- Energy levels show 0.000000 or very low values (< 0.0001)
-- No energy bars appear when speaking
+- Energy levels in the DEBUG log show 0.000000 or very low values (< 0.0001)
 
 **Solutions:**
 1. **Check Windows Settings:**
@@ -112,7 +53,7 @@ python src/gaia/audio/whisper_asr.py --mode mic --stream --duration 20
 ### Issue 2: Audio Detected but No Transcription
 
 **Symptoms:**
-- Energy bars appear when speaking
+- DEBUG log shows speech-level energy when speaking
 - Talk mode shows "Listening..." but never transcribes
 - No text output despite speaking
 
@@ -121,7 +62,7 @@ python src/gaia/audio/whisper_asr.py --mode mic --stream --duration 20
    - The system may be too strict about what counts as "speech"
   - The internal VAD (amplitude) threshold in `WhisperAsr` defaults to ~0.01, tuned for typical speaking levels (0.02–0.03)
   - The CLI flag `--silence-threshold` controls pause duration (in seconds) before sending the last heard phrase to the LLM, not the amplitude threshold
-  - If detection is unreliable, verify your energy levels with the mic test and reduce background noise
+  - If detection is unreliable, check the per-chunk energy values in the DEBUG log and reduce background noise
 
 2. **Use Smaller Whisper Model:**
    ```bash
@@ -195,28 +136,10 @@ gaia talk --no-tts --logging-level DEBUG --whisper-model-size tiny
 
 ### Test Individual Components
 
-1. **Test Microphone Only:**
-   ```bash
-   # Simple microphone level test
-   python src/gaia/audio/tests/test_mic_simple.py
-   ```
-
-2. **Test Whisper Transcription:**
-   ```bash
-   # Basic 3-second recording and transcription loop
-   python src/gaia/audio/tests/test_talk_basic.py
-   ```
-
-3. **Test Full Pipeline:**
-   ```bash
-   # Comprehensive test of all audio components
-   python src/gaia/audio/tests/test_audio_pipeline.py
-   ```
-
-4. **Test Real-time Streaming:**
+**Test Real-time Streaming:**
    ```bash
    # Test the WhisperAsr module directly with streaming
-   python src/gaia/audio/whisper_asr.py --mode mic --stream --duration 20
+   python src/gaia/audio/whisper_asr.py --stream --duration 20
    ```
 
 ## Audio System Architecture
@@ -291,7 +214,7 @@ export GAIA_LOG_LEVEL=DEBUG
 
 3. **File an Issue:**
    If problems persist, create an issue with:
-   - Output of the microphone test
+   - Output of the Whisper ASR streaming test above
    - Debug logs from `gaia talk --logging-level DEBUG`
    - Your system info (Windows version, Python version)
    - Audio device list from the diagnostic commands

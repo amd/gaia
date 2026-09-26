@@ -20,6 +20,7 @@ on:
       - 'pyproject.toml'
       - 'util/lint.py'
       - 'util/check_*.py'
+      - 'util/test_lane_allowlist.yml'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
       # `util/check_workflow_triggers.py` validates these, same as
@@ -36,6 +37,7 @@ on:
       - 'pyproject.toml'
       - 'util/lint.py'
       - 'util/check_*.py'
+      - 'util/test_lane_allowlist.yml'
       - '.security-suppressions.json'
       - '.github/dependabot.yml'
       # `util/check_workflow_triggers.py` validates these, same as

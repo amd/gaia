@@ -11,7 +11,7 @@ These tests verify that the REST API correctly serializes/deserializes
 data, validates input, and delegates to MemoryStore correctly.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -26,6 +26,11 @@ from gaia.agents.base.memory_store import MemoryStore
 
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat()
+
+
+def _utc_iso() -> str:
+    """A ``+00:00`` stamp, so the "+" path is covered off a UTC runner too."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _future_iso(days: int = 1) -> str:
@@ -369,12 +374,14 @@ class TestKnowledgeCRUD:
             context="work",
         )
 
-        time_before = _now_iso()
-        resp = api_client.get(f"/api/memory/knowledge?time_from={time_before}")
-        assert resp.status_code == 200
+        # Pass through ``params`` so the client percent-encodes the offset: a
+        # literal "+00:00" in the URL decodes to a space and 422s.
+        for stamp in (_now_iso(), _utc_iso()):
+            resp = api_client.get("/api/memory/knowledge", params={"time_from": stamp})
+            assert resp.status_code == 200, resp.text
 
-        resp = api_client.get(f"/api/memory/knowledge?time_to={time_before}")
-        assert resp.status_code == 200
+            resp = api_client.get("/api/memory/knowledge", params={"time_to": stamp})
+            assert resp.status_code == 200, resp.text
 
     def test_list_knowledge_excludes_sensitive(self, api_client, memory_store):
         """GET excludes sensitive items by default."""
@@ -676,11 +683,34 @@ class TestMaintenanceEndpoints:
         results = memory_store.search("GAIA")
         assert len(results) >= 1
 
-    def test_consolidation_endpoint(self, api_client, memory_store):
-        """POST /api/memory/consolidate returns response (501 if not implemented)."""
+    def test_consolidation_without_agent_session_is_503(
+        self, api_client, memory_store, monkeypatch
+    ):
+        """No chat session has registered a consolidator yet: refuse loudly."""
+        from gaia.ui.routers import memory as memory_mod
+
+        monkeypatch.setattr(memory_mod, "_consolidate_fn", None)
         resp = api_client.post("/api/memory/consolidate")
-        # Accept either 200 (implemented) or 501 (not yet implemented)
-        assert resp.status_code in (200, 501)
+        assert resp.status_code == 503
+        assert "active agent session" in resp.json()["detail"]
+
+    def test_consolidation_runs_the_registered_consolidator(
+        self, api_client, memory_store, monkeypatch
+    ):
+        """With a session's consolidator registered, the endpoint returns its result."""
+        from gaia.ui.routers import memory as memory_mod
+
+        calls = []
+
+        def _consolidate(max_sessions):
+            calls.append(max_sessions)
+            return {"consolidated": 2, "extracted_items": 3}
+
+        monkeypatch.setattr(memory_mod, "_consolidate_fn", _consolidate)
+        resp = api_client.post("/api/memory/consolidate?max_sessions=7")
+        assert resp.status_code == 200
+        assert resp.json() == {"consolidated": 2, "extracted_items": 3}
+        assert calls == [7]
 
     def test_rebuild_embeddings_endpoint(self, api_client, memory_store):
         """POST /api/memory/rebuild-embeddings returns response (501 if not implemented)."""

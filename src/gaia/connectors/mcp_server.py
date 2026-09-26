@@ -10,10 +10,10 @@ restarting GAIA (plan amendment A5).
 
 Keyring storage layout:
   - Service: ``gaia.connections`` (same service as OAuth tokens, per A3)
-  - Username: ``<connector_id>:<env_key>``  (e.g. ``"github:GITHUB_TOKEN"``)
+  - Username: ``<connector_id>:<env_key>``  (e.g. ``"mcp-github:GITHUB_PERSONAL_ACCESS_TOKEN"``)
 
 ``mcp_servers.json`` env block uses ``$keyring`` references (plan amendment A4):
-  ``{"env": {"GITHUB_TOKEN": {"$keyring": "gaia.connections:github:GITHUB_TOKEN"}}}``
+  ``{"env": {"GITHUB_PERSONAL_ACCESS_TOKEN": {"$keyring": "gaia.connections:mcp-github:GITHUB_PERSONAL_ACCESS_TOKEN"}}}``
 ``MCPClient.from_config()`` resolves references at spawn time and fails closed
 if a referenced keyring entry is missing (plan amendment A5b).
 """
@@ -25,7 +25,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
 from gaia.connectors.errors import ConnectorsError
@@ -100,6 +100,29 @@ def _read_mcp_servers_json() -> Dict[str, Any]:
             f"mcp_servers.json at {path} is unreadable: {e}. "
             "Delete to reset or fix the JSON."
         ) from e
+
+
+def _saved_keyring_usernames(connector_id: str, entry: Any) -> List[str]:
+    """Return keyring usernames a saved entry references in ``connector_id``'s own namespace."""
+    env = entry.get("env") if isinstance(entry, dict) else None
+    if not isinstance(env, dict):
+        return []
+    prefix = f"{SERVICE_NAME}:{connector_id}:"
+    usernames = []
+    for value in env.values():
+        ref = value.get("$keyring") if isinstance(value, dict) else None
+        if isinstance(ref, str) and ref.startswith(prefix):
+            usernames.append(ref[len(SERVICE_NAME) + 1 :])
+    return usernames
+
+
+def _delete_keyring_slots(usernames: Iterable[str]) -> None:
+    """Delete each ``gaia.connections`` keyring slot; absent slots are already gone."""
+    for username in sorted(usernames):
+        try:
+            keyring.delete_password(SERVICE_NAME, username)
+        except keyring.errors.PasswordDeleteError:
+            pass
 
 
 def is_mcp_server_configured(connector_id: str) -> bool:
@@ -217,6 +240,9 @@ class McpServerHandler:
 
         # Read, update, and atomically write mcp_servers.json.
         servers = _read_mcp_servers_json()
+        stale = set(_saved_keyring_usernames(spec.id, servers.get(spec.id))) - {
+            f"{spec.id}:{env_key}" for env_key in spec.mcp_env_keys
+        }
         servers[spec.id] = {
             "command": spec.mcp_command,
             "args": list(spec.mcp_args),
@@ -224,6 +250,7 @@ class McpServerHandler:
             "disabled": config.get("disabled", False),
         }
         _write_mcp_servers_json(servers)
+        _delete_keyring_slots(stale)
 
         logger.info(
             "mcp_server: configured connector_id=%s command=%s",
@@ -250,17 +277,14 @@ class McpServerHandler:
         """Remove the MCP server entry, keyring slots, and per-agent grants."""
         # Remove from mcp_servers.json.
         servers = _read_mcp_servers_json()
+        usernames = {f"{spec.id}:{env_key}" for env_key in spec.mcp_env_keys}
         if spec.id in servers:
+            # The saved entry may reference slots under env names the catalog has since renamed.
+            usernames.update(_saved_keyring_usernames(spec.id, servers[spec.id]))
             del servers[spec.id]
             _write_mcp_servers_json(servers)
 
-        # Delete keyring entries for every env key.
-        for env_key in spec.mcp_env_keys:
-            username = f"{spec.id}:{env_key}"
-            try:
-                keyring.delete_password(SERVICE_NAME, username)
-            except keyring.errors.PasswordDeleteError:
-                pass  # already absent — idempotent
+        _delete_keyring_slots(usernames)
 
         # Wipe per-agent grants AND activations. If the same connector_id is
         # re-added later the new connector must NOT inherit the previous user's

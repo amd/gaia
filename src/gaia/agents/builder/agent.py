@@ -10,7 +10,6 @@ name, then calls the ``create_agent`` tool to write a Python agent file under
 
 import ast
 import json
-import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -25,6 +24,8 @@ from gaia.agents.registry import (
     get_lemonade_models,
     resolve_preferred_model,
 )
+from gaia.llm.lemonade_client import resolve_lemonade_base_url
+from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.llm.providers.lemonade import LemonadeError, LemonadeNetworkError
 from gaia.logger import get_logger
 
@@ -140,11 +141,11 @@ def _select_builder_model(base_url: str) -> str:
     selected = resolve_preferred_model(BUILDER_PREFERRED_MODELS, available)
     if selected is None:
         candidates = ", ".join(BUILDER_PREFERRED_MODELS)
+        pull = describe_client_hint("pull", BUILDER_PREFERRED_MODELS[-1]).instruction
         err = LemonadeError(
             user_message=(
                 "No usable model is installed for the agent builder. Install "
-                f"one of: {candidates} — for example "
-                f"`gaia download {BUILDER_PREFERRED_MODELS[-1]}` — or run "
+                f"one of: {candidates}. {pull.rstrip('.')}. Or run "
                 "`gaia init` to set up a profile, then try again."
             )
         )
@@ -196,7 +197,7 @@ class BuilderAgent(Agent):
         effective_base_url = (
             config.base_url
             if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+            else resolve_lemonade_base_url()
         )
         # An explicit model_id (session-resolved upstream, or pinned by a
         # caller) is never second-guessed by a live check. Only an omitted

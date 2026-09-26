@@ -8,9 +8,10 @@ Gaia Agent SDK - Unified text chat integration with conversation history
 
 import json
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from gaia.chat.prompts import Prompts
 from gaia.llm import create_client
@@ -26,6 +27,7 @@ class AgentConfig:
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
     temperature: Optional[float] = None
+    top_p: Optional[float] = None  # None = the provider's default
     system_prompt: Optional[str] = None
     max_history_length: int = 4  # Number of conversation pairs to keep
     show_stats: bool = False
@@ -344,6 +346,30 @@ class AgentSDK:
     #: Step index stamped onto the next recorded call, set by the agent loop.
     turn_step: int = 0
 
+    #: Receives one timing dict per model request; set by the agent loop.
+    llm_call_sink: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    def _report_llm_call(self, started: float, *, streamed: bool, ok: bool) -> None:
+        """Hand the sink this request's wall time, ttft, finish reason, and
+        the tokens from the response's own usage (never ``/stats``)."""
+        seconds = time.perf_counter() - started
+        sink = self.llm_call_sink
+        if sink is None:
+            return
+        usage = self.llm_client.get_last_usage() if ok else None
+        usage = usage if isinstance(usage, dict) else {}
+        ttft = self.llm_client.get_last_ttft_seconds() if streamed and ok else None
+        finish = self.llm_client.get_last_finish_reason() if ok else None
+        sink(
+            {
+                "seconds": seconds,
+                "ttft_seconds": ttft if isinstance(ttft, (int, float)) else None,
+                "finish_reason": finish if isinstance(finish, str) else None,
+                "completion_tokens": usage.get("completion_tokens"),
+                "reasoning_tokens": usage.get("reasoning_tokens"),
+            }
+        )
+
     def _recorder_begin(
         self, structured: List[Dict[str, Any]], tools: Optional[List[Dict]]
     ) -> None:
@@ -428,6 +454,8 @@ class AgentSDK:
 
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "top_p" not in kwargs and self.config.top_p is not None:
+                kwargs["top_p"] = self.config.top_p
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
 
@@ -437,6 +465,8 @@ class AgentSDK:
                 kwargs["tools"] = tools
 
             self._recorder_begin(structured, tools)
+            call_started = time.perf_counter()
+            call_ok = False
             try:
                 response = self.llm_client.chat(
                     messages=structured,
@@ -444,7 +474,9 @@ class AgentSDK:
                     stream=False,
                     **kwargs,
                 )
+                call_ok = True
             finally:
+                self._report_llm_call(call_started, streamed=False, ok=call_ok)
                 self._recorder_end()
 
             # Prepare response data
@@ -489,6 +521,8 @@ class AgentSDK:
         Yields:
             AgentResponse chunks as they arrive
         """
+        call_started: Optional[float] = None
+        call_reported = False
         try:
             messages = self._prepare_messages_for_llm(messages)
 
@@ -512,6 +546,8 @@ class AgentSDK:
 
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "top_p" not in kwargs and self.config.top_p is not None:
+                kwargs["top_p"] = self.config.top_p
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
 
@@ -522,6 +558,7 @@ class AgentSDK:
                 kwargs["tools"] = tools
 
             self._recorder_begin(structured, tools)
+            call_started = time.perf_counter()
             for chunk in self.llm_client.chat(
                 messages=structured, model=self.effective_model, stream=True, **kwargs
             ):
@@ -532,6 +569,8 @@ class AgentSDK:
                 # native tool_calls branch already parses.
                 if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
                     self._recorder_mark()
+                    call_reported = True
+                    self._report_llm_call(call_started, streamed=True, ok=True)
                     tool_call_stats = self.get_stats()
                     self._recorder_end(tool_call_stats)
                     yield AgentResponse(
@@ -546,6 +585,8 @@ class AgentSDK:
             # Send final response with stats
             # Always get stats for token tracking (show_stats controls display, not collection)
             self._recorder_mark()
+            call_reported = True
+            self._report_llm_call(call_started, streamed=True, ok=True)
             stats = self.get_stats()
             self._recorder_end(stats)
 
@@ -569,6 +610,8 @@ class AgentSDK:
             # Cancelling closes this generator at the yield; without this the
             # call stays open and its seconds read as agent overhead. Empty
             # stats, never a fetch — a cancel must start no HTTP request.
+            if call_started is not None and not call_reported:
+                self._report_llm_call(call_started, streamed=True, ok=False)
             self._recorder_end(stats={})
 
     def send(
@@ -630,6 +673,8 @@ class AgentSDK:
                 and self.config.temperature is not None
             ):
                 generate_kwargs["temperature"] = self.config.temperature
+            if "top_p" not in generate_kwargs and self.config.top_p is not None:
+                generate_kwargs["top_p"] = self.config.top_p
 
             # Note: Retry logic is now handled at the LLM client level
             response = self._generate_conversation(
@@ -716,6 +761,8 @@ class AgentSDK:
                 and self.config.temperature is not None
             ):
                 generate_kwargs["temperature"] = self.config.temperature
+            if "top_p" not in generate_kwargs and self.config.top_p is not None:
+                generate_kwargs["top_p"] = self.config.top_p
 
             full_response = ""
             for chunk in self._generate_conversation(

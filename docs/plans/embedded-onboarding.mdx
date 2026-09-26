@@ -1,0 +1,190 @@
+---
+title: "Two-command setup on embedded Lemonade"
+description: "Scope for installing GAIA with npx, initializing it with gaia init (or on first launch), and opening it with gaia, gaia web, gaia desktop or Claude Code, with GAIA's embedded Lemonade replacing a system-wide install."
+---
+
+**A new user runs two commands, maybe three, and has a working GAIA.** Today it takes a
+Python install, a system-wide Lemonade install that asks for an administrator password, a
+model download, and knowing which of those failed when something goes wrong. After this
+work, GAIA carries its own Lemonade, picks the right model for the PC, and sets itself up
+on first launch if the user skipped that step.
+
+| Step | Command | What happens |
+|---|---|---|
+| 1. Install | `npx @amd-gaia/gaia install` | Installs the `gaia` command and the verified TUI and agent binaries. No models yet. |
+| 2. Initialize (optional) | `gaia init` | Installs and starts GAIA's embedded Lemonade, picks the model for this PC, downloads and checks it. |
+| 3. Use | `gaia` (terminal UI), `gaia web` (web app in the browser), `gaia desktop` (desktop app, also in the Start menu or Dock), or `/plugin install gaia --marketplace amd/gaia` in Claude Code | If step 2 was skipped, the first launch runs it. |
+
+## 1. Decisions
+
+| Decision | Choice |
+|---|---|
+| Which Lemonade | **GAIA's embedded Lemonade replaces a system-wide Lemonade entirely.** Every PC runs the version GAIA pins. `LEMONADE_BASE_URL` stays as an explicit override for a remote or hand-managed server; nothing else looks for a system install. |
+| How `npx` leaves a `gaia` command | **It runs the existing installer** (`install.sh` / `install.ps1`, Python `gaia` via uv) and fetches the verified binaries. A Python-free packaged binary is a later option. |
+| Who starts Lemonade | **Any GAIA entry point may start the embedded server** when it's stopped: it is GAIA's own private process on a private port, so starting it can't disturb anything else. This replaces the current rule that only `gaia init` starts Lemonade. |
+| Downloads | Only `gaia init`, the TUI's first-run setup, or an explicit re-download pulls models, and each shows the size first. |
+| Entry points | **`gaia` opens the terminal UI, `gaia web` the web app, `gaia desktop` the desktop app.** The desktop app also gets a Start menu, Dock or launcher entry. `gaia chat` in every form, and the top-level `--ui` / `--cli` flags, are legacy and removed. "Chat" stops being a product word. |
+| What stays | **A command stays only if it is useful and CI exercises it**; every kept command gets a CI test if it lacks one. Docs for removed commands are deleted, not marked deprecated. |
+| Lifetime | **The GAIA daemon owns embedded Lemonade:** it starts the server with the daemon and stops it on `gaia daemon stop`. Every entry point goes through the daemon. |
+| The Lemonade app on the same PC | **Left alone, never used by accident, reported when it gets in the way** (section 3, item 5). |
+| Technical debt | Fixed in the PR that touches it, not deferred. |
+
+## 2. What exists today
+
+- **Clients already prefer the embedded server.** `resolve_lemonade_base_url()` and
+  `resolve_lemonade_api_key()` read `~/.gaia/lemonade/state.json` before falling back to the
+  default port, so every GAIA client talks to a running embedded server without changes.
+- **The TUI already sets itself up on first launch** (`chat/setup.go`) and through `/setup`,
+  by running `gaia init --profile gaia --yes`. Its setup screen also starts a stopped
+  Lemonade by itself (`tryAutoStartLemonade`), but only through system launchers.
+- **The installers already leave Lemonade to `gaia init`**: `install.sh`, `install.ps1` and
+  the Windows desktop installer (`gaia.nsi`) install GAIA only.
+- **What still assumes a system Lemonade:**
+  - `gaia init` finds or installs it (`LemonadeInstaller`: the Windows MSI, Linux packages,
+    macOS pkg) and starts it through `lemonade_launcher` (tray app, `systemctl`, macOS app).
+  - `LemonadeManager.ensure_ready()` only checks, and reports a stopped server as an error.
+  - The TUI's auto-start and start hints (`preflight/autostart.go`, `lemonadeStartRemedy`).
+  - About 20 CI workflows run on self-hosted machines with a system Lemonade.
+- **`gaia` with no command opens the web Agent UI**, not the terminal UI; the terminal UI is
+  a separate `gaia-tui` binary. `gaia chat --ui`, and the top-level `--ui` and `--cli` flags,
+  are other routes into the same web UI, referenced in 43 files.
+- **`npx @amd-gaia/gaia`** fetches the TUI and agent binaries and opens the TUI, but needs
+  the Python `gaia` command installed separately, and leaves no lasting `gaia` command.
+
+## 3. PR 1: `gaia init` sets up embedded Lemonade
+
+**`gaia init` installs, starts and uses GAIA's embedded Lemonade, and every GAIA entry point
+starts it when it's stopped.** A system Lemonade is no longer installed, found or started.
+
+PR 1 ships as three PRs so each one can be reviewed and tested on its own:
+
+| PR | Scope | Items below |
+|----|-------|-------------|
+| **1a** | `gaia init` and `gaia init --check` use embedded Lemonade; `LEMONADE_BASE_URL` still names another server; init's system install, upgrade and start code is removed, along with `--skip-lemonade` | 1, 2 (stopped still counts as not ready until 1b) |
+| **1b** | The daemon starts embedded Lemonade at startup and on request, and stops only a server it started itself (never one that is slow to answer or runs another version; those need `gaia init`); `LemonadeManager.ensure_ready()` and `gaia init --check` have it start a stopped server | 3 (without the fallback removal) |
+| **1c** | CI's self-hosted runners move off system Lemonade; the default-port fallback, `LemonadeInstaller`'s system installers, the launcher's system paths and `gaia install --lemonade` are removed; the Lemonade app is detected and reported; every `lemonade-server serve` mention goes | 3 (fallback), 4, 5, 6 |
+
+The fallback removal waits for 1c because 18 CI workflows still reach a system Lemonade on
+the default port without setting `LEMONADE_BASE_URL`.
+
+### Changes
+
+1. **`gaia init` on embedded Lemonade.** Replace the system path in `InitCommand`
+   (`_ensure_lemonade_installed`, `_install_lemonade`, `_upgrade_lemonade`,
+   `_check_version_compatibility`, `_find_lemonade_server`, `_auto_start_server`,
+   `_ensure_server_running`) with `EmbeddedLemonade`: install the pinned artifact
+   (SHA-256 verified), start it, and install the profile's backend through
+   `EmbeddedLemonade.install_backend` (`llamacpp` everywhere, `flm:npu` for the NPU
+   profile). Model download, the hardware-based model choice (#4176) and verification are
+   unchanged, because they already talk to whatever `resolve_lemonade_base_url()` returns.
+   No administrator prompt on any platform.
+2. **`gaia init --check`** reports embedded status: installed, running, version, and the
+   models. An installed-but-stopped server counts as ready, since any entry point starts it.
+3. **The daemon owns the server.** `gaia daemon start` starts embedded Lemonade and
+   `gaia daemon stop` stops it. Every entry point that needs a model (the TUI, the Agent UI,
+   agents, evals, and `gaia web` / `gaia desktop` once they exist) ensures the daemon, so a
+   stopped server after a reboot is started without the user doing anything.
+   `LemonadeManager.ensure_ready()` stops reporting "not running" and asks the daemon
+   instead. With `LEMONADE_BASE_URL` set, nothing is started: the user chose that server.
+   **The default-port fallback is removed** from `resolve_lemonade_base_url()`, so GAIA can
+   never silently land on a different Lemonade (the app's, on 13305) when its own isn't up.
+4. **Remove the system-Lemonade code** that nothing uses any more: `LemonadeInstaller`'s
+   MSI, package and pkg installers, the system launch paths in `lemonade_launcher`, the
+   init-time upgrade prompts, and `gaia install --lemonade`. `describe_start_hint()`
+   becomes one message, "run `gaia init`", with the remote-server case kept.
+5. **Existing users and the Lemonade app.** Models live in the shared Hugging Face cache, so
+   the embedded server re-uses everything already downloaded. The two servers never clash
+   on ports (embedded uses its own port and key and stays off Lemonade's discovery). They
+   can clash on **memory** (a model the app keeps loaded) and on **the NPU** (one process at
+   a time). So:
+   - GAIA never uses the app's server, and never uninstalls or reconfigures it.
+   - `gaia init` and its health check detect the app and report it: its version, whether it
+     is running, what it has loaded and how much memory that holds, and how to quit it,
+     stop it starting at login, or uninstall it.
+   - A model load that fails because the app holds the memory or the NPU says so, naming
+     the app and the amount, instead of a generic out-of-memory error.
+6. **`gaia uninstall`** already removes the embedded server; its tiers are checked against
+   the new layout.
+7. **Docs, all together:** install and quickstart guides, `docs/reference/cli.mdx`
+   (`gaia init`, `gaia lemonade`, the removed `gaia install --lemonade`), troubleshooting,
+   the installer scripts' messages (no more administrator prompt), `CLAUDE.md`'s Lemonade
+   start rules, and the flagship package's `README.md` / `SPEC.md` / `SKILL.md` /
+   `CHANGELOG.md`.
+
+### Technical debt fixed in PR 1
+
+- Leftover mentions of the removed `lemonade-server serve` command across hints, docs and
+  the flagship sidecar's readiness messages.
+- Duplicate version-parsing and install-state logic spread across `init_command.py`,
+  `lemonade_installer.py` and `lemonade_launcher.py`, which the embedded path replaces.
+- `except Exception: pass`-style handlers in the touched Lemonade code, replaced with
+  specific errors per CLAUDE.md's no-silent-fallback rule.
+- Tests that mock the system installer; replaced with tests of the embedded path, plus one
+  real test that installs and starts embedded Lemonade into a temporary `GAIA_HOME`.
+
+### Verification
+
+- Unit tests: init's embedded steps, start-on-demand with and without `LEMONADE_BASE_URL`,
+  `--check` states, the TUI remedy text, removed commands give a clear message.
+- Real: a clean `GAIA_HOME` on this Mac, `gaia init --profile gaia --yes` from nothing →
+  embedded server installed and started → model ready → `gaia llm "hi"` answers. Then stop
+  the server and confirm `gaia chat` and the TUI start it again.
+- CI: the self-hosted workflows keep working through `LEMONADE_BASE_URL`; the ones that
+  exercise `gaia init` move to the embedded path.
+- Windows and Linux (Strix Halo) checked on hardware before merge.
+
+## 4. PR 2: plain `gaia` opens the terminal UI; remove legacy commands
+
+**Running `gaia` with no arguments starts the terminal UI**, launching the verified
+`gaia-tui` binary the installer put in place, with the same flags passed through. Today it
+opens the web Agent UI. If the terminal UI binary is missing, `gaia` says how to install it
+rather than opening something else.
+
+**Removed**, each with a one-line message naming what replaces it, plus every doc page, guide
+section, test and workflow step about it:
+
+| Command | Replaced by |
+|---|---|
+| `gaia chat`, `gaia chat --ui`, top-level `--ui` / `--cli` | `gaia`, `gaia web`, `gaia desktop` |
+| `gaia prompt`, `gaia llm` | The terminal UI; model health in `gaia init` |
+| `gaia install`, `gaia download` | `npx @amd-gaia/gaia install`, `gaia init` |
+| `gaia stats`, `gaia test`, `gaia perf-vis`, `gaia report` | `gaia eval` for evaluation reporting |
+| `gaia youtube`, `gaia knowledge`, `gaia cache` | The agent's skills |
+| `gaia kill` | `gaia daemon stop` |
+| `gaia lemonade …` | `gaia init`; a hidden `gaia lemonade status` stays for debugging |
+
+**Init profiles** collapse to `gaia`, plus `npu` and `sd` where the hardware needs them.
+`chat`, `rag`, `minimal`, `vlm`, `email` and `all` are removed.
+
+**Kept**, each with a CI test if it lacks one: `gaia`, `gaia web`, `gaia desktop`, `gaia init`,
+`gaia config`, `gaia uninstall`, `gaia diagnostics`, `gaia connectors`, `gaia hub`,
+`gaia email`, `gaia slack`, `gaia telegram`, `gaia schedule`, `gaia talk`, `gaia memory`,
+and for developers `gaia agent`, `gaia skill`, `gaia eval`, `gaia mcp` (trimmed to what's
+used), `gaia daemon`, `gaia api`.
+
+"Chat" leaves the docs, help text and profile names. The `ChatAgent` class, which the GAIA
+agent is built on, keeps its name until a separate rename.
+
+## 5. Later PRs
+
+| PR | Scope |
+|---|---|
+| **3. `npx @amd-gaia/gaia install`** | New `install` command: runs `install.sh` / `install.ps1`, fetches and verifies the binaries into GAIA's own folder, and leaves `gaia` on `PATH`. `npx @amd-gaia/gaia` with no command keeps opening the terminal UI, the same as `gaia`. |
+| **4. `gaia web` and `gaia desktop`** | `gaia web` starts the web app and opens the browser. `gaia desktop` opens the desktop app, installing it on first use if it's missing, and registers a per-user shortcut so it opens from the Start menu (Windows), Launchpad and Spotlight (macOS, app placed in `~/Applications`) or the app launcher (Linux, a `.desktop` entry). No admin rights; the installers keep creating the same shortcut, and `gaia uninstall` removes it either way. |
+| **5. TUI `/init`** | First launch still sets up automatically. `/init` (with `/setup` as an alias) shows a health report (Lemonade running and its version, model on disk and loadable, context size), and offers to re-download a damaged model (`gaia init --force-models`) or change the model. |
+| **6. Claude Code plugin** | The Claude Code plugin (its scope doc lands with that PR), relying on the installed `gaia`. A missing setup gives "run `gaia init`" and never downloads silently. |
+| **7. CI on the golden flows** | Move the self-hosted workflows from their system Lemonade to the embedded one, and add end-to-end jobs that run exactly what a user does on each OS: npx install → `gaia init` (small model) → the terminal UI answers a question → `gaia web` loads → the Claude Code plugin completes a task. The same scripts run locally. |
+
+## 6. Risks and open questions
+
+- **NPU:** the FastFlowLM backend needs the AMD NPU driver on the machine; embedded
+  Lemonade installs the backend but not the driver. `gaia init --profile npu` must check the
+  driver and say so.
+- **Two Lemonades at once:** a user who still runs a system Lemonade on port 13305 will have
+  two servers. The embedded one uses its own port, so nothing breaks, but both can hold a
+  model in memory. `gaia init` warns when it sees one running.
+- **Desktop app and Agent UI start-up:** both call `ensure_ready()`, so they gain start on
+  demand; the embedded server's first start takes a few seconds, which their loading
+  screens must allow for.
+- **Removing commands breaks scripts** that call them. Each removed command prints its
+  replacement, and the release notes list them all.

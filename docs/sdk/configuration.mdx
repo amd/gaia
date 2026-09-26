@@ -57,6 +57,30 @@ profile default. Registered models retain their own default when no override is
 set. NPU/FLM requests are capped at 32,768 tokens with a warning. Invalid nonempty
 values fail with an actionable error; unset or blank values use the default.
 
+## Per-request time budget
+
+A long document arrives as one large prefill, and the bigger the context window
+the longer that takes. GAIA derives the budget from the window rather than
+keeping a separate number that can drift from it: 32,768 tokens gets 1,024
+seconds, 65,536 gets 2,048, and everything is capped at 3,600 so a wedged
+request still ends. `GAIA_CTX_SIZE` moves it too.
+
+The same value is used at both ends — the private Lemonade instance's
+`global_timeout` and GAIA's own client read timeout — so the server cannot be
+allowed more time than the client will wait.
+
+Set `GAIA_LEMONADE_REQUEST_BUDGET` to a positive integer number of seconds to
+override it on a machine slower than that assumption:
+
+```bash
+GAIA_LEMONADE_REQUEST_BUDGET=3000 gaia chat
+```
+
+Invalid nonempty values fail with an actionable error rather than falling back
+to the derived number; unset or blank values use it. This applies to the
+embedded Lemonade instance GAIA owns — a system-wide install keeps its own
+settings.
+
 Larger windows require model support and more KV-cache memory. The override is a
 requested window, not proof of the backend's effective capacity. A model already
 loaded with a sufficient window is reused; lowering the value takes effect on the

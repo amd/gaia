@@ -197,6 +197,19 @@ MIN_EXTRACTION_WORDS = 5
 #  on machines under load or when the embedding model is also busy.
 EXTRACTION_TIMEOUT_S = 8
 
+#: Tool calls shown to extraction, most recent last, and each entry's detail cap.
+EXTRACTION_TOOL_RECORD_MAX_CALLS = 20
+EXTRACTION_TOOL_RECORD_DETAIL_CHARS = 240
+
+#: Sources an extracted op may cite. Anything else is the answer's own claim.
+_EXTRACTION_GROUNDS = frozenset({"user", "tool"})
+
+#: ``_record_tool_call`` outcomes. Load-bearing: ``_extract_via_llm`` gates
+#: tool-grounded ops on OUTCOME_OK appearing in the turn's record.
+OUTCOME_OK = "ok"
+OUTCOME_FAILED = "failed"
+OUTCOME_REFUSED = "refused, did not run"
+
 #: Consolidation age threshold in days.
 CONSOLIDATION_AGE_DAYS = 14
 
@@ -219,17 +232,24 @@ CONSOLIDATION_BUDGET_SECONDS = 10.0
 # ============================================================================
 
 _EXTRACTION_PROMPT = """\
-You are a memory manager. Given a conversation turn and the user's existing memory,
-decide what knowledge operations to perform. Return a JSON array only.
+You are a memory manager. Given a conversation turn, the record of what the
+tools returned during it, and the user's existing memory, decide what knowledge
+operations to perform. Return a JSON array only.
 
 Each item must have an "op" field:
 - "add": New knowledge not already in memory
-  Required: {{op, category, content, entity?, domain?, confidence: 0.4}}
+  Required: {{op, category, content, grounded, entity?, domain?, confidence: 0.4}}
 - "update": Modify an existing memory item (correction, enrichment, or supersession)
-  Required: {{op, knowledge_id, content, entity?, domain?}}
+  Required: {{op, knowledge_id, content, grounded, entity?, domain?}}
 - "delete": Remove a memory item contradicted or invalidated by new information
-  Required: {{op, knowledge_id, reason}}
+  Required: {{op, knowledge_id, reason, grounded}}
 - "noop": Information already captured accurately. Do not include in output.
+
+"grounded" says where the knowledge comes from:
+- "user": the user stated it in their message
+- "tool": a tool result in the tool record shows it
+Knowledge that only the assistant's answer asserts is not grounded. The answer
+can be wrong. Do not store it.
 
 Categories: fact, preference, error, skill, note, reminder
 Entity format: type:name (person:sarah_chen, app:vscode, project:gaia)
@@ -238,12 +258,19 @@ Domain examples: journal, meeting, meeting:standup, research, deployment
 Rules:
 - Only extract information useful in FUTURE conversations
 - Skip greetings, task confirmations, and ephemeral details
+- Skip narration of this session: where the user is working, the current
+  directory, what they asked for this turn, what the assistant did or changed
+- Never store a refused call or a permission limit. Permissions change, and
+  the tools report a refusal every time it applies
 - Prefer "update" over "add" + "delete" when a fact has changed
 - Use "delete" only when information is explicitly contradicted
 - If nothing worth doing, return []
 
 Existing memory:
 {existing_items_json}
+
+Tool record (what the tools returned this turn):
+{tool_record}
 
 Conversation:
 User: {user_input}
@@ -1477,16 +1504,23 @@ class MemoryMixin(ProceduralMemoryMixin):
         user_input: str,
         assistant_response: str,
         existing_items: List[Dict],
+        tool_record: Optional[List[Dict]] = None,
     ) -> List[Dict]:
         """Mem0-style extraction: conversation + existing memory → operations.
 
         Single LLM call returns JSON array of operations: ADD/UPDATE/DELETE/NOOP.
         Timeout: 3s.
 
+        An op must say it is grounded in the user's message or a tool result.
+        One grounded only in the answer is dropped, as is one citing a tool
+        when no tool ran successfully this turn: an answer's claim is not
+        evidence, and stored as a fact it is replayed as truth.
+
         Args:
             user_input: The user's message.
             assistant_response: The assistant's response.
             existing_items: Top-10 relevant existing knowledge items.
+            tool_record: This turn's tool calls, from ``_record_tool_call``.
 
         Returns:
             List of operation dicts with 'op' field.
@@ -1507,11 +1541,17 @@ class MemoryMixin(ProceduralMemoryMixin):
             indent=2,
         )
 
+        tool_record = tool_record or []
         prompt = _EXTRACTION_PROMPT.format(
             existing_items_json=existing_json,
+            tool_record=self._format_tool_record(tool_record),
             user_input=user_input[:2000],
             assistant_response=assistant_response[:2000],
         )
+        # Only OUTCOME_OK counts. A refused call never ran, and a failed one
+        # returned an error rather than a finding — neither establishes a fact
+        # worth replaying as truth in every later prompt.
+        a_tool_succeeded = any(entry["outcome"] == OUTCOME_OK for entry in tool_record)
 
         try:
             # Use the agent's AgentSDK for LLM calls
@@ -1562,10 +1602,28 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # Validate each operation has required fields
             valid_ops = []
+            writes = 0
+            unlabelled = 0
             for op in operations:
                 if not isinstance(op, dict) or "op" not in op:
                     continue
                 op_type = op["op"]
+                grounded = str(op.get("grounded", "")).strip().lower()
+                if op_type in ("add", "update", "delete"):
+                    writes += 1
+                    if grounded not in _EXTRACTION_GROUNDS:
+                        unlabelled += 1
+                if op_type in ("add", "update", "delete") and (
+                    grounded not in _EXTRACTION_GROUNDS
+                    or (grounded == "tool" and not a_tool_succeeded)
+                ):
+                    logger.debug(
+                        "[MemoryMixin] dropped ungrounded extracted op "
+                        "(grounded=%r): %s",
+                        grounded,
+                        str(op.get("content", ""))[:80],
+                    )
+                    continue
                 if op_type == "add" and "content" in op and "category" in op:
                     if op["category"] in EXTRACTABLE_CATEGORIES:
                         valid_ops.append(op)
@@ -1592,6 +1650,20 @@ class MemoryMixin(ProceduralMemoryMixin):
                     valid_ops.append(op)
                 # noop is excluded from output per spec
 
+            # Grounding fails closed, so a model that ignores the field stores
+            # nothing — indistinguishable at a glance from "nothing worth
+            # storing". Say so out loud when every write was dropped for a
+            # missing or unrecognised label; that is the model, not the turn.
+            if writes and unlabelled == writes:
+                logger.warning(
+                    "[MemoryMixin] extraction stored nothing: all %d proposed "
+                    "writes lacked a recognised 'grounded' value (expected one "
+                    "of %s). If this repeats, the model is dropping the field "
+                    "and memory is no longer learning.",
+                    writes,
+                    sorted(_EXTRACTION_GROUNDS),
+                )
+
             return valid_ops
 
         except json.JSONDecodeError as e:
@@ -1600,6 +1672,59 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] LLM extraction failed: %s", e)
             return []
+
+    @staticmethod
+    def _format_tool_record(tool_record: List[Dict]) -> str:
+        """One line per call: tool, arguments, outcome, and what it returned."""
+        if not tool_record:
+            return "(no tools ran this turn)"
+        shown = tool_record[-EXTRACTION_TOOL_RECORD_MAX_CALLS:]
+        lines = []
+        if len(tool_record) > len(shown):
+            lines.append(f"({len(tool_record) - len(shown)} earlier calls omitted)")
+        for entry in shown:
+            lines.append(
+                f"- {entry['tool']} {entry['args']} -> {entry['outcome']}: "
+                f"{entry['detail']}"
+            )
+        return "\n".join(lines)
+
+    def _record_tool_call(
+        self, tool_name: str, tool_args: Any, result: Any, error_msg: Optional[str]
+    ) -> None:
+        """Note a call in this turn's tool record, for extraction to check against.
+
+        Only reached when ``_execute_tool`` resolves to this mixin. An agent
+        listing ``Agent`` ahead of ``MemoryMixin`` — ``EmailTriageAgent`` does,
+        and documents it on its ``process_query`` — shadows both that override
+        and the per-turn reset, so its extractor always sees "no tools ran"
+        and drops every tool-grounded op. That fails safe (it stores less, not
+        wrong things) but it is not coverage: fixing it means reordering that
+        agent's bases, not patching here.
+        """
+        if isinstance(result, dict) and not check_was_executed(result):
+            outcome = OUTCOME_REFUSED
+        elif error_msg is not None:
+            outcome = OUTCOME_FAILED
+        else:
+            outcome = OUTCOME_OK
+        cap = EXTRACTION_TOOL_RECORD_DETAIL_CHARS
+        detail = error_msg if error_msg is not None else str(result)
+        # Slice before splitting: a multi-MB read_file result would otherwise
+        # build a million-element word list to keep 240 characters.
+        detail = " ".join(detail[: cap * 8].split())
+        args = json.dumps(tool_args, default=str, ensure_ascii=False)
+        record = getattr(self, "_turn_tool_record", None)
+        if record is None:
+            record = self._turn_tool_record = []
+        record.append(
+            {
+                "tool": tool_name,
+                "args": args[:cap],
+                "outcome": outcome,
+                "detail": detail[:cap],
+            }
+        )
 
     def _execute_extraction_operations(
         self,
@@ -1713,7 +1838,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         Called automatically on the first process_query() invocation, by which
         time Agent.__init__() has completed and self.chat is available.
         Steps: reconcile_memory (max 20 pairs), consolidate_old_sessions (max 5),
-        _synthesize_skills (procedural memory, #887), then prune() — pruning is
+        start_skill_synthesis (procedural memory, #887 — runs in the background
+        so it is not in front of the first answer), then prune() — pruning is
         last so old turns are distilled before anything is deleted.
         """
         # Step 6: reconcile_memory() (max 20 pairs)
@@ -1732,17 +1858,16 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] post-init consolidation failed: %s", e)
 
-        # Step 8: _synthesize_skills() — procedural memory (#887).  Boundary
-        # translation only: _synthesize_skills is fail-loud internally (embedder
-        # failure re-raises, no smaller-model fallback); this wrapper keeps a
-        # background synthesis error from crashing the user's first query, the
-        # same posture as the reconcile / consolidate steps above.
+        # Step 8: skill synthesis (procedural memory, #887) — started on a
+        # background thread, so distillation never sits in front of the user's
+        # first answer.  The pass logs its own start, outcome and failures;
+        # this wrapper only keeps a failure to *start* it off the first query.
         try:
-            synth = self._synthesize_skills()
-            if synth.get("stored", 0) > 0:
-                logger.info("[MemoryMixin] post-init skill synthesis: %s", synth)
+            self.start_skill_synthesis()
         except Exception as e:
-            logger.warning("[MemoryMixin] post-init skill synthesis failed: %s", e)
+            logger.warning(
+                "[MemoryMixin] post-init skill synthesis failed to start: %s", e
+            )
 
         # Step 9: prune() last, so old turns are distilled before anything is deleted.
         try:
@@ -2470,6 +2595,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Save original so _after_process_query stores the clean user text
         self._original_user_input = user_input
+        self._turn_tool_record = []
 
         # Refresh the recalled-procedure injection for this goal (#887 RECALL).
         # Uses the clean goal (not the dynamic-context-augmented message) and
@@ -2518,6 +2644,15 @@ class MemoryMixin(ProceduralMemoryMixin):
             is_error = True
             error_msg = str(exc)
             result = {"status": "error", "error": error_msg}
+            # Bookkeeping must never replace the tool's own exception.
+            try:
+                self._record_tool_call(tool_name, tool_args, None, error_msg)
+            except Exception as record_error:
+                logger.warning(
+                    "[MemoryMixin] failed to record tool exception in the turn "
+                    "record: %s",
+                    record_error,
+                )
 
             # Log to tool_history before re-raising
             try:
@@ -2539,6 +2674,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                     "[MemoryMixin] failed to record tool exception: %s", log_error
                 )
             raise
+
+        # Bookkeeping must never turn a successful tool call into a failure.
+        try:
+            self._record_tool_call(tool_name, tool_args, result, error_msg)
+        except Exception as record_error:
+            logger.warning(
+                "[MemoryMixin] failed to record tool call in the turn record: %s",
+                record_error,
+            )
 
         # Truncate result summary
         result_str = str(result)
@@ -2821,7 +2965,10 @@ class MemoryMixin(ProceduralMemoryMixin):
 
                 # LLM decides operations against existing memory
                 operations = self._extract_via_llm(
-                    clean_input, assistant_response, existing
+                    clean_input,
+                    assistant_response,
+                    existing,
+                    getattr(self, "_turn_tool_record", None),
                 )
 
                 # Execute operations
@@ -2877,20 +3024,21 @@ class MemoryMixin(ProceduralMemoryMixin):
         ) -> dict:
             """Store a fact, preference, or learning in persistent memory.
 
-            CONTENT RULE — preserve detail: pass the user's full statement
-            verbatim or as close to it as possible. DO NOT summarize,
-            paraphrase, or drop attributes. Future recall fails when the
-            stored content is thinner than what the user actually said.
-              GOOD: "API gateway runs on port 8080 and uses basic HTTP auth"
-              BAD:  "API gateway uses 8080" (lost the auth method)
-              BAD:  "user told me about the gateway" (lost everything)
-            If the user gave multiple distinct facts in one message, call
-            remember() once per fact rather than concatenating into a single
-            blob — each fact should be independently retrievable.
+            Store the user's statement verbatim — summarizing loses the
+            attributes a later recall needs ("gateway on port 8080 with basic
+            HTTP auth", not "gateway uses 8080"). One call per distinct fact,
+            never a concatenated blob. Credential-shaped content and transient
+            observations are refused.
 
-            Categories: fact, preference, error, skill, note, reminder.
-            due_at: ISO 8601 for reminders. context: work/personal scope.
-            sensitive=true for private data. entity: person:name, app:name."""
+            Args:
+                fact: The statement to store, in the user's own words.
+                category: fact, preference, error, skill, note, or reminder.
+                domain: Sub-type, e.g. 'journal', 'todo', 'work'.
+                due_at: ISO 8601 timestamp; reminders only.
+                context: Scope — 'work', 'personal', or 'global'.
+                sensitive: "true" to mark the entry private.
+                entity: Linked entity, e.g. 'person:Linda' or 'app:slack'.
+            """
             if getattr(mixin, "_incognito", False):
                 return {
                     "status": "skipped",
@@ -3000,33 +3148,25 @@ class MemoryMixin(ProceduralMemoryMixin):
             time_from: str = "",
             time_to: str = "",
         ) -> dict:
-            """Search or browse memory — works as both a search engine AND a database query tool.
+            """Search or browse memory — a search engine and a filtered list in one.
 
-            SEARCH MODE (with query=): semantic + keyword hybrid search across all memories.
-              Example: recall(query='python project settings')
+            With query=, runs hybrid semantic + keyword search. Without it,
+            lists every entry matching the filters — use that to list, browse,
+            or count rather than to find one specific memory. A bare recall()
+            lists recent non-sensitive rows.
 
-            BROWSE/LIST MODE (without query=): returns ALL entries matching your filters.
-              Use this when you want to list, browse, or count memories — not find a specific one.
-              Examples:
-                recall(category='note')                        → all notes
-                recall(category='note', domain='journal')      → all journal entries
-                recall(category='reminder')                    → all reminders / todos
-                recall(category='preference')                  → all stored preferences
-                recall(time_from='2026-01-01', time_to='2026-03-31')  → entries from Q1
-                recall(category='note', limit=50, offset=50)  → second page of notes
-
-            PARAMETERS:
-              query     : free-text search (enables hybrid search mode)
-              category  : filter by category (note, reminder, fact, preference, error, skill)
-              domain    : sub-type filter — e.g. 'journal', 'todo', 'work', 'personal'
-              context   : scope filter ('work', 'personal', 'global')
-              entity    : filter by linked entity (e.g. 'person:Linda')
-              limit     : max results (default 20 for browse, adaptive for search; max 100)
-              offset    : skip first N results for pagination (default 0)
-              time_from : ISO 8601 date lower bound (e.g. '2026-01-01')
-              time_to   : ISO 8601 date upper bound (e.g. '2026-03-31')
-
-            All optional; a bare recall() lists recent non-sensitive rows."""
+            Args:
+                query: Free-text search; enables hybrid search mode.
+                category: note, reminder, fact, preference, error, or skill.
+                domain: Sub-type filter, e.g. 'journal', 'todo', 'work'.
+                context: Scope filter — 'work', 'personal', or 'global'.
+                entity: Linked entity, e.g. 'person:Linda'.
+                limit: Max results (default 20 browsing, adaptive searching,
+                    max 100).
+                offset: Skip the first N results, for pagination.
+                time_from: ISO 8601 lower bound, e.g. '2026-01-01'.
+                time_to: ISO 8601 upper bound, e.g. '2026-03-31'.
+            """
             _recall_t0 = time.perf_counter()
             unfiltered = not any(
                 [query, category, domain, context, entity, time_from, time_to]

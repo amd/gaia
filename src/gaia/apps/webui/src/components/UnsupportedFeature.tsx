@@ -376,7 +376,7 @@ export function ErrorReportBanner({ errorMessage, context }: ErrorReportBannerPr
     const issueUrl = bugReportUrl(errorMessage.slice(0, 100));
 
     return (
-        <div className="unsupported-banner" style={{ borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+        <div className="unsupported-banner" style={{ borderColor: 'color-mix(in srgb, var(--danger) 30%, transparent)' }}>
             <div className="unsupported-banner-header">
                 <Bug size={16} />
                 <span>Something went wrong</span>

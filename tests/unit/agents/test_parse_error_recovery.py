@@ -78,6 +78,14 @@ class TestParseLLMResponseRaisesOnMalformed:
             target.write_text("value = 1\n")
             responses = iter(
                 [
+                    # The edit tools refuse a file the agent hasn't read.
+                    json.dumps(
+                        {
+                            "thought": "Read the file.",
+                            "tool": "read_file",
+                            "tool_args": {"file_path": str(target)},
+                        }
+                    ),
                     json.dumps(
                         {
                             "thought": "Edit the file.",
@@ -103,7 +111,7 @@ class TestParseLLMResponseRaisesOnMalformed:
             chat.send_messages.side_effect = send_messages
             agent.chat = chat
             with patch.object(agent, "_tool_requires_confirmation", return_value=False):
-                result = agent.process_query("Edit the file", max_steps=2)
+                result = agent.process_query("Edit the file", max_steps=3)
         finally:
             _TOOL_REGISTRY.clear()
             _TOOL_REGISTRY.update(saved_registry)
@@ -1057,3 +1065,90 @@ class TestParseRecoveryPromptSurfacesStep1ImagePath:
         # image, not the first.
         assert r"C:\second\b.png" in text
         assert r"C:\first\a.png" not in text
+
+
+class TestParseRetriesHaveTheirOwnBudget:
+    """Failed tool calls are ordinary work; they must not spend the retries a
+    malformed reply gets. A benchmark run lost its whole answer this way: three
+    refused or failing commands, then one malformed reply, and the turn ended
+    with "I had trouble formatting my tool call" on the first parse failure."""
+
+    @pytest.fixture
+    def failing_agent(self):
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            a = _DummyAgent(silent_mode=True, skip_lemonade=True)
+            a.streaming = False
+            # Per-instance so the fake tool never reaches the global registry.
+            a._instance_tools = {
+                "run_check": {
+                    "name": "run_check",
+                    "description": "Run a check that fails.",
+                    "parameters": {"target": {"type": "string", "required": False}},
+                    "function": lambda target="": {
+                        "status": "error",
+                        "error": "1 failed",
+                        "return_code": 1,
+                    },
+                    "atomic": True,
+                }
+            }
+            return a
+
+    @staticmethod
+    def _call(target: str) -> str:
+        # Vary the args so the three calls don't trip ``max_consecutive_repeats``
+        # (default 4) — this test is about the parse budget, nothing else.
+        return json.dumps({"tool": "run_check", "tool_args": {"target": target}})
+
+    def test_a_malformed_reply_after_failing_tools_is_retried(self, failing_agent):
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        good = json.dumps({"thought": "Done.", "answer": "test_retry hangs."})
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None,
+            failing_agent,
+            self._call("unit"),
+            self._call("mcp"),
+            self._call("integration"),
+            bad,
+            good,
+        )
+
+        result = failing_agent.process_query("Run the checks.", max_steps=10)
+
+        assert chat.send_messages.call_count == 5
+        assert "test_retry hangs." in result["result"]
+        assert "trouble formatting" not in result["result"]
+
+    def test_three_malformed_replies_still_give_up(self, failing_agent):
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None, failing_agent, bad, bad, bad, bad, bad
+        )
+
+        result = failing_agent.process_query("test", max_steps=10)
+
+        assert chat.send_messages.call_count == 3
+        assert "trouble formatting" in result["result"]
+
+    def test_a_clean_parse_gives_the_retries_back(self, failing_agent):
+        """The budget counts malformed replies in a row, not per turn. Two bad
+        replies, a good tool call, two more bad replies — a long turn that keeps
+        recovering must not lose its answer to a cumulative count."""
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        good = json.dumps({"thought": "Done.", "answer": "all checks ran."})
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None,
+            failing_agent,
+            bad,
+            bad,
+            self._call("unit"),
+            bad,
+            bad,
+            good,
+        )
+
+        result = failing_agent.process_query("Run the checks.", max_steps=10)
+
+        assert chat.send_messages.call_count == 6
+        assert "all checks ran." in result["result"]
+        assert "trouble formatting" not in result["result"]

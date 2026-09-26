@@ -106,6 +106,40 @@ def require_allowed(handler):
     return guarded
 
 
+def is_adapter_process(pid: int) -> bool:
+    """True only for a live process that is a ``gaia telegram start`` adapter.
+
+    A stale pid file can name an unrelated process that inherited the id, so
+    liveness alone is not enough before signalling it.
+
+    Raises:
+        PermissionError: the process exists but its command line is unreadable.
+    """
+    try:
+        import psutil
+
+        from gaia.daemon.instance import pid_alive
+    except ImportError as e:
+        raise RuntimeError(
+            "psutil is required to check the Telegram adapter. Install it with: "
+            'pip install "amd-gaia[telegram]"'
+        ) from e
+    if not pid_alive(pid):
+        return False
+    try:
+        argv = psutil.Process(pid).cmdline()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied as e:
+        raise PermissionError(
+            f"cannot read the command line of pid {pid} to confirm it is the "
+            "Telegram adapter"
+        ) from e
+    # Adjacent argv entries, not substrings of the joined line: Telegram
+    # Desktop's `telegram-desktop -startintray` contains both words.
+    return any(a == "telegram" and b == "start" for a, b in zip(argv, argv[1:]))
+
+
 class TelegramAdapter:
     def __init__(self, token: str, allowed_users: Optional[Set[int]] = None):
         # Refused here rather than at start(): an adapter that cannot serve
@@ -419,8 +453,15 @@ class TelegramAdapter:
                     # thread. The background thread owns this event loop.
                     app.run_polling(stop_signals=None)
                 finally:
-                    # cleanup
                     stop_event.set()
+                    try:
+                        os.remove(pid_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as e:
+                        log.warning(
+                            "Failed to remove Telegram PID file %s: %s", pid_path, e
+                        )
 
             # This thread owns the background service lifetime. A daemon thread
             # dies as soon as the CLI handler returns, leaving only a stale PID

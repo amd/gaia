@@ -115,6 +115,41 @@ jobs:
 
           exit /b %dacl_exit%
 
+      - name: Run Windows Schedule-Lock Tests (CMD)
+        shell: cmd
+        env:
+          PYTHONUTF8: 1
+        run: |
+          REM Activate virtual environment
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+
+          echo ================================================================
+          echo         WINDOWS SCHEDULE-LOCK TESTS (issue #4208)
+          echo ================================================================
+
+          REM The single-daemon guard takes msvcrt.locking here and fcntl.flock
+          REM everywhere else, and tests/unit/ runs on ubuntu-latest only -- so
+          REM without this step the branch most GAIA users hit is never run.
+          REM -rs prints skip reasons: if the win32-gated tests SKIP here, the
+          REM platform guard is misfiring and the real coverage is silently
+          REM absent -- that must be visible in the log, not swallowed.
+          python -m pytest tests\unit\test_schedule_lock.py -v -rs --tb=short
+          set lock_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo test_schedule_lock.py exit code: %lock_exit%
+          if %lock_exit% equ 0 (
+              echo [SUCCESS] Schedule-lock tests passed
+          ) else (
+              echo [FAILURE] Schedule-lock tests failed
+              echo Two `gaia schedule daemon` processes may both start on
+              echo Windows and fire every schedule twice - see issue #4208.
+          )
+          echo ----------------------------------------------------------------
+
+          exit /b %lock_exit%
+
       # Pin the version: the default `release` resolves through gyan.dev, so that
       # host 503ing fails the job outright (2026-08-05, "Cannot get latest release").
       # An explicit version resolves from the GyanD/codexffmpeg GitHub releases API.

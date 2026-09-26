@@ -69,6 +69,16 @@ class LLMClient(ABC):
         """The model's reasoning from the most recent ``chat()`` call, kept
         apart from its answer, or ``None`` when there was none or the provider
         does not report it."""
+    def get_last_finish_reason(self) -> Optional[str]:
+        """Why the most recent ``chat()`` reply ended (``"stop"``,
+        ``"length"``, ``"tool_calls"``), or ``None`` when the provider does
+        not report it. ``"length"`` means the output-token limit cut it off."""
+        return None
+
+    def get_last_ttft_seconds(self) -> Optional[float]:
+        """Seconds from the most recent streamed ``chat()`` call to its first
+        token (content, reasoning, or a tool-call fragment). ``None`` for a
+        non-streamed call, or when the provider does not measure it."""
         return None
 
     def load_model(self, model_name: str, **kwargs) -> None:

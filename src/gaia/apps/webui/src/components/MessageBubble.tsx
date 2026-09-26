@@ -18,8 +18,6 @@ import './MessageBubble.css';
 interface MessageBubbleProps {
     message: Message;
     isStreaming?: boolean;
-    /** Show a solid terminal cursor at the end of the message (even when not streaming). */
-    showTerminalCursor?: boolean;
     /** Agent steps to display inside this message bubble. */
     agentSteps?: AgentStep[];
     /** Whether agent steps are currently active (streaming). */
@@ -350,7 +348,7 @@ function formatLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
@@ -509,7 +507,9 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                     {(message.cards ?? cards)?.map((card, i) => (
                         <RenderCard key={i} render={card.render} data={card.data} />
                     ))}
-                    <RenderedContent content={cleanedContent} showCursor={(isStreaming || showTerminalCursor) && !!cleanedContent && !agentStepsActive} />
+                    {/* The cursor is a streaming indicator, not decoration — it never
+                        outlives the write. See docs/spec/gaia-design-language.mdx. */}
+                    <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} />
                     {message.role === 'assistant'
                         && !isStreaming
                         && isAuthRequiredMessage(cleanedContent) && (
