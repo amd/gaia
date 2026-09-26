@@ -408,6 +408,7 @@
               "plans/gaia-ui-redesign",
               "plans/setup-wizard",
               "plans/security-model",
+              "plans/permission-model",
               "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
