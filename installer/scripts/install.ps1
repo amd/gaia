@@ -1,6 +1,9 @@
 # GAIA Installer for Windows
 # One-command installation: irm https://amd-gaia.ai/install.ps1 | iex
 
+# One scope, and throw rather than exit: under iex this runs in the user's own session.
+& {
+
 $ErrorActionPreference = "Stop"
 
 # Configuration
@@ -40,19 +43,19 @@ function Write-Success {
     Write-Host "[OK] $Message" -ForegroundColor $COLOR_GREEN
 }
 
-function Write-Error {
+function Write-GaiaError {
     param([string]$Message)
     Write-Host "[X] $Message" -ForegroundColor $COLOR_RED
 }
 
-function Write-Warning {
+function Write-GaiaWarning {
     param([string]$Message)
     Write-Host "[!] $Message" -ForegroundColor $COLOR_YELLOW
 }
 
 # Warn about elevation before anything prompts for it.
 function Show-ElevationNotice {
-    Write-Warning "One step later on needs administrator approval:"
+    Write-GaiaWarning "One step later on needs administrator approval:"
     Write-Host "  'gaia init' installs Lemonade Server (the local model runtime), whose" -ForegroundColor White
     Write-Host "  MSI raises a UAC prompt. This installer itself never needs elevation." -ForegroundColor White
     Write-Host "`n"
@@ -74,16 +77,16 @@ function Install-Uv {
         $env:PATH = [System.Environment]::GetEnvironmentVariable("Path", "User") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     }
     catch {
-        Write-Error "Failed to install uv: $_"
+        Write-GaiaError "Failed to install uv: $_"
         Write-Host "  Fix:  install uv manually from" -ForegroundColor $COLOR_YELLOW
         Write-Host "        https://docs.astral.sh/uv/getting-started/installation/" -ForegroundColor $COLOR_YELLOW
-        exit 1
+        throw "GAIA install failed - see the error above."
     }
 
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-        Write-Error "uv installed but is not on PATH."
+        Write-GaiaError "uv installed but is not on PATH."
         Write-Host "  Fix:  close and reopen your terminal, then re-run this installer." -ForegroundColor $COLOR_YELLOW
-        exit 1
+        throw "GAIA install failed - see the error above."
     }
 
     Write-Success "uv installed successfully"
@@ -93,7 +96,7 @@ function Install-Gaia {
     # Check if GAIA is already installed
     $gaiaExe = "$GAIA_VENV\Scripts\gaia.exe"
     if (Test-Path $gaiaExe) {
-        Write-Warning "GAIA is already installed at $GAIA_HOME"
+        Write-GaiaWarning "GAIA is already installed at $GAIA_HOME"
         Write-Step "Checking for updates..."
 
         # uv, not `python -m pip`: `uv venv` creates the environment without pip,
@@ -102,9 +105,9 @@ function Install-Gaia {
         # failure, not "already current".
         & uv pip install --python "$GAIA_VENV\Scripts\python.exe" --upgrade "amd-gaia[api]" --quiet
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to update the GAIA package in $GAIA_VENV (exit $LASTEXITCODE)."
+            Write-GaiaError "Failed to update the GAIA package in $GAIA_VENV (exit $LASTEXITCODE)."
             Write-Host "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean." -ForegroundColor $COLOR_YELLOW
-            exit 1
+            throw "GAIA install failed - see the error above."
         }
         Write-Success "GAIA is up to date"
         return
@@ -118,7 +121,7 @@ function Install-Gaia {
         Write-Success "Created directory: $GAIA_HOME"
     }
     else {
-        Write-Warning "Directory already exists: $GAIA_HOME"
+        Write-GaiaWarning "Directory already exists: $GAIA_HOME"
     }
 
     # Create virtual environment with Python 3.12 (uv will download if needed)
@@ -127,8 +130,8 @@ function Install-Gaia {
     # A non-zero native exit does not throw, so $LASTEXITCODE is the only signal.
     & uv venv $GAIA_VENV --python $PYTHON_VERSION
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to create the virtual environment at $GAIA_VENV (uv exit $LASTEXITCODE)."
-        exit 1
+        Write-GaiaError "Failed to create the virtual environment at $GAIA_VENV (uv exit $LASTEXITCODE)."
+        throw "GAIA install failed - see the error above."
     }
     Write-Success "Virtual environment created"
 
@@ -139,10 +142,10 @@ function Install-Gaia {
     # piped-in installer itself is exempt.
     & uv pip install --python "$GAIA_VENV\Scripts\python.exe" "amd-gaia[api]"
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to install the GAIA package (uv exit $LASTEXITCODE)."
+        Write-GaiaError "Failed to install the GAIA package (uv exit $LASTEXITCODE)."
         Write-Host "  Fix:  re-run this installer; if it persists report it at" -ForegroundColor $COLOR_YELLOW
         Write-Host "        https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
-        exit 1
+        throw "GAIA install failed - see the error above."
     }
     Write-Success "GAIA package installed successfully"
 }
@@ -174,7 +177,7 @@ function Resolve-HubArtifact {
         $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec $HTTP_TIMEOUT_SEC
     }
     catch {
-        Write-Error "Could not fetch the $Label manifest: $_"
+        Write-GaiaError "Could not fetch the $Label manifest: $_"
         Write-Host "  URL:  $manifestUrl" -ForegroundColor $COLOR_YELLOW
         Write-Host "  Fix:  check your network, then retry." -ForegroundColor $COLOR_YELLOW
         return $null
@@ -182,13 +185,13 @@ function Resolve-HubArtifact {
 
     $version = $manifest.latest_version
     if (-not $version) {
-        Write-Error "The hub manifest at $manifestUrl declares no latest_version."
+        Write-GaiaError "The hub manifest at $manifestUrl declares no latest_version."
         return $null
     }
 
     $entry = $manifest.versions.$version
     if (-not $entry) {
-        Write-Error "The hub manifest names latest_version $version but publishes no such version."
+        Write-GaiaError "The hub manifest names latest_version $version but publishes no such version."
         Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
         return $null
     }
@@ -202,13 +205,13 @@ function Resolve-HubArtifact {
     if (-not $match) {
         $listed = ($artifacts | ForEach-Object { $_.filename } | Sort-Object) -join ", "
         if (-not $listed) { $listed = "none" }
-        Write-Error "$Label $version publishes no $Filename (it publishes: $listed)."
+        Write-GaiaError "$Label $version publishes no $Filename (it publishes: $listed)."
         Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
         return $null
     }
 
     if (-not $match.sha256) {
-        Write-Error "$Label $version publishes $Filename with no SHA-256 - refusing to install unverified."
+        Write-GaiaError "$Label $version publishes $Filename with no SHA-256 - refusing to install unverified."
         Write-Host "  Look: $manifestUrl" -ForegroundColor $COLOR_YELLOW
         return $null
     }
@@ -225,8 +228,8 @@ function Resolve-HubArtifact {
 # flagship agent so there is exactly one place the verification rule lives.
 #
 # -Optional turns a missing platform build or an unreachable manifest into a
-# warning instead of exiting: the hub is still usable without a given agent.
-# A CHECKSUM MISMATCH is never softened that way -- it always exits.
+# warning instead of a failure: the hub is still usable without a given agent.
+# A CHECKSUM MISMATCH is never softened that way -- it always fails the install.
 function Install-HubBinary {
     param(
         [Parameter(Mandatory)][string]$AgentId,
@@ -239,10 +242,10 @@ function Install-HubBinary {
     $resolved = Resolve-HubArtifact -AgentId $AgentId -Filename $Filename -Label $Label
     if (-not $resolved) {
         if ($Optional) {
-            Write-Warning "Skipping $Label - see above. The terminal hub still works."
+            Write-GaiaWarning "Skipping $Label - see above. The terminal hub still works."
             return $false
         }
-        exit 1
+        throw "GAIA install failed - see the error above."
     }
 
     $tmpDir = Join-Path $env:TEMP ("gaia-dl-" + [guid]::NewGuid().ToString("N"))
@@ -262,21 +265,21 @@ function Install-HubBinary {
             }
         }
         catch {
-            Write-Error "Could not download the $Label binary: $_"
+            Write-GaiaError "Could not download the $Label binary: $_"
             Write-Host "  URL:  $($resolved.Url)" -ForegroundColor $COLOR_YELLOW
             Write-Host "  Fix:  check your network and retry." -ForegroundColor $COLOR_YELLOW
             if ($Optional) { return $false }
-            exit 1
+            throw "GAIA install failed - see the error above."
         }
 
         # No checksum, no install.
         $got = (Get-FileHash -Path $tmpFile -Algorithm SHA256).Hash
         if ($got -ne $resolved.Sha256.ToUpper()) {
-            Write-Error "Checksum mismatch for $Filename - refusing to install."
+            Write-GaiaError "Checksum mismatch for $Filename - refusing to install."
             Write-Host "  expected $($resolved.Sha256.ToUpper())" -ForegroundColor $COLOR_YELLOW
             Write-Host "  got      $got" -ForegroundColor $COLOR_YELLOW
             Write-Host "  Fix:  retry; if it persists report it at https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
-            exit 1
+            throw "GAIA install failed - see the error above."
         }
 
         if (-not (Test-Path $GAIA_BIN)) {
@@ -286,11 +289,11 @@ function Install-HubBinary {
             Move-Item -Path $tmpFile -Destination "$GAIA_BIN\$DestName" -Force
         }
         catch {
-            Write-Error "Downloaded and verified, but could not write $GAIA_BIN\$DestName`: $_"
+            Write-GaiaError "Downloaded and verified, but could not write $GAIA_BIN\$DestName`: $_"
             Write-Host "  Fix:  close any running GAIA (and any tool scanning that" -ForegroundColor $COLOR_YELLOW
             Write-Host "        folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
             if ($Optional) { return $false }
-            exit 1
+            throw "GAIA install failed - see the error above."
         }
         Write-Success "$Label $($resolved.Version) installed to $GAIA_BIN\$DestName"
         return $true
@@ -307,10 +310,10 @@ function Install-Tui {
     $platform = Get-TerminalHubPlatform
     if (-not $platform) {
         $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
-        Write-Error "No terminal hub build for processor architecture '$arch'."
+        Write-GaiaError "No terminal hub build for processor architecture '$arch'."
         Write-Host "  Published targets: win-x64, win-arm64, linux-x64, linux-arm64," -ForegroundColor $COLOR_YELLOW
         Write-Host "  darwin-x64, darwin-arm64. See $GAIA_HUB_BASE_URL/index.json" -ForegroundColor $COLOR_YELLOW
-        exit 1
+        throw "GAIA install failed - see the error above."
     }
 
     # Never `gaia.exe`: tui/internal/daemon/client.go resolves `gaia` on PATH to
@@ -334,7 +337,7 @@ function Install-FlagshipAgent {
 
     $platform = Get-TerminalHubPlatform
     if (-not $platform) {
-        Write-Warning "No flagship agent build for this architecture - skipping."
+        Write-GaiaWarning "No flagship agent build for this architecture - skipping."
         return $false
     }
     # The sidecar is published under win32-x64; the terminal hub uses win-x64.
@@ -371,7 +374,7 @@ function Add-ToPath {
         Write-Success "Added GAIA to PATH"
     }
     catch {
-        Write-Warning "Failed to add GAIA to PATH automatically"
+        Write-GaiaWarning "Failed to add GAIA to PATH automatically"
         Write-Host "Please add the following directories to your PATH manually:" -ForegroundColor $COLOR_YELLOW
         foreach ($dir in $wanted) {
             Write-Host "  $dir" -ForegroundColor $COLOR_YELLOW
@@ -427,10 +430,10 @@ function Main {
     # $env:USERPROFILE is empty off Windows, which would target the filesystem
     # root. PS 5.1 is Windows-only, so $IsWindows only exists to be checked here.
     if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
-        Write-Error "This installer is for Windows. Detected: $([System.Environment]::OSVersion.Platform)"
+        Write-GaiaError "This installer is for Windows. Detected: $([System.Environment]::OSVersion.Platform)"
         Write-Host "On Linux and macOS, run instead:" -ForegroundColor $COLOR_YELLOW
         Write-Host "  curl -fsSL https://amd-gaia.ai/install.sh | sh" -ForegroundColor $COLOR_YELLOW
-        exit 1
+        throw "GAIA install failed - see the error above."
     }
 
     Show-ElevationNotice
@@ -458,4 +461,4 @@ function Main {
 
 # Run installer
 Main
-
+}

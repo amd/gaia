@@ -897,7 +897,7 @@ def test_install_cpp_tar_member_path_traversal_blocked(tmp_path):
         tf.addfile(evil, io.BytesIO(evil_data))
     archive = buf.getvalue()
 
-    with pytest.raises(InstallError, match="outside the agent install directory"):
+    with pytest.raises(InstallError, match="escapes the destination directory"):
         _cpp_install_from_archive(
             tmp_path, "evil_agent-1.0.0-linux-x86_64.tar.gz", archive
         )
