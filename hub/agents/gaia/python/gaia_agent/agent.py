@@ -46,12 +46,12 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, List, Optional
+from typing import ClassVar, FrozenSet, List, Optional
 
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
-from gaia.agents.base.project_map import ProjectMapMixin
+from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
     DEFAULT_SKILL_THRESHOLD,
@@ -59,6 +59,10 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+from gaia.agents.tools.delegate_tools import (
+    DEFAULT_DELEGATE_MAX_STEPS,
+    DelegateToolsMixin,
+)
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
@@ -226,6 +230,15 @@ class GaiaAgentConfig(ChatAgentConfig):
     # for a monorepo where a full embed pass is not worth it.
     auto_index: bool = True
 
+    # ``delegate_task``: hand a bounded subtask to a fresh child agent whose
+    # context is discarded when it finishes. Off until measured; overridable
+    # via GAIA_DELEGATE=1. The child gets ``delegate_max_steps`` (or
+    # GAIA_DELEGATE_MAX_STEPS) and runs at ``delegate_depth`` 1, where the
+    # tool is never registered, whatever the env says.
+    delegate_enabled: bool = False
+    delegate_max_steps: int = DEFAULT_DELEGATE_MAX_STEPS
+    delegate_depth: int = 0
+
 
 # ``ProjectMapMixin`` is the one exception to "base agent first": it overrides
 # ``_on_task_start`` and calls ``super()``, and ``Agent``'s no-op default sits
@@ -239,6 +252,7 @@ class GaiaAgent(
     SkillLearningToolsMixin,
     CodeIndexToolsMixin,
     EmailToolsMixin,
+    DelegateToolsMixin,
 ):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
@@ -324,7 +338,27 @@ class GaiaAgent(
         self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
         self.register_code_index_tools()
         self.register_email_tools()
+        if self._resolve_delegate_enabled():
+            self.register_delegate_tools()
         super()._register_tools()
+        self._enforce_delegate_toggle()
+
+    def _workspace_core_tools(self) -> FrozenSet[str]:
+        """The shell, always on when this session works in a code repository.
+
+        Coding requests rarely read like shell requests ("skip these tests on
+        PRs"), so semantic selection left a repo session without a shell even
+        though the project map tells the model which commands it accepts.
+        """
+        core = set()
+        root = self._project_map_root()
+        if root and is_code_repository(root):
+            core.add("run_shell_command")
+        # Delegation is a decision the model makes on any turn, so semantic
+        # selection cannot be allowed to hide it.
+        if self._resolve_delegate_enabled():
+            core.add("delegate_task")
+        return frozenset(core)
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
 

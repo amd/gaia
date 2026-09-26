@@ -453,19 +453,102 @@ provider.
 
 ## Large tool results
 
-The agent applies a character budget to plain-string tool results as well as
-structured results before sending them to the model. Strings at or below the
-threshold remain unchanged. Oversized strings become a JSON envelope containing
-`head`, `tail`, `original_chars`, `omitted_chars`, and `truncated: true`. The
-serialized envelope, including escaping, fits the target budget, so long logs
-retain both their initial context and final diagnostic lines.
+Every tool result passes through one character budget before it reaches the
+model. A result at or below the threshold is sent unchanged. A larger one is
+archived whole and reaches the model as a chunk index:
+
+- `shown` — the parts kept verbatim, as `{offset, text}` segments.
+- `index` — one `{n, label, offset, length}` per part left out, numbered from 1
+  in document order. `read_tool_output(artifact, entry=n)` returns exactly that
+  part; the result's `fetch` field says so.
+- `artifact`, `continuation`, `total_chars`, `truncated`, `original_chars`,
+  `omitted_chars` — as before. `archived_field` names the field the archive
+  holds (`content`, `stdout`, `matches`); every other field is kept, including
+  `check_result`.
+
+Parts follow the result's own structure, never fixed windows:
+
+| Result | Split at |
+|--------|----------|
+| Python source (`read_file` on `.py`) | module header, each top-level `def`/`class`, each method; labels carry line range, signature and first docstring line |
+| Markdown | headings |
+| JSON | top-level keys; lists in groups of 20 records |
+| `search_file_content` | each file's first match, then the rest of its matches (archived as grep-style text) |
+| Test / shell output | pytest and section markers (`FAILURES`, `___ test ___`, `FAILED`, tracebacks); failing sections and the final summary are shown first |
+| Diffs | each file and hunk |
+| Other text | paragraphs, then lines |
+
+Shown holds the first part, then parts the result marks as leads or the call's
+arguments name, then the rest in order, while they fit. Text with no structure
+at all (a single long line) keeps a `head`/`tail` excerpt, with the middle as
+its one index entry.
 
 Local thresholds/targets are 30,000/20,000 characters for NPU and 60,000/40,000
 for GPU/CPU. An omitted device follows the configured profile; FLM models retain
-the NPU budget. The Claude path uses its existing larger window. These are
-per-result character budgets, not measured remaining tokens. The envelope includes
-an artifact handle and continuation instructions for recovering the omitted
-middle with `read_tool_output`. Structured results retain complete records.
+the NPU budget. A cloud model reached through Lemonade gets the conservative
+30,000/20,000 without reading the local device profile. The Claude path uses its existing larger window. These are
+per-result character budgets, not measured remaining tokens.
+
+## Delegating a subtask
+
+On a real repository, most of an agent's tool calls before its first edit are
+exploration, and every one of those results is re-sent on every later step.
+`delegate_task` hands a bounded subtask to a fresh child agent whose whole
+context is discarded when it finishes; only its short result plus evidence
+enters the parent's conversation.
+
+The tool comes from `DelegateToolsMixin` (`gaia.agents.tools.delegate_tools`,
+`"delegate"` in `KNOWN_TOOLS`). The flagship agent ships it off; turn it on with
+`GaiaAgentConfig(delegate_enabled=True)` or `GAIA_DELEGATE=1`, and size the
+child's budget with `delegate_max_steps` (default 40) or
+`GAIA_DELEGATE_MAX_STEPS`. When on, it is always offered, whatever the dynamic
+tool selection picks for the turn.
+
+```python
+delegate_task(
+    goal="Find where the retry policy for Lemonade requests is decided",
+    scope="src/gaia/llm/, especially lemonade_client.py and providers/",
+    done_when="the function and the config field that set the retry count are named",
+    return_format="file:line for each, then one paragraph",
+)
+```
+
+The split that saves is planning here and delegating bounded implementation:
+the worker reads, edits and runs the tests for one component, and the parent
+reviews its evidence instead of re-reading the files. Delegating only the
+understanding of files the parent must edit anyway saves nothing. The prompt
+fragment that comes with the tool says exactly this.
+
+The child is a new instance of the same agent class with the same config
+(model, backend, working directory, tools, permissions, system prompt) but a
+fresh conversation, its own step budget, a silent console, and no
+`delegate_task` of its own — depth is one. It starts with no memory of the
+conversation, so the brief must carry every path, name and criterion. The
+result the parent sees stays under 8,000 characters (one `read_tool_output`
+page):
+
+- `result` — the child's answer, whole up to ~6,500 characters. A longer one
+  is archived on its own and returned as a chunk index (`shown` parts plus a
+  numbered `index`; `read_tool_output(artifact, entry=n)` reads one part).
+- `evidence` — `files_changed` (from `git status` before and after, each
+  with `added`/`removed` line counts from `git diff --numstat`; names only
+  from a modification-time scan outside a repository), `commands_run` (up to
+  12, with the total, minus the shell tool's `cd <workdir> &&` prefix), and
+  `tests` (how many checks the child ran, plus the last one's command,
+  pass/fail and summary lines, capped at 600 characters).
+- `steps`, `tool_calls`, `tokens` (`input`, `output`, `cached`), `hit_step_limit`.
+- `transcript` — an artifact handle for the child's full conversation log, for
+  drilling into how it worked; never needed to use the answer.
+
+A child that raises, or whose backend fails, comes back as
+`{"status": "error", "error": ..., "transcript": ...}` — never retried, never
+swallowed. A child that runs out of steps returns what it has with
+`hit_step_limit: true`.
+
+The child's model calls count against the parent: they are added to the turn's
+token totals (as a `delegated` stats entry in the conversation) and kept
+separately in `agent.delegated_tokens`, so a saving is measured with the
+child's cost included.
 
 ## Common Pitfalls and Solutions
 
@@ -1094,13 +1177,19 @@ SPDX-License-Identifier: MIT
 
 ## Recovering large tool outputs
 
-When a result exceeds the model budget, the excerpt includes an `artifact`
-handle and `continuation: read_tool_output`. Call
-`read_tool_output(artifact, offset=0, limit=2000)` to retrieve exact text;
-`next_offset` is the next character offset, or `null` at the end. Pages are
-limited to 8,000 characters. Unicode offsets count characters, not bytes.
-The archived text is the original string, or JSON for a structured result.
-Small results remain unchanged. Structured excerpts retain whole records.
+When a result exceeds the model budget, it carries an `artifact` handle, a
+numbered `index` of the parts left out, and `continuation: read_tool_output`.
+Call `read_tool_output(artifact, entry=n)` to get entry `n` verbatim. The index
+names every omitted part, so paging through a whole output is almost never
+needed. A part longer than 8,000 characters comes back in pages: the page sets
+`remaining`, and `read_tool_output(artifact, offset=next_offset,
+limit=remaining)` continues it. Without an entry, `offset` and `limit` (default
+2,000) read any span. An entry number outside the index is an error that names
+the valid range. Unicode offsets count characters, not bytes.
+
+The archived text is the original string, the field named by
+`archived_field`, or JSON (one record per line) for a structured result. Small
+results remain unchanged. Structured excerpts retain whole records.
 
 Shell, Python execution and browser excerpts retain omitted output before
 applying their own display limits. File readers accept `offset` and `limit`
