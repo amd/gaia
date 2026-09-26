@@ -24,6 +24,7 @@ from gaia.agents.tools.file_edit import (
     stamp_of,
 )
 from gaia.logger import get_logger
+from gaia.security import BackupError
 
 logger = get_logger(__name__)
 
@@ -529,6 +530,17 @@ class FileIOToolsMixin:
                 if backup_path:
                     result["backup_path"] = backup_path
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -692,6 +704,17 @@ class FileIOToolsMixin:
                     "diff": diff,
                     "backup_created": backup_path is not None,
                     "backup_path": backup_path,
+                }
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
                 }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
@@ -930,6 +953,17 @@ class FileIOToolsMixin:
                 if backup_path:
                     result["backup_path"] = backup_path
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -945,26 +979,19 @@ class FileIOToolsMixin:
         ) -> Dict[str, Any]:
             """Create a text file, or replace one wholesale, without validation.
 
-            Any text file: documentation (.md, .mdx), source (.py, .go, .ts,
-            .js), configuration (.yml, .json, .toml), plain text.
-
-            Prefer edit_file when changing PART of a file that already exists —
-            this replaces the whole thing. Use write_python_file instead only
-            when you want the write REFUSED if the content is not valid Python.
+            Any text file — .md, .py, .yml, .go, .json. Prefer edit_file to
+            change PART of an existing file; this replaces the whole thing.
+            write_python_file is the variant that refuses invalid Python.
             Overwriting an existing file requires reading it with read_file first.
 
-            Includes security guardrails: path validation, blocked directory
-            enforcement, sensitive file protection, size limits, backup
-            creation, and audit logging.
-
             Args:
-                file_path: Path where to write the file
-                content: Content to write to the file
-                create_dirs: Whether to create parent directories if they don't exist
-                project_dir: Project root directory for resolving relative paths
+                file_path: Path where to write the file.
+                content: Content to write to the file.
+                create_dirs: Create missing parent directories.
+                project_dir: Project root for resolving a relative file_path.
 
             Returns:
-                dict: Status and file information
+                Status, the resolved path, size, and any backup made.
             """
             try:
                 path = _resolve_target(file_path, project_dir)
@@ -1045,6 +1072,17 @@ class FileIOToolsMixin:
                 if display_error:
                     result["display_error"] = display_error
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -1060,32 +1098,18 @@ class FileIOToolsMixin:
         ) -> Dict[str, Any]:
             """Change part of a text file in place, without rewriting the rest.
 
-            The default way to edit anything: documentation (.md, .mdx, .rst),
-            source (.py, .go, .ts, .js, .rs, .cpp), configuration (.yml, .json,
-            .toml), plain text. Prefer it over rewriting a file with write_file,
-            and over shelling out to sed or a here-doc. The file must have been
-            read with read_file first.
-
-            Use edit_python_file instead only when you want the edit REFUSED if
-            it would break Python syntax.
-
-            Includes security guardrails: path validation, blocked directory
-            enforcement, sensitive file protection, backup creation, and audit
-            logging.
-
-            old_content must match exactly one location. Zero or several matches
-            are errors that carry the file's current content, so a retry does not
-            need a separate read.
+            The default way to edit any text file — .md, .py, .yml, .go, .json
+            — ahead of rewriting it with write_file or shelling out to sed.
+            The file must have been read with read_file first. edit_python_file
+            is the variant that refuses a syntax-breaking edit. old_content
+            must match exactly one location; zero or several matches return
+            the file's current content, so a retry needs no re-read.
 
             Args:
-                file_path: Path to the file to edit
-                old_content: Exact content to find and replace; must be unique
-                    in the file
-                new_content: New content to replace with
-                project_dir: Project root directory for resolving relative paths
-
-            Returns:
-                dict: Status and edit information
+                file_path: Path to the file to edit.
+                old_content: Exact text to replace; must be unique in the file.
+                new_content: Text to put in its place.
+                project_dir: Project root for resolving a relative file_path.
             """
             try:
                 path = _resolve_target(file_path, project_dir)
@@ -1210,6 +1234,17 @@ class FileIOToolsMixin:
                 if display_error:
                     result["display_error"] = display_error
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -1499,6 +1534,17 @@ class FileIOToolsMixin:
                     "function_replaced": function_name,
                     "backup_path": backup_path if backup else None,
                     "diff": diff,
+                }
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
                 }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)

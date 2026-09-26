@@ -43,6 +43,7 @@ from typing import (
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.project_map import resolve_project_root
+from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
@@ -67,6 +68,7 @@ from gaia.llm.lemonade_client import (
     profile_ctx_size,
     truncation_budget,
 )
+from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -369,6 +371,7 @@ TOOLS_REQUIRING_CONFIRMATION = {
 # ``Agent.turn_content_provenance`` (see there for why an allowlist at all).
 TOOLS_WITHOUT_EXTERNAL_CONTENT = {
     "remember_skill_lesson",
+    "sleep",
 }
 
 
@@ -935,6 +938,28 @@ def _claims_file_write(answer: str) -> bool:
     return False
 
 
+def _offer_skill_tools(agent: Any, skill: Any) -> None:
+    """Add *skill*'s tools to the turn's tool subset so the next step can call them.
+
+    The subset is picked from the user's message before the first model call, so
+    a skill loaded mid-turn otherwise names tools the model cannot call until the
+    next turn — and a one-turn task has no next turn.
+    """
+    current = getattr(agent, "_active_tool_filter", None)
+    if current is None:
+        return
+    wanted = [
+        *skill.gaia.tools_required,
+        *(skill.namespaced_tool_name(tool) for tool in skill.tool_names),
+    ]
+    missing = [
+        tool for tool in wanted if tool in agent._tools_registry and tool not in current
+    ]
+    if missing:
+        # Appended, never re-sorted: a reshuffled list breaks the cached prefix.
+        agent._apply_tool_filter([*current, *missing])
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -964,10 +989,10 @@ class Agent(abc.ABC):
     # Class-level so a subclass that never runs ``__init__`` still increments.
     _turn_seq: int = 0
 
-    # Dynamic tool loader (#1449): the sorted subset of tool names to surface
-    # this turn, or ``None`` to render the full registry (legacy, byte-identical).
-    # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
-    # both render paths and the ``_openai_tools`` property.
+    # Dynamic tool loader (#1449): the subset of tool names to surface this
+    # turn, in admission order, or ``None`` to render the full registry (legacy,
+    # byte-identical). Set by ``_select_tools_for_turn`` at the top of each
+    # query; consulted by both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
 
     # Last value handed to the backend as ``tools=``, and the filter in force
@@ -989,6 +1014,8 @@ class Agent(abc.ABC):
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
+    # Per-step timing for the running turn (always on); ``None`` between turns.
+    _step_timer: Optional[StepTimer] = None
 
     # Skills (#888): lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
@@ -1311,6 +1338,8 @@ Do NOT wrap conversational replies in JSON.
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
         self._cancel_event: Optional[threading.Event] = None
+        # System text supplied by an API caller; see set_caller_system_prompt.
+        self._caller_system_prompt: Optional[str] = None
         # Optional queue of follow-ups the user sent WHILE this turn was
         # running. Drained at the step boundary beside the cancel check, so a
         # second thought reaches the model without waiting out the turn.
@@ -1561,6 +1590,10 @@ Do NOT wrap conversational replies in JSON.
         if custom:
             parts.append(custom)
 
+        caller = getattr(self, "_caller_system_prompt", None)
+        if caller:
+            parts.append(caller)
+
         # Native tool_calls models receive the full JSON schemas via ``tools=``
         # (``_openai_tools``). Rendering the one-line text list as well restates
         # every name, signature and summary the schema already carries — 1,678
@@ -1662,6 +1695,22 @@ Do NOT wrap conversational replies in JSON.
 
         logger.info("[turn] %s", format_summary(record))
         return record
+
+    def _attach_step_timer(self) -> StepTimer:
+        """Start this turn's step timer and route the SDK's call timings to it."""
+        timer = StepTimer()
+        self._step_timer = timer
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            chat.llm_call_sink = timer.record_llm_call
+        return timer
+
+    def _detach_step_timer(self) -> None:
+        """Stop routing call timings; a later turn must not inherit them."""
+        self._step_timer = None
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            chat.llm_call_sink = None
 
     def _publish_turn_metrics(self, record: Optional[Dict[str, Any]]) -> None:
         """Hand the sealed record to the console, if this console wants one.
@@ -1825,7 +1874,7 @@ Do NOT wrap conversational replies in JSON.
         Args:
             filter_to: When ``None`` (default), render every registered tool in
                 registry order — byte-identical to the legacy path. When a list,
-                render only those names, in the given (pre-sorted) order,
+                render only those names, in the given (admission) order,
                 skipping any not present in the registry.
         """
         tool_descriptions = []
@@ -1913,10 +1962,11 @@ Do NOT wrap conversational replies in JSON.
     def _select_tools_for_turn(  # pylint: disable=unused-argument
         self, user_input: str
     ) -> Optional[List[str]]:
-        """Return the sorted tool-name subset to surface this turn, or ``None``.
+        """Return the tool-name subset to surface this turn, or ``None``.
 
         Default: ``None`` — render the full registry (legacy behavior). Agents
-        with a dynamic tool loader override this to return a selection.
+        with a dynamic tool loader override this to return a selection, in
+        admission order (see :class:`~gaia.agents.base.tool_loader.ToolLoader`).
         """
         return None
 
@@ -1944,11 +1994,12 @@ Do NOT wrap conversational replies in JSON.
 
         Calls ``_select_tools_for_turn`` and, **only when the selection
         changes**, swaps ``_active_tool_filter`` and recomputes the cached
-        system prompt. Both filters are sorted lists (or ``None``), so ``!=`` is
-        a correct change test; a stable selection leaves the cached prompt — and
-        thus the backend's KV-cache prefix — untouched. ``None`` is the legacy
-        full-registry path. ``_openai_tools`` is a property, so all native
-        ``tools=`` call sites pick up the new filter automatically.
+        system prompt. The comparison is ordered — a re-ordered list of the same
+        tools renders different bytes, so it is a real change — and the loader
+        keeps admission order precisely so an unchanged set compares equal.
+        ``None`` is the legacy full-registry path. ``_openai_tools`` is a
+        property, so all native ``tools=`` call sites pick up the new filter
+        automatically.
         """
         # The base hook returns None, but ChatAgent overrides it to return
         # Optional[List[str]] — pylint's None-inference is wrong here.
@@ -2088,6 +2139,17 @@ Do NOT wrap conversational replies in JSON.
         recipe. Empty for an agent with no manifest or no always-on entries.
         """
         return frozenset(ref.name for ref in self.skill_sets.always)
+
+    def set_caller_system_prompt(self, text: Optional[str]) -> None:
+        """Add a caller's own system instructions to this agent's system prompt.
+
+        For a front end that serves the agent to clients that send their own
+        system messages, such as the OpenAI-compatible ``gaia api``. The text is
+        placed after the agent's prompt, so it applies on top of the agent's
+        instructions rather than replacing them. ``None`` or ``""`` removes it.
+        """
+        self._caller_system_prompt = text or None
+        self.rebuild_system_prompt()
 
     def _active_skill_names(self) -> Optional[FrozenSet[str]]:
         """Loaded skills whose body renders this turn; ``None`` means all of them."""
@@ -2289,6 +2351,7 @@ Do NOT wrap conversational replies in JSON.
                 self._note_skill_active(name)
                 if filter_changed:
                     self.rebuild_system_prompt()
+            _offer_skill_tools(self, self.loaded_skills[name])
             return self.loaded_skills[name]
 
         skill = resolver.load(name)
@@ -2357,6 +2420,7 @@ Do NOT wrap conversational replies in JSON.
             self.granted_binaries.revoke_skill(skill.name)
             self.loaded_skills.pop(name, None)
             raise
+        _offer_skill_tools(self, skill)
 
         # tools_required names registry tools the skill CONSUMES. A name that is
         # valid but not active in this agent is scoping, not a defect — log it so
@@ -2766,8 +2830,8 @@ Do NOT wrap conversational replies in JSON.
         only thing that has arrived. Any tool returning anything — a web page,
         an email, an issue body, a command's output, a skill listing, an MCP
         call — flips this to ``"tool_content"`` for the rest of the turn, and
-        it resets on the next user message. The allowlist holds exactly one
-        name, the learning tool's own receipt, so a tool nobody classified
+        it resets on the next user message. The allowlist holds only receipts
+        (the learning tool's, and ``sleep``'s), so a tool nobody classified
         taints by default rather than by omission.
 
         This exists because a learned skill change persists across sessions: a
@@ -2908,6 +2972,16 @@ Do NOT wrap conversational replies in JSON.
             # Get description
             if verbose:
                 description = tool_info["description"]
+                # Argument text lives per-parameter, not in the description.
+                arg_lines = [
+                    f"  {param_name}: {param_info['description']}"
+                    for param_name, param_info in tool_info["parameters"].items()
+                    if param_info.get("description")
+                ]
+                if arg_lines:
+                    description = "\n".join(
+                        filter(None, [description, "Args:", *arg_lines])
+                    )
             else:
                 description = (
                     tool_info["description"].split("\n")[0]
@@ -3454,7 +3528,7 @@ Do NOT wrap conversational replies in JSON.
             filter_to: When ``None`` (default), build a schema for every
                 registered tool in registry order — byte-identical to the legacy
                 path. When a list, build only those names, in the given
-                (pre-sorted) order, skipping any not present in the registry.
+                (admission) order, skipping any not present in the registry.
         """
 
         def _python_to_json_type(py_type: str) -> str:
@@ -4269,7 +4343,7 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage.append(usage)
 
     def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
-        """Run :meth:`_execute_tool`, timing it for the turn record.
+        """Run :meth:`_execute_tool`, timing it for the step and turn records.
 
         Deliberately a separate method the agent loop calls, rather than timing
         inside ``_execute_tool``: that method is copied onto stand-ins by
@@ -4280,10 +4354,13 @@ Do NOT wrap conversational replies in JSON.
         — so a refused call's latency is never misfiled as agent overhead.
         """
         recorder = getattr(self, "_turn_recorder", None)
+        step_timer = getattr(self, "_step_timer", None)
         # Only the outermost call is timed. A tool body may call another tool
         # (CodeAgent's orchestration does); timing both would count the inner
         # one's seconds twice and push tool_s past the turn's own total.
-        if recorder is None or getattr(self, "_tool_timing_depth", 0):
+        if (recorder is None and step_timer is None) or getattr(
+            self, "_tool_timing_depth", 0
+        ):
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result)
             return result
@@ -4301,19 +4378,26 @@ Do NOT wrap conversational replies in JSON.
             return result
         finally:
             self._tool_timing_depth = 0
+            elapsed = time.perf_counter() - started
             waited = getattr(self, "_confirmation_wait_s", 0.0) or 0.0
-            try:
-                recorder.record_tool(
-                    step=getattr(getattr(self, "chat", None), "turn_step", 0),
-                    name=tool_name or "<unnamed>",
-                    # Human approval is excluded — neither tool nor model cost.
-                    # Folding it in made a 1.3s command report as 322.6s.
-                    wall_s=max(0.0, time.perf_counter() - started - waited),
-                    ok=ok,
-                    waited_s=waited,
-                )
-            except Exception as e:  # noqa: BLE001 - never displace a tool error
-                logger.warning("could not record tool timing: %s", e)
+            if step_timer is not None:
+                try:
+                    step_timer.record_tool(tool_name or "<unnamed>", elapsed, waited)
+                except Exception as e:  # noqa: BLE001 - never displace a tool error
+                    logger.warning("could not record step tool timing: %s", e)
+            if recorder is not None:
+                try:
+                    recorder.record_tool(
+                        step=getattr(getattr(self, "chat", None), "turn_step", 0),
+                        name=tool_name or "<unnamed>",
+                        # Human approval is excluded — neither tool nor model
+                        # cost. Folding it in made a 1.3s command report as 322.6s.
+                        wall_s=max(0.0, elapsed - waited),
+                        ok=ok,
+                        waited_s=waited,
+                    )
+                except Exception as e:  # noqa: BLE001 - never displace a tool error
+                    logger.warning("could not record tool timing: %s", e)
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -5735,6 +5819,7 @@ Do NOT wrap conversational replies in JSON.
             # retries). A recorder left attached would fold the next turn's
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
+            self._detach_step_timer()
 
     #: How a mid-turn follow-up is framed for the model. It is the user
     #: speaking, so it goes in as a user message — but unlabelled, a user
@@ -5799,6 +5884,7 @@ Do NOT wrap conversational replies in JSON.
     ) -> Dict[str, Any]:
         """Inner implementation of ``process_query`` — see public method docstring."""
         start_time = time.time()  # Track query processing start time
+        step_timer = self._attach_step_timer()
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
@@ -5942,10 +6028,12 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken,
                     steps_limit,
                 )
+                # Neutral wording: cancel now has several triggers (a user
+                # pressing Stop, an API client disconnecting, a stream timeout),
+                # and this text is persisted with the turn.
                 final_answer = (
-                    "The request was stopped because it exceeded the allowed "
-                    "time before completing. Try a simpler request or break it "
-                    "into smaller steps."
+                    "The request was stopped before it finished. Try again, or "
+                    "break it into smaller steps if it was taking too long."
                 )
                 break
 
@@ -5959,6 +6047,7 @@ Do NOT wrap conversational replies in JSON.
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
             steps_taken += 1
+            step_timer.begin_step(steps_taken)
             logger.debug(f"Step {steps_taken}/{steps_limit}")
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
@@ -7510,17 +7599,15 @@ Do NOT wrap conversational replies in JSON.
             # Collect and store performance stats for token tracking
             # Do this BEFORE checking for final answer so stats are always collected
             perf_stats = response_stats or self.chat.get_stats()
-            if perf_stats:
-                conversation.append(
-                    {
-                        "role": "system",
-                        "content": {
-                            "type": "stats",
-                            "step": steps_taken,
-                            "performance_stats": perf_stats,
-                        },
-                    }
-                )
+            # A step whose backend reported no stats still took model time.
+            if perf_stats or step_timer.has_llm_calls():
+                stats_record = {
+                    "type": "stats",
+                    "step": steps_taken,
+                    "performance_stats": perf_stats or {},
+                }
+                step_timer.attach(stats_record)
+                conversation.append({"role": "system", "content": stats_record})
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
@@ -8178,6 +8265,10 @@ Do NOT wrap conversational replies in JSON.
                         tok_per_s=_query_tok_per_s(conversation),
                     )
 
+        # Closes the last step, filling its stats record before anyone reads
+        # it. After the step-cap call above, so that call's time is counted.
+        timing_summary = step_timer.finish()
+
         # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn
         # with empty text so it doesn't rehydrate as a completed answer and the
         # empty-answer classification (#2137/#2141) skips persistence. Returned
@@ -8191,6 +8282,7 @@ Do NOT wrap conversational replies in JSON.
                 "system_prompt": self.system_prompt,
                 "conversation": conversation,
                 "steps_taken": steps_taken,
+                "timing_summary": timing_summary,
                 "duration": time.time() - start_time,
                 "error_count": len(self.error_history),
                 "error_history": self.error_history,
@@ -8248,6 +8340,8 @@ Do NOT wrap conversational replies in JSON.
             "system_prompt": self.system_prompt,  # Include system prompt in the result
             "conversation": conversation,
             "steps_taken": steps_taken,
+            # Where the time went: llm/tool/overhead totals and slowest steps.
+            "timing_summary": timing_summary,
             "max_steps_reached": max_steps_reached,
             "duration": total_duration,  # Total query processing time in seconds
             "input_tokens": total_input_tokens,  # Total input tokens across all steps
@@ -8306,17 +8400,9 @@ Do NOT wrap conversational replies in JSON.
         )
 
     _RATE_LIMIT_WAIT_CAP_S = 15.0
-    _LOOP_CONNECTION_RE = re.compile(
-        r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
-        r"|unreachable|could not connect|failed to establish|max retries exceeded"
-        r"|name or service not known|getaddrinfo|connect(?:ion)? timed out"
-        # Windows words a refused connection as "no connection could be made
-        # because the target machine actively refused it" (WinError 10061) —
-        # without these a dead service reads as a permissions problem.
-        r"|no connection could be made|actively refused|connection attempt failed"
-        r"|winerror 1006\d",
-        re.IGNORECASE,
-    )
+    # Without the Windows wordings in here a dead service reads as a
+    # permissions problem.
+    _LOOP_CONNECTION_RE = CONNECTION_FAILURE_RE
     _LOOP_NOT_PERMITTED_RE = re.compile(
         r"not allowed|not permitted|not in (?:the )?allowed|access denied"
         # "blocked" only as a verdict, not as a word in unrelated output

@@ -466,7 +466,7 @@ class TestCatalog:
         import gaia.connectors.catalog.mcp_servers  # noqa: F401
         from gaia.connectors.catalog.mcp_servers import _GITHUB
 
-        assert "GITHUB_TOKEN" in _GITHUB.mcp_env_keys
+        assert "GITHUB_PERSONAL_ACCESS_TOKEN" in _GITHUB.mcp_env_keys
 
     def test_no_spec_has_env_keys_without_config_schema(self):
         import gaia.connectors.catalog.mcp_servers as m

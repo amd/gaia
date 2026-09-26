@@ -6,7 +6,7 @@ icon: "sparkles"
 
 # GAIA — the flagship agent
 
-GAIA is the agent a new user meets first. One agent handles the everyday work you'd otherwise spread across four: talking things through, answering questions about your own documents, poking at a spreadsheet, and reading the web. It remembers across sessions, and every inference runs **locally** on your machine through Lemonade.
+GAIA is the agent a new user meets first. One agent handles the everyday work you'd otherwise spread across four: talking things through, answering questions about your own documents, poking at a spreadsheet, and reading the web. It remembers across sessions, and inference runs **locally** on your machine through Lemonade by default.
 
 <Note>
   GAIA is built on top of the [Chat agent](/guides/chat) — same document Q&A prompt, same
@@ -39,7 +39,7 @@ Install Lemonade, download the model, and start the server:
 gaia init
 ```
 
-The agent runs local inference only: the sidecar's `/query` endpoint rejects any request naming a provider other than `lemonade` with **HTTP 400**.
+Inference runs locally by default. The sidecar's `/query` endpoint accepts `provider: "lemonade"` (the default) or `provider: "claude"`, which sends the conversation to Anthropic's API. Any other provider is rejected with **HTTP 400**, as is naming a `provider` together with a `model` that belongs to the other one. Omit `provider` and the `model` decides: a `claude-*` id goes to Anthropic, anything else runs locally.
 
 ## Install and launch
 
@@ -105,11 +105,11 @@ The default construction registers **82 tools** — the 60 of the Chat agent's `
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command`, `wait_for_condition` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `capture_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
-| Run control | `request_user_input`, `set_loop_state`, `load_tools`, `read_tool_output` |
+| Run control | `request_user_input`, `set_loop_state`, `sleep`, `load_tools`, `read_tool_output` |
 
 That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
 
-`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused. Commands can be chained on one line (`cd src && ls | grep agent`) so looking something up and checking it is a single step — every command on the line is checked against the same allowlist before any of it runs, and one approval covers the line. A leading `VAR=value` (`PYTHONPATH=. pytest -q`) sets that one command's environment and nothing else's; the variables that decide which binary runs or what code it loads — `PATH`, `LD_PRELOAD`, `GIT_SSH_COMMAND` and their families — stay refused. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project.
+`run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused. Commands can be chained on one line (`cd src && ls | grep agent`) so looking something up and checking it is a single step — every command on the line is checked against the same allowlist before any of it runs, and one approval covers the line. A leading `VAR=value` (`PYTHONPATH=. pytest -q`) sets that one command's environment and nothing else's; the variables that decide which binary runs or what code it loads — `PATH`, `LD_PRELOAD`, `GIT_SSH_COMMAND` and their families — stay refused. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project. `sleep` waits up to five minutes per call, so the agent can wait out a rate limit before retrying; pressing Stop ends the wait within a second.
 
 How long a command may run depends on what it is — a test run gets 15 minutes, a build or install 30, a network call 5, and everything else the usual 30 seconds. Those longer classes only come into play for a binary a loaded skill has granted, since the base allowlist refuses test runners, installers and network fetches outright. `wait_for_condition` covers the other half of waiting: give it a command that succeeds once the thing you are waiting for is ready (a file written, a server answering) and the agent waits in one step instead of re-checking in a loop.
 
@@ -234,10 +234,10 @@ The model server isn't running. Run `gaia init` to install and start it, or poin
 ### "The model … is not downloaded"
 
 ```bash
-gaia download Gemma-4-E4B-it-GGUF
+gaia init
 ```
 
-Then re-run the readiness check.
+The hint `GET /v1/gaia/init` returns also names the pull command for whichever Lemonade client this machine has, if you'd rather pull just that one model. Then re-run the readiness check.
 
 ### "Access denied to path"
 
