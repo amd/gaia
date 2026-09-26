@@ -100,6 +100,8 @@ gaia --ui --base-url https://your-server:13305/api/v1
 
 Agents stop after a maximum number of reasoning/tool steps. The default is **50**, applied consistently across the CLI, the Agent UI, and background runs.
 
+An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. If that last call fails, you get the step-limit notice plus a line saying why the summary couldn't be written.
+
 - **Per-invocation:** pass `--max-steps <n>` to any agent command (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
 
@@ -1611,7 +1613,7 @@ get a 401. `start` writes them to a file you source rather than printing the key
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 11.8.1 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.39.1 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:
@@ -2022,7 +2024,7 @@ Author and manage agent skills. A skill is a directory whose only required file 
 gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
 gaia skill deltas <name> [OPTIONS]                                # what an agent LEARNED
 gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
-gaia skill {search,install,remove,promote,publish,keygen,trust} [OPTIONS] # marketplace + trust
+gaia skill {search,install,remove,lock,promote,publish,keygen,trust} [OPTIONS] # marketplace + trust
 ```
 
 Skills are discovered from three roots, highest precedence first:
@@ -2213,7 +2215,21 @@ Skills are discovered from three roots, highest precedence first:
     NAME                         VERSION    TIER          TOOLS  DESCRIPTION
     web-research                 1.2.0      community     1      Search the web and summarize results
     incident-review              0.3.1      experimental  0      Structure a postmortem from an incident log
+
+    Catalog: hub, fetched just now
     ```
+
+    The trailing line is the catalog's age. Offline still works — GAIA serves the
+    cached catalog rather than refusing — but it says how old that copy is, and
+    warns loudly once it passes a week:
+
+    ```
+    ⚠ This catalog was last refreshed 93 days ago — over 7 days old. The hub is
+      unreachable, so skills published since are missing and skills unpublished
+      since are still listed, including any whose security tier changed.
+    ```
+
+    `--json` carries the same facts as `age_seconds`, `age_text`, and `stale`.
   </Tab>
 
   <Tab title="install">
@@ -2237,6 +2253,73 @@ Skills are discovered from three roots, highest precedence first:
     bundle's `SIGNATURE.json` over every file, then installs at
     `min(claimed tier, tier the signature earned)`. Nothing is written until every
     gate passes.
+  </Tab>
+
+  <Tab title="lock">
+    ```bash
+    gaia skill lock [--check | --relock] [--json]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--check` | Report drift, change nothing (the default) |
+    | `--relock` | Re-record the current state as intended |
+    | `--json` | Emit JSON instead of text |
+
+    Compares every skill in `~/.gaia/skills` against `skill-lock.json` — version,
+    the tier install enforced, and a digest of the files — and reports skills the
+    lock has lost track of plus skills it tracks that are gone. Exits `4` when
+    anything differs, `0` when the lock and the disk agree.
+
+    ```
+    ⚠ 2 difference(s) between ~/.gaia/skills and skill-lock.json (1 blocking, 1 advisory):
+
+    web-research
+      ✗ [content] The files in ~/.gaia/skills/web-research no longer hash to the
+        digest recorded at install — something was added, removed, or edited.
+          → Reinstall the attested copy with 'gaia skill install web-research --force'.
+    my-notes
+      ⚠ [untracked] 'my-notes' is installed but skill-lock.json does not track it.
+          → Expected if you created, imported, or migrated it.
+    ```
+
+    Untracked skills are normal right after `create` / `import` / `migrate`;
+    `--relock` starts tracking them as `source: local`.
+
+    <Note>
+    **After upgrading from a build that predates content digests**, skills
+    installed by the older build have nothing to compare against. They report as
+    *unverifiable*, not as changed — `gaia skill list` says so in those words and
+    still exits `0`:
+
+    ```
+    ⚠ 2 skill(s) in ~/.gaia/skills predate content digests, so skill-lock.json
+      cannot verify them:
+    ```
+
+    `gaia skill lock` still exits `4` here: it is an explicit verification verb,
+    and "could not verify" is not "verified clean". Don't gate CI on it without
+    running `--relock` first. Locally-authored and `experimental` skills are
+    recorded by that one command; a `community` / `verified` one needs
+    `gaia skill install <name> --force` instead (see the warning below).
+
+    A **corrupt or future-schema** `skill-lock.json` is different: it is reported
+    alongside the `gaia skill list` inventory (exit `4`), and every skill in
+    `~/.gaia/skills` refuses to load until the file is fixed or deleted —
+    including purely local ones. Nothing can tell an attested skill from a local
+    one while the lock is unreadable, so loading anyway would let corrupting one
+    file switch the check off.
+    </Note>
+
+    <Warning>
+    `--relock` **refuses** to re-record a `community` or `verified` skill whose
+    files changed, **or one that has no recorded digest at all**. Writing a digest
+    in either case would leave the lock asserting a publisher signature over bytes
+    that signature never covered — and the no-digest case is where every upgrade
+    from a pre-digest build starts, so it is the likeliest way to launder an
+    attestation, not the rarest. Reinstall it, or `gaia skill remove` then
+    `gaia skill import` to keep the edit at `experimental`.
+    </Warning>
   </Tab>
 
   <Tab title="promote">
@@ -2340,8 +2423,8 @@ stamp is a provenance claim, not a runtime sandbox.
 
 Hub installs are tracked in `~/.gaia/skills/skill-lock.json`. Discovery answers
 *what is on disk*; the lock answers what was **requested**, what **resolved**, what
-the artifact **hashed** to, who **signed** it, and which tier it was installed at
-after the ceiling was applied:
+the artifact and the installed files **hashed** to, who **signed** it, and which
+tier it was installed at after the ceiling was applied:
 
 ```json
 {
@@ -2356,6 +2439,7 @@ after the ceiling was applied:
       "hub_url": "https://hub.amd-gaia.ai",
       "artifact_sha256": "9f2c…",
       "artifact_filename": "web-research-1.2.0.zip",
+      "content_digest": "sha256:4b1d…",
       "claimed_tier": "community",
       "attested_tier": "community",
       "installed_tier": "community",
@@ -2373,8 +2457,25 @@ after the ceiling was applied:
 }
 ```
 
-Only hub installs are tracked — a skill from `create` or `import` has no hub
-provenance to record.
+`gaia skill install` writes `source: "hub"` entries; a skill from `create` or
+`import` has no hub provenance, so install never invents one. `gaia skill lock
+--relock` may record it as `source: "local"`, which claims exactly the origin it
+has.
+
+`content_digest` covers the **installed** directory (after the tier re-stamp), not
+the downloaded archive. That is what makes post-install tampering detectable:
+`gaia skill lock` compares against it, and a `community` / `verified` skill whose
+files no longer match **refuses to load** — those bytes are not the ones the
+signature covered, so the tier badge no longer means anything. An `experimental`
+or locally-authored skill warns and keeps working; nothing attested it, and
+editing a skill you wrote is the normal workflow.
+
+<Note>
+`skill-lock.json` has no integrity protection of its own — anyone who can write
+to it can rewrite a digest. It defends against tampering with the *skill
+directory* (a swapped bundle, an edited manifest, a downgraded version), which
+until now was entirely silent.
+</Note>
 
 **Examples:**
 
@@ -2413,6 +2514,12 @@ gaia skill install web-research@^1.2
 gaia skill info web-research               # tier the signature actually earned
 gaia skill install some-skill --allow-experimental
 gaia skill remove web-research
+```
+
+```bash Verify nothing changed since install
+gaia skill lock                        # exits 4 if anything drifted
+gaia skill lock --json | jq '.drifts[] | select(.fatal)'
+gaia skill lock --relock               # accept your own edits
 ```
 
 ```bash Publish your own
@@ -2486,6 +2593,8 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
 
 The running daemon reloads schedules every second, so adding, pausing, resuming, removing, or editing a schedule does not require a restart. Pausing or removing a schedule prevents future runs; it does not interrupt a run already in progress.
+
+A run that comes due while the daemon is running but the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name. A run that came due while the daemon itself was not running is not replayed on restart.
 
 ```bash
 gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
