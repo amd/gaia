@@ -934,8 +934,9 @@ code, so `pytest | tail` that failed reads as failed.
 Results that carry no `check_result` — MCP tools, hub agents built before the
 field existed — are still classified from their text: a tool named `run_tests`,
 `run_lint`, `typecheck`, or `build`, a `command` argument naming a known runner,
-or a `run_python` / `execute_python_file` output with a pytest or unittest
-summary. Other unrecognized runners remain `unverified`.
+or a `run_python` / `execute_python_file` output with a test runner's summary
+(pytest, unittest, jest, vitest, mocha, `go test`, `cargo test`). Other
+unrecognized runners remain `unverified`.
 
 Before the answer goes out, the loop also checks it against the same record. An
 answer that reports a test outcome (`111 passed`, "all tests pass") when no test

@@ -19,7 +19,6 @@ from __future__ import annotations
 import difflib
 import json
 import os
-import re
 import shutil
 import statistics
 import subprocess
@@ -31,6 +30,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.checks import check_kind, runner_summary, summary_reports_failure
 from gaia.agents.base.tool_grants import PATH_TOOLS
 from gaia.agents.base.verification import (
     check_was_executed,
@@ -302,16 +302,6 @@ def prepare_workdir(task: Task, root: Path) -> Tuple[Path, Path]:
 #: one this sees too.
 EDIT_TOOLS = PATH_TOOLS
 
-#: pytest's closing summary when a test failed. A snippet or a pipe that prints
-#: it can still exit 0, so the exit code alone would call the run a pass.
-_FAILED_SUMMARY = re.compile(
-    r"(?m)^[= ]*(?:\d+ [a-z]+, )*[1-9]\d* (?:failed|errors?)\b.* in \d+(?:\.\d+)?s\b"
-)
-
-#: pytest's closing summary for a run that actually collected tests. Without
-#: it, ``pytest --version`` and ``--collect-only`` would read as a passing run.
-_RAN_SUMMARY = re.compile(r"(?m)^[= ]*(?:\d+ [a-z]+(?:, )?)+ in \d+(?:\.\d+)?s\b")
-
 
 def _tool_result(content: Any) -> Any:
     if isinstance(content, str):
@@ -328,17 +318,20 @@ def _test_run_passed(result: Any) -> bool:
     if not isinstance(result, dict):
         return True
     output = "\n".join(str(result.get(key) or "") for key in ("stdout", "stderr"))
-    return bool(_RAN_SUMMARY.search(output)) and not _FAILED_SUMMARY.search(output)
+    found = runner_summary(output)
+    return found is not None and not summary_reports_failure(found[1])
 
 
 def tests_verified(conversation: List[Mapping[str, Any]]) -> bool:
-    """True when a pytest run passed after the agent's last file edit.
+    """True when a test run passed after the agent's last file edit.
 
     Read from the agent's own tool record, with the check detection its
-    verification line uses, so ``python -m pytest`` and pytest run through
-    ``run_python`` both count. A command run more than once counts by its
-    latest run. A run that collected no tests (``--version``, ``--collect-only``)
-    does not count. Edits made through a shell command or a snippet are not seen.
+    verification line uses, so ``python -m pytest``, pytest run through
+    ``run_python``, and every other runner the record knows (jest, vitest,
+    mocha, ``go test``, ``cargo test``) count. A command run more than once
+    counts by its latest run. A run whose output holds no runner summary
+    (``--version``, ``--collect-only``) does not count. Edits made through a
+    shell command or a snippet are not seen.
     """
     latest: Dict[str, bool] = {}
     for entry in conversation:
@@ -351,7 +344,9 @@ def tests_verified(conversation: List[Mapping[str, Any]]) -> bool:
         if name in EDIT_TOOLS:
             if not Agent._is_error_result(result):
                 latest.clear()
-        elif verification_check_label(name, args, result) == "pytest":
+        elif (label := verification_check_label(name, args, result)) and (
+            check_kind(label) == "test"
+        ):
             latest[verification_check_target(name, args)] = _test_run_passed(result)
     return any(latest.values())
 
