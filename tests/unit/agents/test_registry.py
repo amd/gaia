@@ -832,11 +832,8 @@ class TestModelResolution:
 # ---------------------------------------------------------------------------
 # Builder model-preference contract (#2243)
 #
-# BuilderAgent currently hardcodes model_id="Qwen3.5-35B-A3B-GGUF" and fails
-# outright on any machine that hasn't installed that specific 35B model.
-# These tests are written against the accepted interface contract for the
-# fix, which is not yet implemented — they are expected to fail red
-# (ImportError/AttributeError on missing names), not to pass.
+# BuilderAgent picks the first installed model from an ordered preference list
+# instead of failing on machines without Qwen3.5-35B-A3B-GGUF.
 # ---------------------------------------------------------------------------
 
 

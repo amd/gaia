@@ -26,9 +26,11 @@
 #                     it's a valid unit gate, not a wheel-smoke substitute
 #                     (see the `build` job's own wheel-smoke for that). The
 #                     honest release bar per CLAUDE.md is `gaia eval agent
-#                     --agent-type doc` (live backend + judge); chat has no
-#                     committed SCORECARD.md yet (#2312/#2333), so that eval
-#                     is a documented MANUAL pre-publish step, not a CI gate.
+#                     --agent-type chat` (live backend + judge -- the eval
+#                     defaults to the flagship, so scoring chat means naming
+#                     it); chat has no committed SCORECARD.md yet
+#                     (#2312/#2333), so that eval is a documented MANUAL
+#                     pre-publish step, not a CI gate.
 #   3. publish     — behind the `agent-publish` environment's manual approval
 #                     (same environment release_agent_email.yml uses):
 #                     verify pyproject.toml <-> gaia-agent.yaml version lock

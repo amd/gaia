@@ -312,10 +312,12 @@ async function startBackend() {
   try {
     backendPort = await portManager.findFreePort();
   } catch (err) {
-    console.warn(
-      `[main] findFreePort failed (${err.message}); falling back to ${DEFAULT_BACKEND_PORT}`
+    throw new Error(
+      `Could not reserve a local port for the GAIA backend: ${err.message}. ` +
+        "Check that security software isn't blocking 127.0.0.1, then relaunch GAIA. " +
+        `Logs: ${_MAIN_LOG_PATH}`,
+      { cause: err }
     );
-    backendPort = DEFAULT_BACKEND_PORT;
   }
   healthCheckUrl = `http://localhost:${backendPort}/api/health`;
   // Defensively clean up any orphaned backend in case bootstrap was skipped

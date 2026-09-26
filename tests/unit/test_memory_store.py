@@ -246,6 +246,33 @@ class TestBasicCRUD:
 class TestFTS5Search:
     """FTS5 search with AND/OR semantics, BM25 ranking, sanitization."""
 
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT", "NEAR", "é"])
+    def test_search_treats_keywords_as_literal_words(self, store, keyword):
+        content = f"The {keyword} operator is documented"
+        kid = store.store(category="fact", content=content)
+        store.store_turn("literal-query", "user", content)
+
+        assert [row["id"] for row in store.search(keyword)] == [kid]
+        assert [row["id"] for row in store.search(f"{keyword} documented")] == [kid]
+        assert store.search_conversations(keyword)[0]["content"] == content
+        assert store.get_all_knowledge(search=keyword)["total"] == 1
+        assert store.get_all_knowledge(search=f"{keyword} documented")["total"] == 1
+
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT"])
+    def test_literal_keyword_search_preserves_or_fallback(self, store, keyword):
+        kid = store.store(category="fact", content=f"Use the {keyword} operator")
+
+        assert [row["id"] for row in store.search(f"{keyword} nonexistent")] == [kid]
+
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT"])
+    def test_literal_keywords_do_not_disable_deduplication(self, store, keyword):
+        content = f"The {keyword} operator is documented"
+        first = store.store(category="fact", content=content)
+        second = store.store(category="fact", content=content)
+
+        assert second == first
+        assert store.get_all_knowledge()["total"] == 1
+
     def test_search_finds_by_keyword(self, store):
         """search() finds entries by keyword in content."""
         store.store(category="fact", content="GAIA supports NPU acceleration")
@@ -1687,12 +1714,12 @@ class TestEdgeCases:
             assert mode == "wal"
 
     def test_schema_version_exists(self, store):
-        """schema_version table exists at the current version (v4, #2674)."""
+        """schema_version table exists at the current version (v5, #887)."""
         if hasattr(store, "_conn"):
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 4
+            assert row[0] == 5
 
 
 # ===========================================================================
@@ -1764,6 +1791,20 @@ class TestHelperFunctions:
         result = _sanitize_fts5_query("module.submodule semi-colon")
         assert result is not None
         assert "." not in result or "module" in result
+
+    def test_sanitize_fts5_query_drops_all_underscore_tokens(self):
+        """An all-underscore token quotes to an empty FTS5 phrase and would
+        zero out an AND query -- it must be dropped, not quoted (#4142)."""
+        from gaia.agents.base.memory_store import _sanitize_fts5_query
+
+        result = _sanitize_fts5_query("___ hello", use_and=True)
+        assert result == '"hello"'
+
+    def test_sanitize_fts5_query_all_underscore_tokens_returns_none(self):
+        from gaia.agents.base.memory_store import _sanitize_fts5_query
+
+        assert _sanitize_fts5_query("___", use_and=True) is None
+        assert _sanitize_fts5_query("___ ____", use_and=False) is None
 
 
 # ===========================================================================
@@ -3755,14 +3796,14 @@ class TestSchemaV2Migration:
         assert any(r["id"] == kid for r in results)
 
     def test_schema_version_is_current(self, store):
-        """A fresh database is stamped at the current schema version (v4, #2674)."""
+        """A fresh database is stamped at the current schema version (v5, #887)."""
         with store._lock:
             cursor = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             row = cursor.fetchone()
         assert row is not None
-        assert row[0] == 4
+        assert row[0] == 5
 
 
 # ===========================================================================
@@ -4857,9 +4898,10 @@ class TestProceduresMigration:
         store = MemoryStore(db_path=db)
         store.close()
 
-        assert _schema_version(db) == 4
+        assert _schema_version(db) == 5
         assert "procedures" in _table_names(db)
         assert "skill_deltas" in _table_names(db)
+        assert "synthesis_marks" in _table_names(db)
 
     def test_v2_db_migrates_to_v3_without_touching_existing_rows(self, tmp_path):
         """An existing v2 DB migrates to v3 additively — no knowledge/tool row altered.
@@ -4904,7 +4946,7 @@ class TestProceduresMigration:
         # Reopen — triggers the v2→v3 migration.
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 4
+            assert _schema_version(db) == 5
             assert "procedures" in _table_names(db)
 
             con = sqlite3.connect(str(db))
@@ -4947,7 +4989,7 @@ class TestProceduresMigration:
 
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 4
+            assert _schema_version(db) == 5
             assert "procedures" in _table_names(db)
             # The v1→v2 ALTERs are re-applied idempotently; the legacy row survives.
             rows = store2.get_by_category("fact")
