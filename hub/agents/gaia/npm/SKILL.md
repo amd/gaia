@@ -127,9 +127,11 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running (`lemonade-server serve`).
-2. The default model downloaded (`gaia download Gemma-4-E4B-it-GGUF`, or
-   `gaia init`).
+1. Lemonade **10.2.0 or newer**, running (`gaia init` installs and starts it).
+2. The default model downloaded (`gaia init`). `gaia download` takes **no**
+   model argument — naming one makes it exit 2. To pull a single model instead,
+   repeat the command `GET /v1/gaia/init` gives you: it names the Lemonade
+   client this machine actually has. Do not invent one.
 
 Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 (it never pulls or loads) that probes Lemonade, compares its version to the
@@ -150,7 +152,9 @@ alone:
                 "min_version": "10.2.0", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
-  "hint": "Local Lemonade Server is not reachable at … — start it with `lemonade-server serve`, or set LEMONADE_BASE_URL to a running server."
+  // The start instruction is resolved for the host's Lemonade install
+  // (tray app, macOS app, systemd service, or CLI) — render it verbatim.
+  "hint": "Local Lemonade Server is not reachable at …. Start the Lemonade app from Applications, then retry. Or set LEMONADE_BASE_URL to a running server. See https://amd-gaia.ai/docs/guides/gaia."
 }
 ```
 
@@ -239,7 +243,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
-| `provider` | no | `"lemonade"` (default) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. Under `"claude"`, `model` names a Claude model. |
+| `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
 | `max_steps` | no | ≥ 1. |
 
 ```ts
@@ -378,6 +382,15 @@ It applies to the very next gated tool, including one in a turn already running,
 and an unknown session is a **404** rather than a new one. A malformed
 `session_id` is a **400**, same as on `/query`.
 
+**That bypass stops the prompts; it does not open the shell.** The stdio
+transport's `--bypass-permissions` does both — it runs gated tools unasked *and*
+lifts the shell tool's guardrails (redirection and the other shell-only
+operators, the read-only binary allowlist, the rate limit). That second half is
+arbitrary code execution, appropriate for one local parent on a private pipe and
+not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
+gates, and the request body rejects unknown fields so a client cannot ask. See
+SPEC §5.5.
+
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
 immediately with a terminal `final` saying it stopped before running the action,
@@ -486,6 +499,11 @@ specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or
 `GaiaAgentConfig(project_root=...)` when embedding. A directory that is neither
 a VCS checkout nor holds a recognised manifest gets **no map** — that is the
 designed answer, not a failure.
+
+The same root check also decides whether the shell rides along: when it
+resolves to a repository, `run_shell_command` is offered on every turn instead
+of only when semantic selection guesses the request sounds like a shell
+request. No repository, no change.
 
 ## 12. Ports
 

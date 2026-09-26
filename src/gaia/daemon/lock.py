@@ -28,6 +28,32 @@ else:
     import fcntl
 
 
+def try_lock(fd: int) -> bool:
+    """Take an exclusive advisory lock on ``fd`` without blocking; False if held."""
+    if os.name == "nt":
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def unlock(fd: int) -> None:
+    """Release a lock taken with :func:`try_lock` (closing ``fd`` also releases it)."""
+    if os.name == "nt":
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
 class StartLock:
     """Context manager holding the exclusive daemon-start lock."""
 
@@ -38,17 +64,7 @@ class StartLock:
         self._path = paths.lock_path()
 
     def _try_acquire(self) -> bool:
-        if os.name == "nt":
-            try:
-                msvcrt.locking(self._fd, msvcrt.LK_NBLCK, 1)
-                return True
-            except OSError:
-                return False
-        try:
-            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except OSError:
-            return False
+        return try_lock(self._fd)
 
     def __enter__(self) -> "StartLock":
         paths.ensure_host_dir()
@@ -73,13 +89,7 @@ class StartLock:
         if self._fd is None:
             return
         try:
-            if os.name == "nt":
-                try:
-                    msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
-            else:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
+            unlock(self._fd)
         finally:
             os.close(self._fd)
             self._fd = None

@@ -5,6 +5,7 @@
 import json
 import logging
 import re
+import time
 from typing import Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
@@ -14,6 +15,7 @@ from ..lemonade_client import (
     active_profile_ctx_size,
     is_tool_calling_model,
 )
+from ..lemonade_launcher import describe_client_hint
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,42 @@ _NATIVE_TC_KEY = "__tool_calls__"
 #: Public because the streaming seam has to tell a control frame from answer
 #: text before it shows anything to a user.
 NATIVE_TOOL_CALLS_PREFIX = '{"' + _NATIVE_TC_KEY + '":'
+
+#: Wordings of "the server could not be reached", across OSes, curl, urllib3
+#: and httpx. Shared with the agent loop so both agree on what "down" means.
+#: A connect timeout belongs here: the server never answered, so it is not the
+#: slow-model upstream timeout (#1030).
+CONNECTION_FAILURE_RE = re.compile(
+    r"connection (?:refused|reset|aborted|error)|connecterror|not reachable"
+    r"|unreachable|could not connect|couldn't connect|failed to establish"
+    r"|max retries exceeded|name or service not known|getaddrinfo"
+    r"|could not resolve host|no route to host"
+    # urllib3 puts the host in the middle: "Connection to <host> timed out.
+    # (connect timeout=5)", so the two words are never adjacent.
+    r"|connect(?:ion)?(?: to \S+)? timed out|connecttimeouterror"
+    # Windows: "No connection could be made because the target machine
+    # actively refused it" (WinError 10061).
+    r"|no connection could be made|actively refused|connection attempt failed"
+    r"|winerror 1006\d",
+    re.IGNORECASE,
+)
+
+#: A read timeout means bytes were already exchanged — the server is up and the
+#: model is slow, which is the #1030 distinction. It can still arrive wrapped in
+#: a ``MaxRetryError``, whose "max retries exceeded" wording is a connection
+#: failure above, so it has to win over that.
+READ_TIMEOUT_RE = re.compile(r"read timed out|readtimeouterror", re.IGNORECASE)
+
+
+def _reasoning_tokens(usage: dict) -> Optional[int]:
+    """Reasoning tokens from an OpenAI-shape ``usage``, when reported."""
+    for key in ("completion_tokens_details", "output_tokens_details"):
+        details = usage.get(key)
+        if isinstance(details, dict):
+            value = details.get("reasoning_tokens")
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+    return None
 
 
 def _accumulate_tool_calls(acc: dict, deltas: Optional[List[dict]]) -> None:
@@ -188,8 +226,7 @@ class LemonadeModelNotFoundError(LemonadeError):
     retryable = False
     user_message = (
         "The model this agent needs isn't installed on the local LLM server. "
-        "Run `gaia init` to set up a profile, or `gaia download <model>` to "
-        "install it, then try again."
+        "Run `gaia init` to set up a profile, then try again."
     )
 
     def __init__(
@@ -200,10 +237,11 @@ class LemonadeModelNotFoundError(LemonadeError):
         self.model_id = model_id
         message = None
         if model_id:
+            pull = describe_client_hint("pull", model_id).instruction.rstrip(".")
             message = (
                 f"The model this agent needs (`{model_id}`) isn't installed on "
-                f"the local LLM server. Install it with `gaia download {model_id}`, "
-                f"or run `gaia init` to set up a profile, then try again."
+                f"the local LLM server. {pull}. Or run `gaia init` "
+                "to set up a profile, then try again."
             )
         super().__init__(user_message=message, payload=payload)
 
@@ -290,11 +328,8 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         or "timed out" in msg_blob
         or "operation_timeout" in type_blob
     )
-    is_unreachable = (
-        "connection refused" in msg_blob
-        or "could not resolve host" in msg_blob
-        or "no route to host" in msg_blob
-        or "couldn't connect" in msg_blob
+    is_unreachable = bool(CONNECTION_FAILURE_RE.search(msg_blob)) and not (
+        READ_TIMEOUT_RE.search(msg_blob)
     )
 
     if is_timeout and not is_unreachable:
@@ -385,11 +420,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         or "timed out" in text
         or "operation_timeout" in text
     )
-    is_unreachable = (
-        "connection refused" in text
-        or "could not resolve host" in text
-        or "no route to host" in text
-        or "couldn't connect" in text
+    is_unreachable = bool(CONNECTION_FAILURE_RE.search(text)) and not (
+        READ_TIMEOUT_RE.search(text)
     )
     # Lemonade HTTP 5xx — typical when llama-server is mid-swap between models
     # or hit an internal recovery state. Treat them as the network-flavour
@@ -449,6 +481,9 @@ class LemonadeProvider(LLMClient):
         # ``usage`` field, captured here since ``chat()`` itself returns
         # just the message content/tool-call envelope as ``str``.
         self._last_usage: Optional[dict] = None
+        self._last_finish_reason: Optional[str] = None
+        self._last_ttft_seconds: Optional[float] = None
+        self._last_streamed = False
 
     @property
     def provider_name(self) -> str:
@@ -486,12 +521,15 @@ class LemonadeProvider(LLMClient):
         model: str | None = None,
         stream: bool = False,
         tools: Optional[List[dict]] = None,
+        tool_choice: Optional[Union[str, dict]] = None,
         **kwargs,
     ) -> Union[str, dict, Iterator[str]]:
-        # Reset from any previous call — usage is per-call, not cumulative,
-        # and the streaming branch below never populates it (no non-streaming
-        # JSON body to read a ``usage`` field from).
+        # Reset from any previous call — these are per-call, not cumulative.
         self._last_usage = None
+        self._last_finish_reason = None
+        self._last_ttft_seconds = None
+        self._last_streamed = stream
+        request_started = time.perf_counter()
 
         # Use provided model, instance model, or default CPU model
         effective_model = model or self._model or DEFAULT_MODEL_NAME
@@ -524,6 +562,16 @@ class LemonadeProvider(LLMClient):
         # because it always sends a tools array.
         effective_stream = stream
         effective_tools = tools if tool_capable else None
+        if tool_choice is not None:
+            if not tools:
+                raise ValueError(
+                    f"tool_choice={tool_choice!r} was passed without tools; it "
+                    "only applies to a request that offers tools. Pass tools= "
+                    "as well, or drop tool_choice."
+                )
+            # Governs the tools, so it is withheld along with them.
+            if effective_tools:
+                kwargs["tool_choice"] = tool_choice
 
         response = self._backend.chat_completions(
             model=effective_model,
@@ -533,7 +581,7 @@ class LemonadeProvider(LLMClient):
             **kwargs,
         )
         if effective_stream:
-            return self._handle_stream(response)
+            return self._handle_stream(response, request_started)
 
         # Handle error responses — classify into typed exceptions so the
         # chat layer can decide whether to auto-retry vs. surface a
@@ -577,6 +625,7 @@ class LemonadeProvider(LLMClient):
         choice = response["choices"][0]
         message = choice.get("message", {})
         finish_reason = choice.get("finish_reason", "")
+        self._last_finish_reason = finish_reason or None
         tool_calls = message.get("tool_calls")
 
         if tool_calls:
@@ -640,8 +689,9 @@ class LemonadeProvider(LLMClient):
                 if key != "tokens_per_second"
             }
         # A non-streaming local call carries its own usage. /stats counts only
-        # the uncached part of whichever request the server served last.
-        if self._last_usage:
+        # the uncached part of whichever request the server served last. A
+        # streamed local call keeps /stats: it carries the ttft the UI shows.
+        if self._last_usage and not self._last_streamed:
             return dict(self._last_usage)
         return self._backend.get_stats() or {}
 
@@ -663,12 +713,12 @@ class LemonadeProvider(LLMClient):
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "total_tokens": int(usage.get("total_tokens") or 0),
         }
-        for key, container in (
-            ("cached_tokens", usage.get("prompt_tokens_details")),
-            ("reasoning_tokens", usage.get("completion_tokens_details")),
-        ):
-            if isinstance(container, dict) and container.get(key) is not None:
-                captured[key] = int(container[key])
+        cached = usage.get("prompt_tokens_details")
+        if isinstance(cached, dict) and cached.get("cached_tokens") is not None:
+            captured["cached_tokens"] = int(cached["cached_tokens"])
+        reasoning = _reasoning_tokens(usage)
+        if reasoning is not None:
+            captured["reasoning_tokens"] = reasoning
         captured["tokens_per_second"] = float(
             (timings or {}).get("predicted_per_second") or 0.0
         )
@@ -676,9 +726,15 @@ class LemonadeProvider(LLMClient):
 
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent non-streaming ``chat()``
-        call (#1891), or ``None`` when unavailable (a streaming call, or the
-        server's response didn't include a ``usage`` field)."""
+        call (#1891), or the usage a stream carried on its last chunk. ``None``
+        when the server sent none."""
         return self._last_usage
+
+    def get_last_finish_reason(self) -> Optional[str]:
+        return self._last_finish_reason
+
+    def get_last_ttft_seconds(self) -> Optional[float]:
+        return self._last_ttft_seconds
 
     def load_model(self, model_name: str, **kwargs) -> None:
         self._backend.load_model(model_name, **kwargs)
@@ -690,7 +746,7 @@ class LemonadeProvider(LLMClient):
     def _extract_text(self, response: dict) -> str:
         return response["choices"][0]["text"]
 
-    def _handle_stream(self, response) -> Iterator[str]:
+    def _handle_stream(self, response, request_started: float) -> Iterator[str]:
         """Yield prose as it arrives; end with the tool_calls sentinel if any.
 
         A tool-calling turn is only recognisable once the stream is over — the
@@ -720,6 +776,13 @@ class LemonadeProvider(LLMClient):
                 choice = chunk["choices"][0]
                 finish_reason = choice.get("finish_reason") or finish_reason
                 delta = choice.get("delta", {})
+                if self._last_ttft_seconds is None and (
+                    delta.get("content")
+                    or delta.get("reasoning_content")
+                    or delta.get("tool_calls")
+                    or choice.get("text")
+                ):
+                    self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
                 content = delta.get("content")
                 if content:
@@ -753,6 +816,7 @@ class LemonadeProvider(LLMClient):
                                 yield close_thinking()
                             text_seen.append(text)
                             yield text
+        self._last_finish_reason = finish_reason or None
         # Close any unclosed thinking block at end of stream
         if in_thinking:
             yield close_thinking()

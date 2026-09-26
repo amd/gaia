@@ -66,6 +66,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from gaia.config import (
+    GAIA_HOME_HOLDS_USER_HOME,
+    GAIA_HOME_IS_FS_ROOT,
+    UnsafeGaiaHomeError,
+    unsafe_gaia_home_reason,
+)
 from gaia.installer._stdin import stdin_is_tty
 
 log = logging.getLogger(__name__)
@@ -194,12 +200,10 @@ def _safe_roots(home: Optional[Path] = None) -> List[Path]:
 # ---------------------------------------------------------------------------
 
 
-class UnsafeGaiaHomeError(RuntimeError):
-    """The resolved GAIA home is not a directory this command may delete into.
-
-    Raised before any plan is built, so a misconfigured ``GAIA_HOME`` can
-    never reach :func:`_remove_path`.
-    """
+# ``UnsafeGaiaHomeError`` now lives in gaia.config (imported above) and stays
+# importable from here, where it was first defined. The structural predicate
+# lives beside it so the Agent UI, which owns the same <GAIA_HOME>/documents
+# tree, cannot drift from this command's idea of unsafe.
 
 
 # Entries only GAIA creates. At least one must exist before any tier deletes
@@ -259,14 +263,16 @@ def _assert_purgeable_home(
         else "GAIA_HOME is not set, so this came from Path.home()."
     )
 
-    if resolved == resolved.parent:
+    reason = unsafe_gaia_home_reason(resolved, user_home)
+
+    if reason == GAIA_HOME_IS_FS_ROOT:
         raise UnsafeGaiaHomeError(
             f"Refusing to uninstall: the GAIA home resolves to the filesystem "
             f"root {resolved}. {hint} Point GAIA_HOME at a dedicated GAIA data "
             f"directory (the default is {user_home / '.gaia'})."
         )
 
-    if resolved == user_home or user_home.is_relative_to(resolved):
+    if reason == GAIA_HOME_HOLDS_USER_HOME:
         raise UnsafeGaiaHomeError(
             f"Refusing to uninstall: the GAIA home resolves to {resolved}, "
             f"which is your home directory (or contains it). Purging it would "

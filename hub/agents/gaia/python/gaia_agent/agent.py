@@ -178,14 +178,17 @@ class GaiaAgentConfig(ChatAgentConfig):
     # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
     dynamic_tools: bool = True
 
-    # 15 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
+    # 16 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
     # of loading it. Swept offline against nine representative queries with 13
     # CORE: 13 dynamic slots lands every matched bundle whole, 9 cut the web
-    # bundle in half on a research question, and 17 buys nothing further. Grows
-    # with CORE so the dynamic share stays 13.
-    dynamic_tools_max: int = 28
+    # bundle in half on a research question, and 17 buys nothing further. Bump
+    # this literal when FULL_CORE_TOOLS grows so the dynamic share stays 13;
+    # per-session workspace CORE additions (e.g. the shell in a repo) don't
+    # need a bump here — _resolve_dynamic_tools_max() grows the cap by
+    # len(_workspace_core_tools()) automatically.
+    dynamic_tools_max: int = 29
 
     # List every installed skill in the system prompt so the model loads one
     # when the work fits, and the user never has to know a skill's name. On for

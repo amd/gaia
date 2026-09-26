@@ -76,15 +76,24 @@ from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 from gaia.llm import create_client
 from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
-    DEFAULT_LEMONADE_URL,
     LemonadeClient,
     LemonadeClientError,
     cloud_model_provider,
+    resolve_lemonade_base_url,
 )
+from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
 logger = get_logger(__name__)
+
+
+def lemonade_start_instruction() -> str:
+    """How to start Lemonade on this host, as one complete sentence."""
+    instruction = describe_start_hint().instruction.rstrip()
+    # Some hints end in a bare command; punctuate so appended prose stays readable.
+    return instruction if instruction.endswith((".", "!", "?")) else f"{instruction}."
+
 
 #: Level the permission audit trail is pinned at, independent of --dev.
 AUDIT_LEVEL = logging.INFO
@@ -142,6 +151,8 @@ CONTROL_CLEAR_HISTORY = "clear_history"
 
 class _ClearHistory:
     """Queue sentinel: the turn loop (which owns the agent) performs the clear."""
+
+
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and the bypass mode all survive it.
 CONTROL_CANCEL = "cancel"
@@ -165,20 +176,38 @@ class PermissionState:
     while the turn thread is swapping ``handler`` around it.
     """
 
-    def __init__(self, bypass: bool = False) -> None:
+    def __init__(self, bypass: bool = False, *, lifts_shell_gates: bool = True) -> None:
         self._lock = threading.Lock()
         self._bypass = bypass
+        self._lifts_shell_gates = lifts_shell_gates
         self._grants: set = set()
         self._handler: Any = None
         if bypass:
             # Starting unattended is the same security event as toggling it on
             # mid-session, and it never went through set_bypass.
-            audit.warning("Bypass permissions ENABLED at launch")
+            audit.warning(
+                "Bypass permissions ENABLED at launch (shell gates %s)",
+                "off" if lifts_shell_gates else "still on",
+            )
 
     @property
     def bypass(self) -> bool:
         with self._lock:
             return self._bypass
+
+    def _apply(self, handler: Any, enabled: bool) -> None:
+        """Write this session's bypass decision onto one handler.
+
+        Two attributes, because they are two different grants that happen to be
+        turned on together. ``auto_approve_gated_tools`` skips the confirmation
+        prompt; ``bypass_permissions`` additionally lifts the shell guardrails —
+        the operator block, the read-only binary policy and the rate limit
+        (#3373, #3374). An unattended harness that only pre-approves prompts
+        sets the first and must not inherit the second, which is what
+        ``lifts_shell_gates=False`` buys the HTTP transport.
+        """
+        handler.auto_approve_gated_tools = enabled
+        handler.bypass_permissions = enabled and self._lifts_shell_gates
 
     def set_bypass(self, enabled: bool) -> None:
         """Turn bypass on or off, taking effect on the very next gated tool.
@@ -189,13 +218,17 @@ class PermissionState:
         with self._lock:
             self._bypass = enabled
             if self._handler is not None:
-                self._handler.auto_approve_gated_tools = enabled
-        audit.warning("Bypass permissions %s", "ENABLED" if enabled else "disabled")
+                self._apply(self._handler, enabled)
+        audit.warning(
+            "Bypass permissions %s (shell gates %s)",
+            "ENABLED" if enabled else "disabled",
+            ("off" if enabled else "on") if self._lifts_shell_gates else "still on",
+        )
 
     def attach(self, handler: Any) -> None:
         """Hand a turn's handler the session's accumulated permission state."""
         with self._lock:
-            handler.auto_approve_gated_tools = self._bypass
+            self._apply(handler, self._bypass)
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution. The
@@ -395,7 +428,7 @@ def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
         # A malformed base_url reads to the user as "Lemonade isn't running",
         # so name it rather than reporting a bare unreachable. The client
         # resolves an omitted URL the same way, so report that, not None.
-        tried = base_url or os.environ.get("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+        tried = base_url or resolve_lemonade_base_url()
         logger.warning("[lemonade] client construction failed for %r: %s", tried, exc)
         return {"lemonade_base_url": tried, "lemonade_reachable": False}
     state: Dict[str, Any] = {"lemonade_base_url": client.base_url}
@@ -438,7 +471,7 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
     except LemonadeClientError as exc:
         raise RuntimeError(
             f"Lemonade Server is not reachable at {client.base_url} ({exc}). "
-            "Start it with `lemonade-server serve`, then retry."
+            f"{lemonade_start_instruction()}"
         ) from exc
     return sorted(
         {
@@ -582,7 +615,7 @@ def _apply_local_switch(agent: Any, target: str) -> str:
             + (
                 ", ".join(available)
                 if available
-                else "(none — run `lemonade-server pull <model>` first)"
+                else f"(none — {describe_client_hint('pull', target).instruction.rstrip('.')})"
             )
             + "."
         )
@@ -609,6 +642,11 @@ def _apply_local_switch(agent: Any, target: str) -> str:
     return target
 
 
+def is_claude_model(model_id: str) -> bool:
+    """Whether *model_id* names a Claude model, i.e. goes to Anthropic."""
+    return model_id.startswith("claude-")
+
+
 def switch_model(agent: Any, target: str) -> str:
     """Swap the agent's live LLM client to *target*.
 
@@ -625,7 +663,7 @@ def switch_model(agent: Any, target: str) -> str:
     machinery it depends on already is — moving 200 working lines to improve a
     filename is not worth the risk.
     """
-    if target.startswith("claude-"):
+    if is_claude_model(target):
         return _apply_claude_switch(agent, target)
     return _apply_local_switch(agent, target)
 
@@ -949,8 +987,9 @@ def _terminal_error(exc: BaseException) -> Dict[str, Any]:
         return {
             "type": "error",
             "detail": (
-                "Local Lemonade Server is not reachable. Start it, then retry — "
-                f"run `lemonade-server serve`. (underlying error: {text})"
+                "Local Lemonade Server is not reachable. "
+                f"{lemonade_start_instruction()} "
+                f"(underlying error: {text})"
             ),
         }
     return {"type": "error", "detail": text}
@@ -1205,9 +1244,14 @@ def build_parser() -> "argparse.ArgumentParser":
     parser.add_argument(
         "--bypass-permissions",
         action="store_true",
-        help="Start with confirmation prompts OFF: every gated tool runs "
-        "without asking. Off unless passed, and the host can toggle it at any "
-        "time over the control channel.",
+        help="Start with the permission gates OFF: every gated tool runs "
+        "without asking, the shell-only operators (>, >>, <, &, `, $(), "
+        "newline) parse and run, the "
+        "read-only binary policy is replaced by the developer set (node, npm, "
+        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh, git) and "
+        "the shell rate limit is lifted. This is arbitrary code execution. Off "
+        "unless passed, and the host can toggle it at any time over the "
+        "control channel. Every shell command run this way is audit-logged.",
     )
     return parser
 

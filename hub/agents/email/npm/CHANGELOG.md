@@ -6,6 +6,51 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **The email agent now finds GAIA's own Lemonade Server.** It used to look
+  for Lemonade on its default port, so on a PC where `gaia init` set up GAIA's
+  own server it reported the model server as missing, or its version as
+  unknown. It now uses the same server as the rest of GAIA, with its key.
+
+- **`shutdown()` no longer waits forever when the sidecar survives a forced
+  kill.** It used to hang with no time limit, so Ctrl+C in `agent-email
+  playground` froze instead of telling you anything. It now rejects about
+  `timeoutMs` after the forced kill with an error naming the pid, the command
+  to kill it, and the port it still holds — `playground` prints that and exits
+  1. If you `await shutdown(sidecar)`, catch the rejection. The sidecar also
+  stays registered with the exit-time auto-reaper until it is confirmed gone,
+  so a survivor still gets one last kill when your process exits.
+
+- **`agent-email playground` no longer reports a clean exit when Ctrl+C fails
+  to stop the sidecar.** A failed shutdown was thrown away and the command
+  exited 0. It now prints the error and exits 1.
+
+- **A second Ctrl+C while the playground is stopping no longer orphans the
+  sidecar.** The handler was registered with `once`, so a repeat Ctrl+C during a
+  slow teardown hit Node's default disposition and killed the process mid-stop —
+  leaving the detached sidecar still holding port 8131, which is exactly the
+  stuck state this release set out to remove. Repeats are now absorbed and
+  reported while the shutdown finishes.
+
+- **`agent-email` now understands `--port=9000` and refuses malformed flags
+  instead of quietly using the default port.** `--port=9000` was read as an
+  unknown switch, a bare `--port` or `--out` printed "ignoring" and carried on,
+  and `--port 0x1f90` was accepted as hex — each ran on 8131 while you thought
+  you'd picked something else. Both `--flag value` and `--flag=value` now work,
+  ports must be plain digits, and a missing or unexpected value stops with
+  exit code 2 and the usage text.
+
+- **Starting the sidecar when port 8131 is already taken now fails with a clear
+  error instead of pretending it worked.** If an earlier `agent-email
+  playground` or another server held the port, `startSidecar` handed back a
+  "started" sidecar it didn't own: every call then failed with 401, and
+  `shutdown()` couldn't stop it. It now throws `PortInUseError` without spawning
+  anything (use `connectSidecar` to reuse a running server), or
+  `SidecarExitedError` if the port is taken mid-start. A sidecar that crashes
+  at startup now fails straight away instead of after the full 30 s wait.
+  A sidecar that becomes healthy and *then* crashes says so, instead of
+  blaming a port conflict and sending you to hunt for a process that was
+  never there.
+
 - **Intel Macs can now install the agent.** Every release publishes an Intel
   macOS binary, but the hub manifest didn't list Intel macOS as supported, so
   `gaia hub install email` refused it before downloading anything.

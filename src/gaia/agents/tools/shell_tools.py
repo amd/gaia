@@ -167,6 +167,61 @@ DANGEROUS_FIND_ACTIONS = {
     "-fls",
 }
 
+# The binaries a developer session needs and a read-only session must not have
+# (#3374). Active ONLY under bypass permissions; ALLOWED_COMMANDS above is
+# untouched so the read-only tier keeps claiming exactly what it claims, and
+# #2768's sweep of it never has to reason about these entries.
+#
+# This set permits ARBITRARY CODE EXECUTION — node, make and the interpreters
+# each run whatever the working tree tells them to. That is why it is reachable
+# only from the mode the user turned on deliberately.
+#
+# python/python3/pytest and gh are listed for CONSOLIDATION, not new reach: all
+# four already have a path today (``execute_python_file`` for the
+# generic_file_ops profiles, a ``shell:execute:`` skill grant for pytest and
+# gh). Naming them here means bypass has one answer to "may this binary run"
+# instead of three. The per-skill grant path is unchanged and still works with
+# bypass off.
+#
+# `git` is here for the same reason, and its policy's outright refusals (push,
+# reset, rebase) do not survive bypass. That is not a boundary being dropped:
+# `python` and `make` above already reach git by shelling out, so refusing it
+# here would only be a tripwire — and one that made bypass STRICTER than the
+# default tier, where the read-only floor still runs `git status`.
+DEVELOPER_COMMANDS = frozenset(
+    {
+        # Interpreters and test runners
+        "python",
+        "python3",
+        "pytest",
+        "node",
+        # Build and package tooling
+        "npm",
+        "make",
+        "cmake",
+        "go",
+        "cargo",
+        # Forge
+        "gh",
+        "git",
+        # Text processing that writes
+        "sed",
+        "awk",
+        # Network
+        "curl",
+        # Process control
+        "sleep",
+        "timeout",
+        "export",
+        # File shuffling. `cp` and `mv` are in; `rm` is deliberately NOT — see
+        # docs/plans/security-model.mdx. Not a boundary (anything above can
+        # delete a file), just a tripwire against an accidental recursive
+        # delete.
+        "cp",
+        "mv",
+    }
+)
+
 # Global git options that sit BEFORE the subcommand. They have to be stepped
 # over to find what the command actually is, and each one is classified here —
 # an unlisted option is refused rather than skipped, so a future git release
@@ -795,15 +850,94 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
+#: Tokens that end one command and begin the next. Only ``|`` can appear
+#: outside bypass mode — ``DANGEROUS_SHELL_OPERATORS`` refuses the rest before
+#: tokenisation — so extending the set leaves default behaviour untouched.
+_SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
+
+#: Characters shlex is asked to lex as punctuation in bypass mode. A newline is
+#: one of them because the shell that ultimately runs the string treats it as a
+#: command separator, so the segment walk has to as well.
+_BYPASS_PUNCTUATION = ";&|<>\n"
+
+
+def _tokenize(command: str, bypass_gates: bool = False) -> list:
+    """Split *command* into argv tokens.
+
+    Default mode uses ``shlex.split``, unchanged. Bypass mode asks shlex to
+    treat ``;&|<>`` and the newline as punctuation instead, so ``cd build &&
+    make`` yields a standalone ``&&`` for ``_split_pipeline`` to break on.
+    Parentheses stay out of the punctuation set: making them tokens would
+    mangle ordinary operands like ``find . -name "(draft)*"``.
+
+    The newline is dropped from ``whitespace`` so it survives as a token rather
+    than being eaten as a space. Inside quotes it is still ordinary data, so
+    ``echo "a<newline>b"`` remains one operand.
+    """
+    if not bypass_gates:
+        return shlex.split(command)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+    lexer.whitespace_split = True
+    lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
+    lexer.whitespace = " \t\r"
+    return list(lexer)
+
+
+def _is_segment_separator(token: str) -> bool:
+    """Whether *token* ends one command and begins the next.
+
+    shlex emits a *run* of adjacent punctuation as a single token, so a newline
+    reaches here fused to whatever preceded it — ``;\\n``, ``&&\\n``, ``\\n|\\n``.
+    Any all-punctuation run containing a newline therefore separates, which is
+    what stops ``ls\\nrm -rf /tmp/x`` from being walked as one ``ls`` segment.
+    """
+    if token in _SEGMENT_SEPARATORS:
+        return True
+    return (
+        bool(token)
+        and "\n" in token
+        and all(char in _BYPASS_PUNCTUATION for char in token)
+    )
+
+
+def _is_lone_granted_segment(segments: list, granted: frozenset) -> bool:
+    """Whether the whole command is a single invocation of a skill-granted CLI.
+
+    That is the one path that runs argv-only instead of through a shell, so the
+    pre-flight and the executor have to decide it the same way or one of them
+    refuses a command the other would have run differently.
+    """
+    return (
+        len(segments) == 1
+        and bool(granted)
+        and _is_granted_segment(segments[0], granted)
+    )
+
+
+def _redirects(command: str) -> bool:
+    """Whether *command* redirects, reading ``<``/``>`` the way a shell would.
+
+    Quoting decides it: tokenisation has already dropped the quotes, so by then
+    a redirect and a literal ``">"`` operand look identical.
+    """
+    return any(char in _outside_double_quotes(command) for char in "<>")
+
+
 _ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def _split_pipeline(cmd_parts: list) -> list:
-    """Split a shlex-split command on ``|`` into its non-empty segments."""
+    """Split tokenised *cmd_parts* on shell separators into non-empty segments.
+
+    Every segment is validated and audited on its own, which is what keeps a
+    refused binary in ``a && b`` from riding in on an allowed one — and what
+    keeps the audit record honest under bypass mode, where the separators
+    actually reach a shell.
+    """
     segments: list = []
     current: list = []
     for part in cmd_parts:
-        if part == "|":
+        if _is_segment_separator(part):
             if current:
                 segments.append(current)
             current = []
@@ -1012,19 +1146,26 @@ def _take_segment_envs(segments: list) -> tuple:
     return tuple(envs), stripped, None
 
 
-def _parse_line(command: str) -> tuple:
+def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
     """*command* as steps, or the refusal its text alone earns.
 
     Shape only — operators, quoting, pipes, and ``cd``'s form. What each
     command may DO is the caller's question, so the refusal path and the
     skill-grant check share one answer to what a segment IS before they
     disagree about anything else.
+
+    Bypass mode drops the operator blocklist — a redirect and a background ``&``
+    are what it exists to allow — and lexes the rest as punctuation so the
+    segment walk still sees every command on the line. Nothing else relaxes:
+    each segment is still validated on its own.
     """
     steps: list = []
     parts = _split_connectors(command)
     for raw_text, connector in parts:
         text, modes = _take_stderr_redirections(raw_text)
-        if DANGEROUS_SHELL_OPERATORS.search(_operator_check_text(text)):
+        if not bypass_gates and DANGEROUS_SHELL_OPERATORS.search(
+            _operator_check_text(text)
+        ):
             return [], {
                 "status": "error",
                 "error": (
@@ -1040,7 +1181,7 @@ def _parse_line(command: str) -> tuple:
                 ),
             }
         try:
-            cmd_parts = shlex.split(text)
+            cmd_parts = _tokenize(text, bypass_gates=bypass_gates)
         except ValueError as exc:
             return [], {
                 "status": "error",
@@ -1239,6 +1380,7 @@ def _run_step(
     timeout: float,
     granted: frozenset,
     waiter: Optional[Callable] = None,
+    bypass: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run one validated pipeline in *cwd*, and return what it produced.
 
@@ -1268,24 +1410,29 @@ def _run_step(
     # One segment only: the `|` tokens are already dropped, so an argv run of a
     # pipeline would concatenate its commands. Off Windows, _run_pipeline
     # chains the segments.
-    lone_granted_segment = (
-        len(segments) == 1
-        and bool(granted)
-        and _is_granted_segment(segments[0], granted)
-    )
+    lone_granted_segment = _is_lone_granted_segment(segments, granted)
     # An environment assignment is scoped to its own segment, and cmd.exe owns
     # the whole string it is handed — so a step carrying one runs as argv here
     # too, and gives up cmd.exe's built-in resolution to keep that scope.
+    #
+    # Bypass mode needs a shell off Windows too: the operators it unblocks ARE
+    # the shell. A redirect is a token to the walk above and a file write to sh,
+    # so an argv run would pass '>' to the program as an operand.
     use_shell = (
-        os.name == "nt" and not lone_granted_segment and not any(step.envs or ())
+        (os.name == "nt" or bypass)
+        and not lone_granted_segment
+        and not any(step.envs or ())
     )
 
     exec_cmd = [part for segment in segments for part in segment]
     if use_shell:
         # The step's own text, to preserve quoting (critical for PowerShell).
-        # It keeps the stderr redirections, spelled cmd.exe's way: cmd.exe owns
-        # the pipeline here, so only it can route a middle segment's stderr.
-        exec_cmd = step.shell_text or step.text
+        # On Windows it keeps the stderr redirections, spelled cmd.exe's way:
+        # cmd.exe owns the pipeline here, so only it can route a middle
+        # segment's stderr. sh must not be handed that spelling — '2>NUL'
+        # there creates a file called NUL — so it gets the lifted text and the
+        # redirection is applied below.
+        exec_cmd = (step.shell_text or step.text) if os.name == "nt" else step.text
         cmd_base = segments[0][0].lower()
         if cmd_base in _UNIX_TO_WIN:
             import shutil
@@ -1302,8 +1449,12 @@ def _run_step(
             segments, step.stderr_modes, step.envs, cwd, timeout, waiter
         )
 
-    # A shell step's redirection is already in the string cmd.exe was handed.
-    mode = "" if use_shell or not step.stderr_modes else step.stderr_modes[0]
+    # cmd.exe was handed the redirection in its string; sh was not, and a
+    # pipeline it owns routes per-segment stderr this process cannot reach.
+    shell_owns_redirection = use_shell and (os.name == "nt" or len(segments) > 1)
+    mode = (
+        "" if shell_owns_redirection or not step.stderr_modes else step.stderr_modes[0]
+    )
 
     # encoding/errors are explicit, and load-bearing. Bare ``text=True``
     # decodes with the locale codec — cp1252 on a default Windows box — and
@@ -1450,11 +1601,35 @@ class ShellToolsMixin:
             directory, path traversal) stay with the caller, so a command this
             clears may still be refused later; one it rejects never runs.
         """
-        steps, error = _parse_line(command)
+        bypass = self.bypass_gates_active()
+        steps, error = _parse_line(command, bypass_gates=bypass)
         if error is not None:
             return error, []
 
         granted = skill_granted_binaries(self)
+
+        # A granted CLI is handed argv, never a shell, so a redirect would reach
+        # it as a literal argument. Refuse instead of answering wrongly.
+        segments = [seg for step in steps for seg in step.segments]
+        if _is_lone_granted_segment(segments, granted) and _redirects(steps[0].text):
+            return (
+                {
+                    "status": "error",
+                    "error": (
+                        f"Redirection is not supported for '{segments[0][0]}': a "
+                        "skill-granted CLI receives its arguments directly rather "
+                        "than through a shell, so '>' would be passed to it as text."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Re-run the command without the redirect and use the output "
+                        "it returns, or write that output to a file with the file "
+                        "tools."
+                    ),
+                },
+                [],
+            )
+
         for step in steps:
             for segment in step.segments:
                 error = self._validate_command(
@@ -1463,11 +1638,36 @@ class ShellToolsMixin:
                     step.text if len(step.segments) == 1 else " ".join(segment),
                     granted_binaries=granted,
                     skill_manager=getattr(self, "skill_manager", None),
+                    bypass_gates=bypass,
                 )
                 if error:
                     return error, []
 
         return None, steps
+
+    def bypass_gates_active(self) -> bool:
+        """Whether this session is running under bypass permissions (#3373).
+
+        One source of truth, read live: the session's output handler carries
+        ``bypass_permissions``, set only by the sidecar's ``PermissionState``
+        from ``--bypass-permissions`` or the TUI's ``/bypass``. Every gate reads
+        this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
+        executor — so they cannot hold different opinions about whether a
+        command is legal.
+
+        Read live rather than resolved once because bypass is toggleable
+        mid-session over the control channel; caching it would leave `/bypass
+        off` half-applied. Each ``run_shell_command`` reads it once and threads
+        that value through its own pre-flight and execution, so a toggle landing
+        mid-call cannot split the two.
+
+        Answers False for any host that never set it — a plain console, the
+        HTTP transport, a library embedding — which is what keeps the shipped
+        default byte-identical.
+        """
+        return bool(
+            getattr(getattr(self, "console", None), "bypass_permissions", False)
+        )
 
     def policy_refusal_for_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -1535,6 +1735,13 @@ class ShellToolsMixin:
             # Only the tool that actually runs _validate_command may be exempt;
             # anything else would skip the modal without enforcing the policy.
             return False
+
+        bypass = self.bypass_gates_active()
+        if bypass:
+            # Every gated tool is pre-approved in bypass mode; saying so here
+            # keeps this answer aligned with the console's, rather than leaving
+            # two predicates to disagree about whether the call was consented to.
+            return True
 
         granted = skill_granted_binaries(self)
         if not granted:
@@ -1905,6 +2112,7 @@ class ShellToolsMixin:
         command: str,
         granted_binaries: frozenset = frozenset(),
         skill_manager: Any = None,
+        bypass_gates: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -1918,6 +2126,10 @@ class ShellToolsMixin:
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
+            bypass_gates: This session's ``--bypass-permissions`` state. When
+                True the read-only policy is replaced wholesale by
+                ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
+                exactly as it was.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -1928,6 +2140,9 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
+        if bypass_gates:
+            return ShellToolsMixin._validate_bypass_command(cmd_base)
+
         # Git's global options sit before the subcommand, so every check below
         # has to read the call with them stepped over. The options that hand git
         # arbitrary code are refused here rather than stepped over.
@@ -2248,6 +2463,50 @@ class ShellToolsMixin:
 
         return None  # Command is allowed
 
+    @staticmethod
+    def _validate_bypass_command(cmd_base: str) -> Optional[Dict[str, Any]]:
+        """The whole binary policy under bypass permissions.
+
+        Membership in ``ALLOWED_COMMANDS | DEVELOPER_COMMANDS`` and nothing
+        else: the read-only sub-guards (git subcommands, PowerShell cmdlets,
+        ``find -exec``, ``sort -o``, ``uniq`` output) and the binary policies'
+        own refusals all encode "this binary may not write", which is precisely
+        the assumption bypass mode drops.
+
+        Still a set, not an open door — ``rm`` and anything unrecognised are
+        refused, and every segment lands in the audit record either way.
+        """
+        from gaia.skills.binaries import normalize_binary
+
+        candidates = {cmd_base, normalize_binary(cmd_base)}
+        if candidates & (ALLOWED_COMMANDS | DEVELOPER_COMMANDS):
+            return None
+        return {
+            "status": "error",
+            "error": (
+                f"Command '{cmd_base}' is not in the developer command set, "
+                "even with bypass permissions active."
+            ),
+            "has_errors": True,
+            "hint": (
+                "Bypass permissions swap the read-only allowlist for a "
+                "developer set (python, python3, pytest, node, npm, make, "
+                "cmake, go, cargo, gh, git, sed, awk, curl, sleep, timeout, "
+                "export, cp, mv). 'rm' is deliberately excluded."
+            ),
+        }
+
+    def _audit_shell_execution(self, command: str, cwd: str, segments: list) -> None:
+        """Record a command run under bypass mode, arguments and all.
+
+        Skipping the confirmation *prompt* must not mean skipping the *record*:
+        consent was granted in advance, which is exactly when the audit trail is
+        the only evidence of what the agent did.
+        """
+        from gaia.security import audit_shell_command
+
+        audit_shell_command(command=command, cwd=cwd, segments=segments, mode="bypass")
+
     def register_shell_tools(self) -> None:
         """Register shell command execution tools."""
         from gaia.agents.base.tools import tool
@@ -2259,6 +2518,10 @@ class ShellToolsMixin:
             # inside its own (correct) timeout.
             timeout=MAX_COMMAND_TIMEOUT + 60,
         )
+        # The class table leads the docstring because the prompt renders a tool
+        # by its FIRST LINE; anything below is seen only by models using native
+        # tool calls. ``test_the_docstring_states_every_class`` keeps that line
+        # honest when the table changes.
         def run_shell_command(
             command: str,
             working_directory: Optional[str] = None,
@@ -2268,19 +2531,13 @@ class ShellToolsMixin:
             # to send "60". None still means "use the class default".
             timeout: int = None,
         ) -> Dict[str, Any]:
-            """Execute a shell command. Leave timeout unset: it defaults to what the command needs — 900s for test runners, 1800s for builds and installs, 300s for git/network calls, 30s for everything else.
+            """Execute a shell command. Leave timeout unset — it defaults by class: 900s test runners, 1800s builds and installs, 300s git/network, 30s everything else.
 
-            The class table leads because the prompt renders a tool by the FIRST
-            LINE of its docstring; anything below is seen only by models using
-            native tool calls. ``test_the_docstring_states_every_class`` keeps
-            that line honest when the table changes.
-
-            Chain on one line: 'a && b' on success, 'a || b' on failure,
-            'a; b' always, 'a | b' pipes, 'cd <dir> && b' runs b there. Each
-            is allowlist-checked; one approval covers the line. '2>&1' keeps
-            stderr and '2>/dev/null' drops it; 'PYTHONPATH=. pytest -q' scopes
-            a variable to one command. Other redirections and ` $() &
-            newline are refused.
+            Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
+            'cd <dir> && b'. One approval covers the line; every part is
+            allowlist-checked. '2>&1' keeps stderr, '2>/dev/null' drops it,
+            'VAR=x cmd' scopes a variable. Other redirections and
+            ` $() & newline are refused.
 
             Args:
                 command: Shell command to execute
@@ -2290,13 +2547,12 @@ class ShellToolsMixin:
                     ceiling it is refused, not clamped.
 
             Returns:
-                Dictionary with status, combined output, the last command's
-                exit code, and 'steps' (each command with its own code). The
-                applied timeout and the class it came from are in ``timeout``
-                and ``timeout_class``; a command killed at the limit carries
-                ``timed_out`` plus whatever it printed first.
+                status, output, the last exit code, 'steps' (each with its own
+                code), the applied 'timeout' and 'timeout_class'; one killed at
+                the limit carries 'timed_out'.
             """
             try:
+                bypass = self.bypass_gates_active()
                 try:
                     timeout, timeout_class = resolve_timeout(command, timeout)
                 except ValueError as exc:
@@ -2309,7 +2565,9 @@ class ShellToolsMixin:
                     }
 
                 # Check rate limits first to prevent DOS
-                allowed, reason, wait_time, waited = self._pace_rate_limit()
+                allowed, reason, wait_time, waited = (
+                    (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
+                )
                 if not allowed:
                     return {
                         **NOT_EXECUTED,
@@ -2388,6 +2646,11 @@ class ShellToolsMixin:
                     if error:
                         return error
 
+                if bypass:
+                    self._audit_shell_execution(
+                        command, cwd, [seg for st in steps for seg in st.segments]
+                    )
+
                 # Log command execution (debug mode)
                 if hasattr(self, "debug") and self.debug:
                     logger.info(f"Executing command: {command} in {cwd}")
@@ -2440,6 +2703,7 @@ class ShellToolsMixin:
                             # the command while it is still running, rather
                             # than half an hour later when its budget expires.
                             self._communicate_or_cancel,
+                            bypass,
                         )
                     except subprocess.TimeoutExpired as exc:
                         # Truncated here too: a command killed at 30 minutes has
@@ -2530,8 +2794,10 @@ class ShellToolsMixin:
                 duration = time.monotonic() - start_time
 
                 # One line is one model step, so it costs one slot however many
-                # commands it chains.
-                self._record_command_execution()
+                # commands it chains. Skipped under bypass, where the limit is
+                # lifted and the deque _check_rate_limit creates never existed.
+                if not bypass:
+                    self._record_command_execution()
 
                 stdout = "".join(stdout_parts)
                 stderr = "".join(stderr_parts)
@@ -2600,11 +2866,9 @@ class ShellToolsMixin:
             timeout: int = WAIT_DEFAULT_TIMEOUT,
             poll_interval: int = WAIT_DEFAULT_POLL_INTERVAL,
         ) -> Dict[str, Any]:
-            """Wait until a shell command succeeds, instead of sleeping and re-checking: give it a command that exits 0 once the thing you are waiting for is ready (a file written, a server answering, a run finished) and it polls every 5s until then, giving up at 120s by default and 600s at most.
+            """Wait until a shell command succeeds instead of sleeping and re-checking: give it a command that exits 0 once the thing is ready, and it polls every 5s, giving up at 120s by default, 600s at most.
 
-            One agent step covers the whole wait. The polling happens inside
-            this call against a monotonic deadline, so the loop's step budget is
-            spent on work rather than on re-asking whether the thing is ready.
+            One agent step covers the whole wait — don't re-poll in the loop.
 
             Args:
                 command: The predicate — exits 0 once the condition holds,
@@ -2614,9 +2878,8 @@ class ShellToolsMixin:
                 poll_interval: Seconds between checks (5-60)
 
             Returns:
-                A result dict carrying ``condition_met``, how many probes ran and
-                the last probe's output. Deadline expiry is an error, not a
-                quiet False.
+                'condition_met', the probe count, and the last probe's output.
+                Deadline expiry is an error, not a quiet False.
             """
             try:
                 timeout = int(timeout)

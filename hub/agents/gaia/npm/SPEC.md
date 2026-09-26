@@ -321,8 +321,10 @@ whenever the agent's working directory resolves to a code repository (a VCS
 directory or a recognised manifest at its root). `GAIA_PROJECT_ROOT=<path>`
 picks the project when the working directory is not it. If that repository has
 no code index, the first turn starts one in a background thread;
-`GAIA_PROJECT_MAP_AUTO_INDEX=0` disables that. Neither affects the wire
-contract — they change what the agent knows and what the first turn costs.
+`GAIA_PROJECT_MAP_AUTO_INDEX=0` disables that. The same repository check also
+makes `run_shell_command` always-on for the session instead of semantically
+selected. Neither affects the wire contract — they change what the agent
+knows, what tools it is offered, and what the first turn costs.
 
 A second `/query` for a `session_id` that already has a turn in flight gets
 `409 Conflict` — cancel the running turn or wait for it, then retry. A
@@ -347,7 +349,20 @@ that differs from the one its `session_id` was built with **switches the retaine
 agent in place** (≥ 2.14), so the conversation and any loaded skills survive the
 change; the same machinery the stdio transport's `/model` uses. A switch that
 fails — a missing Claude credential, an unknown local model — is a `409` naming
-the reason, and leaves the session on its previous model.
+the reason, and leaves the session on its previous model. The session records its
+`provider` too: a turn naming a different `provider` switches it the same way,
+onto that turn's `model` or, if it names none, the provider's default model. A
+`model` from the other provider than the one named (a `claude-*` id with
+`"lemonade"`, or a non-Claude id with `"claude"`) is a `400` on a new session and
+an existing one alike, before anything is built or switched.
+
+`provider` is optional, and an omitted one is **not** read as `"lemonade"` — it
+means "whatever the `model` implies", so a `claude-*` id alone reaches Anthropic
+and any other id runs locally. The `400` above therefore fires only when a
+request names a `provider` that disagrees with its `model`; there is no pair to
+disagree when only one is given. On a retained session, omitting both leaves the
+session on the provider it is already using, so an ordinary follow-up turn never
+moves a Claude conversation back to Lemonade.
 
 ### 5.3 Version gate
 
@@ -426,6 +441,44 @@ The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model
 remotely, so a local server URL alone does not establish local inference.
+
+`--bypass-permissions` turns off more than the prompt. It also lifts the shell
+tool's own guardrails for the session: the shell-only operators — redirection
+(`>`, `>>`, `<`), backgrounding (`&`), substitution (`` ` ``, `$()`) and the
+newline — parse and run, chaining (`&&`, `||`, `;`, `|`) already ran by
+default, the read-only binary allowlist is replaced by a developer set
+(`node`, `npm`, `make`, `cmake`, `go`, `cargo`, `sed`, `awk`, `curl`, `sleep`,
+`timeout`, `export`, `cp`, `mv`, plus `python`/`python3`/`pytest`/`gh`/`git`,
+which already had their own paths), and the shell rate limit is dropped. `git`
+being in that set means its policy's outright refusals — push, reset, rebase —
+also stop applying under bypass. That is
+arbitrary code execution in the working directory, which is why it exists only
+on this transport: one local parent process on a private pipe. It is **not**
+reachable over HTTP, and the request body cannot ask for it —
+`POST /v1/gaia/sessions/{id}/bypass` stops an HTTP session's approval prompts
+but never lifts these shell gates. `rm` is excluded
+from the developer set — not a boundary, since anything in the set can delete a
+file, but a tripwire against an accidental recursive delete. Redirection has one
+exception: a command that is nothing but a skill-granted CLI runs argv-only
+rather than through a shell, so a `>` there is refused with an explanation
+instead of reaching the binary as a literal argument.
+
+Every shell command run under bypass is recorded with its full arguments and its
+per-segment breakdown in `~/.gaia/cache/file_audit.log` — skipping the prompt
+does not skip the record. Treat that file as sensitive; arguments are verbatim.
+The host can toggle bypass mid-session over `gaia_control`, and the shell gates
+follow on the very next command.
+
+`--use-claude` is the one with a reach beyond the machine, and it cannot be
+turned on for what this package delivers: the terminal UI **refuses** the launch
+flag for a daemon-transport agent, with an error saying so, because it pins the
+backend for the life of the process and the daemon relay has no such lever.
+
+That is a limit on the *launch flag*, not on the agent. Since contract 2.14 a
+caller can ask for Anthropic per request with `/query`'s `provider` field (§5.2),
+so local inference is this package's **default**, not a property of the transport
+that nobody can change. Anything reaching Anthropic is named by the request that
+asked for it.
 
 ---
 
@@ -521,7 +574,7 @@ failed start never leaks a process.
 | Code    | Meaning                                                                 |
 | ------- | ----------------------------------------------------------------------- |
 | `0`     | Success                                                                 |
-| `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, `PortInUseError`, `SidecarExitedError`, `MalformedResponseError`, or an unexpected error |
+| `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, `PortInUseError`, `SidecarExitedError`, `MalformedResponseError`, or an unexpected error; also `serve` on Ctrl+C when the sidecar survives the forced kill (the message names its pid and the kill command) |
 | `2`     | Usage error: unknown command, invalid `--port`, or a flag the command does not read (`run --port`, `serve --component`, `serve --cache-dir`, `run`/`serve` `--platform`), an unknown `--component`, or a non-https `--base-url` without `--allow-insecure-base-url` |
 | *other* | From `run`: the TUI's own exit code, propagated verbatim                 |
 
