@@ -2874,6 +2874,11 @@ class LemonadeClient:
                         }
                         for choice in chunk.choices
                     ],
+                    "usage": (
+                        chunk.usage.model_dump()
+                        if getattr(chunk, "usage", None) is not None
+                        else None
+                    ),
                 }
 
             self.log.debug(
