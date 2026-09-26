@@ -516,9 +516,11 @@ class ToolLoader:
         The loaded-skill counterpart to :meth:`load_bundle`: a skill's recipe
         names exact tools, not a bundle, and a namespaced skill tool belongs to
         no bundle at all, so ``load_bundle`` would raise ``KeyError`` on it.
-        Cap-aware exactly like :meth:`select`'s SKILL tier — under the cap via
-        :meth:`_admit`, at the cap by LRU-evicting a tool that is neither CORE
-        nor being admitted right now, else skipping.
+        Add-only for the same reason :meth:`load_bundle` is: this runs mid-turn,
+        and evicting to stay under ``max_tools`` would drop a tool from the
+        middle of the already-offered list and re-prefill every tool after it.
+        The overshoot is bounded (one skill's recipe per call) and :meth:`select`
+        trims it back at the next turn boundary.
 
         Names absent from *registry* are dropped rather than raised, mirroring
         the SKILL tier: a skill may name a tool this agent does not have, and
@@ -535,39 +537,24 @@ class ToolLoader:
             already-offered tools and void the model's cached prompt prefix.
         """
         sel = _Selection()
-        admitted_this_turn: set[str] = set()
         for name in names:
             if name in self._loaded or name not in registry:
                 continue
             sel.skill.append(name)
-            if len(self._loaded) < self._max_tools:
-                self._admit(name, sel)
-                admitted_this_turn.add(name)
-                continue
-            victim = self._pick_eviction_victim(admitted_this_turn)
-            if victim is None:
-                sel.skipped_at_cap.append(name)
-                continue
-            del self._loaded[victim]
-            sel.evicted.append(victim)
             self._admit(name, sel)
-            admitted_this_turn.add(name)
 
         if sel.skill:
-            logger.info(
-                "TOOL_LOADER %s",
-                json.dumps(
-                    {
-                        "turn": self._turn,
-                        "event": "admit_skill_tools",
-                        "skill": sorted(sel.skill),
-                        "admitted": sorted(sel.admitted),
-                        "evicted": sorted(sel.evicted),
-                        "skipped_at_cap": sorted(sel.skipped_at_cap),
-                        "loaded": sorted(self._loaded),
-                    }
-                ),
-            )
+            payload = {
+                "turn": self._turn,
+                "event": "admit_skill_tools",
+                "skill": sorted(sel.skill),
+                "admitted": sorted(sel.admitted),
+                "loaded": list(self._loaded),
+            }
+            over_cap = len(self._loaded) - self._max_tools
+            if over_cap > 0:
+                payload["over_cap"] = over_cap
+            logger.info("TOOL_LOADER %s", json.dumps(payload))
         return list(self._loaded)
 
     # ── internals ────────────────────────────────────────────────────────

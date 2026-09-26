@@ -131,6 +131,27 @@ def test_parse_loaded_sets_unions_load_tools_lines_within_a_turn():
     assert scenarios[0][0] == ["load_tools", "read_file", "search_file"]  # unioned
 
 
+def test_parse_loaded_sets_unions_admit_skill_tools_lines_within_a_turn():
+    """A skill loaded mid-turn widens its turn — it is not a turn of its own.
+
+    The line carries a ``turn`` and a ``loaded`` like a selection line, so
+    without the event check it reads as an extra turn — and on turn 1 it also
+    opens a phantom scenario, shifting alignment for the rest of the run.
+    """
+    log = "\n".join(
+        [
+            'TOOL_LOADER {"turn": 1, "loaded": ["read_file", "load_skill"]}',
+            'TOOL_LOADER {"turn": 1, "event": "admit_skill_tools", "skill": '
+            '["run_shell_command"], "admitted": ["run_shell_command"], "loaded": '
+            '["read_file", "load_skill", "run_shell_command"]}',
+        ]
+    )
+    scenarios = parse_loaded_sets_from_log(log)
+    assert len(scenarios) == 1
+    assert len(scenarios[0]) == 1  # one turn, not two
+    assert scenarios[0][0] == ["load_skill", "read_file", "run_shell_command"]
+
+
 def test_parse_loaded_sets_splits_consecutive_single_turn_scenarios():
     """Two single-turn scenarios still split — only event-less lines move cursor."""
     log = "\n".join(
