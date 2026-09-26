@@ -43,7 +43,6 @@ from .schemas import (
 # Configure logging
 logger = logging.getLogger(__name__)
 _REDACTED_LOG_VALUE = "[redacted]"
-_DEFAULT_LEMONADE_BASE_URL = "http://localhost:13305/api/v1"
 _LEMONADE_HEALTH_TIMEOUT_SECONDS = 0.35
 
 # Set logger level based on debug flag
@@ -633,7 +632,12 @@ async def health_check():
 
 
 async def _lemonade_health():
-    base_url = os.getenv("LEMONADE_BASE_URL", _DEFAULT_LEMONADE_BASE_URL).rstrip("/")
+    from gaia.llm.lemonade_client import (
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+
+    base_url = resolve_lemonade_base_url().rstrip("/")
     if not base_url.endswith("/api/v1"):
         base_url = f"{base_url}/api/v1"
 
@@ -643,7 +647,7 @@ async def _lemonade_health():
         "model": None,
         "url": base_url,
     }
-    api_key = os.getenv("LEMONADE_API_KEY", "").strip()
+    api_key = resolve_lemonade_api_key(base_url=base_url)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     try:

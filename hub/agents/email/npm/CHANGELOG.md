@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **The email agent now finds GAIA's own Lemonade Server.** It used to look
+  for Lemonade on its default port, so on a PC where `gaia init` set up GAIA's
+  own server it reported the model server as missing, or its version as
+  unknown. It now uses the same server as the rest of GAIA, with its key.
+
 - **`agent-email playground` no longer reports a clean exit when Ctrl+C fails
   to stop the sidecar.** A failed shutdown was thrown away and the command
   exited 0. It now prints the error and exits 1.

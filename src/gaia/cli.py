@@ -25,6 +25,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     _get_lemonade_config,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
@@ -665,7 +666,7 @@ async def async_main(action, **kwargs):
                 claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
                 base_url=kwargs.get(
                     "base_url",
-                    os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+                    resolve_lemonade_base_url(),
                 ),
                 model_id=explicit_model,
                 device=effective_device,
@@ -920,7 +921,7 @@ def _launch_interactive_cli(log=None):
             ) from e
 
         config = ChatAgentConfig(
-            base_url=base_url or os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
+            base_url=base_url or resolve_lemonade_base_url(),
             silent_mode=True,
         )
         agent = ChatAgent(config)
@@ -3257,8 +3258,9 @@ Examples:
         "--check",
         action="store_true",
         help="Report whether this profile is already set up and exit — no "
-        "install, no download, no side effects. Exit code 0 means ready, "
-        "1 means `gaia init` still has work to do.",
+        "install, no download. A stopped GAIA Lemonade Server is started through "
+        "the GAIA daemon (started too if needed), as any GAIA command would. "
+        "Exit code 0 means ready, 1 means `gaia init` still has work to do.",
     )
 
     # Install command (install specific components)
@@ -3521,7 +3523,13 @@ def _handle_schedule(args):
         return
 
     if action == "daemon":
-        schedule_daemon.run_daemon()
+        from gaia.schedule.lock import ScheduleLockError
+
+        try:
+            schedule_daemon.run_daemon()
+        except ScheduleLockError as exc:
+            print(f"❌ {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     print(
@@ -7605,7 +7613,9 @@ def _handle_daemon_stop():
     except DaemonError as e:
         print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
         terminate_instance(inst)
-    if client.wait_until_gone(inst, timeout=10.0):
+    # Shutdown drains requests, waits out a Lemonade start in flight and stops
+    # the Lemonade Server it started — see client.STOP_WAIT_TIMEOUT.
+    if client.wait_until_gone(inst, timeout=client.STOP_WAIT_TIMEOUT):
         remove_instance(only_pid=inst.pid)
         print(f"✅ GAIA daemon stopped (pid {inst.pid})")
     else:

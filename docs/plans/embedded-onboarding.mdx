@@ -61,7 +61,7 @@ PR 1 ships as three PRs so each one can be reviewed and tested on its own:
 | PR | Scope | Items below |
 |----|-------|-------------|
 | **1a** | `gaia init` and `gaia init --check` use embedded Lemonade; `LEMONADE_BASE_URL` still names another server; init's system install, upgrade and start code is removed, along with `--skip-lemonade` | 1, 2 (stopped still counts as not ready until 1b) |
-| **1b** | The daemon starts and stops embedded Lemonade; `LemonadeManager.ensure_ready()` asks the daemon; a stopped server counts as ready | 3 (without the fallback removal) |
+| **1b** | The daemon starts embedded Lemonade at startup and on request, and stops only a server it started itself (never one that is slow to answer or runs another version; those need `gaia init`); `LemonadeManager.ensure_ready()` and `gaia init --check` have it start a stopped server | 3 (without the fallback removal) |
 | **1c** | CI's self-hosted runners move off system Lemonade; the default-port fallback, `LemonadeInstaller`'s system installers, the launcher's system paths and `gaia install --lemonade` are removed; the Lemonade app is detected and reported; every `lemonade-server serve` mention goes | 3 (fallback), 4, 5, 6 |
 
 The fallback removal waits for 1c because 18 CI workflows still reach a system Lemonade on

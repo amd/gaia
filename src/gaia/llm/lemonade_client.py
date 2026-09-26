@@ -506,6 +506,59 @@ def split_backend_spec(spec: str) -> Tuple[str, str]:
 # Default timeout in seconds for regular API requests
 # Increased to accommodate long-running coding and evaluation tasks
 DEFAULT_REQUEST_TIMEOUT = 900
+
+# Upstream's own per-request default (resources/defaults.json), and the ceiling
+# it uses for long validation legs. A wedged request must still end.
+_UPSTREAM_GLOBAL_TIMEOUT = 600
+_MAX_REQUEST_BUDGET = 3600
+# Assumed FLOOR for prefill throughput, tokens/second — deliberately pessimistic.
+# Overshooting costs wall-clock only on a request that was already failing;
+# undershooting truncates a real answer.
+_MIN_PREFILL_TOKENS_PER_SECOND = 32
+#: Raises the budget on a machine slower than that floor. Honored by BOTH ends,
+#: so the server and the client cannot be set to disagree.
+REQUEST_BUDGET_ENV = "GAIA_LEMONADE_REQUEST_BUDGET"
+
+
+def request_budget_seconds(ctx_size: Optional[int] = None) -> int:
+    """Seconds one chat request may take, scaled to the window in use.
+
+    Follows ``budget_for_ctx``: derive from the context size rather than invent a
+    second number that can drift from it. A long document arrives as one large
+    prefill, and 65536 tokens on a slow machine does not finish inside the 600s
+    Lemonade allows by default — the request dies and the answer is truncated.
+
+    Never returns less than ``DEFAULT_REQUEST_TIMEOUT``, so this only ever raises
+    the ceiling. Both ends use it: lemond's ``global_timeout`` and the client's
+    own read timeout, which otherwise caps the server's budget at 900s and
+    reintroduces exactly the drift this removes.
+
+    ``GAIA_LEMONADE_REQUEST_BUDGET`` overrides it outright. An unusable value
+    raises rather than falling back — a timeout quietly other than the one you
+    set is worse than being told to fix it.
+    """
+    override = os.environ.get(REQUEST_BUDGET_ENV, "").strip()
+    if override:
+        try:
+            seconds = int(override)
+        except ValueError as e:
+            raise LemonadeClientError(
+                f"{REQUEST_BUDGET_ENV} must be a whole number of seconds; got "
+                f"{override!r}. Fix or unset it."
+            ) from e
+        if seconds <= 0:
+            raise LemonadeClientError(
+                f"{REQUEST_BUDGET_ENV} must be greater than 0; got {seconds}."
+            )
+        return seconds
+
+    if ctx_size is None:
+        ctx_size = resolve_ctx_size()
+    budget = -(-max(ctx_size, 0) // _MIN_PREFILL_TOKENS_PER_SECOND)  # ceil
+    budget = max(_UPSTREAM_GLOBAL_TIMEOUT, min(_MAX_REQUEST_BUDGET, budget))
+    return max(DEFAULT_REQUEST_TIMEOUT, budget)
+
+
 # Default timeout in seconds for model loading operations
 # Increased for large model downloads and loading (10x increase for streaming stability)
 DEFAULT_MODEL_LOAD_TIMEOUT = 12000
@@ -584,9 +637,7 @@ class LemonadeStatus:
     """Status of Lemonade Server"""
 
     running: bool = False
-    url: str = field(
-        default_factory=lambda: os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
-    )
+    url: str = field(default_factory=resolve_lemonade_base_url)
     version: Optional[str] = None
     context_size: int = 0
     loaded_models: list = field(default_factory=list)
@@ -2326,7 +2377,7 @@ class LemonadeClient:
         max_tokens: Optional[int] = None,
         stop: Optional[Union[str, List[str]]] = None,
         stream: bool = False,
-        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+        timeout: Optional[int] = None,
         logprobs: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         auto_download: bool = True,
@@ -2347,7 +2398,8 @@ class LemonadeClient:
                         (deprecated, use max_completion_tokens)
             stop: Sequences where generation should stop
             stream: Whether to stream the response
-            timeout: Request timeout in seconds
+            timeout: Request timeout in seconds. Defaults to
+                ``request_budget_seconds()``, which scales with the context window.
             logprobs: Whether to include log probabilities
             tools: List of tools the model may call
             auto_download: Automatically download model if not available (default: True)
@@ -2375,6 +2427,11 @@ class LemonadeClient:
           }]
         }
         """
+        if timeout is None:
+            # Resolved per call, not as a default argument: GAIA_CTX_SIZE and the
+            # device profile can change between calls, and the budget follows them.
+            timeout = request_budget_seconds()
+
         if self.cloud_model_provider(model):
             # llama.cpp-only sampling knobs; cloud providers do not accept them.
             kwargs.pop("repeat_penalty", None)
