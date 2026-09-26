@@ -321,8 +321,10 @@ whenever the agent's working directory resolves to a code repository (a VCS
 directory or a recognised manifest at its root). `GAIA_PROJECT_ROOT=<path>`
 picks the project when the working directory is not it. If that repository has
 no code index, the first turn starts one in a background thread;
-`GAIA_PROJECT_MAP_AUTO_INDEX=0` disables that. Neither affects the wire
-contract — they change what the agent knows and what the first turn costs.
+`GAIA_PROJECT_MAP_AUTO_INDEX=0` disables that. The same repository check also
+makes `run_shell_command` always-on for the session instead of semantically
+selected. Neither affects the wire contract — they change what the agent
+knows, what tools it is offered, and what the first turn costs.
 
 A second `/query` for a `session_id` that already has a turn in flight gets
 `409 Conflict` — cancel the running turn or wait for it, then retry. A

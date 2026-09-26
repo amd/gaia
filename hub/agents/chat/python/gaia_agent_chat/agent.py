@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
 
 from gaia.logger import get_logger
 
@@ -714,7 +714,7 @@ class ChatAgent(
         if profile_config is None:
             return None
         return ToolLoader(
-            core_tools=profile_config.core,
+            core_tools=profile_config.core | self._workspace_core_tools(),
             bundles=profile_config.bundles,
             optional_tools=profile_config.optional,
             embed_fn=self._embed_text,
@@ -722,6 +722,14 @@ class ChatAgent(
             threshold=self._resolve_dynamic_tools_threshold(),
             max_tools=self._resolve_dynamic_tools_max(),
         )
+
+    def _workspace_core_tools(self) -> FrozenSet[str]:
+        """Tools the session's workspace makes always-on, beyond the profile CORE.
+
+        Fixed when the loader is built, so the offered prefix is stable from the
+        first turn. Default: none.
+        """
+        return frozenset()
 
     def _resolve_dynamic_tools_enabled(self) -> bool:
         """Toggle: ``GAIA_DYNAMIC_TOOLS`` (truthy) wins over the config field."""
@@ -743,10 +751,16 @@ class ChatAgent(
             ) from e
 
     def _resolve_dynamic_tools_max(self) -> int:
-        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly."""
+        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly.
+
+        Grown by any workspace-added CORE tools (e.g. the shell in a repo
+        session) so they don't eat into the dynamic selection budget.
+        """
         raw = os.getenv("GAIA_DYNAMIC_TOOLS_MAX")
         if raw is None:
-            return int(self.config.dynamic_tools_max)
+            return int(self.config.dynamic_tools_max) + len(
+                self._workspace_core_tools()
+            )
         try:
             return int(raw)
         except ValueError as e:

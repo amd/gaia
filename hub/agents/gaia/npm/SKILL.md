@@ -500,6 +500,11 @@ specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or
 a VCS checkout nor holds a recognised manifest gets **no map** — that is the
 designed answer, not a failure.
 
+The same root check also decides whether the shell rides along: when it
+resolves to a repository, `run_shell_command` is offered on every turn instead
+of only when semantic selection guesses the request sounds like a shell
+request. No repository, no change.
+
 ## 12. Ports
 
 | Service | Port |
