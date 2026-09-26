@@ -49,11 +49,11 @@ from gaia_agent.session_registry import (
     close_agent,
 )
 from gaia_agent.session_registry import registry as session_registry
-from gaia_agent.stdio import lemonade_start_instruction
 from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
+from gaia.agents.base.readiness import start_advice
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
@@ -384,9 +384,8 @@ def _terminal_error_detail(exc: BaseException) -> str:
         )
     ):
         return (
-            "Local Lemonade Server is not reachable. "
-            f"{lemonade_start_instruction()} See {_DOCS_URL}. "
-            f"(underlying error: {text})"
+            f"Local Lemonade Server is not reachable. {start_advice()} "
+            f"See {_DOCS_URL}. (underlying error: {text})"
         )
     return text
 
@@ -568,10 +567,12 @@ async def init() -> Dict[str, Any]:
 
     hint: Optional[str] = None
     if not probe["reachable"]:
-        start = await asyncio.to_thread(lemonade_start_instruction)
+        # Off the event loop: start_advice() resolves the host's install, which
+        # touches the filesystem.
+        advice = await asyncio.to_thread(start_advice)
         hint = (
             f"Local Lemonade Server is not reachable at {probe['base_url']}. "
-            f"{start} Or set LEMONADE_BASE_URL to a running server. "
+            f"{advice} Or set LEMONADE_BASE_URL to a running server. "
             f"See {_DOCS_URL}."
         )
     elif compatible is False:

@@ -24,7 +24,7 @@
 }
 
 .unsupported-banner-header svg {
-    color: var(--accent-gold);
+    color: var(--accent-yellow);
     flex-shrink: 0;
 }
 
@@ -85,7 +85,7 @@
 
 .unsupported-feature-request a:hover {
     text-decoration: underline;
-    color: var(--danger-light);
+    color: var(--danger);
 }
 
 /* ── Inline error toast for DocumentLibrary and FileBrowser ───────────── */
@@ -97,7 +97,7 @@
     padding: 12px 14px;
     border-radius: var(--radius-md);
     background: var(--danger-dim2);
-    border: 1px solid rgba(229, 72, 77, 0.15);
+    border: 1px solid color-mix(in srgb, var(--danger) 15%, transparent);
     margin: 8px 0;
     font-size: 12.5px;
     line-height: 1.5;

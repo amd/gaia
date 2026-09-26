@@ -39,9 +39,10 @@ function status(over: Partial<SystemStatus>): SystemStatus {
         model_downloaded: null,
         default_model_name: MODEL,
         default_model_size_gb: 6,
-        lemonade_url: null,
+        lemonade_url: 'http://localhost:13305',
         expected_model_loaded: false,
         download_progress: null,
+        active_profile: 'chat',
         ...over,
     };
 }

@@ -229,7 +229,7 @@ gaia chat
 ```
 </CodeGroup>
 
-> **Note:** GAIA automatically starts Lemonade Server when needed. For manual start: `lemonade-server serve`
+> **Note:** GAIA starts Lemonade Server when needed — `gaia daemon` supervises it, so there is nothing to launch first. To bring it up ahead of time, or to check on it, use `gaia daemon start` and `gaia daemon status`.
 
 ### Running Electron Applications
 
@@ -271,6 +271,16 @@ uv run python -m gaia.ui.server --debug
 # Terminal 2: Frontend (Vite dev server with hot reload)
 cd src/gaia/apps/webui && npm run dev
 ```
+
+**Changed a backend pydantic model?** Regenerate the frontend's API types, or CI fails:
+
+```bash
+python -m gaia.ui.export_openapi                     # writes src/types/api.schemas.json
+cd src/gaia/apps/webui && npm run gen:api-types      # writes src/types/api.gen.ts
+npx tsc --noEmit                                     # checks the hand-written types still match
+```
+
+If `tsc` then flags `src/types/apiContract.ts`, update the matching interface in `src/types/index.ts`.
 
 ### Linting and Formatting
 

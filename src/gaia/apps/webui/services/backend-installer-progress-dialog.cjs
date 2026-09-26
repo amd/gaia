@@ -86,12 +86,24 @@ function buildProgressHtml({ logPath }) {
 <meta charset="UTF-8" />
 <title>Installing GAIA</title>
 <style>
+  /* Standalone window: it loads from a data: URL and never sees
+   * src/styles/index.css, so the dark theme's role values are mirrored
+   * here. Keep them in step with that file; nothing below names a hex. */
+  :root {
+    --bg-primary: #17161C;
+    --bg-tertiary: #2A2831;
+    --border: #3A3842;
+    --text-primary: #F0EDE7;
+    --text-secondary: #AAA5B0;
+    --text-muted: #8C8794;
+    --accent-fill: #9A4930;
+  }
   html, body {
     margin: 0;
     padding: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #1a1a2e;
-    color: #eee;
+    background: var(--bg-primary);
+    color: var(--text-primary);
     user-select: none;
     -webkit-user-select: none;
     overflow: hidden;
@@ -110,35 +122,38 @@ function buildProgressHtml({ logPath }) {
     font-size: 18px;
     font-weight: 600;
     margin: 0 0 8px 0;
-    color: #fff;
+    color: var(--text-primary);
   }
   .subtitle {
     font-size: 13px;
-    color: #9aa0c8;
+    color: var(--text-secondary);
     margin: 0 0 24px 0;
   }
   .stage {
     font-size: 12px;
-    color: #7a7f9f;
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 6px;
     min-height: 15px;
   }
+  /* The rule carries the track's edge: no fill clears the 1.5:1 chrome
+   * floor against the canvas, but --border does at 1.56:1. */
   .bar {
     width: 360px;
     max-width: 100%;
     height: 10px;
-    background: #2a2a47;
-    border-radius: 5px;
+    box-sizing: border-box;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 9999px;
     overflow: hidden;
     margin-bottom: 12px;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
   }
   .fill {
     height: 100%;
-    background: linear-gradient(90deg, #4a7dff 0%, #6b9aff 100%);
-    border-radius: 5px;
+    background: var(--accent-fill);
+    border-radius: 9999px;
     transition: width 300ms ease-out;
     width: 0%;
   }
@@ -151,15 +166,19 @@ function buildProgressHtml({ logPath }) {
     50%  { margin-left: 70%;  }
     100% { margin-left: 0%;   }
   }
+  @media (prefers-reduced-motion: reduce) {
+    .fill { transition: none; }
+    .fill.indeterminate { animation: none; margin-left: 35%; }
+  }
   .percent {
     font-size: 12px;
-    color: #9aa0c8;
+    color: var(--text-secondary);
     margin-bottom: 16px;
     min-height: 14px;
   }
   .message {
     font-size: 13px;
-    color: #c6cae4;
+    color: var(--text-primary);
     max-width: 420px;
     min-height: 36px;
     line-height: 1.4;
@@ -171,12 +190,12 @@ function buildProgressHtml({ logPath }) {
     right: 0;
     text-align: center;
     font-size: 10px;
-    color: #5a5f7a;
+    color: var(--text-muted);
   }
   code {
     font-family: "SF Mono", Monaco, Consolas, monospace;
     font-size: 10px;
-    color: #7a7f9f;
+    color: var(--text-muted);
   }
 </style>
 </head>
@@ -249,7 +268,7 @@ function createProgressWindow() {
     frame: false,
     transparent: false,
     show: false,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: "#17161C", // --bg-primary, dark theme (see the :root block above)
     title: "Installing GAIA",
     webPreferences: {
       nodeIntegration: false,

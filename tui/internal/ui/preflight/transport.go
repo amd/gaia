@@ -2,8 +2,11 @@ package preflight
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +46,15 @@ type Transport interface {
 	Start(ctx context.Context) (DaemonInfo, error)
 	// EnsureAgent asks the daemon to spawn-or-attach the agent's sidecar.
 	EnsureAgent(ctx context.Context, agentID string) error
+	// StartLemonade asks the daemon to start the local model server, blocking
+	// until it answers or the attempt fails. It returns nil when a server is
+	// running afterwards — including one that was already up.
+	//
+	// The DAEMON does this, not the TUI: this process must not spawn Lemonade
+	// itself (the daemon is the machine's single custody process, and two
+	// front-ends launching at once would otherwise race into two servers), and
+	// it must not shell out to the Python `gaia` CLI.
+	StartLemonade(ctx context.Context) error
 	// Do issues an authenticated request against the daemon's control plane
 	// ("/daemon/v1/...") or its agent relay ("/v1/<agent>/...").
 	Do(ctx context.Context, method, path string, body []byte) (Response, error)
@@ -139,6 +151,91 @@ func (t *daemonTransport) EnsureAgent(ctx context.Context, agentID string) error
 	}
 	t.set(inst)
 	return nil
+}
+
+// LemonadeStartRefused is the daemon answering that it could not start the
+// local model server. Detail is the daemon's own message, which already names
+// what failed, what to do and where to look — so it is shown as the remedy
+// rather than replaced with wording invented here.
+type LemonadeStartRefused struct {
+	Status int
+	Detail string
+}
+
+func (e *LemonadeStartRefused) Error() string {
+	if e.Detail == "" {
+		return fmt.Sprintf("the background service refused to start the local model server (HTTP %d)", e.Status)
+	}
+	return e.Detail
+}
+
+// TooOldToStartLemonade reports whether the running daemon predates the start
+// verb. A 404 here is a version skew, not a missing agent — the routes are
+// mounted unconditionally from host API 1.2 on.
+func (e *LemonadeStartRefused) TooOldToStartLemonade() bool {
+	return e.Status == http.StatusNotFound
+}
+
+// lemonadeStartPath is the daemon verb, mounted from host API 1.2 on.
+const lemonadeStartPath = daemon.APIPrefix + "/lemonade/start"
+
+// lemonadeStartHeaderTimeout is how long to wait for the daemon to ANSWER the
+// start request. It must exceed the daemon's own start budget
+// (lemonade_supervisor.DEFAULT_START_TIMEOUT_S, 120s) — the route blocks until
+// the server answers health, so a client deadline under that aborts a start
+// that was seconds from succeeding and then reports the wrong cause: the error
+// surfaces as a transport failure and the row blames the background service.
+//
+// The default client timeout is 60s (daemon.defaultRequestTimeout), which is
+// exactly that bug, so this call must NOT use it.
+const lemonadeStartHeaderTimeout = 150 * time.Second
+
+func (t *daemonTransport) StartLemonade(ctx context.Context) error {
+	// An empty JSON object, not a nil body: the daemon defaults ctx_size to
+	// this machine's device profile, and inventing a window here would let the
+	// TUI and the Python disagree about how big a request the server can serve.
+	status, rc, err := t.do(
+		ctx,
+		http.MethodPost,
+		lemonadeStartPath,
+		"application/json",
+		[]byte("{}"),
+		daemon.StreamHTTPClient(streamConnectTimeout, lemonadeStartHeaderTimeout),
+	)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	body, rerr := io.ReadAll(io.LimitReader(rc, 1<<20))
+	if rerr != nil {
+		return &daemon.RequestError{
+			Op:     "read the answer to " + lemonadeStartPath,
+			Detail: rerr.Error(),
+		}
+	}
+	return lemonadeStartResult(Response{Status: status, Body: body})
+}
+
+// lemonadeStartResult maps the daemon's answer to an error, or nil when a
+// server is running afterwards. Split out from the call so the mapping is
+// testable without standing up a daemon.
+func lemonadeStartResult(resp Response) error {
+	if resp.Status == http.StatusOK {
+		return nil
+	}
+	return &LemonadeStartRefused{Status: resp.Status, Detail: detailOf(resp.Body)}
+}
+
+// detailOf pulls FastAPI's `detail` out of an error body, falling back to the
+// raw body so a non-JSON answer is still shown rather than swallowed.
+func detailOf(body []byte) string {
+	var payload struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &payload); err == nil && strings.TrimSpace(payload.Detail) != "" {
+		return payload.Detail
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // instance returns the verified instance, attaching first when this is the

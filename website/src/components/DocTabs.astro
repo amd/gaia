@@ -44,10 +44,10 @@ const { tabs, label } = Astro.props;
     @apply -mb-px flex-none whitespace-nowrap border-b-2 border-transparent px-3.5 py-3.5 font-mono text-[12px] uppercase tracking-[0.06em] text-g-faint transition-colors duration-[250ms] ease-g-out hover:text-g-text;
   }
   /* Selected state is weight + underline, not hue alone (SC 1.4.1), and the
-     underline uses gold-TEXT so it clears 3:1 on the card in light theme —
-     the graphic gold was 2.07:1. Weight 500 is a loaded JetBrains Mono face,
+     underline uses the accent-TEXT token so it clears 3:1 on the card in
+     both themes. Weight 500 is a loaded JetBrains Mono face,
      so the strip does not reflow when selection moves. */
   .doc-tab[aria-selected='true'] {
-    @apply border-g-gold-text font-medium text-g-gold-text;
+    @apply border-g-accent-text font-medium text-g-accent-text;
   }
 </style>

@@ -21,7 +21,13 @@ SERVICE_ID = "gaia-daemon"
 # added the /daemon/v1/agents control plane (#2142) — clients that need it
 # floor-check MINOR >= 1 so a pre-#2142 daemon fails loudly instead of 404ing.
 # MINOR 2 added /daemon/v1/lemonade/ensure (the daemon owns embedded Lemonade).
-DAEMON_API_VERSION = "1.2"
+# MINOR 3 added POST /daemon/v1/lemonade/start and GET /daemon/v1/lemonade/status
+# (the daemon owns starting/supervising a non-embedded local model server too).
+# Clients do NOT floor-check that one — refusing to attach to an otherwise
+# healthy 1.2 daemon over it would be a worse outcome than the thing it fixes.
+# They read its 404 as "this core is too old to start Lemonade for you" and say
+# exactly that.
+DAEMON_API_VERSION = "1.3"
 
 # Client-token auth: header name and scheme.
 AUTH_SCHEME = "Bearer"

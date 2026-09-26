@@ -27,11 +27,7 @@ Before using Agent Memory, make sure you have the following in place:
 
 - **Extras required:** `[dev,rag]` — `[rag]` provides the FAISS index used for memory recall; `[dev]` adds the developer toolchain
 
-- **Lemonade server** must be running before you start:
-
-  ```bash
-  lemonade-server serve
-  ```
+- **Model server:** nothing to start — `gaia daemon` resolves and supervises it. If Lemonade isn't installed yet, run `gaia init`
 
 - **Example files** referenced in this guide are inside the cloned repo under `examples/`
 

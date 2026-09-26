@@ -6,6 +6,9 @@ package components
 import (
 	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // gaiaStyle derives GAIA's markdown look from a glamour builtin.
@@ -22,11 +25,10 @@ import (
 // rules, code, links, emphasis.
 func gaiaStyle(dark bool) ansi.StyleConfig {
 	base := styles.LightStyleConfig
-	p := lightPalette
 	if dark {
 		base = styles.DarkStyleConfig
-		p = darkPalette
 	}
+	p := gaiaPalette(dark)
 
 	// The chat pane already indents the whole answer (answerPanelStyle), so
 	// glamour must not add its own margin on top. Two indents deep wastes four
@@ -62,11 +64,10 @@ func gaiaStyle(dark bool) ansi.StyleConfig {
 	base.Emph.Italic = boolPtr(true)
 	base.Emph.Color = strPtr(p.emph)
 
-	// A coloured bullet is what makes a list scan as a list at a glance.
+	// Prefix only: glamour paints list items in the Document colour and ignores
+	// Item.Color entirely (TestAListMarkerIsAGlyphNotAColour).
 	base.Item.BlockPrefix = "• "
-	base.Item.Color = strPtr(p.marker)
 	base.Enumeration.BlockPrefix = ". "
-	base.Enumeration.Color = strPtr(p.marker)
 	base.Task.Ticked = "[x] "
 	base.Task.Unticked = "[ ] "
 
@@ -111,28 +112,62 @@ func gaiaStyle(dark bool) ansi.StyleConfig {
 	return base
 }
 
-// palette holds the ANSI-256 codes one variant paints with. Glamour takes
-// colours as strings, not lipgloss.AdaptiveColor, so light and dark are two
-// concrete tables rather than one adaptive set.
+// palette is what one variant of the markdown renderer paints prose with.
+// Glamour takes colours as plain strings, not lipgloss.AdaptiveColor, so the
+// mode has to be resolved before the config is built — see gaiaPalette.
 type palette struct {
-	body    string
-	heading string
-	strong  string
-	emph    string
-	marker  string
-	code    string
-	// codeBG is inline code's background, and must be the ANSI-256 index of
-	// syntax.bg rather than the same hex. Chroma's formatter only ever emits
-	// 256-colour codes, so a truecolor terminal would paint a fenced block from
-	// its 256 palette and the inline span beside it from an exact RGB triple —
-	// the same colour on paper, two different greys on a terminal whose 256
-	// palette is themed.
-	codeBG   string
+	body     string
+	heading  string
+	strong   string
+	emph     string
+	code     string
 	link     string
 	linkText string
 	quote    string
 	rule     string
 	syntax   syntax
+}
+
+// gaiaPalette flattens the theme roles into the strings glamour wants.
+//
+// An answer is the largest thing on the screen, so it is also the loudest place
+// an off-palette colour can hide: this table used to paint headings bright
+// cyan, emphasis warm sand and inline code amber — three hues the product does
+// not otherwise own, inside a copper-and-graphite UI. Every prose colour is now
+// a role, and the only mode-reach in the TUI lives here (literals_test.go
+// exempts this function by name and says why).
+func gaiaPalette(dark bool) palette {
+	pick := func(c lipgloss.AdaptiveColor) string {
+		if dark {
+			return c.Dark
+		}
+		return c.Light
+	}
+	syn := lightSyntax
+	if dark {
+		syn = darkSyntax
+	}
+	return palette{
+		body:    pick(theme.Text),
+		heading: pick(theme.AccentBright),
+		// Bold and italic stay neutral. A model bolds half a dozen phrases per
+		// answer, so painting them copper turns running prose into the speckle
+		// the palette reserves for the prompt and the one primary action; the
+		// SGR attribute is the signal, the colour would only be decoration.
+		strong: pick(theme.Text),
+		emph:   pick(theme.Text),
+		// Inline code is the one span with nothing else left: the tinted box
+		// was dropped because an answer naming six symbols came out as a row of
+		// little rectangles, so colour alone has to say "this is a literal".
+		code: pick(theme.Accent),
+		// Blue for links is the one convention older than this palette, and
+		// Info is the role that already carries it elsewhere in the TUI.
+		link:     pick(theme.Info),
+		linkText: pick(theme.Info),
+		quote:    pick(theme.Dim),
+		rule:     pick(theme.Divider),
+		syntax:   syn,
+	}
 }
 
 // syntax is the fenced-code half of a palette. Its values are hex, not
@@ -155,41 +190,6 @@ type syntax struct {
 	removed  string
 }
 
-var (
-	// Dark: body lifted from the builtin's 252 to near-white so the answer is
-	// the brightest thing in the pane — the user's own question is deliberately
-	// dimmed, and the contrast between them is the point.
-	darkPalette = palette{
-		body:     "254",
-		heading:  "81",  // bright cyan
-		strong:   "231", // white
-		emph:     "222", // warm sand
-		marker:   "81",
-		code:     "215", // amber
-		codeBG:   "235", // the ANSI-256 index of syntax.bg — see palette.codeBG
-		link:     "75",
-		linkText: "81",
-		quote:    "245",
-		rule:     "240",
-		syntax:   darkSyntax,
-	}
-
-	lightPalette = palette{
-		body:     "234",
-		heading:  "25", // deep blue
-		strong:   "232",
-		emph:     "94", // brown
-		marker:   "25",
-		code:     "130", // burnt orange
-		codeBG:   "254", // the ANSI-256 index of syntax.bg — see palette.codeBG
-		link:     "26",
-		linkText: "25",
-		quote:    "241",
-		rule:     "250",
-		syntax:   lightSyntax,
-	}
-)
-
 // The syntax hues are One Half Dark / One Half Light — the same pair the rest
 // of the TUI's palette is derived from (see internal/ui/theme), and a scheme
 // that ships with Windows Terminal, GNOME Terminal and macOS Terminal, so code
@@ -199,6 +199,13 @@ var (
 // comment. Glamour's builtin puts comments at #676767, which is 2.8:1 on a dark
 // pane — the classic "comments are technically rendered" failure, where the
 // line the author wrote to explain the code is the one line nobody can read.
+//
+// These two tables are the TUI's only sanctioned colour literals outside
+// theme.go, and literals_test.go names them one by one. They cannot become
+// roles: a role is measured against the TERMINAL's background, and these are
+// measured against the fence's own slab, which is neither terminal background
+// (TestEverySyntaxColourIsLegibleOnItsOwnBackground). A fence also has to stay
+// a different colour from prose, so `text` is specifically NOT theme.Text.
 var (
 	darkSyntax = syntax{
 		bg:       "#262626",

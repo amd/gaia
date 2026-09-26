@@ -94,6 +94,8 @@ def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
         if gaia_home
         else EMBEDDED_LEMONADE_STATE
     )
+    if state_path is None:
+        return None
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -182,8 +184,23 @@ def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
     return trimmed
 
 
+def _embedded_lemonade_state_path() -> Optional[Path]:
+    """``~/.gaia/lemonade/state.json``, or None when home is unresolvable.
+
+    ``Path.home()`` raises on Windows when neither ``USERPROFILE`` nor
+    ``HOMEDRIVE``+``HOMEPATH`` is set. At module scope that turns a missing
+    optional credential into an ``import gaia`` failure (see
+    ``gaia.logger._home_log_file`` for the same guard).
+    """
+    try:
+        return Path.home() / ".gaia" / "lemonade" / "state.json"
+    except RuntimeError:
+        return None
+
+
 #: Where GAIA's embedded Lemonade records the credential it generated.
-EMBEDDED_LEMONADE_STATE = Path.home() / ".gaia" / "lemonade" / "state.json"
+#: None when the home directory cannot be resolved.
+EMBEDDED_LEMONADE_STATE = _embedded_lemonade_state_path()
 
 
 def _embedded_lemonade_api_key(base_url: Optional[str] = None) -> Optional[str]:
@@ -5021,9 +5038,18 @@ class LemonadeClient:
         self.log.info(f"Model unloaded successfully: {response}")
         return response
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self, timeout=None) -> Dict[str, Any]:
         """
         Check server health.
+
+        Args:
+            timeout: Optional requests-style timeout — a scalar, or a
+                ``(connect, read)`` tuple. Omit it for the client default
+                (``DEFAULT_REQUEST_TIMEOUT``, sized for generation). "Is the
+                server even up?" callers should pass a short one: the scalar
+                default also governs the read, so a socket that ACCEPTS and
+                then never answers (a Lemonade mid-model-load) would block a
+                liveness probe for the full 15 minutes.
 
         Returns:
             Dict containing the server status and loaded model
@@ -5032,7 +5058,9 @@ class LemonadeClient:
             LemonadeClientError: If the health check fails
         """
         url = f"{self.base_url}/health"
-        return self._send_request("get", url)
+        if timeout is None:
+            return self._send_request("get", url)
+        return self._send_request("get", url, timeout=timeout)
 
     def get_stats(self) -> Dict[str, Any]:
         """

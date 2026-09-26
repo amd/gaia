@@ -308,6 +308,12 @@
             ]
           },
           {
+            "group": "Design",
+            "pages": [
+              "spec/gaia-design-language"
+            ]
+          },
+          {
             "group": "Packaging",
             "pages": [
               "spec/electron-integration"

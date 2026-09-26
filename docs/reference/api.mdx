@@ -25,13 +25,10 @@ The server exposes one model, `gaia` — the flagship agent. Capability that use
 </Note>
 
 <Steps>
-  <Step title="Start Lemonade Server">
-    ```bash
-    lemonade-server serve --ctx-size 32768
-    ```
-  </Step>
-
   <Step title="Start GAIA API Server">
+    This brings up Lemonade Server through the daemon, at the context size your
+    device profile pins — nothing to start beforehand.
+
     ```bash
     gaia api start
     ```
@@ -79,10 +76,11 @@ The server exposes one model, `gaia` — the flagship agent. Capability that use
   </Card>
 
   <Card title="Lemonade Server" icon="server">
-    Must be running with sufficient context:
+    Must be installed — the API server starts it through the daemon and sizes
+    the context from your device profile:
 
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia init
     ```
   </Card>
 </CardGroup>
@@ -334,12 +332,12 @@ Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`]
   <Accordion title="Agent Errors" icon="triangle-exclamation">
     **Check Lemonade is running:**
     ```bash
-    curl http://localhost:13305/health
+    gaia daemon status
     ```
 
-    **Verify context size:**
+    **Start it if it isn't:**
     ```bash
-    lemonade-server serve --ctx-size 32768
+    gaia daemon start
     ```
 
     **Enable debug mode:**
@@ -354,7 +352,7 @@ Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`]
 | Issue | Solution |
 |-------|----------|
 | "Model not found" | Confirm the model id is registered in `AGENT_MODELS` — `GET /v1/models` lists what's actually available |
-| "Agent processing failed" | Ensure Lemonade is running with `--ctx-size 32768` |
+| "Agent processing failed" | Check the model server with `gaia daemon status`; start it with `gaia daemon start` |
 | "Port already in use" | Stop existing server or use `--port` flag |
 | Streaming not working | Ensure `"stream": true` in request |
 
@@ -371,14 +369,9 @@ Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`]
 **Quick Setup:**
 
 <Steps>
-  <Step title="Start Servers">
-    Start Lemonade server with extended context:
-
-    ```bash
-    lemonade-server serve --ctx-size 32768
-    ```
-
-    Start GAIA API server:
+  <Step title="Start the API Server">
+    It brings up Lemonade Server through the daemon, so this is the only
+    command you need:
 
     ```bash
     gaia api start
