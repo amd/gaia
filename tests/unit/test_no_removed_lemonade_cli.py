@@ -51,12 +51,6 @@ _PENDING = {
     "src/gaia/apps/webui/README.md",
     "src/gaia/llm/providers/lemonade.py",
     "tui/internal/ui/chat/modelcmd.go",
-    # #4181 and #3122; stdio.py also names `lemonade-server pull <model>`.
-    "hub/agents/gaia/npm/SCORECARD.md",
-    "hub/agents/gaia/npm/SKILL.md",
-    "hub/agents/gaia/python/gaia_agent/server.py",
-    "hub/agents/gaia/python/gaia_agent/stdio.py",
-    "hub/agents/gaia/python/packaging/gen_scorecard.py",
 }
 
 
