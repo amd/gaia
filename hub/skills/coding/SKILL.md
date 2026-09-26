@@ -2,18 +2,22 @@
 name: coding
 description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository. Covers finding the right file, editing safely, and proving the change works before reporting it.
 license: MIT
-version: 0.1.0
+version: 0.2.0
 metadata:
   gaia:
     security_tier: community
     permissions:
       - shell:execute:pytest
+      - shell:execute:python
+      - shell:execute:python3
+      - shell:execute:git
     tools_required:
       - read_file
       - edit_file
       - search_file_content
       - search_code_index
       - run_python
+      - run_shell_command
     provenance:
       source: starter-pack
 ---
@@ -64,13 +68,16 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest`, so run it directly. Prefer the `python -m` spelling —
-it puts the project's own directory on `sys.path`, so it works on a checkout
-that was never installed, where bare `pytest` fails to import the project:
+This skill grants `pytest` and `python`, so run the suite directly with
+`run_shell_command`. Prefer the `python -m` spelling — it puts the project's own
+directory on `sys.path`, so it works on a checkout that was never installed,
+where bare `pytest` fails to import the project:
 
 ```
 python -m pytest -q tests/
 python -m pytest -x -k discount tests/test_cart.py
+pytest -q tests/                     # same grant, same rules; for an installed project
+python util/lint.py --all --fix      # or whatever the project's own runner is
 ```
 
 `python -m` adds the current directory to the import path, not `src/`. For a
@@ -80,19 +87,34 @@ project whose package lives under `src/`, scope the path to that one command:
 PYTHONPATH=src python -m pytest -q tests/
 ```
 
-Where only `python3` exists, `python3 -m pytest` works the same way. Bare
-`pytest` carries the same grant and the same flag rules, so it is allowed too;
-reach for it only when the project is installed.
+Where only `python3` exists, `python3 -m pytest` works the same way.
 
-The grant is narrow on purpose. `--pdb` would hang waiting for a debugger nobody
-can answer, `-p <plugin>` imports arbitrary code, and `--junitxml` writes outside
-the run — all refused. If you need something the grant will not allow, say so
-rather than working around it.
+Loading this skill grants `pytest` and `python <script.py>` execution without
+another prompt. Tests and scripts are trusted project code: they can write
+files, access the network, and launch other programs, including commands the
+direct CLI policy refuses. These grants do not sandbox their effects. The
+separate `execute_python_file` tool still requires per-call approval.
 
-For a suite pytest cannot drive (npm, go, make), run it with `run_python`
-rather than writing a runner file into the project. Then report what the run actually said. If you could not run it, say that
-plainly — *"I could not execute the suite, so this is unverified"* — rather than
-implying it passed.
+`python -c "..."` is refused because the grant requires a reviewable file in the
+checkout. Write new code to a file first so the diff shows it, and review what
+it does before executing it. For a one-off calculation that should not land in
+the repository at all, `run_python` takes the snippet through the tool path
+instead — it asks for approval on every call rather than riding this grant.
+
+The rest of the grant is narrow on purpose. `--pdb` would hang waiting for a
+debugger nobody can answer, `-p <plugin>` imports arbitrary code, `--junitxml`
+writes outside the run. `python -m pytest --pdb` is refused for exactly the same
+reason `pytest --pdb` is — `-m` is not a way around a rule.
+
+For a suite `pytest` cannot drive — npm, go, cargo, make — you have no grant by
+default. GAIA ships policies for `npm`, `go`, `uv`, `pip`, `black`, `isort` and
+`ruff`, so a project skill can declare the one it needs (`shell:execute:npm`)
+and get the same three-tier treatment. `make` has no policy and will not get
+one: its argument is a target in a file, so "run `make test`" means "run
+whatever the Makefile says", which no approval prompt can honestly describe.
+
+If you could not run something, say so plainly — *"I could not execute the
+suite, so this is unverified"* — rather than implying it passed.
 
 ## Do not break what was already working
 
@@ -102,6 +124,24 @@ notice if you only look at the one.
 
 If something else fails, that is now your problem, whether or not you caused it.
 Say which of the two it is.
+
+## Committing: yours to propose, theirs to approve
+
+You have `git`. Reads — `status`, `diff`, `log`, `show`, `branch` — run straight
+through, and you should use them constantly: `git diff` before you report a
+change is the cheapest possible check that the diff is only what you meant.
+
+`add`, `commit`, `checkout`, `switch`, `restore` and `stash` each stop and show
+the user the exact command before running. That is not a formality to click
+past — write the commit message as if it is the only thing the reviewer reads,
+because for a squashed PR it is.
+
+The direct Git policy refuses `push`, `reset --hard`, `clean`, `rebase`,
+`commit --amend`, `git config`. Publishing and history-rewriting are the user's
+to run, and destroying uncommitted work has no undo anywhere. When the work is
+committed and wants pushing, **say so and stop** — *"committed on `fix/discount`;
+run `git push -u origin fix/discount` and I will open the PR"* — rather than
+looking for a spelling that gets through.
 
 ## Keep the diff to the change
 
@@ -121,9 +161,13 @@ more useful than a silent single fix.
 
 ## Scratch files are yours, not theirs
 
-Runner scripts and scratch output go in the system temp directory. Writing
-`create_doc.py` and `temp/` into the root of someone's repository leaves them in
-the next `git status`, and they did not ask for them.
+Runner scripts and scratch output go in the system temp directory — write them
+there and run them with `execute_python_file`, which does not care where the
+file lives. `python` does: its grant stops at the checkout, so a scratch script
+outside it is `execute_python_file`'s job, not the shell's.
+
+Writing `create_doc.py` and `temp/` into the root of someone's repository leaves
+them in the next `git status`, and they did not ask for them.
 
 ## Reporting a code change
 
