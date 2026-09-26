@@ -14,6 +14,12 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- "Lemonade is not reachable" errors no longer tell users to run
+  `lemonade-server serve`, a command current Lemonade installs don't have. The
+  `GET /v1/gaia/init` hint, run errors, and `/model` now say how to start
+  Lemonade on the user's own install (tray app, macOS app, service, or CLI).
+  `/model <unknown>` with nothing downloaded likewise names the download command
+  the host actually has, instead of the removed `lemonade-server pull`.
 - `gaia serve` no longer exits 0 when Ctrl+C fails to stop the sidecar. The
   error naming the surviving process and how to kill it was discarded, so the
   next `serve` hit an unexplained port conflict. It now prints that error and
