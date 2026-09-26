@@ -88,11 +88,10 @@ icon: "wrench"
 
     Or download directly from the [Lemonade v2026.39.1 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v2026.39.1).
 
-    How the server starts depends on the install, and there is no
-    cross-platform `serve` command — Lemonade removed the `lemonade-server`
-    CLI in 10.7. Windows starts `LemonadeServer.exe` from the tray icon or the
-    Start menu; Linux runs the `lemond` systemd unit; macOS installs a
-    LaunchDaemon.
+    After installation, restart your terminal and start the server. `gaia daemon` resolves and supervises it in the background, so the terminal stays free:
+    ```powershell
+    gaia daemon start
+    ```
 
     <Note>
       **Not using Lemonade?** Any OpenAI-compatible server works — llama.cpp, Ollama, vLLM, or a cloud endpoint. See the [Integration Guide](/cpp/integration#using-alternative-llm-backends) for configuration examples.
@@ -179,9 +178,9 @@ icon: "wrench"
 
     Or browse all platform options on the [Lemonade v2026.39.1 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v2026.39.1).
 
-    After installation, start the `lemond` systemd unit:
+    After installation, start the server. `gaia daemon` resolves and supervises it in the background, so the terminal stays free:
     ```bash
-    systemctl --user start lemond
+    gaia daemon start
     ```
 
     <Note>

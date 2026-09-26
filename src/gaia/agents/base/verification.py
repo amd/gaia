@@ -39,6 +39,7 @@ from gaia.agents.base.checks import (
     declares_check,
     runner_summary,
 )
+from gaia.agents.base.checks import summary_reports_failure as summary_counts_failure
 from gaia.agents.base.claims import passing_test_claim
 
 VERIFICATION_SCOPE_PREFIX = "Verification: "
@@ -100,47 +101,24 @@ def _is_scope_line(line: str) -> bool:
     return bool(_SCOPE_BODY_RE.match(_SCOPE_MARKUP_RE.sub("", line)))
 
 
-#: ``subtests?`` sits between the count and the outcome when pytest-subtests is
-#: installed ("70 passed, 19 subtests passed in 1.32s"). Without it the whole
-#: summary failed to match and a run that really did pass was called unverified.
-_PYTEST_SUMMARY_RE = re.compile(
-    r"(?m)^=*[ \t]*(?:\d+ (?:subtests? )?"
-    r"(?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)"
-    r"(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*[ \t]*$"
-)
-_UNITTEST_SUMMARY_RE = re.compile(
-    r"(?m)^Ran [1-9]\d* tests? in \d+(?:\.\d+)?s\s*\n\s*"
-    r"(OK(?: \(.*\))?|FAILED \(.*\))[ \t]*$"
-)
-
-
-def _python_run_output(result: Dict[str, Any]) -> str:
-    return "\n".join(
-        value
-        for key in ("stdout", "stderr")
-        if isinstance((value := result.get(key)), str)
-    )
-
-
 def summary_reports_failure(tool_name: str, result: Any) -> bool:
     """True when a Python run's own test summary says something failed.
 
-    A snippet that runs pytest and prints the result exits 0 whatever pytest
-    reported, so its exit code cannot decide pass or fail. The last summary
-    printed wins: a snippet may run the suite more than once.
+    A snippet that runs pytest and prints the result exits 0 whatever the
+    runner reported, so its exit code cannot decide pass or fail. Any runner
+    :func:`~gaia.agents.base.checks.runner_summary` knows counts.
     """
     if (tool_name or "").strip() not in ("execute_python_file", "run_python"):
         return False
     if not isinstance(result, dict):
         return False
-    output = _python_run_output(result)
-    summaries = list(_PYTEST_SUMMARY_RE.finditer(output))
-    if summaries and re.search(
-        r"\b[1-9]\d* (?:subtests? )?(?:failed|errors?)\b", summaries[-1].group(0)
-    ):
-        return True
-    unittest = list(_UNITTEST_SUMMARY_RE.finditer(output))
-    return bool(unittest) and unittest[-1].group(1).startswith("FAILED")
+    output = "\n".join(
+        value
+        for key in ("stdout", "stderr")
+        if isinstance((value := result.get(key)), str)
+    )
+    found = runner_summary(output)
+    return found is not None and summary_counts_failure(found[1])
 
 
 def verification_check_label(
@@ -539,8 +517,9 @@ _PYTEST_DECORATION_RE = re.compile(r"^[ \t]*=|\bin[ \t]+\d+(?:\.\d+)?m?s\b", re.
 
 
 def has_test_run_summary(output: str) -> bool:
-    """True when *output* carries a pytest or unittest summary line.
+    """True when *output* carries a test runner's summary line.
 
+    Any runner :func:`~gaia.agents.base.checks.runner_summary` knows counts.
     A line of nothing but soft counts — ``2 warnings``, ``12 skipped`` — is
     what a compiler or a downloader prints too, and reading one as "the tests
     ran" silently cancels the reminder this module exists to raise. Those count
@@ -549,6 +528,8 @@ def has_test_run_summary(output: str) -> bool:
     """
     if not output:
         return False
+    if runner_summary(output) is not None:
+        return True
     for match in _TEST_SUMMARY_RE.finditer(output):
         line = match.group(0)
         lowered = line.lower()

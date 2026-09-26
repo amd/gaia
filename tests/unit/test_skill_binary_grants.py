@@ -1994,7 +1994,11 @@ def _validation_error(host, command):
     )
 
 
-def test_python_m_pytest_without_the_grant_points_at_the_skill():
+def test_python_m_pytest_without_the_grant_points_at_the_skill(monkeypatch):
+    # Installed but ungranted: the answer is the grant, not "not installed".
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
     error = _validation_error(_Gated(), "python -m pytest -q")
     assert error is not None
     assert "shell:execute:pytest" in error["error"], error
