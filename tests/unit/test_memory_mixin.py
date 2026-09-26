@@ -3211,7 +3211,7 @@ class TestConversationConsolidation:
                 "consolidate_old_sessions",
                 side_effect=lambda **_: order.append("consolidate") or {},
             ),
-            patch.object(consol_host, "_synthesize_skills", return_value={}),
+            patch.object(consol_host, "start_skill_synthesis", return_value=None),
             patch.object(
                 consol_host._memory_store,
                 "prune",
@@ -3243,7 +3243,7 @@ class TestConversationConsolidation:
         """Real consolidation and prune; the unrelated LLM steps are stubbed."""
         with (
             patch.object(host, "reconcile_memory", return_value={}),
-            patch.object(host, "_synthesize_skills", return_value={}),
+            patch.object(host, "start_skill_synthesis", return_value=None),
         ):
             host._run_memory_post_init()
 
@@ -4054,6 +4054,16 @@ tools_required: [query_documents, read_file, remember]
 """
 
 
+#: The result shape of a pass that did no work.
+_EMPTY_PASS = {
+    "clusters": 0,
+    "stored": 0,
+    "skipped": 0,
+    "consumed": 0,
+    "capped": False,
+}
+
+
 def _chat_returning(text):
     """A chat SDK stub whose send_messages returns a response with .text == text."""
     chat = MagicMock()
@@ -4163,18 +4173,14 @@ class TestSynthesizeSkills:
             ):
                 result = mixin_host._synthesize_skills()
 
-        assert result == {"clusters": 0, "stored": 0, "skipped": 0}
+        assert result == _EMPTY_PASS
         assert store.search_skills() == []
         assert "disabled" in caplog.text.lower()
 
     def test_no_store_is_noop(self, mixin_host):
         """With no store (GAIA_MEMORY_DISABLED floor) synthesis is a clean no-op."""
         mixin_host._memory_store = None
-        assert mixin_host._synthesize_skills() == {
-            "clusters": 0,
-            "stored": 0,
-            "skipped": 0,
-        }
+        assert mixin_host._synthesize_skills() == _EMPTY_PASS
 
     def test_rerun_is_noop_and_never_deletes(self, mixin_host):
         """Reconcile issues NOOP on a re-run — the row is kept, never duplicated."""
@@ -4237,9 +4243,12 @@ class TestSynthesizeSkills:
         assert rows_after_1[0]["name"] == "summarize-unread-emails"
         pass1_id = rows_after_1[0]["id"]
 
-        # Pass 2: 2 more sessions raise the cluster's aggregate success_count; the
-        # distiller drifts the name. Match-by-meaning must UPDATE, not duplicate.
-        for sid in ["d4", "d5"]:
+        # Pass 2 sees only what pass 1 did not consume — one more
+        # min_occurrences-sized batch, which is the steady state.  It does NOT
+        # out-score the stored row on its own; what supersedes is the LINEAGE's
+        # record, the stored row's plus these.  Requiring the window to beat the
+        # row outright is what made UPDATE unreachable after the first pass.
+        for sid in ["d4", "d5", "d6"]:
             _seed_qualifying_session(store, sid, goal)
         mixin_host.chat = _chat_returning(pass2_md)
         second = mixin_host._synthesize_skills()
@@ -4249,6 +4258,16 @@ class TestSynthesizeSkills:
         assert len(visible) == 1
         assert visible[0]["name"] == "summarize-my-unread-emails"  # pass-2 name
         assert "digest" in visible[0]["markdown_body"]  # pass-2 body
+        # Six sessions of track record, not the three pass 2 happened to see.
+        assert visible[0]["success_count"] == 2 * rows_after_1[0]["success_count"]
+        assert sorted(visible[0]["provenance"]["from_sessions"]) == [
+            "d1",
+            "d2",
+            "d3",
+            "d4",
+            "d5",
+            "d6",
+        ]
         # The pass-1 row is superseded (kept, never deleted).
         old = store.search_skills(
             skill_id=pass1_id, include_superseded=True, enabled_only=False
