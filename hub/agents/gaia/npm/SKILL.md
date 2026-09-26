@@ -127,9 +127,11 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running — `gaia init` installs and starts it.
-   Qwen3.8 Flash Next needs **v2026.39.1 or newer**, the version `gaia init`
-   installs; older servers cannot load it.
+1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
+   one, so `gaia daemon start` is normally all that is needed (`gaia init`
+   also installs and starts it on first run). Qwen3.8 Flash Next needs
+   **v2026.39.1 or newer**, the version `gaia init` installs; older servers
+   cannot load it.
 2. The machine's default chat model downloaded — run `gaia init`. It picks
    `user.Qwen3.8-Flash-Next-GGUF` where it fits (a 128 GB Strix Halo) and
    `Gemma-4-E4B-it-GGUF` everywhere else, and records the pick as `default_model`
@@ -160,9 +162,9 @@ alone:
                 "min_version": "10.2.0", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
-  // The start instruction is resolved for the host's Lemonade install
-  // (tray app, macOS app, systemd service, or CLI) — render it verbatim.
-  "hint": "Local Lemonade Server is not reachable at …. Start the Lemonade app from Applications, then retry. Or set LEMONADE_BASE_URL to a running server. See https://amd-gaia.ai/docs/guides/gaia."
+  // The manual fallback ("Otherwise: …") is resolved for the host's Lemonade
+  // install (tray app, macOS app, systemd service, or CLI) — render it verbatim.
+  "hint": "Local Lemonade Server is not reachable at …. GAIA starts it automatically — run `gaia daemon start` if the background service is not running. Otherwise: Start the Lemonade app from Applications, then retry. Or set LEMONADE_BASE_URL to a running server. See https://amd-gaia.ai/docs/guides/gaia."
 }
 ```
 
