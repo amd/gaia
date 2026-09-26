@@ -172,6 +172,9 @@ def _prepare_agent(
         config.top_p = request.top_p
     if request.max_tokens is not None:
         config.max_tokens = request.max_tokens
+        # The agent loop reads its own cap per call and would otherwise ignore
+        # the config value, silently answering at the model default instead.
+        agent.max_output_tokens = request.max_tokens
 
 
 def _prepend_tool_denials(agent, content: str) -> str:

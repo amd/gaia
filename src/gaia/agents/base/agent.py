@@ -5950,10 +5950,12 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken,
                     steps_limit,
                 )
+                # Neutral wording: cancel now has several triggers (a user
+                # pressing Stop, an API client disconnecting, a stream timeout),
+                # and this text is persisted with the turn.
                 final_answer = (
-                    "The request was stopped because it exceeded the allowed "
-                    "time before completing. Try a simpler request or break it "
-                    "into smaller steps."
+                    "The request was stopped before it finished. Try again, or "
+                    "break it into smaller steps if it was taking too long."
                 )
                 break
 
