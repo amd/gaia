@@ -1287,7 +1287,11 @@ Do NOT wrap conversational replies in JSON.
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
-            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
+                          The first time the limit is hit the model gets one correction and the call is not run;
+                          a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
+                          more model call with no tool calls allowed and answers from those results; repeats that
+                          errored or were refused report the failure instead.
             min_context_size: Minimum context size required; unset uses the model/device resolver.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
