@@ -479,9 +479,7 @@ export interface SystemStatus {
     gpu_vram_gb: number | null;
     tokens_per_second: number | null;
     time_to_first_token: number | null;
-    // Device compatibility check
     processor_name: string | null;
-    device_supported: boolean;
     // LLM configuration health
     context_size_sufficient: boolean;
     model_downloaded: boolean | null;

@@ -37,6 +37,7 @@ from ..utils import (
     ensure_within_home,
     format_size,
     list_windows_drives,
+    uploads_dir,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,6 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 # All extensions allowed for upload (document types + image types)
 UPLOAD_ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS
 
-# Directory where uploaded files are stored
-UPLOADS_DIR = Path.home() / ".gaia" / "chat" / "uploads"
-
 router = APIRouter(tags=["files"])
 
 
@@ -64,7 +62,7 @@ async def upload_file(file: UploadFile = File(...)):
     """Upload a file to the server.
 
     Accepts multipart form data with a ``file`` field.  The file is saved
-    to ``~/.gaia/chat/uploads/`` with a UUID-based filename to prevent
+    to ``<GAIA_HOME>/chat/uploads/`` with a UUID-based filename to prevent
     collisions.  The original extension is preserved.
 
     Constraints:
@@ -114,11 +112,12 @@ async def upload_file(file: UploadFile = File(...)):
         )
 
     # Ensure uploads directory exists
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    upload_root = uploads_dir()
+    upload_root.mkdir(parents=True, exist_ok=True)
 
     # Generate unique filename preserving original extension
     unique_name = f"{uuid.uuid4()}{ext}"
-    dest_path = UPLOADS_DIR / unique_name
+    dest_path = upload_root / unique_name
 
     # Write file to disk
     try:

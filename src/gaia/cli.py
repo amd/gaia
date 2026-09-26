@@ -325,6 +325,9 @@ class GaiaCliClient:
         max_tokens=512,
         show_stats=False,
         logging_level="INFO",
+        base_url=None,
+        use_claude=False,
+        claude_model=None,
     ):
         self.log = self.__class__.log  # Use the class-level logger for instances
         # Set the logging level for this instance's logger
@@ -335,8 +338,12 @@ class GaiaCliClient:
         self.cli_mode = True  # Set this to True for CLI mode
         self.show_stats = show_stats
 
-        # Initialize LLM client for local inference
-        self.llm_client = create_client("lemonade", model=model)
+        if use_claude:
+            # Like `gaia chat`: --model is the local model, --claude-model the Claude one.
+            self.model = claude_model
+            self.llm_client = create_client("claude", model=self.model)
+        else:
+            self.llm_client = create_client("lemonade", model=model, base_url=base_url)
 
         self.log.debug("Gaia CLI client initialized.")
         self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
@@ -831,6 +838,8 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
 
     _ensure_webui_built(log=log)
 
+    from gaia.config import UnsafeGaiaHomeError
+
     try:
         from gaia.ui.server import create_app
 
@@ -863,6 +872,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log_level="debug" if debug else "info",
             access_log=debug,
         )
+    except UnsafeGaiaHomeError as e:
+        # The user's misconfiguration to fix: print the remedy, not a traceback.
+        # 64 is EX_USAGE, matching gaia uninstall's exit code for the same fault.
+        print(f"\nError: {e}")
+        sys.exit(64)
     except ImportError as e:
         print(f"\nMissing dependencies for Agent UI: {e}")
         print("\n   The Agent UI requires extra dependencies that are not installed.")
@@ -1102,49 +1116,6 @@ def build_parser():
         "$GAIA_CONFIG_FILE). Used to resolve default_model.",
     )
 
-    # Generic LLM backend options (available to all agents)
-    parent_parser.add_argument(
-        "--use-claude",
-        action="store_true",
-        help="Use Claude API instead of local Lemonade server",
-    )
-    parent_parser.add_argument(
-        "--use-chatgpt",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
-    parent_parser.add_argument(
-        "--claude-model",
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use when --use-claude is specified (default: claude-sonnet-4-20250514)",
-    )
-    parent_parser.add_argument(
-        "--base-url",
-        default=None,
-        help=f"Lemonade LLM server base URL (default: from LEMONADE_BASE_URL env or {DEFAULT_LEMONADE_URL})",
-    )
-    parent_parser.add_argument(
-        "--model",
-        default=None,
-        help="Model ID to use (default: auto-selected by each agent)",
-    )
-    parent_parser.add_argument(
-        "--trace",
-        action="store_true",
-        help="Save detailed JSON trace of agent execution (default: disabled)",
-    )
-    parent_parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=None,
-        help="Maximum conversation steps. Defaults to the global agent step "
-        "limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
-    )
-    parent_parser.add_argument(
-        "--list-tools",
-        action="store_true",
-        help="List available tools and exit",
-    )
     parent_parser.add_argument(
         "--stats",
         "--show-stats",
@@ -1153,14 +1124,78 @@ def build_parser():
         help="Show performance statistics",
     )
     parent_parser.add_argument(
-        "--stream",
-        action="store_true",
-        help="Enable real-time streaming of LLM responses (shows raw JSON)",
-    )
-    parent_parser.add_argument(
         "--no-lemonade-check",
         action="store_true",
         help="Skip Lemonade server check (for CI/testing without Lemonade)",
+    )
+
+    # Backend flags live on separate parents so each command accepts only the
+    # ones its handler reads; an unread flag is a usage error, not a silent no-op.
+    model_parser = argparse.ArgumentParser(add_help=False)
+    model_parser.add_argument(
+        "--model",
+        default=None,
+        help="Model ID to use (default: auto-selected by each agent)",
+    )
+    base_url_parser = argparse.ArgumentParser(add_help=False)
+    base_url_parser.add_argument(
+        "--base-url",
+        # SUPPRESS, not None: argparse copies the subparser's namespace over the
+        # parent's, so a None default here would erase a pre-subcommand
+        # `gaia --base-url ... <cmd>`. The top-level parser still defaults it.
+        default=argparse.SUPPRESS,
+        help=f"Lemonade LLM server base URL (default: from LEMONADE_BASE_URL env or {DEFAULT_LEMONADE_URL})",
+    )
+    claude_parser = argparse.ArgumentParser(add_help=False)
+    claude_parser.add_argument(
+        "--use-claude",
+        action="store_true",
+        help="Use Claude API instead of local Lemonade server",
+    )
+    claude_parser.add_argument(
+        "--claude-model",
+        default="claude-sonnet-4-20250514",
+        help="Claude model to use when --use-claude is specified (default: claude-sonnet-4-20250514)",
+    )
+    # A removed provider, not a backend capability: it is parsed only so main()
+    # can answer with the migration guidance. It therefore belongs on every
+    # command that picks an LLM backend — not just the ones that can pick
+    # Claude — or `gaia llm --use-chatgpt` dies on "unrecognized arguments".
+    removed_provider_parser = argparse.ArgumentParser(add_help=False)
+    removed_provider_parser.add_argument(
+        "--use-chatgpt",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    llm_backend_parents = [
+        model_parser,
+        base_url_parser,
+        claude_parser,
+        removed_provider_parser,
+    ]
+    trace_parser = argparse.ArgumentParser(add_help=False)
+    trace_parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Save detailed JSON trace of agent execution (default: disabled)",
+    )
+    agent_loop_parser = argparse.ArgumentParser(add_help=False)
+    agent_loop_parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Maximum conversation steps. Defaults to the global agent step "
+        "limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
+    )
+    agent_loop_parser.add_argument(
+        "--list-tools",
+        action="store_true",
+        help="List available tools and exit",
+    )
+    agent_loop_parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Enable real-time streaming of LLM responses (shows raw JSON)",
     )
 
     # Create subparsers for different commands
@@ -1173,7 +1208,7 @@ def build_parser():
     prompt_parser = subparsers.add_parser(
         "prompt",
         help="Send a single prompt to Gaia",
-        parents=[parent_parser, config_path_parser],
+        parents=[parent_parser, *llm_backend_parents, config_path_parser],
     )
     prompt_parser.add_argument(
         "message",
@@ -1195,7 +1230,13 @@ def build_parser():
     chat_parser = subparsers.add_parser(
         "chat",
         help="Interactive chat with RAG, file search, and shell execution",
-        parents=[parent_parser, config_path_parser],
+        parents=[
+            parent_parser,
+            *llm_backend_parents,
+            trace_parser,
+            agent_loop_parser,
+            config_path_parser,
+        ],
     )
     chat_parser.add_argument(
         "--query",
@@ -1290,7 +1331,9 @@ def build_parser():
         help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
     talk_parser = subparsers.add_parser(
-        "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
+        "talk",
+        help="Start voice conversation with Gaia",
+        parents=[parent_parser, *llm_backend_parents],
     )
     talk_parser.add_argument(
         "--max-tokens",
@@ -1343,7 +1386,13 @@ def build_parser():
             "all body inference running locally on Lemonade. Requires the "
             "Google connector to be configured (Settings → Connections)."
         ),
-        parents=[parent_parser],
+        parents=[
+            parent_parser,
+            model_parser,
+            base_url_parser,
+            trace_parser,
+            removed_provider_parser,
+        ],
     )
     email_parser.add_argument(
         "-q",
@@ -1481,7 +1530,7 @@ def build_parser():
     api_parser = subparsers.add_parser(
         "api",
         help="Start OpenAI-compatible API server for VSCode integration",
-        parents=[parent_parser],
+        parents=[parent_parser, base_url_parser],
     )
     api_parser.add_argument(
         "subcommand",
@@ -1870,7 +1919,7 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
     subparsers.add_parser(
         "stats",
         help="Show Gaia statistics from the most recent run.",
-        parents=[parent_parser],
+        parents=[parent_parser, base_url_parser],
     )
 
     # Add utility commands to main parser instead of creating a separate parser
@@ -1949,7 +1998,13 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
     llm_parser = subparsers.add_parser(
         "llm",
         help="Run simple LLM queries using LLMClient wrapper",
-        parents=[parent_parser, config_path_parser],
+        parents=[
+            parent_parser,
+            model_parser,
+            base_url_parser,
+            config_path_parser,
+            removed_provider_parser,
+        ],
     )
     llm_parser.add_argument("query", help="The query/prompt to send to the LLM")
     llm_parser.add_argument(
@@ -2488,7 +2543,9 @@ Examples:
 
     # MCP start command
     mcp_start_parser = mcp_subparsers.add_parser(
-        "start", help="Start the MCP bridge server", parents=[parent_parser]
+        "start",
+        help="Start the MCP bridge server",
+        parents=[parent_parser, base_url_parser],
     )
     mcp_start_parser.add_argument(
         "--host",
@@ -2501,7 +2558,7 @@ Examples:
         default=MCP_BRIDGE_PORT,
         help=f"Port to listen on (default: {MCP_BRIDGE_PORT})",
     )
-    # Note: --base-url is inherited from parent_parser
+    # Note: --base-url is inherited from base_url_parser
     mcp_start_parser.add_argument(
         "--auth-token",
         help=(
@@ -3462,6 +3519,13 @@ def _handle_schedule(args):
         sink_args = {}
         if getattr(args, "to", None):
             sink_args["to"] = args.to
+        from gaia.schedule import sinks as schedule_sinks
+
+        try:
+            schedule_sinks.validate(args.sink, sink_args)
+        except (ValueError, NotImplementedError) as exc:
+            print(f"❌ Cannot add schedule {args.name!r}: {exc}", file=sys.stderr)
+            sys.exit(1)
         schedule = Schedule(
             name=args.name,
             cron=args.cron,
@@ -3695,29 +3759,46 @@ def main():
             return
 
         if action == "stop":
+            import contextlib
             import signal
 
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
             if not os.path.exists(pid_path):
                 print("Telegram adapter is not running (no PID file).")
                 return
+            from gaia.messaging.telegram import is_adapter_process
+
             try:
                 with open(pid_path, "r", encoding="utf-8") as f:
                     pid = int(f.read().strip())
+            except (OSError, ValueError):
+                # The file is written non-atomically, so a crash mid-write
+                # leaves one that names no process worth signalling.
+                print(f"Unreadable PID file {pid_path}; removing it.")
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(pid_path)
+                return
+
+            try:
+                if not is_adapter_process(pid):
+                    print(
+                        f"PID {pid} is not a Telegram adapter; removing stale PID file."
+                    )
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(pid_path)
+                    return
+                # The adapter removes its own PID file once polling stops.
                 os.kill(pid, signal.SIGTERM)
                 print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
-                try:
-                    os.remove(pid_path)
-                except OSError:
-                    pass
             except ProcessLookupError:
                 print("Process not found; removing stale PID file.")
-                try:
+                with contextlib.suppress(FileNotFoundError):
                     os.remove(pid_path)
-                except OSError:
-                    pass
             except PermissionError:
                 print("Permission denied when attempting to stop process. Try sudo.")
+                sys.exit(1)
+            except RuntimeError as e:
+                print(f"❌ {e}", file=sys.stderr)
                 sys.exit(1)
             except OSError as e:
                 print(f"Failed to stop Telegram adapter: {e}")
@@ -3743,11 +3824,33 @@ def main():
                 # is not a URLError - see AbstractHTTPHandler.do_open.
                 pass
 
+            from gaia.messaging.telegram import is_adapter_process
+
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
+            pid = None
             if os.path.exists(pid_path):
+                try:
+                    with open(pid_path, "r", encoding="utf-8") as f:
+                        pid = int(f.read().strip())
+                except (OSError, ValueError):
+                    print(
+                        f"Telegram adapter: not running (unreadable PID file {pid_path})"
+                    )
+                    return
+            try:
+                running = pid is not None and is_adapter_process(pid)
+            except (PermissionError, RuntimeError) as e:
                 print(
-                    "Telegram adapter: PID file exists, but health check failed (may be starting or unhealthy)."
+                    f"❌ Telegram adapter: cannot verify pid {pid}: {e}",
+                    file=sys.stderr,
                 )
+                sys.exit(1)
+            if running:
+                print(
+                    "Telegram adapter: running, but health check failed (may be starting or unhealthy)."
+                )
+            elif pid is not None:
+                print(f"Telegram adapter: not running (stale PID file {pid_path})")
             else:
                 print("Telegram adapter: not running")
             return
@@ -4968,6 +5071,20 @@ def handle_email_command(args):
     """
     log = get_logger(__name__)
 
+    # The query contract has no server field, so the sidecar would ignore it.
+    base_url = getattr(args, "base_url", None)
+    if base_url:
+        print(
+            "❌ gaia email does not accept --base-url: the email agent runs "
+            "inside the GAIA daemon and uses the daemon's LEMONADE_BASE_URL.\n"
+            "   To use another Lemonade server, run `gaia daemon stop`, set\n"
+            f"   LEMONADE_BASE_URL={base_url} in this shell, and re-run\n"
+            "   `gaia email` — the daemon restarts with that server.\n"
+            "   See https://amd-gaia.ai/docs/guides/email",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     # --spec: generate the HTML endpoint spec and open it in a browser.
     # No LLM, no Lemonade, no daemon — short-circuit before any server check.
     if getattr(args, "spec", False):
@@ -5002,7 +5119,6 @@ def handle_email_command(args):
             agent="email",
             skip_if_external=True,
             # Deliberately omitted: use_claude / use_chatgpt — see AC3.
-            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)

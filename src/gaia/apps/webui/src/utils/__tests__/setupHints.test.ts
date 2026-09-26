@@ -24,7 +24,6 @@ function status(overrides: Partial<SystemStatus> = {}): SystemStatus {
         tokens_per_second: null,
         time_to_first_token: null,
         processor_name: null,
-        device_supported: true,
         context_size_sufficient: true,
         model_downloaded: true,
         default_model_name: 'Gemma-4-E4B-it-GGUF',

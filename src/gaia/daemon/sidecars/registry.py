@@ -427,6 +427,12 @@ class SidecarRegistry:
                 "tree-kill and is still alive. Inspect the process and "
                 "kill it manually before retrying."
             )
+        if manager.is_running:
+            raise StopFailedError(
+                f"agent '{agent_id}' sidecar pid {pid} exited but a child in "
+                f"its process group {pid} survived the tree-kill. Kill that "
+                "process group manually before retrying."
+            )
 
     @contextmanager
     def hold_for_mutation(self, agent_id: str):

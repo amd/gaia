@@ -116,6 +116,12 @@ the terminal UI meant building it from source.
   printed, instead of a throwaway script left in your repository. It joins the
   always-on tool set (about 250 more prompt tokens per call) and the `shell`
   bundle.
+- **`sleep`, always on.** The agent can now wait before retrying, e.g. until a
+  rate limit resets, instead of giving up; before, its only way to wait was
+  `time.sleep` inside a confirmation-gated `run_python`. Up to five minutes per
+  call, no approval needed, and Stop ends the wait within a second. It joins the
+  always-on tool set (about 190 more prompt tokens per call) and the
+  `loop_control` bundle (80 tools → 81).
 - **Image generation, reachable out of the box.** "Draw me a red bicycle" now
   generates a PNG with local Stable Diffusion and reports the path; previously
   the tools existed behind a flag nothing turned on, so the agent just said it
@@ -171,10 +177,12 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent at most 28 of its 81 tools on any one call — a
+  profile.** The model is sent about 28 of its 81 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
-  hatch the model calls mid-turn to pull in a bundle the selector missed.
+  hatch the model calls mid-turn to pull in a bundle the selector missed; that
+  bundle is appended for the rest of the turn (briefly above the cap, which the
+  next turn restores) so the prompt already sent stays cached.
   `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
   moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
 - **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`
@@ -243,6 +251,13 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The agent has to read a file before it changes it.** `edit_file`, and
+  `write_file` on an existing file, now refuse a file the agent hasn't read with
+  `read_file` in this session, or one that changed on disk since it did. Benchmark
+  runs caught the agent patching files it had never opened, from a grep snippet
+  or a guess; now it has to look first. A partial read counts, creating a file
+  needs no read, and the refusal comes before any approval prompt. It applies
+  with confirmations bypassed too.
 - **The agent sees every installed skill and loads the one that fits.**
   Previously a per-turn matcher scored the request against skill descriptions
   and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never

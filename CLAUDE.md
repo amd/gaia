@@ -552,7 +552,6 @@ gaia/
 │   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
 │   ├── scratchpad/     # Scratchpad tables backend
-│   ├── shell/          # Shell integration
 │   ├── sidecar/        # Shared building blocks for local agent sidecars
 │   ├── skills/         # Skill backend (gaia skill): loader, install, audit, signing
 │   ├── talk/           # Voice interaction SDK
@@ -657,6 +656,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
@@ -717,6 +717,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
+- `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
 
