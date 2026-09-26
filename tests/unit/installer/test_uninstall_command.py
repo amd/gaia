@@ -220,9 +220,11 @@ class TestDryRun:
         exit_code = uc.run(_ns(**kwargs), printer=captured)
 
         assert exit_code == uc.EXIT_OK, captured.text
+        # The needles use "/"; Windows prints its own separator.
+        output = captured.text.replace("\\", "/")
         for needle in expected_substrings:
             assert (
-                needle in captured.text
+                needle in output
             ), f"missing {needle!r} in dry-run output:\n{captured.text}"
         # Filesystem must be unchanged.
         gaia = fake_home / ".gaia"
