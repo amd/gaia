@@ -102,13 +102,15 @@ A prompt change passes every unit test and still breaks the agent. CLAUDE.md mak
 
 ```bash
 # Backend must be up: python -m gaia.ui.server --port 4200 --host 127.0.0.1
-gaia eval agent --category <category> --agent-type <type>
+gaia eval agent --category <category>
 # → prints the run dir; scorecard lands at <run-dir>/scorecard.json
 
 gaia eval agent --compare \
-  tests/fixtures/eval_baselines/<model>/scorecard_<category>.json \
+  tests/fixtures/eval_baselines/gaia-flagship/scorecard_<category>.json \
   <run-dir>/scorecard.json          # --compare only DIFFS; it does not run an eval
 ```
+
+No flagship baseline is committed yet, so `--compare` has nothing to diff against; report the scores you measured and say the run had no baseline. Never hand-author or copy forward a number to fill the gap.
 
 - **Run evals serially.** Never two `gaia eval agent` processes at once — they race-evict each other's models. Precheck: `ps aux | grep "gaia eval" | grep -v grep | wc -l` must print `0`.
 - **A regression gets fixed before you commit.** Re-run after the fix.

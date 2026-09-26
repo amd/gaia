@@ -56,6 +56,13 @@ FIXTURE_DIR = (
 _PROFILES_WITHOUT_VLM = frozenset({"chat"})
 
 
+class _FixtureHome(type(Path())):
+    """Keep the fixed Linux prompt's home spelling on Windows hosts too."""
+
+    def __str__(self):
+        return super().__str__().replace("\\", "/")
+
+
 @contextlib.contextmanager
 def chat_agent_build_context(
     profile: str,
@@ -125,7 +132,7 @@ def chat_agent_build_context(
             )
             stack.enter_context(patch("platform.machine", return_value="x86_64"))
             stack.enter_context(
-                patch.object(Path, "home", return_value=Path("/fake/home"))
+                patch.object(Path, "home", return_value=_FixtureHome("/fake/home"))
             )
             with stack:
                 agent = ChatAgent.__new__(ChatAgent)

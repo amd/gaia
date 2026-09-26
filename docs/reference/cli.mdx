@@ -93,6 +93,8 @@ gaia --ui --base-url https://your-server:13305/api/v1
 
 Agents stop after a maximum number of reasoning/tool steps. The default is **50**, applied consistently across the CLI, the Agent UI, and background runs.
 
+An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. If that last call fails, you get the step-limit notice plus a line saying why the summary couldn't be written.
+
 - **Per-invocation:** pass `--max-steps <n>` to any agent command (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
 
@@ -432,7 +434,7 @@ On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tr
 </Note>
 
 <Note>
-`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. Both stop paths for the API server — `gaia api stop` and `python -m gaia.api.app stop` — use the same targeting.
+`--port` only targets a socket that is *listening* on exactly that port — clients connected to it, and servers on a port that merely shares a prefix, are left alone. Before killing, it checks the owning process: GAIA's servers run under a Python or Node interpreter, so a native service (a database, `svchost`, `nginx`) on a mistyped port gets a refusal message instead of a `kill -9`. Port-listing and forceful termination commands time out after five seconds and report inspection failures. If only some listeners are terminated, the command reports the killed, refused, and failed processes and exits 1. An empty port exits 0 because the requested stopped state already holds. `--lemonade` propagates failures from its port-based stop path. Both stop paths for the API server — `gaia api stop` and `python -m gaia.api.app stop` — use the same targeting.
 </Note>
 
 ### Agent Command
@@ -1024,6 +1026,39 @@ gaia telegram stop
 
 ---
 
+### Slack Command
+
+<Card title="Slack" icon="slack" href="/guides/slack">
+  Drive the flagship GAIA agent from a Slack direct message, over Socket Mode.
+</Card>
+
+```bash
+gaia slack setup
+gaia slack start --allowed-users U024BE7LH
+gaia slack status
+gaia slack stop
+```
+
+**Subcommands & options:**
+
+| Subcommand | Option | Default | Description |
+|-----------|--------|---------|-------------|
+| `setup` | `--no-browser` | false | Print the pre-filled create-app URL instead of opening a browser. |
+| `setup` | `--print-url` | false | Print only the create-app URL and exit, for a caller running its own prompts (the TUI's setup panel). |
+| `start` | `--allowed-users` (required) | – | The one Slack member ID allowed to use the agent. Starting with none, or with more than one, is refused. |
+| `start` | `--agent-command` | `gaia-agent` | Command that starts the agent child. |
+| `start` | `--deny-gated-tools` | false | Refuse every tool that would ask for approval, instead of offering buttons. |
+| `start` | `--upload-root` | your home directory | Directory a written file may be uploaded from. Repeatable. |
+| `start` | `--background` | false | Record a PID file so `gaia slack stop` can find the process. |
+| `stop` | – | – | Stop a bridge started with `--background`; clears a stale PID file. |
+| `status` | `--json` | false | Emit detection, configuration, and liveness as JSON. |
+| `connect` | – | – | Store a pair of tokens read from stdin — app-level token first, bot token second. Tokens never go in argv, where `ps` would show them. |
+| `decline` | `--never` | false | Record that you don't want Slack set up; `--never` stops the TUI offering it again. |
+
+[→ Slack Guide](/guides/slack)
+
+---
+
 ## API Server
 
 <Card title="API Server" icon="server" href="/reference/api">
@@ -1393,6 +1428,50 @@ environment variable; see [the Microsoft connector guide](/connectors/microsoft#
 
 ---
 
+## AMD LLM Gateway
+
+Runs GAIA agents on gateway-hosted models — larger on-prem models and frontier
+models — alongside local inference. Requires **Lemonade Server 11.8.0+**.
+
+You enter your token once. Lemonade holds it in memory and forgets it on
+restart, so GAIA keeps a copy in your **OS credential store** (DPAPI, Keychain,
+SecretService) and replays it — encrypted at rest, never in a GAIA file.
+
+```bash
+gaia gateway install --base-url https://llm-api.amd.com/Unified/v1  # register the gateway
+gaia gateway auth                     # prompts for the token without echo
+gaia gateway status                   # registration, auth state, active model
+gaia gateway models                   # what the gateway offers
+gaia gateway enable amd.Claude-Opus-5 # add it to your enabled set
+gaia gateway use amd.Claude-Opus-5    # make it the default for chat/llm/prompt
+gaia gateway test "Say hello"         # end-to-end round trip
+gaia gateway auth --no-remember       # ask me every restart instead
+gaia gateway logout                   # drop Lemonade's copy, keep the stored one
+gaia gateway logout --forget          # also delete it from the credential store
+gaia gateway uninstall                # remove the provider
+```
+
+| Flag | Command | Purpose |
+|------|---------|---------|
+| `--base-url` | `install` | Gateway OpenAI-compatible base URL |
+| `--auth-header-name` | `install` | Auth header name (default `Ocp-Apim-Subscription-Key`) |
+| `--auth-header-prefix` | `install` | Header value prefix (default empty — the AMD gateway takes a bare key) |
+| `--skip-probe` | `install` | Register without first testing the gateway |
+| `--token` | `auth` | Token value — prefer the prompt, which keeps it out of shell history |
+| `--token-stdin` | `auth` | Read the token from stdin — best for scripts |
+| `--no-remember` | `auth` | Do not store the token; you are asked again after a restart |
+| `--forget` | `logout` | Also delete the stored token |
+| `--model` | `test` | Model to test (default: the active gateway model) |
+
+Gateway models are namespaced `amd.<model>` and work anywhere a local model
+does. `LEMONADE_AMD_API_KEY` in **Lemonade's** environment still takes
+precedence over a stored token; if both are set, Lemonade says so rather than
+silently choosing.
+
+[→ LLM Gateway Guide](/guides/llm-gateway)
+
+---
+
 ## Configuration
 
 GAIA keeps a small persistent config at `~/.gaia/config.json` (override the
@@ -1567,7 +1646,7 @@ get a 401. `start` writes them to a file you source rather than printing the key
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 11.8.1 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.39.1 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:
@@ -1718,7 +1797,7 @@ gaia eval agent [OPTIONS]
 | `--scenario` | string | all | Run a specific scenario by ID |
 | `--category` | string | all | Run all scenarios in a category |
 | `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
-| `--agent-type` | string | backend default | Agent registration ID to target (e.g. `gaia-lite`); scenarios run against this agent |
+| `--agent-type` | string | `gaia` | Agent registration ID to score. Every scenario runs against this one agent, so a scorecard names a single agent and two scorecards are comparable. Override only to measure a different agent — and never compare the result to a scorecard captured under another one |
 | `--model` | string | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
 | `--iterations` | integer | `1` | Run each scenario N times for reliability measurement |
 | `--keep-sessions` | flag | false | Don't delete Agent UI sessions after eval — leave them for manual inspection |
@@ -1736,6 +1815,7 @@ gaia eval agent [OPTIONS]
 | `--scenario-dir` | string | -- | Additional scenario directory to scan (repeatable) |
 | `--corpus-dir` | string | -- | Additional corpus directory to scan (repeatable) |
 | `--tag` | string | -- | Run only scenarios with this tag (repeatable, OR logic) |
+| `--exclude-tag` | string | -- | Skip scenarios carrying this tag (repeatable; applied *after* `--tag`/`--category`) |
 | `--output-format` | choice | -- | Output format: `json`, `markdown`, or `junit` |
 
 **Examples:**
@@ -1804,10 +1884,11 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 
 ### Flagship Agent Tasks
 
-Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, quality, honesty, tokens, steps and runtime, against main's committed results.
+Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, tested changes, quality, honesty, tokens, steps and runtime, against main's committed results.
 
 ```bash
 gaia eval tasks run --suite core                   # Run the core tasks, then judge them
+gaia eval tasks run --suite adversarial            # Only the trap tasks (red suite, flaky test, hang, ...)
 gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
 gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
 gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
@@ -1976,7 +2057,7 @@ Author and manage agent skills. A skill is a directory whose only required file 
 gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
 gaia skill deltas <name> [OPTIONS]                                # what an agent LEARNED
 gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
-gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
+gaia skill {search,install,remove,lock,promote,publish,keygen,trust} [OPTIONS] # marketplace + trust
 ```
 
 Skills are discovered from three roots, highest precedence first:
@@ -2000,6 +2081,7 @@ Skills are discovered from three roots, highest precedence first:
 | `search [query]` | Search the Agent Hub's skills lane |
 | `install <name[@range]>` | Install a published skill into `~/.gaia/skills/` |
 | `remove <name>` | Delete an installed skill and drop its lock entry |
+| `promote <name>` | Trust a **captured** skill's code after a clean audit — until then its `tools.py` stays inert |
 | `publish <dir>` | Validate, audit, sign, and publish a skill to the hub |
 | `keygen` | Generate an Ed25519 publisher key for signing |
 | `trust {list,add,remove}` | Manage the public keys whose signatures this machine trusts |
@@ -2166,7 +2248,21 @@ Skills are discovered from three roots, highest precedence first:
     NAME                         VERSION    TIER          TOOLS  DESCRIPTION
     web-research                 1.2.0      community     1      Search the web and summarize results
     incident-review              0.3.1      experimental  0      Structure a postmortem from an incident log
+
+    Catalog: hub, fetched just now
     ```
+
+    The trailing line is the catalog's age. Offline still works — GAIA serves the
+    cached catalog rather than refusing — but it says how old that copy is, and
+    warns loudly once it passes a week:
+
+    ```
+    ⚠ This catalog was last refreshed 93 days ago — over 7 days old. The hub is
+      unreachable, so skills published since are missing and skills unpublished
+      since are still listed, including any whose security tier changed.
+    ```
+
+    `--json` carries the same facts as `age_seconds`, `age_text`, and `stale`.
   </Tab>
 
   <Tab title="install">
@@ -2190,6 +2286,97 @@ Skills are discovered from three roots, highest precedence first:
     bundle's `SIGNATURE.json` over every file, then installs at
     `min(claimed tier, tier the signature earned)`. Nothing is written until every
     gate passes.
+  </Tab>
+
+  <Tab title="lock">
+    ```bash
+    gaia skill lock [--check | --relock] [--json]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--check` | Report drift, change nothing (the default) |
+    | `--relock` | Re-record the current state as intended |
+    | `--json` | Emit JSON instead of text |
+
+    Compares every skill in `~/.gaia/skills` against `skill-lock.json` — version,
+    the tier install enforced, and a digest of the files — and reports skills the
+    lock has lost track of plus skills it tracks that are gone. Exits `4` when
+    anything differs, `0` when the lock and the disk agree.
+
+    ```
+    ⚠ 2 difference(s) between ~/.gaia/skills and skill-lock.json (1 blocking, 1 advisory):
+
+    web-research
+      ✗ [content] The files in ~/.gaia/skills/web-research no longer hash to the
+        digest recorded at install — something was added, removed, or edited.
+          → Reinstall the attested copy with 'gaia skill install web-research --force'.
+    my-notes
+      ⚠ [untracked] 'my-notes' is installed but skill-lock.json does not track it.
+          → Expected if you created, imported, or migrated it.
+    ```
+
+    Untracked skills are normal right after `create` / `import` / `migrate`;
+    `--relock` starts tracking them as `source: local`.
+
+    <Note>
+    **After upgrading from a build that predates content digests**, skills
+    installed by the older build have nothing to compare against. They report as
+    *unverifiable*, not as changed — `gaia skill list` says so in those words and
+    still exits `0`:
+
+    ```
+    ⚠ 2 skill(s) in ~/.gaia/skills predate content digests, so skill-lock.json
+      cannot verify them:
+    ```
+
+    `gaia skill lock` still exits `4` here: it is an explicit verification verb,
+    and "could not verify" is not "verified clean". Don't gate CI on it without
+    running `--relock` first. Locally-authored and `experimental` skills are
+    recorded by that one command; a `community` / `verified` one needs
+    `gaia skill install <name> --force` instead (see the warning below).
+
+    A **corrupt or future-schema** `skill-lock.json` is different: it is reported
+    alongside the `gaia skill list` inventory (exit `4`), and every skill in
+    `~/.gaia/skills` refuses to load until the file is fixed or deleted —
+    including purely local ones. Nothing can tell an attested skill from a local
+    one while the lock is unreadable, so loading anyway would let corrupting one
+    file switch the check off.
+    </Note>
+
+    <Warning>
+    `--relock` **refuses** to re-record a `community` or `verified` skill whose
+    files changed, **or one that has no recorded digest at all**. Writing a digest
+    in either case would leave the lock asserting a publisher signature over bytes
+    that signature never covered — and the no-digest case is where every upgrade
+    from a pre-digest build starts, so it is the likeliest way to launder an
+    attestation, not the rarest. Reinstall it, or `gaia skill remove` then
+    `gaia skill import` to keep the edit at `experimental`.
+    </Warning>
+  </Tab>
+
+  <Tab title="promote">
+    ```bash
+    gaia skill promote <name>
+    ```
+
+    The trust step for skills the agent **captured** in-conversation (the
+    flagship's `capture_skill` tool: pasted `SKILL.md` text, a URL, or a local
+    folder/zip). A captured skill's instructions load immediately, but any
+    `tools.py`/scripts it carries stay **inert** — `load_skill` injects the body
+    and defers tool registration. `promote` re-runs the full security audit on
+    the installed directory and, **only on an `ALLOW` verdict**, marks the code
+    trusted so the next load registers its tools. Trust is bound to the audited
+    bytes: edit the skill afterwards and its code defers again until
+    re-promoted.
+
+    `REVIEW`/`BLOCK` print the findings and refuse (exit `5`/`6`), revoking any
+    earlier trust. This is deliberately a terminal command — the agent cannot
+    call it, so a chat approval can never enable captured code.
+
+    Not to be confused with `gaia skill trust`, which manages the **signing
+    keys** this machine accepts for hub installs. `promote` trusts one local
+    captured skill's code, audit-gated — nothing else.
   </Tab>
 
   <Tab title="publish">
@@ -2269,8 +2456,8 @@ stamp is a provenance claim, not a runtime sandbox.
 
 Hub installs are tracked in `~/.gaia/skills/skill-lock.json`. Discovery answers
 *what is on disk*; the lock answers what was **requested**, what **resolved**, what
-the artifact **hashed** to, who **signed** it, and which tier it was installed at
-after the ceiling was applied:
+the artifact and the installed files **hashed** to, who **signed** it, and which
+tier it was installed at after the ceiling was applied:
 
 ```json
 {
@@ -2285,6 +2472,7 @@ after the ceiling was applied:
       "hub_url": "https://hub.amd-gaia.ai",
       "artifact_sha256": "9f2c…",
       "artifact_filename": "web-research-1.2.0.zip",
+      "content_digest": "sha256:4b1d…",
       "claimed_tier": "community",
       "attested_tier": "community",
       "installed_tier": "community",
@@ -2302,8 +2490,25 @@ after the ceiling was applied:
 }
 ```
 
-Only hub installs are tracked — a skill from `create` or `import` has no hub
-provenance to record.
+`gaia skill install` writes `source: "hub"` entries; a skill from `create` or
+`import` has no hub provenance, so install never invents one. `gaia skill lock
+--relock` may record it as `source: "local"`, which claims exactly the origin it
+has.
+
+`content_digest` covers the **installed** directory (after the tier re-stamp), not
+the downloaded archive. That is what makes post-install tampering detectable:
+`gaia skill lock` compares against it, and a `community` / `verified` skill whose
+files no longer match **refuses to load** — those bytes are not the ones the
+signature covered, so the tier badge no longer means anything. An `experimental`
+or locally-authored skill warns and keeps working; nothing attested it, and
+editing a skill you wrote is the normal workflow.
+
+<Note>
+`skill-lock.json` has no integrity protection of its own — anyone who can write
+to it can rewrite a digest. It defends against tampering with the *skill
+directory* (a swapped bundle, an edited manifest, a downgraded version), which
+until now was entirely silent.
+</Note>
 
 **Examples:**
 
@@ -2342,6 +2547,12 @@ gaia skill install web-research@^1.2
 gaia skill info web-research               # tier the signature actually earned
 gaia skill install some-skill --allow-experimental
 gaia skill remove web-research
+```
+
+```bash Verify nothing changed since install
+gaia skill lock                        # exits 4 if anything drifted
+gaia skill lock --json | jq '.drifts[] | select(.fatal)'
+gaia skill lock --relock               # accept your own edits
 ```
 
 ```bash Publish your own
@@ -2413,6 +2624,10 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 ## Schedule
 
 Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
+
+The running daemon reloads schedules every second, so adding, pausing, resuming, removing, or editing a schedule does not require a restart. Pausing or removing a schedule prevents future runs; it does not interrupt a run already in progress.
+
+A run that comes due while the daemon is running but the machine is asleep or busy still fires once the daemon catches up, as long as that is within an hour of the due time; several missed runs collapse into one. A run more than an hour late, or one that comes due while the same schedule's previous run is still going, is skipped and logged at WARNING with the schedule name. A run that came due while the daemon itself was not running is not replayed on restart.
 
 ```bash
 gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
@@ -3154,7 +3369,7 @@ gaia kill --port 13305
 This command will:
 - Find the process ID (PID) bound to the specified port
 - Forcefully terminate that process
-- Provide feedback about success or failure
+- Report killed, refused, and failed listeners; exit 1 on any refusal or failure. An empty port is a successful no-op (exit 0). Listing and forceful termination commands each have a five-second timeout.
 
 ---
 

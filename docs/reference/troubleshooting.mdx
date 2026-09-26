@@ -85,6 +85,26 @@ icon: "bug"
     **Workaround:** To skip the Agent UI frontend build entirely (the CLI still works),
     pass `--skip-webui-build` or set `GAIA_SKIP_WEBUI_BUILD=1`.
   </Accordion>
+
+  <Accordion title="gaia init reports a Launchpad outage (Linux)" icon="cloud-slash">
+    **Cause:** Lemonade is distributed on Linux only through `ppa:lemonade-team/stable`,
+    hosted on Canonical's Launchpad. When Launchpad cannot serve the PPA's signing key or
+    its package index, nothing about your machine is wrong — the package source is
+    temporarily unreachable.
+
+    **Solution:** Wait a few minutes and re-run `gaia init`. Check
+    [status.canonical.com](https://status.canonical.com/) if it persists.
+
+    **Example errors:**
+    ```
+    W: Failed to fetch https://ppa.launchpadcontent.net/lemonade-team/stable/ubuntu/dists/noble/InRelease  503  Service Unavailable
+    ERROR: b'GPGKeyTemporarilyNotFoundError'
+    ```
+
+    Do not run `sudo dpkg --configure -a` for this — your apt state is fine. If you see
+    `E: Unable to locate package lemonade-server` on an older GAIA, this outage is the
+    likely cause rather than a missing or renamed package.
+  </Accordion>
 </AccordionGroup>
 
 ---
@@ -438,7 +458,7 @@ icon: "bug"
     `gaia eval agent --compare` only *diffs* scorecards — it does not run an eval.
     - **Fix**: Run the eval first (`gaia eval agent --category <cat>`); it prints the run dir and writes `<run-dir>/scorecard.json`.
     - **Then**: `gaia eval agent --compare <baseline>/scorecard.json <run-dir>/scorecard.json`.
-    - **Baseline**: pick the committed baseline matching your model under `tests/fixtures/eval_baselines/` — don't rely on mtime sorting.
+    - **Baseline**: flagship baselines live in `tests/fixtures/eval_baselines/gaia-flagship/`. None is committed yet, so until the first one lands there is no regression verdict to report, only the scores the run measured.
   </Accordion>
 
   <Accordion title="Eval runs fail with chaotic context/model errors" icon="clipboard-question">

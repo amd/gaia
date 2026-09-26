@@ -45,7 +45,7 @@ flowchart TD
     MANIFEST(["eval/corpus/manifest.json"]) --> RUNNER
     PROMPTS(["eval/prompts/*.md\n(simulator · judge_turn · judge_scenario)"]) --> RUNNER
 
-    RUNNER -->|"claude -p subprocess\n--output-format json\n--json-schema\n--mcp-config eval/mcp-config.json\n--max-budget-usd"| EVAL(["Eval Agent\n(claude-sonnet-4-6)"])
+    RUNNER -->|"claude -p subprocess\n--output-format json\n--json-schema\n--mcp-config eval/results/{run_id}/\nmcp-config.resolved.json\n--max-budget-usd"| EVAL(["Eval Agent\n(claude-sonnet-4-6)"])
 
     EVAL -->|"MCP tool calls\n(create_session · send_message\nindex_document · get_messages\ndelete_session)"| MCPS(["gaia-agent-ui\nMCP Server"])
 
@@ -541,12 +541,12 @@ gaia eval agent --audit-only
 
 Runs a static analysis of the Agent UI's internal constraints without making any LLM calls:
 
-- **History window size** (`_MAX_HISTORY_PAIRS` in `_chat_helpers.py`)
-- **Message truncation limits** (`_MAX_MSG_CHARS`)
+- **History window size** (`_MAX_PAIRS` in `_chat_helpers.py`)
+- **Message truncation limits** (`_MAX_CHARS`)
 - **Tool result persistence** in conversation history
 - **Agent persistence model** (stateless per-message vs. persistent)
 
-The audit flags which scenarios will be automatically `BLOCKED_BY_ARCHITECTURE` and provides recommendations (e.g., "increase `_MAX_HISTORY_PAIRS` to 10+"). Run this before the full benchmark to understand expected failures due to architecture limits rather than AI quality.
+The audit flags which scenarios will be automatically `BLOCKED_BY_ARCHITECTURE` and provides recommendations (e.g., "increase `_MAX_PAIRS` to 10+"). Run this before the full benchmark to understand expected failures due to architecture limits rather than AI quality.
 
 ---
 
@@ -559,6 +559,7 @@ After a run, results are written to `eval/results/<run_id>/`:
 | `scorecard.json` | Machine-readable results with per-scenario details, scores, and cost |
 | `summary.md` | Human-readable pass/fail report with emoji status icons |
 | `traces/<scenario_id>.json` | Full per-scenario trace (turns, dimension scores, reasoning) |
+| `mcp-config.resolved.json` | The MCP config each `claude -p` subprocess ran with. `eval/mcp-config.json` is a template; its `python` is rewritten to the interpreter running the eval |
 | `fix_log.json` | Written by `--fix` mode: list of files changed and rationale per fix |
 | `eval/results/baseline.json` | Saved baseline (written by `--save-baseline`) |
 
