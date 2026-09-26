@@ -5,6 +5,42 @@
 
 import { create } from 'zustand';
 import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData } from '../types';
+import { applyTheme } from '../utils/theme';
+import { log } from '../utils/logger';
+
+/**
+ * Read a UI preference, saying so when the store is unreadable.
+ *
+ * Storage throws in private-browsing and sandboxed-iframe contexts; the
+ * preference is cosmetic, so the default stands in rather than failing the
+ * whole store's construction -- but never without a trace.
+ */
+function readPref(key: string, fallback: string): string {
+    if (typeof window === 'undefined') return fallback;
+    try {
+        return localStorage.getItem(key) || fallback;
+    } catch (err) {
+        log.system.warn(
+            `Preference "${key}" unreadable, using "${fallback}". ` +
+                'localStorage is blocked -- check private-browsing or site-data settings.',
+            err,
+        );
+        return fallback;
+    }
+}
+
+/** Persist a UI preference. Never throws: a zustand setter must still update state. */
+function writePref(key: string, value: string): void {
+    try {
+        localStorage.setItem(key, value);
+    } catch (err) {
+        log.system.warn(
+            `Preference "${key}" not saved -- it will reset on reload. ` +
+                'localStorage is blocked -- check private-browsing or site-data settings.',
+            err,
+        );
+    }
+}
 
 interface ChatState {
     // Agents
@@ -127,37 +163,28 @@ interface ChatState {
 export const useChatStore = create<ChatState>((set, get) => ({
     // Agents
     agents: [],
-    activeAgentId: (() => {
-        try { return localStorage.getItem('gaia-active-agent-id') || 'chat'; }
-        catch { return 'chat'; }
-    })(),
+    activeAgentId: readPref('gaia-active-agent-id', 'chat'),
     setAgents: (agents) => set({ agents }),
     setActiveAgentId: (id) => {
-        try { localStorage.setItem('gaia-active-agent-id', id); } catch { /* noop */ }
+        writePref('gaia-active-agent-id', id);
         set({ activeAgentId: id });
     },
     agentsError: null,
     setAgentsError: (error) => set({ agentsError: error }),
 
     // Device selection
-    activeDevice: (() => {
-        try { return localStorage.getItem('gaia-active-device') || 'gpu'; }
-        catch { return 'gpu'; }
-    })(),
+    activeDevice: readPref('gaia-active-device', 'gpu'),
     setActiveDevice: (device) => {
-        try { localStorage.setItem('gaia-active-device', device); } catch { /* noop */ }
+        writePref('gaia-active-device', device);
         set({ activeDevice: device });
     },
     detectedDevices: ['gpu'],
     setDetectedDevices: (devices) => set({ detectedDevices: devices }),
 
     // Model-size tier selection (#1162)
-    activeModelTier: (() => {
-        try { return localStorage.getItem('gaia-active-model-tier') || 'full'; }
-        catch { return 'full'; }
-    })(),
+    activeModelTier: readPref('gaia-active-model-tier', 'full'),
     setActiveModelTier: (tier) => {
-        try { localStorage.setItem('gaia-active-model-tier', tier); } catch { /* noop */ }
+        writePref('gaia-active-model-tier', tier);
         set({ activeModelTier: tier });
     },
 
@@ -295,10 +322,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setBackendConnected: (connected) => set({ backendConnected: connected }),
 
     // UI
-    theme: (() => {
-        try { return (localStorage.getItem('gaia-chat-theme') as 'light' | 'dark') || 'dark'; }
-        catch { return 'dark'; }
-    })(),
+    theme: readPref('gaia-chat-theme', 'dark') as 'light' | 'dark',
     showDocLibrary: false,
     showFileBrowser: false,
     showSettings: false,
@@ -308,19 +332,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     toggleTheme: () =>
         set((state) => {
             const next = state.theme === 'dark' ? 'light' : 'dark';
-            try { localStorage.setItem('gaia-chat-theme', next); } catch { /* noop */ }
-            document.documentElement.setAttribute('data-theme', next);
+            writePref('gaia-chat-theme', next);
+            applyTheme(next);
             return { theme: next };
         }),
     sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
-    sidebarCollapsed: (() => {
-        try { return typeof window !== 'undefined' && localStorage.getItem('gaia-chat-sidebar-collapsed') === 'true'; }
-        catch { return false; }
-    })(),
-    sidebarWidth: (() => {
-        try { return typeof window !== 'undefined' ? parseInt(localStorage.getItem('gaia-chat-sidebar-width') || '300', 10) : 300; }
-        catch { return 300; }
-    })(),
+    sidebarCollapsed: readPref('gaia-chat-sidebar-collapsed', 'false') === 'true',
+    sidebarWidth: parseInt(readPref('gaia-chat-sidebar-width', '300'), 10) || 300,
     isLoadingMessages: false,
     pendingPrompt: null,
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
@@ -338,16 +356,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     toggleSidebarCollapsed: () =>
         set((state) => {
             const next = !state.sidebarCollapsed;
-            try { localStorage.setItem('gaia-chat-sidebar-collapsed', String(next)); } catch { /* noop */ }
+            writePref('gaia-chat-sidebar-collapsed', String(next));
             return { sidebarCollapsed: next };
         }),
     setSidebarCollapsed: (collapsed) => {
-        try { localStorage.setItem('gaia-chat-sidebar-collapsed', String(collapsed)); } catch { /* noop */ }
+        writePref('gaia-chat-sidebar-collapsed', String(collapsed));
         set({ sidebarCollapsed: collapsed });
     },
     setSidebarWidth: (width) => {
         const clamped = Math.max(200, Math.min(500, width));
-        try { localStorage.setItem('gaia-chat-sidebar-width', String(clamped)); } catch { /* noop */ }
+        writePref('gaia-chat-sidebar-width', String(clamped));
         set({ sidebarWidth: clamped });
     },
     setLoadingMessages: (loading) => set({ isLoadingMessages: loading }),

@@ -27,28 +27,21 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
   <Tab title="Windows">
     1. Follow the [Quickstart](/quickstart) to install GAIA
     2. Open PowerShell and run `gaia` to launch the Agent UI, or `gaia --cli` for terminal chat
-    3. GAIA automatically starts Lemonade Server when needed, or start manually:
 
-    ```bash
-    lemonade-server serve
-    ```
+    GAIA starts Lemonade Server when it needs it, so there is nothing to launch first.
   </Tab>
 
   <Tab title="Linux">
     1. Install from source: Follow [Linux Installation](/quickstart)
-    2. Install Lemonade Server from [lemonade-server.ai](https://www.lemonade-server.ai)
-    3. Start the server:
-
-    ```bash
-    lemonade-server serve
-    ```
-
-    4. Verify installation:
+    2. Install Lemonade Server with `gaia init`, or from [lemonade-server.ai](https://www.lemonade-server.ai)
+    3. Verify installation:
 
     ```bash
     gaia -v
     gaia llm "Hello, world!"
     ```
+
+    `gaia llm` starts Lemonade Server through the daemon on first use.
   </Tab>
 </Tabs>
 
@@ -878,7 +871,7 @@ gaia prompt "MESSAGE" [OPTIONS]
 | `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device (Ryzen AI for `npu`) |
 | `--base-url` | string | `$LEMONADE_BASE_URL` or local | Lemonade server to send the prompt to (e.g. `https://host:13305/api/v1`) |
 | `--use-claude` | flag | false | Answer with the Claude API instead of Lemonade. Needs `ANTHROPIC_API_KEY` |
-| `--claude-model` | string | claude-sonnet-4-20250514 | Claude model used with `--use-claude`; `--model` is ignored then |
+| `--claude-model` | string | `claude-sonnet-5` | Claude model used with `--use-claude`; `--model` is ignored then |
 | `--config` | path | `~/.gaia/config.json` | GAIA config file used to resolve `default_model` (or `$GAIA_CONFIG_FILE`) |
 | `--stats` | flag | false | Show performance statistics |
 
@@ -974,15 +967,21 @@ gaia talk [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | auto | Model ID to use (default: auto-selected by each agent) |
-| `--max-tokens` | integer | 512 | Maximum tokens to generate |
+| `--model` | string | `Gemma-4-E4B-it-GGUF` | Model for the conversation (also what the Lemonade pre-flight loads) |
+| `--max-tokens` | integer | 512 | Maximum tokens per reply |
+| `--use-claude` | flag | false | Use the Claude API instead of local Lemonade (needs `ANTHROPIC_API_KEY`) |
+| `--use-chatgpt` | flag | false | **Removed.** Passing it exits with migration guidance — configure the model in Lemonade and use `--base-url` |
+| `--claude-model` | string | `claude-sonnet-5` | Claude model, used with `--use-claude` |
+| `--base-url` | string | `LEMONADE_BASE_URL` or `http://localhost:13305/api/v1` | Lemonade server URL |
 | `--no-tts` | flag | false | Disable text-to-speech |
 | `--audio-device-index` | integer | auto-detect | Audio input device index |
 | `--whisper-model-size` | string | base | Whisper model [tiny, base, small, medium, large] |
-| `--silence-threshold` | float | 0.5 | Silence threshold in seconds |
+| `--silence-threshold` | float | 0.5 | Seconds of silence that end your turn |
 | `--mic-threshold` | float | 0.003 | Microphone amplitude threshold for voice detection (lower = more sensitive) |
-| `--stats` | flag | false | Show performance statistics |
+| `--stats`, `--show-stats` | flag | false | Print performance statistics after each reply |
 | `--index, -i` | path | - | PDF document for voice Q&A |
+
+The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop or microphone fails.
 
 **Examples:**
 
@@ -997,6 +996,10 @@ gaia talk --index manual.pdf
 
 ```bash No TTS
 gaia talk -i guide.pdf --no-tts
+```
+
+```bash Model
+gaia talk --model Qwen3-Coder-30B-A3B-Instruct-GGUF --max-tokens 1024
 ```
 </CodeGroup>
 
@@ -1073,17 +1076,13 @@ gaia slack stop
 
 ### Quick Start
 
-1. Start Lemonade with extended context:
-```bash
-lemonade-server serve --ctx-size 32768
-```
-
-2. Start GAIA API server:
+1. Start GAIA API server — it brings up Lemonade through the daemon, at the
+   context size your device profile pins:
 ```bash
 gaia api start
 ```
 
-3. Test the server:
+2. Test the server:
 ```bash
 curl http://localhost:8080/health
 ```
@@ -2956,6 +2955,9 @@ contract; every route needs `Authorization: Bearer <token>` from
 | Route | Purpose |
 |-------|---------|
 | `GET /daemon/v1/status` | pid / port / uptime / API version |
+| `POST /daemon/v1/lemonade/ensure` | Start GAIA's embedded Lemonade Server if stopped and return where it listens (409 if not managed, 503 on a start failure). Host API ≥ 1.2 |
+| `POST /daemon/v1/lemonade/start` | Start or attach the local model server; returns 503 with actionable detail on refusal. Host API ≥ 1.3 |
+| `GET /daemon/v1/lemonade/status` | Whether this daemon supervises a server, its PID, and its log path. Host API ≥ 1.3 |
 | `POST /daemon/v1/shutdown` | graceful drain + exit |
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
 | `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |
@@ -3102,20 +3104,15 @@ one-shot over the daemon transport (the agents the background service supervises
 runs the same readiness check the interactive launch's gate runs — background
 service, sidecar, local model server, model, and for email the mailbox — and if
 one of them is not ready it prints that row and its remedy to stderr and exits
-non-zero. Against an unreachable dependency that is about a second; the ceiling
-is the time it takes to start the sidecar. Nothing is sent to the agent, and the
+non-zero. A stopped local model server is started through the daemon before
+readiness is decided; this cold-start check can take up to 210 seconds after
+sidecar setup. Nothing is sent to the agent until it is ready, and the
 gate screen is never rendered: a script has nobody to press a key. The flagship
 runs as a local subprocess and is checked the same way, just with its own
 three-row gate (agent binary, Lemonade, models) instead of the daemon's five.
 
-```bash
-$ gaia tui run email --query "triage my inbox"   # with the model server down
-❌ Email is not ready — Local AI: not running at http://localhost:8000/api/v1
-   GAIA needs a local model server. It runs on your machine; no message text ever leaves it.
-…
-        run: lemonade-server serve
-$ echo $?   # 1, after about a second
-```
+If startup fails, stderr names the failing readiness row, the recovery action,
+and the relevant log. A stopped server alone is no longer an immediate refusal.
 
 The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeout
 2h` to change it — so an agent that accepts the query and then stops answering is
@@ -3494,7 +3491,7 @@ despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
 |--------|------|---------|-------------|
 | `--logging-level` | string | INFO | Logging verbosity [DEBUG, INFO, WARNING, ERROR, CRITICAL] |
 | `-v, --version` | flag | - | Show program's version and exit |
-| `--claude-model` | string | `claude-sonnet-4-20250514` | Claude model to use when `--use-claude` is set |
+| `--claude-model` | string | `claude-sonnet-5` | Claude model to use when `--use-claude` is set |
 | `--no-lemonade-check` | flag | - | Skip the Lemonade server reachability check (CI/testing without Lemonade) |
 
 <Note>
@@ -3521,11 +3518,16 @@ Backend flags are accepted only by the commands that use them, and any other com
 
 <AccordionGroup>
   <Accordion title="Connection Errors" icon="link-slash">
-    If you get connection errors, ensure Lemonade server is running:
+    Connection errors mean the model server isn't up. The daemon owns it, so
+    check there first, then start it:
 
     ```bash
-    lemonade-server serve
+    gaia daemon status
+    gaia daemon start
     ```
+
+    If it still won't come up, `gaia daemon logs --lines 100` has the reason —
+    most often that Lemonade isn't installed, which `gaia init` fixes.
   </Accordion>
 
   <Accordion title="Model Issues" icon="circle-exclamation">

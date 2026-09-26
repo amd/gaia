@@ -3,18 +3,43 @@
 // SPDX-License-Identifier: MIT
 
 // The landing page has exactly one job: get a visitor to install the GAIA agent
-// and put it to work. One product, one install, one entry point — so the page
-// carries one primary CTA and no competing paths, and the only branch it offers
-// is what you do with that one agent: run it, integrate it, build on it.
+// and put it to work. One product, one install — the hero's only branch is
+// which front end you open it in, desktop app or terminal, and that branch is
+// on screen because both ship and a visitor has to be able to tell them apart.
+// Everything below is what you do with the one agent: run it, integrate it,
+// build on it.
 
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 import InstallCommand from '../components/InstallCommand.astro';
-import TuiDownload from '../components/TuiDownload.astro';
+import Downloads from '../components/Downloads.astro';
 import Feature from '../components/Feature.astro';
+import StatBlock from '../components/StatBlock.astro';
+import ReleaseStream from '../components/ReleaseStream.astro';
+import { formatCount, getNpmDownloadStats, getReleaseStats, getRepoStats } from '../data/github';
 
 const DOCS = 'https://amd-gaia.ai/docs';
+
+const repoStats = await getRepoStats();
+const releaseStats = await getReleaseStats();
+const npmStats = await getNpmDownloadStats();
+
+// Labels are deliberately specific ("GitHub release downloads", "npm
+// downloads") rather than a bare "downloads" — the site's own install button
+// downloads from an R2 bucket with no tracking at all, so a number here that
+// implied "everyone who's ever installed GAIA" would overclaim. See
+// docs/plans/website-admin-dashboard.md for the real, all-source count.
+const STATS = [
+  { value: formatCount(repoStats.stars), label: 'GitHub stars' },
+  { value: formatCount(repoStats.forks), label: 'GitHub forks' },
+  { value: formatCount(releaseStats.totalDownloadCount), label: 'GitHub release downloads' },
+  { value: String(releaseStats.totalReleaseCount), label: 'Releases' },
+  { value: formatCount(npmStats.weekly), label: 'npm downloads / week' },
+  { value: formatCount(npmStats.lifetime), label: 'npm downloads total' },
+];
+
+const RECENT_RELEASES = releaseStats.releases.slice(0, 8);
 
 // Three things you can do with the one agent — not three products.
 const PATHS = [
@@ -121,7 +146,7 @@ const ARCHITECTURE = [
          rather than left on the page pretending to be one. -->
     <section id="install" class="g-shell flex flex-col items-center pb-24 pt-[136px] text-center sm:pb-32 sm:pt-[184px]">
       <h1 class="g-h-hero animate-g-rise max-w-[14ch]">
-        The agent for<br /><span class="whitespace-nowrap text-g-gold-text">AI PCs.</span>
+        The agent for<br /><span class="whitespace-nowrap text-g-accent-text">AI PCs.</span>
       </h1>
 
       <p class="g-lede animate-g-rise mt-6 text-center" style="animation-delay:0.08s">
@@ -129,7 +154,28 @@ const ARCHITECTURE = [
         air-gapped, and there are no token costs.
       </p>
 
-      <TuiDownload align="center" class="animate-g-rise mt-10 [animation-delay:0.14s]" />
+      <Downloads class="animate-g-rise mt-10 [animation-delay:0.14s]" />
+    </section>
+
+    <!-- Traction, right under the install — stars/forks/downloads, then
+         shipping cadence. Both come from live GitHub/npm data, fetched at
+         build time (website/src/data/github.ts); no bundled fixture. -->
+    <section id="stats" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
+      <div class="g-label mb-8">Live from GitHub &amp; npm</div>
+      <StatBlock stats={STATS} />
+    </section>
+
+    <section id="releases" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
+      <div class="g-label mb-8">Releases</div>
+      <ReleaseStream releases={RECENT_RELEASES} class="max-w-[560px]" />
+      <a
+        href="https://github.com/amd/gaia/releases"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="g-label mt-6 inline-block text-g-gold-text hover:underline"
+      >
+        View all releases on GitHub →
+      </a>
     </section>
 
     <!-- 2. The whole product, in three boxes. -->
@@ -147,14 +193,14 @@ const ARCHITECTURE = [
             >
               <h2 class="g-h-card flex items-baseline gap-2">
                 {p.title}
-                <span class="text-[15px] text-g-faint transition-colors group-hover:text-g-gold-text" aria-hidden="true">→</span>
+                <span class="text-[15px] text-g-faint transition-colors group-hover:text-g-accent-text" aria-hidden="true">→</span>
               </h2>
               <p class="g-body mb-6 mt-2.5">{p.body}</p>
 
               {/* Focusable: the command overflows at narrow widths, and a scroll
                   region no keyboard user can reach hides the tail of it. */}
               <div tabindex="0" class="g-cmd-plain mt-auto overflow-x-auto text-[12px]">
-                <span class="text-g-gold" aria-hidden="true">$</span>
+                <span class="text-g-code-accent" aria-hidden="true">$</span>
                 <span class="whitespace-nowrap">{p.code}</span>
               </div>
             </a>

@@ -123,9 +123,9 @@
     border-radius: var(--radius-sm);
     font-family: var(--font-mono);
 }
-.doc-status-failed { color: var(--accent-danger); background: var(--accent-danger-dim); }
-.doc-status-cancelled { color: var(--text-muted); background: rgba(128, 128, 128, 0.08); }
-.doc-status-missing { color: var(--accent-gold); background: var(--accent-gold-dim); }
+.doc-status-failed { color: var(--danger); background: var(--danger-dim); }
+.doc-status-cancelled { color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 8%, transparent); }
+.doc-status-missing { color: var(--accent-yellow); background: var(--accent-yellow-dim); }
 
 .doc-row-actions {
     display: flex;
@@ -138,7 +138,7 @@
 .doc-row:hover .doc-row-actions { opacity: 1; }
 
 .doc-open-folder { color: var(--text-muted); }
-.doc-open-folder:hover { color: var(--amd-blue, #0096d6); }
+.doc-open-folder:hover { color: var(--accent-blue); }
 
 .doc-delete { color: var(--text-muted); }
 .doc-delete:hover { color: var(--danger); }
@@ -178,8 +178,8 @@
     transition: background 0.15s, color 0.15s;
 }
 .btn-retry:hover {
-    background: var(--accent-danger-dim);
-    color: var(--accent-danger, #e74c3c);
+    background: var(--danger-dim);
+    color: var(--danger);
 }
 .btn-retry:disabled {
     opacity: 0.6;

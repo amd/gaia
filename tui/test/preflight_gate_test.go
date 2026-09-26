@@ -57,6 +57,14 @@ type gateTransport struct {
 	ensures  int
 	healths  int
 	searches int
+
+	// lemonadeStarts counts POST /daemon/v1/lemonade/start. lemonadeStartErr is
+	// what that call answers; onLemonadeStart lets a test repair initBody the
+	// way a real start would, so both "it fixed it" and "it did not" are
+	// reachable from the same fake.
+	lemonadeStarts   int
+	lemonadeStartErr error
+	onLemonadeStart  func(*gateTransport)
 }
 
 func readyGateTransport() *gateTransport {
@@ -118,6 +126,20 @@ func (g *gateTransport) Start(ctx context.Context) (preflight.DaemonInfo, error)
 func (g *gateTransport) EnsureAgent(context.Context, string) error {
 	g.ensures++
 	g.agentState = "running"
+	return nil
+}
+
+// StartLemonade records that the gate asked the daemon to start the local model
+// server, and reports success. lemonadeUp then decides what the next /init says,
+// so a test can model both "the start fixed it" and "it did not".
+func (g *gateTransport) StartLemonade(context.Context) error {
+	g.lemonadeStarts++
+	if g.lemonadeStartErr != nil {
+		return g.lemonadeStartErr
+	}
+	if g.onLemonadeStart != nil {
+		g.onLemonadeStart(g)
+	}
 	return nil
 }
 

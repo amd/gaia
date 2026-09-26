@@ -5,11 +5,11 @@
 // Plain ESM, no framework dependency.
 //
 // Two color shapes (see tokens.css):
-//   rgb(var(--x) / <alpha-value>)  -> supports opacity modifiers: text-g-gold/40
+//   rgb(var(--x) / <alpha-value>)  -> supports opacity modifiers: text-g-accent/40
 //   var(--x)                       -> already rgba(); NO opacity modifier.
 //                                     Surfaces and hairlines are translucent so
-//                                     cards let the starfield show through; use
-//                                     the -2 variant for the "hover" step.
+//                                     a card reads on the canvas and on the
+//                                     band; use the -2 variant for "hover".
 
 /** @type {import('tailwindcss').Config} */
 export default {
@@ -22,13 +22,18 @@ export default {
         'g-text': 'rgb(var(--g-text) / <alpha-value>)',
         'g-muted': 'rgb(var(--g-muted) / <alpha-value>)',
         'g-faint': 'rgb(var(--g-faint) / <alpha-value>)',
-        'g-gold': 'rgb(var(--g-gold) / <alpha-value>)',
-        'g-gold2': 'rgb(var(--g-gold2) / <alpha-value>)',
-        'g-gold-text': 'rgb(var(--g-gold-text) / <alpha-value>)',
-        'g-on-gold': 'rgb(var(--g-on-gold) / <alpha-value>)',
+        'g-accent': 'rgb(var(--g-accent) / <alpha-value>)',
+        'g-accent2': 'rgb(var(--g-accent2) / <alpha-value>)',
+        'g-accent-text': 'rgb(var(--g-accent-text) / <alpha-value>)',
+        // Accent fill — same value in both themes, so it can carry white text.
+        'g-accent-fill': 'rgb(var(--g-accent-fill) / <alpha-value>)',
+        'g-accent-fill2': 'rgb(var(--g-accent-fill2) / <alpha-value>)',
+        'g-on-accent': 'rgb(var(--g-on-accent) / <alpha-value>)',
         'g-code-bg': 'rgb(var(--g-code-bg) / <alpha-value>)',
         'g-code-text': 'rgb(var(--g-code-text) / <alpha-value>)',
         'g-code-faint': 'rgb(var(--g-code-faint) / <alpha-value>)',
+        'g-code-accent': 'rgb(var(--g-code-accent) / <alpha-value>)',
+        'g-code-amber': 'rgb(var(--g-code-amber) / <alpha-value>)',
         'g-focus': 'rgb(var(--g-focus) / <alpha-value>)',
 
         // Translucent — no opacity modifier.
@@ -36,7 +41,7 @@ export default {
         'g-surface2': 'var(--g-surface2)',
         'g-border': 'var(--g-border)',
         'g-border2': 'var(--g-border2)',
-        'g-gold-dim': 'var(--g-gold-dim)',
+        'g-accent-dim': 'var(--g-accent-dim)',
         'g-hdr': 'var(--g-hdr)',
       },
       fontFamily: {
@@ -67,14 +72,9 @@ export default {
         'g-out': 'cubic-bezier(0.2, 0.7, 0.2, 1)',
       },
       animation: {
-        'g-drift': 'g-drift 7s ease-in-out infinite alternate',
-        'g-blink': 'g-blink 1s steps(1) infinite',
         'g-pulse': 'g-pulse 0.5s ease-out 1',
         'g-rise': 'g-rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both',
         'g-marquee': 'g-marquee 34s linear infinite',
-      },
-      backgroundImage: {
-        'g-sky-overlay': 'var(--g-sky-overlay)',
       },
     },
   },
