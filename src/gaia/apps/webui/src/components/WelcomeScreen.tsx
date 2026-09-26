@@ -11,6 +11,13 @@ import './WelcomeScreen.css';
 interface WelcomeScreenProps {
     onNewTask: () => void;
     onSendPrompt: (prompt: string) => void;
+    /**
+     * Start a task on an agent the user picked here. Separate from
+     * `onSendPrompt` because that one runs the flagship: a deliberate choice
+     * has to carry its agent id all the way to session creation, or it is
+     * silently downgraded to a flagship chat.
+     */
+    onStartAgentTask: (agentId: string, prompt?: string) => void;
     onCreateAgent?: () => void;
 }
 
@@ -43,13 +50,17 @@ const DEFAULT_SUGGESTIONS = [
     'What hardware is in my PC? Tell me about my CPU and GPU',
 ];
 
-export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNewTask, onSendPrompt, onStartAgentTask, onCreateAgent }: WelcomeScreenProps) {
     const { systemStatus, agents, activeAgentId, setActiveAgentId } = useChatStore();
 
-    const suggestions = useMemo(() => {
+    // A chip runs on the agent the picker is showing, starters or not --
+    // routing the generic list to the flagship contradicts that selection.
+    // Null only when no known agent is selected, which is the flagship's case.
+    const { suggestions, runOn } = useMemo(() => {
         const active = agents.find((a) => a.id === activeAgentId);
-        if (active?.conversation_starters?.length) return active.conversation_starters;
-        return DEFAULT_SUGGESTIONS;
+        if (active?.conversation_starters?.length)
+            return { suggestions: active.conversation_starters, runOn: active.id };
+        return { suggestions: DEFAULT_SUGGESTIONS, runOn: (active?.id ?? null) as string | null };
     }, [agents, activeAgentId]);
     const [displayedText, setDisplayedText] = useState('');
     const [typingComplete, setTypingComplete] = useState(false);
@@ -128,20 +139,18 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
     return (
         <main className="welcome">
             <div className={`welcome-inner ${showContent ? 'content-revealed' : ''}`}>
-                <h1 className={`welcome-title${typingComplete ? ' typing-done' : ''}`}>
+                <h1 className="welcome-title">
                     {displayedText.length >= 4 ? (
-                        <><span className="gaia-glow">{displayedText.slice(0, 4)}</span><span>{displayedText.slice(4)}</span></>
+                        <><span>{displayedText.slice(0, 4)}</span><span>{displayedText.slice(4)}</span></>
                     ) : displayedText}
-                    {phase === 'title' && (
-                        <span className={`terminal-cursor${typingComplete ? ' blink' : ''}`} />
-                    )}
+                    {/* Every cursor here is gated on its own text still being
+                        written — see docs/spec/gaia-design-language.mdx. */}
+                    {!typingComplete && <span className="terminal-cursor" />}
                 </h1>
                 <p className="welcome-sub">
                     <span className="typewriter-text">
                         {subtitleText}
-                        {(phase === 'subtitle' || phase === 'done') && (
-                            <span className={`terminal-cursor terminal-cursor-sub${phase === 'done' ? ' blink' : ''}`} />
-                        )}
+                        {phase === 'subtitle' && <span className="terminal-cursor terminal-cursor-sub" />}
                     </span>
                 </p>
                 <span className="welcome-version">v{__APP_VERSION__} <span className="beta-badge">BETA</span></span>
@@ -166,11 +175,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                         agents={agents}
                         activeAgentId={activeAgentId}
                         onSelect={setActiveAgentId}
-                        onStartChat={(id, prompt) => {
-                            setActiveAgentId(id);
-                            if (prompt) onSendPrompt(prompt);
-                            else onNewTask();
-                        }}
+                        onStartChat={(id, prompt) => onStartAgentTask(id, prompt)}
                         onCreateAgent={onCreateAgent}
                     />
                 )}
@@ -214,7 +219,12 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                     <span className="suggestions-label">Try asking:</span>
                     <div className="suggestion-chips">
                         {suggestions.map((s) => (
-                            <button key={s} className="chip" onClick={() => onSendPrompt(s)} disabled={isInitializing}>
+                            <button
+                                key={s}
+                                className="chip"
+                                onClick={() => (runOn ? onStartAgentTask(runOn, s) : onSendPrompt(s))}
+                                disabled={isInitializing}
+                            >
                                 {s}
                             </button>
                         ))}
@@ -296,7 +306,7 @@ function Feature({ icon, title, desc, expandedDesc, codeHint }: {
                     <span className="feature-inline"><span className="feature-code-hint feature-code-erasing">{eraseText}</span><span className="terminal-cursor terminal-cursor-sm" /></span>
                 )}
                 {(phase === 'typing' || phase === 'done') && (
-                    <span className="feature-inline"><span className="feature-expanded-text">{hoverText}</span><span className={`terminal-cursor terminal-cursor-sm${phase === 'done' ? ' blink' : ''}`} /></span>
+                    <span className="feature-inline"><span className="feature-expanded-text">{hoverText}</span>{phase === 'typing' && <span className="terminal-cursor terminal-cursor-sm" />}</span>
                 )}
             </div>
         </div>

@@ -16,52 +16,31 @@
     z-index: 40;
 }
 
+/* Each severity is a tint of its own semantic token over the canvas, with the
+   token itself as the text. Both themes share one rule because the tokens
+   already flip: danger/warning/info are dark on light and light on dark. */
 .connection-banner--error {
-    background: #fef2f2;
-    color: #991b1b;
-    border-bottom: 1px solid #fecaca;
+    background: color-mix(in srgb, var(--danger) 8%, var(--bg-primary));
+    color: var(--danger);
+    border-bottom: 1px solid color-mix(in srgb, var(--danger) 28%, var(--bg-primary));
 }
 
 .connection-banner--warning {
-    background: #fffbeb;
-    color: #92400e;
-    border-bottom: 1px solid #fed7aa;
+    background: color-mix(in srgb, var(--accent-yellow) 8%, var(--bg-primary));
+    color: var(--accent-yellow);
+    border-bottom: 1px solid color-mix(in srgb, var(--accent-yellow) 28%, var(--bg-primary));
 }
 
 .connection-banner--device {
-    background: #f0f9ff;
-    color: #075985;
-    border-bottom: 1px solid #bae6fd;
-}
-
-[data-theme="dark"] .connection-banner--error {
-    background: rgba(229, 72, 77, 0.06);
-    color: #fca5a5;
-    border-bottom: 1px solid rgba(229, 72, 77, 0.15);
-}
-
-[data-theme="dark"] .connection-banner--warning {
-    background: rgba(232, 168, 48, 0.06);
-    color: #fcd34d;
-    border-bottom: 1px solid rgba(232, 168, 48, 0.15);
-}
-
-[data-theme="dark"] .connection-banner--device {
-    background: #031624;
-    color: #7dd3fc;
-    border-bottom: 1px solid #0c2d42;
+    background: color-mix(in srgb, var(--accent-cyan) 8%, var(--bg-primary));
+    color: var(--accent-cyan);
+    border-bottom: 1px solid color-mix(in srgb, var(--accent-cyan) 28%, var(--bg-primary));
 }
 
 .connection-banner--init {
-    background: #eff6ff;
-    color: #1e40af;
-    border-bottom: 1px solid #bfdbfe;
-}
-
-[data-theme="dark"] .connection-banner--init {
-    background: rgba(59, 130, 246, 0.06);
-    color: #93c5fd;
-    border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+    background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-primary));
+    color: var(--accent-blue);
+    border-bottom: 1px solid color-mix(in srgb, var(--accent-blue) 28%, var(--bg-primary));
 }
 
 .connection-banner__icon {
@@ -85,12 +64,8 @@
     font-family: var(--font-mono);
     padding: 2px 7px;
     border-radius: var(--radius-sm);
-    background: rgba(0, 0, 0, 0.06);
+    background: var(--tint-hover);
     font-size: 11px;
-}
-
-[data-theme="dark"] .connection-banner__hint code {
-    background: rgba(255, 255, 255, 0.06);
 }
 
 .connection-banner__link {
@@ -129,29 +104,22 @@
     transition: all var(--duration) var(--ease);
 }
 
+/* Filled with the severity token; --text-inverse flips with the theme, so the
+   pair stays legible whether the fill is the dark or the light variant. */
 .connection-banner--error .connection-banner__retry {
-    background: #991b1b;
-    color: #fff;
+    background: var(--danger);
+    color: var(--text-inverse);
 }
 .connection-banner--error .connection-banner__retry:hover {
-    background: #7f1d1d;
+    background: color-mix(in srgb, var(--danger) 82%, var(--text-primary));
 }
 
 .connection-banner--warning .connection-banner__retry {
-    background: #92400e;
-    color: #fff;
+    background: var(--accent-yellow);
+    color: var(--text-inverse);
 }
 .connection-banner--warning .connection-banner__retry:hover {
-    background: #78350f;
-}
-
-[data-theme="dark"] .connection-banner--error .connection-banner__retry {
-    background: #fca5a5;
-    color: #120808;
-}
-[data-theme="dark"] .connection-banner--warning .connection-banner__retry {
-    background: #fcd34d;
-    color: #120e05;
+    background: color-mix(in srgb, var(--accent-yellow) 82%, var(--text-primary));
 }
 
 .connection-banner__retry--secondary {
@@ -190,7 +158,7 @@
     width: 100px;
     height: 6px;
     border-radius: 3px;
-    background-color: rgba(255, 255, 255, 0.15);
+    background-color: color-mix(in srgb, var(--text-primary) 15%, transparent);
     overflow: hidden;
     flex-shrink: 0;
 }

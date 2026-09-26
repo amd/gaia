@@ -279,6 +279,36 @@ describe('getAgentPackages / getSkills — the rendered lane split', () => {
     expect((await mod.getAgentPackages()).map((a) => a.id).sort()).toEqual(['chat', 'demo']);
   });
 
+  // The home page offers the Agent UI desktop app as one of two primary
+  // downloads, so it needs a /hub page describing what it is. A hide list used
+  // to filter it out of getCatalog() — which feeds the listing, the pills, the
+  // counts AND getStaticPaths() — leaving Download pointing at a product the
+  // site would not talk about.
+  it('renders the desktop app the home page offers, rather than hiding it', async () => {
+    const { mod } = await loadWith([
+      { id: 'agent-ui', name: 'Agent UI', type: 'app' },
+      ...MIXED,
+    ]);
+    expect((await mod.getCatalog()).map((a) => a.id)).toContain('agent-ui');
+    expect((await mod.getAgentPackages()).map((a) => a.id)).toContain('agent-ui');
+    expect(await mod.getAgent('agent-ui')).toBeDefined();
+  });
+
+  // The fixture must contain the entry a hide list would have targeted, or the
+  // test passes with the filter back in place and the name is a promise it does
+  // not keep — which is exactly what happened with a MIXED-only fixture.
+  it('serves every entry the hub publishes, filtering none of them out', async () => {
+    const published: Partial<Agent>[] = [
+      { id: 'agent-ui', name: 'Agent UI', type: 'app' },
+      { id: 'terminal-hub', name: 'Terminal Hub', type: 'component' },
+      ...MIXED,
+    ];
+    const { mod } = await loadWith(published);
+    expect((await mod.getCatalog()).map((a) => a.id).sort()).toEqual(
+      published.map((e) => e.id).sort(),
+    );
+  });
+
   it('fetches the catalog once per build across both lanes', async () => {
     const { mod, fetchMock } = await loadWith(MIXED);
     await mod.getAgentPackages();
@@ -289,6 +319,93 @@ describe('getAgentPackages / getSkills — the rendered lane split', () => {
   });
 });
 
+
+// Every download link on the home page is this function's `url`. The manifest
+// ships no `url` field — it ships `path`, the hub's own object key — so the
+// only question is whether the site uses it or re-derives the same shape by
+// hand. Re-deriving means a CDN move or a per-OS subdirectory 404s every link
+// while the build stays green.
+describe('getComponentRelease — the download URL is the hub’s own path', () => {
+  const HUB = 'https://hub.test';
+  const originalHubUrl = process.env.HUB_CATALOG_URL;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalHubUrl === undefined) delete process.env.HUB_CATALOG_URL;
+    else process.env.HUB_CATALOG_URL = originalHubUrl;
+  });
+
+  const artifact = (filename: string, path?: string) => ({
+    filename,
+    ...(path === undefined ? {} : { path }),
+    size_bytes: 1024,
+    sha256: 'a'.repeat(64),
+    content_type: 'application/octet-stream',
+  });
+
+  /** A fresh catalog module served one manifest. */
+  async function loadServing(version: string, artifacts: unknown[]) {
+    vi.resetModules();
+    process.env.HUB_CATALOG_URL = HUB;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              latest_version: version,
+              versions: { [version]: { artifacts } },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
+    return import('./catalog');
+  }
+
+  it('downloads from the path the manifest published, not a rebuilt one', async () => {
+    const mod = await loadServing('0.24.1', [
+      artifact('gaia-win-x64.exe', 'cdn/mirror-eu/win/gaia-win-x64.exe'),
+      artifact('gaia-linux-x64', 'agents/terminal-hub/0.24.1/gaia-linux-x64'),
+    ]);
+    const { binaries } = await mod.getComponentRelease('terminal-hub');
+    expect(binaries.map((b) => b.url)).toEqual([
+      `${HUB}/cdn/mirror-eu/win/gaia-win-x64.exe`,
+      `${HUB}/agents/terminal-hub/0.24.1/gaia-linux-x64`,
+    ]);
+  });
+
+  it('joins an absolute path without doubling the slash', async () => {
+    const mod = await loadServing('0.24.1', [
+      artifact('gaia-linux-x64', '/agents/terminal-hub/0.24.1/gaia-linux-x64'),
+    ]);
+    const { binaries } = await mod.getComponentRelease('terminal-hub');
+    expect(binaries[0].url).toBe(`${HUB}/agents/terminal-hub/0.24.1/gaia-linux-x64`);
+  });
+
+  // manifest.schema.json requires `path` on every artifact, so its absence is a
+  // broken publish — and guessing the key is how every link 404s quietly.
+  it('refuses to guess an object key, naming the artifact that lacks one', async () => {
+    const mod = await loadServing('0.24.1', [artifact('gaia-linux-x64')]);
+    await expect(mod.getComponentRelease('terminal-hub')).rejects.toThrow(
+      /'terminal-hub' artifact 'gaia-linux-x64' at 0\.24\.1 publishes no 'path'/,
+    );
+  });
+
+  it('keeps the filename, size and digest the manifest published', async () => {
+    const mod = await loadServing('0.24.1', [
+      artifact('gaia-linux-x64', 'agents/terminal-hub/0.24.1/gaia-linux-x64'),
+    ]);
+    const { version, binaries } = await mod.getComponentRelease('terminal-hub');
+    expect(version).toBe('0.24.1');
+    expect(binaries[0]).toEqual({
+      filename: 'gaia-linux-x64',
+      size_bytes: 1024,
+      sha256: 'a'.repeat(64),
+      url: `${HUB}/agents/terminal-hub/0.24.1/gaia-linux-x64`,
+    });
+  });
+});
 
 describe('flagship distribution manifest', () => {
   it('offers the declared npm package without inventing a PyPI wheel', async () => {
