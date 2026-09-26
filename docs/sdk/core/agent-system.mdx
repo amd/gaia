@@ -498,11 +498,25 @@ context is discarded when it finishes; only its short result plus evidence
 enters the parent's conversation.
 
 The tool comes from `DelegateToolsMixin` (`gaia.agents.tools.delegate_tools`,
-`"delegate"` in `KNOWN_TOOLS`). The flagship agent ships it off; turn it on with
-`GaiaAgentConfig(delegate_enabled=True)` or `GAIA_DELEGATE=1`, and size the
-child's budget with `delegate_max_steps` (default 40) or
-`GAIA_DELEGATE_MAX_STEPS`. When on, it is always offered, whatever the dynamic
-tool selection picks for the turn.
+`"delegate"` in `KNOWN_TOOLS`). The flagship agent ships it off. The mode is
+`GaiaAgentConfig(delegate_mode=...)`, overridden by `GAIA_DELEGATE` (`1`,
+`true`, `on` mean `tool`; anything else unlisted below is an error at
+construction):
+
+| Mode | Parent is offered | Prompt fragment | When |
+|------|-------------------|-----------------|------|
+| `off` (default) | its usual tools | none | delegation not measured for this agent |
+| `tool` | its usual tools plus `delegate_task`, always, whatever the dynamic selection picks | `==== DELEGATION ====`: plan, delegate bounded pieces, review evidence | the model is trusted to choose when to delegate |
+| `orchestrate` | `delegate_task` and `read_tool_output` only, on every turn; no `load_tools`; any other tool call returns an error without running | `==== ORCHESTRATION ====`: investigate, then one implementation subtask per component, then verify | the harness enforces composition: every unit of work is a child |
+
+`orchestrate` exists because a tool the model *may* choose is rarely chosen: a
+model that can read and grep itself opens every task with the same exploration
+and never delegates. In both modes the child (depth 1) has the full ordinary
+tool set and cannot delegate. Size the child's budget with `delegate_max_steps`
+(default 40) or `GAIA_DELEGATE_MAX_STEPS`; cap the number of workers a parent
+may start per session with `delegate_max_children` (default 12) or
+`GAIA_DELEGATE_MAX_CHILDREN` — the call after the cap returns an error telling
+the parent to finish with the evidence it has, never a silent skip.
 
 ```python
 delegate_task(
@@ -510,8 +524,14 @@ delegate_task(
     scope="src/gaia/llm/, especially lemonade_client.py and providers/",
     done_when="the function and the config field that set the retry count are named",
     return_format="file:line for each, then one paragraph",
+    kind="investigate",
 )
 ```
+
+`kind` is `investigate`, `implement` (the default) or `verify`. It adds one
+line to the worker's brief (investigate and verify workers are told not to
+change files), and is recorded in the result and in the `delegated` stats
+entry, so a run can be broken down by subtask kind.
 
 The split that saves is planning here and delegating bounded implementation:
 the worker reads, edits and runs the tests for one component, and the parent
@@ -536,7 +556,7 @@ page):
   12, with the total, minus the shell tool's `cd <workdir> &&` prefix), and
   `tests` (how many checks the child ran, plus the last one's command,
   pass/fail and summary lines, capped at 600 characters).
-- `steps`, `tool_calls`, `tokens` (`input`, `output`, `cached`), `hit_step_limit`.
+- `kind`, `steps`, `tool_calls`, `tokens` (`input`, `output`, `cached`), `hit_step_limit`.
 - `transcript` — an artifact handle for the child's full conversation log, for
   drilling into how it worked; never needed to use the answer.
 

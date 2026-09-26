@@ -8,6 +8,11 @@ it finishes, its whole context is discarded: only a small result plus evidence
 enters the parent's conversation, and the full transcript is kept as an
 artifact the parent can page with ``read_tool_output``. The child's model cost
 is added to the parent's totals so a saving is measured honestly.
+
+Three modes (``delegate_mode`` / ``GAIA_DELEGATE``): ``off``; ``tool``, where
+``delegate_task`` is one tool among the parent's usual set; and
+``orchestrate``, where the parent is offered nothing but ``delegate_task`` and
+``read_tool_output`` and every unit of work is a child.
 """
 
 from __future__ import annotations
@@ -33,7 +38,20 @@ logger = get_logger(__name__)
 
 DELEGATE_ENV_VAR = "GAIA_DELEGATE"
 DELEGATE_MAX_STEPS_ENV_VAR = "GAIA_DELEGATE_MAX_STEPS"
+DELEGATE_MAX_CHILDREN_ENV_VAR = "GAIA_DELEGATE_MAX_CHILDREN"
 DEFAULT_DELEGATE_MAX_STEPS = 40
+DEFAULT_DELEGATE_MAX_CHILDREN = 12
+
+DELEGATE_MODES = ("off", "tool", "orchestrate")
+#: ``GAIA_DELEGATE`` spellings of the ``tool`` and ``off`` modes.
+_TOOL_MODE_ALIASES = frozenset({"1", "true", "yes", "on"})
+_OFF_MODE_ALIASES = frozenset({"0", "false", "no", "off"})
+
+#: What an orchestrating parent is offered, and all it may execute.
+ORCHESTRATOR_TOOLS = ("delegate_task", "read_tool_output")
+
+DELEGATE_KINDS = ("investigate", "implement", "verify")
+DEFAULT_DELEGATE_KIND = "implement"
 
 #: Serialized size the returned dict stays under: one read_tool_output page.
 RESULT_BUDGET_CHARS = 8000
@@ -70,6 +88,25 @@ has already changed unless its evidence shows a problem: trust files_changed and
 the test output in evidence. Keep for yourself only the plan, the review of each \
 worker's evidence, and the final end-to-end verification."""
 
+#: The parent's guidance in ``orchestrate`` mode, in place of the one above.
+ORCHESTRATE_SYSTEM_PROMPT = """\
+==== ORCHESTRATION ====
+You are the orchestrator. You cannot read, search, run or edit anything \
+yourself: your only tools are delegate_task and read_tool_output. Every unit of \
+work — investigation, implementation, and the final verification — is a \
+delegate_task call with a complete brief, since the worker has no memory of \
+this conversation. Start with one kind="investigate" subtask that returns the \
+facts you need to plan: the files and symbols involved, and how the tests run. \
+Then one kind="implement" subtask per component, each including its tests. \
+Finish with one kind="verify" subtask that runs the full relevant test command \
+and reports the summary. Answer only from the workers' evidence."""
+
+_KIND_HINTS = {
+    "investigate": "answer the question; do not change files.",
+    "implement": "make the change and run its tests.",
+    "verify": "run the checks and report their output; do not change files.",
+}
+
 _BRIEF_HEADER = (
     "You are a delegated worker. You have no memory of the conversation that "
     "produced this brief, so it contains everything you need. Complete exactly "
@@ -77,12 +114,40 @@ _BRIEF_HEADER = (
 )
 
 
-def delegate_env_override() -> Optional[bool]:
-    """``GAIA_DELEGATE`` parsed, or ``None`` when unset."""
+def delegate_env_override() -> Optional[str]:
+    """``GAIA_DELEGATE`` as a mode, or ``None`` when unset; malformed fails loudly."""
     raw = os.getenv(DELEGATE_ENV_VAR)
     if raw is None:
         return None
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+    value = raw.strip().lower()
+    if value in _TOOL_MODE_ALIASES:
+        return "tool"
+    if value in _OFF_MODE_ALIASES:
+        return "off"
+    if value in DELEGATE_MODES:
+        return value
+    raise ValueError(
+        f"{DELEGATE_ENV_VAR} must be one of {', '.join(DELEGATE_MODES)} "
+        f"(or 1/0 for tool/off), got {raw!r}"
+    )
+
+
+def delegate_max_children_from_env() -> Optional[int]:
+    """``GAIA_DELEGATE_MAX_CHILDREN`` parsed, or ``None``; malformed fails loudly."""
+    raw = os.getenv(DELEGATE_MAX_CHILDREN_ENV_VAR)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{DELEGATE_MAX_CHILDREN_ENV_VAR} must be an integer, got {raw!r}"
+        ) from e
+    if value < 1:
+        raise ValueError(
+            f"{DELEGATE_MAX_CHILDREN_ENV_VAR} must be at least 1, got {value}"
+        )
+    return value
 
 
 def delegate_max_steps_from_env() -> Optional[int]:
@@ -107,24 +172,57 @@ class DelegateToolsMixin:
     """Mixin providing ``delegate_task``.
 
     The host stores its dataclass config as ``self.config`` with the fields
-    ``delegate_enabled``, ``delegate_max_steps``, ``delegate_depth``,
-    ``max_steps``, ``silent_mode`` and ``output_handler``, and accepts
-    ``type(self)(config=...)``. Override :meth:`_child_config` when a host's
-    config is shaped differently.
+    ``delegate_mode``, ``delegate_max_steps``, ``delegate_max_children``,
+    ``delegate_depth``, ``max_steps``, ``silent_mode`` and ``output_handler``,
+    and accepts ``type(self)(config=...)``. Override :meth:`_child_config` when
+    a host's config is shaped differently.
+
+    ``orchestrate`` mode needs the host's help at two points the mixin cannot
+    reach from the back of the MRO: its per-turn tool selection must return
+    :data:`ORCHESTRATOR_TOOLS`, and its tool execution must honour
+    :meth:`_orchestrator_refusal`.
     """
 
     #: Running total of every child's model cost, for the parent's stats.
     delegated_tokens: Dict[str, int]
 
-    def _resolve_delegate_enabled(self) -> bool:
-        """Depth 1 is final; then ``GAIA_DELEGATE`` wins over the config field."""
+    def _resolve_delegate_mode(self) -> str:
+        """Depth 1 is ``off``; then ``GAIA_DELEGATE`` wins over the config field."""
         config = getattr(self, "config", None)
         if getattr(config, "delegate_depth", 0) > 0:
-            return False
+            return "off"
         override = delegate_env_override()
         if override is not None:
             return override
-        return bool(getattr(config, "delegate_enabled", False))
+        mode = getattr(config, "delegate_mode", "off")
+        if mode not in DELEGATE_MODES:
+            raise ValueError(
+                f"delegate_mode must be one of {', '.join(DELEGATE_MODES)}, "
+                f"got {mode!r}"
+            )
+        return mode
+
+    def _resolve_delegate_enabled(self) -> bool:
+        return self._resolve_delegate_mode() != "off"
+
+    def _orchestrating(self) -> bool:
+        return self._resolve_delegate_mode() == "orchestrate"
+
+    def _orchestrator_refusal(self, tool_name: str) -> Optional[Dict[str, Any]]:
+        """The error an orchestrating parent gets for any tool it was not offered."""
+        if not self._orchestrating() or tool_name in ORCHESTRATOR_TOOLS:
+            return None
+        from gaia.agents.base.verification import NOT_EXECUTED
+
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": (
+                f"{tool_name} is not available to the orchestrator. Your only "
+                f"tools are {' and '.join(ORCHESTRATOR_TOOLS)}: delegate this "
+                "work to a worker with a complete brief."
+            ),
+        }
 
     def _delegate_max_steps(self) -> int:
         override = delegate_max_steps_from_env()
@@ -138,9 +236,26 @@ class DelegateToolsMixin:
             )
         )
 
+    def _delegate_max_children(self) -> int:
+        override = delegate_max_children_from_env()
+        if override is not None:
+            return override
+        return int(
+            getattr(
+                getattr(self, "config", None),
+                "delegate_max_children",
+                DEFAULT_DELEGATE_MAX_CHILDREN,
+            )
+        )
+
     def get_delegate_system_prompt(self) -> str:
-        """The delegation guidance, auto-collected by ``_get_mixin_prompts``."""
-        return DELEGATE_SYSTEM_PROMPT if self._resolve_delegate_enabled() else ""
+        """The mode's guidance, auto-collected by ``_get_mixin_prompts``."""
+        mode = self._resolve_delegate_mode()
+        if mode == "orchestrate":
+            return ORCHESTRATE_SYSTEM_PROMPT
+        if mode == "tool":
+            return DELEGATE_SYSTEM_PROMPT
+        return ""
 
     def register_delegate_tools(self) -> None:
         """Register ``delegate_task`` into the tool registry."""
@@ -151,7 +266,11 @@ class DelegateToolsMixin:
         # Above the default tool timeout: a child runs a whole agent loop.
         @tool(timeout=3600, display_label="Delegating")
         def delegate_task(
-            goal: str, scope: str, done_when: str, return_format: str
+            goal: str,
+            scope: str,
+            done_when: str,
+            return_format: str,
+            kind: str = DEFAULT_DELEGATE_KIND,
         ) -> Dict[str, Any]:
             """Hand a bounded subtask to a fresh worker agent and get back only its result and evidence.
 
@@ -174,9 +293,10 @@ class DelegateToolsMixin:
                 scope: Where to look or work: directories, files, symbols, commands.
                 done_when: The concrete acceptance check, e.g. "pytest tests/unit/test_x.py passes".
                 return_format: The shape of the answer wanted back, e.g. "file:line and a one-paragraph explanation".
+                kind: "investigate" (answer a question, change nothing), "implement" (the default: change code and run its tests) or "verify" (run the checks and report).
 
             Returns:
-                result (the worker's answer, whole; a very long one comes back
+                kind, result (the worker's answer, whole; a very long one comes back
                 as shown parts plus a numbered index of its own archive, read
                 with read_tool_output(artifact, entry=n)), evidence
                 (files_changed with added/removed line counts, commands_run,
@@ -185,13 +305,37 @@ class DelegateToolsMixin:
                 worker's full conversation log, for drilling into how it
                 worked, never needed to use the answer.
             """
-            return self._delegate_task(goal, scope, done_when, return_format)
+            return self._delegate_task(goal, scope, done_when, return_format, kind)
 
     # ── delegation ──────────────────────────────────────────────────────────
 
     def _delegate_task(
-        self, goal: str, scope: str, done_when: str, return_format: str
+        self,
+        goal: str,
+        scope: str,
+        done_when: str,
+        return_format: str,
+        kind: str = DEFAULT_DELEGATE_KIND,
     ) -> Dict[str, Any]:
+        cap = self._delegate_max_children()
+        spent = getattr(self, "delegated_tokens", {}).get("children", 0)
+        if spent >= cap:
+            return {
+                "status": "error",
+                "error": (
+                    f"delegate_task budget exhausted: {spent} workers have already "
+                    f"run (delegate_max_children={cap}). No more will start; "
+                    "finish now with the evidence you already have."
+                ),
+            }
+        if kind not in DELEGATE_KINDS:
+            return {
+                "status": "error",
+                "error": (
+                    f"delegate_task kind must be one of {', '.join(DELEGATE_KINDS)}, "
+                    f"got {kind!r}."
+                ),
+            }
         fields = {
             "goal": goal,
             "scope": scope,
@@ -210,7 +354,7 @@ class DelegateToolsMixin:
                     "this conversation, so the brief must be complete."
                 ),
             }
-        brief = self._delegate_brief(fields)
+        brief = self._delegate_brief(fields, kind)
         workdir = self._delegate_workdir()
         try:
             before = self._workdir_snapshot(workdir)
@@ -235,10 +379,11 @@ class DelegateToolsMixin:
             failure = _provider_failure(outcome)
         evidence = self._delegate_evidence(child, workdir, before)
         tokens = _child_tokens(outcome)
-        self._account_child(tokens)
+        self._account_child(tokens, kind)
         handle = store_for(self).put(
             json.dumps(
                 {
+                    "kind": kind,
                     "brief": brief,
                     "status": outcome.get("status"),
                     "result": outcome.get("result", ""),
@@ -252,6 +397,7 @@ class DelegateToolsMixin:
         )
         result: Dict[str, Any] = {
             "status": "error" if failure else "success",
+            "kind": kind,
             # The child's scope line restates what ``evidence`` carries.
             "result": strip_verification_scope(str(outcome.get("result") or "")),
             "evidence": evidence,
@@ -265,11 +411,12 @@ class DelegateToolsMixin:
             result["error"] = failure
         return _bounded(result, store_for(self))
 
-    def _delegate_brief(self, fields: Dict[str, str]) -> str:
+    def _delegate_brief(self, fields: Dict[str, str], kind: str) -> str:
         return "\n".join(
             [
                 _BRIEF_HEADER,
                 "",
+                f"Kind: {kind} — {_KIND_HINTS[kind]}",
                 f"Goal: {fields['goal'].strip()}",
                 f"Scope: {fields['scope'].strip()}",
                 f"Done when: {fields['done_when'].strip()}",
@@ -287,7 +434,7 @@ class DelegateToolsMixin:
             )
         return dataclasses.replace(
             config,
-            delegate_enabled=False,
+            delegate_mode="off",
             delegate_depth=int(getattr(config, "delegate_depth", 0)) + 1,
             max_steps=self._delegate_max_steps(),
             silent_mode=True,
@@ -324,7 +471,7 @@ class DelegateToolsMixin:
         if callable(close):
             close()
 
-    def _account_child(self, tokens: Dict[str, int]) -> None:
+    def _account_child(self, tokens: Dict[str, int], kind: str) -> None:
         """Fold the child's cost into this turn's stats and the running breakdown."""
         totals = getattr(self, "delegated_tokens", None)
         if totals is None:
@@ -346,6 +493,7 @@ class DelegateToolsMixin:
                 "content": {
                     "type": "stats",
                     "delegated": True,
+                    "kind": kind,
                     "performance_stats": {
                         "input_tokens": tokens["input"],
                         "output_tokens": tokens["output"],

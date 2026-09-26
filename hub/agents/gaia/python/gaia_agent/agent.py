@@ -60,7 +60,9 @@ from gaia.agents.base.skill_loader import (
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.delegate_tools import (
+    DEFAULT_DELEGATE_MAX_CHILDREN,
     DEFAULT_DELEGATE_MAX_STEPS,
+    ORCHESTRATOR_TOOLS,
     DelegateToolsMixin,
 )
 from gaia.agents.tools.email_tools import EmailToolsMixin
@@ -231,12 +233,16 @@ class GaiaAgentConfig(ChatAgentConfig):
     auto_index: bool = True
 
     # ``delegate_task``: hand a bounded subtask to a fresh child agent whose
-    # context is discarded when it finishes. Off until measured; overridable
-    # via GAIA_DELEGATE=1. The child gets ``delegate_max_steps`` (or
-    # GAIA_DELEGATE_MAX_STEPS) and runs at ``delegate_depth`` 1, where the
-    # tool is never registered, whatever the env says.
-    delegate_enabled: bool = False
+    # context is discarded when it finishes. "off" until measured; "tool"
+    # offers it alongside the usual tools; "orchestrate" offers the parent
+    # nothing else. GAIA_DELEGATE wins over the field (1 means "tool"). The
+    # child gets ``delegate_max_steps`` (or GAIA_DELEGATE_MAX_STEPS) and runs
+    # at ``delegate_depth`` 1, where the tool is never registered, whatever
+    # the env says. A parent starts at most ``delegate_max_children`` (or
+    # GAIA_DELEGATE_MAX_CHILDREN) workers per session.
+    delegate_mode: str = "off"
     delegate_max_steps: int = DEFAULT_DELEGATE_MAX_STEPS
+    delegate_max_children: int = DEFAULT_DELEGATE_MAX_CHILDREN
     delegate_depth: int = 0
 
 
@@ -359,6 +365,26 @@ class GaiaAgent(
         if self._resolve_delegate_enabled():
             core.add("delegate_task")
         return frozenset(core)
+
+    # ── orchestrate mode ──────────────────────────────────────────────────
+
+    def _maybe_build_tool_loader(self):
+        # No loader means no ``load_tools`` escape hatch and no bundle menu.
+        if self._orchestrating():
+            return None
+        return super()._maybe_build_tool_loader()
+
+    def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
+        """Every turn of an orchestrating parent offers exactly the orchestrator set."""
+        if self._orchestrating():
+            return list(ORCHESTRATOR_TOOLS)
+        return super()._select_tools_for_turn(user_input)
+
+    def _execute_tool(self, tool_name: str, tool_args):
+        refusal = self._orchestrator_refusal(tool_name)
+        if refusal is not None:
+            return refusal
+        return super()._execute_tool(tool_name, tool_args)
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
 

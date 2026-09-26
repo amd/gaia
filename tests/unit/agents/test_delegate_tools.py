@@ -20,7 +20,12 @@ import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.tools import delegate_tools
-from gaia.agents.tools.delegate_tools import DELEGATE_SYSTEM_PROMPT, DelegateToolsMixin
+from gaia.agents.tools.delegate_tools import (
+    DELEGATE_SYSTEM_PROMPT,
+    ORCHESTRATE_SYSTEM_PROMPT,
+    ORCHESTRATOR_TOOLS,
+    DelegateToolsMixin,
+)
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 _STATS = {"input_tokens": 100, "output_tokens": 10, "cached_tokens": 40}
@@ -35,7 +40,7 @@ class KidConfig:
     max_steps: int = 6
     silent_mode: bool = True
     output_handler: Any = None
-    delegate_enabled: bool = True
+    delegate_mode: str = "tool"
     delegate_max_steps: int = 4
     delegate_depth: int = 0
 
@@ -129,6 +134,7 @@ def _isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon-home"))
     monkeypatch.delenv("GAIA_DELEGATE", raising=False)
     monkeypatch.delenv("GAIA_DELEGATE_MAX_STEPS", raising=False)
+    monkeypatch.delenv("GAIA_DELEGATE_MAX_CHILDREN", raising=False)
     monkeypatch.delenv("GAIA_PROJECT_ROOT", raising=False)
     saved = dict(_TOOL_REGISTRY)
     SCRIPTS.clear()
@@ -194,8 +200,7 @@ def test_child_starts_fresh_with_identical_prompt_and_no_delegate_tool():
 
 def test_prompt_unchanged_when_delegation_off():
     assert (
-        DELEGATE_SYSTEM_PROMPT
-        not in Kid(KidConfig(delegate_enabled=False)).system_prompt
+        DELEGATE_SYSTEM_PROMPT not in Kid(KidConfig(delegate_mode="off")).system_prompt
     )
 
 
@@ -207,11 +212,11 @@ def test_child_cannot_delegate_even_when_env_enables_it(monkeypatch):
 
 
 def test_tool_offered_only_when_enabled(monkeypatch):
-    assert "delegate_task" not in Kid(KidConfig(delegate_enabled=False))._tools_registry
+    assert "delegate_task" not in Kid(KidConfig(delegate_mode="off"))._tools_registry
     monkeypatch.setenv("GAIA_DELEGATE", "1")
-    assert "delegate_task" in Kid(KidConfig(delegate_enabled=False))._tools_registry
+    assert "delegate_task" in Kid(KidConfig(delegate_mode="off"))._tools_registry
     monkeypatch.setenv("GAIA_DELEGATE", "0")
-    assert "delegate_task" not in Kid(KidConfig(delegate_enabled=True))._tools_registry
+    assert "delegate_task" not in Kid(KidConfig(delegate_mode="tool"))._tools_registry
 
 
 def test_step_budget_enforced_and_reported(repo, monkeypatch):
@@ -439,3 +444,120 @@ def test_registry_exposes_delegate_mixin():
         "gaia.agents.tools.delegate_tools",
         "DelegateToolsMixin",
     )
+
+
+# ── modes, kinds and the children cap ────────────────────────────────────────
+
+
+def test_env_parses_every_mode_and_rejects_the_rest(monkeypatch):
+    for raw, mode in (
+        ("1", "tool"),
+        ("true", "tool"),
+        ("on", "tool"),
+        ("tool", "tool"),
+        ("0", "off"),
+        ("off", "off"),
+        ("orchestrate", "orchestrate"),
+        (" ORCHESTRATE ", "orchestrate"),
+    ):
+        monkeypatch.setenv("GAIA_DELEGATE", raw)
+        assert delegate_tools.delegate_env_override() == mode, raw
+    monkeypatch.setenv("GAIA_DELEGATE", "sometimes")
+    with pytest.raises(ValueError, match="GAIA_DELEGATE must be one of"):
+        delegate_tools.delegate_env_override()
+    with pytest.raises(ValueError, match="GAIA_DELEGATE must be one of"):
+        Kid()
+    monkeypatch.delenv("GAIA_DELEGATE")
+    with pytest.raises(ValueError, match="delegate_mode must be one of"):
+        Kid(KidConfig(delegate_mode="banana"))
+
+
+def test_max_children_env_is_validated(monkeypatch):
+    monkeypatch.setenv("GAIA_DELEGATE_MAX_CHILDREN", "3")
+    assert Kid()._delegate_max_children() == 3
+    monkeypatch.setenv("GAIA_DELEGATE_MAX_CHILDREN", "0")
+    with pytest.raises(ValueError, match="at least 1"):
+        Kid()._delegate_max_children()
+    monkeypatch.setenv("GAIA_DELEGATE_MAX_CHILDREN", "many")
+    with pytest.raises(ValueError, match="must be an integer"):
+        Kid()._delegate_max_children()
+    monkeypatch.delenv("GAIA_DELEGATE_MAX_CHILDREN")
+    assert Kid()._delegate_max_children() == 12
+
+
+def test_orchestrate_paragraph_replaces_the_tool_one_and_never_reaches_the_child(
+    monkeypatch,
+):
+    monkeypatch.setenv("GAIA_DELEGATE", "orchestrate")
+    parent = Kid()
+    assert parent._resolve_delegate_mode() == "orchestrate"
+    assert ORCHESTRATE_SYSTEM_PROMPT in parent.system_prompt
+    assert DELEGATE_SYSTEM_PROMPT not in parent.system_prompt
+    for phrase in (
+        "You are the orchestrator",
+        "cannot read, search, run or edit anything",
+        'kind="investigate"',
+        'kind="implement"',
+        'kind="verify"',
+        "Answer only from the workers' evidence",
+    ):
+        assert phrase in ORCHESTRATE_SYSTEM_PROMPT
+    child = parent._spawn_child()
+    assert child._resolve_delegate_mode() == "off"
+    assert ORCHESTRATE_SYSTEM_PROMPT not in child.system_prompt
+    assert "delegate_task" not in child._tools_registry
+    assert child._orchestrator_refusal("write_note") is None
+    monkeypatch.delenv("GAIA_DELEGATE")
+    tool_mode = Kid(KidConfig(delegate_mode="tool"))
+    assert DELEGATE_SYSTEM_PROMPT in tool_mode.system_prompt
+    assert ORCHESTRATE_SYSTEM_PROMPT not in tool_mode.system_prompt
+
+
+def test_orchestrator_refuses_every_tool_but_its_own(monkeypatch):
+    assert Kid()._orchestrator_refusal("write_note") is None
+    monkeypatch.setenv("GAIA_DELEGATE", "orchestrate")
+    parent = Kid()
+    for name in ORCHESTRATOR_TOOLS:
+        assert parent._orchestrator_refusal(name) is None
+    refusal = parent._orchestrator_refusal("write_note")
+    assert refusal["status"] == "error"
+    assert refusal["executed"] is False
+    assert "delegate_task and read_tool_output" in refusal["error"]
+
+
+def test_kind_is_recorded_in_result_brief_and_stats(repo):
+    SCRIPTS[1] = [_answer("all green")]
+    parent = _approving_parent()
+    parent._turn_conversation = []
+    result = parent._delegate_task(**_BRIEF, kind="verify")
+    assert result["kind"] == "verify"
+    archived = json.loads(delegate_tools.store_for(parent).text(result["transcript"]))
+    assert archived["kind"] == "verify"
+    assert "Kind: verify — run the checks and report" in archived["brief"]
+    assert parent._turn_conversation[-1]["content"]["kind"] == "verify"
+    SCRIPTS[1] = [_answer("default")]
+    assert _approving_parent()._delegate_task(**_BRIEF)["kind"] == "implement"
+
+
+def test_unknown_kind_is_refused_without_spawning(repo):
+    parent = _approving_parent()
+    with patch.object(parent, "_spawn_child") as spawn:
+        result = parent._delegate_task(**_BRIEF, kind="ponder")
+    assert result["status"] == "error"
+    assert "investigate, implement, verify" in result["error"]
+    spawn.assert_not_called()
+
+
+def test_children_cap_errors_on_the_next_call(repo, monkeypatch):
+    monkeypatch.setenv("GAIA_DELEGATE_MAX_CHILDREN", "2")
+    SCRIPTS[1] = [_answer("done")]
+    parent = _approving_parent()
+    assert parent._delegate_task(**_BRIEF)["status"] == "success"
+    assert parent._delegate_task(**_BRIEF)["status"] == "success"
+    with patch.object(parent, "_spawn_child") as spawn:
+        third = parent._delegate_task(**_BRIEF)
+    spawn.assert_not_called()
+    assert third["status"] == "error"
+    assert "2 workers have already run (delegate_max_children=2)" in third["error"]
+    assert "finish now" in third["error"]
+    assert parent.delegated_tokens["children"] == 2
