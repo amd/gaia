@@ -36,10 +36,9 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "test": "node --test test/text-tool-stream.test.cjs",
+    "test": "node --test test/*.test.cjs",
     "package": "vsce package",
-    "publish": "vsce publish",
-    "test:unit": "npm run compile && node --test test/*.test.cjs"
+    "publish": "vsce publish"
   },
   "devDependencies": {
     "@types/node": "^18.0.0",
