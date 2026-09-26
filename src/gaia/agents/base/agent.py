@@ -636,6 +636,8 @@ def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
         if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
             content = entry["content"]
             if content.get("type") == "stats" and "performance_stats" in content:
+                if content.get("delegated"):
+                    continue
                 if content.get("step") != 1:
                     # Step 1's own poll failed/was skipped — never misattribute
                     # a later step's latency as the turn's ttft.
@@ -1277,6 +1279,8 @@ Do NOT wrap conversational replies in JSON.
         self._turn_tool_executions: List[Dict[str, Any]] = []
         # Same rationale for the per-turn record of edited files (#3733).
         self._turn_file_edits: List[Dict[str, Any]] = []
+        # The live turn's record; a child-running tool appends its cost here.
+        self._turn_conversation: List[Dict[str, Any]] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -5931,6 +5935,7 @@ Do NOT wrap conversational replies in JSON.
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []
+        self._turn_conversation = conversation
         # Build messages array for chat completions
         from gaia.agents.base.history import TurnMessages
 

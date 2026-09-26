@@ -489,6 +489,55 @@ the NPU budget. A cloud model reached through Lemonade gets the conservative
 30,000/20,000 without reading the local device profile. The Claude path uses its existing larger window. These are
 per-result character budgets, not measured remaining tokens.
 
+## Delegating a subtask
+
+On a real repository, most of an agent's tool calls before its first edit are
+exploration, and every one of those results is re-sent on every later step.
+`delegate_task` hands a bounded subtask to a fresh child agent whose whole
+context is discarded when it finishes; only its short result plus evidence
+enters the parent's conversation.
+
+The tool comes from `DelegateToolsMixin` (`gaia.agents.tools.delegate_tools`,
+`"delegate"` in `KNOWN_TOOLS`). The flagship agent ships it off; turn it on with
+`GaiaAgentConfig(delegate_enabled=True)` or `GAIA_DELEGATE=1`, and size the
+child's budget with `delegate_max_steps` (default 40) or
+`GAIA_DELEGATE_MAX_STEPS`. When on, it is always offered, whatever the dynamic
+tool selection picks for the turn.
+
+```python
+delegate_task(
+    goal="Find where the retry policy for Lemonade requests is decided",
+    scope="src/gaia/llm/, especially lemonade_client.py and providers/",
+    done_when="the function and the config field that set the retry count are named",
+    return_format="file:line for each, then one paragraph",
+)
+```
+
+The child is a new instance of the same agent class with the same config
+(model, backend, working directory, tools, permissions, system prompt) but a
+fresh conversation, its own step budget, a silent console, and no
+`delegate_task` of its own — depth is one. It starts with no memory of the
+conversation, so the brief must carry every path, name and criterion. The
+result the parent sees stays under 4,000 characters:
+
+- `result` — the child's answer; a long one is elided and kept whole in the transcript.
+- `evidence` — `files_changed` (from `git status` before and after, or a
+  modification-time scan outside a repository), `commands_run` (up to 20, with
+  the total), and `tests` (the child's test, lint and build runs).
+- `steps`, `tool_calls`, `tokens` (`input`, `output`, `cached`), `hit_step_limit`.
+- `transcript` — an artifact handle for the child's full conversation, readable
+  with `read_tool_output`.
+
+A child that raises, or whose backend fails, comes back as
+`{"status": "error", "error": ..., "transcript": ...}` — never retried, never
+swallowed. A child that runs out of steps returns what it has with
+`hit_step_limit: true`.
+
+The child's model calls count against the parent: they are added to the turn's
+token totals (as a `delegated` stats entry in the conversation) and kept
+separately in `agent.delegated_tokens`, so a saving is measured with the
+child's cost included.
+
 ## Common Pitfalls and Solutions
 
 <AccordionGroup>
