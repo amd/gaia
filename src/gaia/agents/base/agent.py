@@ -5696,6 +5696,7 @@ Do NOT wrap conversational replies in JSON.
         return [
             {k: v for k, v in m.items() if k != "reasoning_content"} for m in history
         ]
+
     def _sent_reasoning(self, reasoning: Optional[str]) -> Dict[str, Any]:
         """The ``reasoning_content`` field for a re-sent assistant message, or nothing."""
         if reasoning and self.reasoning_history == "send":

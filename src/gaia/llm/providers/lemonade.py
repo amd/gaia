@@ -771,6 +771,7 @@ class LemonadeProvider(LLMClient):
 
     def get_last_reasoning(self) -> Optional[str]:
         return self._last_reasoning
+
     def get_last_finish_reason(self) -> Optional[str]:
         return self._last_finish_reason
 

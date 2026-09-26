@@ -69,6 +69,8 @@ class LLMClient(ABC):
         """The model's reasoning from the most recent ``chat()`` call, kept
         apart from its answer, or ``None`` when there was none or the provider
         does not report it."""
+        return None
+
     def get_last_finish_reason(self) -> Optional[str]:
         """Why the most recent ``chat()`` reply ended (``"stop"``,
         ``"length"``, ``"tool_calls"``), or ``None`` when the provider does
