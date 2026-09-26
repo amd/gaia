@@ -117,9 +117,7 @@ def test_global_options_exclusion_list_matches_the_parser():
     from gaia.cli import build_parser
 
     top = next(
-        a
-        for a in build_parser()._actions
-        if isinstance(a, argparse._SubParsersAction)
+        a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)
     )
     rejecting = {
         name
