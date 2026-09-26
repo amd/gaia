@@ -158,6 +158,105 @@ def test_a_python_run_without_a_runner_summary_is_not_a_check():
     assert check_from_python_run("snippet:abc", 0, "42\n") is None
 
 
+#: One passing and one failing summary per runner, as each runner prints it.
+RUNNER_OUTPUTS = [
+    ("pytest", "....\n4 passed in 0.05s\n", "F...\n1 failed, 3 passed in 0.06s\n"),
+    (
+        "unittest",
+        "Ran 4 tests in 0.002s\n\nOK\n",
+        "Ran 4 tests in 0.002s\n\nFAILED (failures=1)\n",
+    ),
+    (
+        "jest",
+        "PASS src/a.test.js\n\nTest Suites: 2 passed, 2 total\n"
+        "Tests:       10 passed, 10 total\nTime:        1.2 s\n",
+        "FAIL src/a.test.js\n\nTest Suites: 1 failed, 1 passed, 2 total\n"
+        "Tests:       1 failed, 9 passed, 10 total\nTime:        1.2 s\n",
+    ),
+    (
+        "vitest",
+        " Test Files  1 passed (1)\n      Tests  3 passed (3)\n   Duration  412ms\n",
+        " Test Files  1 failed (1)\n      Tests  1 failed | 2 passed (3)\n"
+        "   Duration  412ms\n",
+    ),
+    (
+        "mocha",
+        "\n  10 passing (52ms)\n\n",
+        "\n  9 passing (52ms)\n  1 pending\n  2 failing\n\n  1) suite\n     x\n",
+    ),
+    (
+        "go test",
+        "ok  \tgithub.com/x/pkg\t0.012s\nok  \tgithub.com/x/pkg2\t(cached)\n",
+        "--- FAIL: TestA (0.00s)\nFAIL\nFAIL\tgithub.com/x/pkg\t0.012s\n"
+        "ok  \tgithub.com/x/pkg2\t0.010s\n",
+    ),
+    (
+        "cargo test",
+        "running 5 tests\n.....\ntest result: ok. 5 passed; 0 failed; 0 ignored;"
+        " 0 measured; 0 filtered out; finished in 0.01s\n\n   Doc-tests x\n"
+        "running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored;"
+        " 0 measured; 0 filtered out; finished in 0.00s\n",
+        "running 5 tests\n....F\ntest result: FAILED. 4 passed; 1 failed; 0 ignored;"
+        " 0 measured; 0 filtered out; finished in 0.01s\n",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,passing,failing", RUNNER_OUTPUTS, ids=[r[0] for r in RUNNER_OUTPUTS]
+)
+def test_every_runner_is_read_from_a_python_run(label, passing, failing):
+    """A snippet that shells out to any runner exits 0 either way."""
+    passed = check_from_python_run("snippet:abc", 0, passing)
+    failed = check_from_python_run("snippet:abc", 0, failing)
+    assert passed is not None and failed is not None
+    assert (passed.label, passed.kind, passed.passed) == (label, "test", True)
+    assert (failed.label, failed.kind, failed.passed) == (label, "test", False)
+
+
+@pytest.mark.parametrize(
+    "label,passing,failing", RUNNER_OUTPUTS, ids=[r[0] for r in RUNNER_OUTPUTS]
+)
+def test_every_runner_is_read_from_a_piped_command(label, passing, failing):
+    """``npm test | tail`` exits with tail's status; the summary still decides."""
+    command = {"pytest": "pytest -q", "unittest": "python -m unittest"}.get(
+        label, f"{label} 2>&1"
+    )
+    argv = command.split()
+    passed = check_from_command(command, [argv], 0, passing)
+    failed = check_from_command(command, [argv], 0, failing)
+    assert passed is not None and failed is not None
+    assert passed.passed is True
+    assert failed.passed is False and failed.summary
+
+
+def test_a_failing_go_package_fails_the_run_whatever_came_after_it():
+    _, _, failing = next(r for r in RUNNER_OUTPUTS if r[0] == "go test")
+    check = check_from_python_run("snippet:abc", 0, failing)
+    assert check is not None and check.passed is False
+    assert check.summary.startswith("FAIL github.com/x/pkg")
+
+
+def test_a_coloured_vitest_summary_still_reads():
+    stdout = "\x1b[1m\x1b[32m      Tests  3 passed (3)\x1b[0m\n"
+    check = check_from_python_run("snippet:abc", 0, stdout)
+    assert check is not None and (check.label, check.passed) == ("vitest", True)
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "?   \tgithub.com/x/pkg\t[no test files]\n",
+        "ok  \tgithub.com/x/pkg\t0.002s [no tests to run]\n",
+        "Tests: pending\n",
+        "3 failed attempts to connect\n",
+        "test result: pending\n",
+    ],
+)
+def test_a_runner_that_ran_nothing_is_not_a_check(stdout):
+    assert check_from_python_run("snippet:abc", 0, stdout) is None
+
+
 def test_the_footer_reads_the_fact_without_the_text_parser():
     """A declared check never reaches the regexes that guess from text."""
     result = attach_check({"status": "success", "stdout": "noise"}, _check())
