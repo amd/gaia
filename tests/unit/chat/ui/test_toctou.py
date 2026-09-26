@@ -52,32 +52,72 @@ class TestSafeOpenDocument:
             or "symbolic" in exc_info.value.detail.lower()
         )
 
-    def test_safe_open_rejects_symlinked_directory_escape(self, home_tmp_dir):
+    def test_safe_open_rejects_symlinked_directory_escape(self, tmp_path, monkeypatch):
         """An intermediate symlinked dir inside home must not open files outside.
 
         The lexical (abspath) home check passes for
         ``~/.gaia_test_toctou/esc/secret.txt`` while the physical path lives
         outside home — the realpath containment check must reject it with 403.
         O_NOFOLLOW alone cannot catch this: it only guards the final component.
-        """
-        import tempfile
 
-        outside_dir = Path(tempfile.mkdtemp(prefix="gaia_toctou_outside_"))
+        Home is pinned to an isolated ``tmp_path`` subdirectory (matching
+        ``test_declared_root_does_not_open_its_parent``) rather than the real
+        home directory: ``tempfile.mkdtemp()``'s default location sits INSIDE
+        the user profile on Windows (``%TEMP%`` is
+        ``%USERPROFILE%\\AppData\\Local\\Temp``), so an "outside" directory
+        built from it is not actually outside home — the containment check
+        correctly allows it, and the test was asserting the wrong thing
+        rather than catching a real escape.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+        home_tmp = fake_home / ".gaia_test_toctou"
+        home_tmp.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        secret = outside_dir / "secret.txt"
+        secret.write_text("outside-home content")
+        escape_link = home_tmp / "esc"
         try:
-            secret = outside_dir / "secret.txt"
-            secret.write_text("outside-home content")
-            escape_link = home_tmp_dir / "esc"
-            try:
-                escape_link.symlink_to(outside_dir, target_is_directory=True)
-            except OSError:
-                pytest.skip("Symlink creation requires elevated privileges on Windows")
-            attack_path = escape_link / "secret.txt"
+            escape_link.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("Symlink creation requires elevated privileges on Windows")
+        attack_path = escape_link / "secret.txt"
+        with pytest.raises(HTTPException) as exc_info:
+            with safe_open_document(str(attack_path)):
+                pass
+        assert exc_info.value.status_code == 403
+
+    def test_symlink_directory_escape_rejected_without_needing_symlink_privilege(
+        self, tmp_path, monkeypatch
+    ):
+        """Same escape as above, proven deterministically on every runner.
+
+        The real-symlink version above skips wherever the OS refuses
+        unprivileged symlink creation (unprivileged Windows accounts,
+        some CI runners), so it can silently stop proving anything for
+        exactly the audiences most likely to hit a regression here.
+        Mocking ``os.path.realpath`` to return what it would if a symlink
+        HAD been resolved exercises the same containment check
+        unconditionally, so the escape stays covered even when the OS-level
+        test above is skipped.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+        home_tmp = fake_home / ".gaia_test_toctou"
+        home_tmp.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        secret = outside_dir / "secret.txt"
+        secret.write_text("outside-home content")
+        attack_path = home_tmp / "esc" / "secret.txt"
+        with patch("os.path.realpath", return_value=str(secret)):
             with pytest.raises(HTTPException) as exc_info:
                 with safe_open_document(str(attack_path)):
                     pass
-            assert exc_info.value.status_code == 403
-        finally:
-            shutil.rmtree(outside_dir, ignore_errors=True)
+        assert exc_info.value.status_code == 403
 
     def test_safe_open_rejects_missing_file(self, home_tmp_dir):
         """Non-existent file must return 404."""
@@ -158,7 +198,19 @@ class TestSafeOpenDocument:
         assert exc_info.value.status_code == 403
 
     def test_declared_root_still_rejects_symlink_escape(self, tmp_path, monkeypatch):
-        """realpath containment applies to declared roots too, not just home."""
+        """realpath containment applies to declared roots too, not just home.
+
+        Home is pinned away from ``tmp_path`` (matching
+        ``test_declared_root_does_not_open_its_parent``): ``tmp_path`` sits
+        under ``%TEMP%``, which is inside the real user profile on Windows,
+        so without pinning, ``outside_dir`` would be allowed by the
+        always-included home root regardless of ``GAIA_DOCUMENT_ROOTS`` —
+        passing without exercising the declared-root containment this test
+        is meant to prove.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
         corpus = tmp_path / "corpus"
         corpus.mkdir()
         outside_dir = tmp_path / "outside"
