@@ -11,6 +11,15 @@ behind any entry — API shapes, endpoints, and version semantics — see
   own server it reported the model server as missing, or its version as
   unknown. It now uses the same server as the rest of GAIA, with its key.
 
+- **`shutdown()` no longer waits forever when the sidecar survives a forced
+  kill.** It used to hang with no time limit, so Ctrl+C in `agent-email
+  playground` froze instead of telling you anything. It now rejects about
+  `timeoutMs` after the forced kill with an error naming the pid, the command
+  to kill it, and the port it still holds — `playground` prints that and exits
+  1. If you `await shutdown(sidecar)`, catch the rejection. The sidecar also
+  stays registered with the exit-time auto-reaper until it is confirmed gone,
+  so a survivor still gets one last kill when your process exits.
+
 - **`agent-email playground` no longer reports a clean exit when Ctrl+C fails
   to stop the sidecar.** A failed shutdown was thrown away and the command
   exited 0. It now prints the error and exits 1.
