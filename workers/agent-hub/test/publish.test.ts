@@ -172,6 +172,84 @@ describe("POST /publish — version immutability", () => {
     expect(await obj!.text()).toBe("original");
   });
 
+  it("rejects a second artifact whose manifest differs from the version's (409 manifest_mismatch)", async () => {
+    const env = makeEnv();
+    const first = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0", security_tier: "experimental" }),
+      artifact: "win32-binary",
+      filename: "email-agent-win32-x64.exe",
+    });
+    expect(first.status).toBe(201);
+    const manifestBefore = await (await env.bucket.get("agents/email/manifest.json"))!.text();
+    const indexBefore = await (await env.bucket.get("index.json"))!.text();
+
+    const second = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0", security_tier: "verified" }),
+      artifact: "darwin-arm64-binary",
+      filename: "email-agent-darwin-arm64",
+    });
+    expect(second.status).toBe(409);
+    expect(((await second.json()) as any).error.code).toBe("manifest_mismatch");
+
+    // Nothing about the published version moved: no new artifact, same catalog.
+    expect(env.bucket.keys()).not.toContain("agents/email/0.1.0/email-agent-darwin-arm64");
+    expect(await (await env.bucket.get("agents/email/manifest.json"))!.text()).toBe(manifestBefore);
+    expect(await (await env.bucket.get("index.json"))!.text()).toBe(indexBefore);
+    const index = JSON.parse(indexBefore) as CatalogIndex;
+    expect(index.agents.find((a) => a.id === "email")!.security_tier).toBe("experimental");
+  });
+
+  it("reports manifest_mismatch, not version_exists, for a same-filename re-post with a changed manifest", async () => {
+    // version_exists is the publisher's "already published" success signal; a
+    // changed manifest must not be able to hide behind it.
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "original",
+      filename: "email-agent-win32-x64.exe",
+    });
+    const again = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0", description: '"changed"' }),
+      artifact: "original",
+      filename: "email-agent-win32-x64.exe",
+    });
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as any).error.code).toBe("manifest_mismatch");
+  });
+
+  it("accepts a second artifact whose manifest differs only in formatting (CRLF, comments)", async () => {
+    // Release legs can check the same gaia-agent.yaml out with different line
+    // endings; equal content must still join the version.
+    const env = makeEnv();
+    const yaml = sampleManifest({ id: "email", version: "0.1.0" });
+    expect(
+      (
+        await publish(env, {
+          token: "tok_amd",
+          manifestYaml: yaml,
+          artifact: "win32-binary",
+          filename: "email-agent-win32-x64.exe",
+        })
+      ).status
+    ).toBe(201);
+    const rawBefore = await (await env.bucket.get("agents/email/0.1.0/gaia-agent.yaml"))!.text();
+    const second = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: "# same manifest, Windows checkout\r\n" + yaml.replace(/\n/g, "\r\n"),
+      artifact: "darwin-arm64-binary",
+      filename: "email-agent-darwin-arm64",
+    });
+    expect(second.status).toBe(201);
+    expect(((await second.json()) as any).published.version_artifacts).toBe(2);
+    // The first post's bytes stay the version's record.
+    const raw = await (await env.bucket.get("agents/email/0.1.0/gaia-agent.yaml"))!.text();
+    expect(raw).toBe(rawBefore);
+  });
+
   it("allows publishing a new version of an existing agent (201)", async () => {
     const env = makeEnv();
     await publish(env, {
