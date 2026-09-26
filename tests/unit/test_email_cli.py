@@ -111,25 +111,57 @@ class TestDispatch:
             assert "use_claude" not in call.kwargs
             assert "use_chatgpt" not in call.kwargs
 
+    @pytest.mark.parametrize(
+        "argv_tail",
+        [
+            pytest.param(
+                [
+                    "email",
+                    "--base-url",
+                    "http://lemonade.example:13305/api/v1",
+                    "-q",
+                    "ping",
+                ],
+                id="after-subcommand",
+            ),
+            pytest.param(
+                [
+                    "--base-url",
+                    "http://lemonade.example:13305/api/v1",
+                    "email",
+                    "-q",
+                    "ping",
+                ],
+                id="before-subcommand",
+            ),
+            pytest.param(
+                [
+                    "--base-url=http://lemonade.example:13305/api/v1",
+                    "email",
+                    "-q",
+                    "ping",
+                ],
+                id="before-subcommand-equals",
+            ),
+        ],
+    )
     def test_base_url_is_rejected_instead_of_only_reaching_the_health_check(
-        self, capsys
+        self, capsys, argv_tail
     ):
         """#4312: the query runs in the daemon's email sidecar, which never sees
         the CLI's ``--base-url``. Accepting it would pre-flight one server and
-        then triage on another, so the flag must fail loudly before either."""
+        then triage on another, so the flag must fail loudly before either.
+
+        Parametrized over flag position: argparse copies the subparser namespace
+        over the parent's, so a pre-subcommand ``gaia --base-url ... email`` used
+        to be discarded and run on the daemon's server with no warning at all.
+        """
         import sys
 
         from gaia import cli
 
         old_argv = sys.argv
-        sys.argv = [
-            "gaia",
-            "email",
-            "--base-url",
-            "http://lemonade.example:13305/api/v1",
-            "-q",
-            "ping",
-        ]
+        sys.argv = ["gaia", *argv_tail]
         try:
             with (
                 patch("gaia.daemon.agent_query.run_query") as run_query,

@@ -1119,7 +1119,10 @@ def build_parser():
     )
     parent_parser.add_argument(
         "--base-url",
-        default=None,
+        # SUPPRESS, not None: argparse copies the subparser's namespace over the
+        # parent's, so a None default here would erase a pre-subcommand
+        # `gaia --base-url ... <cmd>`. The top-level parser still defaults it.
+        default=argparse.SUPPRESS,
         help=f"Lemonade LLM server base URL (default: from LEMONADE_BASE_URL env or {DEFAULT_LEMONADE_URL})",
     )
     parent_parser.add_argument(
