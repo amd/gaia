@@ -158,6 +158,10 @@ class TestSafeOpenDocument:
 
     def test_declared_root_still_rejects_symlink_escape(self, tmp_path, monkeypatch):
         """realpath containment applies to declared roots too, not just home."""
+        # Pin home: on Windows tmp_path sits inside it, so `outside` would pass.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
         corpus = tmp_path / "corpus"
         corpus.mkdir()
         outside_dir = tmp_path / "outside"
