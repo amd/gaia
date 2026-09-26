@@ -1425,6 +1425,11 @@
       "total": {
         "title": "Total",
         "type": "integer"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
       }
     },
     "required": [

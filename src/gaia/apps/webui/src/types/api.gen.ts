@@ -440,6 +440,7 @@ export interface FileSearchResponse {
   results: FileSearchResult[];
   searched_locations?: string[];
   total: number;
+  truncated?: boolean;
 }
 /**
  * A single file search result.
