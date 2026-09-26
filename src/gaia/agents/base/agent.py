@@ -752,6 +752,19 @@ def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
     return answer, "\n\n".join(p for p in parts if p) or None
 
 
+def _response_reasoning(response: Any) -> Optional[str]:
+    """The model's reasoning off a chat response, or ``None`` when it has none.
+
+    ``AgentResponse.reasoning`` is declared ``Optional[str]``, but this reads it
+    with ``getattr`` because older responses and test doubles may not carry the
+    attribute at all. Anything that is not a non-empty string is "no reasoning":
+    it would otherwise ride into the request history as ``reasoning_content``
+    and into the trace file, neither of which can serialise it.
+    """
+    value = getattr(response, "reasoning", None)
+    return value if isinstance(value, str) and value else None
+
+
 # Unfinished-answer guard (#3887): a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
 _MAX_UNFINISHED_ANSWER_REPROMPTS = 2
@@ -6516,9 +6529,7 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
-                                response_reasoning = getattr(
-                                    chunk_response, "reasoning", None
-                                )
+                                response_reasoning = _response_reasoning(chunk_response)
                                 # Non-empty complete chunk = tool_calls sentinel from
                                 # native tool-calling path (no streaming for tool calls)
                                 if chunk_response.text:
@@ -6678,7 +6689,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
-                        response_reasoning = getattr(chat_response, "reasoning", None)
+                        response_reasoning = _response_reasoning(chat_response)
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
@@ -6972,7 +6983,7 @@ Do NOT wrap conversational replies in JSON.
 
                     for chunk_response in stream_gen:
                         if chunk_response.is_complete:
-                            plan_reasoning = getattr(chunk_response, "reasoning", None)
+                            plan_reasoning = _response_reasoning(chunk_response)
                             if chunk_response.text:
                                 full_response = chunk_response.text
                         else:
@@ -7014,7 +7025,7 @@ Do NOT wrap conversational replies in JSON.
                         max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
-                    plan_reasoning = getattr(chat_response, "reasoning", None)
+                    plan_reasoning = _response_reasoning(chat_response)
                     self.console.stop_progress()
 
                 plan_response, inline_plan_reasoning = _split_reasoning(plan_response)
