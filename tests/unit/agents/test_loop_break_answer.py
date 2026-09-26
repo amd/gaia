@@ -263,6 +263,53 @@ def test_closing_call_counts_its_tokens_and_step(agent):
     assert result["input_tokens"] == counted * _STATS["input_tokens"]
 
 
+def test_the_closing_answer_is_printed_not_just_returned(agent):
+    """On the CLI the console is the only thing that prints the answer.
+
+    The normal and step-cap paths print where they set ``final_answer``; the
+    loop guard returns its answer and breaks, so without an explicit print the
+    turn ended on the repeat warning and the user never saw the answer this
+    whole path exists to produce. It was in ``result["result"]`` the whole
+    time, which is why unit tests asserting on the return value missed it.
+    """
+    _stub_chat(agent, *_repeat_then(_ANSWER))
+    agent.console.print_final_answer = MagicMock()
+
+    result = agent.process_query("fix the loader and run the tests")
+
+    agent.console.print_final_answer.assert_called_once()
+    printed = agent.console.print_final_answer.call_args[0][0]
+    assert printed.startswith(_ANSWER)
+    assert printed == result["result"]
+    # Printed text carries the scope line, and only one of it.
+    assert len(_scope_lines(printed)) == 1
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_the_legacy_path_prints_its_closing_answer_too():
+    agent = _make_agent(streaming=False, model_id=None)
+    _stub_chat(agent, *([_json_call()] * _CALLS), _answer(_ANSWER))
+    agent.console.print_final_answer = MagicMock()
+
+    result = agent.process_query("fix the loader and run the tests")
+
+    agent.console.print_final_answer.assert_called_once()
+    assert agent.console.print_final_answer.call_args[0][0] == result["result"]
+
+
+def test_a_failed_repeat_summary_is_printed_as_well(agent):
+    """The summary branch reaches the user by the same route."""
+    agent.tool_result = {"status": "error", "error": "boom"}
+    _stub_chat(agent, *_repeat_then())
+    agent.console.print_final_answer = MagicMock()
+
+    result = agent.process_query("fix the loader and run the tests")
+
+    agent.console.print_final_answer.assert_called_once()
+    assert agent.console.print_final_answer.call_args[0][0] == result["result"]
+    assert "boom" in result["result"]
+
+
 # ---------------------------------------------------------------------------
 # Repeats that failed: today's message, and no closing call
 # ---------------------------------------------------------------------------

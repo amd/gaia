@@ -350,7 +350,7 @@ Agents accept many configuration parameters. Here's what each one does:
 agent = MyAgent(
     # === LLM Selection ===
     use_claude=False,              # Use Anthropic Claude API
-    use_chatgpt=False,             # Use OpenAI ChatGPT API
+    use_chatgpt=False,             # Removed; True raises migration guidance
     # If both are False, uses local Lemonade Server
 
     # === Local LLM Settings ===
@@ -359,7 +359,7 @@ agent = MyAgent(
 
     # === Cloud LLM Settings ===
     claude_model="claude-sonnet-4-20250514",  # Claude model version
-    # API keys are read from environment: ANTHROPIC_API_KEY, OPENAI_API_KEY
+    # API key is read from environment: ANTHROPIC_API_KEY
 
     # === Agent Behavior ===
     max_steps=20,                  # Max reasoning loop iterations
@@ -431,31 +431,14 @@ agent = MyAgent(
 **Best for:** Complex reasoning, production applications, code analysis.
 </Accordion>
 
-<Accordion title="Option 3: ChatGPT API - Wide Compatibility">
+<Accordion title="Gateway models through Lemonade">
 
-Uses OpenAI's GPT models:
+The direct OpenAI and LiteLLM adapters have been removed. Configure the upstream
+model in Lemonade and pass its server URL and catalog model ID to the agent.
+See [gateway migration](/sdk/sdks/llm#gateway-migration). Legacy
+`use_chatgpt=True` calls raise an actionable error rather than selecting another
+provider.
 
-```bash
-# Set your API key
-export OPENAI_API_KEY="your-key-here"
-```
-
-```python
-agent = MyAgent(
-    use_chatgpt=True
-)
-```
-
-**Pros:**
-- Wide tool support
-- Familiar API
-- Good general performance
-
-**Cons:**
-- API costs
-- Requires internet connection
-
-**Best for:** Integration with existing OpenAI workflows.
 </Accordion>
 
 ### Tuning Agent Behavior
@@ -794,6 +777,30 @@ print(result["result"])
 ---
 
 ## Deep Dive: Under the Hood
+
+`process_query()` also returns `model_messages`: a deep-copied, model-facing trace
+of the current turn, including native tool calls and their results. It excludes
+prior conversation history and the system prompt. Hosts can persist it and use
+complete turns to populate `conversation_history` on later calls. Overflow retry
+trimming does not replace the retained evidence with stubs. Calls interrupted
+before a result was recorded receive an explicit incomplete-result message;
+this does not claim they executed successfully.
+
+The flagship TUI persists these traces in private SQLite files under
+`~/.gaia/tui/history/` (`GAIA_TUI_HOME/history/` when configured). Each launch
+starts a separate session. Set `GAIA_HISTORY_FILE=/path/session.sqlite3` to
+explicitly resume the same transcript, or pass `--history-file` to the stdio
+agent. This archive contains tool output, including local file contents.
+Delete the file to remove it. A host calling `conversation_history.clear()`
+erases both the visible history and its archived turns.
+
+The next prompt admits complete turns using the active model's context budget,
+reserving space for the system prompt, tool schemas, current question and answer.
+Older turns are evicted in blocks from the model view, never cut into invalid
+call/result pairs. The archive remains intact across context eviction and model
+switches. The terminal event is sent only after the completed trace is committed;
+a storage failure is reported as an error rather than a successful saved turn.
+
 
 <Accordion title="How process_query() Works Internally">
 

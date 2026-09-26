@@ -12,6 +12,8 @@
  * Every guard fails loudly with a structured error.
  */
 
+import { parse as parseYaml } from "yaml";
+
 import { assertAuthorAllowed, authenticate } from "./auth";
 import { makeVersionEntry, rebuildIndex, upsertVersion } from "./catalog";
 import { HttpError, json } from "./http";
@@ -38,6 +40,54 @@ import {
   writeAgentManifest,
 } from "./storage";
 import type { ArtifactInfo, Env } from "./types";
+
+/** JSON with object keys sorted at every depth, so equal YAML documents compare equal. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.keys(v as Record<string, unknown>)
+            .sort()
+            .map((k) => [k, (v as Record<string, unknown>)[k]])
+        )
+      : v
+  );
+}
+
+/**
+ * A version's gaia-agent.yaml is fixed by its first publish. A later artifact may
+ * join the version only with the same manifest — byte-equal, or equal once parsed
+ * (line endings, comments, key order) — because the catalog entry is rebuilt from
+ * whatever manifest the latest post carried.
+ */
+async function assertSameVersionManifest(
+  env: Env,
+  id: string,
+  version: string,
+  manifestText: string
+): Promise<void> {
+  const key = rawManifestKey(id, version);
+  const stored = await env.BUCKET.get(key);
+  if (!stored) {
+    throw new HttpError(
+      500,
+      "manifest_record_missing",
+      `${id}@${version} is in the catalog but its stored gaia-agent.yaml (${key}) is ` +
+        `missing, so a new artifact cannot be checked against it. Restore that object, ` +
+        `or publish under a new version.`
+    );
+  }
+  const storedText = await stored.text();
+  if (storedText === manifestText) return;
+  if (canonicalJson(parseYaml(storedText)) === canonicalJson(parseYaml(manifestText))) return;
+  throw new HttpError(
+    409,
+    "manifest_mismatch",
+    `${id}@${version} is already published with a different gaia-agent.yaml, and a ` +
+      `published version's manifest is immutable. Post every artifact of a version ` +
+      `with the same manifest; to change it, bump the version.`
+  );
+}
 
 /**
  * Read + validate the optional `package_files` part: the listing of files inside
@@ -333,8 +383,9 @@ export async function handlePublish(
 
   // Publisher scope (ownership) against the existing agent manifest. Version
   // immutability is enforced per-artifact below: a version's artifact set is
-  // append-only per distinct filename, so a second platform binary can join an
-  // existing version, but no published filename can ever be overwritten.
+  // append-only per distinct filename, so a second platform binary carrying the
+  // same manifest can join an existing version, but no published filename can
+  // ever be overwritten.
   const existing = await readAgentManifest(env.BUCKET, manifest.id);
   if (existing && existing.author !== manifest.author) {
     throw new HttpError(
@@ -345,6 +396,11 @@ export async function handlePublish(
     );
   }
   const versionExists = Boolean(existing?.versions[manifest.version]);
+  // Before the per-filename 409, so a changed manifest can't pass as the
+  // publisher's "already published" success signal.
+  if (versionExists) {
+    await assertSameVersionManifest(env, manifest.id, manifest.version, manifestText);
+  }
 
   const key = artifactKey(manifest.id, manifest.version, filename);
   // Per-filename immutability: a published artifact is never overwritten. A new
