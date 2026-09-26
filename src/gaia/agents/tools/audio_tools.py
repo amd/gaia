@@ -383,18 +383,11 @@ class AudioToolsMixin:
         ) -> Dict:
             """Transcribe an audio or video file and SAVE it to a text file.
 
-            Handles mp4, mkv, mov, m4a, mp3, wav and anything else ffmpeg can
-            decode.
-
-            This does NOT return the transcript — a long meeting would be
-            truncated on the way back. It returns the file path plus a short
-            preview. To summarise or answer questions, read the saved file:
-            index_document(transcript_path) then summarize_document(...), or
-            query_documents(...). Never summarise from `preview`; it is only
-            the first 1200 characters.
-
-            Long files take minutes. A 45-minute recording is roughly 5 minutes
-            of transcription.
+            Takes any format ffmpeg decodes (mp4, mkv, m4a, mp3, wav). Returns
+            a path and a 1200-character preview, never the transcript: to
+            summarize it, index_document(transcript_path) then
+            summarize_document or query_documents. A 45-minute recording takes
+            about 5 minutes.
 
             Args:
                 file_path: Path to the audio or video file.
@@ -404,10 +397,7 @@ class AudioToolsMixin:
                              ~/.gaia/transcripts/<name>.txt
 
             Returns:
-                Dictionary with status, transcript_path, preview,
-                character_count, segment_count, audio_duration, language,
-                model, next_step, low_confidence_spans, and
-                low_confidence_span_count
+                transcript_path, preview, duration, low-confidence spans.
             """
             return self._transcribe_media(
                 file_path,
@@ -423,15 +413,10 @@ class AudioToolsMixin:
         ) -> Dict:
             """Correct mis-hearings and label the speakers in a raw transcript.
 
-            Call this on the file `transcribe_media` produced, BEFORE
-            summarizing. It works through the transcript in sections, repairs
-            wording the recognizer was unsure about, works out who is speaking
-            from self-introductions and direct address, and writes a corrected,
-            speaker-labelled transcript to a new file.
-
-            A summary built from the raw transcript has no speakers and can
-            repeat mis-heard names, so the action items come out wrong. Always
-            summarize the file this returns, not the raw one.
+            Call on the file transcribe_media produced, BEFORE summarizing: a
+            summary off the raw transcript has no speakers and repeats
+            mis-heard names, so its action items come out wrong. Writes a new
+            corrected file — summarize that one, not the raw one.
 
             Args:
                 transcript_path: The raw transcript from transcribe_media.
@@ -439,8 +424,7 @@ class AudioToolsMixin:
                              writes alongside as <name>.transcript.md
 
             Returns:
-                Dictionary with status, refined_path, speakers, sections,
-                corrections_applied and next_step
+                refined_path, speakers, sections, corrections_applied.
             """
             return self._refine_transcript(transcript_path, output_path or None)
 
@@ -452,6 +436,8 @@ class AudioToolsMixin:
         output_path: Optional[str] = None,
     ) -> Dict:
         """Decode the file to WAV, transcribe it, and persist the transcript."""
+        from tempfile import TemporaryDirectory
+
         from gaia.agents.base.tools import ToolCancelled, raise_if_cancelled
         from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL, LemonadeASRClient
         from gaia.audio.media import ensure_ffmpeg, probe_duration, to_wav16k_mono
@@ -481,7 +467,7 @@ class AudioToolsMixin:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-        wav_path = None
+        scratch = None
         saved_path = None
         try:
             media_seconds = probe_duration(source)
@@ -503,7 +489,12 @@ class AudioToolsMixin:
                     f"Decoding {source.name} — {pct:.0%} of {_clock(media_seconds)}"
                 )
 
-            wav_path = to_wav16k_mono(source, progress_callback=_decoding)
+            scratch = TemporaryDirectory(prefix="gaia-media-")
+            wav_path = to_wav16k_mono(
+                source,
+                dest=Path(scratch.name) / "audio.16k.wav",
+                progress_callback=_decoding,
+            )
 
             raise_if_cancelled()
             client = LemonadeASRClient(model=model or DEFAULT_ASR_MODEL)
@@ -574,15 +565,15 @@ class AudioToolsMixin:
                 )
             return failure
         finally:
-            # The decoded WAV is a large scratch file; the transcript is
-            # the artifact. Never let cleanup mask the real exception.
-            if wav_path is not None:
+            # The decoded WAV lives in scratch; the transcript is the artifact.
+            # Never let cleanup mask the real exception.
+            if scratch is not None:
                 try:
-                    Path(wav_path).unlink(missing_ok=True)
+                    scratch.cleanup()
                 except OSError as cleanup_error:
                     logger.warning(
-                        "Could not remove scratch WAV %s: %s",
-                        wav_path,
+                        "Could not remove scratch directory %s: %s",
+                        scratch.name,
                         cleanup_error,
                     )
 
@@ -678,19 +669,26 @@ class AudioToolsMixin:
                         f"Identifying speakers — batch {index} of {len(batches)}"
                     )
                     named.extend(self._name_turns(batch, speaker_notes))
+            if acoustic_labels is None:
+                # Only the text-only path over-splits. Merging voices separated
+                # acoustically undoes real evidence.
+                self._report_progress("Consolidating speakers...")
+                named = self._consolidate_speakers(named)
         except ToolCancelled:
             logger.warning("Refinement of %s cancelled after timeout", source)
             raise
         except Exception as e:
             logger.error("Refinement failed for %s: %s", source, e)
-            return {"status": "error", "error": str(e)}
+            return {
+                "status": "error",
+                "error": (
+                    f"Speaker identification failed: {e}. The raw transcript "
+                    f"at {source} and its timings are unchanged; fix the cause "
+                    "and call refine_transcript on it again."
+                ),
+                "source_transcript": str(source),
+            }
 
-        if acoustic_labels is None:
-            # Only the text-only path over-splits. Merging voices
-            # separated acoustically undoes real evidence — it
-            # collapsed four measured voices into two.
-            self._report_progress("Consolidating speakers...")
-            named = self._consolidate_speakers(named)
         blocks = [f"{name}: {text}" for name, text in _merge_adjacent(named)]
         speakers = list(dict.fromkeys(name for name, _ in named))
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -781,11 +779,7 @@ class AudioToolsMixin:
             "form `Label -> Name`, one per label, including labels that stay "
             "unchanged.\n\nVoices:\n" + sample
         )
-        try:
-            mapping = _parse_alias_map(self._llm_text(prompt), set(roster))
-        except Exception as e:  # noqa: BLE001 — anonymous labels still work
-            logger.info("Could not put names to voices (%s)", e)
-            return named
+        mapping = _parse_alias_map(self._llm_text(prompt), set(roster))
         # Never let naming merge two distinct voices into one person.
         collisions = {
             v for v in mapping.values() if list(mapping.values()).count(v) > 1
@@ -898,11 +892,7 @@ class AudioToolsMixin:
             "including labels that stay as they are. Use a real name as the "
             "final label when one is evident.\n\nLabels:\n" + sample
         )
-        try:
-            mapping = _parse_alias_map(self._llm_text(prompt), set(roster))
-        except Exception as e:  # noqa: BLE001 — consolidation is an improvement
-            logger.info("Speaker consolidation skipped (%s)", e)
-            return named
+        mapping = _parse_alias_map(self._llm_text(prompt), set(roster))
         if not mapping:
             return named
         return [(mapping.get(name, name), text) for name, text in named]

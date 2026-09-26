@@ -57,9 +57,7 @@ def _stamp(result, scenario_data, cli_agent_type, observed, backend_url="http://
 
 
 def test_agreement_records_both_ids_and_preserves_status():
-    result = _stamp(
-        _passing_result(), {"id": "s", "agent_type": "gaia"}, None, observed="gaia"
-    )
+    result = _stamp(_passing_result(), {"id": "s"}, "gaia", observed="gaia")
     assert result["agent_type_requested"] == "gaia"
     assert result["agent_type_observed"] == "gaia"
     assert result["status"] == "PASS"
@@ -68,34 +66,27 @@ def test_agreement_records_both_ids_and_preserves_status():
 def test_dropped_kwarg_is_caught_and_fails_the_scenario():
     # The driver was told to create a `gaia` session and didn't; the backend
     # default answered instead. Scoring that as a `gaia` PASS is the bug.
-    result = _stamp(
-        _passing_result(), {"id": "s", "agent_type": "gaia"}, None, observed="chat"
-    )
+    result = _stamp(_passing_result(), {"id": "s"}, "gaia", observed="chat")
     assert result["status"] == "INFRA_ERROR"
     assert result["agent_type_requested"] == "gaia"
     assert result["agent_type_observed"] == "chat"
     assert "gaia" in result["error"] and "chat" in result["error"]
 
 
-def test_scenario_agent_type_beats_the_cli_flag_as_the_requested_id():
+def test_a_stray_scenario_agent_type_does_not_override_the_run():
+    # validate_scenario rejects the key, so this dict cannot come off disk --
+    # pinned anyway because honouring it is what made a run score one agent
+    # while its scorecard recorded another.
     result = _stamp(
-        _passing_result(), {"id": "s", "agent_type": "doc"}, "gaia", observed="doc"
+        _passing_result(), {"id": "s", "agent_type": "doc"}, "gaia", observed="gaia"
     )
-    assert result["agent_type_requested"] == "doc"
-    assert result["status"] == "PASS"
-
-
-def test_cli_flag_is_the_requested_id_when_the_scenario_declares_none():
-    result = _stamp(_passing_result(), {"id": "s"}, "gaia", observed="gaia")
     assert result["agent_type_requested"] == "gaia"
     assert result["status"] == "PASS"
 
 
 def test_legacy_alias_is_not_a_mismatch():
     # `doc-lite` sessions are stored and read back as `doc`.
-    result = _stamp(
-        _passing_result(), {"id": "s", "agent_type": "doc-lite"}, None, observed="doc"
-    )
+    result = _stamp(_passing_result(), {"id": "s"}, "doc-lite", observed="doc")
     assert result["status"] == "PASS"
     assert result["agent_type_observed"] == "doc"
 
@@ -108,7 +99,7 @@ def test_legacy_alias_is_not_a_mismatch():
 def test_missing_session_id_discards_a_score():
     result = _passing_result()
     del result["session_id"]
-    _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="gaia")
+    _stamp(result, {"id": "s"}, "gaia", observed="gaia")
     assert result["status"] == "INFRA_ERROR"
     assert result["agent_type_observed"] is None
     assert "session_id" in result["error"]
@@ -117,8 +108,8 @@ def test_missing_session_id_discards_a_score():
 def test_unreachable_backend_discards_a_score_and_names_the_url():
     result = _stamp(
         _passing_result(),
-        {"id": "s", "agent_type": "gaia"},
-        None,
+        {"id": "s"},
+        "gaia",
         observed=RuntimeError("connection refused"),
         backend_url="http://127.0.0.1:4200",
     )
@@ -134,7 +125,7 @@ def test_unverifiable_does_not_overwrite_a_more_specific_status():
         "status": "BLOCKED_BY_ARCHITECTURE",
         "turns": [{"turn": 1}],
     }
-    _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="gaia")
+    _stamp(result, {"id": "s"}, "gaia", observed="gaia")
     assert result["status"] == "BLOCKED_BY_ARCHITECTURE"
     assert "session_id" in result["provenance_warning"][0]
     assert "error" not in result
@@ -148,7 +139,7 @@ def test_a_mismatch_overrides_even_a_more_specific_status():
         "session_id": "sess-1",
         "turns": [{"turn": 1}],
     }
-    _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="chat")
+    _stamp(result, {"id": "s"}, "gaia", observed="chat")
     assert result["status"] == "INFRA_ERROR"
 
 
@@ -160,15 +151,15 @@ def test_a_scenario_that_never_measured_keeps_its_own_status(status):
     # These never got far enough to create a session; relabelling them
     # INFRA_ERROR would erase the real failure.
     result = {"scenario_id": "s", "status": status, "turns": []}
-    _stamp(result, {"id": "s", "agent_type": "gaia"}, None, observed="chat")
+    _stamp(result, {"id": "s"}, "gaia", observed="chat")
     assert result["status"] == status
     assert result["agent_type_requested"] == "gaia"
     assert "error" not in result
 
 
 def test_no_agent_requested_checks_nothing():
-    # Neither the scenario nor the CLI named an agent, so the backend default
-    # is right by definition — and a missing session_id costs nothing.
+    # The run named no agent, so the backend default is right by definition —
+    # and a missing session_id costs nothing.
     result = _passing_result()
     del result["session_id"]
     _stamp(result, {"id": "s"}, None, observed="chat")
@@ -210,9 +201,7 @@ def test_a_chat_scenario_cannot_distinguish_a_drop_from_a_request():
     # HTTP a scenario that legitimately asks for `chat` looks identical to a
     # dropped kwarg. Harmless for every non-`chat` scenario, which is the case
     # the guard exists for.
-    result = _stamp(
-        _passing_result(), {"id": "s", "agent_type": "chat"}, None, observed="chat"
-    )
+    result = _stamp(_passing_result(), {"id": "s"}, "chat", observed="chat")
     assert result["status"] == "PASS"
 
 

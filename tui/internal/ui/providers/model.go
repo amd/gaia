@@ -68,6 +68,19 @@ func (m Model) Init() tea.Cmd {
 	return func() tea.Msg { p, e := c.Providers(m.ctx); return loadedMsg{source: c, providers: p, err: e} }
 }
 func (m Model) chosen() string { return names[m.selected] }
+
+// keyStatus reports whether the chosen provider already has a credential,
+// read live from m.providers rather than a value snapshotted at setup() time
+// — so it stays correct across a key clear (Ctrl+D) or a provider chosen
+// before the initial Providers() fetch has landed.
+func (m Model) keyStatus() (env, runtime bool) {
+	for _, p := range m.providers {
+		if p.Name == m.chosen() {
+			return p.EnvKey, p.RuntimeKey
+		}
+	}
+	return false, false
+}
 func (m Model) fetchModels() tea.Cmd {
 	c, p := m.client, m.chosen()
 	return func() tea.Msg { models, e := c.Models(m.ctx, p); return modelsMsg{source: c, models: models, err: e} }
@@ -99,7 +112,14 @@ func (m Model) setup() Model {
 	}
 	m.fields[3].EchoMode = textinput.EchoPassword
 	m.fields[3].EchoCharacter = '•'
-	m.fields[3].Placeholder = "Paste API key (blank uses existing key)"
+	switch env, runtime := m.keyStatus(); {
+	case env:
+		m.fields[3].Placeholder = "Blank uses the environment key"
+	case runtime:
+		m.fields[3].Placeholder = "Blank keeps the saved key"
+	default:
+		m.fields[3].Placeholder = "Paste API key"
+	}
 	m.focus = 3
 	if p.Name == "amd" && p.BaseURL == "" {
 		m.focus = 0
@@ -160,11 +180,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.models = v.models
 		sort.Slice(m.models, func(i, j int) bool {
-			if m.models[i].ID == lemonade.FireworksModel {
-				return true
-			}
-			if m.models[j].ID == lemonade.FireworksModel {
-				return false
+			if ri, rj := rankKey(m.models[i].ID), rankKey(m.models[j].ID); ri != rj {
+				return ri < rj
 			}
 			return m.models[i].ID < m.models[j].ID
 		})
@@ -182,6 +199,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.note = v.err.Error()
 		} else {
 			m.note = "Runtime key cleared. An environment key, if set, remains active."
+			// Reflect the clear immediately rather than waiting on the
+			// m.Init() refresh below to land — otherwise the "key already
+			// configured" notice keeps claiming a key that was just removed
+			// for however long that request takes.
+			for i := range m.providers {
+				if m.providers[i].Name == m.chosen() {
+					m.providers[i].RuntimeKey = false
+				}
+			}
 		}
 		return m, m.Init()
 	case tea.KeyMsg:
@@ -306,6 +332,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
+// rankKey orders recommended models by rank and everything else after them.
+func rankKey(id string) int {
+	if rank, _, ok := lemonade.Rank(id); ok {
+		return rank
+	}
+	return len(lemonade.RecommendedModels) + 1
+}
 func (m Model) filteredModels() []lemonade.Model {
 	var out []lemonade.Model
 	for _, model := range m.models {
@@ -351,12 +385,26 @@ func (m Model) View() string {
 				lines = append(lines, "Usage may incur charges.")
 			}
 		} else if m.chosen() == "fireworks" {
-			lines = append(lines, "Chat history is sent to Fireworks AI. Usage may incur charges.", "Suggested model: Gemma 4 31B IT", "Endpoint: "+lemonade.FireworksURL)
+			top := lemonade.TopRecommendation()
+			lines = append(lines, "Chat history is sent to Fireworks AI. Usage may incur charges.", "Recommended model: "+strings.TrimPrefix(top.ID, "fireworks.")+" · "+top.Note, "Endpoint: "+lemonade.FireworksURL)
 		} else {
 			lines = append(lines, "Chat history is sent to your configured AMD gateway.")
 		}
 		if m.height >= 22 {
 			lines = append(lines, "Keys stay in Lemonade memory until it restarts.", "Provider settings are shared by clients of this Lemonade server.")
+		}
+		success := lipgloss.NewStyle().Foreground(theme.Success)
+		switch env, runtime := m.keyStatus(); {
+		case env && m.height < 22:
+			lines = append(lines, success.Render("Environment key active — blank keeps it."))
+		case runtime && m.height < 22:
+			lines = append(lines, success.Render("Key already saved — blank keeps it."))
+		case env:
+			lines = append(lines, success.Render(
+				"An environment key is already active for "+lemonade.Label(m.chosen())+" and takes precedence over any key entered below — leave API key blank to keep using it."))
+		case runtime:
+			lines = append(lines, success.Render(
+				"A key is already configured for "+lemonade.Label(m.chosen())+" — leave API key blank to keep using it, or paste a new one to replace it."))
 		}
 		lines = append(lines, "")
 		labels := []string{"Gateway URL", "Auth header", "Prefix (include trailing space for Bearer)", "API key"}
@@ -383,13 +431,15 @@ func (m Model) View() string {
 				marker = "› "
 			}
 			label := strings.TrimPrefix(models[i].ID, m.chosen()+".")
-			if models[i].ID == lemonade.FireworksModel {
-				label += " · suggested"
+			if rank, note, ok := lemonade.Rank(models[i].ID); ok {
+				label += fmt.Sprintf(" · #%d %s", rank, note)
 			}
+			// One row per model: a wrapped row would push the rows above it out of the budget.
+			label = ansi.Truncate(marker+label, w, "…")
 			if i == m.focus {
-				lines = append(lines, title.Render(marker+label))
+				lines = append(lines, title.Render(label))
 			} else {
-				lines = append(lines, marker+label)
+				lines = append(lines, label)
 			}
 		}
 		if len(models) == 0 {

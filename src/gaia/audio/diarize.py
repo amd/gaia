@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -29,6 +28,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from gaia.logger import get_logger
+from gaia.utils.archive import ArchiveError, safe_extract
 
 log = get_logger(__name__)
 
@@ -253,13 +253,7 @@ def _ensure_models(say: Callable[[str], None]) -> None:
         archive = MODEL_DIR / "segmentation.tar.bz2"
         _download(_SEGMENTATION_ARCHIVE, archive)
         try:
-            with tarfile.open(archive, "r:bz2") as tar:
-                _safe_extract(tar, MODEL_DIR)
-        except (tarfile.TarError, OSError) as e:
-            raise DiarizationError(
-                f"Could not unpack the segmentation model: {e}. Delete "
-                f"{MODEL_DIR} and try again."
-            ) from e
+            _unpack_models(archive, MODEL_DIR)
         finally:
             archive.unlink(missing_ok=True)
 
@@ -297,33 +291,17 @@ def _download(url: str, destination: Path) -> None:
         ) from e
 
 
-def _safe_extract(tar: tarfile.TarFile, target: Path) -> None:
-    """Extract a model archive without letting it write outside *target*.
-
-    Members are validated and written one at a time. ``extractall`` is not used
-    even after a validation loop, because it re-reads the archive and would
-    place a traversing or link member regardless of what the loop concluded —
-    the CWE-22 tar-slip that .security-suppressions.json exists to stop.
-    """
-    target = target.resolve()
-    for member in tar.getmembers():
-        destination = (target / member.name).resolve()
-        if target not in destination.parents and destination != target:
-            raise DiarizationError(
-                f"Refusing to extract '{member.name}' — it points outside " f"{target}."
-            )
-        if member.issym() or member.islnk():
-            raise DiarizationError(
-                f"Refusing to extract link '{member.name}' from the model archive."
-            )
-        if member.isdir():
-            destination.mkdir(parents=True, exist_ok=True)
-            continue
-        if not member.isfile():
-            continue
-        source = tar.extractfile(member)
-        if source is None:
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with source, destination.open("wb") as handle:
-            shutil.copyfileobj(source, handle)
+def _unpack_models(archive: Path, target: Path) -> None:
+    """Extract a model archive, refusing any member that would escape *target*."""
+    try:
+        safe_extract(archive, target, kind="tar")
+    except ArchiveError as e:
+        raise DiarizationError(
+            f"Refusing to unpack the segmentation model: {e}. Delete {target} "
+            f"and try again. See {DOCS_URL}"
+        ) from e
+    except (tarfile.TarError, OSError) as e:
+        raise DiarizationError(
+            f"Could not unpack the segmentation model: {e}. Delete "
+            f"{target} and try again."
+        ) from e

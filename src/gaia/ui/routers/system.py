@@ -59,8 +59,10 @@ _MIN_CONTEXT_SIZE = DEFAULT_CONTEXT_SIZE
 
 
 def _get_lemonade_base_url() -> str:
-    """Return the Lemonade Server API base URL from environment or default."""
-    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+    """Return the Lemonade Server API base URL: configured, else GAIA's own."""
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    return resolve_lemonade_base_url()
 
 
 async def _lemonade_post(
@@ -743,7 +745,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
             "true",
             "yes",
         )
-        lemonade_url = os.environ.get("LEMONADE_BASE_URL", "")
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        lemonade_url = configured_lemonade_url() or ""
         _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", ""}
         try:
             _parsed_hostname = urlparse(lemonade_url).hostname or ""
