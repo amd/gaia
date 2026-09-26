@@ -860,6 +860,29 @@ def _cloud_error_status(error: openai.APIError) -> Optional[int]:
 #: Where a user adds funds, for cloud providers whose billing page is known.
 _CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/billing")}
 
+#: OpenAI ``reasoning_effort`` values Lemonade's cloud providers accept.
+REASONING_EFFORTS = ("none", "low", "medium", "high")
+
+
+def _reasoning_effort_rejected(
+    status: Optional[int], body_text: str, sent: Dict[str, Any]
+) -> Optional[LemonadeClientError]:
+    """An actionable error when a 400 names the ``reasoning_effort`` we sent.
+
+    Only the field name is matched against the body; nothing of the body is
+    reflected. The agent's reasoning policy sends the field, so the fix is
+    named in its terms.
+    """
+    effort = sent.get("reasoning_effort")
+    if status != 400 or effort is None or "reasoning" not in body_text.lower():
+        return None
+    return LemonadeClientError(
+        f"The cloud provider rejected reasoning_effort={effort!r} (HTTP 400): "
+        f"model {sent.get('model')!r} does not accept a reasoning-effort setting. "
+        "Set reasoning_policy='off' (or GAIA_REASONING=off) for this model, or "
+        "pick a model that supports it. Nothing was retried."
+    )
+
 
 def _cloud_request_error(
     status: Optional[int], provider: Optional[str] = None
@@ -2275,6 +2298,11 @@ class LemonadeClient:
 
             if response.status_code != 200:
                 if self.cloud_model_provider(model):
+                    rejected = _reasoning_effort_rejected(
+                        response.status_code, response.text, data
+                    )
+                    if rejected is not None:
+                        raise rejected
                     raise _cloud_request_error(
                         response.status_code, self.cloud_model_provider(model)
                     )
@@ -2534,6 +2562,11 @@ class LemonadeClient:
             )
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             if self.cloud_model_provider(model):
+                rejected = _reasoning_effort_rejected(
+                    _cloud_error_status(e), str(e), {"model": model, **kwargs}
+                )
+                if rejected is not None:
+                    raise rejected from None
                 raise _cloud_request_error(
                     _cloud_error_status(e), self.cloud_model_provider(model)
                 ) from None

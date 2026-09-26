@@ -489,6 +489,26 @@ the NPU budget. A cloud model reached through Lemonade gets the conservative
 30,000/20,000 without reading the local device profile. The Claude path uses its existing larger window. These are
 per-result character budgets, not measured remaining tokens.
 
+## Reasoning per step
+
+Measured on the benchmark runs, 58-85% of every output token is the model's
+reasoning, and much of it is spent after a file read whose next move was
+already obvious. `reasoning_policy` (`GAIA_REASONING` overrides) is `off` by
+default and sends nothing; `none` sends `reasoning_effort="none"` on every
+step; `adaptive` decides each step from the previous step's tool results,
+before the call — the model's default for the first step of a turn and after a
+tool error, a refused call, a test-runner summary, an edit, or a `delegate_task`
+result, and `none` after a plain read, search, list or shell look. Only a cloud
+model receives the field, and each step's `stats` entry records the choice as
+`reasoning_effort`.
+
+Within one request, each step's reasoning is re-sent as `reasoning_content` on
+the assistant messages of every later step — 14-24% of all prompt tokens over
+a run. `reasoning_history` (`GAIA_REASONING_HISTORY` overrides) is `send` by
+default; `drop` omits it from what is sent while the conversation log keeps
+every step's reasoning, and the first `stats` entry of a turn records the
+setting as `reasoning_history`.
+
 ## Delegating a subtask
 
 On a real repository, most of an agent's tool calls before its first edit are
