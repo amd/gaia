@@ -38,10 +38,10 @@ _GITHUB = ConnectorSpec(
     docs_url="https://amd-gaia.ai/docs/connectors/github",
     mcp_command="npx",
     mcp_args=("-y", "@modelcontextprotocol/server-github@2025.4.8"),
-    mcp_env_keys=("GITHUB_TOKEN",),
+    mcp_env_keys=("GITHUB_PERSONAL_ACCESS_TOKEN",),
     config_schema=(
         ConfigField(
-            key="GITHUB_TOKEN",
+            key="GITHUB_PERSONAL_ACCESS_TOKEN",
             label="GitHub Personal Access Token",
             kind="secret",
             placeholder="ghp_…",

@@ -244,18 +244,30 @@ def test_an_empty_findings_directory_aborts_the_run(prep, tmp_path):
     assert "no lens ran" in str(excinfo.value).lower()
 
 
-def test_an_unreadable_findings_file_aborts_the_run(prep, tmp_path):
-    """Truncated JSON is a lost artifact, not a bad record — nothing to quarantine.
-
-    Quarantine needs to know WHAT it dropped; an unparseable file could hold one
-    finding or a hundred, so continuing would silently under-report the run.
-    """
+def test_an_unreadable_findings_file_is_quarantined_not_fatal(prep, tmp_path):
+    """A lens killed mid-write (job timeout, cancelled runner) leaves truncated
+    JSON. Lenses now rewrite their file after every finding, which widens that
+    window, and aborting would throw away every other lens's work over one file.
+    It is not silent: the file comes back as a reject, raised as a CI error, and
+    the nightly completeness check names that lens as unfinished."""
     (tmp_path / "findings-docs.json").write_text('{"findings": [', encoding="utf-8")
+    write_findings(tmp_path, "findings-tests.json", [make_finding()])
+
+    findings, rejects = prep.load_findings(tmp_path)
+
+    assert len(findings) == 1
+    assert any("findings-docs.json" in r and "unreadable" in r for r in rejects)
+
+
+def test_every_findings_file_unreadable_still_aborts_the_run(prep, tmp_path):
+    """With nothing valid left, continuing would report an all-clear audit."""
+    (tmp_path / "findings-docs.json").write_text('{"findings": [', encoding="utf-8")
+    (tmp_path / "findings-tests.json").write_text("not json", encoding="utf-8")
 
     with pytest.raises(SystemExit) as excinfo:
         prep.load_findings(tmp_path)
 
-    assert "Cannot read findings file" in str(excinfo.value)
+    assert "unreadable" in str(excinfo.value)
 
 
 def test_a_lens_with_nothing_to_report_is_not_an_error(prep, tmp_path):

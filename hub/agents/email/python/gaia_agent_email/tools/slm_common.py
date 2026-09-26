@@ -28,11 +28,10 @@ failure is a quiet fallback, never an import-time crash of this module.
 
 from __future__ import annotations
 
-import os
 import threading
 from typing import Any, Optional, Tuple
 
-from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL
+from gaia.llm.lemonade_client import resolve_lemonade_base_url
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -58,12 +57,7 @@ def format_slm_input(*, subject: str, sender: str, body: str) -> str:
 
         Body text here.
     """
-    return (
-        f"From: {sender or ''}\n"
-        f"Subject: {subject or ''}\n"
-        f"\n"
-        f"{body or ''}"
-    )
+    return f"From: {sender or ''}\n" f"Subject: {subject or ''}\n" f"\n" f"{body or ''}"
 
 
 def _lemonade_server_root(base_url: str) -> str:
@@ -79,13 +73,14 @@ def resolve_base_url(config: Any) -> str:
     """Return the Lemonade server root the SLM encoder should talk to.
 
     Mirrors ``EmailTriageAgent.__init__``: an explicit ``config.base_url`` wins,
-    otherwise ``LEMONADE_BASE_URL``, otherwise core's ``DEFAULT_LEMONADE_URL``.
+    otherwise core's ``resolve_lemonade_base_url()`` (``LEMONADE_BASE_URL``,
+    then GAIA's own server).
     Chat-style URLs ending in ``/api/v1`` or ``/v1`` are stripped to the server
     root — ``LemonadeEmbeddingClassifier`` appends those paths itself.
     """
     base_url = getattr(config, "base_url", None)
     if not base_url:
-        base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+        base_url = resolve_lemonade_base_url()
     return _lemonade_server_root(base_url)
 
 

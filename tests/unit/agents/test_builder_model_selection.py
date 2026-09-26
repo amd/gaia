@@ -106,7 +106,7 @@ class TestSelectBuilderModelFunction:
         ), f"expected a concrete candidate model name in the error, got: {message!r}"
         # Must give a remediation command.
         assert (
-            "gaia download" in message or "gaia init" in message
+            "gaia init" in message
         ), f"expected a remediation command in the error, got: {message!r}"
 
     def test_unreachable_and_no_models_errors_are_distinct(self):

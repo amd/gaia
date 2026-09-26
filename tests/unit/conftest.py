@@ -103,6 +103,28 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "allow_network: opt out of the _block_network socket guard"
     )
+    config.addinivalue_line(
+        "markers",
+        "embedded_start: let LemonadeManager.start_embedded_if_stopped run "
+        "(its own dependencies must be mocked)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_embedded_lemonade_start(request, monkeypatch):
+    """Keep ensure_ready() off the developer's real GAIA Lemonade and daemon.
+
+    With the network blocked, a real, running ~/.gaia server looks stopped, and
+    ensure_ready() would ask a real daemon to start it. Opt out with
+    @pytest.mark.embedded_start.
+    """
+    if request.node.get_closest_marker("embedded_start"):
+        return
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    monkeypatch.setattr(
+        LemonadeManager, "start_embedded_if_stopped", classmethod(lambda cls: False)
+    )
 
 
 @pytest.fixture(autouse=True)
