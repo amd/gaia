@@ -127,7 +127,9 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running (`gaia init` installs and starts it).
+1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
+   one, so `gaia daemon start` is normally all that is needed (`gaia init`
+   also installs and starts it on first run).
 2. The default model downloaded (`gaia init`). `gaia download` takes **no**
    model argument — naming one makes it exit 2. To pull a single model instead,
    repeat the command `GET /v1/gaia/init` gives you: it names the Lemonade
@@ -152,9 +154,9 @@ alone:
                 "min_version": "10.2.0", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
-  // The start instruction is resolved for the host's Lemonade install
-  // (tray app, macOS app, systemd service, or CLI) — render it verbatim.
-  "hint": "Local Lemonade Server is not reachable at …. Start the Lemonade app from Applications, then retry. Or set LEMONADE_BASE_URL to a running server. See https://amd-gaia.ai/docs/guides/gaia."
+  // The manual fallback ("Otherwise: …") is resolved for the host's Lemonade
+  // install (tray app, macOS app, systemd service, or CLI) — render it verbatim.
+  "hint": "Local Lemonade Server is not reachable at …. GAIA starts it automatically — run `gaia daemon start` if the background service is not running. Otherwise: Start the Lemonade app from Applications, then retry. Or set LEMONADE_BASE_URL to a running server. See https://amd-gaia.ai/docs/guides/gaia."
 }
 ```
 

@@ -231,8 +231,10 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
     registry.shutdown_all.side_effect = lambda: calls.append("registry.shutdown_all")
     custody_store = mock.Mock()
     custody_store.close.side_effect = lambda: calls.append("custody_store.close")
+    lemonade = mock.Mock()
+    lemonade.shutdown.side_effect = lambda: calls.append("lemonade.shutdown")
     lemonade_owner = mock.Mock()
-    lemonade_owner.stop.side_effect = lambda: calls.append("lemonade.stop")
+    lemonade_owner.stop.side_effect = lambda: calls.append("lemonade_owner.stop")
 
     deregister = daemon_server._build_deregister(
         registry=registry,
@@ -240,16 +242,21 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
         pid=555,
         refresher=refresher,
         clock=clock,
+        lemonade=lemonade,
         lemonade_owner=lemonade_owner,
     )
     deregister()
 
-    # Lemonade stops only after the sidecars that load models from it.
+    # Both model servers are reaped AFTER the sidecars, never before: an agent
+    # mid-teardown may still be finishing a model call, and pulling either
+    # server out from under it turns a clean shutdown into a wave of
+    # connection errors in the logs.
     assert calls == [
         "refresher.stop",
         "clock.stop",
         "registry.shutdown_all",
-        "lemonade.stop",
+        "lemonade.shutdown",
+        "lemonade_owner.stop",
         "custody_store.close",
     ]
     assert instance_mod.read_instance() is None
@@ -269,6 +276,7 @@ def test_build_deregister_still_deregisters_when_lemonade_will_not_stop(daemon_h
         pid=556,
         refresher=mock.Mock(),
         clock=mock.Mock(),
+        lemonade=mock.Mock(),
         lemonade_owner=lemonade_owner,
     )
     deregister()

@@ -4885,9 +4885,18 @@ class LemonadeClient:
         self.log.info(f"Model unloaded successfully: {response}")
         return response
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self, timeout=None) -> Dict[str, Any]:
         """
         Check server health.
+
+        Args:
+            timeout: Optional requests-style timeout — a scalar, or a
+                ``(connect, read)`` tuple. Omit it for the client default
+                (``DEFAULT_REQUEST_TIMEOUT``, sized for generation). "Is the
+                server even up?" callers should pass a short one: the scalar
+                default also governs the read, so a socket that ACCEPTS and
+                then never answers (a Lemonade mid-model-load) would block a
+                liveness probe for the full 15 minutes.
 
         Returns:
             Dict containing the server status and loaded model
@@ -4896,7 +4905,9 @@ class LemonadeClient:
             LemonadeClientError: If the health check fails
         """
         url = f"{self.base_url}/health"
-        return self._send_request("get", url)
+        if timeout is None:
+            return self._send_request("get", url)
+        return self._send_request("get", url, timeout=timeout)
 
     def get_stats(self) -> Dict[str, Any]:
         """
