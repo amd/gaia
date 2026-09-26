@@ -28,7 +28,6 @@ from gaia.agents.base.duplicate_guard import (
     duplicate_limit_from_env,
     result_text,
 )
-from gaia.agents.base.reasoning_policy import tool_result_failed
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 _ANSWER = "Done."
@@ -403,27 +402,6 @@ def test_disabled_by_env_executes_everything(monkeypatch):
 
     assert len(agent.runs) == 3
     assert all("duplicates_short_circuited" not in s for s in _stats_entries(result))
-
-
-@pytest.mark.usefixtures("clean_registry")
-def test_the_reasoning_policy_sees_a_non_error_observation():
-    agent = _make_agent(reasoning_policy="adaptive")
-    observed = []
-    real = agent._reasoning_policy.observe
-    agent._reasoning_policy.observe = lambda name, result: (
-        observed.append((name, result)),
-        real(name, result),
-    )
-    _stub_chat(
-        agent, _script(("run_shell_command", _GREP), ("run_shell_command", _GREP))
-    )
-
-    agent.process_query("go")
-
-    assert [name for name, _ in observed] == ["run_shell_command"] * 2
-    duplicate = observed[1][1]
-    assert duplicate["status"] == "duplicate"
-    assert not tool_result_failed(duplicate)
 
 
 # ---------------------------------------------------------------------------

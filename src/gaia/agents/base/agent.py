@@ -62,12 +62,6 @@ from gaia.agents.base.duplicate_guard import (
 )
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.project_map import resolve_project_root
-from gaia.agents.base.reasoning_policy import (
-    ReasoningPolicy,
-    reasoning_history_from_env,
-    reasoning_policy_from_env,
-    validate_reasoning_history,
-)
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import (
@@ -1339,8 +1333,6 @@ Do NOT wrap conversational replies in JSON.
         context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,
         context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,
         resend_reasoning_across_requests: bool = False,
-        reasoning_policy: str = "off",
-        reasoning_history: str = "send",
         duplicate_call_guard: bool = True,
         duplicate_window: int = DEFAULT_DUPLICATE_WINDOW,
         duplicate_limit: int = DEFAULT_DUPLICATE_LIMIT,
@@ -1406,21 +1398,6 @@ Do NOT wrap conversational replies in JSON.
                           ``conversation_history`` from earlier user requests
                           is sent back to the model. Within one request it is
                           always sent back (default: False).
-            reasoning_policy: "off" (default), "none" or "adaptive": the
-                          ``reasoning_effort`` sent with each step's request.
-                          "off" sends nothing; "none" turns reasoning off on
-                          every step; "adaptive" turns it off only for the
-                          step after a plain read/search/list/shell result and
-                          leaves the model's default for the first step of a
-                          turn and after a tool error, a test-runner summary,
-                          an edit, or a delegate_task result. Only a cloud
-                          model receives the field. GAIA_REASONING overrides.
-            reasoning_history: "send" (default) or "drop": whether each
-                          step's reasoning rides along as ``reasoning_content``
-                          on the assistant messages re-sent within one request.
-                          "drop" omits it from what is sent; the conversation
-                          log keeps every step's reasoning either way.
-                          GAIA_REASONING_HISTORY overrides.
             duplicate_call_guard: True (default): a call identical to one that
                           already ran this turn, within the last
                           ``duplicate_window`` steps, with no error and no
@@ -1643,14 +1620,6 @@ Do NOT wrap conversational replies in JSON.
         )
         # Set by the step head when a batch fires; the step's stats record takes it.
         self._pending_eviction: Optional[Dict[str, int]] = None
-        self._reasoning_policy = ReasoningPolicy(
-            reasoning_policy_from_env() or reasoning_policy
-        )
-        # Decided at the step head from the previous step's results.
-        self._step_reasoning_effort: Optional[str] = None
-        self.reasoning_history = validate_reasoning_history(
-            reasoning_history_from_env() or reasoning_history
-        )
         from gaia.agents.base.artifacts import store_for
 
         env_guard = duplicate_guard_from_env()
@@ -1692,10 +1661,6 @@ Do NOT wrap conversational replies in JSON.
 
         if self.show_prompts:
             self.console.print_prompt(self.system_prompt, "Initial System Prompt")
-
-    def _step_llm_kwargs(self) -> Dict[str, Any]:
-        """Request fields for the step's chat call beyond messages and tools."""
-        return self._reasoning_policy.request_kwargs(self._step_reasoning_effort)
 
     def _max_output_tokens(self) -> int:
         """Output-token cap for the next LLM call, re-read per call so a model
@@ -4607,7 +4572,6 @@ Do NOT wrap conversational replies in JSON.
                     duplicate["previous_step"],
                 )
                 self._note_verification_signal(tool_name, tool_args, duplicate)
-                self._reasoning_policy.observe(tool_name, duplicate)
                 return duplicate
         # Only the outermost call is timed. A tool body may call another tool
         # (CodeAgent's orchestration does); timing both would count the inner
@@ -4617,7 +4581,6 @@ Do NOT wrap conversational replies in JSON.
             self._note_verification_signal(tool_name, tool_args, result)
             if outermost:
                 self._duplicate_guard.record(tool_name, tool_args, result)
-                self._reasoning_policy.observe(tool_name, result)
             return result
 
         started = time.perf_counter()
@@ -4631,7 +4594,6 @@ Do NOT wrap conversational replies in JSON.
             ok = not self._is_error_result(result)
             self._note_verification_signal(tool_name, tool_args, result)
             self._duplicate_guard.record(tool_name, tool_args, result)
-            self._reasoning_policy.observe(tool_name, result)
             return result
         finally:
             self._tool_timing_depth = 0
@@ -5742,12 +5704,6 @@ Do NOT wrap conversational replies in JSON.
             {k: v for k, v in m.items() if k != "reasoning_content"} for m in history
         ]
 
-    def _sent_reasoning(self, reasoning: Optional[str]) -> Dict[str, Any]:
-        """The ``reasoning_content`` field for a re-sent assistant message, or nothing."""
-        if reasoning and self.reasoning_history == "send":
-            return {"reasoning_content": reasoning}
-        return {}
-
     def _build_assistant_message(
         self,
         raw_response: str,
@@ -5770,10 +5726,9 @@ Do NOT wrap conversational replies in JSON.
         response text through unchanged.
 
         ``reasoning`` rides along as ``reasoning_content`` so the model keeps
-        its own reasoning across the steps of one request, unless
-        ``reasoning_history`` is "drop".
+        its own reasoning across the steps of one request.
         """
-        extra = self._sent_reasoning(reasoning)
+        extra = {"reasoning_content": reasoning} if reasoning else {}
         tc_list = parsed.get("tool_calls")
         if not tc_list:
             return {"role": "assistant", "content": raw_response, **extra}
@@ -6425,8 +6380,6 @@ Do NOT wrap conversational replies in JSON.
         if self._context_evictor is not None:
             self._context_evictor.begin_turn()
         self._pending_eviction = None
-        self._reasoning_policy.begin_turn()
-        self._step_reasoning_effort = None
         self._duplicate_guard.begin_turn()
 
         # Add user query to the conversation history
@@ -6499,7 +6452,6 @@ Do NOT wrap conversational replies in JSON.
                 self._pending_eviction = self._context_evictor.evict(
                     messages, steps_taken, store_for(self)
                 )
-            self._step_reasoning_effort = self._reasoning_policy.decide()
             self._duplicate_guard.begin_step(steps_taken)
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
@@ -6904,7 +6856,6 @@ Do NOT wrap conversational replies in JSON.
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
-                            **self._step_llm_kwargs(),
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -7085,7 +7036,6 @@ Do NOT wrap conversational replies in JSON.
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
-                            **self._step_llm_kwargs(),
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -8131,12 +8081,6 @@ Do NOT wrap conversational replies in JSON.
                 if self._pending_eviction is not None:
                     stats_record.update(self._pending_eviction)
                     self._pending_eviction = None
-                if self._reasoning_policy.active:
-                    stats_record["reasoning_effort"] = self._reasoning_policy.recorded(
-                        self._step_reasoning_effort
-                    )
-                if steps_taken == 1:
-                    stats_record["reasoning_history"] = self.reasoning_history
                 stats_record.update(self._duplicate_guard.step_stats())
                 if self._context_evictor is not None:
                     self._context_evictor.note_prompt_tokens(perf_stats)

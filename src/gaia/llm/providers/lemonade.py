@@ -11,7 +11,6 @@ from typing import Iterator, List, Optional, Tuple, Union
 from ..base_client import LLMClient
 from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
-    REASONING_EFFORTS,
     LemonadeClient,
     active_profile_ctx_size,
     is_tool_calling_model,
@@ -557,30 +556,11 @@ class LemonadeProvider(LLMClient):
         # Default to low temperature for deterministic responses (matches old LLMClient behavior)
         kwargs.setdefault("temperature", 0.1)
 
-        cloud = self._backend.cloud_model_provider(effective_model) is not None
-        # Only sent when the caller asks, and only to a cloud model: llama.cpp
-        # has no such field, and the model's own default is what "unset" means.
-        reasoning_effort = kwargs.pop("reasoning_effort", None)
-        if reasoning_effort is not None:
-            if reasoning_effort not in REASONING_EFFORTS:
-                raise ValueError(
-                    f"reasoning_effort must be one of {', '.join(REASONING_EFFORTS)}, "
-                    f"got {reasoning_effort!r}."
-                )
-            if cloud:
-                kwargs["reasoning_effort"] = reasoning_effort
-            else:
-                logger.debug(
-                    "reasoning_effort=%s dropped: %s is not a cloud model",
-                    reasoning_effort,
-                    effective_model,
-                )
-
         # Stops local models looping on tables and paragraphs. Cloud models get
         # none: the penalties hit their reasoning tokens and the thinking runs away.
         # repeat_penalty / repeat_last_n are llama.cpp-native (sent via extra_body
         # when streaming).
-        if not cloud:
+        if not self._backend.cloud_model_provider(effective_model):
             kwargs.setdefault("frequency_penalty", 0.3)
             kwargs.setdefault("presence_penalty", 0.1)
             kwargs.setdefault("repeat_penalty", 1.1)
