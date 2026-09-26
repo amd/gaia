@@ -12,6 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from apscheduler.events import (
+    EVENT_JOB_MAX_INSTANCES,
+    EVENT_JOB_MISSED,
+    JobExecutionEvent,
+    JobSubmissionEvent,
+)
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -26,6 +32,15 @@ from gaia.schedule.store import (
 
 log = get_logger(__name__)
 STORE_REFRESH_SECONDS = 1.0
+# A run that comes due while the machine sleeps still fires if the daemon wakes
+# within this window; older runs are skipped (and logged) rather than replayed.
+MISFIRE_GRACE_SECONDS = 3600
+JOB_DEFAULTS = {
+    "misfire_grace_time": MISFIRE_GRACE_SECONDS,
+    "coalesce": True,
+    # One run at a time per schedule; an overlapping fire is skipped and logged.
+    "max_instances": 1,
+}
 
 
 def _job(schedule: Schedule, store: ScheduleStore) -> None:
@@ -48,9 +63,28 @@ def _job(schedule: Schedule, store: ScheduleStore) -> None:
     )
 
 
+def _log_skipped_run(event: JobExecutionEvent | JobSubmissionEvent) -> None:
+    if isinstance(event, JobExecutionEvent):
+        log.warning(
+            "schedule %r missed its run due at %s: "
+            "the machine was asleep or busy for more than %ds past that time",
+            event.job_id,
+            event.scheduled_run_time,
+            MISFIRE_GRACE_SECONDS,
+        )
+        return
+    log.warning(
+        "schedule %r skipped its run due at %s: the previous run is still "
+        "in progress",
+        event.job_id,
+        ", ".join(str(t) for t in event.scheduled_run_times),
+    )
+
+
 def build_scheduler(store: ScheduleStore) -> BackgroundScheduler:
     """Create a scheduler with one cron job per enabled schedule."""
-    scheduler = BackgroundScheduler()
+    scheduler = BackgroundScheduler(job_defaults=JOB_DEFAULTS)
+    scheduler.add_listener(_log_skipped_run, EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES)
     refresh_schedules(scheduler, store)
     log.info("armed %d schedule(s)", len(scheduler.get_jobs()))
     return scheduler
