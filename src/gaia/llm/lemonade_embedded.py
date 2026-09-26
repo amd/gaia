@@ -233,7 +233,9 @@ def _extract(archive: Path, dest: Path) -> None:
             f"embedded Lemonade asset. Delete {archive} and retry."
         )
     try:
-        safe_extract(archive, dest, allow_links=True, kind=kind)
+        # Links only on tar: the Windows .zip asset has none, and os.symlink
+        # needs Developer Mode or admin there.
+        safe_extract(archive, dest, allow_links=(kind == "tar"), kind=kind)
     except ArchiveError as e:
         raise EmbeddedLemonadeError(
             f"Refusing to unpack embedded Lemonade: {e}. The download is corrupt "

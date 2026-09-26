@@ -231,6 +231,39 @@ class TestArchiveSafety:
         _extract(archive, dest)
         assert (dest / "resources" / "defaults.json").is_file()
 
+    def test_a_zip_symlink_is_refused_rather_than_created(self, tmp_path):
+        """Only tar may carry links.
+
+        The published Windows asset is a .zip with no symlink entries, and
+        ``os.symlink`` needs Developer Mode or admin there -- so recreating one
+        would turn a working install into a hard failure on a default box.
+        """
+        archive = tmp_path / "linky.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            info = zipfile.ZipInfo("libfoo.so")
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zf.writestr(info, "libfoo.so.1")
+
+        with pytest.raises(EmbeddedLemonadeError) as exc:
+            _extract(archive, tmp_path / "dest")
+        assert "link" in str(exc.value).lower()
+
+    def test_a_tar_symlink_inside_the_tree_is_still_recreated(self, tmp_path):
+        if platform.system() == "Windows":
+            pytest.skip("symlink creation needs Developer Mode or admin")
+
+        archive = tmp_path / "links.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            tf.addfile(tarfile.TarInfo("libfoo.so.1"), io.BytesIO(b""))
+            link = tarfile.TarInfo("libfoo.so")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "libfoo.so.1"
+            tf.addfile(link)
+
+        dest = tmp_path / "dest"
+        _extract(archive, dest)
+        assert (dest / "libfoo.so").is_symlink()
+
     def test_unknown_archive_suffix_is_rejected(self, tmp_path):
         bogus = tmp_path / "asset.7z"
         bogus.write_bytes(b"x")
