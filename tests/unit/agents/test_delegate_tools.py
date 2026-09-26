@@ -20,7 +20,7 @@ import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.tools import delegate_tools
-from gaia.agents.tools.delegate_tools import DelegateToolsMixin
+from gaia.agents.tools.delegate_tools import DELEGATE_SYSTEM_PROMPT, DelegateToolsMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 _STATS = {"input_tokens": 100, "output_tokens": 10, "cached_tokens": 40}
@@ -185,7 +185,18 @@ def test_child_starts_fresh_with_identical_prompt_and_no_delegate_tool():
     assert child.silent_mode is True
     assert "delegate_task" in parent._tools_registry
     assert "delegate_task" not in child._tools_registry
-    assert child.system_prompt == parent.system_prompt
+    assert DELEGATE_SYSTEM_PROMPT in parent.system_prompt
+    assert DELEGATE_SYSTEM_PROMPT not in child.system_prompt
+    assert child.system_prompt == parent.system_prompt.replace(
+        DELEGATE_SYSTEM_PROMPT + "\n\n", ""
+    )
+
+
+def test_prompt_unchanged_when_delegation_off():
+    assert (
+        DELEGATE_SYSTEM_PROMPT
+        not in Kid(KidConfig(delegate_enabled=False)).system_prompt
+    )
 
 
 def test_child_cannot_delegate_even_when_env_enables_it(monkeypatch):

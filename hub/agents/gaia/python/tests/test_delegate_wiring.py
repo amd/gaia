@@ -13,6 +13,7 @@ import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.delegate_tools import DELEGATE_SYSTEM_PROMPT
 
 
 @contextlib.contextmanager
@@ -70,10 +71,30 @@ def test_child_matches_parent_but_cannot_delegate(env):
             assert child.conversation_history == []
             assert "delegate_task" not in child._tools_registry
             assert "delegate_task" not in child.tool_loader._core
-            assert child.system_prompt == parent.system_prompt
+            assert DELEGATE_SYSTEM_PROMPT in parent.system_prompt
+            assert DELEGATE_SYSTEM_PROMPT not in child.system_prompt
+            assert child.system_prompt == parent.system_prompt.replace(
+                DELEGATE_SYSTEM_PROMPT + "\n\n", ""
+            )
         finally:
             child.close()
         parent.close()
+
+
+def test_prompt_is_byte_identical_when_delegation_is_off(env):
+    with _isolated_registry():
+        off = _agent()
+        baseline = off.system_prompt
+        off.close()
+    with _isolated_registry():
+        on = _agent(delegate_enabled=True)
+        assert DELEGATE_SYSTEM_PROMPT in on.system_prompt
+        on.close()
+    with _isolated_registry():
+        again = _agent()
+        assert again.system_prompt == baseline
+        assert DELEGATE_SYSTEM_PROMPT not in baseline
+        again.close()
 
 
 def test_agent_built_after_a_delegating_one_stays_clean(env):

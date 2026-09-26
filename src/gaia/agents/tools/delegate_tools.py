@@ -49,6 +49,17 @@ PROVIDER_ERROR_TYPES = frozenset(
 _SKIP_DIRS = frozenset({"node_modules", "__pycache__"})
 _MTIME_SCAN_CAP = 200_000
 
+#: Prompt guidance the flagship carries only while delegation is on, so the
+#: prompt is byte-identical otherwise and the child never sees it.
+DELEGATE_SYSTEM_PROMPT = """\
+==== DELEGATION ====
+Before editing anything in a repository you have not explored, delegate the \
+investigation with delegate_task instead of exploring here. Delegate any subtask \
+whose output you need only as a short answer: where something is implemented, \
+how it works, which tests fail and why. Write the brief with every path, symbol, \
+command and criterion, because the worker starts with no memory of this \
+conversation. Do the edits and the final verification yourself."""
+
 _BRIEF_HEADER = (
     "You are a delegated worker. You have no memory of the conversation that "
     "produced this brief, so it contains everything you need. Complete exactly "
@@ -116,6 +127,10 @@ class DelegateToolsMixin:
                 DEFAULT_DELEGATE_MAX_STEPS,
             )
         )
+
+    def get_delegate_system_prompt(self) -> str:
+        """The delegation guidance, auto-collected by ``_get_mixin_prompts``."""
+        return DELEGATE_SYSTEM_PROMPT if self._resolve_delegate_enabled() else ""
 
     def register_delegate_tools(self) -> None:
         """Register ``delegate_task`` into the tool registry."""
