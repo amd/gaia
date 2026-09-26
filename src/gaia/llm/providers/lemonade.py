@@ -454,6 +454,17 @@ class LemonadeProvider(LLMClient):
     def provider_name(self) -> str:
         return "Lemonade"
 
+    def cloud_model_provider(self, model: Optional[str] = None) -> Optional[str]:
+        """Cloud provider serving *model* (default: the live one), or None.
+
+        Goes through the backend, which carries the catalog metadata, so a
+        provider discovered at runtime is recognised as well as the two whose
+        id prefixes are known up front.
+        """
+        return self._backend.cloud_model_provider(
+            model or self._last_model or self._model or DEFAULT_MODEL_NAME
+        )
+
     def generate(
         self,
         prompt: str,
@@ -475,6 +486,7 @@ class LemonadeProvider(LLMClient):
         model: str | None = None,
         stream: bool = False,
         tools: Optional[List[dict]] = None,
+        tool_choice: Optional[Union[str, dict]] = None,
         **kwargs,
     ) -> Union[str, dict, Iterator[str]]:
         # Reset from any previous call — usage is per-call, not cumulative,
@@ -513,6 +525,16 @@ class LemonadeProvider(LLMClient):
         # because it always sends a tools array.
         effective_stream = stream
         effective_tools = tools if tool_capable else None
+        if tool_choice is not None:
+            if not tools:
+                raise ValueError(
+                    f"tool_choice={tool_choice!r} was passed without tools; it "
+                    "only applies to a request that offers tools. Pass tools= "
+                    "as well, or drop tool_choice."
+                )
+            # Governs the tools, so it is withheld along with them.
+            if effective_tools:
+                kwargs["tool_choice"] = tool_choice
 
         response = self._backend.chat_completions(
             model=effective_model,

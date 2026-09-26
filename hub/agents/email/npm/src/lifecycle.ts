@@ -460,14 +460,20 @@ export interface StartOptions extends SpawnOptions {
   expectedApiVersion?: string;
 }
 
-/**
- * Refuse a handle whose own child is dead. A healthy `/health` proves *something*
- * owns the port — this proves it is ours.
- */
-function assertOurs(sidecar: Sidecar): void {
+/** Whether something still answers `/health` — i.e. someone else holds the port. */
+async function portStillAnswers(sidecar: Sidecar): Promise<boolean> {
+  const probe = new EmailClient({ baseUrl: sidecar.baseUrl, timeoutMs: 1_000 });
+  try {
+    return (await probe.health()).status === "ok";
+  } catch {
+    return false; // nothing is listening
+  }
+}
+
+/** Our child is dead and a probe confirmed someone else is answering its port. */
+function foreignServerError(sidecar: Sidecar): SidecarExitedError {
   const { child } = sidecar;
-  if (child.exitCode === null && child.signalCode === null) return;
-  throw new SidecarExitedError(
+  return new SidecarExitedError(
     `the email sidecar we spawned exited (code=${String(child.exitCode)} ` +
       `signal=${String(child.signalCode)}) while ${sidecar.baseUrl}/health still ` +
       `answered — another process is already bound to port ${sidecar.port}, most ` +
@@ -481,6 +487,30 @@ function assertOurs(sidecar: Sidecar): void {
 }
 
 /**
+ * Refuse a handle whose own child is dead, having first asked who owns the port.
+ * A confirmed answer means an incumbent we must not adopt; silence means our own
+ * sidecar came up and then crashed, which is a different failure and a different
+ * fix — blaming a port conflict there sends the user hunting a process that was
+ * never there.
+ *
+ * Exported for tests: which of the two errors this picks depends on a live probe,
+ * and driving that from a real `startSidecar` run would race the child reap.
+ */
+export async function assertOurs(sidecar: Sidecar): Promise<void> {
+  const { child } = sidecar;
+  if (child.exitCode === null && child.signalCode === null) return;
+  if (await portStillAnswers(sidecar)) throw foreignServerError(sidecar);
+  throw new SidecarExitedError(
+    `the email sidecar we spawned became healthy and then exited ` +
+      `(code=${String(child.exitCode)} signal=${String(child.signalCode)}), and ` +
+      `nothing answers ${sidecar.baseUrl}/health now — so no other process holds ` +
+      `port ${sidecar.port}; the sidecar itself crashed after starting. A failed ` +
+      "model load, an unreachable Lemonade server, or a bad env are the usual " +
+      "causes. Re-run with DEBUG=agent-email to see the sidecar's own output.",
+  );
+}
+
+/**
  * Decide what a dead child means by asking who owns the port now. The health
  * wait aborts the instant our child exits, which can beat a healthy reply from
  * an incumbent and misreport a port conflict as a plain timeout. Silent when our
@@ -489,13 +519,7 @@ function assertOurs(sidecar: Sidecar): void {
 async function assertNotAForeignServer(sidecar: Sidecar): Promise<void> {
   const { child } = sidecar;
   if (child.exitCode === null && child.signalCode === null) return;
-  const probe = new EmailClient({ baseUrl: sidecar.baseUrl, timeoutMs: 1_000 });
-  try {
-    if ((await probe.health()).status !== "ok") return;
-  } catch {
-    return; // nothing is listening — our sidecar simply died
-  }
-  assertOurs(sidecar);
+  if (await portStillAnswers(sidecar)) throw foreignServerError(sidecar);
 }
 
 /**
@@ -556,12 +580,12 @@ export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
       await assertNotAForeignServer(sidecar);
       throw e;
     }
-    assertOurs(sidecar);
+    await assertOurs(sidecar);
     if (opts.verifyVersion ?? true) {
       await checkVersion(sidecar.client, {
         expectedApiVersion: opts.expectedApiVersion,
       });
-      assertOurs(sidecar);
+      await assertOurs(sidecar);
     }
     return sidecar;
   } catch (e) {
