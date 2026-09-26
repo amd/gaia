@@ -360,7 +360,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs |
+| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`), and undo the installer's PATH edits |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
@@ -378,7 +378,7 @@ gaia uninstall --purge --dry-run
 gaia uninstall --venv
 ```
 
-```bash Full Purge (venv + chats + documents + embedded Lemonade + config)
+```bash Full Purge (venv + chats + documents + embedded Lemonade + config + installer leftovers)
 gaia uninstall --purge
 ```
 
@@ -393,8 +393,21 @@ gaia uninstall --purge --purge-lemonade --yes
 
 <Warning>
 `--purge` permanently deletes your chat history, uploaded documents, configuration,
-and embedded Lemonade downloads. Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
+embedded Lemonade downloads, agent traces, and the daemon's state in `~/.gaia/host` —
+including its custody database (agent memory, sessions, and audit history). Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
 </Warning>
+
+<Note>
+`--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
+before deleting its state, removes `gaia-tui` and `gaia-agent` from `~/.gaia/bin`, and
+removes the installer's PATH entries: the `# Added by GAIA installer` block in
+`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\venv\Scripts`
+and `~\.gaia\bin` entries on the Windows user PATH. The rest of each file and every
+other PATH entry are left exactly as they were. If you edited the installer's `export PATH`
+line by hand, it is kept and the command tells you to remove it yourself. A `GAIA_HOME`
+other than `~/.gaia` leaves these PATH edits alone, because they still point at `~/.gaia`.
+Open a new terminal afterwards so it stops using the old PATH.
+</Note>
 
 <Note>
 `GAIA_HOME` moves the directory this command deletes into, and the resolved path is printed above the plan and in the `--purge` confirmation prompt. It must name a directory GAIA owns, and **both `--venv` and `--purge` check this** before deleting anything:
@@ -3314,7 +3327,8 @@ run and keep it.
 
 A launch that fails before the agent says anything (a refused port, an unmet
 precondition) removes its own empty trace rather than leaving a 0-byte file
-behind. `~/.gaia/traces` is never pruned otherwise — delete old runs yourself.
+behind. `~/.gaia/traces` is never pruned otherwise — delete old runs yourself, or
+remove them all with `gaia uninstall --purge`.
 
 ---
 
