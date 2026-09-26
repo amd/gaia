@@ -27,7 +27,23 @@ logger = logging.getLogger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
-_SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout")
+_SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout", "preflight")
+
+# Every model call re-sends the schema of every offered tool, so this text is
+# billed on each step of each turn. Enforced by `python util/lint.py
+# --tool-descriptions`; measure with `python util/tool_schema_tokens.py`.
+MAX_TOOL_DESCRIPTION_CHARS = 400
+MAX_TOOL_PARAM_DESCRIPTION_CHARS = 160
+
+# Named exceptions to MAX_TOOL_DESCRIPTION_CHARS, not a general escape hatch.
+# Both are already trimmed to safety-relevant facts only (no examples, no
+# rationale) — the overage is what it costs to state which shell operators
+# run vs. refuse, and the exact skill-correction contract, without which the
+# model cannot use either tool safely.
+TOOL_DESCRIPTION_ALLOWANCES = {
+    "run_shell_command": 600,
+    "remember_skill_lesson": 450,
+}
 
 
 # Annotation -> registry type name. Anything absent stays "unknown", which
@@ -142,12 +158,55 @@ def _parse_arg_descriptions(docstring: Optional[str]) -> Dict[str, str]:
     return descriptions
 
 
+def _schema_description(docstring: Optional[str]) -> str:
+    """Return the docstring text the tool schema ships, minus the ``Args:`` block.
+
+    Every ``Args:`` entry already rides in ``properties.<arg>.description``, so
+    leaving it here bills the same text twice on every model call. Leading
+    indentation goes too — the raw ``__doc__`` carries the source indent of
+    every continuation line.
+
+    The ``Args:`` block ends where :func:`_parse_arg_descriptions` stops reading
+    it: at the next section header, or at the first line that dedents out of the
+    block. Keep the two boundaries identical or text falls between them.
+    """
+    if not docstring:
+        return ""
+
+    kept: list[str] = []
+    in_args = False
+    arg_indent: Optional[int] = None
+
+    for line in inspect.cleandoc(docstring).splitlines():
+        if in_args:
+            if _NEXT_SECTION_RE.match(line):
+                in_args = False
+            elif not line.strip():
+                continue
+            else:
+                expanded = line.expandtabs()
+                indent = len(expanded) - len(expanded.lstrip())
+                if arg_indent is None:
+                    arg_indent = indent
+                if indent >= arg_indent:
+                    continue
+                in_args = False
+        elif _ARGS_HEADER_RE.match(line):
+            in_args = True
+            arg_indent = None
+            continue
+        kept.append(line)
+
+    return "\n".join(kept).strip()
+
+
 def tool(
     func: Callable | None = None,
     *,
     atomic: bool = False,
     display_label: str | None = None,
     timeout: float | None = None,
+    preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
     **unexpected_kwargs: object,
 ) -> Callable:
     """
@@ -165,6 +224,10 @@ def tool(
             this on tools that legitimately run long (e.g. image generation that
             may download a model) so they aren't capped by the global default.
             ``None`` (the default) means "use the global default".
+        preflight: Called with the call's arguments before the confirmation
+            prompt; returns the refusal the call has already earned, or
+            ``None``. The tool body must enforce the same rule itself, since
+            state can change while a prompt waits.
 
     Returns:
         The original function or decorator, unchanged
@@ -202,12 +265,13 @@ def tool(
         # Register the tool with atomic metadata
         _TOOL_REGISTRY[tool_name] = {
             "name": tool_name,
-            "description": f.__doc__ or "",
+            "description": _schema_description(f.__doc__),
             "parameters": params,
             "function": f,
             "atomic": atomic,
             "display_label": display_label,
             "timeout": timeout,
+            "preflight": preflight,
         }
 
         # Return the function unchanged

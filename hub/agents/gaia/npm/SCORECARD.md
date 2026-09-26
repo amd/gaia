@@ -121,7 +121,7 @@ Run the following commands from the repository root:
 # packages, start a Lemonade Server with the model on AMD Ryzen AI
 # hardware, and have the Claude Code CLI on PATH (the eval driver).
 uv pip install -e ".[dev,eval,ui,api]" -e hub/agents/chat/python -e hub/agents/gaia/python
-lemonade-server serve   # in a separate shell; must stay running
+gaia init   # installs and starts Lemonade Server; it must stay running
 
 # Step 0: stage fixtures + start the fixture server (see
 # tests/fixtures/gaia/README.md for the staging contract)

@@ -565,13 +565,15 @@ def test_scope_is_reset_between_turns(agent):
 # ---------------------------------------------------------------------------
 
 
-def test_cancel_event_timeout_path_carries_the_statement(agent):
+def test_cancel_event_path_carries_the_statement(agent):
     event = threading.Event()
     event.set()
     agent._cancel_event = event
     _stub_chat(agent, _answer("never reached"))
     result = agent.process_query("do something", max_steps=5)
-    assert "exceeded the allowed" in result["result"]
+    assert "stopped before it finished" in result["result"]
+    # Cancel has several triggers now; the text must not claim a timeout.
+    assert "exceeded the allowed" not in result["result"]
     assert "unverified" in _scope_line(result["result"])
 
 
