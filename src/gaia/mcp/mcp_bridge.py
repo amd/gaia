@@ -414,11 +414,16 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Not found"})
 
     def handle_jsonrpc(self, data):
-        """Handle JSON-RPC requests."""
+        """Handle JSON-RPC requests.
+
+        Protocol-level errors ride a 200 with a JSON-RPC error body: Streamable
+        HTTP reads any non-2xx as a TRANSPORT failure, so a 4xx makes an SDK
+        client raise instead of surfacing the error code it knows how to report.
+        """
         # Validate that data is a dict (JSON-RPC requires an object)
         if not isinstance(data, dict):
             self.send_json(
-                400,
+                200,
                 {
                     "jsonrpc": "2.0",
                     "error": {
@@ -432,7 +437,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         # Validate JSON-RPC
         if "jsonrpc" not in data or data["jsonrpc"] != "2.0":
             self.send_json(
-                400,
+                200,
                 {
                     "jsonrpc": "2.0",
                     "error": {"code": -32600, "message": "Invalid Request"},
@@ -490,7 +495,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             }
         else:
             self.send_json(
-                400,
+                200,
                 {
                     "jsonrpc": "2.0",
                     "error": {"code": -32601, "message": f"Method not found: {method}"},

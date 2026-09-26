@@ -213,9 +213,47 @@ class TestToolsCall:
 
     def test_unknown_tool_is_a_jsonrpc_invalid_params_error(self, bridge_server):
         url, _ = bridge_server
-        _, message = _rpc(
+        status, message = _rpc(
             url, "tools/call", {"name": "gaia.nonexistent", "arguments": {}}
         )
+        assert status == 200
         assert "result" not in message
         assert message["error"]["code"] == -32602
         assert "gaia.nonexistent" in message["error"]["message"]
+
+
+class TestProtocolErrorsRideA200:
+    """Streamable HTTP reads any non-2xx as a TRANSPORT failure, so a 4xx makes
+    an SDK client raise instead of reporting the JSON-RPC error it understands.
+    """
+
+    def test_unknown_method_is_a_jsonrpc_method_not_found(self, bridge_server):
+        url, _ = bridge_server
+        status, message = _rpc(url, "resources/list")
+        assert status == 200
+        assert "result" not in message
+        assert message["error"]["code"] == -32601
+        assert "resources/list" in message["error"]["message"]
+
+    def test_unknown_method_error_validates_against_mcp_sdk_types(self, bridge_server):
+        types = pytest.importorskip("mcp.types")
+        url, _ = bridge_server
+        _, message = _rpc(url, "prompts/list")
+        parsed = types.JSONRPCError.model_validate(message)
+        assert parsed.error.code == types.METHOD_NOT_FOUND
+
+    def test_wrong_jsonrpc_version_is_an_invalid_request(self, bridge_server):
+        url, _ = bridge_server
+        status, body = _post(url, {"jsonrpc": "1.0", "id": 7, "method": "ping"})
+        message = json.loads(body)
+        assert status == 200
+        assert message["error"]["code"] == -32600
+        assert message["id"] == 7
+
+    def test_non_object_payload_is_an_invalid_request(self, bridge_server):
+        url, _ = bridge_server
+        status, body = _post(url, ["not", "an", "object"])
+        message = json.loads(body)
+        assert status == 200
+        assert message["error"]["code"] == -32600
+        assert message["id"] is None
