@@ -744,14 +744,24 @@ async def async_main(action, **kwargs):
             print(f"❌ Error: {e}")
             return
         finally:
-            # Cleanup
-            try:
-                if "agent" in locals():
+            # Cleanup. The drain is here rather than beside the one-shot
+            # return so interactive, Ctrl-C and error exits land the last
+            # turn's facts too — extraction now finishes after the answer.
+            if "agent" in locals():
+                try:
+                    from gaia.agents.base.memory import drain_memory_extraction
+
+                    drain_memory_extraction(agent)
+                except Exception as exc:
+                    get_logger(__name__).warning(
+                        "Could not finish memory extraction before exit: %s", exc
+                    )
+                try:
                     agent.stop_watching()
-            except Exception as exc:
-                get_logger(__name__).warning(
-                    "Could not stop agent file watcher: %s", exc
-                )
+                except Exception as exc:
+                    get_logger(__name__).warning(
+                        "Could not stop agent file watcher: %s", exc
+                    )
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
@@ -946,6 +956,16 @@ def _launch_interactive_cli(log=None):
         log.error(f"Error in chat: {e}", exc_info=True)
         print(f"Error: {e}")
         sys.exit(1)
+    finally:
+        # Extraction finishes after the answer, so the last turn's facts are
+        # still in flight when this returns.
+        if "agent" in locals():
+            try:
+                from gaia.agents.base.memory import drain_memory_extraction
+
+                drain_memory_extraction(agent)
+            except Exception as exc:
+                log.warning("Could not finish memory extraction before exit: %s", exc)
 
 
 def _show_interactive_menu(log=None):

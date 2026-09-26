@@ -384,7 +384,32 @@ Sends the conversation turn plus existing memory to the LLM, which returns a JSO
 
 The extraction fetches top-10 relevant existing items first via `_hybrid_search()`, so the LLM can see what already exists and decide whether to add, update, delete, or do nothing. This replaces v1's regex-based heuristic extraction.
 
-**Error handling:** Invalid JSON → logged error, skip this turn. Timeout (3s) → logged warning, skip. Individual operation failure → logged, continue with remaining operations. No fallback to regex heuristics.
+**Error handling:** Invalid JSON → logged warning carrying the reply's length and opening characters, skip this turn. Timeout (`EXTRACTION_TIMEOUT_S`, 60s) → logged warning; the call is abandoned and whatever it eventually returns is discarded. Individual operation failure → logged, continue with remaining operations. No fallback to regex heuristics.
+
+### Background extraction
+
+Extraction runs **after** the turn returns, not before it. `_after_process_query()` schedules the job and returns immediately, so the answer is on screen while the model call is still in flight.
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `MIN_EXTRACTION_WORDS` | 5 | Turns shorter than this never reach the model |
+| `EXTRACTION_TIMEOUT_S` | 60 | Deadline after which the call is abandoned |
+| `EXTRACTION_MAX_TOKENS` | 4096 | Budget, sized so a reasoning model's hidden chain-of-thought does not consume it all |
+| `EXTRACTION_QUEUE_MAX` | 4 | Turns that may queue behind a running job; the oldest is dropped, with a log line |
+| `EXTRACTION_EXIT_WAIT_S` | 15 | How long a drain waits before giving up and saying the turn's facts were not stored |
+
+One extraction thread per agent. Each job freezes the turn's text and context at turn end, so mutating the agent afterwards cannot change what gets extracted.
+
+**Waiting for it.** Anything that exits right after a turn must drain first, or the last turn's facts die with the process:
+
+```python
+from gaia.agents.base.memory import drain_memory_extraction
+
+drain_memory_extraction(agent)          # waits EXTRACTION_EXIT_WAIT_S, logs if it gives up
+agent.wait_for_memory_extraction(timeout=10)   # same wait, as a method
+```
+
+Both return `True` when nothing is left in flight. `drain_memory_extraction()` is a no-op on an agent without memory, so it is safe to call unconditionally. The CLI chat paths call it from their cleanup block, which covers the one-shot, interactive, Ctrl-C and error exits alike; the Agent UI and TUI need no change, because `signal_done()` follows `process_query()`, which no longer waits.
 
 ### Consolidation
 
@@ -449,7 +474,9 @@ Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool run
 
 **Hook 3: `_after_process_query()` callback**
 
-Called after `process_query()` completes. Stores both conversation turns (user + assistant) in the conversations table and runs Mem0-style LLM extraction (ADD/UPDATE/DELETE/NOOP operations against existing memory). For turns ≥ 20 words, the extraction pipeline fetches top-10 relevant existing items via `_hybrid_search()`, then asks the LLM to decide what operations to perform — no regex heuristic fallback.
+Called after `process_query()` completes. Stores both conversation turns (user + assistant) in the conversations table **synchronously**, so the transcript is durable the instant the turn ends, then *schedules* Mem0-style LLM extraction (ADD/UPDATE/DELETE/NOOP operations against existing memory) and returns without waiting for it.
+
+For turns of at least `MIN_EXTRACTION_WORDS` (5) words, the scheduled job fetches top-10 relevant existing items via `_hybrid_search()`, then asks the LLM to decide what operations to perform — no regex heuristic fallback. See [Background extraction](#background-extraction) for the timing, the queue, and how to wait for it before exiting.
 
 ---
 

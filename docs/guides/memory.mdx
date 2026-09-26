@@ -389,6 +389,8 @@ The same mechanism powers **accountability** -- commit to something ("I'll exerc
 
 After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory alongside the new conversation and decides whether to **ADD** new knowledge, **UPDATE** a changed fact (old version preserved with lineage), or **DELETE** something you've contradicted.
 
+This happens *after* your answer is on screen, in the background, so it never adds to how long you wait for a reply. A fact you state may take a few more seconds to appear in the Memory Dashboard than the answer itself did.
+
 It extracts information useful in future conversations -- facts, preferences, project details, people, deadlines -- and skips greetings, confirmations, and ephemeral details. For example, "we standardized on Python 3.12 and I'm using a Ryzen 9 9950X" stores two facts but ignores subjective asides like "it's much faster."
 
 <Tip>
