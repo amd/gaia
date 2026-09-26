@@ -31,6 +31,7 @@ on:
       - 'tests/unit/eval/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/test_ui_email_scope_consent.py'
       - 'tests/unit/test_email_sidecar_devmode_app.py'
       - 'tests/unit/test_email_sidecar_server_wiring.py'
       # The Go side of the email-scope drift guard (#2730 D2a) — a one-sided
@@ -66,6 +67,7 @@ on:
       - 'tests/unit/eval/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/test_ui_email_scope_consent.py'
       - 'tests/unit/test_email_sidecar_devmode_app.py'
       - 'tests/unit/test_email_sidecar_server_wiring.py'
       # The Go side of the email-scope drift guard (#2730 D2a) — a one-sided
