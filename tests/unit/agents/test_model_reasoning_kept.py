@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, _response_reasoning
 from gaia.agents.base.verification import strip_verification_scope
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.providers.lemonade import LemonadeProvider
@@ -363,3 +363,41 @@ def test_earlier_requests_reasoning_is_resent_when_enabled(agent):
     agent.process_query("Hello", max_steps=3)
 
     assert sent[0][1]["reasoning_content"] == "Earlier thinking"
+
+
+# ---------------------------------------------------------------------------
+# Only real text counts as reasoning
+# ---------------------------------------------------------------------------
+
+
+def test_a_response_without_a_reasoning_attribute_has_no_reasoning():
+    assert _response_reasoning(object()) is None
+
+
+def test_a_non_string_reasoning_is_not_carried_into_the_request():
+    """A bare ``MagicMock`` response answers ``.reasoning`` with another mock.
+
+    That is what most agent-loop test doubles are, and an unserialisable object
+    riding into ``reasoning_content`` breaks the request history and the trace
+    file rather than failing where it was produced.
+    """
+    assert _response_reasoning(MagicMock()) is None
+
+
+@pytest.mark.parametrize("value", ["", None])
+def test_an_empty_reasoning_is_no_reasoning(value):
+    assert _response_reasoning(MagicMock(reasoning=value)) is None
+
+
+def test_real_reasoning_text_is_kept():
+    assert _response_reasoning(MagicMock(reasoning="  thought  ")) == "  thought  "
+
+
+def test_a_mock_backed_reply_leaves_no_reasoning_in_the_request(agent):
+    """The whole loop, driven by the MagicMock stub the other agent suites use."""
+    sent = _stub_chat(agent, ("Done.", None))
+
+    agent.process_query("Hello", max_steps=3)
+
+    assert all("reasoning_content" not in m for m in sent[0])
+    json.dumps(sent[0])  # would raise TypeError on a MagicMock
