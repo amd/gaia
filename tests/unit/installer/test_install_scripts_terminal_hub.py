@@ -347,6 +347,70 @@ def test_ps1_parses_without_errors():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+# ── install.ps1 runs inside the user's own session under `irm | iex` ───────
+#
+# Off Windows the script refuses to run, which is a real failure path that
+# needs no stubbing. On Windows the same run would install for real, so skip.
+
+needs_pwsh = pytest.mark.skipif(shutil.which("pwsh") is None, reason="no pwsh")
+off_windows = pytest.mark.skipif(sys.platform == "win32", reason="would install")
+
+
+def _run_pwsh(args):
+    return subprocess.run(
+        ["pwsh", "-NoProfile", "-NonInteractive", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
+@needs_pwsh
+@off_windows
+def test_a_failed_iex_install_leaves_the_session_alive_and_clean():
+    """`exit 1` under iex closed the user's terminal along with the Fix: hint,
+    and a run left Stop and a shadowed Write-Error behind in their session."""
+    script = (
+        f"$src = Get-Content -Raw -LiteralPath '{INSTALL_PS1}';"
+        'try { Invoke-Expression $src } catch { Write-Host "caught: $_" };'
+        "Write-Host 'alive';"
+        'Write-Host "eap=$ErrorActionPreference";'
+        'Write-Host "write-error=$((Get-Command Write-Error).CommandType)";'
+        'Write-Host "write-warning=$((Get-Command Write-Warning).CommandType)";'
+        'Write-Host "leaked=$([bool](Get-Command Install-Gaia -ErrorAction Ignore))"'
+    )
+    result = _run_pwsh(["-Command", script])
+    out = result.stdout + result.stderr
+
+    assert "This installer is for Windows" in out
+    assert "alive" in result.stdout, out
+    assert "caught: " in result.stdout
+    assert "eap=Continue" in result.stdout
+    assert "write-error=Cmdlet" in result.stdout
+    assert "write-warning=Cmdlet" in result.stdout
+    assert "leaked=False" in result.stdout
+
+
+@needs_pwsh
+@off_windows
+def test_a_failed_file_install_still_exits_non_zero():
+    """`pwsh -File install.ps1` must keep reporting failure to its caller."""
+    result = _run_pwsh(["-File", str(INSTALL_PS1)])
+    assert result.returncode != 0
+    assert "This installer is for Windows" in result.stdout + result.stderr
+
+
+def test_ps1_never_calls_exit(ps1_text):
+    """Under iex, `exit` ends the user's PowerShell session, not the script."""
+    code = [
+        line
+        for line in ps1_text.splitlines()
+        if re.match(r"^\s*exit\b", line) or re.search(r"[;{]\s*exit\b", line)
+    ]
+    assert not code, code
+
+
 # ── functional: run install_tui against a fake Agent Hub ───────────────────
 
 

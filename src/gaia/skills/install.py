@@ -78,6 +78,7 @@ from gaia.skills.tiers import (
     effective_tier,
     enforce_tier_ceiling,
 )
+from gaia.utils.archive import ArchiveError, safe_extract
 
 log = get_logger(__name__)
 
@@ -443,21 +444,15 @@ def _assert_matches_bundle(
 
 
 def _unpack_bundle(archive: Path, destination: Path, *, name: str) -> Path:
-    """Extract a skill bundle, refusing traversal, and return its root."""
+    """Extract a skill bundle, refusing unsafe entries, and return its root."""
     destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    root = destination.resolve()
     try:
-        with zipfile.ZipFile(archive) as bundle:
-            for member in bundle.infolist():
-                resolved = (destination / member.filename).resolve()
-                if resolved != root and root not in resolved.parents:
-                    raise SkillValidationError(
-                        f"Refusing to extract the bundle for '{name}': entry "
-                        f"{member.filename!r} escapes the destination directory. The "
-                        "bundle is malformed or hostile; nothing was installed."
-                    )
-            bundle.extractall(destination)
+        safe_extract(archive, destination, kind="zip")
+    except ArchiveError as exc:
+        raise SkillValidationError(
+            f"Refusing to extract the bundle for '{name}': {exc}. The bundle is "
+            "malformed or hostile; nothing was installed."
+        ) from exc
     except zipfile.BadZipFile as exc:
         raise SkillValidationError(
             f"The bundle downloaded for '{name}' is not a valid .zip: {exc}. Retry "

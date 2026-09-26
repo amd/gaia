@@ -1,270 +1,179 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Integration test for the complete MCP workflow: CLI → Config → Agent.
+"""End-to-end MCP workflow: ``gaia connectors configure`` → config → agent tools.
 
-This tests the ACTUAL user workflow:
-1. User runs CLI commands: gaia mcp add <name> <command>
-2. Config is saved to ~/.gaia/mcp_servers.json
-3. Agent loads servers from config
-4. Agent can use all MCP tools
+This is the flow a user follows today (the connectors framework replaced
+``gaia mcp add`` in #977):
 
-Run:
-    uv run pytest tests/mcp/test_mcp_cli_to_agent_workflow.py -xvs -m integration
+1. ``gaia connectors configure <id> --set KEY=VALUE`` stores the secret in the
+   keyring and writes ``~/.gaia/mcp_servers.json`` with a ``$keyring`` reference.
+2. An MCP-enabled agent loads that file, spawns the server with the secret
+   resolved into its environment, and registers its tools.
+3. ``gaia connectors disconnect <id>`` removes the server for the next agent.
+
+The server is the local fixture in ``tests/mcp/fixtures/`` — nothing is
+downloaded, so this runs offline.
 """
 
+import io
 import json
+from contextlib import redirect_stderr, redirect_stdout
 
 import pytest
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.mcp import MCPClientMixin
-from gaia.mcp.client.config import MCPConfig
 
-# MCP server configs (Anthropic format - same as in other tests)
-MCP_SERVERS = {
-    "memory": {
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-memory"],
-    },
-    "sequential-thinking": {
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-    },
-    "time": {
-        "command": "uvx",
-        "args": ["mcp-server-time"],
-    },
-}
+CONNECTOR_ID = "mcp-gaia-fixture"
+TOOL_PREFIX = "mcp_gaia_fixture_"
+SECRET_KEY = "GAIA_FIXTURE_TOKEN"
+SECRET_VALUE = "fixture-secret-123"
 
 
 class MCPTestAgent(Agent, MCPClientMixin):
-    """Test agent that loads MCP servers from config."""
+    """Lemonade-free agent that loads MCP servers from the user's config."""
 
-    def __init__(self, config_path: str, **kwargs):
-        # Skip Lemonade to avoid subprocess issues
+    def __init__(self, **kwargs):
         kwargs.setdefault("skip_lemonade", True)
-        kwargs.setdefault("max_steps", 10)
-
+        kwargs.setdefault("silent_mode", True)
         Agent.__init__(self, **kwargs)
-        MCPClientMixin.__init__(self, auto_load_config=False)
-
-        # Override config path for testing
-        self._mcp_manager.config = MCPConfig(config_path)
-
-        # Load servers from config (system prompt auto-updated with MCP tools)
-        self.load_mcp_servers_from_config()
+        MCPClientMixin.__init__(self, auto_load_config=True)
 
     def _get_system_prompt(self) -> str:
-        """Simple system prompt for testing."""
         return "You are a test agent with access to MCP servers."
 
     def _register_tools(self) -> None:
-        """No additional tools needed."""
         pass
 
 
-@pytest.mark.integration
-class TestMCPCLIToAgentWorkflow:
-    """Test the complete CLI → Config → Agent workflow."""
+def _connectors(*argv) -> tuple[int, str, str]:
+    """Run ``gaia connectors <argv>`` in-process so it shares the test keyring."""
+    from gaia.connectors import cli as connectors_cli
 
-    def test_full_workflow_cli_to_agent(self, npx_available, tmp_path):
-        """Test the complete user workflow from CLI to Agent usage.
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        try:
+            rc = connectors_cli.main(["connectors", *argv])
+        except SystemExit as e:
+            rc = e.code if isinstance(e.code, int) else 1
+    return rc, out.getvalue(), err.getvalue()
 
-        Workflow:
-        1. Simulate CLI: gaia mcp add <name> <command>
-        2. Verify config file is created with correct servers
-        3. Create agent that loads from config
-        4. Verify agent can list and use MCP tools
-        """
-        config_file = tmp_path / "mcp_servers.json"
 
-        # Step 1: Simulate CLI commands (gaia mcp add)
-        # In real usage: gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
-        # For testing, we'll directly write to config to simulate this
-        config_data = {"mcpServers": MCP_SERVERS}
+@pytest.fixture
+def fixture_connector(
+    isolated_home, fixture_server_config, in_memory_keyring, monkeypatch
+):
+    """Publish a catalog entry that launches the local fixture server."""
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+    from gaia.connectors.spec import ConfigField, ConnectorSpec
 
-        config_file.write_text(json.dumps(config_data, indent=2))
+    spec = ConnectorSpec(
+        id=CONNECTOR_ID,
+        display_name="GAIA fixture",
+        icon="T",
+        category="dev-tools",
+        tier=9,
+        type="mcp_server",
+        description="Local stdio MCP server used by the tests.",
+        mcp_command=fixture_server_config["command"],
+        mcp_args=tuple(fixture_server_config["args"]),
+        mcp_env_keys=(SECRET_KEY,),
+        config_schema=(
+            ConfigField(key=SECRET_KEY, label="Token", kind="secret", secret=True),
+        ),
+    )
+    monkeypatch.setitem(REGISTRY._specs, CONNECTOR_ID, spec)
+    return spec
 
-        # Step 2: Verify config file was created correctly
-        assert config_file.exists(), "Config file should exist"
-        loaded_config = json.loads(config_file.read_text())
-        assert "mcpServers" in loaded_config
-        assert len(loaded_config["mcpServers"]) == 3
-        assert "memory" in loaded_config["mcpServers"]
-        assert "sequential-thinking" in loaded_config["mcpServers"]
-        assert "time" in loaded_config["mcpServers"]
 
-        # Step 3: Create agent that loads from config
-        agent = MCPTestAgent(config_path=str(config_file))
+@pytest.fixture
+def clean_tool_registry():
+    """MCP tools land in the process-wide registry; drop them after each test."""
+    before = set(_TOOL_REGISTRY)
+    yield
+    for name in set(_TOOL_REGISTRY) - before:
+        del _TOOL_REGISTRY[name]
 
-        # Step 4: Verify agent loaded all servers
-        servers = agent.list_mcp_servers()
-        assert len(servers) == 3, "Should have loaded 3 servers"
-        assert "memory" in servers
-        assert "sequential-thinking" in servers
-        assert "time" in servers
 
-        # Step 5: Verify tools are registered and accessible
-        # Memory server should have ~9 tools
-        memory_client = agent.get_mcp_client("memory")
-        memory_tools = memory_client.list_tools()
-        assert len(memory_tools) > 0, "Memory server should have tools"
+@pytest.fixture
+def make_agent(clean_tool_registry):
+    agents = []
 
-        # Sequential thinking should have 1 tool
-        thinking_client = agent.get_mcp_client("sequential-thinking")
-        thinking_tools = thinking_client.list_tools()
-        assert len(thinking_tools) == 1, "Sequential thinking should have 1 tool"
+    def _make():
+        agent = MCPTestAgent()
+        agents.append(agent)
+        return agent
 
-        # Time server should have 2 tools
-        time_client = agent.get_mcp_client("time")
-        time_tools = time_client.list_tools()
-        assert len(time_tools) == 2, "Time server should have 2 tools"
-
-        # Step 6: Verify tools are in the agent's tool registry
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-
-        # Check for namespaced MCP tools
-        mcp_tools = [name for name in _TOOL_REGISTRY.keys() if name.startswith("mcp_")]
-        assert (
-            len(mcp_tools) >= 12
-        ), f"Should have at least 12 MCP tools, found {len(mcp_tools)}"
-
-        # Check specific tools exist (note: server name from config)
-        assert "mcp_memory_create_entities" in _TOOL_REGISTRY
-        assert "mcp_sequential-thinking_sequentialthinking" in _TOOL_REGISTRY
-        assert "mcp_time_get_current_time" in _TOOL_REGISTRY
-
-        # Step 7: Verify system prompt includes tools
-        assert "AVAILABLE TOOLS" in agent.system_prompt
-        assert "mcp_memory_create_entities" in agent.system_prompt
-        assert "mcp_time_get_current_time" in agent.system_prompt
-        assert "mcp_sequential-thinking_sequentialthinking" in agent.system_prompt
-
-        # Cleanup
+    yield _make
+    for agent in agents:
         agent._mcp_manager.disconnect_all()
 
-    def test_cli_add_command_simulation(self, npx_available, tmp_path):
-        """Test simulating the actual 'gaia mcp add' CLI command.
 
-        This test simulates what happens when users run:
-        gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
-        """
-        config_file = tmp_path / "mcp_servers.json"
+def _configure():
+    rc, out, err = _connectors(
+        "configure", CONNECTOR_ID, f"--set={SECRET_KEY}={SECRET_VALUE}"
+    )
+    assert rc == 0, f"configure failed: stdout={out!r} stderr={err!r}"
 
-        # Simulate the CLI command behavior
-        from gaia.mcp import MCPClientManager
-        from gaia.mcp.client.config import MCPConfig
 
-        config = MCPConfig(str(config_file))
-        manager = MCPClientManager(config=config)
+class TestConnectorsToAgentWorkflow:
+    def test_configure_writes_keyring_reference_not_secret(
+        self, fixture_connector, isolated_home
+    ):
+        _configure()
 
-        try:
-            # This is what 'gaia mcp add' does internally (with config dicts)
-            for name, server_config in MCP_SERVERS.items():
-                client = manager.add_server(name, server_config)
-                assert client is not None, f"Failed to add {name}"
-                assert client.is_connected(), f"{name} not connected"
+        config_path = isolated_home / ".gaia" / "mcp_servers.json"
+        raw = config_path.read_text(encoding="utf-8")
+        assert SECRET_VALUE not in raw
 
-            # Verify config file was created
-            assert config_file.exists(), "Config file should exist after adding servers"
-
-            # Verify config contents (uses mcpServers key)
-            config_data = json.loads(config_file.read_text())
-            assert len(config_data["mcpServers"]) == 3
-
-            # Now test that a NEW manager can load from this config
-            manager2 = MCPClientManager(config=MCPConfig(str(config_file)))
-            manager2.load_from_config()
-
-            servers = manager2.list_servers()
-            assert len(servers) == 3
-            assert set(servers) == set(MCP_SERVERS.keys())
-
-            # Cleanup
-            manager2.disconnect_all()
-
-        finally:
-            manager.disconnect_all()
-
-    def test_agent_can_call_mcp_tools(self, npx_available, tmp_path):
-        """Test that agent can actually call MCP tools loaded from config.
-
-        This validates that tools work end-to-end through the Agent class.
-        """
-        config_file = tmp_path / "mcp_servers.json"
-
-        # Setup config (using mcpServers format)
-        config_data = {
-            "mcpServers": {
-                "time": MCP_SERVERS["time"],
-            }
+        entry = json.loads(raw)["mcpServers"][CONNECTOR_ID]
+        assert entry["command"] == fixture_connector.mcp_command
+        assert entry["args"] == list(fixture_connector.mcp_args)
+        assert entry["env"][SECRET_KEY] == {
+            "$keyring": f"gaia.connections:{CONNECTOR_ID}:{SECRET_KEY}"
         }
-        config_file.write_text(json.dumps(config_data, indent=2))
 
-        # Create agent
-        agent = MCPTestAgent(config_path=str(config_file))
+    def test_agent_loads_configured_server_and_calls_its_tools(
+        self, fixture_connector, make_agent
+    ):
+        _configure()
 
-        try:
-            # Verify time server loaded
-            assert "time" in agent.list_mcp_servers()
+        agent = make_agent()
 
-            # Get the MCP client directly and test tool call
-            time_client = agent.get_mcp_client("time")
-            result = time_client.call_tool("get_current_time", {"timezone": "UTC"})
+        assert agent.list_mcp_servers() == [CONNECTOR_ID]
+        registered = {n for n in _TOOL_REGISTRY if n.startswith(TOOL_PREFIX)}
+        assert registered == {f"{TOOL_PREFIX}{t}" for t in ("echo", "add", "read_env")}
+        for name in registered:
+            assert name in agent.system_prompt
 
-            # Verify result
-            assert result is not None
-            assert "content" in result
-            assert len(result["content"]) > 0
+        echo = _TOOL_REGISTRY[f"{TOOL_PREFIX}echo"]["function"](text="hello")
+        assert echo["status"] == "success"
+        assert echo["data"]["content"][0]["text"] == "hello"
 
-            # Parse the JSON response
-            response_text = result["content"][0]["text"]
-            response_data = json.loads(response_text)
-            assert "timezone" in response_data
-            assert response_data["timezone"] == "UTC"
-            assert "datetime" in response_data
+        # The keyring secret must reach the spawned server's environment.
+        env = _TOOL_REGISTRY[f"{TOOL_PREFIX}read_env"]["function"](name=SECRET_KEY)
+        assert env["status"] == "success"
+        assert env["data"]["content"][0]["text"] == SECRET_VALUE
 
-        finally:
-            agent._mcp_manager.disconnect_all()
+    def test_disconnect_removes_server_for_the_next_agent(
+        self, fixture_connector, make_agent, isolated_home, in_memory_keyring
+    ):
+        _configure()
+        assert make_agent().list_mcp_servers() == [CONNECTOR_ID]
 
-    def test_config_persistence_across_sessions(self, npx_available, tmp_path):
-        """Test that MCP server config persists across sessions.
+        rc, out, err = _connectors("disconnect", CONNECTOR_ID)
+        assert rc == 0, f"disconnect failed: stdout={out!r} stderr={err!r}"
 
-        Simulates:
-        Session 1: User adds servers via CLI
-        Session 2: New agent loads them automatically
-        """
-        config_file = tmp_path / "mcp_servers.json"
-
-        # Session 1: Add servers
-        from gaia.mcp import MCPClientManager
-        from gaia.mcp.client.config import MCPConfig
-
-        session1_manager = MCPClientManager(config=MCPConfig(str(config_file)))
-
-        try:
-            # Add just one server in session 1
-            client = session1_manager.add_server("time", MCP_SERVERS["time"])
-            assert client is not None
-
-            # Disconnect session 1
-            session1_manager.disconnect_all()
-
-            # Session 2: New agent loads from config
-            agent = MCPTestAgent(config_path=str(config_file))
-
-            assert (
-                "time" in agent.list_mcp_servers()
-            ), "Time server should be loaded from config"
-
-            # Verify tool is accessible
-            time_client = agent.get_mcp_client("time")
-            tools = time_client.list_tools()
-            assert len(tools) == 2
-
-            # Cleanup
-            agent._mcp_manager.disconnect_all()
-
-        finally:
-            if session1_manager:
-                session1_manager.disconnect_all()
+        servers = json.loads(
+            (isolated_home / ".gaia" / "mcp_servers.json").read_text(encoding="utf-8")
+        )["mcpServers"]
+        assert CONNECTOR_ID not in servers
+        assert (
+            in_memory_keyring.get_password(
+                "gaia.connections", f"{CONNECTOR_ID}:{SECRET_KEY}"
+            )
+            is None
+        )
+        assert make_agent().list_mcp_servers() == []

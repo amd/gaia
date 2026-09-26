@@ -25,9 +25,9 @@ from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools import search_scope
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
-    check_file_state,
-    record_read,
-    record_write,
+    file_read_record,
+    read_first_preflight,
+    stamp_of,
 )
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
@@ -36,6 +36,7 @@ from gaia.agents.tools.search_scope import (
     search_roots,
 )
 from gaia.logger import get_logger
+from gaia.security import BackupError
 
 logger = get_logger(__name__)
 
@@ -55,6 +56,11 @@ def _python_syntax_error(source: str, filename: str) -> str | None:
     except (SyntaxError, ValueError) as e:  # ValueError: source has null bytes
         return str(e)
     return None
+
+
+def _resolved_target(args: Dict[str, Any]) -> Path:
+    """The file write_file / edit_file act on, resolved as they resolve it."""
+    return Path(args["file_path"]).resolve()
 
 
 DATE_RANGE_FORMATS = (
@@ -224,9 +230,8 @@ class FileSearchToolsMixin:
             Args:
                 file_pattern: name, substring, glob ("*.go") or regex to match.
                 directory: WHERE to look. Pass it whenever the user names a
-                    folder ("in tui/internal", "under docs") — without it the
-                    search covers the whole workspace and common document
-                    folders, which is slower and can match the wrong file.
+                    folder ("under docs"); without it the search covers the
+                    whole workspace and can match the wrong file.
                 deep_search: search entire drives. Slow; only after a normal
                     search found nothing.
                 file_types: comma-separated extensions to restrict to, e.g.
@@ -884,16 +889,17 @@ class FileSearchToolsMixin:
                         ),
                     }
 
+                reads = file_read_record(self)
+                seen = stamp_of(file_path)
+
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
 
-                    return {
-                        "status": "success",
-                        "file_path": file_path,
-                        **read_text_page(
-                            file_path, offset, 8000 if limit is None else limit
-                        ),
-                    }
+                    page = read_text_page(
+                        file_path, offset, 8000 if limit is None else limit
+                    )
+                    reads.note(file_path, seen)
+                    return {"status": "success", "file_path": file_path, **page}
 
                 # Guard against reading very large files into memory
                 file_size = os.path.getsize(file_path)
@@ -914,6 +920,8 @@ class FileSearchToolsMixin:
                     # Binary file
                     with open(file_path, "rb") as f:
                         content_bytes = f.read()
+                    # Recorded too: this is all a read can show of it.
+                    reads.note(file_path, seen)
                     return {
                         "status": "success",
                         "file_path": file_path,
@@ -923,8 +931,7 @@ class FileSearchToolsMixin:
                         "size_bytes": len(content_bytes),
                     }
 
-                # Anchor later edits to what the agent actually saw.
-                record_read(file_path, content)
+                reads.note(file_path, seen)
 
                 # Detect file type by extension
                 ext = os.path.splitext(file_path)[1].lower()
@@ -1205,12 +1212,15 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
+            preflight=read_first_preflight(self, _resolved_target, "overwriting"),
         )
         def write_file(
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
             """
             Write content to a file with full security guardrails.
+
+            Overwriting an existing file requires reading it with read_file first.
 
             Security checks performed:
             1. Path allowlist validation (PathValidator)
@@ -1248,23 +1258,29 @@ class FileSearchToolsMixin:
                             "error": reason,
                             "operation": "write_file",
                         }
-
-                stale_error = check_file_state(str(resolved_path))
-                if stale_error is not None:
-                    if path_validator is not None:
-                        path_validator.audit_write(
-                            "write", str(resolved_path), content_size, "denied", "stale"
-                        )
-                    return {**stale_error, "operation": "write_file"}
-                if path_validator is not None:
-                    if resolved_path.exists():
-                        backup_path = path_validator.create_backup(str(resolved_path))
                 else:
                     logger.warning(
                         "No PathValidator available — write_file proceeding without "
                         "security checks for: %s",
                         resolved_path,
                     )
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(resolved_path, "overwriting")
+                if refusal is not None:
+                    if path_validator is not None:
+                        path_validator.audit_write(
+                            "write",
+                            str(resolved_path),
+                            content_size,
+                            "denied",
+                            refusal.get("error_type", "read_required"),
+                        )
+                    return {**refusal, "operation": "write_file"}
+
+                # Create backup of existing file before overwriting
+                if path_validator is not None and resolved_path.exists():
+                    backup_path = path_validator.create_backup(str(resolved_path))
 
                 # Create parent directories if needed
                 if create_dirs and resolved_path.parent:
@@ -1273,7 +1289,7 @@ class FileSearchToolsMixin:
                 # Write the file
                 with open(resolved_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                record_write(str(resolved_path), content)
+                reads.note(resolved_path)
 
                 # Audit the successful write
                 if path_validator is not None:
@@ -1296,6 +1312,18 @@ class FileSearchToolsMixin:
                     result["backup_path"] = backup_path
                 return result
 
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                    "operation": "write_file",
+                }
             except PermissionError:
                 logger.error(f"Permission denied writing to: {file_path}")
                 return {
@@ -1523,6 +1551,7 @@ class FileSearchToolsMixin:
 
         @tool(
             atomic=True,
+            preflight=read_first_preflight(self, _resolved_target),
         )
         def edit_file(
             file_path: str, old_content: str, new_content: str
@@ -1532,6 +1561,7 @@ class FileSearchToolsMixin:
 
             Similar to Claude Code's Edit tool — performs a partial string replacement
             rather than overwriting the entire file. Includes all security guardrails.
+            The file must have been read with read_file first.
 
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
@@ -1597,6 +1627,11 @@ class FileSearchToolsMixin:
                         "operation": "edit_file",
                     }
 
+                reads = file_read_record(self)
+                refusal = reads.refusal(resolved_path)
+                if refusal is not None:
+                    return {**refusal, "operation": "edit_file"}
+
                 # Read current content
                 current_content = resolved_path.read_text(encoding="utf-8")
 
@@ -1657,7 +1692,7 @@ class FileSearchToolsMixin:
 
                 # Write updated content
                 resolved_path.write_text(updated_content, encoding="utf-8")
-                record_write(str(resolved_path), updated_content)
+                reads.note(resolved_path)
 
                 # Audit the edit
                 edit_size = len(updated_content.encode("utf-8"))
@@ -1686,6 +1721,18 @@ class FileSearchToolsMixin:
                     result["backup_path"] = backup_path
                 return result
 
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                    "operation": "edit_file",
+                }
             except Exception as e:
                 logger.error(f"Error editing file: {e}")
                 path_validator = getattr(self, "path_validator", None)
@@ -2035,11 +2082,9 @@ class FileSearchToolsMixin:
                 columns: Comma-separated column names to focus on (optional)
                 group_by: Column name to group rows by; numeric columns are
                     summed per group, largest first (optional)
-                date_range: Keep only rows whose date column falls in this
-                    period (optional). Accepts a quarter ('2025-Q1',
-                    'Q1 2025', "Q1'25"), year ('2025'), month ('2025-03'),
-                    day ('2025-03-15'), or a range ('2025-01 to 2025-06').
-                    Unsupported formats return an error.
+                date_range: Keep only rows dated in this period (optional).
+                    A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
+                    day, or range ('2025-01 to 2025-06'). Else an error.
 
             Returns:
                 Dictionary with analysis results based on the requested type

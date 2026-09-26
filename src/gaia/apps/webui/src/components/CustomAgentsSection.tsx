@@ -285,7 +285,7 @@ export function CustomAgentsSection() {
                         display: 'flex',
                         alignItems: 'center',
                         gap: 8,
-                        color: status.kind === 'error' ? 'var(--accent-gold)' : 'var(--text-secondary)',
+                        color: status.kind === 'error' ? 'var(--accent-yellow)' : 'var(--text-secondary)',
                     }}
                     role="status"
                 >
