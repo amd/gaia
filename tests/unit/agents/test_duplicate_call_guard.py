@@ -2,16 +2,21 @@
 # SPDX-License-Identifier: MIT
 """The duplicate tool-call short-circuit, from the rule to the turn's end.
 
-A call identical to one that already ran this turn, within the window, with
-no error and no change to what it looks at, does not run again: the model gets
-the step it ran at and a handle to the archived output. Repeats past the limit
-warn, and past twice the limit the turn ends the way the loop guard ends it.
+Only a read-only call (a read, search or listing tool, or a shell command made
+of read-only programs with no redirection) identical to one that already ran
+this turn, within the window, with no error and with what it looked at
+unchanged on disk, is not run again: the model gets the step it ran at and a
+handle to the archived output. Everything else runs every time. Repeats past
+the limit warn, and past twice the limit the turn ends the way the loop guard
+ends it.
 """
 
-# pylint: disable=protected-access,unused-argument
+# pylint: disable=protected-access,unused-argument,attribute-defined-outside-init
 
 import copy
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -26,8 +31,10 @@ from gaia.agents.base.duplicate_guard import (
     DuplicateCallGuard,
     duplicate_guard_from_env,
     duplicate_limit_from_env,
+    is_read_only_command,
     result_text,
 )
+from gaia.agents.base.session_ledger import SessionLedger
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 _ANSWER = "Done."
@@ -38,6 +45,11 @@ _GREP = {"command": 'grep -rn "gfx90a" build_tools/configure'}
 def _isolated_env(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon-home"))
+    # The guard fingerprints the working directory when a call names no
+    # existing path; a private one keeps other processes out of the picture.
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
     for var in (
         DUPLICATE_GUARD_ENV_VAR,
         DUPLICATE_WINDOW_ENV_VAR,
@@ -64,13 +76,16 @@ class _ProbeAgent(Agent):
         agent = self
         agent.runs = []
 
+        # Replaced per test with a fake that touches the working directory.
+        agent.shell = lambda command: f"out of {command}"
+
         @tool
         def run_shell_command(command: str) -> dict:
             """A shell look."""
             agent.runs.append(("run_shell_command", command))
             return {
                 "status": "success",
-                "stdout": f"out of {command}",
+                "stdout": agent.shell(command),
                 "return_code": 0,
             }
 
@@ -227,8 +242,8 @@ def test_argument_order_does_not_make_a_call_different():
     guard = DuplicateCallGuard(store=lambda: store_for(SimpleNamespace()))
     guard.begin_turn()
     guard.begin_step(1)
-    guard.record("t", {"a": 1, "b": 2}, {"status": "success"})
-    assert guard.check("t", {"b": 2, "a": 1}) is not None
+    guard.record("read_file", {"a": 1, "b": 2}, {"status": "success"})
+    assert guard.check("read_file", {"b": 2, "a": 1}) is not None
 
 
 @pytest.mark.usefixtures("clean_registry")
@@ -257,20 +272,148 @@ def test_a_call_runs_again_after_an_edit_to_a_path_it_references():
 
 
 @pytest.mark.usefixtures("clean_registry")
-def test_a_shell_command_runs_again_after_any_edit():
+def test_a_command_that_runs_code_always_executes():
+    """A second ``python tools/tick.py`` is a second side effect, not a repeat."""
     agent = _make_agent()
+    counter = Path("state/counter.txt")
+    counter.parent.mkdir()
+    counter.write_text("40\n", encoding="utf-8")
+
+    def shell(command):
+        if command == "python tools/tick.py":
+            value = int(counter.read_text(encoding="utf-8")) + 1
+            counter.write_text(f"{value}\n", encoding="utf-8")
+            return f"counter is now {value}"
+        return counter.read_text(encoding="utf-8")
+
+    agent.shell = shell
+    tick = {"command": "python tools/tick.py"}
     _stub_chat(
         agent,
         _script(
+            ("run_shell_command", tick),
+            ("run_shell_command", tick),
             ("run_shell_command", {"command": "pytest tests/"}),
-            ("edit_file", {"file_path": "src/a.py", "old": "x", "new": "y"}),
             ("run_shell_command", {"command": "pytest tests/"}),
         ),
     )
 
     agent.process_query("go")
 
-    assert len([r for r in agent.runs if r[0] == "run_shell_command"]) == 2
+    assert agent.runs.count(("run_shell_command", tick["command"])) == 2
+    assert agent.runs.count(("run_shell_command", "pytest tests/")) == 2
+    assert counter.read_text(encoding="utf-8") == "42\n"
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_a_writing_shell_command_is_never_short_circuited():
+    agent = _make_agent()
+    Path("f").write_text("a\n", encoding="utf-8")
+    sed = {"command": "sed -i s/a/b/ f"}
+    redirect = {"command": "cat f > g"}
+    _stub_chat(
+        agent,
+        _script(
+            ("run_shell_command", sed),
+            ("run_shell_command", sed),
+            ("run_shell_command", redirect),
+            ("run_shell_command", redirect),
+        ),
+    )
+
+    agent.process_query("go")
+
+    assert len(agent.runs) == 4
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_a_repeated_cat_runs_again_after_a_script_rewrote_the_file():
+    agent = _make_agent()
+    ini = Path("config/app.ini")
+    ini.parent.mkdir()
+    ini.write_text("build = 4418\n", encoding="utf-8")
+
+    def shell(command):
+        if command == "python tools/bump.py":
+            _rewrite(ini, "build = 4419\n")
+            return "bumped"
+        return ini.read_text(encoding="utf-8")
+
+    agent.shell = shell
+    cat = {"command": "cat config/app.ini"}
+    calls = _stub_chat(
+        agent,
+        _script(
+            ("run_shell_command", cat),
+            ("run_shell_command", {"command": "python tools/bump.py"}),
+            ("run_shell_command", cat),
+        ),
+    )
+
+    agent.process_query("go")
+
+    assert agent.runs.count(("run_shell_command", cat["command"])) == 2
+    seen = _tool_results(calls, "run_shell_command")
+    assert [r["stdout"] for r in seen] == ["build = 4418\n", "bumped", "build = 4419\n"]
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_a_repeated_ls_runs_again_after_a_script_added_files():
+    agent = _make_agent()
+    build = Path("build")
+    build.mkdir()
+    (build / "a.txt").write_text("a\n", encoding="utf-8")
+
+    def shell(command):
+        if command == "python tools/stage.py":
+            for name in ("stage_01.bin", "stage_02.bin"):
+                (build / name).write_bytes(b"\x00")
+            return "staged"
+        return "\n".join(sorted(p.name for p in build.iterdir()))
+
+    agent.shell = shell
+    ls = {"command": "ls build/"}
+    calls = _stub_chat(
+        agent,
+        _script(
+            ("run_shell_command", ls),
+            ("run_shell_command", {"command": "python tools/stage.py"}),
+            ("run_shell_command", ls),
+        ),
+    )
+
+    agent.process_query("go")
+
+    assert agent.runs.count(("run_shell_command", ls["command"])) == 2
+    seen = _tool_results(calls, "run_shell_command")
+    assert seen[-1]["stdout"] == "a.txt\nstage_01.bin\nstage_02.bin"
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_a_repeated_grep_with_nothing_changed_is_short_circuited():
+    agent = _make_agent()
+    services = Path("toybox/services")
+    services.mkdir(parents=True)
+    (services / "billing.py").write_text("lease\n", encoding="utf-8")
+    grep = {"command": "grep -rl lease toybox/services/"}
+    calls = _stub_chat(
+        agent,
+        _script(*[("run_shell_command", grep)] * 3),
+    )
+
+    agent.process_query("go")
+
+    assert agent.runs.count(("run_shell_command", grep["command"])) == 1
+    statuses = [r.get("status") for r in _tool_results(calls, "run_shell_command")]
+    assert statuses == ["success", "duplicate", "duplicate"]
+
+
+def _rewrite(path: Path, text: str) -> None:
+    """Write *text* and make sure the mtime moves, whatever the clock's grain."""
+    before = path.stat().st_mtime_ns
+    path.write_text(text, encoding="utf-8")
+    if path.stat().st_mtime_ns == before:
+        os.utime(path, ns=(before + 1_000_000, before + 1_000_000))
 
 
 @pytest.mark.usefixtures("clean_registry")
@@ -319,6 +462,104 @@ def test_a_call_outside_the_window_runs_again():
     agent.process_query("go")
 
     assert agent.runs.count(("run_shell_command", _GREP["command"])) == 2
+
+
+@pytest.mark.parametrize(
+    "command, read_only",
+    [
+        ("cat a.txt", True),
+        ("grep -rl lease toybox/services/", True),
+        ("sed -n 1,5p f", True),
+        ("cat a 2>/dev/null | wc -l", True),
+        ("git log -3", True),
+        ("git -C x status", True),
+        ("find . -name x", True),
+        ("cd src && ls", True),
+        ("FOO=1 cat f", True),
+        ('awk "{print}" f', True),
+        ("rg lease | sort | uniq", True),
+        ("python tools/tick.py", False),
+        ("pytest tests/ -q", False),
+        ("sed -i s/a/b/ f", False),
+        ("awk -i inplace 1 f", False),
+        ("cat a > b", False),
+        ("cat a >> b", False),
+        ("cat f | tee g", False),
+        ("git commit -m x", False),
+        ("find . -name x -delete", False),
+        ("echo $(rm x)", False),
+        ("ls; touch x", False),
+        ("cat 'unbalanced", False),
+        ("", False),
+    ],
+)
+def test_read_only_command_classifier(command, read_only):
+    assert is_read_only_command(command) is read_only
+
+
+def test_a_read_only_repeat_runs_again_once_the_workdir_changes():
+    """A call that names no existing path is fingerprinted by the workdir."""
+    guard = DuplicateCallGuard(store=lambda: store_for(SimpleNamespace()))
+    guard.begin_turn()
+    guard.begin_step(1)
+    guard.record("run_shell_command", {"command": "ls"}, {"status": "success"})
+    assert guard.check("run_shell_command", {"command": "ls"}) is not None
+    Path("new.txt").write_text("x", encoding="utf-8")
+    assert guard.check("run_shell_command", {"command": "ls"}) is None
+
+
+def test_ledger_marks_a_read_stale_on_invalidation_and_refreshes_on_reread():
+    ledger = SessionLedger(SimpleNamespace())
+    path = Path("notes.md")
+    path.write_text("# one\n", encoding="utf-8")
+    read = {"status": "success", "file_path": str(path), "content": "# one\n"}
+    ledger.record("read_file", {"file_path": str(path)}, read, step=1, actor="parent")
+    assert "stale" not in ledger.render()
+
+    guard = DuplicateCallGuard(
+        store=lambda: store_for(SimpleNamespace()), on_invalidate=ledger.mark_stale
+    )
+    guard.begin_turn()
+    guard.begin_step(1)
+    guard.record("run_shell_command", {"command": "cat notes.md"}, read)
+    _rewrite(path, "# one\n# two\n")
+    assert guard.check("run_shell_command", {"command": "cat notes.md"}) is None
+    line = ledger.render()
+    assert "(stale: file changed after this outline)" in line
+    assert ledger.tool_result("notes")["matches"][0]["stale"] is True
+
+    fresh = {**read, "content": "# one\n# two\n"}
+    ledger.record("read_file", {"file_path": str(path)}, fresh, step=2, actor="parent")
+    assert "stale" not in ledger.render()
+
+
+def test_ledger_marks_a_read_stale_on_an_edit_and_on_a_silent_disk_change():
+    ledger = SessionLedger(SimpleNamespace())
+    path = Path("a.py")
+    path.write_text("x = 1\n", encoding="utf-8")
+    read = {"status": "success", "file_path": str(path), "content": "x = 1\n"}
+    ledger.record("read_file", {"file_path": str(path)}, read, step=1, actor="w1")
+    ledger.record(
+        "edit_file",
+        {"file_path": str(path), "old": "1", "new": "2"},
+        {"status": "success", "file_path": str(path)},
+        step=2,
+        actor="w1",
+    )
+    assert "(stale: file changed after this outline)" in ledger.render()
+
+    other = Path("b.py")
+    other.write_text("y = 1\n", encoding="utf-8")
+    ledger.record(
+        "read_file",
+        {"file_path": str(other)},
+        {"status": "success", "file_path": str(other), "content": "y = 1\n"},
+        step=3,
+        actor="w1",
+    )
+    _rewrite(other, "y = 2\n")
+    rendered = ledger.render()
+    assert rendered.count("(stale: file changed after this outline)") == 2
 
 
 # ---------------------------------------------------------------------------

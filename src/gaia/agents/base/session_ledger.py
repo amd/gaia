@@ -122,6 +122,10 @@ class Entry:
     passed: Optional[bool] = None
     #: A partial read (a page or a paged shell command) carries no outline.
     partial: bool = False
+    #: ``(size, mtime_ns)`` of a read file when it was read; ``None`` if unknown.
+    disk: Optional[Tuple[int, int]] = None
+    #: The file changed after this read; the outline no longer describes it.
+    stale: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         record: Dict[str, Any] = {
@@ -135,6 +139,7 @@ class Entry:
                     "path": self.key,
                     "chars": self.size,
                     "partial": self.partial,
+                    "stale": self.stale,
                     "artifact": self.artifact,
                     "entries": [
                         {"n": e["n"], "label": e["label"], "lines": e["lines"]}
@@ -199,6 +204,31 @@ class SessionLedger:
         # keeps first-seen order and stays deterministic.
         self._entries[(entry.kind, entry.key)] = entry
         return entry
+
+    # ── staleness ───────────────────────────────────────────────────────────
+
+    def mark_stale(self, paths) -> List[Entry]:
+        """Flag the read entries for *paths*: their file changed after the read."""
+        targets = {os.path.abspath(p) for p in paths}
+        marked = []
+        for entry in self._entries.values():
+            if entry.kind == "read" and not entry.stale:
+                if os.path.abspath(entry.key) in targets:
+                    entry.stale = True
+                    marked.append(entry)
+        return marked
+
+    def refresh_stale(self) -> None:
+        """Flag every read entry whose file no longer matches what was read.
+
+        A shell script or a command outside the edit tools changes a file
+        without any tool-level record; the disk is the only witness.
+        """
+        for entry in self._entries.values():
+            if entry.kind != "read" or entry.stale or entry.disk is None:
+                continue
+            if _disk_state(entry.key) != entry.disk:
+                entry.stale = True
 
     # ── recording ───────────────────────────────────────────────────────────
 
@@ -298,6 +328,7 @@ class SessionLedger:
                 artifact=handle,
                 outline=spans,
                 partial=partial,
+                disk=_disk_state(path),
             )
         )
 
@@ -339,6 +370,7 @@ class SessionLedger:
             )
         if not path:
             return None
+        self.mark_stale([path])
         return self._put(
             Entry(kind="change", key=path, step=step, actor=actor, label=tool_name)
         )
@@ -432,6 +464,7 @@ class SessionLedger:
 
     def render(self, max_chars: int = DIGEST_CHARS) -> str:
         """The digest: plain text, no handles, identical for identical findings."""
+        self.refresh_stale()
         sections = []
         for kind in KINDS:
             lines = [_digest_line(e) for e in self._entries.values() if e.kind == kind]
@@ -467,6 +500,7 @@ class SessionLedger:
                     "entry=n) fetches that exact part"
                 ),
             }
+        self.refresh_stale()
         matched = self.find(query)
         result: Dict[str, Any] = {
             "status": "success",
@@ -507,6 +541,14 @@ def ledger_for(owner) -> SessionLedger:
 
 def _serialize(value: Any) -> str:
     return json.dumps(value, default=str, ensure_ascii=False)
+
+
+def _disk_state(path: str) -> Optional[Tuple[int, int]]:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime_ns)
 
 
 def _clip(text: str, limit: int = LABEL_CHARS) -> str:
@@ -625,6 +667,8 @@ def _digest_line(entry: Entry) -> str:
     who = f"{entry.actor}, step {entry.step}"
     if entry.kind == "read":
         head = f"- {entry.key} ({entry.size} chars; {who})"
+        if entry.stale:
+            return f"{head}: (stale: file changed after this outline)"
         if entry.partial:
             return f"{head}: partial"
         parts = [

@@ -1628,6 +1628,7 @@ Do NOT wrap conversational replies in JSON.
             window=duplicate_window_from_env() or duplicate_window,
             limit=duplicate_limit_from_env() or duplicate_limit,
             store=lambda: store_for(self),
+            on_invalidate=self._mark_ledger_stale,
         )
 
         chat_config = AgentConfig(
@@ -4548,6 +4549,12 @@ Do NOT wrap conversational replies in JSON.
             return
         logger.debug("Tool '%s' reported its own LLM usage: %s", tool_name, usage)
         self._tool_reported_usage.append(usage)
+
+    def _mark_ledger_stale(self, paths: List[str]) -> None:
+        """A file changed after the ledger outlined it; say so in the digest."""
+        ledger = getattr(self, "_session_ledger", None)
+        if ledger is not None:
+            ledger.mark_stale(paths)
 
     def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """Run :meth:`_execute_tool`, timing it for the step and turn records.

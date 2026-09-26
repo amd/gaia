@@ -11,12 +11,20 @@ after JSON canonicalisation) already executed within the last
 result naming the step that ran it and a handle to the archived output, and
 nothing is lost.
 
-A call runs anyway when its previous execution errored (a retry is
-legitimate), when a file-changing tool touched a path the call references
-since then, when the call observes the workspace at large (a shell command)
-and any file changed since then, and for the tools that read the agent's own
-state (``read_tool_output``, ``session_findings``, ``delegate_task``, ``sleep``,
-``request_user_input``).
+Only a read-only call is ever short-circuited: a read, search or listing
+tool, or a shell command whose every pipeline segment is a read-only program
+(``cat``, ``grep``, ``ls``, a read-only ``git`` subcommand, …) with no output
+redirection and no in-place flag. Everything else — ``python``, ``pytest``, a
+script, ``rm``, ``git commit`` — runs every time: a second ``python
+tools/tick.py`` is a second side effect, not a repeat. And a read-only repeat
+runs again unless the world is unchanged: at record time the guard fingerprints
+what the call looked at (size and mtime of each file it names, the entries of
+each directory, or the working directory's top level when it names nothing
+that resolves) and a different fingerprint at check time means a fresh run.
+A call also runs again when its previous execution errored (a retry is
+legitimate) or a file-changing tool has touched a path it references, and
+always for the tools that read the agent's own state (``read_tool_output``,
+``session_findings``, ``delegate_task``, ``sleep``, ``request_user_input``).
 """
 
 from __future__ import annotations
@@ -24,6 +32,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import stat as stat_mod
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from gaia.agents.base.artifacts import ArtifactStore
@@ -51,16 +61,232 @@ ALWAYS_EXECUTE: FrozenSet[str] = frozenset(
     }
 )
 
-#: A shell command can observe any file, so any change since its last run may
-#: change its output. Judged by name here and by a ``command`` argument too.
-_WORKSPACE_TOOLS: FrozenSet[str] = frozenset(
-    {"run_shell_command", "run_python", "execute_python_file"}
+#: Their result depends only on what is on disk; a repeat with nothing changed
+#: is the same result.
+READ_ONLY_TOOLS: FrozenSet[str] = frozenset(
+    {
+        "read_file",
+        "search_file_content",
+        "search_file",
+        "search_code",
+        "search_directory",
+        "list_directory",
+        "find_files",
+        "browse_directory",
+        "tree",
+        "file_info",
+        "get_file_info",
+        "list_recent_files",
+        "search_code_index",
+        "get_index_status",
+        "generate_diff",
+    }
+)
+
+#: The one shell tool whose command line the classifier can read. ``run_python``
+#: and ``execute_python_file`` run code, which is never read-only.
+SHELL_TOOL = "run_shell_command"
+
+#: Programs that only read. A segment starting with anything else is a run.
+READ_ONLY_PROGRAMS: FrozenSet[str] = frozenset(
+    {
+        "cat",
+        "sed",
+        "head",
+        "tail",
+        "grep",
+        "rg",
+        "find",
+        "ls",
+        "wc",
+        "tree",
+        "stat",
+        "file",
+        "diff",
+        "sort",
+        "uniq",
+        "cut",
+        "awk",
+        "echo",
+        "printf",
+        "git",
+        "cd",
+        "pwd",
+    }
+)
+READ_ONLY_GIT_SUBCOMMANDS: FrozenSet[str] = frozenset(
+    {"log", "show", "status", "diff", "branch", "rev-parse", "blame", "ls-files"}
+)
+#: Stderr redirections that write nothing; any other ``>`` is a write.
+_HARMLESS_REDIRECTIONS = ("2>&1", "2>/dev/null", "2>nul")
+#: Command substitution runs an arbitrary program the segment walk never sees.
+_SUBSTITUTION = ("$(", "`")
+#: Directory entries a fingerprint keeps; beyond that a change is still very
+#: likely to move the count or the mtime.
+_FINGERPRINT_ENTRIES = 2000
+_CD_PREFIX_RE = re.compile(r"^\s*cd\s+(\S+)\s*&&\s*")
+_PATH_ARG_KEYS = (
+    "file_path",
+    "path",
+    "filepath",
+    "filename",
+    "file",
+    "target_path",
+    "directory",
+    "dir",
+    "root",
+    "root_dir",
+    "search_path",
 )
 
 
-def _observes_workspace(tool_name: str, tool_args: Any) -> bool:
-    return tool_name in _WORKSPACE_TOOLS or (
-        isinstance(tool_args, dict) and "command" in tool_args
+def is_read_only_command(command: str) -> bool:
+    """Does every part of *command* only read?
+
+    Each pipeline segment's program must be in :data:`READ_ONLY_PROGRAMS`
+    (``git`` only with a subcommand in :data:`READ_ONLY_GIT_SUBCOMMANDS`), with
+    no output redirection, no command substitution, no ``sed -i`` / ``awk -i``
+    and no ``find`` action that writes or executes. A line shlex rejects is not
+    read-only: what it would do cannot be told.
+    """
+    # Lazy: the shell tool imports the base package, not the other way round.
+    from gaia.agents.tools.shell_tools import (  # pylint: disable=import-outside-toplevel
+        _ENV_ASSIGNMENT_RE,
+        DANGEROUS_FIND_ACTIONS,
+        _outside_double_quotes,
+        _resolve_git_subcommand,
+        _rewrites_in_place,
+        _split_connectors,
+        _split_pipeline,
+    )
+
+    if not isinstance(command, str) or not command.strip():
+        return False
+    syntax = _outside_double_quotes(command)
+    for harmless in _HARMLESS_REDIRECTIONS:
+        syntax = syntax.replace(harmless, " ")
+    if ">" in syntax or any(mark in syntax for mark in _SUBSTITUTION):
+        return False
+    for pipeline, _connector in _split_connectors(command):
+        try:
+            parts = shlex.split(pipeline)
+        except ValueError:
+            return False
+        for segment in _split_pipeline(parts):
+            while segment and _ENV_ASSIGNMENT_RE.match(segment[0]):
+                segment = segment[1:]
+            if not segment:
+                return False
+            program = os.path.basename(segment[0]).lower()
+            program = program[:-4] if program.endswith(".exe") else program
+            if program not in READ_ONLY_PROGRAMS:
+                return False
+            if program == "git":
+                subcommand, _error = _resolve_git_subcommand(segment)
+                if subcommand not in READ_ONLY_GIT_SUBCOMMANDS:
+                    return False
+            elif program in ("sed", "awk") and _rewrites_in_place(program, segment):
+                return False
+            elif program == "find" and any(
+                part in DANGEROUS_FIND_ACTIONS for part in segment[1:]
+            ):
+                return False
+    return True
+
+
+def is_read_only_call(tool_name: str, tool_args: Any) -> bool:
+    """May this call be answered from its last result, given nothing changed?"""
+    if tool_name in READ_ONLY_TOOLS:
+        return True
+    if tool_name == SHELL_TOOL and isinstance(tool_args, dict):
+        return is_read_only_command(tool_args.get("command"))
+    return False
+
+
+def _call_cwd(tool_name: str, tool_args: Any) -> str:
+    cwd = os.getcwd()
+    if not isinstance(tool_args, dict):
+        return cwd
+    given = tool_args.get("working_directory")
+    if isinstance(given, str) and given.strip():
+        cwd = os.path.join(cwd, os.path.expanduser(given))
+    if tool_name == SHELL_TOOL and isinstance(tool_args.get("command"), str):
+        match = _CD_PREFIX_RE.match(tool_args["command"])
+        if match:
+            cwd = os.path.join(cwd, os.path.expanduser(match.group(1)))
+    return cwd
+
+
+def _candidate_paths(tool_name: str, tool_args: Any) -> List[str]:
+    """Tokens of the call that may name a file or directory, as given."""
+    if not isinstance(tool_args, dict):
+        return []
+    if tool_name == SHELL_TOOL:
+        command = tool_args.get("command")
+        if not isinstance(command, str):
+            return []
+        command = _CD_PREFIX_RE.sub("", command)
+        return [w for w in _WORD_RE.findall(command) if not w.startswith("-")]
+    return [
+        tool_args[key] for key in _PATH_ARG_KEYS if isinstance(tool_args.get(key), str)
+    ]
+
+
+def _entry_state(directory: str) -> Tuple[Any, ...]:
+    entries = []
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                except OSError:
+                    entries.append((entry.name, None, None))
+                    continue
+                entries.append((entry.name, st.st_size, st.st_mtime_ns))
+    except OSError:
+        return ()
+    entries.sort()
+    return tuple(entries[:_FINGERPRINT_ENTRIES]) + ((len(entries),),)
+
+
+def _state_of(path: str) -> Optional[Tuple[Any, ...]]:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if stat_mod.S_ISDIR(st.st_mode):
+        return ("dir", st.st_mtime_ns, _entry_state(path))
+    return ("file", st.st_size, st.st_mtime_ns)
+
+
+def fingerprint(tool_name: str, tool_args: Any) -> Dict[str, Tuple[Any, ...]]:
+    """What the call looks at, as it is on disk right now.
+
+    Every path-like token that resolves is a file's ``(size, mtime)`` or a
+    directory's mtime and entries. When nothing resolves — a pattern-only grep,
+    a listing of the current directory — the working directory's top level
+    stands in, so a change anywhere visible from there still invalidates.
+    """
+    cwd = _call_cwd(tool_name, tool_args)
+    states: Dict[str, Tuple[Any, ...]] = {}
+    for token in _candidate_paths(tool_name, tool_args):
+        full = os.path.normpath(os.path.join(cwd, os.path.expanduser(token)))
+        if full in states:
+            continue
+        state = _state_of(full)
+        if state is not None:
+            states[full] = state
+    if not states:
+        state = _state_of(cwd)
+        states[os.path.normpath(cwd)] = state if state is not None else ("missing",)
+    return states
+
+
+def _changed_paths(
+    before: Dict[str, Tuple[Any, ...]], after: Dict[str, Tuple[Any, ...]]
+) -> List[str]:
+    return sorted(
+        path for path in set(before) | set(after) if before.get(path) != after.get(path)
     )
 
 
@@ -196,11 +422,15 @@ class DuplicateCallGuard:
         window: int = DEFAULT_DUPLICATE_WINDOW,
         limit: int = DEFAULT_DUPLICATE_LIMIT,
         store: Optional[Callable[[], ArtifactStore]] = None,
+        on_invalidate: Optional[Callable[[List[str]], None]] = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.window = validate_positive_int("duplicate_window", window)
         self.limit = validate_positive_int("duplicate_limit", limit)
         self._store = store
+        # Told the paths whose on-disk state no longer matches a recorded
+        # result, so the session ledger can mark what it knows of them stale.
+        self._on_invalidate = on_invalidate
         self._step = 0
         self._sequence = 0
         # (tool, canonical args) -> record of the latest execution.
@@ -232,15 +462,21 @@ class DuplicateCallGuard:
         """The result to return instead of running the call, or ``None`` to run it."""
         if not self.enabled or tool_name in ALWAYS_EXECUTE:
             return None
+        if not is_read_only_call(tool_name, tool_args):
+            return None
         key = (tool_name, canonical_args(tool_args))
         record = self._executed.get(key)
         if record is None or not record["ok"]:
             return None
         if self._step - record["step"] > self.window:
             return None
-        if self._changed_since(
-            _observes_workspace(tool_name, tool_args), key[1], record["sequence"]
-        ):
+        if self._changed_since(key[1], record["sequence"]):
+            return None
+        changed = _changed_paths(
+            record["fingerprint"], fingerprint(tool_name, tool_args)
+        )
+        if changed:
+            self._invalidate(changed)
             return None
         return self._short_circuit(record)
 
@@ -249,25 +485,33 @@ class DuplicateCallGuard:
         if not self.enabled:
             return
         self._sequence += 1
+        ok = _result_ok(result)
+        read_only = is_read_only_call(tool_name, tool_args)
         self._executed[(tool_name, canonical_args(tool_args))] = {
             "step": self._step,
             "sequence": self._sequence,
-            "ok": _result_ok(result),
+            "ok": ok,
             "result": result,
             "artifact": None,
             "repeats": 0,
+            "fingerprint": (
+                fingerprint(tool_name, tool_args) if ok and read_only else {}
+            ),
         }
-        if _result_ok(result) and is_mutating_tool(tool_name):
-            for path in paths_changed_by(tool_name, tool_args):
+        if ok and is_mutating_tool(tool_name):
+            changed = paths_changed_by(tool_name, tool_args)
+            for path in changed:
                 for form in _path_forms(path):
                     self._changes.append((form, self._sequence))
+            if changed:
+                self._invalidate([os.path.abspath(p) for p in changed])
 
-    def _changed_since(self, any_file: bool, args_text: str, sequence: int) -> bool:
+    def _invalidate(self, paths: List[str]) -> None:
+        if self._on_invalidate is not None and paths:
+            self._on_invalidate(paths)
+
+    def _changed_since(self, args_text: str, sequence: int) -> bool:
         recent = [path for path, seq in self._changes if seq > sequence]
-        if not recent:
-            return False
-        if any_file:
-            return True
         return any(_references(args_text, path) for path in recent)
 
     def _short_circuit(self, record: Dict[str, Any]) -> Dict[str, Any]:

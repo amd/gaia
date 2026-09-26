@@ -494,24 +494,51 @@ per-result character budgets, not measured remaining tokens.
 With reasoning off, one model repeated the identical shell command 101 times
 in a row, and its twin 101 times: 281 calls in 43 steps, no edit, until the
 step budget ran out, and every call ran. The duplicate-call guard is on by
-default and model-agnostic: a call identical to one that already ran this turn
-(same tool, same arguments after JSON canonicalisation) within the last
-`duplicate_window` steps (6) does not run again. The model gets
-`{"status": "duplicate", "executed": false, ...}` naming the step that ran it
-and a `read_tool_output(artifact=..., entry=1)` handle to the archived output,
-so nothing is lost. A call still runs when its previous execution errored or
-was refused (a retry is legitimate), when an edit or write tool has since
-touched a file it references — the path itself, its basename, or a directory
-above it, in any argument — when it is a shell or Python command and any file
-changed since, and for `read_tool_output`, `session_findings`,
-`delegate_task`, `sleep` and `request_user_input`. After `duplicate_limit` (3)
-short-circuits in a turn the message warns that the loop guard will end the
-turn, and that step's `stats` entry records `loop_suspected`; after twice that
-the turn ends the way the loop guard ends it, with one closing call to answer
-from the work done. Every step with a short-circuit records
-`duplicates_short_circuited`. `GAIA_DUPLICATE_GUARD` (`0` disables),
-`GAIA_DUPLICATE_WINDOW` and `GAIA_DUPLICATE_LIMIT` override the three
-settings; a malformed value is an error at construction.
+default and model-agnostic: a read-only call identical to one that already ran
+this turn (same tool, same arguments after JSON canonicalisation) within the
+last `duplicate_window` steps (6), with nothing changed on disk, does not run
+again. The model gets `{"status": "duplicate", "executed": false, ...}` naming
+the step that ran it and a `read_tool_output(artifact=..., entry=1)` handle to
+the archived output, so nothing is lost.
+
+Only a read-only call is ever short-circuited: `read_file`,
+`search_file_content`, the listing and search tools (`list_directory`,
+`find_files`, `browse_directory`, `tree`, `search_code_index`, …), and a shell
+command whose every pipeline segment starts with a read-only program (`cat`,
+`sed`, `head`, `tail`, `grep`, `rg`, `find`, `ls`, `wc`, `tree`, `stat`,
+`file`, `diff`, `sort`, `uniq`, `cut`, `awk`, `echo`, `printf`, `cd`, `pwd`,
+and `git` with `log`, `show`, `status`, `diff`, `branch`, `rev-parse`, `blame`
+or `ls-files`) with no output redirection (`>`, `>>`, `tee`), no command
+substitution, no `sed -i` / `awk -i inplace` and no `find` action that writes
+or executes. Anything else — `python`, `pytest`, a script, `pip`, `make`, `rm`,
+`mv`, `touch`, `git commit` — runs every time: a second `python tools/tick.py`
+is a second side effect, not a repeat.
+
+A read-only repeat runs again unless the world is unchanged. When a call is
+recorded the guard fingerprints what it looked at: for each path-like argument
+or command token that resolves, a file's size and mtime or a directory's mtime
+and entries; when nothing resolves (a pattern-only grep, `ls` of the current
+directory), the working directory's top level. A different fingerprint at the
+repeat — a script rewrote the file, created files, bumped a counter — means a
+fresh run. A call also runs again when its previous execution errored or was
+refused (a retry is legitimate), when an edit or write tool has since touched
+a file it references — the path itself, its basename, or a directory above it,
+in any argument — and always for `read_tool_output`, `session_findings`,
+`delegate_task`, `sleep` and `request_user_input`.
+
+Either invalidation, and every recorded edit, marks the session ledger's read
+entries for the affected files `stale`: the digest renders them as
+`(stale: file changed after this outline)` so a later worker does not trust
+an outline of a file that has since changed, and a fresh read replaces the
+entry.
+
+After `duplicate_limit` (3) short-circuits in a turn the message warns that
+the loop guard will end the turn, and that step's `stats` entry records
+`loop_suspected`; after twice that the turn ends the way the loop guard ends
+it, with one closing call to answer from the work done. Every step with a
+short-circuit records `duplicates_short_circuited`. `GAIA_DUPLICATE_GUARD`
+(`0` disables), `GAIA_DUPLICATE_WINDOW` and `GAIA_DUPLICATE_LIMIT` override
+the three settings; a malformed value is an error at construction.
 
 ## Editing what the agent has seen
 
