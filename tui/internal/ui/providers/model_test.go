@@ -102,6 +102,38 @@ func TestRecommendedRowsShowRankAndNoteOnOneLine(t *testing.T) {
 		}
 	}
 }
+// The widths above are all wide enough to fit a ranked row untruncated, so they
+// never exercise the guard. This one is not: without the truncate the row wraps
+// onto a second line and pushes a row above it out of the height budget.
+func TestNarrowRankedRowStaysOnOneTruncatedLine(t *testing.T) {
+	top := lemonade.TopRecommendation()
+	name := strings.TrimPrefix(top.ID, "fireworks.")
+	width := 36
+	if got := len(name) + len(" · #1 ") + len(top.Note) + 2; got <= width-4 {
+		t.Fatalf("width %d no longer forces a truncation (row is %d cells); lower it", width, got)
+	}
+	m := New("", width, 30)
+	m.selected = 1
+	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: top.ID}}})
+	m = next.(Model)
+
+	var rows []string
+	for _, line := range strings.Split(ansi.Strip(m.View()), "\n") {
+		if strings.Contains(line, name) {
+			rows = append(rows, strings.TrimRight(line, " "))
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ranked row rendered on %d lines at width %d: %q", len(rows), width, rows)
+	}
+	if !strings.HasSuffix(rows[0], "…") {
+		t.Fatalf("row was not truncated at width %d: %q", width, rows[0])
+	}
+	if strings.Contains(ansi.Strip(m.View()), top.Note) {
+		t.Fatalf("note survived intact at width %d, so nothing was truncated: %q", width, rows[0])
+	}
+}
+
 func TestSetupScreenNamesTopRecommendation(t *testing.T) {
 	top := lemonade.TopRecommendation()
 	m := New("", 100, 30)

@@ -71,6 +71,33 @@ func TestRecommendedModelsAreRankedAndLookedUpByID(t *testing.T) {
 		t.Fatalf("unknown id resolved: rank=%d note=%q ok=%v", rank, note, ok)
 	}
 }
+
+// Lemonade reports Fireworks models under either the short name or the full
+// account path (the Python side handles both — see
+// tests/unit/test_fireworks_catalog.py). Ranking the short form only would
+// leave the long form unranked: the same silent no-op this list replaced.
+func TestRankMatchesTheFullAccountPathForm(t *testing.T) {
+	for i, r := range RecommendedModels {
+		short := strings.TrimPrefix(r.ID, "fireworks.")
+		long := "fireworks.accounts/fireworks/models/" + short
+		rank, note, ok := Rank(long)
+		if !ok || rank != i+1 || note != r.Note {
+			t.Fatalf("%q did not rank as %s: rank=%d note=%q ok=%v", long, r.ID, rank, note, ok)
+		}
+	}
+}
+
+// The provider stays in the key: a gateway model sharing a Fireworks model's
+// name is a different model and must not inherit its rank.
+func TestRankDoesNotMatchAcrossProviders(t *testing.T) {
+	short := strings.TrimPrefix(TopRecommendation().ID, "fireworks.")
+	for _, id := range []string{"amd." + short, short, "amd.accounts/fireworks/models/" + short} {
+		if rank, _, ok := Rank(id); ok {
+			t.Fatalf("%q inherited rank %d from a Fireworks recommendation", id, rank)
+		}
+	}
+}
+
 func TestErrorsNeverReflectProviderBodyOrFollowRedirects(t *testing.T) {
 	for _, status := range []int{301, 400, 401, 403, 404, 409, 500} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
