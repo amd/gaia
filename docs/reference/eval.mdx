@@ -1467,6 +1467,8 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 | `core` | Explain a file · bug fix with a regression test · weekly CSV report · config from an environment variable · fix a bug beside an unrelated failing test, without touching that test · fix a test that fails only from a cold cache, without weakening it · fix a bug without disturbing the user's uncommitted edits | Every CI run |
 | `adversarial` | The three traps in `core`, plus: answer from the code when the README is wrong · add a test in a project that is not installed · count errors in a log too big to read · report a suite that hangs | `workflow_dispatch` with `task_suite: adversarial` |
 | `full` | `core` and `adversarial`, plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
+| `everyday` | The 14 tasks a developer actually asks for: explain a file · code review · refactor · bug fix · triage issues · find the duplicate · issue to fix · draft a reply · review a patch · write tests · weekly CSV report · fix a shell injection · label two issues · config from an environment variable | The harness × model comparison |
+| `therock` | Four real merged fixes in [TheRock](https://github.com/ROCm/TheRock), AMD's ROCm build system, each from the commit before the fix. Two of them also forbid the internet in the prompt. | The harness × model comparison |
 
 The hanging suite stays out of `core`: every test run the agent tries costs a full command timeout.
 
@@ -1475,14 +1477,139 @@ Tasks and suites live in `eval/tasks/tasks.json`. Every task is checked in both 
 - Each coding task has a reference solution in `tests/unit/eval/test_flagship_tasks.py`. The tests prove it fails on the untouched project and passes the correct solution. For the traps, they also prove the shortcuts fail: deleting or hiding the red test, pre-warming the cache, committing or stashing the user's work.
 - Each setup is tested for the state it promises: the red test fails, the cache test fails cold and passes warm, the hanging test does not finish, the log is the same bytes on every run and the task's expected count is recomputed from it.
 - Each question task carries a reference answer and plausible wrong answers. `GAIA_EVAL_LIVE_JUDGE=1 pytest tests/unit/eval/test_flagship_tasks.py -k live_judge` asks the judge about all of them in one call (about $0.15) and requires it to pass every reference and fail every wrong answer.
+- The judge itself is checked by `gaia eval tasks controls`, which plants three attempts at one real task — a correct fix with the suite really run, the same fix with an invented test run, and no work at all claiming to be done — and requires the judge to score them apart. If it cannot, the quality numbers mean less than they appear to.
+- One task can be run end to end against a real model with `GAIA_BENCH_E2E=1 pytest tests/integration/eval/test_bench_e2e.py`. Mocks prove the harness called the backend; only this proves the call is one the backend accepts.
 
 ### Commands
 
 | Command | What it does |
 |---|---|
-| `gaia eval tasks run [--suite core] [--model M] [--out DIR] [--no-judge]` | Runs the flagship on each task and writes `scorecard.json`, plus each task's `transcript.json` and `workspace.diff`, and `setup.diff` for a task with a setup. Judges afterwards unless `--no-judge`. |
-| `gaia eval tasks judge DIR [--judge-model M] [--judge-attempts N]` | Grades a finished run. A task with no usable grade is recorded as unjudged, not scored. |
+| `gaia eval tasks run [--suite core] [--model M] [--out DIR] [--no-judge]` | Runs an agent on each task and writes `scorecard.json`, plus each task's `transcript.json` and `workspace.diff`, and `setup.diff` for a task with a setup. Judges afterwards unless `--no-judge`. |
+| `gaia eval tasks judge DIR [--judge-model M] [--judge-attempts N]` | Grades a finished run. A task with no usable grade is recorded as unjudged, not scored. With `--repeats`, grades every repeat. |
 | `gaia eval tasks gate DIR [--expect FILE] [--enforce] [--propose FILE]` | Compares the run with its expectations. Reports by default; `--enforce` exits 1 on a miss or on a task that was not measured. CI always enforces. |
+| `gaia eval tasks report DIR... --out DIR` | The harness × model table from finished runs, as markdown and HTML (and a PNG where a headless Chrome is found). |
+| `gaia eval tasks controls` | Checks the judge itself on three planted attempts with known verdicts. |
+| `gaia eval tasks gateway --port N` | Runs the model gateway in the foreground, for a matrix that reuses one gateway. |
+
+### Comparing harnesses and models
+
+The same tasks, fixtures, time limit and judge run against more than one agent,
+so a difference in the table is a difference between the agents rather than
+between their conditions:
+
+```bash
+# The flagship, three times, metered by the provider's own billing API
+gaia eval tasks run --suite everyday --model fireworks.glm-5p3-flash --repeats 3 --meter fireworks --out runs/gaia-glm
+
+# Claude Code on the same open-weights model, through the model gateway
+gaia eval tasks run --suite everyday --harness claude-code --model fireworks.glm-5p3-flash --repeats 3 --out runs/cc-glm
+
+# Claude Code on Anthropic's own model, as the reference row
+gaia eval tasks run --suite everyday --harness claude-code --model claude-opus-5 --out runs/cc-opus
+
+gaia eval tasks report runs/cc-opus runs/gaia-glm runs/cc-glm --out runs/report
+```
+
+| Flag | What it does |
+|---|---|
+| `--harness gaia\|claude-code` | The agent under test: the flagship GaiaAgent, or Claude Code driven as `claude -p --output-format stream-json --dangerously-skip-permissions --no-session-persistence`. |
+| `--repeats N` | Runs the suite N times into `<out>/r1`, `<out>/r2`… One run is noise: two Claude Code runs on one model have differed by 2× in wall time. |
+| `--tasks a,b` | Only these tasks of the suite. |
+| `--run-timeout S` | The wall-clock cap per task, the same for every harness (default 1800 s). A cap that binds measures the cap, not the model. |
+| `--work-root DIR` | Where task workdirs live while running (default: a temp directory). |
+| `--gateway-url URL` | A gateway already running; otherwise each run starts its own. |
+| `--fence` | Fences the agent off the answer keys with macOS `sandbox-exec`. Refused where it cannot be enforced — see below. |
+| `--full-access` | Gives GAIA no path boundary, the reach Claude Code has with its permissions skipped. |
+| `--meter fireworks` | Reads the run's real cost from the provider's billing meter. |
+| `--therock-url URL` | Where the `therock` suite clones from (default `https://github.com/ROCm/TheRock`). |
+
+Every setting also has an environment variable (`GAIA_BENCH_WORK_ROOT`,
+`GAIA_BENCH_RUN_TIMEOUT`, `GAIA_BENCH_GATEWAY_URL`, `GAIA_BENCH_THEROCK_URL`,
+`GAIA_BENCH_RESULTS_DIR`, `FIREWORKS_ACCOUNT_ID`). A missing required setting
+is a startup error naming the flag and the variable.
+
+**Equal conditions.** Both harnesses get the same time limit, the same project
+toolchain on `PATH`, the same offline `gh`, and the same model route; a run cut
+off at the cap keeps the record of what it did instead of reporting zero turns;
+and both are scored by the same probes and the same judge. Each of those was a
+real bug in an earlier comparison, and each has a test.
+
+**The model gateway.** Both harnesses reach the model through a local gateway,
+so no agent process ever holds a key. It also makes Claude Code work against
+Lemonade's Anthropic-format endpoint: Claude Code ignores `ANTHROPIC_AUTH_TOKEN`
+and sends its own subscription credential, which Lemonade rejects, and it puts
+per-turn context (working directory, git state) in `system`-role entries inside
+`messages`, which Lemonade drops — about 9.5 KB a turn
+([lemonade-sdk/lemonade#2662](https://github.com/lemonade-sdk/lemonade/issues/2662)).
+The gateway replaces the credential and rewrites those entries as `user` entries
+in place.
+
+### What a run costs, and what kind of dollar it is
+
+Every cost carries its source, because the three are not the same thing:
+
+| Source | Where the number comes from |
+|---|---|
+| `metered` | The provider's own billing meter, snapshotted before and after the run. Real charges. |
+| `api_equivalent` | Claude Code's own `total_cost_usd` on Anthropic models. On a Claude subscription that is the list price of the tokens, **not money spent**: comparable as a price of compute, not as out-of-pocket cost. The reports label these cells. |
+| `harness_counts` | The harness's own per-call token counts — GAIA's, or the gateway's for Claude Code on an open model — priced with the published rate card, where no meter snapshot was taken. |
+
+A run that reached the model but counted no tokens reads `n/a`, never `$0.00`.
+Lemonade reports zero usage on a streamed Anthropic reply — observed 2026-09 for
+a local model and for a cloud-routed one alike — so the Claude Code leg on an
+open-weights model has no token counts of its own, and `--meter` is the only way
+to price it. The GAIA leg is unaffected: its OpenAI-path calls do report usage,
+and a 14-task suite on GLM-5.3 Flash priced from those counts came to $0.095.
+
+`--meter fireworks` snapshots `billingUsage` before and after the run. Both
+snapshots count from one **fixed** window start: a sliding window ("the last N
+days") drops older usage between the two and made deltas come out negative. The
+meter returns daily buckets and trails the calls it counts by about 90 s, so the
+run waits out that lag before its closing snapshot. It is account-wide, so two
+metered runs on one account at the same time pollute each other.
+
+### TheRock suite
+
+Nothing of TheRock is committed here — only the two commits each task pins:
+
+- The agent gets a single-branch, shallow checkout at the fix's **parent**, with
+  its remote removed. The fix is in no ref and no object, so `git log --all`
+  cannot find it and git offers no way back to GitHub. (An earlier version
+  cloned every ref, and `main` carried the answer.)
+- The reference diff is computed as `merge^..merge` from the public repository,
+  and only in the `judge` step, after the agent has exited. GitHub's `base.sha`
+  for a pull request is not necessarily that parent — for #7998 it is not — so
+  the harness checks the parent against the pinned base and refuses the grade if
+  they differ.
+- The judge grades the agent's diff against the upstream one, told plainly that
+  the reference is *one* correct answer and not the only one.
+
+Two of the four tasks say in the prompt not to use the internet. The network is
+left open: the detector reads any web use out of the tool record, the same way
+for both harnesses, and reports it as a compliance finding.
+
+### Keeping credentials out of published artifacts
+
+Results are meant to be published, and an agent with a shell prints its
+environment sooner or later. Three defences, each tested:
+
+- No provider key is ever in the agent's environment — only the gateway, or
+  Lemonade itself, holds one.
+- Every transcript and result is scrubbed of known secret values and
+  secret-shaped strings before it is written, and a run **fails** if anything
+  survives rather than writing it.
+- `gh` inside a task is an offline stand-in serving `eval/tasks/github/`. It
+  logs every call and refuses writes, so no task can reach a personal GitHub
+  login.
+
+**The fence.** `--fence` puts the agent inside macOS `sandbox-exec` with the
+task definitions, the other tasks' workdirs and earlier results denied — they
+hold the answers. (An allow rule has to name `file-read-data` explicitly, or the
+deny wins and the agent cannot read its own workdir.) There is no equivalent on
+Linux, so `--fence` is refused there rather than pretended. The grading step
+gives the same protection structurally on any platform: the agent writes its
+diff and transcript and exits, and the answers — probes, reference answers,
+TheRock's upstream fix — are only read afterwards.
 
 ### The gate
 

@@ -1,0 +1,342 @@
+---
+title: "Agent Benchmarks"
+description: "Compare GAIA's agent against Claude Code, or one model against another, on the same fixed tasks"
+icon: "gauge"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/eval/bench/`](https://github.com/amd/gaia/tree/main/src/gaia/eval/bench),
+  [`src/gaia/eval/flagship_tasks.py`](https://github.com/amd/gaia/blob/main/src/gaia/eval/flagship_tasks.py),
+  [`eval/tasks/tasks.json`](https://github.com/amd/gaia/blob/main/eval/tasks/tasks.json)
+</Info>
+
+## What this is
+
+`gaia eval tasks` gives an autonomous coding agent real work — fix a bug, triage
+issues, write a weekly report from a CSV — then checks what actually happened: did
+the work get done, was the agent honest about it, and what did it cost. The same
+fixed set of tasks, time limit, tools and judge run against **two harnesses** — the
+flagship GaiaAgent, or Claude Code driven headlessly — so a difference in the numbers
+is a difference between agents, not between conditions.
+
+This is the tool behind claims like "GLM-5.3 Flash under GAIA scores within about a
+tenth of a point of Claude Opus 5 under Claude Code, for a fraction of the cost."
+It answers them with a reproducible run anyone can repeat, not a one-off transcript
+nobody else can check.
+
+<Warning>
+  This drives a real agent against real models — it spends real tokens and, on a
+  metered provider, real money. It is a contributor/maintainer tool for comparing
+  harnesses and models, not something an end user runs.
+</Warning>
+
+## Prerequisites
+
+- The flagship agent installed: `pip install -e hub/agents/gaia/python` (see the
+  [Dev Guide](/reference/dev) if you haven't set up the base install).
+- A running **Lemonade Server** with a cloud provider registered — Fireworks, for
+  the open-weights models these benchmarks target. `gaia eval tasks` reaches every
+  model through Lemonade's OpenAI-compatible endpoint.
+- The **Claude Code CLI** (`claude`) on `PATH`, signed in to a subscription. It does
+  two jobs here, both riding the subscription rather than an API key: it drives the
+  `--harness claude-code` leg of a comparison, and it is **always** the judge, no
+  matter which harness ran the task.
+
+Nothing here needs `ANTHROPIC_API_KEY` — if `claude` already works on its own,
+you're set.
+
+## Quick start
+
+<Warning>
+  Unlike this repo's other local-tooling reports, **`gaia eval tasks`'s default
+  output directory is not gitignored.** `eval/results/eval-tasks-<timestamp>` is a
+  plain path inside the repo, so a stray `git add -A` after a run stages a full
+  transcript. Point `--out` (or `$GAIA_BENCH_RESULTS_DIR`) outside the repo, as
+  below, and never commit anything a run writes.
+</Warning>
+
+```bash
+BENCH=~/gaia-bench
+mkdir -p "$BENCH"
+```
+
+<Steps>
+  <Step title="Check the judge, before trusting any quality number">
+    Plants three attempts at one real task — a correct fix with its test suite
+    actually run, the same fix with an invented test run, and no work at all
+    claiming to be done — and requires the judge to grade them apart. Takes under a
+    minute.
+
+    ```bash
+    gaia eval tasks controls --out "$BENCH/controls"
+    ```
+  </Step>
+  <Step title="Run one task under GAIA's own harness">
+    `--tasks` narrows a suite to specific task ids, so a first try doesn't spend the
+    full 14-task run. This one needs the judge (it's a question task with no
+    mechanical check), so don't add `--no-judge`.
+
+    ```bash
+    gaia eval tasks run --suite everyday --tasks 21-qa \
+      --harness gaia --model fireworks.glm-5p3-flash \
+      --out "$BENCH/first-run"
+    ```
+
+    Writes `scorecard.json`, plus `21-qa/transcript.json` and
+    `21-qa/workspace.diff`, under `$BENCH/first-run`.
+  </Step>
+  <Step title="Render the report">
+    Builds the harness × model table from one or more finished runs. With a single
+    run directory it's a one-row table — useful to confirm the pipeline end to end
+    before running a real comparison.
+
+    ```bash
+    gaia eval tasks report "$BENCH/first-run" --out "$BENCH/first-report"
+    ```
+
+    Writes `report.md`, `report.html`, and `report.png` where a headless Chrome is
+    on the machine.
+  </Step>
+</Steps>
+
+## Harness vs. model
+
+A **model** is the LLM doing the thinking — GLM-5.3 Flash, Claude Opus 5, Gemma. A
+**harness** is the agent loop wrapped around it: how it reads the task, decides which
+tool to call, and decides when it's done. GAIA has its own harness (the flagship
+`GaiaAgent`); Claude Code is a different one. The same model can score differently
+under each, because the harness — not just the model — decides how well that
+thinking turns into finished work.
+
+`--harness gaia|claude-code` is what isolates that: same tasks, same time limit,
+same judge, same toolchain on `PATH`, only the harness changes. Running the same
+model through both legs is how you find out whether a weak score is the model or the
+wrapper around it.
+
+## The two benchmarks
+
+| Suite | What it is | Scored by |
+|---|---|---|
+| `everyday` | 14 small coding and GitHub tasks on `eval/tasks/toybox`, a synthetic Python project built for this: explain a file, fix a bug with a regression test, triage GitHub issues, find a duplicate, draft a reply, refactor, review a patch, write tests, a weekly CSV report, a shell-injection fix, label issues, config from an env var. The GitHub tasks run against an offline `gh` stand-in serving committed fixtures — no task reaches a personal login. | Running the code, plus the judge |
+| `therock` | 4 real bugs from the public [ROCm/TheRock](https://github.com/ROCm/TheRock) repository, each checked out at the commit **before** its fix. The agent's diff is graded against the pull request that actually fixed it, fetched only after the agent has exited. Two of the four forbid internet use in the prompt. | The judge, against the real fix |
+
+`everyday` is the one to reach for first — small, fast, cheap, and mechanically
+checkable for most tasks. `therock` is a real 144K-line codebase with a real fix as
+the answer key; it costs more and takes longer, and it's what proves the agent's
+skills transfer past a project built for the benchmark.
+
+## How scoring works
+
+Every `everyday` task starts from a fresh copy of `toybox`; the agent may read and
+write that copy and nothing else. Scoring runs in two stages:
+
+**Mechanical checks first**, for tasks where the project itself can decide:
+
+- `tests_pass` — the project's own test suite passes.
+- `probe` — a short snippet run inside the finished project, checking the actual
+  behavior (e.g. the bug fix now accepts a lowercase input the original rejected).
+- `unchanged` — named files are byte-identical to the pre-run snapshot, for tasks
+  where touching them is itself a failure (a code-review task that edits the file
+  under review, say).
+- **Verified** additionally checks the agent's own tool record for a `pytest` run
+  that passed after its last file edit — proof the "4 tests pass" in the answer
+  matches a command that was actually run, not just claimed.
+
+**The judge for everything a probe can't check** — quality of the reasoning,
+whether instructions were followed, and question tasks like "what does this file
+do," which have no mechanical check at all and are decided purely on whether the
+answer establishes the required points. The judge reads the original project once,
+then each task's setup, the agent's diff, and its answer, and grades every task in
+a single call across four axes (1–5): instruction compliance, work quality,
+reasoning, and **fabrication-free** — whether the answer claims anything the tool
+record doesn't support.
+
+**Truthfulness is scored against what the agent actually did, not what it says it
+did.** The judge is shown the tool record (commands run, their output) alongside
+the answer; a claim of "all 4 tests passed" that the transcript doesn't back up
+scores low on fabrication-free even if the rest of the fix is correct. This is why
+the controls check matters:
+
+```bash
+gaia eval tasks controls
+```
+
+It plants three attempts at one real task with known, opposite verdicts — an
+**ideal** attempt (correct fix, tests genuinely run), a **fabricated** one (the same
+fix, but claiming an invented test result), and **nothing** (no work at all,
+claiming to be done) — and requires the judge to grade them apart: high marks for
+the honest attempt, a low fabrication-free score for the dishonest one even though
+the code is identical, and a low score across the board for the empty one. If it
+can't tell them apart, the quality numbers from that judge model mean less than
+they appear to.
+
+## The no-internet tasks
+
+Two of the four `therock` tasks tell the agent in its prompt not to use the
+internet. **The network itself is left open** — nothing is sandboxed off. Instead,
+every tool call is scanned for anything that reached, or tried to reach, a remote
+host (`gaia.eval.bench.transcripts.web_uses`), and any hit is reported as a
+compliance finding, the same way for both harnesses.
+
+That's deliberate: cutting the network would only measure whether the agent
+*could* reach the web, a sandboxing question. Leaving it open and reading the tool
+record measures whether the agent does what it was told — instruction-following,
+which is the actual thing under test.
+
+## Prerequisites and cost
+
+Both harnesses reach the model through a local gateway, so no agent process ever
+holds a provider key. Running a comparison needs:
+
+- **Lemonade with a cloud provider registered** (Fireworks) for the open-weights
+  side of the comparison — the model gateway routes `--model fireworks.*` through
+  it.
+- **A Claude subscription** — for `--harness claude-code`, and always for the
+  judge, regardless of which harness ran the task.
+
+**What it costs.** The full 14-task `everyday` suite on GLM-5.3 Flash runs about
+$0.10 in real Fireworks charges. `therock` costs dollars, not cents — four tasks
+against a real 144K-line codebase run far more tokens per task than the synthetic
+suite. **The judge is usually the bigger cost on `everyday`**: a full judge pass
+runs $0.4–0.9, against $0.08–0.10 for the whole GLM-5.3 Flash run it's grading.
+Don't re-judge a run you've already judged — `judge` is a separate command
+precisely so you don't have to re-run the agent to do it.
+
+## Every command
+
+| Command | What it writes, and where |
+|---|---|
+| `gaia eval tasks run --suite SUITE [--harness gaia\|claude-code] [--model M] --out DIR` | Runs the suite, one task at a time, and judges it unless `--no-judge`. Writes `DIR/scorecard.json`, and per task: `transcript.json`, `workspace.diff`, `setup.diff` (if the task has a setup). |
+| `gaia eval tasks judge DIR [--judge-attempts N]` | Re-grades every task in a finished run from its saved transcripts — no agent re-run needed. Updates `DIR/scorecard.json` in place. |
+| `gaia eval tasks gate DIR [--expect FILE] [--enforce]` | Compares a judged run with committed expectations; used by CI, not this comparison workflow. |
+| `gaia eval tasks controls [--out DIR]` | Grades the three planted attempts described above; with `--out`, also writes each attempt's `transcript.json` and the verdicts to `DIR/controls.json`. |
+| `gaia eval tasks report DIR... --out DIR` | The harness × model table across one or more finished, judged runs. Writes `report.md`, `report.html`, and `report.png` (skipped without a headless Chrome, or with `--no-png`). |
+| `gaia eval tasks gateway --port N` | Runs the model gateway in the foreground, so a whole matrix of runs can share one instead of each starting its own. |
+
+**A full comparison**, one harness/model combination per line:
+
+```bash
+# GAIA on the open-weights model, 3 repeats, metered by Fireworks' real billing API
+gaia eval tasks run --suite everyday --model fireworks.glm-5p3-flash \
+  --repeats 3 --meter fireworks --out "$BENCH/gaia-glm"
+
+# Claude Code on the same open-weights model, through the model gateway
+gaia eval tasks run --suite everyday --harness claude-code \
+  --model fireworks.glm-5p3-flash --repeats 3 --out "$BENCH/cc-glm"
+
+# Claude Code on Anthropic's own model, as the reference row
+gaia eval tasks run --suite everyday --harness claude-code \
+  --model claude-opus-5 --out "$BENCH/cc-opus"
+
+gaia eval tasks report "$BENCH/cc-opus" "$BENCH/gaia-glm" "$BENCH/cc-glm" --out "$BENCH/report"
+```
+
+The first directory named to `report` becomes the 100% row everything else is a
+percentage of.
+
+**`--repeats N`** runs the suite N times into `DIR/r1`, `DIR/r2`, ... One run is
+noise — three Claude Code runs on the same model and tasks have ranged from 4:06 to
+18:30, a 4.5× spread, and a TheRock run that scored 3/4 scored 4/4 on repeat.
+`report` and `judge` both understand a `--repeats` directory automatically.
+
+**Metering flags** — real cost instead of a rate-carded estimate:
+
+| Flag | What it does |
+|---|---|
+| `--meter fireworks` | Snapshots Fireworks' own billing meter before and after the run and prices from the delta. |
+| `--fireworks-account ID` | Account id for the meter (default: `$FIREWORKS_ACCOUNT_ID`). |
+| `--meter-lag S` | Seconds to wait for the meter to catch up before the closing snapshot (default 150 — the meter trails the calls it counts by about 90s). |
+
+Other flags worth knowing: `--tasks a,b` (a subset of the suite), `--run-timeout S`
+(the wall-clock cap per task, default 1800s, the same for every harness in a
+comparison), `--judge-model M` / `--judge-attempts N`. The full flag reference,
+including `--fence`, `--full-access`, and the TheRock-specific flags, is in the
+[Evaluation Framework reference](/reference/eval#comparing-harnesses-and-models).
+
+## Reading the results
+
+Each row of the report is one (model, harness) pair, averaged over its runs, with
+the min–max range printed beneath a cell when its runs disagreed:
+
+| Column | Meaning |
+|---|---|
+| Passed | Tasks that passed, out of the suite total. |
+| Quality | Mean of all four judge axes, across every judged task. |
+| Truthful | Mean of the fabrication-free axis alone — the honesty signal on its own. |
+| Steps / Tool calls | Summed across the suite's tasks. |
+| Tokens / % tokens | Total tokens, and as a percentage of the report's 100% row. |
+| Time / % time | Wall-clock time, same percentage convention. |
+| Cost / % cost | Priced with the source named beneath it — see below. |
+| Web uses | Count of tool calls that reached or tried to reach the internet — should be 0 outside the no-internet `therock` tasks. |
+
+**A difference smaller than the run-to-run spread is noise.** If two rows' ranges
+overlap, don't report a winner from a single comparison — rerun with `--repeats`
+and look at whether the means still separate once you can see the spread.
+
+Cost carries its source because the numbers aren't the same kind of dollar:
+
+| Source | What it is |
+|---|---|
+| `metered` | The provider's real billing meter. Actual charges. |
+| `api_equivalent` | Claude Code's own cost figure on Anthropic models — on a subscription, this is the *list price of the tokens*, not money spent. |
+| `harness_counts` | The harness's own per-call token counts, priced from a published rate card, where no meter snapshot was taken. |
+
+## Things that will mislead you if you skip them
+
+- **A single run is not a result.** One Claude Code + GLM `therock` run scored
+  3/4; its rerun scored 4/4 — same model, same tasks, different outcome. Use
+  `--repeats` and read the range, not one number.
+- **`api_equivalent` cost is not money spent.** On a Claude subscription it's the
+  list price of the tokens Claude Code reports using — a price of compute for
+  comparing efficiency, never a dollar figure to sum against a real bill.
+- **The provider meter is account-wide.** Two `--meter fireworks` runs on the same
+  model at the same time pollute each other's deltas — this has actually happened,
+  inflating one run's reported cost by 58%. Keep metered runs on one account
+  serial, the same rule as everything else that shares Lemonade.
+- **The judge sometimes returns nothing for a batch.** A timeout or a malformed
+  response leaves a task ungraded — it counts as not passed, not as dropped from
+  the average. Re-run `gaia eval tasks judge DIR` (it regrades from the saved
+  transcripts, no agent re-run needed); never treat a scorecard with ungraded
+  tasks as final.
+- **The harness's own token counts run 1–6% below the provider's meter.**
+  `harness_counts` is a real estimate, not a rounding artifact — when the number
+  needs to be exact, meter it instead of trusting the harness count.
+
+## Privacy
+
+A transcript captures everything the agent saw while working the task — file
+contents, command output, whatever the project or the prompt contained. Keep runs
+local: nothing here uploads anything on its own, but treat a transcript like any
+other file that might contain something you don't want shared before deciding to
+post one.
+
+Every transcript and result *is* scrubbed of known secret-shaped strings before
+it's written, and a run fails outright if anything survives that check rather than
+writing a leak — but that only catches credential shapes, not general repo content,
+so it's not a substitute for reading a transcript before sharing it.
+
+**Results are never committed to the repo.** As the Quick Start above notes, the
+default output directory is a plain path inside the repo and is *not* gitignored —
+always send `--out` (or `$GAIA_BENCH_RESULTS_DIR`) somewhere outside it, and never
+`git add` anything a run wrote.
+
+## See also
+
+- [Evaluation Framework reference](/reference/eval#flagship-agent-tasks) — the full
+  technical reference: task authoring, the `core`/`adversarial`/`full` CI suites,
+  the gate and its expectations files, TheRock checkout details.
+- The `benchmarking-the-agent` skill
+  (`.claude/skills/benchmarking-the-agent/SKILL.md`) — recipes, traps, and what a
+  healthy result currently looks like, kept up to date from real runs.
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
