@@ -181,6 +181,7 @@ export function FileBrowser() {
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<any[] | null>(null);
     const [searchedLocations, setSearchedLocations] = useState<string[]>([]);
+    const [searchTruncated, setSearchTruncated] = useState(false);
     const [isSearching, setIsSearching] = useState(false);
     const [typeFilter, setTypeFilter] = useState('');
 
@@ -245,6 +246,7 @@ export function FileBrowser() {
             const data = await api.searchFiles(searchQuery.trim(), typeFilter || undefined, 30);
             setSearchResults(data.results);
             setSearchedLocations(data.searched_locations ?? []);
+            setSearchTruncated(data.truncated === true);
             log.ui.info(`Search "${searchQuery}": ${data.total} results`);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Search failed';
@@ -531,6 +533,11 @@ export function FileBrowser() {
                                         title={searchedLocations.join('\n')}
                                     >
                                         Searching in: <code>{searchScope}</code>
+                                    </span>
+                                )}
+                                {searchTruncated && (
+                                    <span>
+                                        Search stopped early, so some matches may be missing. Try a more specific name.
                                     </span>
                                 )}
                             </div>
