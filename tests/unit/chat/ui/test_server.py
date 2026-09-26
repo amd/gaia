@@ -2031,7 +2031,7 @@ class TestLemonadeApiKeyInjection:
 
     @patch("httpx.AsyncClient")
     def test_system_status_omits_authorization_header_when_no_key(
-        self, mock_httpx_cls, client
+        self, mock_httpx_cls, client, tmp_path
     ):
         captured_headers = []
 
@@ -2053,6 +2053,9 @@ class TestLemonadeApiKeyInjection:
         mock_httpx_cls.return_value = mock_client
 
         env_no_key = {k: v for k, v in os.environ.items() if k != "LEMONADE_API_KEY"}
+        # Empty GAIA_HOME: otherwise a developer running GAIA's own Lemonade
+        # supplies that server's key and "no key" never happens.
+        env_no_key["GAIA_HOME"] = str(tmp_path)
         with patch.dict(os.environ, env_no_key, clear=True):
             resp = client.get("/api/system/status")
         assert resp.status_code == 200

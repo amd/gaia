@@ -35,6 +35,10 @@ const DEFAULT_CONFIG = {
   },
 };
 
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 // ── TrayManager ──────────────────────────────────────────────────────────
 
 class TrayManager {
@@ -231,11 +235,24 @@ class TrayManager {
       if (fs.existsSync(CONFIG_PATH)) {
         const raw = fs.readFileSync(CONFIG_PATH, "utf8");
         const loaded = JSON.parse(raw);
-        return {
-          ...DEFAULT_CONFIG,
-          ...loaded,
-          tray: { ...DEFAULT_CONFIG.tray, ...(loaded.tray || {}) },
-        };
+        if (!isPlainObject(loaded)) {
+          console.warn(`[tray] ${CONFIG_PATH} is not an object; using defaults`);
+          return { ...DEFAULT_CONFIG };
+        }
+        // Repair on read: the pre-validation handler could store wrong-typed
+        // values, and set-config re-reads stored keys the payload omits.
+        const stored = isPlainObject(loaded.tray) ? loaded.tray : {};
+        const tray = { ...DEFAULT_CONFIG.tray };
+        for (const key of Object.keys(DEFAULT_CONFIG.tray)) {
+          if (typeof stored[key] === "boolean") {
+            tray[key] = stored[key];
+          } else if (key in stored) {
+            console.warn(
+              `[tray] Ignoring non-boolean ${key} in ${CONFIG_PATH}; using default`
+            );
+          }
+        }
+        return { ...DEFAULT_CONFIG, ...loaded, tray };
       }
     } catch (err) {
       console.warn("[tray] Could not load tray config:", err.message);
@@ -263,15 +280,30 @@ class TrayManager {
     });
 
     ipcMain.handle("tray:set-config", (_event, cfg) => {
-      if (cfg.tray) {
-        this.config.tray = { ...this.config.tray, ...cfg.tray };
+      if (!isPlainObject(cfg)) {
+        throw new TypeError("tray:set-config expects an object payload");
       }
+      if (cfg.tray === undefined) {
+        return this.config;
+      }
+      if (!isPlainObject(cfg.tray)) {
+        throw new TypeError("tray:set-config: tray must be an object");
+      }
+
+      const tray = {};
+      for (const key of Object.keys(DEFAULT_CONFIG.tray)) {
+        const value = key in cfg.tray ? cfg.tray[key] : this.config.tray[key];
+        if (typeof value !== "boolean") {
+          throw new TypeError(`tray:set-config: tray.${key} must be a boolean`);
+        }
+        tray[key] = value;
+      }
+      this.config.tray = tray;
 
       this._saveConfig();
 
-      // Apply login-item setting if changed
-      if (cfg.tray && "startOnLogin" in cfg.tray) {
-        this._applyLoginItemSetting(cfg.tray.startOnLogin);
+      if ("startOnLogin" in cfg.tray) {
+        this._applyLoginItemSetting(tray.startOnLogin);
       }
 
       return this.config;
