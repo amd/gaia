@@ -250,6 +250,33 @@ def test_corrupt_zip_raises_the_native_error(tmp_path):
         safe_extract(bogus, tmp_path / "dest")
 
 
+def test_a_failed_zip_write_still_closes_the_member_handle(tmp_path, monkeypatch):
+    """A member that cannot be written must not leak its reader.
+
+    An archive holding both a file ``a`` and a file ``a/b.txt`` makes the
+    destination mkdir fail, which is the cheapest way to raise between opening
+    a member and the writer taking ownership of it.
+    """
+    opened = []
+    real_open = zipfile.ZipFile.open
+
+    def spy(self, *args, **kwargs):
+        handle = real_open(self, *args, **kwargs)
+        opened.append(handle)
+        return handle
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", spy)
+
+    archive = _zip(
+        tmp_path / "clash.zip", [("a", b"blocker", None), ("a/b.txt", b"p", None)]
+    )
+    with pytest.raises(OSError):
+        safe_extract(archive, tmp_path / "dest", kind="zip")
+
+    assert opened, "the spy never saw a member open"
+    assert all(h.closed for h in opened)
+
+
 # --- Size caps ---------------------------------------------------------------
 
 

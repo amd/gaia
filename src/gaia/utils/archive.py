@@ -338,7 +338,10 @@ def safe_extract(
                 if entry.kind == "dir":
                     entry.target.mkdir(parents=True, exist_ok=True)
                 elif entry.kind == "file":
-                    _write_file(handle.open(entry.member), entry, budget)
+                    # Scoped here, not passed as an argument: _write_file only
+                    # takes ownership once it reaches its own `with`.
+                    with handle.open(entry.member) as source:
+                        _write_file(source, entry, budget)
     elif kind == "tar":
         with tarfile.open(archive_path, "r:*") as handle:
             entries = _tar_entries(handle, root, allow_links)
