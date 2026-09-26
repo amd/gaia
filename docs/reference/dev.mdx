@@ -287,6 +287,7 @@ python util/lint.py --mypy        # type checking
 python util/lint.py --bandit      # security scan
 python util/lint.py --imports     # custom import-cycle check
 python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
+python util/lint.py --test-lanes  # reject test files that no CI lane runs
 python util/lint.py --tool-descriptions # hold tool docstrings to the schema budget
 python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
 ```
@@ -298,6 +299,14 @@ means "only when merging into main" — every PR stacked on a feature branch ski
 workflow, with nothing on its checks page to say so
 ([#2767](https://github.com/amd/gaia/issues/2767)). Scope a workflow with `paths:`
 instead.
+</Note>
+
+<Note>
+`--test-lanes` fails when a test file under `tests/` or a hub agent's `tests/` is
+not named by any workflow's pytest step, because a file nothing runs looks green on
+every PR whether it works or not. Add a new file to a lane (offline integration
+files go in `test_unit.yml`'s `offline-integration` job), or list it in
+`util/test_lane_allowlist.yml` with the reason CI can't run it.
 </Note>
 
 ### Running Tests
