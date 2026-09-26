@@ -16,8 +16,10 @@ on your Lemonade server.
    **Enter**. Keys go directly to your local Lemonade server, never through the
    conversation or the agent.
 3. Pick a discovered model. **Gemma 4 31B IT**
-   (`fireworks.gemma-4-31b-it`) appears first when your account exposes it.
-   Type to filter the list; use **↑/↓** and **Enter** to select.
+   (`fireworks.gemma-4-31b-it`) appears first when your account exposes it,
+   followed by the [benchmarked picks](#benchmarked-fireworks-picks), each
+   marked `benchmarked` with its cost tier and measured results shown when
+   focused. Type to filter the list; use **↑/↓** and **Enter** to select.
 
 The model list comes from Lemonade's provider discovery. A listed model may still
 require deployment or additional account access to serve requests. GAIA does not create a paid
@@ -29,6 +31,26 @@ URL. The default authentication header is `Authorization`, with the prefix
 `Bearer ` (including its trailing space). For gateways using a bare API key,
 enter the required header name and leave the prefix empty. Use **Tab** to move
 between fields, then paste the key and press **Enter**.
+
+## Benchmarked Fireworks picks
+
+Three Fireworks models were measured end to end with the GAIA flagship agent —
+14 everyday coding tasks (mean of 3 runs) and TheRock, 4 real ROCm build-system
+bugs in a 144K-line repository (1 run) — judged by an independent Opus 5 judge
+and billed at real Fireworks rates. They are pinned after the suggested model
+whenever discovery exposes them; a pick your account does not expose is not
+offered.
+
+| Model | Lemonade id | Good at | 14 coding tasks | TheRock |
+|---|---|---|---|---|
+| GLM-5.3 Flash | `fireworks.glm-5p3-flash` | Cheapest per task; best value for everyday coding | 14/14 solved, quality 4.89/5, $0.09 per run, 7:04 | 4/4, quality 3.69/5, $0.42 |
+| DeepSeek V4.1 Flash | `fireworks.deepseek-v4p1-flash` | Highest quality of the cheap tier; re-sent context is near-free (cached input $0.006/M) | 14/14, quality 4.92/5, $0.10 per run, 5:39 | 4/4, quality 3.81/5, $0.75 |
+| Kimi K2.7 Code | `fireworks.kimi-k2p7-code` | Strongest on large codebases; about 4-9x the cost | 14/14, quality 4.68/5, $0.41 per run, 5:09 | 4/4, quality 4.00/5 (best on the hard repo), $3.71 |
+
+Cost is the real Fireworks charge for one pass of the suite; time is wall clock
+for that pass. Fireworks chat still sends conversation history to Fireworks and
+incurs usage charges — see [`/cost`](/guides/terminal-hub#what-a-session-costs)
+for what a session has spent.
 
 For **Local**, select a downloaded chat model. If none are installed, close the
 panel and run setup. Selecting a cloud provider before setup downloads only the
