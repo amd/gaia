@@ -5,8 +5,9 @@
  *  Must match backend `_MIN_CONTEXT_SIZE` in `gaia.ui.routers.system`. */
 export const MIN_CONTEXT_SIZE = 32768;
 
-/** Default model name used by GAIA Chat when no custom override is set.
- *  Must match backend `_DEFAULT_MODEL_NAME` in `gaia.ui.routers.system`. */
+/** Fallback only: the backend's `default_model_name` in `/api/system/status` is the
+ *  model this PC runs (it can be larger than this floor). Must match
+ *  `DEFAULT_MODEL_NAME` in `gaia.llm.lemonade_client`. */
 export const DEFAULT_MODEL_NAME = 'Gemma-4-E4B-it-GGUF';
 
 /** Max spinner duration (ms) for model load operations (5 min safety reset). */

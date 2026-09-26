@@ -12,6 +12,17 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Changed
+
+- Qwen3 30B A3B Instruct 2507 is a supported chat model on the same big-memory
+  PCs: reported to generate faster than Qwen3.8 Flash Next, text only. Switch with
+  `gaia config set default_model Qwen3-30B-A3B-Instruct-2507-GGUF`.
+- The default chat model now follows the hardware. On a PC with the memory for it
+  (a 128 GB Strix Halo), `gaia init` also sets up Qwen3.8 Flash Next and records
+  it as `default_model`; the agent and its `GET /v1/gaia/init` readiness check
+  use it for chat. Gemma 4 E4B is still downloaded for vision. Every other PC
+  keeps Gemma alone.
+
 ### Fixed
 
 - `/v1/gaia/query` now honours `provider` on an existing session. It used to

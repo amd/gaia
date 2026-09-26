@@ -274,6 +274,30 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
+# The default on machines with the memory for it (a 128 GB Strix Halo): a 125B
+# MoE with 6B active. Not a Lemonade built-in — registered as a ``user.`` model
+# on first pull (see its MODELS entry). ``gaia init`` picks it only when
+# gaia.llm.model_fit says it fits, and records the pick as ``default_model``.
+LARGE_DEFAULT_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
+
+# The other big-PC candidate: a Lemonade built-in, reported 2-5x faster decode
+# than Flash on Strix Halo, but text-only. Supported and switchable; which one is the
+# default is settled by `util/compare_local_models.py` on real hardware.
+QWEN3_30B_MODEL_NAME = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+
+
+def resolve_default_chat_model() -> str:
+    """The chat model an agent uses when nobody passed one.
+
+    ``~/.gaia/config.json``'s ``default_model`` — which ``gaia init`` sets from
+    the hardware — else :data:`DEFAULT_MODEL_NAME`. Every agent resolves the
+    same way, so switching agents never evicts the resident model.
+    """
+    from gaia.config import GaiaConfig
+
+    return GaiaConfig.load().resolve_model(None, DEFAULT_MODEL_NAME)
+
+
 # Default embedding model. EmbeddingGemma 300M (768-dim) replaces
 # nomic-embed-text-v2-moe, which the current llama.cpp server cannot load.
 # Not a Lemonade built-in — registered as a ``user.`` custom model on first
@@ -636,6 +660,34 @@ class ModelRequirement:
     # Lemonade applies the ``embeddings`` label explicitly (avoids the #1745
     # auto-label-from-name bug).
     embedding: bool = False
+    # Custom multimodal / reasoning registration: the vision projector file in
+    # the checkpoint's repo, and the labels Lemonade cannot infer for a user model.
+    mmproj: Optional[str] = None
+    vision: bool = False
+    reasoning: bool = False
+    # Download size in GB, for the fit check (gaia.llm.model_fit). A built-in
+    # may leave it None, since Lemonade's catalog reports its size; set it to
+    # judge fit without a running server (the default ladder, the model
+    # comparison script).
+    size_gb: Optional[float] = None
+    # Oldest Lemonade whose bundled llama.cpp can load the model.
+    min_lemonade_version: Optional[str] = None
+
+    def pull_kwargs(self) -> Dict[str, Any]:
+        """Registration fields for ``ensure_model_downloaded`` on a ``user.`` model.
+
+        Built-ins get none: passing ``recipe`` for one 400s (#1655).
+        """
+        if not self.model_id.startswith("user."):
+            return {}
+        return {
+            "checkpoint": self.checkpoint,
+            "recipe": self.recipe,
+            "embedding": self.embedding or None,
+            "mmproj": self.mmproj,
+            "vision": self.vision or None,
+            "reasoning": self.reasoning or None,
+        }
 
 
 @dataclass
@@ -678,6 +730,39 @@ MODELS = {
         display_name="Gemma 4 E4B (Multimodal)",
         min_ctx_size=GPU_CTX_SIZE,
         tool_calling=True,
+    ),
+    # --- Qwen3.8-Flash-Next: the default where it fits (Strix Halo 128 GB) ---
+    # 125B MoE (6B active) + 51B n-gram embedding; needs llama.cpp's qwen4exp
+    # support, first bundled in Lemonade v2026.39.1. UD-IQ3_XXS (82 GB, three
+    # shards in one repo folder) is the largest quant that fits a 96 GB GPU
+    # carve-out with room for the 64K window — its KV cache is ~25 KB/token,
+    # since only 12 of 48 layers carry attention.
+    "qwen3.8-flash": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=LARGE_DEFAULT_MODEL_NAME,
+        display_name="Qwen3.8 Flash Next (Multimodal)",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        checkpoint="unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS",
+        recipe="llamacpp",
+        mmproj="mmproj-F16.gguf",
+        vision=True,
+        reasoning=True,
+        # Three model shards plus the 0.9 GB vision projector, as Lemonade counts it.
+        size_gb=82.86,
+        min_lemonade_version="2026.39.1",
+    ),
+    # --- Qwen3 30B A3B Instruct 2507: the fast big-PC alternative ---
+    # 30.5B MoE (3.3B active), a Lemonade built-in on llama.cpp (Q4_0).
+    # Native tool calls, no vision and no thinking mode. The "-HRX" build of the
+    # same weights is Linux-only and experimental, so it is not listed here.
+    "qwen3-30b-a3b-instruct": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=QWEN3_30B_MODEL_NAME,
+        display_name="Qwen3 30B A3B Instruct 2507",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        size_gb=17.4,
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
@@ -834,6 +919,79 @@ AGENT_PROFILES = {
         description="Image generation via the SD tool mixin",
     ),
 }
+
+
+def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement]:
+    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace."""
+    for mr in MODELS.values():
+        if _model_ids_match(mr.model_id, model_id):
+            return mr
+    return None
+
+
+def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
+    """The version a running Lemonade reports on ``/health``, or None.
+
+    None means "cannot show support", which keeps the version-gated model out.
+    """
+    try:
+        health = client.health_check()
+    except LemonadeClientError:
+        # The caller's reason then reads "this server's version is unknown".
+        return None
+    version = health.get("version") if isinstance(health, dict) else None
+    return str(version) if version else None
+
+
+#: Largest-first default chat models; the last is the floor every machine gets.
+DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
+
+
+def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
+    """Pick the default chat model this machine can run, from Lemonade's view of it.
+
+    Returns ``(model_id, skipped, capacity)``: ``skipped`` lists
+    ``(model_id, reason)`` for each larger model passed over, so the caller can
+    say why a big machine did not get the big model. When Lemonade's report
+    does not say how much memory this PC has, the floor model is picked —
+    the model every PC ran before this choice existed — with that as the
+    reason, and ``capacity`` is None.
+    """
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        check_fit,
+        check_server_supports,
+        pick_default_model,
+    )
+
+    floor = DEFAULT_MODEL_LADDER[-1]
+    try:
+        capacity = capacity_from_system_info(client.get_system_info(timeout=15))
+    except (ModelFitError, LemonadeClientError) as e:
+        # An unanswered request is as unjudgeable as an unreadable answer.
+        return floor, [(m, str(e)) for m in DEFAULT_MODEL_LADDER[:-1]], None
+    server_version = lemonade_server_version(client)
+    # Fit first, then version: "upgrade Lemonade" is only useful advice for a
+    # model this PC could actually hold.
+    candidates, unsupported = [], []
+    for model_id in DEFAULT_MODEL_LADDER:
+        mr = find_model_requirement(model_id)
+        size = (mr.size_gb if mr else None) or 0.0
+        if model_id != floor and not size:
+            # A size of 0 would fit every PC; never guess a larger model in.
+            unsupported.append((model_id, "GAIA does not know its download size"))
+            continue
+        if model_id != floor and check_fit(size, capacity).fits:
+            verdict = check_server_supports(
+                mr.min_lemonade_version if mr else None, server_version
+            )
+            if not verdict.fits:
+                unsupported.append((model_id, verdict.reason))
+                continue
+        candidates.append((model_id, size))
+    model_id, skipped = pick_default_model(candidates, capacity)
+    return model_id, unsupported + skipped, capacity
 
 
 # Recipe Lemonade stamps on a cloud-offloaded model (>= 11.8). Such a model is
@@ -999,7 +1157,7 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
     if not model_id:
         return False
     for mr in MODELS.values():
-        if mr.model_id == model_id:
+        if _model_ids_match(mr.model_id, model_id):
             return mr.tool_calling
     cloud = _CLOUD_MODELS.get(model_id)
     if cloud is not None:
@@ -3489,6 +3647,7 @@ class LemonadeClient:
         mmproj: Optional[str] = None,
         embedding: Optional[bool] = None,
         timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
+        vision: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Install a model on the server.
@@ -3502,6 +3661,7 @@ class LemonadeClient:
             embedding: Whether the model is an embedding model — sets the
                 'embeddings' label on registration (for registering new models)
             timeout: Request timeout in seconds (longer for model installation)
+            vision: Whether the model accepts images (for registering new models)
 
         Returns:
             Dict containing the status of the pull operation
@@ -3529,6 +3689,8 @@ class LemonadeClient:
             request_data["mmproj"] = mmproj
         if embedding is not None:
             request_data["embedding"] = embedding
+        if vision is not None:
+            request_data["vision"] = vision
 
         url = f"{self.base_url}/pull"
         try:
@@ -3812,6 +3974,9 @@ class LemonadeClient:
         checkpoint: Optional[str] = None,
         recipe: Optional[str] = None,
         embedding: Optional[bool] = None,
+        mmproj: Optional[str] = None,
+        vision: Optional[bool] = None,
+        reasoning: Optional[bool] = None,
     ) -> bool:
         """
         Ensure a model is downloaded, downloading if necessary.
@@ -3830,6 +3995,10 @@ class LemonadeClient:
             recipe: Lemonade recipe for a custom-model registration (e.g. ``llamacpp``).
             embedding: Set True for a custom embedding model so the ``embeddings``
                 label is applied on registration.
+            mmproj: Vision projector file in the checkpoint's repo, for a custom
+                multimodal model's registration.
+            vision: Set True for a custom model that accepts images.
+            reasoning: Set True for a custom model that emits reasoning.
 
         Returns:
             True if model is available (was already downloaded or successfully downloaded),
@@ -3886,6 +4055,9 @@ class LemonadeClient:
                 checkpoint=checkpoint,
                 recipe=recipe,
                 embedding=embedding,
+                mmproj=mmproj,
+                vision=vision,
+                reasoning=reasoning,
                 timeout=timeout,
             )
 
@@ -4932,7 +5104,9 @@ class LemonadeClient:
             stats["model_load_seconds"] = self._last_model_load_seconds
         return stats
 
-    def get_system_info(self, verbose: bool = False) -> Dict[str, Any]:
+    def get_system_info(
+        self, verbose: bool = False, timeout: int = DEFAULT_REQUEST_TIMEOUT
+    ) -> Dict[str, Any]:
         """
         Get system hardware information and device enumeration.
 
@@ -4972,7 +5146,7 @@ class LemonadeClient:
         url = f"{self.base_url}/system-info"
         if verbose:
             url += "?verbose=true"
-        return self._send_request("get", url)
+        return self._send_request("get", url, timeout=timeout)
 
     def ready(self) -> bool:
         """

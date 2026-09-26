@@ -14,6 +14,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -36,7 +37,7 @@ func TestCloudPreflightStillRequiresEmbeddingReadiness(t *testing.T) {
 			}
 		})
 	}
-	if (localRunner{opts: LocalOptions{Model: "user.embeddinggemma-300m-GGUF"}}).skipChatModel() {
+	if (localRunner{opts: LocalOptions{Model: "user.embeddinggemma-300m-GGUF"}}).pickedLocalModel() == "" {
 		t.Fatal("a dotted local id was mistaken for cloud inference")
 	}
 }
@@ -607,5 +608,39 @@ func TestARemoteLemonadeOffersNoSetupKey(t *testing.T) {
 	if row.Fix != FixNone {
 		t.Errorf("fix = %v, want FixNone — `gaia init` refuses to install or "+
 			"start anything in remote mode", row.Fix)
+	}
+}
+
+// A local model picked in the TUI replaces the hardware default: on a large PC
+// setup must not demand the 82 GB default the user chose Gemma to avoid.
+func TestAPickedLocalModelReplacesTheHardwareDefault(t *testing.T) {
+	r := localRunner{opts: LocalOptions{Model: "Gemma-4-E4B-it-GGUF"}}
+	if !r.skipChatModel() || !strings.Contains(gaiainit.RunCommand(r.skipChatModel()), "--skip-chat-model") {
+		t.Fatal("setup would still download the hardware default chat model")
+	}
+	stubGaiaInit(t, func() (string, error) { return exitStub(t, 0), nil })
+	orig := downloadedLocalModels
+	t.Cleanup(func() { downloadedLocalModels = orig })
+
+	downloadedLocalModels = func(context.Context) ([]lemonade.Model, error) {
+		return []lemonade.Model{{ID: "Gemma-4-E4B-it-GGUF", Downloaded: true}}, nil
+	}
+	if row := r.checkModels(context.Background(), localCfg()); row.State != StateOK || !strings.Contains(row.Line, "Gemma") {
+		t.Fatalf("a downloaded pick did not pass: %+v", row)
+	}
+
+	downloadedLocalModels = func(context.Context) ([]lemonade.Model, error) { return nil, nil }
+	row := r.checkModels(context.Background(), localCfg())
+	if row.State != StateFailed || row.Fix != FixNone || !strings.Contains(row.Line, "not downloaded") {
+		t.Fatalf("a missing pick was not reported, or setup was offered for it: %+v", row)
+	}
+
+	// Lemonade lists a user. model without its prefix.
+	r = localRunner{opts: LocalOptions{Model: "user.Qwen3.8-Flash-Next-GGUF"}}
+	downloadedLocalModels = func(context.Context) ([]lemonade.Model, error) {
+		return []lemonade.Model{{ID: "Qwen3.8-Flash-Next-GGUF", Downloaded: true}}, nil
+	}
+	if row := r.checkModels(context.Background(), localCfg()); row.State != StateOK {
+		t.Fatalf("user.-prefixed pick not matched to its listed id: %+v", row)
 	}
 }

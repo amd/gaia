@@ -472,8 +472,9 @@ def _probe_lemonade() -> Dict[str, Any]:
     from gaia_agent.agent import GaiaAgentConfig
 
     from gaia.llm.lemonade_client import (
-        DEFAULT_MODEL_NAME,
+        _model_ids_match,
         configured_lemonade_url,
+        resolve_default_chat_model,
         resolve_lemonade_base_url,
     )
 
@@ -481,7 +482,7 @@ def _probe_lemonade() -> Dict[str, Any]:
     base = resolve_lemonade_base_url(
         configured_lemonade_url() or getattr(GaiaAgentConfig(), "base_url", None)
     ).rstrip("/")
-    model_id = DEFAULT_MODEL_NAME
+    model_id = resolve_default_chat_model()
 
     out: Dict[str, Any] = {
         "base_url": base,
@@ -497,7 +498,7 @@ def _probe_lemonade() -> Dict[str, Any]:
         out["reachable"] = True
         data = r.json().get("data") or []
         for entry in data:
-            if entry.get("id") == model_id or model_id in str(
+            if _model_ids_match(entry.get("id"), model_id) or model_id in str(
                 entry.get("checkpoint", "")
             ):
                 out["present"] = True

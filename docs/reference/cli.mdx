@@ -231,7 +231,30 @@ profile. The default `gaia` profile is a superset, so a bare `gaia init` covers 
 </Note>
 
 <Note>
-`gaia llm` quick queries use the global default model (`Gemma-4-E4B-it-GGUF`).
+For the `gaia`, `chat`, `rag` and `all` profiles the chat model follows the
+hardware. Where Lemonade reports enough memory for it — about 88 GB for models, as on a
+128 GB Strix Halo — `gaia init` also sets up `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB
+download) as the chat model, prints why, and records it as `default_model`. Gemma is still
+downloaded, since vision and document-image extraction load it by name. Every other PC
+gets Gemma alone. Qwen is also skipped, with the reason printed, when the running Lemonade
+is older than v2026.39.1 (its llama.cpp cannot load the model): `gaia init --yes` keeps an
+older Lemonade that meets the profile minimum, so upgrade with `gaia init --force-reinstall`. A `default_model` you set yourself always wins, and `--check` asks for
+the same model `gaia init` would download.
+</Note>
+
+<Note>
+On the same big-memory PCs, `Qwen3-30B-A3B-Instruct-2507-GGUF` (a 17 GB Lemonade
+built-in) is the alternative: published Strix Halo benchmarks report it generating
+several times faster than Qwen3.8 Flash (not yet measured on GAIA's build), but it
+reads text only. Switch to it with
+`gaia config set default_model Qwen3-30B-A3B-Instruct-2507-GGUF`, or pick it in the
+terminal UI's model picker; Lemonade downloads it on first use. To measure both on your
+own PC, speed, tool calling and (with `--tasks core`) agent quality, run
+`python util/compare_local_models.py` from a GAIA checkout.
+</Note>
+
+<Note>
+`gaia llm` quick queries use `default_model` when set, else `Gemma-4-E4B-it-GGUF`.
 </Note>
 
 **Examples:**
@@ -1511,7 +1534,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `user.Qwen3.8-Flash-Next-GGUF` on a PC with the memory for it and never overwrites a value you set |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 

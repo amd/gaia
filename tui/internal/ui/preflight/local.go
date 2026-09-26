@@ -92,7 +92,7 @@ func (l localRunner) Rows(cfg Config) []Row {
 		rows = append(rows, Row{Key: KeyClaudeCredential, Label: "Claude credential"})
 	}
 	modelLabel := modelRowLabel
-	if l.skipChatModel() {
+	if l.skipChatModel() && l.pickedLocalModel() == "" {
 		modelLabel = "Embeddings"
 	}
 	rows = append(rows,
@@ -456,8 +456,57 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 
 // --- 3. the models -----------------------------------------------------------
 
+// skipChatModel reports that setup must not pick and download the chat model:
+// chat runs on Claude or a cloud provider, or the user already chose a local
+// model — on a large PC the hardware default is an 82 GB download they may have
+// picked Gemma precisely to avoid.
 func (l localRunner) skipChatModel() bool {
-	return l.opts.ClaudeMode || lemonade.IsCloudID(l.opts.Model)
+	return l.opts.ClaudeMode || l.opts.Model != ""
+}
+
+// pickedLocalModel is the local chat model the user chose, or "".
+func (l localRunner) pickedLocalModel() string {
+	if l.opts.ClaudeMode || lemonade.IsCloudID(l.opts.Model) {
+		return ""
+	}
+	return l.opts.Model
+}
+
+// downloadedLocalModels lists the local models Lemonade has on disk. A var so
+// tests can answer without a server.
+var downloadedLocalModels = func(ctx context.Context) ([]lemonade.Model, error) {
+	return lemonade.New("").Models(ctx, "local")
+}
+
+// checkPickedModel confirms the chosen local model is on disk; setup was told
+// to leave the chat model alone, so nothing else would notice it missing.
+func (l localRunner) checkPickedModel(ctx context.Context, row Row) Row {
+	picked := l.pickedLocalModel()
+	models, err := downloadedLocalModels(ctx)
+	if err != nil {
+		row.State = StateUnknown
+		row.Disposition = status.DispositionNotify
+		row.Line = "could not confirm " + picked + " is downloaded"
+		row.Detail = err.Error()
+		row.Raw = err.Error()
+		return row
+	}
+	for _, m := range models {
+		if strings.EqualFold(strings.TrimPrefix(m.ID, "user."), strings.TrimPrefix(picked, "user.")) {
+			row.State = StateOK
+			row.Line = "downloaded — chat uses " + picked
+			return row
+		}
+	}
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = picked + " is not downloaded"
+	row.Detail = "Setup leaves a model you picked to you, so it will not fetch this one."
+	row.Fix = FixNone
+	row.Remedy = Remedy{
+		Action: "Press p and choose it again to download it, or pick a downloaded model.",
+	}
+	return row
 }
 
 func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
@@ -493,6 +542,9 @@ func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 		return row
 
 	case ready:
+		if l.pickedLocalModel() != "" {
+			return l.checkPickedModel(ctx, row)
+		}
 		row.State = StateOK
 		row.Line = "downloaded"
 		if lemonade.IsCloudID(l.opts.Model) {
@@ -512,6 +564,9 @@ func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 	if l.skipChatModel() {
 		row.Line = "embedding models not downloaded"
 		row.Detail = "Chat uses your selected remote provider. Setup downloads local embedding models for document search and memory."
+		if picked := l.pickedLocalModel(); picked != "" {
+			row.Detail = "Chat uses " + picked + ", which you picked. Setup downloads only the local embedding models for document search and memory."
+		}
 	}
 	row.Fix = FixRunSetup
 	row.Remedy = Remedy{

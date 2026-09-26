@@ -36,9 +36,40 @@ URL. The default authentication header is `Authorization`, with the prefix
 enter the required header name and leave the prefix empty. Use **Tab** to move
 between fields, then paste the key and press **Enter**.
 
-For **Local**, select a downloaded chat model. If none are installed, close the
-panel and run setup. Selecting a cloud provider before setup downloads only the
-local embedding models, not an unused local chat model.
+For **Local**, the list shows every chat model Lemonade offers, downloaded or not.
+**Recommended** models come first — Qwen3.8 Flash Next, Gemma 4 E4B, Qwen3 30B A3B
+Instruct 2507, and the Qwen3 Coder models — marked with ★. The panel names how much memory this PC has
+for models and how much disk is free, both read from Lemonade:
+
+- **downloaded** — selecting it switches to it straight away.
+- **download N GB** — it fits; selecting it downloads it in the panel with
+  progress, then switches to it. **Esc** stops the download.
+- **won't fit** — shown so you know it exists, but it cannot be downloaded. The
+  details line says what it needs against what this PC has.
+- **fit unknown** — Lemonade did not report this PC's GPU memory or the model's
+  size, so it cannot be judged and is not downloaded.
+- **needs newer Lemonade** — the model needs a newer Lemonade than this PC runs
+  (Qwen3.8 Flash Next needs v2026.39.1). Upgrade with `gaia init --force-reinstall`.
+
+A model fits when its size plus 5% and 1 GB of working room fits the memory
+llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared
+memory — and its download fits the free disk. If Lemonade cannot report this PC's
+memory, every download is disabled rather than guessed.
+
+Selecting a cloud provider before setup downloads only the local embedding
+models, not an unused local chat model.
+
+### The default local model
+
+`gaia init` picks the local chat model from the same rule: **Qwen3.8 Flash Next**
+where it fits (a 128 GB Strix Halo), **Gemma 4 E4B** on every other PC. It records
+a Qwen pick as `default_model` in `~/.gaia/config.json`, so the TUI's agent starts
+on it. Set `gaia config set default_model <id>` to choose your own; `gaia init`
+never overwrites it. To stay on Gemma on a large machine and skip the 82 GB
+download, run `gaia config set default_model Gemma-4-E4B-it-GGUF` before setup.
+Pressing **p** at the setup screen and picking Gemma does the same for that
+session only: setup then downloads just the embedding models, but the next
+launch asks for the default again unless `default_model` is set.
 
 ## Keys and settings
 

@@ -33,6 +33,23 @@ from gaia.daemon.sidecars.errors import (
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec, builtin_specs
 
+_REAL_POPEN = mgr.subprocess.Popen
+_REAL_SIGNAL_TREE = mgr.AgentSidecarManager._signal_tree
+
+
+@pytest.fixture(autouse=True)
+def _never_signal_a_fake_pid(monkeypatch):
+    """Tree-kill only real children: a fake proc's pid belongs to a stranger."""
+
+    def _signal_tree(proc, sig):
+        if isinstance(proc, _REAL_POPEN):
+            _REAL_SIGNAL_TREE(proc, sig)
+
+    monkeypatch.setattr(
+        mgr.AgentSidecarManager, "_signal_tree", staticmethod(_signal_tree)
+    )
+
+
 # ---------------------------------------------------------------------------
 # spec.py — AgentSidecarSpec + builtin_specs()
 # ---------------------------------------------------------------------------
@@ -411,6 +428,16 @@ def _install_fake_spawn(monkeypatch, tmp_path, *, spec=None, version_payload=Non
         return _FakeProc()
 
     monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
+    # The fake pid is not ours: never signal it (killpg/taskkill) or probe it.
+    captured["signals"] = []
+    monkeypatch.setattr(
+        mgr.AgentSidecarManager,
+        "_signal_tree",
+        staticmethod(lambda proc, sig: captured["signals"].append(sig)),
+    )
+    monkeypatch.setattr(
+        mgr.AgentSidecarManager, "_group_alive", lambda self, pgid: False
+    )
     monkeypatch.setattr(
         mgr.atexit, "register", lambda fn: captured["atexit"].append(fn)
     )
@@ -665,8 +692,8 @@ def test_health_rejects_foreign_server_on_port(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
-    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
-    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
     m = mgr.AgentSidecarManager(
         _email_spec_with_src(src),
         cache_dir=tmp_path,
@@ -690,8 +717,8 @@ def test_pinned_version_with_missing_apiversion_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
-    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
-    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
     m = mgr.AgentSidecarManager(
         _email_spec_with_src(src),
         cache_dir=tmp_path,
@@ -794,8 +821,8 @@ def test_start_retries_on_early_exit_then_succeeds(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
     # killpg must be a no-op for the fake procs on the early-exit shutdown.
-    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
-    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
 
     m = mgr.AgentSidecarManager(
         _email_spec_with_src(src), cache_dir=tmp_path, log_dir=tmp_path / "logs"
@@ -830,8 +857,8 @@ def test_start_does_not_retry_on_health_timeout(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
-    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
-    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
 
     m = mgr.AgentSidecarManager(
         _email_spec_with_src(src),
