@@ -26,6 +26,7 @@ class AgentConfig:
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
     temperature: Optional[float] = None
+    top_p: Optional[float] = None  # None = the provider's default
     system_prompt: Optional[str] = None
     max_history_length: int = 4  # Number of conversation pairs to keep
     show_stats: bool = False
@@ -422,6 +423,8 @@ class AgentSDK:
 
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "top_p" not in kwargs and self.config.top_p is not None:
+                kwargs["top_p"] = self.config.top_p
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
 
@@ -502,6 +505,8 @@ class AgentSDK:
 
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "top_p" not in kwargs and self.config.top_p is not None:
+                kwargs["top_p"] = self.config.top_p
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
 
@@ -612,6 +617,8 @@ class AgentSDK:
                 and self.config.temperature is not None
             ):
                 generate_kwargs["temperature"] = self.config.temperature
+            if "top_p" not in generate_kwargs and self.config.top_p is not None:
+                generate_kwargs["top_p"] = self.config.top_p
 
             # Note: Retry logic is now handled at the LLM client level
             response = self._generate_conversation(
@@ -698,6 +705,8 @@ class AgentSDK:
                 and self.config.temperature is not None
             ):
                 generate_kwargs["temperature"] = self.config.temperature
+            if "top_p" not in generate_kwargs and self.config.top_p is not None:
+                generate_kwargs["top_p"] = self.config.top_p
 
             full_response = ""
             for chunk in self._generate_conversation(
