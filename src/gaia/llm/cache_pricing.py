@@ -15,6 +15,7 @@ from typing import Dict, Optional
 #: ``cached / uncached`` input price, keyed by the bare model id (no provider prefix).
 CACHED_INPUT_PRICE_RATIO: Dict[str, float] = {
     "kimi-k2p7-code": 0.20,
+    "kimi-k3": 0.10,
     "glm-5p3-flash": 0.20,
     "glm-5p3": 0.19,
     "deepseek-v4p1-flash": 0.02,
