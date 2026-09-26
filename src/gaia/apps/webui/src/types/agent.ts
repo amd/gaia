@@ -167,6 +167,12 @@ export interface TrayConfig {
   };
 }
 
+/** Payload for `tray.setConfig`; `agents` entries are merged by agent id. */
+export interface TrayConfigUpdate {
+  agents?: Record<string, AgentConfig>;
+  tray?: Partial<TrayConfig['tray']>;
+}
+
 // ── Agent Chat Types ─────────────────────────────────────────────────────
 
 export interface AgentChatMessage {
@@ -265,7 +271,7 @@ export interface GaiaElectronAPI {
   };
   tray: {
     getConfig: () => Promise<TrayConfig>;
-    setConfig: (config: Partial<TrayConfig>) => Promise<void>;
+    setConfig: (config: TrayConfigUpdate) => Promise<TrayConfig>;
   };
   notification: {
     onPermissionRequest: (cb: (data: GaiaNotification) => void) => void;

@@ -43,7 +43,13 @@ class FakeAgent(Agent):
             "greet": {
                 "name": "greet",
                 "description": "Greet someone by name.\nSecond line ignored.",
-                "parameters": {"name": {"type": "string", "required": True}},
+                "parameters": {
+                    "name": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Who to greet.",
+                    }
+                },
             }
         }
 
@@ -140,6 +146,19 @@ def test_api_lists_tools(api_client):
     tools = resp.json()["tools"]
     assert tools[0]["name"] == "greet"
     assert tools[0]["inputSchema"]["required"] == ["name"]
+
+
+def test_api_tool_schema_carries_per_argument_descriptions(api_client):
+    """Argument text rides in the property, not the tool description.
+
+    The registry stopped shipping the ``Args:`` block inside ``description``,
+    so a client only sees what each argument means if the property carries it.
+    """
+    resp = api_client.get("/v1/tools")
+    name_property = resp.json()["tools"][0]["inputSchema"]["properties"]["name"]
+
+    assert name_property["type"] == "string"
+    assert name_property["description"] == "Who to greet."
 
 
 def test_api_chat_completion(api_client):
@@ -251,6 +270,9 @@ def test_mcp_tools_list(server):
     tools = resp["result"]["tools"]
     assert tools[0]["name"] == "greet"
     assert tools[0]["description"].startswith("Greet someone by name.")
+    assert (
+        tools[0]["inputSchema"]["properties"]["name"]["description"] == "Who to greet."
+    )
 
 
 def test_mcp_tools_call(server):

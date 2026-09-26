@@ -246,6 +246,22 @@ both surfaces.
 {"event": "answer", "data": {"text": "Here's the code..."}}
 ```
 
+### Disconnects and failures
+
+If the client disconnects mid-stream, the agent is told to stop and quits at
+its next step instead of finishing the turn. If the agent fails after streaming
+has started, the stream ends with an
+`{"error": {"message": ..., "type": "server_error"}}` chunk and then
+`data: [DONE]`, since the HTTP status has already been sent.
+
+<Note>
+  The stop takes effect at the agent's next step or tool, so a model call that
+  is **already in flight** runs to completion and keeps its worker thread until
+  it returns. Agent runs execute on the default thread pool, so a client that
+  repeatedly starts and cancels long requests can keep those workers busy and
+  delay unrelated requests.
+</Note>
+
 ### Confirmation-gated tools are denied on this surface
 
 This stream is one-way — the client has no channel to answer a permission

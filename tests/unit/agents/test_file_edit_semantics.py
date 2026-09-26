@@ -14,6 +14,9 @@ These tests pin the replacement contract for every ``edit_*`` tool:
   extra read
 - an edit against a file that changed since it was read is rejected
 
+Each test reads the file through the same mixin first: the edit tools refuse a
+file the agent hasn't read (``test_read_before_edit.py`` covers that rule).
+
 The behaviour table is parametrized over all three implementations, so the
 suite fails if any one of them drifts from the others.
 
@@ -21,13 +24,14 @@ No LLM or external service required.
 """
 
 import importlib
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.tools.file_edit import FileStateTracker, apply_unique_replacement
+from gaia.agents.tools.file_edit import apply_unique_replacement
 from gaia.security import PathValidator
 
 # Valid Python (edit_python_file rejects edits that break the parse) with a
@@ -77,22 +81,15 @@ EDIT_TOOLS = [
 EDIT_TOOL_IDS = [entry[0] for entry in EDIT_TOOLS]
 
 
-@pytest.fixture(autouse=True)
-def clean_tracker():
-    """The tracker is process-wide; no test may inherit another's ledger."""
-    FileStateTracker.instance().clear()
-    yield
-    FileStateTracker.instance().clear()
-
-
 @pytest.fixture(params=EDIT_TOOLS, ids=EDIT_TOOL_IDS)
-def edit_tool(request, tmp_path, mock_home):
+def edit_tool(request, tmp_path, mock_home, sample_file):
     """Every edit tool, behind one ``(path, old, new) -> dict`` signature.
 
     The two ``edit_file`` implementations register under the same name and
     overwrite each other in the registry, so each is registered and captured
     on its own. ``mock_home`` keeps ``edit_python_file``'s backup out of the
-    real ``~/.gaia``.
+    real ``~/.gaia``. ``sample_file`` has been read through the same mixin,
+    and ``call.read`` reads again.
     """
     _, module_name, class_name, registrar, tool_name = request.param
     module = importlib.import_module(module_name)
@@ -108,10 +105,16 @@ def edit_tool(request, tmp_path, mock_home):
         entry = _TOOL_REGISTRY.get(tool_name)
         assert entry is not None, f"{tool_name} was not registered by {registrar}"
         function = entry["function"]
+        read_file = _TOOL_REGISTRY["read_file"]["function"]
 
         def call(path, old, new):
             return function(str(path), old, new)
 
+        def read(path):
+            assert read_file(str(path))["status"] == "success"
+
+        read(sample_file)
+        call.read = read
         call.module_name = module_name
         call.tool_name = tool_name
         yield call
@@ -204,57 +207,52 @@ class TestNotFoundCarriesContent:
 class TestStalenessRejection:
     """An edit against a file that moved under the agent must not clobber it."""
 
+    @staticmethod
+    def _change_on_disk(path):
+        path.write_text(SAMPLE + "\n# changed by someone else\n", encoding="utf-8")
+
     def test_stale_edit_is_rejected(self, edit_tool, sample_file):
-        FileStateTracker.instance().record_read(str(sample_file), "something older")
+        self._change_on_disk(sample_file)
         result = edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
         assert result["status"] == "error"
-        assert result["stale"] is True
+        assert "changed on disk" in result["error"]
 
     def test_stale_edit_writes_nothing(self, edit_tool, sample_file):
-        FileStateTracker.instance().record_read(str(sample_file), "something older")
+        self._change_on_disk(sample_file)
+        before = sample_file.read_text(encoding="utf-8")
         edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
-        assert sample_file.read_text(encoding="utf-8") == SAMPLE
+        assert sample_file.read_text(encoding="utf-8") == before
 
-    def test_stale_rejection_carries_current_content(self, edit_tool, sample_file):
-        FileStateTracker.instance().record_read(str(sample_file), "something older")
+    def test_a_touch_alone_is_rejected(self, edit_tool, sample_file):
+        """mtime cannot tell a touch from a rewrite; a fresh read is cheap."""
+        st = sample_file.stat()
+        os.utime(sample_file, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         result = edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
-        assert result["current_content"] in SAMPLE
+        assert result["status"] == "error"
 
-    def test_stale_rejection_names_both_hashes(self, edit_tool, sample_file):
-        FileStateTracker.instance().record_read(str(sample_file), "something older")
-        result = edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
-        assert result["hash_at_read"] != result["hash_now"]
-        assert result["hash_at_read"] in result["error"]
-
-    def test_matching_read_does_not_block_the_edit(self, edit_tool, sample_file):
-        FileStateTracker.instance().record_read(str(sample_file), SAMPLE)
-        result = edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
-        assert result["status"] == "success"
-
-    def test_unread_file_is_not_blocked(self, edit_tool, sample_file):
-        """No record means nothing stale to be wrong about."""
-        assert not FileStateTracker.instance().has_record(str(sample_file))
-        result = edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
-        assert result["status"] == "success"
+    def test_unread_file_is_refused(self, edit_tool, tmp_path):
+        """No record means the edit would be made blind."""
+        unread = tmp_path / "unread.py"
+        unread.write_text(SAMPLE, encoding="utf-8")
+        result = edit_tool(unread, UNIQUE_OLD, UNIQUE_NEW)
+        assert result["status"] == "error"
+        assert "read_file" in result["error"]
+        assert unread.read_text(encoding="utf-8") == SAMPLE
 
     def test_consecutive_edits_need_no_intervening_read(self, edit_tool, sample_file):
-        """A successful edit re-anchors the ledger to what it just wrote."""
+        """A successful edit re-records the file as it just wrote it."""
         first = edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
         assert first["status"] == "success"
         second = edit_tool(sample_file, "def beta():", "def gamma():")
         assert second["status"] == "success"
 
     def test_stale_rejection_is_not_a_dead_end(self, edit_tool, sample_file):
-        """Rejecting forever is as broken as clobbering.
-
-        The rejection hands the current content back, so it counts as a read:
-        the corrected retry must go through instead of hitting the superseded
-        hash again.
-        """
-        FileStateTracker.instance().record_read(str(sample_file), "something older")
+        """Rejecting forever is as broken as clobbering: a fresh read clears it."""
+        self._change_on_disk(sample_file)
         rejected = edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
         assert rejected["status"] == "error"
 
+        edit_tool.read(sample_file)
         retry = edit_tool(sample_file, UNIQUE_OLD, UNIQUE_NEW)
         assert retry["status"] == "success", "stale rejection livelocked the agent"
 
@@ -332,6 +330,7 @@ class TestImplementationsCannotDiverge:
                 function = _TOOL_REGISTRY[tool_name]["function"]
                 path = tmp_path / f"{tool_id.replace('.', '_')}.py"
                 path.write_text(SAMPLE, encoding="utf-8")
+                _TOOL_REGISTRY["read_file"]["function"](str(path))
                 result = function(str(path), DUPLICATED, "    value = 2")
             finally:
                 _TOOL_REGISTRY.clear()

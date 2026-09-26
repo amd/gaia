@@ -129,7 +129,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         action="append",
         metavar="KEY=VALUE",
         dest="config_pairs",
-        help="Config key=value pair (repeatable, e.g. --set GITHUB_TOKEN=ghp_…)",
+        help="Config key=value pair (repeatable, e.g. --set GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…)",
     )
     p_cfg.add_argument(
         "--json",

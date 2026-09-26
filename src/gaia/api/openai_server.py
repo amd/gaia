@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from typing import AsyncGenerator, List, Tuple
@@ -45,7 +46,6 @@ from .schemas import (
 # Configure logging
 logger = logging.getLogger(__name__)
 _REDACTED_LOG_VALUE = "[redacted]"
-_DEFAULT_LEMONADE_BASE_URL = "http://localhost:13305/api/v1"
 _LEMONADE_HEALTH_TIMEOUT_SECONDS = 0.35
 
 # Set logger level based on debug flag
@@ -148,11 +148,10 @@ def _prepare_agent(
     if request.top_p is not None:
         config.top_p = request.top_p
     if request.max_tokens is not None:
-        # Both: the agent loop passes ``_max_output_tokens()`` explicitly on
-        # every call, which wins over ``config.max_tokens``; other call sites
-        # fall back to the config.
-        agent.max_output_tokens = request.max_tokens
         config.max_tokens = request.max_tokens
+        # The agent loop reads its own cap per call and would otherwise ignore
+        # the config value, silently answering at the model default instead.
+        agent.max_output_tokens = request.max_tokens
 
 
 def _prepend_tool_denials(agent, content: str) -> str:
@@ -444,6 +443,9 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
     This function processes the agent query in a thread pool (to avoid blocking)
     and streams agent progress events in real-time via the SSEOutputHandler.
 
+    If the client disconnects, the agent is told to stop. If the agent raises,
+    the stream ends with an ``{"error": ...}`` chunk and ``data: [DONE]``.
+
     Args:
         agent: Agent instance (with SSEOutputHandler)
         query: User query string
@@ -493,6 +495,11 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
     output_handler = getattr(agent, "output_handler", None) or getattr(
         agent, "console", None
     )
+
+    cancel_event = threading.Event()
+    agent._cancel_event = cancel_event
+    task = None
+    failure = None
 
     try:
         # Start processing in background
@@ -611,10 +618,30 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
             )
             logger.debug("=" * 80)
 
-    except Exception as e:
-        # Log and re-raise errors
+    except Exception as e:  # noqa: BLE001 - reported to the client in-band below
         logger.error(f"❌ Agent query processing failed: {e}", exc_info=True)
-        raise
+        failure = e
+    finally:
+        # A client disconnect cancels this generator; the worker thread keeps
+        # running unless told to stop.
+        if task is not None and not task.done():
+            logger.info("Stream %s ended early; stopping the agent", completion_id)
+            cancel_event.set()
+            handler_cancelled = getattr(output_handler, "cancelled", None)
+            if handler_cancelled is not None:
+                handler_cancelled.set()
+
+    if failure is not None:
+        # Headers are already sent, so the status can't change; say it in-band.
+        error_chunk = {
+            "error": {
+                "message": str(failure) or type(failure).__name__,
+                "type": "server_error",
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
     # Final chunk with finish_reason
     final_chunk = {
@@ -705,7 +732,12 @@ async def health_check():
 
 
 async def _lemonade_health():
-    base_url = os.getenv("LEMONADE_BASE_URL", _DEFAULT_LEMONADE_BASE_URL).rstrip("/")
+    from gaia.llm.lemonade_client import (
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+
+    base_url = resolve_lemonade_base_url().rstrip("/")
     if not base_url.endswith("/api/v1"):
         base_url = f"{base_url}/api/v1"
 
@@ -715,7 +747,7 @@ async def _lemonade_health():
         "model": None,
         "url": base_url,
     }
-    api_key = os.getenv("LEMONADE_API_KEY", "").strip()
+    api_key = resolve_lemonade_api_key(base_url=base_url)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     try:

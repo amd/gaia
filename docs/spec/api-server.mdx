@@ -92,6 +92,11 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
    - Delta content format
    - Finish reason reporting
    - Proper SSE formatting (data: prefix)
+   - A client disconnect stops the agent (its cancel event and the SSE
+     handler's `cancelled` flag are set), so it stops running tools and
+     generating
+   - If the agent raises mid-stream, the stream ends with an
+     `{"error": {...}}` chunk followed by `data: [DONE]`
 
 ### Non-Functional Requirements
 
@@ -497,6 +502,7 @@ async def stream_chat_completion(
         yield "data: [DONE]\n\n"
 
     except Exception as e:
+        # Headers are already sent, so report the failure in-band.
         error_chunk = {
             "error": {
                 "message": str(e),
@@ -504,6 +510,7 @@ async def stream_chat_completion(
             }
         }
         yield f"data: {json.dumps(error_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
 ```
 
 ---
@@ -514,12 +521,18 @@ async def stream_chat_completion(
 
 ```python
 async def create_chat_completion(request: ChatCompletionRequest):
-    # 1. Split the request: the final user message is the query, system and
+    # 1. Validate the model FIRST: an unknown model is a 404 even when the
+    #    message array is also malformed.
+    if not registry.model_exists(request.model):
+        raise HTTPException(status_code=404, detail=f"Model '{request.model}' not found")
+
+    # 2. Split the request: the final user message is the query, system and
     #    developer messages are caller system text, the rest is history.
     #    Raises 400 on a non-text content part or a non-user last message.
     user_message, history, system_text = _split_conversation(request.messages)
 
-    # 2. Resolve a fresh agent and load the conversation into it.
+    # 3. Resolve a fresh agent and load the conversation into it. get_agent
+    #    raises ValueError for an unregistered model, re-raised as a 404.
     agent = registry.get_agent(request.model)
     agent.conversation_history = history
     if system_text:
@@ -530,7 +543,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         agent.chat.config.temperature = request.temperature
     # ...same for top_p and max_tokens
 
-    # 3. Generate response
+    # 4. Generate response
     if request.stream:
         # Streaming response
         return StreamingResponse(
