@@ -22,6 +22,10 @@ import pytest
 
 from gaia.installer import uninstall_command as uc
 
+# Import before pyfakefs starts: it unloads modules first imported under a fake
+# filesystem, which would orphan the monkeypatched EmbeddedLemonade.status.
+from gaia.llm import lemonade_embedded
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -323,8 +327,7 @@ class TestPurgeRemoval:
         embedded.mkdir()
         (embedded / "state.json").write_text("{}")
         monkeypatch.setattr(
-            "gaia.llm.lemonade_embedded.EmbeddedLemonade.status",
-            lambda self: status,
+            lemonade_embedded.EmbeddedLemonade, "status", lambda self: status
         )
         captured = _Capture()
 
