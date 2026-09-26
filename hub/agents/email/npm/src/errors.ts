@@ -40,6 +40,12 @@ export class VersionMismatchError extends AgentEmailError {}
 /** A binary could not be located on disk for spawning. */
 export class BinaryNotFoundError extends AgentEmailError {}
 
+/** The bind port was already taken before we spawned anything. */
+export class PortInUseError extends AgentEmailError {}
+
+/** The sidecar we spawned died; anything answering its port is not ours. */
+export class SidecarExitedError extends AgentEmailError {}
+
 /**
  * The `/query` SSE stream violated the frozen contract — a malformed event
  * payload, a non-SSE response, or a stream that closed without the mandated
