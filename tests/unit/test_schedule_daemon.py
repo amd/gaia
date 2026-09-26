@@ -175,6 +175,87 @@ class TestBuildScheduler:
             scheduler.shutdown()
 
 
+class TestMisfires:
+    """A job that fires late (sleep, busy machine) must still run (#4207)."""
+
+    def test_every_job_tolerates_late_fires(self, tmp_path):
+        store = _store_with(tmp_path, _make_schedule("a"), _make_schedule("b"))
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            for job in scheduler.get_jobs():
+                assert job.misfire_grace_time is not None
+                assert job.misfire_grace_time >= daemon.MISFIRE_GRACE_SECONDS
+                assert job.coalesce is True
+        finally:
+            scheduler.shutdown()
+
+    def test_run_due_a_minute_ago_still_fires(self, mocker, tmp_path):
+        import threading
+        from datetime import timedelta, timezone
+
+        store = _store_with(tmp_path, _make_schedule("a"))
+        fired = threading.Event()
+        mocker.patch.object(runner, "fire", side_effect=lambda _s: fired.set())
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            late = datetime.now(timezone.utc) - timedelta(seconds=60)
+            scheduler.modify_job("a", next_run_time=late)
+            scheduler.resume()
+            assert fired.wait(5), "a run 60s late was dropped as a misfire"
+        finally:
+            scheduler.shutdown()
+
+    def test_job_added_on_reload_tolerates_late_fires(self, tmp_path):
+        store = _store_with(tmp_path)
+        scheduler = daemon.build_scheduler(store)
+        scheduler.start(paused=True)
+        try:
+            store.add(_make_schedule("later"))
+            daemon.refresh_schedules(scheduler, store)
+            assert (
+                scheduler.get_job("later").misfire_grace_time
+                >= daemon.MISFIRE_GRACE_SECONDS
+            )
+        finally:
+            scheduler.shutdown()
+
+    def test_missed_run_is_logged_by_schedule_name(self, tmp_path, caplog):
+        from datetime import timezone
+
+        from apscheduler.events import EVENT_JOB_MISSED, JobExecutionEvent
+
+        store = _store_with(tmp_path, _make_schedule("morning-brief"))
+        scheduler = daemon.build_scheduler(store)
+        due = datetime(2026, 1, 1, 7, 0, tzinfo=timezone.utc)
+        event = JobExecutionEvent(EVENT_JOB_MISSED, "morning-brief", None, due)
+
+        with caplog.at_level("WARNING", logger=daemon.log.name):
+            scheduler._dispatch_event(event)
+
+        assert "morning-brief" in caplog.text
+        assert "missed" in caplog.text
+
+    def test_overlapping_run_is_logged_by_schedule_name(self, tmp_path, caplog):
+        from datetime import timezone
+
+        from apscheduler.events import EVENT_JOB_MAX_INSTANCES, JobSubmissionEvent
+
+        store = _store_with(tmp_path, _make_schedule("morning-brief"))
+        scheduler = daemon.build_scheduler(store)
+        due = datetime(2026, 1, 1, 7, 0, tzinfo=timezone.utc)
+        event = JobSubmissionEvent(
+            EVENT_JOB_MAX_INSTANCES, "morning-brief", None, [due]
+        )
+
+        with caplog.at_level("WARNING", logger=daemon.log.name):
+            scheduler._dispatch_event(event)
+
+        assert "morning-brief" in caplog.text
+        assert "still in progress" in caplog.text
+
+
 # ===========================================================================
 # 3. _job — success and failure paths
 # ===========================================================================
@@ -326,6 +407,17 @@ class TestRunnerFire:
         runner.fire(sched)
 
         mock_dispatch.assert_called_once_with("file", {"path": "/tmp/x.md"}, "out")
+
+    def test_fire_rejects_bad_sink_before_calling_the_agent(self, mocker):
+        # A store written before add-time validation must not burn an LLM run.
+        mock_sdk_cls = mocker.patch(_AGENT_SDK)
+        mocker.patch(_AGENT_CONFIG)
+
+        sched = _make_schedule("a", prompt="p", sink="telegram", sink_args={})
+        with pytest.raises(ValueError, match="--to"):
+            runner.fire(sched)
+
+        mock_sdk_cls.return_value.send.assert_not_called()
 
     def test_fire_skill_only_raises_not_implemented(self, mocker):
         # The scheduler cannot run skills yet; fire must fail loudly, never

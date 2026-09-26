@@ -29,6 +29,7 @@ from gaia_agent_connectors_demo.agent import (
     _drive_recent_files_impl,
     _format_connector_error,
     _github_my_repos_impl,
+    _github_pat,
     _gmail_recent_subjects_impl,
 )
 
@@ -382,6 +383,16 @@ class TestDriveRecentFiles:
 
 
 class TestGithubMyRepos:
+    def test_pat_read_from_the_var_the_catalog_configures(self):
+        from gaia.connectors.catalog.mcp_servers import _GITHUB
+
+        (env_key,) = _GITHUB.mcp_env_keys
+        with patch(
+            "gaia_agent_connectors_demo.agent.get_credential_sync",
+            return_value={"env": {env_key: "ghp_catalog"}},
+        ):
+            assert _github_pat() == "ghp_catalog"
+
     def test_happy_path_lists_repos(self):
         fake_response = httpx.Response(
             200,
@@ -437,13 +448,13 @@ class TestGithubMyRepos:
         with patch(
             "gaia_agent_connectors_demo.agent._github_pat",
             side_effect=ConnectorsError(
-                "GitHub MCP credential resolved but GITHUB_TOKEN was empty."
+                "GitHub MCP credential resolved but GITHUB_PERSONAL_ACCESS_TOKEN was empty."
             ),
         ):
             result = _github_my_repos_impl(limit=10)
         assert result["ok"] is False
         assert "CONNECTOR_ERROR" in result["error"]
-        assert "GITHUB_TOKEN" in result["error"]
+        assert "GITHUB_PERSONAL_ACCESS_TOKEN" in result["error"]
 
 
 # ---------------------------------------------------------------------------

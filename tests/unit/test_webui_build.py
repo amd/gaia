@@ -684,18 +684,16 @@ class TestSkipWebuiBuildFlag(unittest.TestCase):
     def test_init_command_skip_webui_build_never_calls_ensure_webui_built(self):
         from gaia.installer.init_command import InitCommand
 
-        with patch("gaia.installer.init_command.LemonadeInstaller"):
-            cmd = InitCommand(
-                profile="minimal",
-                yes=True,
-                skip_lemonade=True,
-                skip_models=True,
-                skip_webui_build=True,
-            )
+        cmd = InitCommand(
+            profile="minimal",
+            yes=True,
+            skip_models=True,
+            skip_webui_build=True,
+        )
 
         with (
             patch("gaia.ui.build.ensure_webui_built") as mock_ensure,
-            patch.object(cmd, "_ensure_server_running", return_value=True),
+            patch.object(cmd, "_ensure_lemonade_ready", return_value=True),
             patch.object(cmd, "_verify_setup", return_value=True),
             patch("gaia.config.GaiaConfig"),
         ):
@@ -714,7 +712,6 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
         Returns the mock for ensure_webui_built so caller can assert on it.
         """
         from gaia.installer.init_command import InitCommand
-        from gaia.installer.lemonade_installer import LemonadeInstaller
 
         # Fake src path whose .is_dir() is controlled by the caller
         fake_src = MagicMock()
@@ -732,8 +729,6 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
             mock_path.return_value.resolve.return_value.parent.parent.__truediv__.return_value.__truediv__.return_value.__truediv__
         ).return_value = fake_src
 
-        mock_installer = MagicMock(spec=LemonadeInstaller)
-
         with (
             patch("gaia.installer.init_command.Path", mock_path),
             patch("gaia.ui.build.ensure_webui_built") as mock_ensure_built,
@@ -742,8 +737,7 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
             patch.object(InitCommand, "_print_step"),
             patch.object(InitCommand, "_print_success"),
             patch.object(InitCommand, "_print_completion"),
-            patch.object(InitCommand, "_ensure_lemonade_installed", return_value=True),
-            patch.object(InitCommand, "_ensure_server_running", return_value=True),
+            patch.object(InitCommand, "_ensure_lemonade_ready", return_value=True),
             patch.object(InitCommand, "_verify_setup", return_value=True),
             # Never touch the real ~/.gaia/config.json during a test.
             patch("gaia.config.GaiaConfig"),
@@ -751,13 +745,11 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
             cmd = InitCommand.__new__(InitCommand)
             cmd.profile = "minimal"
             cmd.skip_models = True
-            cmd.skip_lemonade = True
             cmd.skip_webui_build = False
             cmd.remote = False
             cmd.verbose = False
             cmd.force_reinstall = False
             cmd._lemonade_base_url = None
-            cmd.installer = mock_installer
             cmd.console = MagicMock()
             cmd.yes = True
             cmd.run()

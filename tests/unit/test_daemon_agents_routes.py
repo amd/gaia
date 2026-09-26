@@ -67,10 +67,10 @@ _TOY_B = AgentSidecarSpec(
 # ===========================================================================
 
 
-def test_daemon_api_version_is_1_1():
+def test_daemon_api_version_is_1_2():
     from gaia.daemon.constants import DAEMON_API_VERSION
 
-    assert DAEMON_API_VERSION == "1.1"
+    assert DAEMON_API_VERSION == "1.2"
 
 
 def test_daemon_api_version_major_still_parses_to_1():

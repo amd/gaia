@@ -178,6 +178,8 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
 
+Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/documents/` and `$GAIA_HOME/chat/uploads/`. It must not be your home directory or one of its parents.
+
 ## Privacy
 
 GAIA runs entirely on your machine. **No data is sent externally** beyond the package downloads during install. There is no telemetry, no crash reporting, no usage analytics. See the [FAQ](/reference/faq) for more.

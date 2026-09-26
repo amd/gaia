@@ -31,6 +31,7 @@ on:
       - 'tests/unit/eval/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/test_ui_email_scope_consent.py'
       - 'tests/unit/test_email_sidecar_devmode_app.py'
       - 'tests/unit/test_email_sidecar_server_wiring.py'
       # The Go side of the email-scope drift guard (#2730 D2a) — a one-sided
@@ -66,6 +67,7 @@ on:
       - 'tests/unit/eval/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/test_ui_email_scope_consent.py'
       - 'tests/unit/test_email_sidecar_devmode_app.py'
       - 'tests/unit/test_email_sidecar_server_wiring.py'
       # The Go side of the email-scope drift guard (#2730 D2a) — a one-sided
@@ -95,7 +97,7 @@ permissions:
 
 jobs:
   test-email-agent-unit:
-    name: Email Agent Unit Tests (py${{ matrix.python-version }})
+    name: Email Agent Unit Tests (py3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -104,17 +106,13 @@ jobs:
       # block indefinitely when no GUI session is available (#2735).
       PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.10', '3.12']
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.12'
 
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -169,6 +167,7 @@ jobs:
           echo "  - tests/unit/agents/test_sidecar_card_drift.py"
           echo "      the daemon spec's transcribed card vs the package's own (#4161);"
           echo "      skips itself without the wheel, so it only runs in this lane"
+          echo "  - tests/test_ui_email_scope_consent.py  connector scopes + no-mailbox 503"
           echo ""
           python -m pytest \
             tests/unit/agents/email/ \
@@ -182,6 +181,7 @@ jobs:
             tests/unit/test_daemon_forward.py \
             tests/unit/test_daemon_remedy_commands.py \
             tests/unit/agents/test_sidecar_card_drift.py \
+            tests/test_ui_email_scope_consent.py \
             -v --tb=short
 
       - name: Test summary
