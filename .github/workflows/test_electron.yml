@@ -108,6 +108,12 @@ jobs:
           cd src/gaia/apps/webui
           npm ci
 
+      # Also runs src/types/apiContract.ts, the hand-written vs generated API type drift guard.
+      - name: Type-check
+        run: |
+          cd src/gaia/apps/webui
+          npx tsc --noEmit
+
       - name: Run Vitest component tests
         run: |
           cd src/gaia/apps/webui

@@ -383,18 +383,11 @@ class AudioToolsMixin:
         ) -> Dict:
             """Transcribe an audio or video file and SAVE it to a text file.
 
-            Handles mp4, mkv, mov, m4a, mp3, wav and anything else ffmpeg can
-            decode.
-
-            This does NOT return the transcript — a long meeting would be
-            truncated on the way back. It returns the file path plus a short
-            preview. To summarise or answer questions, read the saved file:
-            index_document(transcript_path) then summarize_document(...), or
-            query_documents(...). Never summarise from `preview`; it is only
-            the first 1200 characters.
-
-            Long files take minutes. A 45-minute recording is roughly 5 minutes
-            of transcription.
+            Takes any format ffmpeg decodes (mp4, mkv, m4a, mp3, wav). Returns
+            a path and a 1200-character preview, never the transcript: to
+            summarize it, index_document(transcript_path) then
+            summarize_document or query_documents. A 45-minute recording takes
+            about 5 minutes.
 
             Args:
                 file_path: Path to the audio or video file.
@@ -404,10 +397,7 @@ class AudioToolsMixin:
                              ~/.gaia/transcripts/<name>.txt
 
             Returns:
-                Dictionary with status, transcript_path, preview,
-                character_count, segment_count, audio_duration, language,
-                model, next_step, low_confidence_spans, and
-                low_confidence_span_count
+                transcript_path, preview, duration, low-confidence spans.
             """
             return self._transcribe_media(
                 file_path,
@@ -423,15 +413,10 @@ class AudioToolsMixin:
         ) -> Dict:
             """Correct mis-hearings and label the speakers in a raw transcript.
 
-            Call this on the file `transcribe_media` produced, BEFORE
-            summarizing. It works through the transcript in sections, repairs
-            wording the recognizer was unsure about, works out who is speaking
-            from self-introductions and direct address, and writes a corrected,
-            speaker-labelled transcript to a new file.
-
-            A summary built from the raw transcript has no speakers and can
-            repeat mis-heard names, so the action items come out wrong. Always
-            summarize the file this returns, not the raw one.
+            Call on the file transcribe_media produced, BEFORE summarizing: a
+            summary off the raw transcript has no speakers and repeats
+            mis-heard names, so its action items come out wrong. Writes a new
+            corrected file — summarize that one, not the raw one.
 
             Args:
                 transcript_path: The raw transcript from transcribe_media.
@@ -439,8 +424,7 @@ class AudioToolsMixin:
                              writes alongside as <name>.transcript.md
 
             Returns:
-                Dictionary with status, refined_path, speakers, sections,
-                corrections_applied and next_step
+                refined_path, speakers, sections, corrections_applied.
             """
             return self._refine_transcript(transcript_path, output_path or None)
 

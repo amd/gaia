@@ -6,6 +6,7 @@ Handles path validation, user prompting, persistent allow-lists,
 blocked path enforcement, write guardrails, and audit logging.
 """
 
+import contextlib
 import datetime
 import hashlib
 import json
@@ -82,6 +83,11 @@ MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
 
 # Backups kept per edited file; older ones are removed as new ones land.
 BACKUP_GENERATIONS = 5
+
+
+class BackupError(RuntimeError):
+    """A file that exists could not be backed up, so it must not be modified."""
+
 
 # Sensitive file names that should never be written to by the agent
 SENSITIVE_FILE_NAMES: Set[str] = {
@@ -458,6 +464,7 @@ class PathValidator:
         allowed_paths: Optional[List[str]] = None,
         on_prompt_start: Optional[Callable[[], None]] = None,
         on_prompt_end: Optional[Callable[[], None]] = None,
+        interactive_check: Optional[Callable[[], bool]] = None,
     ):
         """
         Initialize PathValidator.
@@ -473,6 +480,11 @@ class PathValidator:
                 user for input (e.g. to pause a progress spinner).
             on_prompt_end: Optional callback invoked after user input is
                 collected (e.g. to resume a progress spinner).
+            interactive_check: Optional predicate answering "is the *requester*
+                reachable on this process's stdin?". A TTY alone does not mean
+                yes — a server launched from a terminal has one, but its users
+                are on HTTP. Evaluated per prompt, so a host that swaps the
+                agent's console mid-session is honoured.
         """
         self.allowed_paths: Set[Path] = set()
         self.scratch_dir: Optional[Path] = None
@@ -500,6 +512,7 @@ class PathValidator:
         # indicators that would otherwise race with ``input()`` on stdout).
         self._on_prompt_start = on_prompt_start
         self._on_prompt_end = on_prompt_end
+        self._interactive_check = interactive_check
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -606,6 +619,14 @@ class PathValidator:
         """
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
+
+    def _can_prompt(self) -> bool:
+        """True when a blocking ``input()`` would actually reach the requester."""
+        if not _is_interactive():
+            return False
+        if self._interactive_check is None:
+            return True
+        return bool(self._interactive_check())
 
     def set_scratch_dir(self, path: str) -> None:
         """Grant the agent's own scratch directory, and only that directory.
@@ -721,10 +742,11 @@ class PathValidator:
         agent surfaces a clean "access denied" error instead of hanging.
         Interactive CLI usage (TTY) still prompts normally.
         """
-        if not _is_interactive():
+        if not self._can_prompt():
             logger.warning(
-                "Path %s outside allowlist; auto-denying (non-interactive "
-                "context — no TTY). Configure allowed_paths to grant access.",
+                "Path %s outside allowlist; auto-denying (no interactive "
+                "requester on this process's stdin). Configure allowed_paths "
+                "to grant access.",
                 path,
             )
             return False
@@ -997,8 +1019,10 @@ class PathValidator:
         In non-interactive environments auto-approve the overwrite — the
         write already passed allowlist + blocklist + size checks, and a
         timestamped ``.bak`` backup is created separately in ``create_backup``,
-        so data loss is recoverable. Blocking on ``input()`` in a server
-        context would hang the request instead.
+        so data loss is recoverable. When no backup can be made,
+        ``create_backup`` raises :class:`BackupError` and the write is refused.
+        Blocking on ``input()`` in a server context would hang the request
+        instead.
 
         Args:
             path: Path to the existing file.
@@ -1007,9 +1031,10 @@ class PathValidator:
         Returns:
             True if user approves overwrite (or non-interactive), False otherwise.
         """
-        if not _is_interactive():
+        if not self._can_prompt():
             logger.info(
-                "Auto-approving overwrite of %s (non-interactive context, "
+                "Auto-approving overwrite of %s (no interactive requester on "
+                "this process's stdin, "
                 "backup will be created)",
                 path,
             )
@@ -1030,7 +1055,11 @@ class PathValidator:
                 print("Please answer 'y' or 'n'.")
 
     def create_backup(self, path: str) -> Optional[str]:
-        """Back up *path* under this validator's cache dir; see :func:`backup_file`."""
+        """Back up *path* under this validator's cache dir; see :func:`backup_file`.
+
+        Raises:
+            BackupError: *path* exists but could not be backed up.
+        """
         return backup_file(path, self.cache_dir)
 
     def audit_write(
@@ -1071,25 +1100,34 @@ def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
         cache_dir: GAIA's cache directory; defaults to ``~/.gaia/cache``.
 
     Returns:
-        Backup file path if successful, None if file doesn't exist or backup failed.
+        Backup file path, or None if the file doesn't exist.
+
+    Raises:
+        BackupError: The file exists but could not be copied. Callers must
+            not modify it — the overwrite was approved on the promise of a
+            backup.
     """
     real_path = Path(os.path.realpath(path)).resolve()
     if not real_path.exists():
         return None
 
     root = (cache_dir or Path.home() / ".gaia" / "cache") / "backups"
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp_time = datetime.datetime.now()
     # A drive or UNC share becomes one plain folder name under backups/.
     drive = re.sub(r"[:\\/]+", "_", real_path.drive).strip("_")
     parts = ([drive] if drive else []) + list(
         real_path.parent.relative_to(real_path.anchor).parts
     )
     mirror = root.joinpath(*parts)
+
     # ".bak" goes LAST. Keeping the original extension made a backup of
     # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
     # collects and cannot import, so editing a test file broke the whole
     # suite (#3747). Nothing globs *.bak.
-    backup_path = mirror / f"{real_path.name}.{timestamp}.bak"
+    def _backup_at(moment: datetime.datetime) -> Path:
+        return mirror / f"{real_path.name}.{moment:%Y%m%d_%H%M%S_%f}.bak"
+
+    backup_path = _backup_at(stamp_time)
 
     try:
         root.parent.mkdir(parents=True, exist_ok=True)
@@ -1098,19 +1136,27 @@ def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
             root.joinpath(*parts[:depth]).mkdir(mode=0o700, exist_ok=True)
         # mkdir's mode does not narrow a directory that already exists.
         root.chmod(0o700)
+        # Two edits on one clock tick must not share (and clobber) a backup.
+        while backup_path.exists():
+            stamp_time += datetime.timedelta(microseconds=1)
+            backup_path = _backup_at(stamp_time)
         shutil.copy2(str(real_path), str(backup_path))
     except OSError as e:
-        logger.warning(
-            "Failed to back up %s to %s: %s. The edit goes ahead without a backup.",
-            real_path,
-            backup_path,
-            e,
-        )
-        return None
+        logger.error("Failed to back up %s to %s: %s", real_path, backup_path, e)
+        # A copy that died mid-stream leaves a truncated .bak that still counts
+        # as a generation, so it can evict a good backup from the rotation.
+        with contextlib.suppress(OSError):
+            backup_path.unlink(missing_ok=True)
+        raise BackupError(
+            f"Refused to modify {real_path}: backing it up to {backup_path} "
+            f"failed ({e}). Nothing was written. Free disk space or make "
+            f"{root} writable, then retry."
+        ) from e
     audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")
     logger.debug(f"Created backup: {backup_path}")
 
-    stamped = re.compile(re.escape(real_path.name) + r"\.\d{8}_\d{6}\.bak")
+    # The optional microseconds keep pruning backups named before they existed.
+    stamped = re.compile(re.escape(real_path.name) + r"\.\d{8}_\d{6}(_\d{6})?\.bak")
     try:
         # The timestamp format sorts chronologically by name.
         generations = sorted(p for p in mirror.iterdir() if stamped.fullmatch(p.name))

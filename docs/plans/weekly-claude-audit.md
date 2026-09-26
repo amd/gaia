@@ -136,7 +136,7 @@ is not an issue, and the workflow never closes an issue.
 - **`dry_run` dispatch input**: files and comments nothing, reports what it would have
   done. The only way to validate a dedup change against the live backlog.
 - **Read-only**: `--allowedTools Read,Grep,Glob,Bash`; never install or run repo code.
-- **Model** `claude-opus-5` via the top-level `AUDIT_MODEL` env (one place to change);
+- **Model** `claude-opus-5-5` via the top-level `AUDIT_MODEL` env (one place to change);
   `claude-fable-5` for max depth at ~2x cost. Dimensions run `max-parallel: 1` (serialized)
   to stay under the Max subscription's rolling rate limit.
 

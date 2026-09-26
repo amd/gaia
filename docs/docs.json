@@ -79,7 +79,8 @@
                     "group": "Setup & Hardware",
                     "pages": [
                       "guides/hardware-advisor",
-                      "guides/npu"
+                      "guides/npu",
+                      "guides/llm-gateway"
                     ]
                   },
                   {
@@ -307,6 +308,12 @@
             ]
           },
           {
+            "group": "Design",
+            "pages": [
+              "spec/gaia-design-language"
+            ]
+          },
+          {
             "group": "Packaging",
             "pages": [
               "spec/electron-integration"
@@ -419,11 +426,13 @@
               "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
               "plans/flagship-installer",
+              "plans/embedded-onboarding",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",
               "plans/adaptive-skills",
+              "plans/adaptive-memory",
               "plans/oem-bundling"
             ]
           },
@@ -435,7 +444,8 @@
               "plans/mcp-docs",
               "plans/desktop-installer",
               "plans/tool-loader",
-              "plans/code-index-review"
+              "plans/code-index-review",
+              "plans/nightly-benchmarks"
             ]
           },
           {

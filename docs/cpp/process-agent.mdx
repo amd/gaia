@@ -102,9 +102,11 @@ The agent auto-runs a full system scan on startup, then waits for your input. Yo
     </Tabs>
   </Step>
 
-  <Step title="Start Lemonade Server">
+  <Step title="Start the LLM server">
+    `gaia daemon` starts and supervises the model server in the background — it does not occupy the terminal.
+
     ```bash
-    lemonade-server serve
+    gaia daemon start
     ```
     The agent connects to `http://localhost:13305/api/v1` by default.
   </Step>

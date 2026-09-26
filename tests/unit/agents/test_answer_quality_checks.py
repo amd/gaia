@@ -309,6 +309,16 @@ class TestVerifyAfterChangeHelpers:
         ("===== 2 warnings =====", True),
         ("no tests ran", True),
         ("Ran 4 tests in 0.003s", True),
+        # The other runners the record knows, by their own summary lines.
+        ("Tests:       10 passed, 10 total", True),
+        ("      Tests  1 failed | 2 passed (3)", True),
+        ("  10 passing (52ms)", True),
+        ("ok  \tgithub.com/x/pkg\t0.012s", True),
+        (
+            "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+            True,
+        ),
+        ("ok  \tgithub.com/x/pkg\t0.002s [no tests to run]", False),
     ],
 )
 def test_soft_counts_alone_are_not_a_test_run(output, is_a_test_run):

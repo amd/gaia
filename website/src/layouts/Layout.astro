@@ -4,7 +4,6 @@
 
 import '../design/tokens.css';
 import '../design/global.css';
-import StarField from '../components/StarField.astro';
 
 interface Props {
   title: string;
@@ -22,14 +21,19 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
-    <meta name="theme-color" content="#08080a" />
+    <!-- Graphite canvas; kept in sync with the active theme by the script below
+         and by ThemeToggle, since a meta tag cannot read a CSS custom property. -->
+    <meta name="theme-color" content="#17161C" />
     <!-- Pre-paint theme: avoids flash of wrong theme. Dark is the designed
-         default and the ground the star chart was drawn for, so an unset
-         preference stays dark rather than following the OS. -->
+         default, so an unset preference stays dark rather than following the OS. -->
     <script is:inline>
       (() => {
         const stored = localStorage.getItem('gaia-theme');
-        document.documentElement.dataset.theme = stored === 'light' ? 'light' : 'dark';
+        const theme = stored === 'light' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = theme;
+        document
+          .querySelector('meta[name="theme-color"]')
+          ?.setAttribute('content', theme === 'light' ? '#F5F2EC' : '#17161C');
       })();
     </script>
 
@@ -71,16 +75,11 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
   </head>
   <body class="min-h-screen bg-g-bg font-sans text-g-text antialiased">
     <!-- Skip to main content link for accessibility -->
-    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-g-btn focus:bg-g-gold focus:px-4 focus:py-2 focus:text-g-on-gold focus:outline-none">
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-g-btn focus:bg-g-accent-fill focus:px-4 focus:py-2 focus:text-g-on-accent focus:outline-none">
       Skip to main content
     </a>
 
-    <StarField />
-
-    <!-- Content sits above the canvas (z-0) and the readability gradient (z-1). -->
-    <div class="relative z-[2]">
-      <slot />
-    </div>
+    <slot />
   </body>
 </html>
 
@@ -112,11 +111,11 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
   }
   .prose-link,
   .doc a {
-    color: rgb(var(--g-gold-text));
+    color: rgb(var(--g-accent-text));
   }
   .prose-link:hover,
   .doc a:hover {
-    color: rgb(var(--g-gold2));
+    color: rgb(var(--g-accent2));
   }
 
   /* Custom scrollbar, theme-aware via tokens */
@@ -146,12 +145,12 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
   }
 
   ::selection {
-    background: rgb(var(--g-gold) / 0.3);
+    background: rgb(var(--g-accent) / 0.3);
   }
 
   /* Visible focus ring everywhere. The prototypes style hover but not focus;
-     pills, tabs, search and the copy button all need this. --g-focus is themed
-     because the graphic gold is only 2.07:1 on the light ground. */
+     pills, tabs, search and the copy button all need this. --g-focus is the
+     themed accent, which clears SC 1.4.11's 3:1 on every surface. */
   :focus-visible {
     outline: 2px solid rgb(var(--g-focus));
     outline-offset: 2px;
