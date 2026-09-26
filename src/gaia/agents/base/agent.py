@@ -421,6 +421,19 @@ _STEP_CAP_ANSWER_PROMPT = (
     "you found, what you couldn't finish and why, and what they can do next."
 )
 
+# Sent once, with no tools offered, when the loop guard stops a turn on
+# identical calls that all worked.
+_REPEATED_CALL_ANSWER_PROMPT = (
+    "You called `{tool}` {count} times with the same arguments and got the "
+    "same result each time. Stop calling tools and answer now from what the "
+    "results above show: what you completed, what you could not confirm, and "
+    "what the user should do next."
+)
+
+# Stands in for a call the loop stopped before it ran, so the transcript
+# accounts for every id the model asked for.
+_UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+
 
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
@@ -1274,7 +1287,11 @@ Do NOT wrap conversational replies in JSON.
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
-            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
+                          The first time the limit is hit the model gets one correction and the call is not run;
+                          a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
+                          more model call with no tool calls allowed and answers from those results; repeats that
+                          errored or were refused report the failure instead.
             min_context_size: Minimum context size required; unset uses the model/device resolver.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
@@ -4731,14 +4748,47 @@ Do NOT wrap conversational replies in JSON.
 
         return message
 
-    def _answer_at_step_cap(
+    def _unanswered_tool_call_messages(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Results for tool calls the loop stopped before running.
+
+        Spec-strict providers reject an assistant tool-call turn whose results
+        are missing, and the loop guard stops mid-fan-out leaving exactly that.
+        """
+        last_call_turn = next(
+            (
+                i
+                for i in reversed(range(len(messages)))
+                if messages[i].get("tool_calls")
+            ),
+            None,
+        )
+        if last_call_turn is None:
+            return []
+        answered = {
+            msg.get("tool_call_id")
+            for msg in messages[last_call_turn + 1 :]
+            if msg.get("role") == "tool"
+        }
+        return [
+            self._create_tool_message(
+                call["function"]["name"],
+                _UNRUN_TOOL_CALL_NOTE,
+                tool_call_id=call["id"],
+            )
+            for call in messages[last_call_turn]["tool_calls"]
+            if call["id"] not in answered
+        ]
+
+    def _closing_answer(
         self,
         messages: List[Dict[str, Any]],
         conversation: List[Dict[str, Any]],
-        steps_limit: int,
+        instruction: str,
         step: int,
     ) -> Optional[str]:
-        """Ask for the final answer once the step limit is spent, no tool calls.
+        """Ask for the final answer on the way out of the loop, no tool calls.
 
         Same model path and tools as the loop (streaming or not), plus
         ``tool_choice="none"``. Returns the answer, or ``None`` when the user
@@ -4751,12 +4801,11 @@ Do NOT wrap conversational replies in JSON.
         if self._console_cancelled():
             return None
 
-        request = messages + [
-            {
-                "role": "user",
-                "content": _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
-            }
-        ]
+        request = (
+            messages
+            + self._unanswered_tool_call_messages(messages)
+            + [{"role": "user", "content": instruction}]
+        )
         # Tool history needs the tools on some providers; the model may not call one.
         tools = self._openai_tools
         no_calls = {"tool_choice": "none"} if tools else {}
@@ -6024,6 +6073,9 @@ Do NOT wrap conversational replies in JSON.
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
+        # The loop guard breaks out with an answer nothing has printed yet;
+        # the normal and step-cap paths print theirs where they set it.
+        loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
 
@@ -7236,10 +7288,19 @@ Do NOT wrap conversational replies in JSON.
                                 )
                             )
                             continue
-                        final_answer = self._build_loop_break_summary(
-                            tool_name, consecutive_count - 2, recent_results
-                        )
                         self.console.print_repeated_tool_warning()
+                        final_answer, steps_taken = self._answer_after_repeated_calls(
+                            tool_name,
+                            consecutive_count - 2,
+                            recent_results,
+                            messages,
+                            conversation,
+                            steps_taken,
+                        )
+                        if final_answer is None:
+                            cancelled_by_console = True
+                        else:
+                            loop_break_answer_unprinted = True
                         fanout_repeat_break = True
                         break
 
@@ -7475,14 +7536,19 @@ Do NOT wrap conversational replies in JSON.
                         )
                         continue
 
-                    # Force a final answer if the same tool is called repeatedly.
-                    # Branches on whether the recent calls were errors so we
-                    # never claim success on a loop of failures.
-                    final_answer = self._build_loop_break_summary(
-                        tool_name, consecutive_count - 2, recent_results
-                    )
-
                     self.console.print_repeated_tool_warning()
+                    final_answer, steps_taken = self._answer_after_repeated_calls(
+                        tool_name,
+                        consecutive_count - 2,
+                        recent_results,
+                        messages,
+                        conversation,
+                        steps_taken,
+                    )
+                    if final_answer is None:
+                        cancelled_by_console = True
+                    else:
+                        loop_break_answer_unprinted = True
                     break
 
                 # Execute the tool
@@ -8283,8 +8349,11 @@ Do NOT wrap conversational replies in JSON.
                 self.chat.turn_step = steps_taken
             self.execution_state = self.STATE_COMPLETION
             try:
-                cap_answer = self._answer_at_step_cap(
-                    messages, conversation, steps_limit, steps_taken
+                cap_answer = self._closing_answer(
+                    messages,
+                    conversation,
+                    _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+                    steps_taken,
                 )
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
                 logger.warning("Could not write the step-limit summary: %s", e)
@@ -8341,6 +8410,30 @@ Do NOT wrap conversational replies in JSON.
             # Returns before the tail seal below.
             self._finish_turn_record("", steps_taken)
             return self.last_result
+
+        # The loop guard returns its answer and breaks, so unlike the normal and
+        # step-cap paths nothing has printed it. On the CLI the console is the
+        # only thing that prints, so without this the turn ends on the repeat
+        # warning and the answer is never shown.
+        if loop_break_answer_unprinted and final_answer is not None:
+            final_answer = self._with_verification_scope(
+                self.finalize_answer(final_answer, conversation)
+            )
+            verification_scope_applied = True
+            _break_input_tokens, break_output_tokens = _sum_conversation_tokens(
+                conversation, self._tool_reported_usage
+            )
+            turn_record = self._finish_turn_record(final_answer, steps_taken)
+            self._publish_turn_metrics(turn_record)
+            self.console.print_final_answer(
+                final_answer,
+                streaming=self.streaming,
+                total_tokens=break_output_tokens,
+                input_tokens=_break_input_tokens,
+                cached_tokens=_sum_cached_tokens(conversation),
+                ttft_seconds=_query_ttft_seconds(conversation),
+                tok_per_s=_query_tok_per_s(conversation),
+            )
 
         # Print completion message
         self.console.print_completion(steps_taken, steps_limit)
@@ -8534,7 +8627,7 @@ Do NOT wrap conversational replies in JSON.
         """Final-answer text when the loop breaks on repeats; names the real cause."""
         last = recent_results[-1] if recent_results else None
         denied = isinstance(last, dict) and last.get("status") == "denied"
-        if not (denied or Agent._is_error_result(last)):
+        if not self._repeats_carry_a_failure(recent_results):
             # A loop break is evidence of neither outcome: the work may be done
             # (the model kept re-verifying it) or never started (it had no tool
             # for the job). Say which is unknown instead of claiming either,
@@ -8569,6 +8662,61 @@ Do NOT wrap conversational replies in JSON.
             "I couldn't recover from this — please rephrase the request "
             "or try a different approach."
         )
+
+    @staticmethod
+    def _repeats_carry_a_failure(recent_results: list) -> bool:
+        """Did the repeated calls fail or get refused? Then that IS the answer."""
+        last = recent_results[-1] if recent_results else None
+        return Agent._is_error_result(last) or (
+            isinstance(last, dict) and last.get("status") == "denied"
+        )
+
+    def _answer_after_repeated_calls(
+        self,
+        tool_name: str,
+        executed_count: int,
+        recent_results: list,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+    ) -> Tuple[Optional[str], int]:
+        """Final answer when the loop guard stops the turn, and the step count.
+
+        Repeats that worked prove neither outcome, so the model gets one
+        closing call (tools withheld) to say what it did from the results it
+        already has; failed or refused repeats keep the summary, which names
+        the failure. ``executed_count`` counts the calls that ran, as the
+        summary does. Returns ``(None, steps)`` when the user pressed Stop.
+        """
+        summary = self._build_loop_break_summary(
+            tool_name, executed_count, recent_results
+        )
+        if self._repeats_carry_a_failure(recent_results):
+            return summary, steps_taken
+
+        steps_taken += 1
+        if self._turn_recorder is not None and self.chat is not None:
+            self.chat.turn_step = steps_taken
+        self.execution_state = self.STATE_COMPLETION
+        try:
+            answer = self._closing_answer(
+                messages,
+                conversation,
+                _REPEATED_CALL_ANSWER_PROMPT.format(
+                    tool=tool_name, count=executed_count
+                ),
+                steps_taken,
+            )
+        except Exception as e:  # noqa: BLE001 - the reason goes in the answer
+            logger.warning("Could not write the loop-break summary: %s", e)
+            return (
+                f"{summary.rstrip()}\n\nThe summary of what I did couldn't be "
+                f"written: {e}",
+                steps_taken,
+            )
+        # Raw, like the summary branches above — the caller finalizes once.
+        # Subclass hooks append corrections, so a second pass duplicates them.
+        return answer, steps_taken
 
     def _dedup_mutation_call(
         self,
