@@ -78,7 +78,7 @@ class SystemStatus(BaseModel):
     # Last inference stats
     tokens_per_second: Optional[float] = None
     time_to_first_token: Optional[float] = None
-    # Device compatibility check
+    # Display-only CPU name for the Settings panel; None when undetectable
     processor_name: Optional[str] = None
     # LLM configuration health
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
