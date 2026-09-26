@@ -61,6 +61,18 @@ class LLMClient(ABC):
         an unsupported-operation error."""
         return None
 
+    def get_last_finish_reason(self) -> Optional[str]:
+        """Why the most recent ``chat()`` reply ended (``"stop"``,
+        ``"length"``, ``"tool_calls"``), or ``None`` when the provider does
+        not report it. ``"length"`` means the output-token limit cut it off."""
+        return None
+
+    def get_last_ttft_seconds(self) -> Optional[float]:
+        """Seconds from the most recent streamed ``chat()`` call to its first
+        token (content, reasoning, or a tool-call fragment). ``None`` for a
+        non-streamed call, or when the provider does not measure it."""
+        return None
+
     def load_model(self, model_name: str, **kwargs) -> None:
         raise NotSupportedError(self.provider_name, "load_model")
 

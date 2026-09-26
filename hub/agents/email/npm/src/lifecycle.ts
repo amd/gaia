@@ -14,12 +14,15 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 
 import { EmailClient } from "./client.js";
 import {
   BinaryNotFoundError,
   HealthTimeoutError,
+  PortInUseError,
+  SidecarExitedError,
   VersionMismatchError,
 } from "./errors.js";
 import { createLogger } from "./logger.js";
@@ -354,12 +357,14 @@ export async function checkVersion(
 
 /**
  * Shut down the sidecar, killing the whole process tree (packaging/README.md, gotcha 6).
- * Resolves once the process has exited (or immediately if already dead).
+ * Resolves once the process has exited (or immediately if already dead). Rejects,
+ * naming the pid and the command to kill it, if the process is still alive
+ * `timeoutMs` after the forced kill.
  */
 export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void> {
   const { child } = sidecar;
-  liveSidecars.delete(sidecar); // explicit shutdown owns the lifecycle now
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
+    liveSidecars.delete(sidecar);
     log.debug("shutdown: sidecar already exited");
     return;
   }
@@ -370,13 +375,30 @@ export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void
     child.once("exit", () => resolve());
   });
 
+  // Why the kill was refused, kept for the throw below — "Access is denied" is
+  // the difference between "retry" and "run this elevated".
+  let killDiagnostic = "";
+
   if (process.platform === "win32") {
     // Kill the whole tree — one-file PyInstaller orphans its uvicorn child.
-    const { spawn: spawnKill } = await import("node:child_process");
-    const killer = spawnKill("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      stdio: "ignore",
+    const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: ["ignore", "ignore", "pipe"],
     });
-    killer.on("error", (e) => log.error(`taskkill failed: ${e.message}`));
+    let taskkillErr = "";
+    killer.stderr?.on("data", (d) => {
+      taskkillErr += String(d);
+    });
+    killer.on("error", (e) => {
+      killDiagnostic = `taskkill could not be launched: ${e.message}`;
+      log.error(killDiagnostic);
+    });
+    killer.on("exit", (code) => {
+      if (code === 0) return;
+      killDiagnostic =
+        `taskkill /PID ${pid} /T /F exited ${String(code)}: ` +
+        `${taskkillErr.trim() || "(no output)"}`;
+      log.error(killDiagnostic);
+    });
   } else {
     // Negative pid → signal the whole process group (we spawned detached).
     try {
@@ -391,11 +413,17 @@ export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void
     }
   }
 
-  const timer = new Promise<"timeout">((resolve) =>
-    setTimeout(() => resolve("timeout"), timeoutMs),
-  );
-  const result = await Promise.race([exited.then(() => "exited" as const), timer]);
-  if (result === "timeout") {
+  const raceExit = async (ms: number): Promise<"exited" | "timeout"> => {
+    let t: NodeJS.Timeout;
+    const timer = new Promise<"timeout">((resolve) => {
+      t = setTimeout(() => resolve("timeout"), ms);
+    });
+    return Promise.race([exited.then(() => "exited" as const), timer]).finally(() =>
+      clearTimeout(t),
+    );
+  };
+
+  if ((await raceExit(timeoutMs)) === "timeout") {
     log.warn(`sidecar did not exit within ${timeoutMs}ms; sending SIGKILL/forced`);
     if (process.platform !== "win32") {
       try {
@@ -404,8 +432,22 @@ export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void
         /* gone */
       }
     }
-    await exited;
+    // Bound the final wait too: on Windows there is no escalation past taskkill.
+    if ((await raceExit(timeoutMs)) === "timeout") {
+      // Deliberately still registered: the process-exit reaper is the last
+      // chance to reap a survivor, and de-registering here would orphan it.
+      throw new Error(
+        `the email sidecar (pid ${pid}) did not exit after a forced kill` +
+          (killDiagnostic ? ` (${killDiagnostic})` : "") +
+          ". Kill it manually — " +
+          (process.platform === "win32"
+            ? `taskkill /PID ${pid} /T /F`
+            : `kill -9 -${pid}`) +
+          ` — or port ${sidecar.port} stays bound.`,
+      );
+    }
   }
+  liveSidecars.delete(sidecar);
   log.info("sidecar shut down");
 }
 
@@ -418,19 +460,132 @@ export interface StartOptions extends SpawnOptions {
   expectedApiVersion?: string;
 }
 
+/** Whether something still answers `/health` — i.e. someone else holds the port. */
+async function portStillAnswers(sidecar: Sidecar): Promise<boolean> {
+  const probe = new EmailClient({ baseUrl: sidecar.baseUrl, timeoutMs: 1_000 });
+  try {
+    return (await probe.health()).status === "ok";
+  } catch {
+    return false; // nothing is listening
+  }
+}
+
+/** Our child is dead and a probe confirmed someone else is answering its port. */
+function foreignServerError(sidecar: Sidecar): SidecarExitedError {
+  const { child } = sidecar;
+  return new SidecarExitedError(
+    `the email sidecar we spawned exited (code=${String(child.exitCode)} ` +
+      `signal=${String(child.signalCode)}) while ${sidecar.baseUrl}/health still ` +
+      `answered — another process is already bound to port ${sidecar.port}, most ` +
+      "likely an instance you started earlier. Stop it (" +
+      (process.platform === "win32"
+        ? `netstat -ano | findstr :${sidecar.port}`
+        : `lsof -i :${sidecar.port}`) +
+      "), start on a different port, or use connectSidecar() to attach to the " +
+      "running server. Re-run with DEBUG=agent-email to see the sidecar's own output.",
+  );
+}
+
 /**
- * One-call convenience: spawn → wait for health → (optionally) version-check.
- * On any failure it shuts the sidecar down before rethrowing, so a failed start
- * never leaks a process.
+ * Refuse a handle whose own child is dead, having first asked who owns the port.
+ * A confirmed answer means an incumbent we must not adopt; silence means our own
+ * sidecar came up and then crashed, which is a different failure and a different
+ * fix — blaming a port conflict there sends the user hunting a process that was
+ * never there.
+ *
+ * Exported for tests: which of the two errors this picks depends on a live probe,
+ * and driving that from a real `startSidecar` run would race the child reap.
+ */
+export async function assertOurs(sidecar: Sidecar): Promise<void> {
+  const { child } = sidecar;
+  if (child.exitCode === null && child.signalCode === null) return;
+  if (await portStillAnswers(sidecar)) throw foreignServerError(sidecar);
+  throw new SidecarExitedError(
+    `the email sidecar we spawned became healthy and then exited ` +
+      `(code=${String(child.exitCode)} signal=${String(child.signalCode)}), and ` +
+      `nothing answers ${sidecar.baseUrl}/health now — so no other process holds ` +
+      `port ${sidecar.port}; the sidecar itself crashed after starting. A failed ` +
+      "model load, an unreachable Lemonade server, or a bad env are the usual " +
+      "causes. Re-run with DEBUG=agent-email to see the sidecar's own output.",
+  );
+}
+
+/**
+ * Decide what a dead child means by asking who owns the port now. The health
+ * wait aborts the instant our child exits, which can beat a healthy reply from
+ * an incumbent and misreport a port conflict as a plain timeout. Silent when our
+ * child is alive or nothing answers — that is a genuine timeout.
+ */
+async function assertNotAForeignServer(sidecar: Sidecar): Promise<void> {
+  const { child } = sidecar;
+  if (child.exitCode === null && child.signalCode === null) return;
+  if (await portStillAnswers(sidecar)) throw foreignServerError(sidecar);
+}
+
+/**
+ * True when something is already listening on host:port. A TCP connect, not a
+ * `/health` probe: ANY listener makes our bind fail. Unreachable-in-time counts
+ * as free — the spawn + health wait remains the actual gate.
+ */
+function portInUse(host: string, port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port });
+    const settle = (inUse: boolean): void => {
+      socket.destroy();
+      resolve(inUse);
+    };
+    socket.setTimeout(timeoutMs, () => settle(false));
+    socket.once("connect", () => settle(true));
+    socket.once("error", () => settle(false)); // ECONNREFUSED — nothing there
+  });
+}
+
+/**
+ * One-call convenience: check the port is free → spawn → wait for health →
+ * assert the child is still ours → (optionally) version-check. On any failure
+ * it shuts the sidecar down before rethrowing, so a failed start never leaks a
+ * process.
+ *
+ * The port is checked BEFORE the spawn: the frozen sidecar spends seconds
+ * unpacking before it binds, while an incumbent answers `/health` at once, so
+ * without the check we would hand back a handle for a server we do not own.
+ * `assertOurs` / `assertNotAForeignServer` cover something binding after it.
  */
 export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
+  const host = opts.host ?? DEFAULT_HOST;
+  const port = opts.port ?? DEFAULT_PORT;
+  if (await portInUse(host, port)) {
+    throw new PortInUseError(
+      `port ${port} on ${host} is already in use, so the email sidecar cannot bind ` +
+        "it. Most likely an instance you started earlier (e.g. `agent-email " +
+        "playground`) is still running. Find it with " +
+        (process.platform === "win32"
+          ? `\`netstat -ano | findstr :${port}\``
+          : `\`lsof -i :${port}\``) +
+        " and stop it, start on a different port, or — if you meant to reuse it — " +
+        "attach with connectSidecar({ baseUrl }). Nothing was spawned.",
+    );
+  }
   const sidecar = spawnSidecar(opts);
+  // A child that dies at startup must not make the caller wait out the timeout.
+  const died = new AbortController();
+  sidecar.child.once("exit", () => died.abort());
   try {
-    await waitForHealth(sidecar.baseUrl, { timeoutMs: opts.healthTimeoutMs });
+    try {
+      await waitForHealth(sidecar.baseUrl, {
+        timeoutMs: opts.healthTimeoutMs,
+        signal: died.signal,
+      });
+    } catch (e) {
+      await assertNotAForeignServer(sidecar);
+      throw e;
+    }
+    await assertOurs(sidecar);
     if (opts.verifyVersion ?? true) {
       await checkVersion(sidecar.client, {
         expectedApiVersion: opts.expectedApiVersion,
       });
+      await assertOurs(sidecar);
     }
     return sidecar;
   } catch (e) {

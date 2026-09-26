@@ -21,6 +21,8 @@ What these pin, and the bug each one caught:
   on the old one with no error at all.
 * **Cancel before start** — ``run_id`` is minted before the POST, so a cancel can
   legitimately arrive first; it used to be dropped and the run proceeded.
+* **Unsafe session_id** — an id that can't be a session file name (``../x``,
+  ``a:b``) came back as a 500; it is the caller's error and must be a 400.
 """
 
 from __future__ import annotations
@@ -173,6 +175,108 @@ def _wait_until(predicate, timeout=5.0):
             return True
         time.sleep(0.01)
     return False
+
+
+# ---------------------------------------------------------------------------
+# The shell-guardrail half of bypass never reaches this transport (#3373)
+#
+# Bypass is two grants on one PermissionState: skip the confirmation prompt,
+# and lift the shell guardrails. HTTP sessions may have the first — they can
+# answer a prompt, so they can also pre-answer it. The second is remote code
+# execution on a bound socket rather than a relaxed permission model, and stays
+# a stdio affordance: one local parent on a private pipe.
+# ---------------------------------------------------------------------------
+
+
+def test_a_query_runs_with_the_shell_gates_on(built):
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    assert r.status_code == 200, r.text
+    assert agents[0].console is not None
+    assert agents[0].console.bypass_permissions is False
+
+
+def test_the_request_body_cannot_ask_for_bypass(built):
+    """extra='forbid' is what makes this unreachable; pin it, so adding a
+    bypass field fails here instead of shipping."""
+    client, _agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(bypass_permissions=True))
+
+    assert r.status_code == 422, r.text
+
+
+def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built):
+    """``/sessions/{id}/bypass`` grants unattended approval, not a free shell.
+
+    The two grants ride the same ``PermissionState``, and ``attach`` writes it
+    onto each turn's fresh handler — so a session that turned bypass on would
+    otherwise overwrite the ``bypass_permissions = False`` the query path pins,
+    handing a bound socket the operator block, the read-only binary policy and
+    the rate limit. Approval is answerable over HTTP; arbitrary shell is not.
+    """
+    client, agents = built
+    session_id = f"s-{uuid.uuid4()}"
+
+    assert client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code == 200
+
+    r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": True})
+    assert r.status_code == 200, r.text
+
+    assert client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code == 200
+
+    console = agents[0].console
+    assert console.auto_approve_gated_tools is True, "bypass must stop the prompts"
+    assert console.bypass_permissions is False, "shell gates must stay on over HTTP"
+
+
+def _served_paths(app) -> set:
+    """Every path the app serves, spelled as a client would call it.
+
+    Read from the OpenAPI schema rather than by walking ``app.routes``.
+    FastAPI 0.141 / Starlette 1.7 stopped flattening ``include_router`` into
+    that list and leave a lazy ``_IncludedRouter`` carrying neither ``.path``
+    nor ``.routes``, so a walk sees only what was declared on the app itself
+    and silently misses every mounted route.
+    """
+    return set(app.openapi()["paths"])
+
+
+def _declared_paths() -> set:
+    """The same surface from the shared router, with the mount prefix applied.
+
+    Checked alongside the schema because the two can disagree: an
+    ``include_in_schema=False`` route is served but absent above, and would
+    slip a second bypass control past the assertion below.
+    """
+    prefix = f"/v1/{server_mod.AGENT_ID}"
+    return {f"{prefix}{route.path}" for route in server_mod.router.routes}
+
+
+def test_the_http_transport_exposes_only_the_session_bypass_control():
+    """HTTP carries exactly one bypass route, and it is the approval-only one.
+
+    The session endpoint may stop the confirmation prompts; nothing over HTTP
+    may lift the shell guardrails. A second bypass route is the shape that
+    mistake would take, so pin the set rather than merely forbidding the word —
+    a new one fails here instead of shipping.
+    """
+    served = _served_paths(server_mod.build_app())
+    declared = _declared_paths()
+
+    # Guard the guard, on a route the ROUTER contributes. Keying on the
+    # "/v1/gaia/" prefix let "/v1/gaia/version" — declared on the app, not the
+    # router — satisfy it alone, so the check below passed against an empty set
+    # on the FastAPI version CI installs.
+    assert "/v1/gaia/query" in served, sorted(served)
+    assert "/v1/gaia/query" in declared, sorted(declared)
+
+    for source, paths in (("served", served), ("declared", declared)):
+        assert {p for p in paths if "bypass" in p.lower()} == {
+            "/v1/gaia/sessions/{session_id}/bypass"
+        }, f"unexpected bypass routes in {source}: {sorted(paths)}"
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +710,210 @@ def test_a_second_turn_on_the_same_claude_model_does_not_re_switch(built, switch
     assert switched == []
 
 
+@pytest.fixture
+def switched_backend(monkeypatch):
+    """Records live switches below the session, so its own bookkeeping runs.
+
+    ``switched`` replaces ``_AgentSession.switch_model`` wholesale, which also
+    skips the provider it records — the thing the tests below are about.
+    """
+    from gaia_agent import stdio
+
+    calls: list = []
+
+    def fake_switch(agent, target):
+        calls.append((target,))
+        return target
+
+    monkeypatch.setattr(stdio, "switch_model", fake_switch)
+    return calls
+
+
+def test_a_claude_session_asked_for_lemonade_switches_to_local(built, switched_backend):
+    """Naming only the provider used to leave the turn going to Anthropic."""
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    client, agents = built
+    client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="lemonade"))
+
+    assert r.status_code == 200, r.text
+    assert switched_backend == [(DEFAULT_MODEL_NAME,)]
+    session = sr.registry.get("s-1")
+    assert session.provider == "lemonade"
+    assert len(agents) == 1, "the conversation must survive the switch"
+
+
+def test_a_local_session_asked_for_claude_switches_to_claude(built, switched_backend):
+    """Naming only the provider used to leave the turn running locally."""
+    # The symbol `_default_model_for` actually reads. Identical to
+    # ChatAgentConfig's today by inheritance, but naming that one instead would
+    # fail confusingly the day the flagship overrides the default.
+    from gaia_agent.agent import GaiaAgentConfig
+
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="claude"))
+
+    assert r.status_code == 200, r.text
+    assert switched_backend == [(GaiaAgentConfig.claude_model,)]
+    assert sr.registry.get("s-1").provider == "claude"
+
+
+def test_a_provider_switch_is_not_repeated_on_the_next_turn(built, switched_backend):
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="claude"))
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", provider="claude"))
+
+    assert len(switched_backend) == 1
+
+
+@pytest.mark.parametrize(
+    "provider, model",
+    [("lemonade", "claude-sonnet-5"), ("claude", "Gemma-4-E4B-it-GGUF")],
+)
+def test_a_model_from_the_other_provider_is_refused_on_a_new_session(
+    built, provider, model
+):
+    """Accepted before, then failed deep in the wrong backend, or ran there."""
+    client, agents = built
+
+    r = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model=model, provider=provider),
+    )
+
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert model in detail and provider in detail
+    assert agents == [], "nothing may be built for a contradictory request"
+
+
+@pytest.mark.parametrize(
+    "provider, model",
+    [("lemonade", "claude-sonnet-5"), ("claude", "Gemma-4-E4B-it-GGUF")],
+)
+def test_a_model_from_the_other_provider_is_refused_on_a_one_shot(
+    built, provider, model
+):
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(model=model, provider=provider))
+
+    assert r.status_code == 400, r.text
+    assert agents == []
+
+
+@pytest.mark.parametrize(
+    "start, provider, model",
+    [
+        (dict(model="model-a"), "lemonade", "claude-sonnet-5"),
+        (
+            dict(model="claude-opus-5", provider="claude"),
+            "claude",
+            "Gemma-4-E4B-it-GGUF",
+        ),
+    ],
+)
+def test_a_model_from_the_other_provider_is_refused_on_a_live_session(
+    built, switched_backend, start, provider, model
+):
+    """``lemonade`` + a Claude id used to switch the session TO Claude."""
+    client, _ = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", **start))
+    before = sr.registry.get("s-1").provider
+
+    r = client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model=model, provider=provider),
+    )
+
+    assert r.status_code == 400, r.text
+    assert switched_backend == []
+    assert sr.registry.get("s-1").provider == before
+    again = client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    assert again.status_code == 200, "a refused turn must not hold the run lock"
+
+
+# `provider` is optional, so an absent one is decided by the model. A retained
+# session already resolved it that way (`switch_model` reads the id); a new one
+# did not, and put a Claude id straight into the local client's `model_id`.
+
+
+def test_a_claude_model_without_a_provider_builds_a_claude_agent(built):
+    """The gap the refusals above leave open.
+
+    ``{"model": "claude-opus-5"}`` never reached ``_check_model_matches_provider``
+    (nothing to disagree with) and fell to the local branch, so the request built
+    a LOCAL agent pointed at an id Lemonade cannot serve — the exact failure
+    ``_check_model_matches_provider`` exists to prevent, one branch over.
+    """
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5"))
+
+    assert r.status_code == 200, r.text
+    assert len(agents) == 1
+    built_with = agents[0].kwargs
+    assert built_with.get("use_claude") is True
+    assert built_with.get("claude_model") == "claude-opus-5"
+    assert "model_id" not in built_with, "a Claude id must not reach the local client"
+
+
+def test_a_claude_model_without_a_provider_agrees_on_new_and_live_sessions(
+    built, switched_backend
+):
+    """A bare Claude ``model`` switched a LIVE session to Anthropic but broke a
+    new one. Whichever answer is right, the two paths must not disagree."""
+    client, agents = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5"))
+
+    assert r.status_code == 200, r.text
+    assert switched_backend == [("claude-opus-5",)]
+    assert sr.registry.get("s-1").provider == "claude"
+
+
+def test_a_one_shot_claude_model_without_a_provider_builds_a_claude_agent(built):
+    client, agents = built
+
+    r = client.post("/v1/gaia/query", json=_body(model="claude-opus-5"))
+
+    assert r.status_code == 200, r.text
+    assert agents[0].kwargs.get("use_claude") is True
+    assert "model_id" not in agents[0].kwargs
+
+
+def test_an_ordinary_turn_never_drags_a_claude_session_back_to_local(
+    built, switched_backend
+):
+    """Resolving the default provider up front would do exactly that.
+
+    An absent ``provider`` means "leave this session where it is", not
+    ``lemonade`` — otherwise every follow-up turn on a Claude session, which
+    sends neither field, silently switches it back.
+    """
+    client, _ = built
+    client.post(
+        "/v1/gaia/query",
+        json=_body(session_id="s-1", model="claude-opus-5", provider="claude"),
+    )
+    switched_backend.clear()
+
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+
+    assert r.status_code == 200, r.text
+    assert switched_backend == [], "an ordinary turn must not switch backends"
+    assert sr.registry.get("s-1").provider == "claude"
+
+
 # ---------------------------------------------------------------------------
 # Tool confirmations over HTTP
 # ---------------------------------------------------------------------------
@@ -699,6 +1007,50 @@ def test_bypass_on_an_unknown_session_is_a_404_not_a_new_session(built):
 
     assert response.status_code == 404, response.text
     assert agents == [], "no agent may be built by a bypass toggle"
+
+
+# ---------------------------------------------------------------------------
+# Session-id validation
+# ---------------------------------------------------------------------------
+
+_ALLOWED_CHARS = "A-Z, a-z, 0-9, '.', '_' and '-'"
+
+
+@pytest.mark.parametrize("bad_id", ["../x", "a:b", "a/b", "...", "x" * 129])
+def test_query_refuses_an_unsafe_session_id_as_a_400(built, bad_id):
+    """The id names a file under ~/.gaia/sessions; one it can't name used to
+    surface as a 500 from deep inside the run."""
+    client, agents = built
+
+    response = client.post("/v1/gaia/query", json=_body(session_id=bad_id))
+
+    assert response.status_code == 400, response.text
+    assert _ALLOWED_CHARS in response.json()["detail"]
+    assert agents == [], "no agent may be built for a refused session id"
+
+
+@pytest.mark.parametrize("bad_id", ["a:b", "...", "x" * 129])
+def test_bypass_refuses_an_unsafe_session_id_as_a_400(built, bad_id):
+    """A slash never reaches this route (the router 404s it), so only
+    single-segment bad ids can be exercised here."""
+    client, _ = built
+
+    response = client.post(f"/v1/gaia/sessions/{bad_id}/bypass", json={"enabled": True})
+
+    assert response.status_code == 400, response.text
+    assert _ALLOWED_CHARS in response.json()["detail"]
+
+
+@pytest.mark.parametrize("good_id", [str(uuid.uuid4()), "s1"])
+def test_ordinary_session_ids_still_work_on_both_routes(built, good_id):
+    client, _ = built
+
+    query = client.post("/v1/gaia/query", json=_body(session_id=good_id))
+    bypass = client.post(f"/v1/gaia/sessions/{good_id}/bypass", json={"enabled": True})
+
+    assert query.status_code == 200, query.text
+    assert bypass.status_code == 200, bypass.text
+    assert sr.registry.get(good_id).permissions.bypass is True
 
 
 def test_the_session_hands_each_turn_its_accumulated_permission_state(built):

@@ -8,6 +8,7 @@ Converts agent output into Server-Sent Events format for API clients.
 
 import json
 import logging
+import threading
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional
@@ -77,6 +78,8 @@ class SSEOutputHandler(OutputHandler):
             debug_mode: Enable verbose event streaming for debugging
         """
         self.queue = deque()
+        # Read per token by Agent._console_cancelled; set when the client leaves.
+        self.cancelled = threading.Event()
         self.streaming_buffer = ""  # Maintain compatibility
         self.debug_mode = debug_mode
         self.current_step = 0

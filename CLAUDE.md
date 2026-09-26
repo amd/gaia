@@ -552,7 +552,6 @@ gaia/
 │   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
 │   ├── scratchpad/     # Scratchpad tables backend
-│   ├── shell/          # Shell integration
 │   ├── sidecar/        # Shared building blocks for local agent sidecars
 │   ├── skills/         # Skill backend (gaia skill): loader, install, audit, signing
 │   ├── talk/           # Voice interaction SDK
@@ -657,6 +656,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
@@ -667,6 +667,35 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 - Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so the ctx size is fixed machine-wide; the NPU email model above is the only case where a second model id enters the picture.
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
 - Image generation (SD): `SDXL-Turbo`
+
+### IMPORTANT: Never hardcode how Lemonade is started — `lemonade-server serve` is dead
+
+There are **three** launch forms, and only one is right for a given machine. Writing
+any of them as a literal string in a message, doc, or start path is a bug:
+
+| Form | Command | When |
+|------|---------|------|
+| Legacy CLI | `lemonade-server serve` | **Pre-10.7 only — dropped.** Errors with "command not found" on every modern install |
+| Modern install | Win `LemonadeServer.exe --silent` (+ `LEMONADE_CTX_SIZE` in env) · Linux `systemctl --user start lemond` · macOS the `lemond` daemon | A user-installed Lemonade |
+| [Embeddable](https://lemonade-server.ai/docs/embeddable/runtime/) | `LEMONADE_API_KEY=KEY lemond ./ --port PORT` | A Lemonade GAIA bundles and owns |
+
+**Resolve against the machine; never switch on `runtime.GOOS` or the platform.**
+[`resolve_lemonade()` / `build_start_command()`](src/gaia/llm/lemonade_launcher.py) own
+this decision and return a `StartSpec(argv, env)` — go through them. The embeddable form
+takes a working directory and a port that the others don't, so **nothing may assume the
+argv shape.** `tui/internal/ui/preflight/lemonade.go` is the reference for doing this
+from Go, and its header comment explains why a GOOS table inherits the Python probe's
+macOS blind spot.
+
+For the embeddable form, the positional `./` is lemond's working directory (holding
+`config.json`, `bin/`, `models/`), `LEMONADE_API_KEY` locks the endpoints to GAIA, and
+every request then carries `Authorization: Bearer KEY` — which
+`lemonade_auth_headers()` already emits. Readiness is `GET /v1/health`.
+
+**Why this is a rule and not a note:** a remedy naming a command that errors is worse
+than no remedy — the user has no path forward and no reason to doubt the instruction.
+GAIA shipped `lemonade-server serve` in ~10 user-facing strings for releases after it
+stopped existing, and it was found only when a user tried to follow it.
 
 ## CLI Commands
 
@@ -688,6 +717,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
+- `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
 

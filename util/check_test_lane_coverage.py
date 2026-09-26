@@ -33,8 +33,8 @@ Scope and limits, stated so the output is not over-read:
 - Every workflow counts equally, including release-only ones. A file named only
   by a `workflow_dispatch` lane passes this check while never running on a PR.
 
-Not wired into `util/lint.py`. Run directly with
-`python util/check_test_lane_coverage.py`.
+Blocking in `util/lint.py` (`--test-lanes`, and part of `--all`). Run directly
+with `python util/check_test_lane_coverage.py`.
 """
 
 from __future__ import annotations

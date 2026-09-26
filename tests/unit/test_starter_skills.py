@@ -161,6 +161,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
     from gaia.agents.tools.shell_tools import ShellToolsMixin
+    from gaia.agents.tools.wait_tools import WaitToolsMixin
     from gaia.sd.mixin import SDToolsMixin
 
     class _Stub:
@@ -188,6 +189,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         (AudioToolsMixin, "register_audio_tools"),
         (MemoryMixin, "register_memory_tools"),
         (EmailToolsMixin, "register_email_tools"),
+        (WaitToolsMixin, "register_wait_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)
@@ -263,6 +265,28 @@ def test_starter_skill_tools_required_are_real_tools(
     assert not unknown, (
         f"{skill.name} declares tools_required that no mixin registers: "
         f"{', '.join(unknown)}"
+    )
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_with_a_shell_grant_declares_run_shell_command(skill_dir: Path):
+    """A ``shell:execute:*`` grant is only usable through ``run_shell_command``.
+
+    Loading a skill brings the tools it declares, so a shell grant without the
+    one tool that consumes it leaves the model unable to run the command.
+    """
+    skill = parse_skill_file(skill_dir)
+    shell_grants = [
+        str(p)
+        for p in skill.parsed_permissions()
+        if p.domain == "shell" and not p.grants_nothing
+    ]
+    if not shell_grants:
+        return
+
+    assert "run_shell_command" in skill.gaia.tools_required, (
+        f"{skill.name} grants {', '.join(shell_grants)} but does not declare "
+        "run_shell_command in tools_required"
     )
 
 
