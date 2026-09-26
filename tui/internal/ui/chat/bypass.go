@@ -31,7 +31,7 @@ import (
 
 const (
 	bypassBannerText = "BYPASS PERMISSIONS — the agent runs every tool " +
-		"without asking. /bypass off to stop."
+		"without asking, shell guardrails off. /bypass off to stop."
 	// Shown when the terminal is too narrow for the sentence. Still says the
 	// two things that matter: what is on, and that it is dangerous.
 	bypassBannerShort = "BYPASS PERMISSIONS ON"
@@ -73,6 +73,11 @@ func (m ChatModel) armBypass() (tea.Model, tea.Cmd) {
 		Content: "[!] Bypass permissions would let " + m.agentName +
 			" run every tool with no prompt — shell commands, file writes, " +
 			"anything it decides to do — for the rest of this session.\n" +
+			"    It also takes the shell guardrails off: it can redirect " +
+			"output, and the read-only allowlist is replaced by a developer set " +
+			"(node, npm, make, go, cargo, python, pytest, gh, git) that can " +
+			"execute arbitrary code in this directory. git is unrestricted " +
+			"there, including push and history rewrites.\n" +
 			"    Type /bypass confirm to turn it on, or /bypass off at any " +
 			"time to turn it back off.",
 	})
@@ -90,7 +95,7 @@ func (m ChatModel) setBypass(enabled bool) (tea.Model, tea.Cmd) {
 	m.bypassArmed = false
 
 	bypasser, ok := m.client.(client.PermissionBypasser)
-	if !ok {
+	if !ok || !livePermissionsAvailable(m.client) {
 		m.messages = append(m.messages, Message{
 			Role: RoleError,
 			Content: "This agent connection cannot change permission mode — " +

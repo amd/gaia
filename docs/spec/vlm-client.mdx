@@ -17,7 +17,7 @@ icon: "eye"
 
 ## Overview
 
-VLMClient provides Vision-Language Model capabilities for extracting text from images using Lemonade server. It handles model loading/unloading, image-to-markdown conversion, and state tracking for VLM processing with automatic model downloading and context manager support.
+VLMClient provides Vision-Language Model capabilities for extracting text from images using Lemonade server. It handles image-to-markdown conversion with on-demand model loading and downloading, and context manager support.
 
 **Key Features:**
 - Image-to-text extraction via VLM
@@ -37,7 +37,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
    - Load VLM model (Gemma-4-E4B-it-GGUF)
    - Automatic model download via Lemonade
    - Model availability checking
-   - State tracking (loaded/unloaded)
+   - Every request re-checks the model is loaded at its required context size
 
 2. **Image Extraction**
    - `extract_from_image()` - Extract text from single image
@@ -54,11 +54,10 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 4. **Resource Management**
    - Context manager support (`with VLMClient()`)
    - Cleanup after processing
-   - State reset
 
 5. **Error Handling**
    - Model availability errors
-   - Loading failures
+   - Loading failures (the real load error text, e.g. out of memory)
    - Extraction failures
    - Connection errors
 
@@ -66,7 +65,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 
 1. **Performance**
    - 300-second timeout for VLM image extraction (5 minutes for complex forms)
-   - 60-second timeout for model loading
+   - Model loads use LemonadeClient's load timeout, not the extraction timeout
    - Low temperature (0.1) for accuracy
    - Up to 2048 tokens per extraction
    - Progress logging for user feedback
@@ -107,7 +106,6 @@ class VLMClient:
     Handles:
     - Model loading (Gemma-4-E4B-it-GGUF)
     - Image-to-markdown conversion
-    - State tracking for VLM processing
 
     Usage:
         # Manual lifecycle
@@ -132,7 +130,8 @@ class VLMClient:
         Args:
             vlm_model: Vision model to use for image extraction
             base_url: Lemonade server API URL (defaults to LEMONADE_BASE_URL env var)
-            auto_load: Automatically load VLM model on first use
+            auto_load: Load (and download if missing) the VLM on each request,
+                at the context size GAIA requires for it
 
         Note:
             - Model will be auto-downloaded if not available (may take hours)
@@ -191,7 +190,9 @@ class VLMClient:
                 index the error as the page's content (#3555).
 
         Note:
-            - Ensures VLM is loaded before extraction
+            - The request itself loads the VLM at its required context size
+              (when auto_load=True); a load failure raises VLMExtractionError
+              carrying the real error text
             - Uses default OCR prompt if none provided
 
         Default Prompt:
@@ -245,22 +246,21 @@ class VLMClient:
 
     def cleanup(self):
         """
-        Cleanup VLM resources.
+        Mark the end of a batch.
 
-        Call this after batch processing to mark VLM as unloaded.
-        Note: Model remains loaded on server; this just updates local state.
+        Holds no local state: the model stays loaded on the server, and each
+        request re-checks that it is loaded at the right context size.
 
         Example:
             >>> vlm = VLMClient()
             >>> # Process images...
             >>> vlm.cleanup()
-            🧹 VLM processing complete
         """
         pass
 
     def __enter__(self):
         """
-        Context manager entry - ensure VLM loaded.
+        Context manager entry - the model loads on the first request.
 
         Returns:
             self
@@ -281,21 +281,6 @@ class VLMClient:
             exc_tb: Exception traceback (if any)
         """
         pass
-
-    def _ensure_vlm_loaded(self) -> bool:
-        """
-        Ensure VLM model is loaded, load it if necessary.
-
-        The model will be automatically downloaded if not available (handled by
-        lemonade_client.chat_completions with auto_download=True).
-
-        Returns:
-            True if VLM is loaded, False if loading failed
-
-        Note:
-            Only loads if auto_load=True and model not already loaded.
-        """
-        pass
 ```
 
 ---
@@ -304,30 +289,13 @@ class VLMClient:
 
 ### Model Loading
 
-```python
-def _ensure_vlm_loaded(self) -> bool:
-    if self.vlm_loaded:
-        return True
-
-    if not self.auto_load:
-        logger.warning("VLM not loaded and auto_load=False")
-        return False
-
-    try:
-        logger.info(f"📥 Loading VLM model: {self.vlm_model}")
-        # Load model (auto-download handled by lemonade_client, may take hours)
-        self.client.load_model(self.vlm_model, timeout=60, auto_download=True)
-        self.vlm_loaded = True
-        logger.info(f"✅ VLM model loaded: {self.vlm_model}")
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to load VLM model: {e}")
-        logger.error(
-            f"   Make sure Lemonade server is running at {self.server_url}"
-        )
-        return False
-```
+There is no separate pre-load. `extract_from_image()` passes
+`auto_download=self.auto_load` to `LemonadeClient.chat_completions()`, which
+loads the model at its required context size (and downloads it if missing)
+while holding the model-slot lease, then runs the request. A load failure
+propagates and is re-raised as `VLMExtractionError` with the original error
+text and the cause attached. Because every request re-checks the load, a model
+evicted mid-batch is reloaded on the next page.
 
 ### Image Extraction
 
@@ -339,14 +307,6 @@ def extract_from_image(
     page_num: int = 1,
     prompt: Optional[str] = None,
 ) -> str:
-    # Ensure VLM is loaded
-    if not self._ensure_vlm_loaded():
-        error_msg = (
-            f"VLM model '{self.vlm_model}' is not available at {self.server_url}"
-        )
-        logger.error(error_msg)
-        raise VLMExtractionError(error_msg, page_num, image_num)
-
     # Encode image as base64
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
@@ -393,6 +353,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             temperature=0.1,  # Low temp for accurate extraction
             max_completion_tokens=2048,  # Allow detailed extraction
             timeout=60,  # VLM may be slower than text models
+            auto_download=self.auto_load,  # ctx-aware load under the lease
         )
 
         elapsed = time.time() - start_time
@@ -468,6 +429,8 @@ self.client = LemonadeClient(model=vlm_model, host=host, port=port)
 import pytest
 from unittest.mock import Mock, patch
 from gaia.llm import VLMClient
+from gaia.llm import VLMExtractionError
+from gaia.llm.lemonade_client import LemonadeClientError
 
 def test_vlm_client_can_be_imported():
     """Verify VLMClient can be imported."""
@@ -480,7 +443,6 @@ def test_initialize_vlm_client():
         vlm = VLMClient()
         assert vlm.vlm_model == "Gemma-4-E4B-it-GGUF"
         assert vlm.auto_load is True
-        assert vlm.vlm_loaded is False
 
 def test_initialize_with_custom_model():
     """Test initialization with custom model."""
@@ -522,39 +484,10 @@ def test_check_availability_not_found():
 
         assert vlm.check_availability() is False
 
-def test_ensure_vlm_loaded_already_loaded():
-    """Test VLM loading when already loaded."""
-    with patch('gaia.llm.vlm_client.LemonadeClient'):
-        vlm = VLMClient()
-        vlm.vlm_loaded = True
-
-        result = vlm._ensure_vlm_loaded()
-        assert result is True
-
-def test_ensure_vlm_loaded_success():
-    """Test VLM loading success."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
-        vlm = VLMClient()
-        vlm.client.load_model = Mock()
-
-        result = vlm._ensure_vlm_loaded()
-        assert result is True
-        assert vlm.vlm_loaded is True
-        vlm.client.load_model.assert_called_once()
-
-def test_ensure_vlm_loaded_auto_load_false():
-    """Test VLM loading when auto_load=False."""
-    with patch('gaia.llm.vlm_client.LemonadeClient'):
-        vlm = VLMClient(auto_load=False)
-
-        result = vlm._ensure_vlm_loaded()
-        assert result is False
-
 def test_extract_from_image_success():
     """Test successful image extraction."""
     with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
-        vlm.vlm_loaded = True  # Skip loading
 
         # Mock successful extraction
         vlm.client.chat_completions = Mock(return_value={
@@ -571,20 +504,21 @@ def test_extract_from_image_success():
         assert "Extracted Text" in result
         assert vlm.client.chat_completions.called
 
-def test_extract_from_image_vlm_not_loaded():
-    """Test extraction when VLM fails to load."""
+def test_extract_from_image_load_failure():
+    """A load failure surfaces its real error text."""
     with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
-        vlm = VLMClient(auto_load=False)
+        vlm = VLMClient()
+        vlm.client.chat_completions = Mock(
+            side_effect=LemonadeClientError("Failed to load model: out of memory")
+        )
 
-        image_bytes = b"fake_image_data"
-        with pytest.raises(VLMExtractionError, match="not available"):
-            vlm.extract_from_image(image_bytes)
+        with pytest.raises(VLMExtractionError, match="out of memory"):
+            vlm.extract_from_image(b"fake_image_data")
 
 def test_extract_from_image_extraction_error():
     """Test extraction failure."""
     with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
-        vlm.vlm_loaded = True
 
         # Mock extraction error
         vlm.client.chat_completions = Mock(side_effect=Exception("Network error"))
@@ -597,7 +531,6 @@ def test_extract_from_image_with_custom_prompt():
     """Test extraction with custom prompt."""
     with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
-        vlm.vlm_loaded = True
 
         vlm.client.chat_completions = Mock(return_value={
             "choices": [{"message": {"content": "Extracted"}}]
@@ -615,7 +548,6 @@ def test_extract_from_page_images():
     """Test batch extraction from page."""
     with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
-        vlm.vlm_loaded = True
 
         vlm.client.chat_completions = Mock(return_value={
             "choices": [{"message": {"content": "Extracted text"}}]
@@ -635,27 +567,15 @@ def test_extract_from_page_images():
         assert results[0]["size_kb"] == 45.2
         assert results[1]["image_num"] == 2
 
-def test_cleanup():
-    """Test cleanup method."""
-    with patch('gaia.llm.vlm_client.LemonadeClient'):
-        vlm = VLMClient()
-        vlm.vlm_loaded = True
-
-        vlm.cleanup()
-        assert vlm.vlm_loaded is False
-
 def test_context_manager():
-    """Test context manager usage."""
+    """The context manager does not pre-load; the first request loads."""
     with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
-        vlm.client.load_model = Mock()
 
         with vlm as v:
             assert v is vlm
-            assert vlm.vlm_loaded is True  # Loaded on enter
 
-        # Verify cleanup was called on exit
-        assert vlm.vlm_loaded is False
+        vlm.client.load_model.assert_not_called()
 ```
 
 ### Integration Tests
