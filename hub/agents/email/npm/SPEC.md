@@ -589,8 +589,16 @@ npx @amd-gaia/agent-email help
 (`--out` to override), `startSidecar`s on `--port` (default 8131), opens the default
 browser to `/v1/email/playground` (`--no-open` to skip), and runs until Ctrl+C.
 The command owns the sidecar lifecycle itself (`autoCleanup: false`) and shuts it
-down on `SIGINT`/`SIGTERM`/`SIGHUP` or on any startup error. Lemonade still has to
-be running for live triage — the page itself reports if it isn't.
+down on `SIGINT`/`SIGTERM`/`SIGHUP` or on any startup error. If that shutdown
+fails, `playground` prints the error and exits 1 rather than 0. A second Ctrl+C
+while the teardown is in flight is absorbed and reported, not acted on — acting
+on it would kill the process mid-shutdown and orphan the sidecar still holding
+the port. Lemonade still has to be running for live triage — the page itself
+reports if it isn't.
+
+Flags accept both `--flag value` and `--flag=value`. A value flag with no value,
+an empty `--flag=`, a value on a boolean switch, or an unknown command exits **2**
+with the usage text; `--port` must be plain digits (no `0x`/`1e3`/padding).
 
 `fetch` is the supported, build-time path. It resolves
 `${process.platform}-${process.arch}`, downloads that platform's artifact from the

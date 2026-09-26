@@ -22,6 +22,10 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- `gaia serve` no longer exits 0 when Ctrl+C fails to stop the sidecar. The
+  error naming the surviving process and how to kill it was discarded, so the
+  next `serve` hit an unexplained port conflict. It now prints that error and
+  exits 1.
 - Conversation state is saved under `~/.gaia/sessions` instead of the directory
   the agent was started from. A `session_id` must be 1–128 characters from
   `A-Z a-z 0-9 . _ -`; any other value is a 400 on `/query` and
