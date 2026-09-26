@@ -703,7 +703,7 @@ class TestGaiaHomeEnvVar:
         monkeypatch.setattr(Path, "home", lambda: Path("/fake/home/user"))
 
         resolved = uc._gaia_home()
-        assert Path(resolved) == alt
+        assert Path(resolved) == alt.resolve()
 
     def test_env_var_unset_uses_home_dot_gaia(self, fs, monkeypatch):
         monkeypatch.delenv("GAIA_HOME", raising=False)
