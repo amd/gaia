@@ -40,8 +40,11 @@ DEFAULT_EVICT_MIN_BATCH_TOKENS = 30000
 #: Token estimate for text the backend has not measured.
 CHARS_PER_TOKEN = 3.6
 
-#: Their results are bounded pages or the parent's only view of a worker.
-NEVER_EVICTED_TOOLS = frozenset({"read_tool_output", "delegate_task"})
+#: Their results are bounded pages, the parent's only view of a worker, or the
+#: session ledger's own capped digest.
+NEVER_EVICTED_TOOLS = frozenset(
+    {"read_tool_output", "delegate_task", "session_findings"}
+)
 
 _SUMMARY_VALUE_CHARS = 40
 _SUMMARY_CHARS = 100

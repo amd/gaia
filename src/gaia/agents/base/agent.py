@@ -973,6 +973,8 @@ class Agent(abc.ABC):
     # Per-instance tool snapshot.  ``None`` → fall back to global
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
+    #: The step in progress this turn, for records that name where a result came from.
+    _turn_step: int = 0
 
     # Class-level so a subclass that never runs ``__init__`` still increments.
     _turn_seq: int = 0
@@ -4975,10 +4977,11 @@ Do NOT wrap conversational replies in JSON.
             The truncated result or original if within limits
         """
         truncated_result = tool_result
-        # Its pages are bounded by the store; condensing one would archive it again.
-        if (
-            isinstance(tool_result, (dict, list, str))
-            and tool_name != "read_tool_output"
+        # Its pages are bounded by the store; condensing one would archive it
+        # again. The ledger's result is under its own cap by construction.
+        if isinstance(tool_result, (dict, list, str)) and tool_name not in (
+            "read_tool_output",
+            "session_findings",
         ):
             # Use custom encoder to handle bytes and other non-serializable types.
             # ensure_ascii=False: this text reaches the model as prose, not a
@@ -5014,6 +5017,16 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if self.debug:
                     print(f"[DEBUG] Tool result truncated from {len(result_str)} chars")
+
+        ledger = getattr(self, "_session_ledger", None)
+        if ledger is not None:
+            ledger.record(
+                tool_name,
+                tool_args,
+                tool_result,
+                step=self._turn_step,
+                actor=getattr(self, "_session_actor", "parent"),
+            )
 
         # Add to conversation
         tool_entry: Dict[str, Any] = {
@@ -6127,6 +6140,7 @@ Do NOT wrap conversational replies in JSON.
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
             steps_taken += 1
+            self._turn_step = steps_taken
             logger.debug(f"Step {steps_taken}/{steps_limit}")
             if self._context_evictor is not None:
                 from gaia.agents.base.artifacts import store_for

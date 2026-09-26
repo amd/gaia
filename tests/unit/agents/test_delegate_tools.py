@@ -18,12 +18,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.session_ledger import DIGEST_HEADER, LEDGER_TOOL
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.tools import delegate_tools
 from gaia.agents.tools.delegate_tools import (
     DELEGATE_SYSTEM_PROMPT,
     ORCHESTRATE_SYSTEM_PROMPT,
     ORCHESTRATOR_TOOLS,
+    WORKER_LEDGER_PROMPT,
     DelegateToolsMixin,
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
@@ -71,6 +73,16 @@ class Kid(DelegateToolsMixin, Agent):
             """Write text to a file."""
             Path(path).write_text(text, encoding="utf-8")
             return {"status": "success", "path": path}
+
+        @tool
+        def read_file(file_path: str) -> dict:
+            """Read a file (fake: no path checks)."""
+            return {
+                "status": "success",
+                "file_path": file_path,
+                "content": Path(file_path).read_text(encoding="utf-8"),
+                "file_type": "python" if file_path.endswith(".py") else "text",
+            }
 
         @tool
         def run_shell_command(command: str) -> dict:
@@ -193,8 +205,11 @@ def test_child_starts_fresh_with_identical_prompt_and_no_delegate_tool():
     assert "delegate_task" not in child._tools_registry
     assert DELEGATE_SYSTEM_PROMPT in parent.system_prompt
     assert DELEGATE_SYSTEM_PROMPT not in child.system_prompt
+    # The child's prompt differs only by the delegation paragraph swapped for
+    # the worker's session-findings line.
+    assert WORKER_LEDGER_PROMPT not in parent.system_prompt
     assert child.system_prompt == parent.system_prompt.replace(
-        DELEGATE_SYSTEM_PROMPT + "\n\n", ""
+        DELEGATE_SYSTEM_PROMPT, WORKER_LEDGER_PROMPT
     )
 
 
@@ -570,7 +585,7 @@ def test_orchestrator_refuses_every_tool_but_its_own(monkeypatch):
     refusal = parent._orchestrator_refusal("write_note")
     assert refusal["status"] == "error"
     assert refusal["executed"] is False
-    assert "delegate_task and read_tool_output" in refusal["error"]
+    assert "delegate_task, read_tool_output and session_findings" in refusal["error"]
 
 
 def test_kind_is_recorded_in_result_brief_and_stats(repo):
@@ -609,3 +624,129 @@ def test_children_cap_errors_on_the_next_call(repo, monkeypatch):
     assert "2 workers have already run (delegate_max_children=2)" in third["error"]
     assert "finish now" in third["error"]
     assert parent.delegated_tokens["children"] == 2
+
+
+# ── session findings ledger ──────────────────────────────────────────────────
+
+
+def _module_file(repo: Path) -> Path:
+    path = repo / "mod.py"
+    lines = ['"""Module under test."""', ""]
+    for i in range(10):
+        lines += [f"def helper_{i}(n):", f"    return n + {i}", ""]
+    path.write_text("\n".join(lines) * 8, encoding="utf-8")
+    return path
+
+
+def test_child_shares_the_parents_ledger_and_its_brief_opens_with_the_digest(repo):
+    path = _module_file(repo)
+    SCRIPTS[0] = [
+        _call("read_file", file_path=str(path)),
+        _call("delegate_task", **_BRIEF, kind="investigate"),
+        _answer("parent done"),
+    ]
+    SCRIPTS[1] = [
+        _call("read_file", file_path=str(repo / "existing.txt")),
+        _answer("the note says v1"),
+    ]
+    parent = _approving_parent()
+    parent.process_query("look")
+    ledger = parent._session_ledger
+    kinds = {(e.kind, e.key): e for e in ledger.entries}
+    parent_read = kinds[("read", str(path))]
+    assert parent_read.actor == "parent" and parent_read.step == 1
+    assert any("helper_3" in e["label"] for e in parent_read.outline)
+    # The worker's own read and its report land in the same ledger.
+    assert kinds[("read", str(repo / "existing.txt"))].actor == "worker:investigate"
+    finding = kinds[("finding", "find the note")]
+    assert finding.summary == "the note says v1" and finding.step == 2
+
+    archived = json.loads(
+        delegate_tools.store_for(parent).text(_last_tool_result(parent)["transcript"])
+    )
+    brief = archived["brief"]
+    assert brief.startswith(f"{DIGEST_HEADER}\nFiles read:\n- {path} (")
+    assert "helper_3" in brief and "L" in brief
+    assert brief.index(DIGEST_HEADER) < brief.index("You are a delegated worker")
+    assert "output_" not in brief.split("You are a delegated worker")[0]
+    # The parent's model never sees the ledger unless it asks the tool.
+    assert DIGEST_HEADER not in json.dumps(_model_messages(parent))
+    assert LEDGER_TOOL in parent._tools_registry
+
+
+def test_spawned_children_share_ledger_store_and_tool():
+    parent = _approving_parent()
+    first = parent._spawn_child("investigate")
+    second = parent._spawn_child("verify")
+    assert first._session_ledger is parent._session_ledger
+    assert second._session_ledger is parent._session_ledger
+    assert first._output_artifacts is parent._output_artifacts
+    assert first._session_actor == "worker:investigate"
+    assert second._session_actor == "worker:verify"
+    assert parent._session_actor == "parent"
+    assert LEDGER_TOOL in first._tools_registry
+    assert LEDGER_TOOL in parent._tools_registry
+    assert LEDGER_TOOL not in Kid(KidConfig(delegate_mode="off"))._tools_registry
+
+
+def test_session_findings_query_fetches_the_exact_part_from_any_agent(repo):
+    path = _module_file(repo)
+    text = path.read_text(encoding="utf-8")
+    parent = _approving_parent()
+    parent._handle_large_tool_result(
+        "read_file",
+        parent._tools_registry["read_file"]["function"](str(path)),
+        [],
+        {"file_path": str(path)},
+    )
+    lookup = parent._tools_registry[LEDGER_TOOL]["function"]
+    found = lookup("helper_7")
+    assert found["total"] == 1
+    match = found["matches"][0]
+    entry = next(e for e in match["entries"] if "helper_7" in e["label"])
+    child = parent._spawn_child("implement")
+    page = child._tools_registry["read_tool_output"]["function"](
+        match["artifact"], entry=entry["n"]
+    )
+    assert page["content"].startswith("def helper_7(n):")
+    assert page["content"] in text
+    # A child's lookup is the same ledger, and the digest form is capped.
+    assert child._tools_registry[LEDGER_TOOL]["function"]("mod.py")["total"] == 1
+    assert len(json.dumps(lookup(""))) <= 8000
+
+
+def test_children_spawned_from_one_ledger_state_get_a_byte_identical_prefix(repo):
+    path = _module_file(repo)
+    parent = _approving_parent()
+    parent._handle_large_tool_result(
+        "read_file",
+        parent._tools_registry["read_file"]["function"](str(path)),
+        [],
+        {"file_path": str(path)},
+    )
+    first = parent._delegate_brief(_BRIEF, "investigate")
+    second = parent._delegate_brief({**_BRIEF, "goal": "fix it"}, "implement")
+    marker = "You are a delegated worker"
+    assert first.split(marker)[0] == second.split(marker)[0]
+    assert first != second
+    assert first.startswith(DIGEST_HEADER)
+
+
+def test_ledger_reaches_the_parent_context_only_through_the_tool(repo):
+    path = _module_file(repo)
+    SCRIPTS[0] = [
+        _call("read_file", file_path=str(path)),
+        _call(LEDGER_TOOL, query=""),
+        _answer("done"),
+    ]
+    parent = _approving_parent()
+    outcome = parent.process_query("look")
+    assert outcome["result"].startswith("done")
+    sent = _model_messages(parent)
+    carrying = [m for m in sent if DIGEST_HEADER in json.dumps(m)]
+    assert not carrying
+    findings = [
+        m for m in sent if m.get("role") == "tool" and "Files read:" in json.dumps(m)
+    ]
+    assert findings, "the tool's digest is the one place the ledger reaches the model"
+    assert str(path) in json.dumps(findings[-1])

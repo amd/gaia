@@ -19,6 +19,7 @@ from gaia.agents.tools.delegate_tools import (
     DELEGATE_SYSTEM_PROMPT,
     ORCHESTRATE_SYSTEM_PROMPT,
     ORCHESTRATOR_TOOLS,
+    WORKER_LEDGER_PROMPT,
 )
 
 
@@ -81,9 +82,16 @@ def test_child_matches_parent_but_cannot_delegate(env):
             assert "delegate_task" not in child.tool_loader._core
             assert DELEGATE_SYSTEM_PROMPT in parent.system_prompt
             assert DELEGATE_SYSTEM_PROMPT not in child.system_prompt
-            assert child.system_prompt == parent.system_prompt.replace(
-                DELEGATE_SYSTEM_PROMPT + "\n\n", ""
-            )
+            # Only the delegation paragraph is swapped for the worker's
+            # session-findings line; everything else is byte-identical.
+            assert WORKER_LEDGER_PROMPT in child.system_prompt
+            assert WORKER_LEDGER_PROMPT not in parent.system_prompt
+            assert child.system_prompt.replace(
+                WORKER_LEDGER_PROMPT + "\n\n", ""
+            ) == parent.system_prompt.replace(DELEGATE_SYSTEM_PROMPT + "\n\n", "")
+            assert "session_findings" in child._tools_registry
+            assert "session_findings" in child.tool_loader._core
+            assert child._session_ledger is parent._session_ledger
         finally:
             child.close()
         parent.close()
@@ -167,7 +175,10 @@ def test_orchestrate_offers_exactly_the_orchestrator_set(env, code_repo, tmp_pat
             refused = agent._execute_tool("read_file", {"file_path": "pkg.py"})
             assert refused["status"] == "error"
             assert refused["executed"] is False
-            assert "delegate_task and read_tool_output" in refused["error"]
+            assert (
+                "delegate_task, read_tool_output and session_findings"
+                in refused["error"]
+            )
             agent.close()
 
 
@@ -186,9 +197,14 @@ def test_orchestrating_parent_spawns_a_fully_equipped_child(env, code_repo):
             assert child.config.delegate_depth == 1
             assert child._resolve_delegate_mode() == "off"
             assert child.tool_loader is not None
-            assert sorted(child._tools_registry) == full_set
+            # The worker has the plain set plus the session ledger's tool.
+            assert sorted(child._tools_registry) == sorted(
+                full_set + ["session_findings"]
+            )
             assert "delegate_task" not in child._tools_registry
-            assert _offered(child, _CODE_TURN) == full_set
+            assert _offered(child, _CODE_TURN) == sorted(
+                full_set + ["session_findings"]
+            )
             assert ORCHESTRATE_SYSTEM_PROMPT not in child.system_prompt
             assert DELEGATE_SYSTEM_PROMPT not in child.system_prompt
             assert child._execute_tool("nonexistent_tool", {})["status"] == "error"
@@ -211,8 +227,11 @@ def test_tool_mode_offered_set_is_the_plain_set_plus_delegate_task(env, code_rep
         assert agent._resolve_delegate_mode() == "tool"
         assert agent.tool_loader is not None
         assert "delegate_task" in agent.tool_loader._core
+        assert "session_findings" in agent.tool_loader._core
         for turn in (_CODE_TURN, _PLAIN_TURN):
-            assert _offered(agent, turn) == sorted(plain_offered + ["delegate_task"])
+            assert _offered(agent, turn) == sorted(
+                plain_offered + ["delegate_task", "session_findings"]
+            )
         assert DELEGATE_SYSTEM_PROMPT in agent.system_prompt
         assert ORCHESTRATE_SYSTEM_PROMPT not in agent.system_prompt
         assert agent._orchestrator_refusal("read_file") is None

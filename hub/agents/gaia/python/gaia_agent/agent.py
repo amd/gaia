@@ -62,6 +62,7 @@ from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.delegate_tools import (
     DEFAULT_DELEGATE_MAX_CHILDREN,
     DEFAULT_DELEGATE_MAX_STEPS,
+    LEDGER_TOOL,
     ORCHESTRATOR_TOOLS,
     DelegateToolsMixin,
 )
@@ -361,9 +362,13 @@ class GaiaAgent(
         if root and is_code_repository(root):
             core.add("run_shell_command")
         # Delegation is a decision the model makes on any turn, so semantic
-        # selection cannot be allowed to hide it.
+        # selection cannot be allowed to hide it; nor the session ledger, which
+        # a parent and every worker must be able to check before exploring.
         if self._resolve_delegate_enabled():
             core.add("delegate_task")
+            core.add(LEDGER_TOOL)
+        elif self._delegated_worker():
+            core.add(LEDGER_TOOL)
         return frozenset(core)
 
     # ── orchestrate mode ──────────────────────────────────────────────────

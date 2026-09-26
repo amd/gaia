@@ -11,8 +11,14 @@ is added to the parent's totals so a saving is measured honestly.
 
 Three modes (``delegate_mode`` / ``GAIA_DELEGATE``): ``off``; ``tool``, where
 ``delegate_task`` is one tool among the parent's usual set; and
-``orchestrate``, where the parent is offered nothing but ``delegate_task`` and
-``read_tool_output`` and every unit of work is a child.
+``orchestrate``, where the parent is offered nothing but ``delegate_task``,
+``read_tool_output`` and ``session_findings`` and every unit of work is a child.
+
+Whenever delegation is on, the parent and every child share one
+:class:`~gaia.agents.base.session_ledger.SessionLedger` and one artifact
+store: every file read, search, check, change and worker report is recorded,
+each brief opens with the digest, and ``session_findings`` looks an entry up so
+a worker fetches with ``read_tool_output`` instead of re-exploring.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.artifacts import store_for
+from gaia.agents.base.session_ledger import LEDGER_TOOL, SessionLedger, ledger_for
 from gaia.agents.base.tool_output import elide_text
 from gaia.agents.base.verification import (
     has_test_run_summary,
@@ -48,7 +55,7 @@ _TOOL_MODE_ALIASES = frozenset({"1", "true", "yes", "on"})
 _OFF_MODE_ALIASES = frozenset({"0", "false", "no", "off"})
 
 #: What an orchestrating parent is offered, and all it may execute.
-ORCHESTRATOR_TOOLS = ("delegate_task", "read_tool_output")
+ORCHESTRATOR_TOOLS = ("delegate_task", "read_tool_output", LEDGER_TOOL)
 
 DELEGATE_KINDS = ("investigate", "implement", "verify")
 DEFAULT_DELEGATE_KIND = "implement"
@@ -86,7 +93,10 @@ and commands, and the exact acceptance check: which test command must pass. The 
 worker starts with no memory of this conversation. Do not re-read files a worker \
 has already changed unless its evidence shows a problem: trust files_changed and \
 the test output in evidence. Keep for yourself only the plan, the review of each \
-worker's evidence, and the final end-to-end verification."""
+worker's evidence, and the final end-to-end verification. Check \
+session_findings before reading or searching anything: a file, search or check \
+already recorded there is fetched with read_tool_output(artifact, entry=n), not \
+redone."""
 
 #: The parent's guidance in ``orchestrate`` mode, in place of the one above.
 ORCHESTRATE_SYSTEM_PROMPT = """\
@@ -101,7 +111,18 @@ Then one kind="implement" subtask per component, each including its tests. \
 Finish with one kind="verify" subtask that runs the full relevant test command \
 and reports the summary. Answer only from the workers' evidence, and report \
 it as theirs: you never ran anything yourself, so say which worker ran what \
-and quote its evidence.tests.command and summary — never "I ran"."""
+and quote its evidence.tests.command and summary — never "I ran". Every brief \
+carries the session findings digest, so a worker fetches what an earlier one \
+read with read_tool_output instead of re-reading it; call session_findings \
+before briefing a worker to point it at the exact parts."""
+
+#: A worker's one line about the ledger; the parent's is in its mode paragraph.
+WORKER_LEDGER_PROMPT = """\
+==== SESSION FINDINGS ====
+Your brief opens with what this session already found. Before you read or \
+search, call session_findings(query) for the path, pattern or symbol: a \
+recorded file is fetched with read_tool_output(artifact, entry=n) instead of \
+re-read, and what you read now is recorded for the next worker."""
 
 _KIND_HINTS = {
     "investigate": "answer the question; do not change files.",
@@ -187,6 +208,11 @@ class DelegateToolsMixin:
 
     #: Running total of every child's model cost, for the parent's stats.
     delegated_tokens: Dict[str, int]
+    #: The session's ledger, shared with every child; ``None`` until delegation
+    #: is on or a parent hands a worker its own.
+    _session_ledger: Optional[SessionLedger] = None
+    #: Who this agent's findings are recorded as.
+    _session_actor: str = "parent"
 
     def _resolve_delegate_mode(self) -> str:
         """Depth 1 is ``off``; then ``GAIA_DELEGATE`` wins over the config field."""
@@ -221,10 +247,13 @@ class DelegateToolsMixin:
             "status": "error",
             "error": (
                 f"{tool_name} is not available to the orchestrator. Your only "
-                f"tools are {' and '.join(ORCHESTRATOR_TOOLS)}: delegate this "
+                f"tools are {_and_list(ORCHESTRATOR_TOOLS)}: delegate this "
                 "work to a worker with a complete brief."
             ),
         }
+
+    def _delegated_worker(self) -> bool:
+        return int(getattr(getattr(self, "config", None), "delegate_depth", 0)) > 0
 
     def _delegate_max_steps(self) -> int:
         override = delegate_max_steps_from_env()
@@ -259,11 +288,55 @@ class DelegateToolsMixin:
             return DELEGATE_SYSTEM_PROMPT
         return ""
 
+    def get_session_findings_system_prompt(self) -> str:
+        """The worker's line; a parent's guidance is in its mode paragraph."""
+        return WORKER_LEDGER_PROMPT if self._delegated_worker() else ""
+
+    def register_session_findings_tool(self) -> None:
+        """Register ``session_findings`` on this instance only, like ``read_tool_output``."""
+
+        def session_findings(query: str = "") -> Dict[str, Any]:
+            """What this session has already read, searched, run and changed, so you fetch instead of re-exploring.
+
+            With no query: the digest — every file read with its outline
+            (symbols and headings with line ranges), every search with its
+            hit counts, every check with its summary, every file changed,
+            and every worker's report. With a query: the matching entries
+            (substring of a path, pattern, symbol or label) with their
+            artifact handle and entry numbers, so read_tool_output(artifact,
+            entry=n) returns that exact part verbatim without re-reading the
+            file. Check it before any read or search.
+
+            Args:
+                query: A path, pattern, symbol or label to look up; empty for the digest.
+            """
+            return ledger_for(self).tool_result(query)
+
+        entry = {
+            "name": LEDGER_TOOL,
+            "description": session_findings.__doc__,
+            "parameters": {"query": {"type": "string", "required": False}},
+            "function": session_findings,
+            "atomic": True,
+            "display_label": "Checking session findings",
+            "timeout": None,
+        }
+        if not hasattr(self, "_tool_overrides"):
+            self._tool_overrides = {}
+        self._tool_overrides[LEDGER_TOOL] = entry
+        if self._instance_tools is not None:
+            self._instance_tools[LEDGER_TOOL] = entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+
     def register_delegate_tools(self) -> None:
-        """Register ``delegate_task`` into the tool registry."""
+        """Register ``delegate_task`` and ``session_findings`` into the tool registry."""
         from gaia.agents.base.tools import tool
 
         self.delegated_tokens = {"input": 0, "output": 0, "cached": 0, "children": 0}
+        self._session_actor = "parent"
+        ledger_for(self)
+        self.register_session_findings_tool()
 
         # Above the default tool timeout: a child runs a whole agent loop.
         @tool(timeout=3600, display_label="Delegating")
@@ -293,6 +366,10 @@ class DelegateToolsMixin:
             The worker's run is the worker's, not yours: when reporting, say
             which worker ran what and quote its evidence.tests.command and
             summary; never present it as something you ran.
+
+            The brief opens with the session findings digest, so the worker
+            fetches files earlier workers read with read_tool_output instead
+            of re-reading them; check session_findings before briefing.
 
             Args:
                 goal: What to find out or change, in one or two sentences.
@@ -364,7 +441,7 @@ class DelegateToolsMixin:
         workdir = self._delegate_workdir()
         try:
             before = self._workdir_snapshot(workdir)
-            child = self._spawn_child()
+            child = self._spawn_child(kind)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("delegate_task could not start a worker: %s", e)
             return {
@@ -402,6 +479,14 @@ class DelegateToolsMixin:
             )
         )
         self._record_child_transcript(kind, fields, handle, outcome)
+        if failure is None and str(outcome.get("result") or "").strip():
+            ledger_for(self).add_finding(
+                kind,
+                fields["goal"],
+                strip_verification_scope(str(outcome["result"])),
+                step=int(getattr(self, "_turn_step", 0)),
+                actor=f"worker:{kind}",
+            )
         result: Dict[str, Any] = {
             "status": "error" if failure else "success",
             "kind": kind,
@@ -419,8 +504,11 @@ class DelegateToolsMixin:
         return _bounded(result, store_for(self))
 
     def _delegate_brief(self, fields: Dict[str, str], kind: str) -> str:
+        """The digest first, so children of one ledger state share a prefix."""
         return "\n".join(
             [
+                ledger_for(self).brief_block(),
+                "",
                 _BRIEF_HEADER,
                 "",
                 f"Kind: {kind} — {_KIND_HINTS[kind]}",
@@ -448,10 +536,20 @@ class DelegateToolsMixin:
             output_handler=None,
         )
 
-    def _spawn_child(self):
-        """A fresh agent of this class, permissions copied from this console."""
+    def _spawn_child(self, kind: str = DEFAULT_DELEGATE_KIND):
+        """A fresh agent of this class sharing this session's ledger and archive.
+
+        Permissions are copied from this console. The child records into the
+        parent's ledger and reads from the parent's artifact store, so a handle
+        the digest names resolves for every agent in the session.
+        """
         child = type(self)(config=self._child_config())
-        child._enforce_delegate_toggle()  # pylint: disable=protected-access
+        # pylint: disable=protected-access
+        child._enforce_delegate_toggle()
+        child._output_artifacts = store_for(self)
+        child._session_ledger = ledger_for(self)
+        child._session_actor = f"worker:{kind}"
+        # pylint: enable=protected-access
         for name in ("auto_approve_gated_tools", "full_access"):
             if hasattr(self.console, name):
                 setattr(child.console, name, getattr(self.console, name))
@@ -469,6 +567,8 @@ class DelegateToolsMixin:
         if self._instance_tools is None:
             self._snapshot_tools()
         self._instance_tools.pop("delegate_task", None)
+        if self._delegated_worker() and LEDGER_TOOL not in self._instance_tools:
+            self.register_session_findings_tool()
         if hasattr(self, "_system_prompt_cache"):
             del self._system_prompt_cache
 
@@ -591,6 +691,11 @@ class DelegateToolsMixin:
 
 
 # ── module helpers ───────────────────────────────────────────────────────────
+
+
+def _and_list(names) -> str:
+    names = list(names)
+    return ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0]
 
 
 def _git_snapshot(root: Path) -> Dict[str, Tuple[str, Optional[int]]]:

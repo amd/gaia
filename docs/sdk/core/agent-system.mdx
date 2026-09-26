@@ -579,6 +579,61 @@ separate list and never carry it. The prompt fragment tells the parent to
 report a worker's run as the worker's — which one ran what, quoting its
 `evidence.tests.command` and `summary` — never as its own.
 
+### The session findings ledger
+
+Every worker starts from an empty conversation, so on a measured `orchestrate`
+run four to six investigation workers each spent about ten steps re-reading
+the same files. Whenever delegation is on (either mode, nothing extra to
+enable), the parent and every child share one `SessionLedger`
+(`gaia.agents.base.session_ledger`) and one artifact store, and the ledger
+records — deterministically, with no model in the loop — what every tool
+result of the session established:
+
+- **files read** (`read_file`, or `cat`/`head`/`sed -n 'a,bp'` on one file):
+  path, size, and for text of 2,000+ characters the outline the chunk index
+  gives it (functions, classes and headings with line ranges). The full text is
+  archived under the ledger's own index, so `read_tool_output(artifact,
+  entry=n)` fetches exactly one outlined part.
+- **searches** (`search_file_content`, `grep`/`rg`): the pattern and each
+  matching file with its hit count.
+- **checks**: the command, the runner and its summary line, pass or fail.
+- **files changed** by an edit or write tool, with the step.
+- **worker findings**: each `delegate_task` brief's goal with the worker's
+  whole result.
+
+Entries name the step and who found them (`parent` or `worker:<kind>`), and
+dedup on `(kind, path or pattern)`: a later read of the same file replaces its
+outline in place. Eviction never touches the ledger.
+
+It reaches the model in two ways. Every child brief opens with the digest
+under the fixed header `What is already known (session findings)` — placed
+after the system prompt and before the brief, so children spawned from the
+same ledger state share a byte-identical prefix for provider caching. And the
+`session_findings(query="")` tool, offered to the parent and every worker (and
+part of the orchestrator's set), returns the digest with no query, or with one
+the matching entries — substring of a path, pattern, symbol or label — with
+their artifact handle and entry numbers. Its result is capped at 8,000
+characters, never condensed and never evicted. The digest carries no handles
+or timestamps, so identical findings always render to identical bytes:
+
+```text
+What is already known (session findings)
+Files read:
+- src/a.py (3141 chars; parent, step 1): 1 A module with enough structure to outline. (1 imports) L1-3 | 2 func_0 L4-10 | 3 func_1 L11-17 | … | 26 Widget.size L179-181
+- README.md (11 chars; parent, step 2): 1 README.md L1-2
+Searches:
+- 'func_1' (search_file_content; 3 hits in 2 files; worker:investigate, step 3): src/a.py x2, src/b.py x1
+Checks run:
+- pytest tests/unit -q (pytest; worker:verify, step 4): passed — 2 passed in 0.10s
+Files changed:
+- src/b.py (write_file; worker:implement, step 5)
+Worker findings:
+- [investigate] where is func_1 used (worker:investigate, step 6): In src/b.py:3.
+```
+
+The prompt fragments say the one thing that matters: check `session_findings`
+before reading or searching, and fetch a known part with `read_tool_output`.
+
 ## Evicting stale tool results
 
 On a large repository the context an agent re-sends each step grows to
