@@ -6,6 +6,7 @@ Handles path validation, user prompting, persistent allow-lists,
 blocked path enforcement, write guardrails, and audit logging.
 """
 
+import contextlib
 import datetime
 import hashlib
 import json
@@ -1093,6 +1094,10 @@ def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
         shutil.copy2(str(real_path), str(backup_path))
     except OSError as e:
         logger.error("Failed to back up %s to %s: %s", real_path, backup_path, e)
+        # A copy that died mid-stream leaves a truncated .bak that still counts
+        # as a generation, so it can evict a good backup from the rotation.
+        with contextlib.suppress(OSError):
+            backup_path.unlink(missing_ok=True)
         raise BackupError(
             f"Refused to modify {real_path}: backing it up to {backup_path} "
             f"failed ({e}). Nothing was written. Free disk space or make "

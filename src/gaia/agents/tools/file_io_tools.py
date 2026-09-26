@@ -23,6 +23,7 @@ from gaia.agents.tools.file_edit import (
     record_write,
 )
 from gaia.logger import get_logger
+from gaia.security import BackupError
 
 logger = get_logger(__name__)
 
@@ -496,6 +497,17 @@ class FileIOToolsMixin:
                 if backup_path:
                     result["backup_path"] = backup_path
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -652,6 +664,17 @@ class FileIOToolsMixin:
                     "diff": diff,
                     "backup_created": backup_path is not None,
                     "backup_path": backup_path,
+                }
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
                 }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
@@ -882,6 +905,17 @@ class FileIOToolsMixin:
                 if backup_path:
                     result["backup_path"] = backup_path
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -998,6 +1032,17 @@ class FileIOToolsMixin:
                 if display_error:
                     result["display_error"] = display_error
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -1164,6 +1209,17 @@ class FileIOToolsMixin:
                 if display_error:
                     result["display_error"] = display_error
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -1443,6 +1499,17 @@ class FileIOToolsMixin:
                     "function_replaced": function_name,
                     "backup_path": backup_path if backup else None,
                     "diff": diff,
+                }
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
                 }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)

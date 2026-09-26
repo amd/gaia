@@ -41,6 +41,19 @@ to the returned generation. Successful writes record their new content so a late
 edit accepts the agent's own changes. New files and files without a prior read
 remain writable, subject to the existing path and write policies.
 
+### No backup, no write
+
+Every tool that modifies an existing file backs it up first. If that backup
+cannot be made — a full disk, an unwritable cache directory — `write_file`,
+`write_python_file`, `write_markdown_file`, `replace_function`, `edit_file`, and
+`edit_python_file` refuse the change and leave the file untouched. The error
+names the cause and the directory to free or make writable.
+
+The refusal carries `executed: False`, because nothing ran. A tool result
+without it is treated as having executed and failed, which is how a one-off
+full disk would otherwise be stored as a durable "writing this file is broken"
+lesson and replayed into later prompts long after the disk was freed.
+
 ---
 
 ## Host Agent Contract
