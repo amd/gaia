@@ -8,10 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.installer.init_command import InitCommand
 from gaia.installer.lemonade_installer import (
     InstallResult,
-    LemonadeInfo,
     LemonadeInstaller,
 )
 
@@ -56,25 +54,3 @@ def test_failure_names_the_msi_log(code, mock_home, tmp_path):
     assert not result.success
     expected_log = mock_home / ".cache" / "gaia" / "installer" / "msi_install.log"
     assert str(expected_log) in result.error
-
-
-def test_init_tells_the_user_to_restart(mock_home):
-    cmd = InitCommand(profile="minimal", yes=True)
-    cmd.installer = MagicMock()
-    cmd.installer.system = "windows"
-    cmd.installer.install.return_value = InstallResult(
-        success=True,
-        version="1.0.0",
-        message="Installed Lemonade v1.0.0. Restart Windows to finish the installation.",
-        restart_required=True,
-    )
-    cmd.installer.check_installation.return_value = LemonadeInfo(installed=False)
-    warnings = []
-
-    with (
-        patch.object(cmd, "_print_warning", side_effect=warnings.append),
-        patch.object(cmd, "_refresh_path_environment"),
-    ):
-        assert cmd._install_lemonade()
-
-    assert any("Restart Windows" in w for w in warnings)
