@@ -239,10 +239,19 @@ def test_evidence_from_git_repo(repo):
     ]
     result = _approving_parent()._delegate_task(**_BRIEF)
     evidence = result["evidence"]
-    assert evidence["files_changed"] == ["existing.txt", "new.txt"]
+    assert evidence["files_changed"] == [
+        {"path": "existing.txt", "added": 1, "removed": 1},
+        {"path": "new.txt", "added": 1, "removed": 0},
+    ]
     assert evidence["commands_run"] == ["pytest -q"]
     assert evidence["commands_total"] == 1
-    assert evidence["tests"] and evidence["tests"][0]["failed"] is False
+    assert evidence["tests"] == {
+        "ran": 1,
+        "command": "pytest -q",
+        "check": "pytest",
+        "failed": False,
+        "summary": "1 passed in 0.01s",
+    }
     assert result["tool_calls"] == 3
     assert result["steps"] == 4
     assert result["tokens"] == {"input": 400, "output": 40, "cached": 160}
@@ -260,7 +269,7 @@ def test_evidence_from_plain_directory_uses_mtimes(tmp_path, monkeypatch):
     parent = Kid()
     parent._verification_project_root = lambda: str(root)
     result = parent._delegate_task(**_BRIEF)
-    assert result["evidence"]["files_changed"] == ["b.txt"]
+    assert result["evidence"]["files_changed"] == [{"path": "b.txt"}]
 
 
 def test_missing_workdir_fails_loudly(monkeypatch, tmp_path):
@@ -389,6 +398,24 @@ def test_structureless_long_answer_is_elided_with_its_own_archive(repo):
     assert result["result"]["original_chars"] >= 50000
     assert result["result"]["artifact"] != result["transcript"]
     assert delegate_tools.store_for(parent).text(result["result"]["artifact"]) == answer
+
+
+def test_no_check_run_reports_zero(repo):
+    SCRIPTS[1] = [_answer("looked only")]
+    assert Kid()._delegate_task(**_BRIEF)["evidence"]["tests"] == {"ran": 0}
+
+
+def test_prompt_fragment_names_the_implementation_split():
+    prompt = Kid().system_prompt
+    for phrase in (
+        "Plan first",
+        "implementation of one component or change including its tests",
+        "which test command must pass",
+        "no memory of this conversation",
+        "trust files_changed and the test output",
+        "final end-to-end verification",
+    ):
+        assert phrase in prompt
 
 
 def test_commands_lose_the_cd_prefix_and_are_capped(repo, monkeypatch):

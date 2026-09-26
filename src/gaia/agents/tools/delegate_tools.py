@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from gaia.agents.base.artifacts import store_for
 from gaia.agents.base.tool_output import elide_text
 from gaia.agents.base.verification import (
+    has_test_run_summary,
     is_check_execution,
     strip_verification_scope,
 )
@@ -42,7 +43,7 @@ ANSWER_WHOLE_CHARS = 6500
 COMMANDS_CAP = 12
 COMMAND_CHARS = 200
 FILES_CAP = 50
-TESTS_CAP = 10
+TEST_EVIDENCE_CHARS = 600
 
 #: ``error_history`` types the agent loop records when the backend, not the
 #: task, failed. A child ending on one of these did not produce a result.
@@ -60,12 +61,14 @@ _MTIME_SCAN_CAP = 200_000
 #: prompt is byte-identical otherwise and the child never sees it.
 DELEGATE_SYSTEM_PROMPT = """\
 ==== DELEGATION ====
-Before editing anything in a repository you have not explored, delegate the \
-investigation with delegate_task instead of exploring here. Delegate any subtask \
-whose output you need only as a short answer: where something is implemented, \
-how it works, which tests fail and why. Write the brief with every path, symbol, \
-command and criterion, because the worker starts with no memory of this \
-conversation. Do the edits and the final verification yourself."""
+Plan first. Then delegate each bounded piece of work as a subtask with \
+delegate_task: investigation that ends in a short answer, and implementation of \
+one component or change including its tests. The brief names the files, symbols \
+and commands, and the exact acceptance check: which test command must pass. The \
+worker starts with no memory of this conversation. Do not re-read files a worker \
+has already changed unless its evidence shows a problem: trust files_changed and \
+the test output in evidence. Keep for yourself only the plan, the review of each \
+worker's evidence, and the final end-to-end verification."""
 
 _BRIEF_HEADER = (
     "You are a delegated worker. You have no memory of the conversation that "
@@ -150,32 +153,37 @@ class DelegateToolsMixin:
         def delegate_task(
             goal: str, scope: str, done_when: str, return_format: str
         ) -> Dict[str, Any]:
-            """Hand a bounded subtask to a fresh worker agent and get back only its short result.
+            """Hand a bounded subtask to a fresh worker agent and get back only its result and evidence.
 
-            Use it for investigation that ends in a short answer — find where
-            X is implemented, explain how Y works, run the tests and report
-            the failures — and for a bounded edit when asked. The worker's
-            exploration never enters this conversation, so it costs far less
-            than exploring here. Do not delegate a task whose full output you
-            need verbatim, or one that depends on what has been said here.
+            Two kinds of subtask: investigation that ends in a short answer
+            (where X is implemented, how Y works, which tests fail and why),
+            and implementation of one component or change including its
+            tests. The worker may edit files and run tests; it reads, edits
+            and verifies itself and returns files_changed plus test evidence.
+            Its exploration never enters this conversation, so it costs far
+            less than doing the work here. Do not delegate a task whose full
+            output you need verbatim, or one that depends on what has been
+            said here.
 
             The worker starts with NO memory of this conversation. The brief
-            must carry every path, name, command and criterion it needs.
+            must carry every path, symbol, command and criterion it needs,
+            including the exact test command that must pass.
 
             Args:
                 goal: What to find out or change, in one or two sentences.
                 scope: Where to look or work: directories, files, symbols, commands.
-                done_when: The concrete condition that means the task is finished.
+                done_when: The concrete acceptance check, e.g. "pytest tests/unit/test_x.py passes".
                 return_format: The shape of the answer wanted back, e.g. "file:line and a one-paragraph explanation".
 
             Returns:
                 result (the worker's answer, whole; a very long one comes back
                 as shown parts plus a numbered index of its own archive, read
                 with read_tool_output(artifact, entry=n)), evidence
-                (files_changed, commands_run, tests), steps, tool_calls,
-                tokens, hit_step_limit, and transcript: the worker's full
-                conversation log, for drilling into how it worked, never
-                needed to use the answer.
+                (files_changed with added/removed line counts, commands_run,
+                tests: the last test command and its summary), steps,
+                tool_calls, tokens, hit_step_limit, and transcript: the
+                worker's full conversation log, for drilling into how it
+                worked, never needed to use the answer.
             """
             return self._delegate_task(goal, scope, done_when, return_format)
 
@@ -364,23 +372,13 @@ class DelegateToolsMixin:
             for e in executions
             if e.get("tool") == "run_shell_command"
         ]
-        tests = [
-            {
-                "tool": e.get("tool"),
-                "check": e.get("check_label"),
-                "target": e.get("check_target"),
-                "failed": bool(e.get("failed")),
-            }
-            for e in executions
-            if is_check_execution(e)
-        ]
         files = self._files_changed(workdir, before)
         return {
             "files_changed": files[:FILES_CAP],
             "files_changed_total": len(files),
             "commands_run": commands[:COMMANDS_CAP],
             "commands_total": len(commands),
-            "tests": tests[:TESTS_CAP],
+            "tests": _test_evidence(executions),
         }
 
     def _workdir_snapshot(self, workdir: str) -> Tuple[str, Dict[str, Any]]:
@@ -397,13 +395,19 @@ class DelegateToolsMixin:
 
     def _files_changed(
         self, workdir: str, before: Tuple[str, Dict[str, Any]]
-    ) -> List[str]:
+    ) -> List[Dict[str, Any]]:
         kind, prior = before
         root = Path(workdir)
         # Both snapshots carry mtimes, so a path dirty before the child ran and
         # edited again still shows up.
         now = _git_snapshot(root) if kind == "git" else _mtime_snapshot(root)
-        return sorted(p for p in set(prior) | set(now) if prior.get(p) != now.get(p))
+        paths = sorted(p for p in set(prior) | set(now) if prior.get(p) != now.get(p))
+        if kind != "git":
+            return [{"path": p} for p in paths]
+        counts = _git_numstat(root)
+        return [
+            {"path": p, **counts.get(p, _untracked_counts(root / p))} for p in paths
+        ]
 
 
 # ── module helpers ───────────────────────────────────────────────────────────
@@ -436,6 +440,69 @@ def _git_snapshot(root: Path) -> Dict[str, Tuple[str, Optional[int]]]:
             mtime = None
         snapshot[path] = (status, mtime)
     return snapshot
+
+
+def _git_numstat(root: Path) -> Dict[str, Dict[str, int]]:
+    """path -> added/removed line counts against HEAD, for tracked changes."""
+    proc = subprocess.run(
+        ["git", "diff", "--numstat", "HEAD", "--"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git diff --numstat failed in {root} (exit {proc.returncode}): "
+            f"{proc.stderr.strip()}"
+        )
+    counts: Dict[str, Dict[str, int]] = {}
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        added, removed, path = parts
+        if " => " in path:
+            path = path.split(" => ", 1)[1].rstrip("}")
+        # "-" marks a binary file; report it as no countable lines.
+        counts[path] = {
+            "added": int(added) if added.isdigit() else 0,
+            "removed": int(removed) if removed.isdigit() else 0,
+        }
+    return counts
+
+
+def _untracked_counts(path: Path) -> Dict[str, int]:
+    """A file git has never seen: every line is an addition."""
+    try:
+        with open(path, "rb") as stream:
+            return {"added": sum(1 for _ in stream), "removed": 0}
+    except OSError:
+        return {"added": 0, "removed": 0}
+
+
+def _test_evidence(executions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The worker's last test run: its command, outcome and summary lines."""
+    checks = [e for e in executions if is_check_execution(e)]
+    if not checks:
+        return {"ran": 0}
+    last = checks[-1]
+    args = last.get("args") or {}
+    command = args.get("command") or args.get("code") or last.get("check_target") or ""
+    output = str(last.get("output") or "")
+    summary = [
+        line.strip() for line in output.splitlines() if has_test_run_summary(line)
+    ]
+    text = "\n".join(summary) if summary else output.strip()
+    if len(text) > TEST_EVIDENCE_CHARS:
+        text = text[-TEST_EVIDENCE_CHARS:]
+    return {
+        "ran": len(checks),
+        "command": _CD_PREFIX_RE.sub("", str(command))[:COMMAND_CHARS],
+        "check": last.get("check_label"),
+        "failed": bool(last.get("failed")),
+        "summary": text,
+    }
 
 
 def _mtime_snapshot(root: Path) -> Dict[str, Tuple[int, int]]:

@@ -513,6 +513,12 @@ delegate_task(
 )
 ```
 
+The split that saves is planning here and delegating bounded implementation:
+the worker reads, edits and runs the tests for one component, and the parent
+reviews its evidence instead of re-reading the files. Delegating only the
+understanding of files the parent must edit anyway saves nothing. The prompt
+fragment that comes with the tool says exactly this.
+
 The child is a new instance of the same agent class with the same config
 (model, backend, working directory, tools, permissions, system prompt) but a
 fresh conversation, its own step budget, a silent console, and no
@@ -524,10 +530,12 @@ page):
 - `result` — the child's answer, whole up to ~6,500 characters. A longer one
   is archived on its own and returned as a chunk index (`shown` parts plus a
   numbered `index`; `read_tool_output(artifact, entry=n)` reads one part).
-- `evidence` — `files_changed` (from `git status` before and after, or a
-  modification-time scan outside a repository), `commands_run` (up to 12,
-  with the total, minus the shell tool's `cd <workdir> &&` prefix), and
-  `tests` (the child's test, lint and build runs).
+- `evidence` — `files_changed` (from `git status` before and after, each
+  with `added`/`removed` line counts from `git diff --numstat`; names only
+  from a modification-time scan outside a repository), `commands_run` (up to
+  12, with the total, minus the shell tool's `cd <workdir> &&` prefix), and
+  `tests` (how many checks the child ran, plus the last one's command,
+  pass/fail and summary lines, capped at 600 characters).
 - `steps`, `tool_calls`, `tokens` (`input`, `output`, `cached`), `hit_step_limit`.
 - `transcript` — an artifact handle for the child's full conversation log, for
   drilling into how it worked; never needed to use the answer.
