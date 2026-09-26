@@ -100,7 +100,7 @@ jobs:
 
       # Skips wholesale without mcp 2.x, which test_unit.yml does not install.
       - name: Run mcp 2.x server API tests
-        run: python -m pytest tests/unit/test_mcp2_server.py -v
+        run: python -m pytest tests/unit/test_mcp2_server.py tests/unit/test_mcp_bridge_protocol.py -v
 
       # TODO: Start Lemonade server for integration tests
       # For now, integration tests requiring LLM will be skipped.

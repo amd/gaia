@@ -48,6 +48,9 @@ on:
       - 'tests/unit/agents/test_default_max_steps.py'
       - 'tests/unit/agents/test_console_tool_confirmation.py'
       - 'tests/unit/agents/tools/test_email_tools.py'
+      - 'tests/unit/test_inference_location.py'
+      - 'tests/unit/test_skill_tools_same_turn.py'
+      - 'tests/unit/test_tool_admission_order.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
   pull_request:
@@ -90,6 +93,9 @@ on:
       - 'tests/unit/agents/test_default_max_steps.py'
       - 'tests/unit/agents/test_console_tool_confirmation.py'
       - 'tests/unit/agents/tools/test_email_tools.py'
+      - 'tests/unit/test_inference_location.py'
+      - 'tests/unit/test_skill_tools_same_turn.py'
+      - 'tests/unit/test_tool_admission_order.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
   merge_group:
@@ -184,6 +190,9 @@ jobs:
             tests/unit/agents/test_default_max_steps.py \
             tests/unit/agents/test_console_tool_confirmation.py \
             tests/unit/agents/tools/test_email_tools.py \
+            tests/unit/test_inference_location.py \
+            tests/unit/test_skill_tools_same_turn.py \
+            tests/unit/test_tool_admission_order.py \
             -v --tb=short
 
       - name: Run Framework Registry Discovery Tests

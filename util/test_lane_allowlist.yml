@@ -84,6 +84,7 @@ module_skips:
   - reason: Needs the gaia-agent-chat wheel, which test_unit.yml does not install.
     runs_in: test_chat_agent.yml
     paths:
+      - tests/unit/agents/test_registry.py
       - tests/unit/test_chat_agent_integration.py
       - tests/unit/test_chat_dynamic_tools.py
       - tests/unit/test_chat_fix_contracts.py
@@ -92,7 +93,10 @@ module_skips:
       - tests/unit/test_chat_tool_bundles.py
       - tests/unit/test_dynamic_tool_filtering.py
       - tests/unit/test_prompt_size_budget.py
+      - tests/unit/test_inference_location.py
       - tests/unit/test_run_python_tool.py
+      - tests/unit/test_skill_tools_same_turn.py
+      - tests/unit/test_tool_admission_order.py
       - tests/unit/test_tool_loader_disambiguation.py
 
   - reason: Needs the gaia-agent (flagship) wheel, which test_unit.yml does not install.
@@ -108,6 +112,7 @@ module_skips:
     paths:
       - tests/unit/test_agent_ui_mcp_messages.py
       - tests/unit/test_mcp2_server.py
+      - tests/unit/test_mcp_bridge_protocol.py
 
   - reason: Needs reportlab, which the email unit lane collects tests/unit/eval/ without.
     runs_in: test_unit.yml
