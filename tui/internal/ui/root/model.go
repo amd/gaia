@@ -13,6 +13,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
+	"github.com/amd/gaia/tui/internal/ui/gateway"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/status"
@@ -30,6 +31,8 @@ const (
 	// chat opens.
 	viewPreflight
 	viewChat
+	// viewGateway connects GAIA to the AMD LLM gateway (Lemonade cloud offload).
+	viewGateway
 )
 
 // FlagshipModel is the whole TUI: splash, readiness, chat, for exactly one
@@ -67,6 +70,9 @@ type FlagshipModel struct {
 	// trace records every agent event to a JSONL file (--trace). Nil when off.
 	// Owned by the caller of RunFlagship, which closes it after the event loop.
 	trace *event.TraceWriter
+
+	// gw is the AMD LLM gateway screen, nil until the user opens it.
+	gw *gateway.GatewayModel
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -128,14 +134,15 @@ func (b *clientBox) set(c client.AgentClient) {
 	b.c = c
 }
 
-func (b *clientBox) close() {
+func (b *clientBox) close() error {
 	b.mu.Lock()
 	c := b.c
 	b.c = nil
 	b.mu.Unlock()
-	if c != nil {
-		c.Close()
+	if c == nil {
+		return nil
 	}
+	return c.Close()
 }
 
 // NewFlagshipModel builds the TUI around one agent.
@@ -171,7 +178,9 @@ func (m FlagshipModel) Close() error {
 		m.chat.CancelActiveTurn()
 	}
 	if m.chatClient != nil {
-		m.chatClient.close()
+		// Returned, not dropped: app.go prints it, and a wedged agent that
+		// outlives quit is only diagnosable from this line.
+		return m.chatClient.close()
 	}
 	return nil
 }
@@ -309,6 +318,8 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chat = &chatModel
 				return m, cmd
 			}
+		case viewGateway:
+			return m.updateGateway(msg)
 		}
 		return m, nil
 
@@ -319,6 +330,14 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.beginPreflight(m.agent)
+
+	case chat.OpenGatewayMsg:
+		return m.openGateway()
+
+	case gateway.CloseMsg:
+		m.gw = nil
+		m.activeView = viewChat
+		return m, nil
 
 	case preflight.ProceedMsg:
 		if !m.gateIsFor(msg.AgentID) {
@@ -410,9 +429,43 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chat = &chatModel
 			return m, cmd
 		}
+	case viewGateway:
+		// Everything the screen started answers with a message this package
+		// cannot name (probe, install, auth, model list, cursor blink), so it
+		// gets the whole default stream.
+		return m.updateGateway(msg)
 	}
 
 	return m, nil
+}
+
+// openGateway switches to the AMD LLM gateway screen. A Lemonade that cannot
+// be reached is passed into the screen rather than swallowed here, so the user
+// sees why on the screen they asked for.
+func (m FlagshipModel) openGateway() (tea.Model, tea.Cmd) {
+	c, err := gateway.NewClient()
+	gw := gateway.New(c, err)
+	m.gw = &gw
+	m.activeView = viewGateway
+
+	cmds := []tea.Cmd{gw.Init()}
+	if m.width > 0 && m.height > 0 {
+		updated, cmd := gw.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+		sized := updated.(gateway.GatewayModel)
+		m.gw = &sized
+		cmds = append(cmds, cmd)
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m FlagshipModel) updateGateway(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.gw == nil {
+		return m, nil
+	}
+	updated, cmd := m.gw.Update(msg)
+	gw := updated.(gateway.GatewayModel)
+	m.gw = &gw
+	return m, cmd
 }
 
 func (m FlagshipModel) View() string {
@@ -433,6 +486,10 @@ func (m FlagshipModel) View() string {
 	case viewChat:
 		if m.chat != nil {
 			base = m.chat.View()
+		}
+	case viewGateway:
+		if m.gw != nil {
+			base = m.gw.View()
 		}
 	}
 

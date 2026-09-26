@@ -165,10 +165,9 @@ Customize your voice interaction experience:
     # Use a cloud provider instead of local Lemonade
     gaia talk --use-claude                            # claude-sonnet-5 by default
     gaia talk --use-claude --claude-model claude-opus-5
-    gaia talk --use-chatgpt --model gpt-4o
     ```
 
-    <Note>Defaults: `Gemma-4-E4B-it-GGUF`, 512 tokens, local Lemonade. `--use-claude` needs `ANTHROPIC_API_KEY`; `--use-chatgpt` needs `OPENAI_API_KEY` and an explicit `--model`.</Note>
+    <Note>Defaults: `Gemma-4-E4B-it-GGUF`, 512 tokens, local Lemonade. `--use-claude` needs `ANTHROPIC_API_KEY`. `--use-chatgpt` was removed — configure the model in Lemonade and point `--base-url` at it.</Note>
   </Tab>
 
   <Tab title="Performance Stats">

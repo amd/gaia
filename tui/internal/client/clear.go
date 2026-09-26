@@ -14,8 +14,11 @@ type ConversationResetter interface {
 	ClearConversation(context.Context) error
 }
 
-// Must match CLEAR_CONVERSATION_QUERY in gaia_agent/stdio.py.
+// Pinned, with its ack below, by tests/fixtures/stdio/gaia_stdio_wire.json.
 const clearConversationQuery = "\x00gaia:clear_conversation\x00"
+
+// clearConversationAck is the final answer that proves the agent really cleared.
+const clearConversationAck = "conversation_cleared"
 
 func (s *SubprocessClient) SupportsConversationReset() bool { return s.canonical }
 
@@ -37,7 +40,7 @@ func (s *SubprocessClient) ClearConversation(ctx context.Context) error {
 	for evt := range ch {
 		switch e := evt.(type) {
 		case event.CanonicalFinalEvent:
-			acknowledged = e.Answer == "conversation_cleared"
+			acknowledged = e.Answer == clearConversationAck
 		case event.CanonicalErrorEvent:
 			return fmt.Errorf("%s", e.Detail)
 		case event.AgentErrorEvent:

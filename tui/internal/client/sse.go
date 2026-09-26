@@ -36,6 +36,8 @@ type Turn struct {
 	Content string `json:"content"`
 }
 
+var _ FollowUpSender = (*SSEClient)(nil)
+
 // SSEOptions configures an SSEClient. The zero value is valid.
 type SSEOptions struct {
 	// Model overrides the sidecar's default model id. Empty means "sidecar default".
@@ -104,6 +106,14 @@ type SSEClient struct {
 type runHandle struct {
 	runID  string
 	cancel context.CancelFunc
+	// followUps are the mid-turn messages accepted against THIS run, in the
+	// order they were delivered. The sidecar folds them into the turn's own
+	// context, but /query is stateless (§2.4) — the host pushes the whole
+	// transcript on every turn, so a follow-up left out here would vanish from
+	// the conversation the moment the next turn overwrote the agent's history.
+	// Guarded by SSEClient.mu, like every other field this client shares with
+	// its consume goroutine.
+	followUps []string
 }
 
 // NewSSEClient builds a daemon-transport client for agentID (the path segment in
@@ -416,7 +426,10 @@ func (s *SSEClient) consume(
 				// empty `final` — keep the streamed text as the turn's answer.
 				answer = streamed.String()
 			}
-			s.appendTurn(query, answer, shown)
+			s.mu.Lock()
+			followUps := append([]string(nil), handle.followUps...)
+			s.mu.Unlock()
+			s.appendTurn(query, answer, shown, followUps)
 		}
 		return
 	}
@@ -712,6 +725,108 @@ func (s *SSEClient) Cancel(ctx context.Context) error {
 	}
 }
 
+// FollowUpSupported implements client.FollowUpSender. It reports what the
+// negotiated peer actually offers — an older sidecar has no /followup route and
+// would 404 the POST, which the UI must know BEFORE it tells the user their
+// message is on its way.
+//
+// False before the first Send, when nothing has been probed yet. That is the
+// honest answer, not a pessimistic guess: there is also no run to send a
+// follow-up to at that point.
+func (s *SSEClient) FollowUpSupported() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerProbed && s.peer.supportsFollowUp
+}
+
+// SendFollowUp implements client.FollowUpSender: it hands the RUNNING turn
+// something the user typed after it started.
+//
+// Unlike Cancel, a failure here is never shrugged off. The whole contract with
+// the user is "your message was sent" — so a run that has already ended (404)
+// is reported as undelivered, and the caller holds the text for the next turn
+// rather than showing a message that went nowhere.
+func (s *SSEClient) SendFollowUp(ctx context.Context, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("an empty follow-up has nothing to deliver")
+	}
+
+	s.mu.Lock()
+	inst := s.inst
+	active := s.active
+	supported := s.peerProbed && s.peer.supportsFollowUp
+	version := s.peer.version
+	s.mu.Unlock()
+
+	if !supported {
+		return fmt.Errorf("%s", noticeForMissingFollowUp(s.agentID, version))
+	}
+	if inst == nil || active == nil {
+		return fmt.Errorf(
+			"there is no live '%s' run to take a follow-up — it finished first", s.agentID)
+	}
+
+	payload, err := json.Marshal(followUpRequest{Text: text})
+	if err != nil {
+		return fmt.Errorf("could not encode the '%s' follow-up: %w", s.agentID, err)
+	}
+
+	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/followup",
+			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
+		Body:       payload,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("deliver a follow-up to the '%s' run", s.agentID),
+	})
+	if err != nil {
+		return fmt.Errorf("could not deliver the follow-up to the '%s' agent: %w", s.agentID, err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Recorded only once the sidecar has it: /query is stateless, so the
+		// host transcript is the only place a follow-up survives into the next
+		// turn's pushed context. Recording an undelivered one would put words
+		// in the conversation the agent never saw.
+		//
+		// Two places to put it, because the turn's own user+assistant pair is
+		// only written when the turn ENDS. While the run is still the live one,
+		// it rides the handle and appendTurn files it between that pair, where
+		// it was said. If the turn settled during this round-trip, that pair is
+		// already written and the handle is read by nothing — so it goes
+		// straight on the end instead. Late, but present: the user has been
+		// told it was sent, and a conversation missing a line the user can see
+		// on their own screen is the worse of the two.
+		s.mu.Lock()
+		if s.active == active {
+			active.followUps = append(active.followUps, text)
+		} else {
+			s.transcript = append(s.transcript, Turn{Role: "user", Content: text})
+		}
+		s.mu.Unlock()
+		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf(
+			"the '%s' run ended before the follow-up reached it, so it was not delivered",
+			s.agentID)
+	case http.StatusConflict:
+		return fmt.Errorf(
+			"the '%s' run is not accepting mid-turn input, so the follow-up was not delivered",
+			s.agentID)
+	default:
+		return fmt.Errorf("delivering the follow-up to the '%s' agent failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
+	}
+}
+
+type followUpRequest struct {
+	Text string `json:"text"`
+}
+
 func (s *SSEClient) clearActive(handle *runHandle) {
 	s.mu.Lock()
 	if s.active == handle {
@@ -727,7 +842,7 @@ func (s *SSEClient) clearActive(handle *runHandle) {
 // reply instead of treating it as a reference note.
 const uiContextMarker = "[ui-context: cards already shown to the user — reference only, never repeat verbatim]"
 
-func (s *SSEClient) appendTurn(query, answer string, shown []string) {
+func (s *SSEClient) appendTurn(query, answer string, shown, followUps []string) {
 	// The assistant turn records what the USER saw, not only what the model
 	// said. Cards are drawn by this client, so their contents never reach the
 	// sidecar's history on their own — and a follow-up referring to a row
@@ -739,10 +854,13 @@ func (s *SSEClient) appendTurn(query, answer string, shown []string) {
 		)
 	}
 	s.mu.Lock()
-	s.transcript = append(s.transcript,
-		Turn{Role: "user", Content: query},
-		Turn{Role: "assistant", Content: content},
-	)
+	s.transcript = append(s.transcript, Turn{Role: "user", Content: query})
+	// Between the question and the answer, which is where they were said and
+	// the only order that makes the answer read as a reply to both.
+	for _, f := range followUps {
+		s.transcript = append(s.transcript, Turn{Role: "user", Content: f})
+	}
+	s.transcript = append(s.transcript, Turn{Role: "assistant", Content: content})
 	s.mu.Unlock()
 }
 
@@ -916,3 +1034,184 @@ var (
 	_ CapabilityReporter = (*SSEClient)(nil)
 	_ MemoryProvider     = (*SSEClient)(nil)
 )
+
+// The live permission seam (docs/plans/daemon-convergence.mdx §3.4).
+//
+// Distinct from Confirm above, and the difference is the whole point. Confirm
+// answers a run that has ALREADY STOPPED under the resume model. These reach an
+// agent thread still parked inside confirm_tool_execution, which is what the
+// flagship's gated tools — shell, file writes, code execution — actually do.
+// Without them the chat view can only record intent: it reports "this agent
+// connection cannot deliver a permission decision" and the tool never runs.
+var (
+	_ ToolPermissionResponder = (*SSEClient)(nil)
+	_ PermissionBypasser      = (*SSEClient)(nil)
+	_ LivePermissionReporter  = (*SSEClient)(nil)
+)
+
+// SupportsLivePermissions reports whether the negotiated peer serves the
+// permission routes. False before any turn has negotiated, which is also before
+// any prompt can arrive.
+func (s *SSEClient) SupportsLivePermissions() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerProbed && s.peer.supportsToolDecision
+}
+
+// noLivePermissions explains why the permission routes cannot be used: this
+// agent never serves them, or it predates them. The two need different fixes.
+func (s *SSEClient) noLivePermissions(action string, peer peerContract, outcome string) error {
+	if s.agentID != toolDecisionAgentID {
+		return fmt.Errorf("the '%s' agent cannot %s over the daemon — it has no such route. %s",
+			s.agentID, action, outcome)
+	}
+	return fmt.Errorf(
+		"this '%s' agent cannot %s over the daemon: it speaks contract %s, and %d.%d "+
+			"added the route. Update the agent with `gaia agent install %s`. %s",
+		s.agentID, action, peer.versionLabel(),
+		toolDecisionContractMajor, toolDecisionContractMinor, s.agentID, outcome)
+}
+
+type toolDecisionRequest struct {
+	Decision  string `json:"decision"`
+	ConfirmID string `json:"confirm_id,omitempty"`
+}
+
+type bypassRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// decisionWire validates a decision before it goes on the wire.
+//
+// PermissionDecision's values ARE the wire words — a deliberate cross-process
+// contract with gaia_agent.stdio's DECISION_* constants and the server's
+// _TOOL_DECISIONS — so there is nothing to translate, only something to check.
+// The agent fails closed on a value it does not recognise, which would turn the
+// approval the user just gave into a silent denial; catching that here names it
+// instead.
+func decisionWire(d PermissionDecision) (string, error) {
+	switch d {
+	case PermissionAllow, PermissionAlways, PermissionDeny:
+		return string(d), nil
+	default:
+		return "", fmt.Errorf(
+			"unknown permission decision %q — nothing was sent, because the "+
+				"agent would have read it as a denial", string(d))
+	}
+}
+
+// RespondToolPermission delivers one decision for the confirmation the agent is
+// parked on. confirmID names WHICH prompt it answers, so a late click cannot
+// resolve whichever confirmation replaced the one it was typed against.
+func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionDecision) error {
+	wire, err := decisionWire(decision)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	inst := s.inst
+	active := s.active
+	s.mu.Unlock()
+	if inst == nil || active == nil {
+		return fmt.Errorf(
+			"there is no live '%s' run to answer — it had already ended. Nothing was sent either way",
+			s.agentID)
+	}
+	if peer := s.negotiate(context.Background(), inst); !peer.supportsToolDecision {
+		// Without this the peer's plain 404 surfaces as "the run had already
+		// finished", which sends the user looking for the wrong problem.
+		return s.noLivePermissions("be asked for permission", peer, "Nothing was sent")
+	}
+
+	payload, err := json.Marshal(toolDecisionRequest{Decision: wire, ConfirmID: confirmID})
+	if err != nil {
+		return fmt.Errorf("could not encode the permission decision for '%s': %w", s.agentID, err)
+	}
+
+	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/tool_decision",
+			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
+		Body:       payload,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("deliver the '%s' agent's permission decision", s.agentID),
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf(
+			"the '%s' run had already finished, so the decision arrived too late. "+
+				"Nothing was sent either way", s.agentID)
+	case http.StatusConflict:
+		return fmt.Errorf(
+			"the '%s' agent is no longer waiting on that confirmation — it was "+
+				"already answered or timed out. Nothing was sent", s.agentID)
+	default:
+		return fmt.Errorf("delivering the '%s' agent's permission decision failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
+	}
+}
+
+// SetBypassPermissions turns unattended approval on or off for this
+// conversation. Session-scoped, not run-scoped: bypass outliving a turn is the
+// entire point of it, and it takes effect on the very next gated tool including
+// one in a turn already running.
+func (s *SSEClient) SetBypassPermissions(enabled bool) error {
+	sessionID, err := s.ensureSessionID()
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	inst := s.inst
+	s.mu.Unlock()
+	if inst == nil {
+		return fmt.Errorf(
+			"the '%s' agent is not connected yet, so bypass could not be changed. "+
+				"Send a message first", s.agentID)
+	}
+	if peer := s.negotiate(context.Background(), inst); !peer.supportsToolDecision {
+		return s.noLivePermissions("toggle bypass", peer, "Nothing was changed")
+	}
+
+	payload, err := json.Marshal(bypassRequest{Enabled: enabled})
+	if err != nil {
+		return fmt.Errorf("could not encode the bypass setting for '%s': %w", s.agentID, err)
+	}
+
+	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/sessions/%s/bypass",
+			url.PathEscape(s.agentID), url.PathEscape(sessionID)),
+		Body:       payload,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("change the '%s' agent's bypass setting", s.agentID),
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		// Bypass applies to a conversation, and this one has not started. Said
+		// plainly rather than as a bare 404: the user just pressed a key.
+		return fmt.Errorf(
+			"this '%s' conversation has not started yet, so there is nothing to "+
+				"apply bypass to. Send a message first, then toggle it", s.agentID)
+	default:
+		return fmt.Errorf("changing the '%s' agent's bypass setting failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
+	}
+}

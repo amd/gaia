@@ -242,7 +242,9 @@ class AudioClient:
             self._start_stdin_listener()
 
             if self.enable_tts:
-                text_queue = queue.Queue()
+                # Bounded like speak_text's: the drop-on-full guard below is
+                # only reachable while it is.
+                text_queue = queue.Queue(maxsize=100)
 
                 # Latched once the queue wedges. Without it every remaining
                 # chunk waits the full timeout again — a 200-chunk answer

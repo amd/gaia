@@ -48,12 +48,9 @@ FLAG_CASES = [
     pytest.param(
         ["--use-claude"], {"use_claude": True}, {"use_claude": True}, id="--use-claude"
     ),
-    pytest.param(
-        ["--use-chatgpt", "--model", "gpt-4o"],
-        {"use_chatgpt": True, "model": "gpt-4o"},
-        {"use_chatgpt": True, "model": "gpt-4o"},
-        id="--use-chatgpt",
-    ),
+    # `--use-chatgpt` is deliberately absent: #3899 retired the openai/litellm
+    # providers, so the flag no longer reaches any client. Its contract is now
+    # a refusal — see test_use_chatgpt_is_refused_with_migration_guidance.
     pytest.param(
         ["--claude-model", "claude-x"],
         {"claude_model": "claude-x"},
@@ -101,9 +98,20 @@ def test_defaults_without_backend_flags(monkeypatch):
     assert audio_client.call_args[1]["model"] == DEFAULT_MODEL_NAME
 
 
-def test_use_chatgpt_without_model_is_refused(monkeypatch, capsys):
-    """The local default model id would only produce a confusing OpenAI 404."""
+@pytest.mark.parametrize("argv", [["--use-chatgpt"], ["--use-chatgpt", "--model", "x"]])
+def test_use_chatgpt_is_refused_with_migration_guidance(argv, monkeypatch, capsys):
+    """#3899 removed the provider; the flag must say so, not silently no-op.
+
+    With or without ``--model`` — a model id cannot rescue a provider that no
+    longer exists, and accepting the flag would start a talk session on
+    Lemonade while the user believes they are on OpenAI.
+    """
     with pytest.raises(SystemExit) as exc:
-        _run_talk(["--use-chatgpt"], monkeypatch)
+        _run_talk(argv, monkeypatch)
+
     assert exc.value.code != 0
-    assert "--use-chatgpt needs --model" in capsys.readouterr().out
+    message = capsys.readouterr().err
+    assert "use_chatgpt" in message
+    assert "removed" in message
+    # The error has to name the way forward, not just the refusal.
+    assert "lemonade" in message.lower()

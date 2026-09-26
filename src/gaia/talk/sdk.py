@@ -47,7 +47,7 @@ class TalkConfig:
 
     # General settings
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    use_chatgpt: bool = False  # Removed; True raises migration guidance
     claude_model: str = DEFAULT_CLAUDE_MODEL  # Claude model when use_claude=True
     base_url: Optional[str] = (
         None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
