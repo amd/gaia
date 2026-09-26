@@ -56,8 +56,13 @@ func TestAgentMarkdownIsActuallyStyled(t *testing.T) {
 	if heading == "" || heading == body {
 		t.Errorf("headings are indistinguishable from body text (%q vs %q)", heading, body)
 	}
-	if strong := styledRun(out, "3 issues"); strong == body {
-		t.Errorf("bold text carries no colour shift, so it vanishes in a font with no real bold: %q", strong)
+	// Bold is deliberately body-coloured — a model bolds half a dozen phrases
+	// per answer, and copper on each one is the speckle the palette reserves
+	// for the prompt. What it must not lose is the SGR bold attribute, which is
+	// the whole signal once the colour is gone.
+	strong := styledRun(out, "3 issues")
+	if strong == body || !strings.HasSuffix(strong, ";1m") {
+		t.Errorf("bold text carries no bold attribute, so it reads as prose: %q", strong)
 	}
 	// Colour, not a tint: the background fill was removed because a paragraph
 	// naming six symbols came out as a patchwork of little rectangles.
@@ -75,6 +80,28 @@ func TestAgentMarkdownIsActuallyStyled(t *testing.T) {
 	}
 	if !strings.Contains(plain, "│ Ship it") {
 		t.Errorf("block quotes render with no bar:\n%s", plain)
+	}
+}
+
+// Glamour paints every list item in the Document colour and drops Item.Color on
+// the floor, so a bullet cannot be tinted no matter what the palette says. The
+// override that tried to went in with a comment claiming a coloured bullet is
+// what makes a list scan; it never rendered. The glyph is the whole signal, and
+// this is the assertion that stops the dead field coming back.
+func TestAListMarkerIsAGlyphNotAColour(t *testing.T) {
+	out := renderDark(t, strings.Join([]string{
+		"Body line.",
+		"",
+		"- first finding",
+	}, "\n"))
+
+	if !strings.Contains(ansi.Strip(out), "• first") {
+		t.Errorf("the bullet glyph is missing, so a list reads as loose lines:\n%s", ansi.Strip(out))
+	}
+	if bullet, body := styledRun(out, "• "), styledRun(out, "Body"); bullet != body {
+		t.Errorf("a bullet was styled apart from body text (%q vs %q); glamour ignores "+
+			"Item.Color, so this can only have come from somewhere that will surprise "+
+			"the next reader", bullet, body)
 	}
 }
 

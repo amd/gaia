@@ -58,7 +58,8 @@
     "package:linux": "npm run build && electron-builder --linux --config electron-builder.yml",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "gen:api-types": "node scripts/gen-api-types.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.3"
@@ -73,6 +74,7 @@
     "electron": "^44.0.0",
     "electron-builder": "^26.8.1",
     "jsdom": "^30.0.1",
+    "json-schema-to-typescript": "16.0.0",
     "lucide-react": "^1.17.0",
     "msw": "^2.7.0",
     "qrcode": "^1.5.4",

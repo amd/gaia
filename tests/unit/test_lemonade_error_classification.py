@@ -21,7 +21,12 @@ timeout case correctly.
 
 from __future__ import annotations
 
-from gaia.llm.lemonade_client import _cloud_request_error
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_LOAD_TIMEOUT,
+    LemonadeStatus,
+    _cloud_request_error,
+    resolve_ctx_size,
+)
 from gaia.llm.providers.lemonade import (
     LemonadeCloudAccountError,
     LemonadeModelNotFoundError,
@@ -109,7 +114,11 @@ def test_upstream_timeout_user_message_is_actionable() -> None:
     assert "qwen3-0.6b" not in msg.lower()
     assert "smaller model" not in msg.lower()
     # Concrete next steps the user can actually run.
-    assert "gaia kill" in msg or "lemonade-server serve" in msg
+    # `gaia kill` only: the other branch of this `or` named a command
+    # Lemonade 10.7 removed, so the assertion would have kept passing
+    # against a dead remedy (CLAUDE.md, "Never hardcode how Lemonade is
+    # started").
+    assert "gaia kill" in msg
 
 
 # ── UI side: exception-string classification ────────────────────────────
@@ -165,10 +174,7 @@ def test_ui_classifier_routes_model_not_found_404_and_names_model() -> None:
     assert classified.model_id == "Qwen3.5-35B-A3B-GGUF"
     # The missing model id and a concrete remediation must both be surfaced.
     assert "Qwen3.5-35B-A3B-GGUF" in classified.user_message
-    assert (
-        "gaia download" in classified.user_message
-        or "gaia init" in classified.user_message
-    )
+    assert "gaia init" in classified.user_message
 
 
 def test_ui_classifier_model_not_found_type_without_quoted_name() -> None:
@@ -289,7 +295,11 @@ def test_agent_extract_lemonade_user_message_typed_direct() -> None:
     msg = agent._extract_lemonade_user_message(exc)
     assert msg is not None
     assert "didn't respond in time" in msg
-    assert "gaia kill" in msg or "lemonade-server serve" in msg
+    # `gaia kill` only: the other branch of this `or` named a command
+    # Lemonade 10.7 removed, so the assertion would have kept passing
+    # against a dead remedy (CLAUDE.md, "Never hardcode how Lemonade is
+    # started").
+    assert "gaia kill" in msg
 
 
 def test_agent_extract_lemonade_user_message_typed_in_cause_chain() -> None:
@@ -750,13 +760,17 @@ class TestExecuteWithAutoDownloadNarrowing:
         api_call = MagicMock(return_value={"choices": [{"message": {"content": "ok"}}]})
         error = LemonadeClientError("model not loaded")
 
-        with patch.object(client, "load_model") as mock_load:
+        with patch.object(client, "_ensure_model_loaded") as mock_ensure:
             result = client._execute_with_auto_download(
                 api_call, "gemma4-it-e2b-FLM", True, error=error
             )
 
         assert result == {"choices": [{"message": {"content": "ok"}}]}
-        mock_load.assert_called_once()
+        # force=True: the request already failed, so a "still loaded" status
+        # would make this recovery a no-op (#4292 follow-up).
+        mock_ensure.assert_called_once_with(
+            "gemma4-it-e2b-FLM", auto_download=True, force=True
+        )
         api_call.assert_called_once()
 
     def test_auto_download_disabled_re_raises_even_for_missing_model(self) -> None:
@@ -820,14 +834,269 @@ class TestExecuteWithAutoDownloadNarrowing:
             status=200,
         )
         client = _client()
-        with (
-            patch.object(client, "_ensure_model_loaded"),
-            patch.object(client, "load_model") as mock_load,
-        ):
+        with patch.object(client, "_ensure_model_loaded") as mock_ensure:
             result = client.chat_completions(
                 model="gemma4-it-e2b-FLM",
                 messages=[{"role": "user", "content": "hi"}],
             )
         assert result["choices"][0]["message"]["content"] == "ok"
         assert len(_responses.calls) == 2
-        mock_load.assert_called_once()
+        # Once for the pre-flight, once for the missing-model recovery.
+        assert mock_ensure.call_count == 2
+
+
+# ── #4292: the auto-download retry must load at GAIA's ctx, not Lemonade's ──
+
+
+def _cold_server(client: LemonadeClient):
+    """Patch the status probes to report an empty server, with no HTTP."""
+    return (
+        patch.object(client, "get_status", return_value=LemonadeStatus(running=True)),
+        patch.object(client, "list_models", return_value={"data": []}),
+    )
+
+
+class TestAutoDownloadLoadsAtResolvedCtx:
+    """A first-run auto-download must not load at Lemonade's default ctx and
+    then cold-reload on the next request."""
+
+    def test_missing_model_loads_at_resolved_ctx(self, monkeypatch) -> None:
+        monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+        model = "Gemma-4-E4B-it-GGUF"
+        client = _client()
+        api_call = MagicMock(return_value={"ok": True})
+        status_patch, list_patch = _cold_server(client)
+
+        with status_patch, list_patch, patch.object(client, "load_model") as load:
+            result = client._execute_with_auto_download(
+                api_call, model, True, error=LemonadeClientError("model not found")
+            )
+
+        assert result == {"ok": True}
+        load.assert_called_once()
+        assert load.call_args.kwargs["ctx_size"] == resolve_ctx_size(model=model)
+        # A multi-GB cold load gets the standard load budget, not 60 s.
+        assert (
+            load.call_args.kwargs.get("timeout", DEFAULT_MODEL_LOAD_TIMEOUT)
+            == DEFAULT_MODEL_LOAD_TIMEOUT
+        )
+        api_call.assert_called_once()
+
+    def test_missing_model_honours_client_ctx_pin(self) -> None:
+        pin = 12288
+        model = "Gemma-4-E4B-it-GGUF"
+        client = LemonadeClient(host="localhost", port=13305, ctx_size_override=pin)
+        api_call = MagicMock(return_value={"ok": True})
+        status_patch, _ = _cold_server(client)
+
+        with (
+            status_patch,
+            patch.object(client, "unload_model"),
+            patch.object(
+                client,
+                "_wait_model_state",
+                side_effect=[None, {"recipe_options": {"ctx_size": pin}}],
+            ),
+            patch.object(client, "load_model") as load,
+        ):
+            client._execute_with_auto_download(
+                api_call, model, True, error=LemonadeClientError("model not found")
+            )
+
+        load.assert_called_once()
+        assert load.call_args.kwargs["ctx_size"] == pin
+
+    def test_stale_loaded_status_still_reloads(self, monkeypatch) -> None:
+        """#4292 follow-up: the recovery must not trust a "still loaded" /health.
+
+        The caller only reaches this path because its request just failed
+        against that supposedly-resident model — the classic shape being a
+        health entry whose llama-server child is gone. Short-circuiting on the
+        status probe would make the recovery a guaranteed no-op and replay the
+        identical failing request, the #2513 behaviour this helper exists to
+        prevent.
+        """
+        monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+        model = "Gemma-4-E4B-it-GGUF"
+        client = _client()
+        api_call = MagicMock(return_value={"ok": True})
+
+        warm = LemonadeStatus(
+            running=True,
+            loaded_models=[
+                {
+                    "id": model,
+                    "recipe_options": {"ctx_size": resolve_ctx_size(model=model)},
+                }
+            ],
+        )
+
+        with (
+            patch.object(client, "get_status", return_value=warm),
+            patch.object(client, "list_models", return_value={"data": []}),
+            patch.object(client, "load_model") as load,
+        ):
+            result = client._execute_with_auto_download(
+                api_call, model, True, error=LemonadeClientError("model not found")
+            )
+
+        assert result == {"ok": True}
+        load.assert_called_once()
+        assert load.call_args.kwargs["ctx_size"] == resolve_ctx_size(model=model)
+        api_call.assert_called_once()
+
+    def test_preflight_still_short_circuits_on_a_warm_server(self) -> None:
+        """``force`` is scoped to the recovery — the normal pre-flight path
+        must keep skipping a redundant /load when the model really is there."""
+        model = "Gemma-4-E4B-it-GGUF"
+        client = _client()
+        warm = LemonadeStatus(
+            running=True,
+            loaded_models=[
+                {
+                    "id": model,
+                    "recipe_options": {"ctx_size": resolve_ctx_size(model=model)},
+                }
+            ],
+        )
+
+        with (
+            patch.object(client, "get_status", return_value=warm),
+            patch.object(client, "list_models", return_value={"data": []}),
+            patch.object(client, "load_model") as load,
+        ):
+            client._ensure_model_loaded(model, auto_download=True)
+
+        load.assert_not_called()
+
+
+# ── #4213: Windows refusals and connect timeouts mean "server unreachable" ──
+
+import requests
+from urllib3.connection import HTTPConnection
+from urllib3.connectionpool import HTTPConnectionPool
+from urllib3.exceptions import (
+    ConnectTimeoutError,
+    MaxRetryError,
+    NewConnectionError,
+    ReadTimeoutError,
+)
+
+from gaia.llm.providers.lemonade import (
+    CONNECTION_FAILURE_RE,
+    classify_lemonade_exception,
+)
+
+_POOL = HTTPConnectionPool("localhost", 13305)
+_CONN = HTTPConnection("localhost", 13305)
+_URL = "/api/v1/chat/completions"
+_WINDOWS_REFUSED = (
+    "[WinError 10061] No connection could be made because the target machine "
+    "actively refused it"
+)
+
+
+def _refused(os_error: str) -> requests.exceptions.ConnectionError:
+    """What ``requests`` raises when nothing is listening on the port."""
+    reason = NewConnectionError(
+        _CONN, f"Failed to establish a new connection: {os_error}"
+    )
+    return requests.exceptions.ConnectionError(MaxRetryError(_POOL, _URL, reason))
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _refused(_WINDOWS_REFUSED),
+        _refused("[Errno 61] Connection refused"),
+        _refused("[Errno 111] Connection refused"),
+        # The bare OS error, as it reads once a wrapper keeps only str(exc).
+        RuntimeError(_WINDOWS_REFUSED),
+        requests.exceptions.ConnectTimeout(
+            MaxRetryError(
+                _POOL,
+                _URL,
+                ConnectTimeoutError(
+                    _CONN, "Connection to remote timed out. (connect timeout=5)"
+                ),
+            )
+        ),
+        # The bare inner message, as it reads once a wrapper keeps only
+        # str(exc). urllib3 puts the host BETWEEN "Connection" and "timed
+        # out", so the wrapped case above matches on "max retries exceeded"
+        # alone and cannot prove the connect-timeout wording is recognised.
+        RuntimeError("Connection to remote timed out. (connect timeout=5)"),
+    ],
+    ids=[
+        "windows",
+        "macos",
+        "linux",
+        "windows-bare",
+        "connect-timeout",
+        "connect-timeout-bare",
+    ],
+)
+def test_unreachable_server_classifies_as_network_error(exc: Exception) -> None:
+    classified = classify_lemonade_exception(exc)
+    assert isinstance(classified, LemonadeNetworkError)
+    assert not isinstance(classified, LemonadeUpstreamTimeoutError)
+
+
+def test_read_timeout_still_classifies_as_upstream_timeout() -> None:
+    """A slow model on a live server is not "server down" (#1030)."""
+    exc = requests.exceptions.ReadTimeout(
+        ReadTimeoutError(_POOL, _URL, "Read timed out. (read timeout=600)")
+    )
+    assert isinstance(classify_lemonade_exception(exc), LemonadeUpstreamTimeoutError)
+
+
+def test_read_timeout_wrapped_in_max_retries_is_still_upstream_timeout() -> None:
+    """ "max retries exceeded" must not turn a slow model into a dead server.
+
+    A pool with read retries on wraps a read timeout in ``MaxRetryError``,
+    whose wording is in the connection-failure set. Bytes were exchanged, so
+    the server is by definition reachable — getting this backwards marks the
+    error retryable and sends the chat layer's retry back at a hung backend
+    (#1030).
+    """
+    exc = requests.exceptions.ConnectionError(
+        MaxRetryError(
+            _POOL,
+            _URL,
+            ReadTimeoutError(_POOL, _URL, "Read timed out. (read timeout=600)"),
+        )
+    )
+    classified = classify_lemonade_exception(exc)
+    assert isinstance(classified, LemonadeUpstreamTimeoutError)
+    assert not classified.retryable
+
+
+def test_read_timeout_payload_is_not_reported_as_unreachable() -> None:
+    """The same guard on the response-payload classifier."""
+    payload = {
+        "error": {
+            "type": "backend_error",
+            "message": (
+                "Max retries exceeded with url: /v1/chat/completions "
+                '(Caused by ReadTimeoutError("Read timed out."))'
+            ),
+        }
+    }
+    err, recognised = _classify_lemonade_response(payload)
+    assert recognised
+    assert isinstance(err, LemonadeUpstreamTimeoutError)
+    assert not isinstance(err, LemonadeNetworkError)
+
+
+def test_windows_refusal_payload_classifies_as_network_error() -> None:
+    payload = {"error": {"type": "backend_error", "message": _WINDOWS_REFUSED}}
+    err, recognised = _classify_lemonade_response(payload)
+    assert recognised
+    assert isinstance(err, LemonadeNetworkError)
+    assert not isinstance(err, LemonadeUpstreamTimeoutError)
+
+
+def test_agent_loop_shares_the_connection_pattern() -> None:
+    from gaia.agents.base.agent import Agent
+
+    assert Agent._LOOP_CONNECTION_RE is CONNECTION_FAILURE_RE

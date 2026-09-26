@@ -10,6 +10,7 @@ The port cleanup around launch/terminate must also leave non-GAIA listeners
 alone.
 """
 
+import gc
 import logging
 import os
 import shutil
@@ -29,6 +30,13 @@ from gaia.ports import listeners_on_port
 posix_only = pytest.mark.skipif(
     sys.platform.startswith("win"), reason="process groups are POSIX-only"
 )
+
+
+@pytest.fixture(autouse=True)
+def _collect_launched_clients():
+    """Finalize earlier tests' clients before this test patches the kill path."""
+    gc.collect()
+
 
 # Launches `sleep 30` through the real launch_server Popen shape, then stops it.
 # Runs in its own session so a group-wide kill can't reach pytest.
@@ -125,6 +133,8 @@ def _launch_with_mocked_server(client):
         patch("gaia.llm.lemonade_client.time.sleep"),
     ):
         client.launch_server(background="silent")
+    # A late GC would run __del__'s port cleanup inside another test's patches.
+    client.keep_alive = True
     return launched
 
 
@@ -146,7 +156,9 @@ def test_launch_server_leaves_a_non_gaia_listener_running():
             time.sleep(0.1)
 
         client = LemonadeClient(host="localhost", port=port, verbose=False)
-        with pytest.raises(LemonadeClientError, match="not a GAIA or Lemonade"):
+        with pytest.raises(
+            LemonadeClientError, match="which GAIA will not stop for you"
+        ):
             _launch_with_mocked_server(client)
 
         assert listener.poll() is None, "launch_server killed a non-GAIA listener"

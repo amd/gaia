@@ -235,10 +235,11 @@ matter alone — no eval-harness access needed.
 Run the following commands from the repository root:
 
 ```sh
-# Prerequisites: install the eval extras and start a Lemonade Server
-# with the model on AMD Ryzen AI hardware (Strix Halo recommended).
+# Prerequisites: the eval extras, and the model on AMD Ryzen AI
+# hardware (Strix Halo recommended). GAIA's daemon starts and
+# supervises the model server itself.
 uv pip install -e ".[dev,eval,api]"
-lemonade-server serve   # in a separate shell; must stay running
+gaia daemon start       # starts and supervises the model server
 
 # Step 0: build the corpus from the committed seed. The mbox +
 # ground_truth are GENERATED artifacts (gitignored), so a fresh

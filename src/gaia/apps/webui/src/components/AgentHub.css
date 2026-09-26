@@ -129,15 +129,15 @@
 }
 
 .agent-hub-banner-offline {
-    background: rgba(232, 168, 48, 0.1);
-    color: var(--accent-gold);
-    border: 1px solid rgba(232, 168, 48, 0.25);
+    background: color-mix(in srgb, var(--accent-yellow) 10%, transparent);
+    color: var(--accent-yellow);
+    border: 1px solid color-mix(in srgb, var(--accent-yellow) 25%, transparent);
 }
 
 .agent-hub-banner-error {
-    background: rgba(239, 68, 68, 0.08);
-    color: var(--accent-red, #ef4444);
-    border: 1px solid rgba(239, 68, 68, 0.25);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    color: var(--danger);
+    border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 .agent-hub-retry {
@@ -385,11 +385,11 @@
 }
 
 .agent-hub-device-verified.verified {
-    color: var(--accent-green, #22c55e);
+    color: var(--accent-green);
 }
 
 .agent-hub-device-verified.unverified {
-    color: var(--accent-gold);
+    color: var(--accent-yellow);
 }
 
 /* Model-size tier selector (#1162) */
@@ -457,8 +457,8 @@
     padding: 7px 14px;
     border: none;
     border-radius: var(--radius-sm);
-    background: var(--accent);
-    color: #1a1a1a;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
     font-family: var(--font-sans);
     font-size: 13px;
     font-weight: 500;
@@ -467,7 +467,7 @@
 }
 
 .agent-hub-card-actions .btn-start-chat:hover {
-    background: var(--accent-dark);
+    background: var(--accent-fill-hover);
 }
 
 .agent-hub-card-actions .btn-start-chat:disabled {
@@ -538,7 +538,7 @@
     align-items: flex-start;
     gap: 6px;
     font-size: 12px;
-    color: var(--accent-red, #ef4444);
+    color: var(--danger);
     margin-bottom: 12px;
     line-height: 1.4;
 }
@@ -559,8 +559,8 @@
     padding: 7px 14px;
     border: none;
     border-radius: var(--radius-sm);
-    background: var(--accent);
-    color: #1a1a1a;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
     font-family: var(--font-sans);
     font-size: 13px;
     font-weight: 500;
@@ -569,7 +569,7 @@
 }
 
 .agent-hub-card-actions .btn-install:hover:not(:disabled) {
-    background: var(--accent-dark);
+    background: var(--accent-fill-hover);
 }
 
 .agent-hub-card-actions .btn-install:disabled {
@@ -595,8 +595,8 @@
 }
 
 .agent-hub-card-actions .btn-install-cancel:hover {
-    border-color: var(--accent-red, #ef4444);
-    color: var(--accent-red, #ef4444);
+    border-color: var(--danger);
+    color: var(--danger);
 }
 
 .agent-hub-card-actions .btn-uninstall {
@@ -613,8 +613,8 @@
 }
 
 .agent-hub-card-actions .btn-uninstall:hover {
-    border-color: var(--accent-red, #ef4444);
-    color: var(--accent-red, #ef4444);
+    border-color: var(--danger);
+    color: var(--danger);
 }
 
 /* ── Badges ─────────────────────────────────────────────────────────────── */
@@ -636,31 +636,31 @@
 }
 
 .agent-badge-custom {
-    background: rgba(59, 158, 255, 0.1);
+    background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
     color: var(--accent-blue);
 }
 
 .agent-badge-native {
-    background: rgba(6, 182, 212, 0.1);
+    background: color-mix(in srgb, var(--accent-cyan) 10%, transparent);
     color: var(--accent-cyan);
 }
 
 .agent-badge-installed {
-    background: rgba(232, 168, 48, 0.1);
-    color: var(--accent-gold);
+    background: color-mix(in srgb, var(--accent-yellow) 10%, transparent);
+    color: var(--accent-yellow);
 }
 
 .agent-badge-category {
-    background: rgba(232, 168, 48, 0.1);
-    color: var(--accent-gold);
+    background: color-mix(in srgb, var(--accent-yellow) 10%, transparent);
+    color: var(--accent-yellow);
 }
 
 .agent-badge-update {
     display: inline-flex;
     align-items: center;
     gap: 3px;
-    background: rgba(232, 168, 48, 0.16);
-    color: var(--accent-gold);
+    background: color-mix(in srgb, var(--accent-yellow) 16%, transparent);
+    color: var(--accent-yellow);
 }
 
 .agent-badge-version {
@@ -679,23 +679,23 @@
 }
 
 .agent-badge-tier-verified {
-    background: rgba(34, 197, 94, 0.12);
-    color: var(--accent-green, #22c55e);
+    background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+    color: var(--accent-green);
 }
 
 .agent-badge-tier-community {
-    background: rgba(59, 158, 255, 0.1);
+    background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
     color: var(--accent-blue);
 }
 
 .agent-badge-tier-experimental {
-    background: rgba(168, 85, 247, 0.12);
-    color: var(--accent-purple, #a855f7);
+    background: color-mix(in srgb, var(--accent-purple) 12%, transparent);
+    color: var(--accent-purple);
 }
 
 .agent-badge-deprecated {
-    background: rgba(239, 68, 68, 0.1);
-    color: var(--accent-red, #ef4444);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    color: var(--danger);
 }
 
 /* ── Create Agent CTA Card ──────────────────────────────────────────────── */
@@ -747,8 +747,8 @@
     font-weight: 500;
     letter-spacing: 0.02em;
     white-space: nowrap;
-    background: rgba(168, 85, 247, 0.12);
-    color: var(--accent-purple, #a855f7);
+    background: color-mix(in srgb, var(--accent-purple) 12%, transparent);
+    color: var(--accent-purple);
     vertical-align: middle;
 }
 
@@ -762,7 +762,7 @@
 .agent-detail-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--bg-modal-overlay);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -967,8 +967,8 @@
 }
 
 .install-confirm-icon {
-    background: rgba(239, 68, 68, 0.12);
-    color: var(--accent-red, #ef4444);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--danger);
 }
 
 .install-confirm-subtitle {
@@ -996,11 +996,11 @@
 }
 
 .install-confirm-warning-native_trust .install-confirm-warning-icon {
-    color: var(--accent-red, #ef4444);
+    color: var(--danger);
 }
 
 .install-confirm-warning-deprecated .install-confirm-warning-icon {
-    color: var(--accent-gold);
+    color: var(--accent-yellow);
 }
 
 .install-confirm-warning-icon {

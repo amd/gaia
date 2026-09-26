@@ -67,8 +67,15 @@ def replace(tmp_path, mock_home):
     _TOOL_REGISTRY.clear()
     try:
         mixin.register_file_io_tools()
+        read = _TOOL_REGISTRY["read_file"]["function"]
         fn = _TOOL_REGISTRY["replace_function"]["function"]
-        yield fn
+
+        def read_then_replace(file_path, *args, **kwargs):
+            # replace_function refuses a file the agent hasn't read.
+            read(file_path)
+            return fn(file_path, *args, **kwargs)
+
+        yield read_then_replace
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)

@@ -86,6 +86,29 @@ def _filter_inhibited_loaded_models(loaded_models: List[dict]) -> List[dict]:
 PROBE_CONNECT_TIMEOUT = 2.0
 PROBE_READ_TIMEOUT = 5.0
 
+
+def start_advice() -> str:
+    """How to get the local model server running, for a caller that found it down.
+
+    Never a hardcoded command. ``lemonade-server serve`` was dropped in
+    Lemonade 10.7 and errors on every modern install, and the three surviving
+    launch forms share no argv — so the manual fallback is resolved against
+    THIS machine by ``describe_start_hint`` (see CLAUDE.md, "Never hardcode how
+    Lemonade is started").
+
+    It leads with the automatic path because that is now the normal one: the
+    daemon starts and supervises the server, and a user reading this most
+    likely just needs the daemon running.
+    """
+    from gaia.llm.lemonade_launcher import describe_start_hint
+
+    return (
+        "GAIA starts it automatically — run `gaia daemon start` if the "
+        f"background service is not running. Otherwise: "
+        f"{describe_start_hint().instruction}"
+    )
+
+
 # A model pull is a first-download of multi-GB weights — minutes, not seconds.
 # Generous read ceiling so a slow link does not abort a real download; the
 # connect leg stays short so an unreachable server still fails fast.
@@ -331,21 +354,63 @@ def probe_model_present(probe_base: str, model_id: str) -> bool:
     from gaia.llm.lemonade_client import (
         _model_ids_match,
         lemonade_auth_headers,
+        record_cloud_models,
         resolve_lemonade_api_key,
     )
 
-    resp = requests.get(
-        f"{probe_base}/models",
-        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
-        timeout=(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT),
-    )
-    resp.raise_for_status()
-    body = resp.json()
-    entries = body.get("data", []) if isinstance(body, dict) else []
-    for entry in entries:
-        if isinstance(entry, dict) and _model_ids_match(entry.get("id"), model_id):
-            return True
+    def _probe_once() -> bool:
+        resp = requests.get(
+            f"{probe_base}/models",
+            headers=lemonade_auth_headers(
+                resolve_lemonade_api_key(base_url=probe_base)
+            ),
+            timeout=(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        entries = body.get("data", []) if isinstance(body, dict) else []
+        # Keep cloud classification current — this response is the authority,
+        # and the readiness gate may be the first thing to read it in this
+        # process.
+        record_cloud_models(body if isinstance(body, dict) else None)
+        for entry in entries:
+            if isinstance(entry, dict) and _model_ids_match(entry.get("id"), model_id):
+                # A gateway model is "present" the moment it is discovered;
+                # there is nothing to download. Reporting it absent sends the
+                # user to `gaia init` for a model that lives on the gateway.
+                return True
+        return False
+
+    if _probe_once():
+        return True
+    # A gateway model missing from the catalog usually means Lemonade restarted
+    # and forgot its token, not that the model is gone — Lemonade discovers
+    # nothing until it can authenticate. Every front-end funnels through here,
+    # so this is the one place that makes a remembered token survive a restart.
+    if _replay_gateway_token(model_id):
+        return _probe_once()
     return False
+
+
+def _replay_gateway_token(model_id: str) -> bool:
+    """Give Lemonade its remembered gateway token back. True if that changed anything.
+
+    Returns False for a local model, when nothing is stored, or when the stored
+    token is rejected — all cases where re-probing would just repeat itself.
+    """
+    import requests
+
+    from gaia.llm.gateway import GATEWAY_PROVIDER, GatewayError, GatewayManager
+
+    if not str(model_id or "").lower().startswith(f"{GATEWAY_PROVIDER}."):
+        return False
+    try:
+        return GatewayManager().ensure_authenticated()
+    except (GatewayError, requests.RequestException) as e:
+        # Never fatal: the model may simply be absent, and the caller's own
+        # "not found" message is the actionable one.
+        logger.debug(f"Could not replay the remembered gateway token: {e}")
+        return False
 
 
 def extract_loaded_ctx(loaded_models: List[dict], model_id: str) -> Optional[int]:
@@ -408,9 +473,19 @@ def pull_model(probe_base: str, model_id: str) -> None:
     import requests
 
     from gaia.llm.lemonade_client import (
+        is_cloud_model,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
     )
+
+    if is_cloud_model(model_id):
+        # A gateway model has no weights to fetch. Lemonade 400s on a pull for
+        # one, and the message talks about a download the user cannot perform.
+        raise RuntimeError(
+            f"'{model_id}' is hosted on a gateway, so there is nothing to "
+            f"download. If it is unavailable, check the gateway connection "
+            f"with `gaia gateway status`."
+        )
 
     resp = requests.post(
         f"{probe_base}/pull",
@@ -489,10 +564,9 @@ def compute_init_status(
             lemonade=backend,
             model=_model(False),
             hint=(
-                f"The local Lemonade Server is not reachable at {probe_base} — "
-                "start it with `lemonade-server serve` (or run `gaia init`), "
-                f"then retry. {agent_name} cannot install it: that is a host "
-                "prerequisite, not something an agent can bootstrap."
+                f"The local Lemonade Server is not reachable at {probe_base}. "
+                f"{start_advice()} {agent_name} cannot install it: that is a "
+                "host prerequisite, not something an agent can bootstrap."
             ),
         )
 
@@ -649,10 +723,7 @@ def unreachable_progress(
     to learn nothing happened.
     """
     yield f"✗ The local Lemonade Server is not reachable at {probe_base}.\n"
-    yield (
-        "✗ Start it with `lemonade-server serve` (or run `gaia init`), then "
-        "POST to this path again.\n"
-    )
+    yield f"✗ {start_advice()} Then POST to this path again.\n"
     yield (
         f"✗ {agent_name} can't install the backend itself — that's a host "
         "prerequisite.\n"

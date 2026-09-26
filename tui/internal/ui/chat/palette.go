@@ -38,6 +38,7 @@ var paletteCommands = []paletteCommand{
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
+	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
 	{"/cost", "What this session has spent; /cost help for rates"},
 	{"/agents", "List installed agents and switch this session to one"},
 }
@@ -335,10 +336,8 @@ var (
 	paletteDescStyle = lipgloss.NewStyle().
 				Foreground(theme.Dim)
 
-	// The selected row is marked by a caret and colour alone — bold
-	// AccentBright text, no filled background — matching the rest of the
-	// TUI's move away from background-tinted rows (see the code-block and
-	// status-bar fixes this pairs with).
+	// Marked by a caret and colour alone — no filled background — matching the
+	// rest of the TUI's move away from background-tinted rows.
 	paletteSelectedNameStyle = lipgloss.NewStyle().
 					Bold(true).
 					Foreground(theme.Selected)
