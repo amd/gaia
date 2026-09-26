@@ -22,6 +22,13 @@ from typing import Generator, List, Optional, Sequence, Tuple
 
 from fastapi import HTTPException
 
+from gaia.config import (
+    GAIA_HOME_IS_FS_ROOT,
+    UnsafeGaiaHomeError,
+    unsafe_gaia_home_reason,
+)
+from gaia.llm.lemonade_embedded import gaia_home
+
 from .models import (
     DocumentResponse,
     FileEntry,
@@ -396,12 +403,57 @@ def validate_file_path(filepath: Path) -> None:
 DOCUMENT_ROOTS_ENV = "GAIA_DOCUMENT_ROOTS"
 
 
+def _ui_gaia_home() -> Path:
+    """Return the GAIA home, refusing one GAIA must not own files under.
+
+    The server deletes files under ``<GAIA_HOME>/documents`` as its own, and
+    with ``GAIA_HOME=$HOME`` that is the real Documents folder on Windows and
+    macOS (case-insensitive filesystems).
+
+    Raises:
+        UnsafeGaiaHomeError: ``GAIA_HOME`` is a filesystem root, the user's
+            home directory, or an ancestor of it. Not an ``HTTPException``:
+            ``uploads_dir()`` is called from ``create_app()``, where one would
+            surface as a raw traceback rather than something a user can act on.
+    """
+    home = gaia_home()
+    resolved = home.resolve()
+    user_home = Path.home().resolve()
+
+    reason = unsafe_gaia_home_reason(resolved, user_home)
+    if reason is None:
+        return home
+
+    problem = (
+        f"is the filesystem root"
+        if reason == GAIA_HOME_IS_FS_ROOT
+        else "is your home directory or contains it"
+    )
+    raise UnsafeGaiaHomeError(
+        f"The Agent UI cannot start: GAIA_HOME resolves to {resolved}, which "
+        f"{problem}, so GAIA would treat {resolved / 'documents'} as its own "
+        f"storage and delete from it. Point GAIA_HOME at a dedicated directory "
+        f"(the default is {user_home / '.gaia'}) and restart the Agent UI."
+    )
+
+
+def managed_documents_dir() -> Path:
+    """Where the Agent UI stores documents it owns (``<GAIA_HOME>/documents``)."""
+    return _ui_gaia_home() / "documents"
+
+
+def uploads_dir() -> Path:
+    """Where chat attachments are stored (``<GAIA_HOME>/chat/uploads``)."""
+    return _ui_gaia_home() / "chat" / "uploads"
+
+
 def document_roots() -> List[Path]:
     """Return the directories documents may be read from.
 
-    Always includes the user's home directory. Each entry of
-    ``GAIA_DOCUMENT_ROOTS`` adds another root; a relative or non-existent
-    entry is a server misconfiguration and raises HTTP 500 rather than being
+    Always includes the user's home directory, plus GAIA's own managed
+    documents folder when ``GAIA_HOME`` moves it outside every other root.
+    Each entry of ``GAIA_DOCUMENT_ROOTS`` adds another root; a relative or
+    non-existent entry is a server misconfiguration and raises HTTP 500 rather than being
     skipped, so a typo can never silently narrow access back to home.
 
     A root whose own path runs through a symlink (``/var`` on macOS) is
@@ -434,6 +486,10 @@ def document_roots() -> List[Path]:
                 ),
             )
         declared.append(candidate)
+
+    managed = managed_documents_dir().resolve()
+    if not any(managed.is_relative_to(root.resolve()) for root in declared):
+        declared.append(managed)
 
     roots: List[Path] = []
     for candidate in declared:

@@ -2990,11 +2990,6 @@
         "title": "Detected Devices",
         "type": "array"
       },
-      "device_supported": {
-        "default": true,
-        "title": "Device Supported",
-        "type": "boolean"
-      },
       "disk_space_gb": {
         "default": 0.0,
         "title": "Disk Space Gb",

@@ -800,7 +800,6 @@ export interface SystemStatus {
   default_model_name?: string;
   default_model_size_gb?: number | null;
   detected_devices?: string[];
-  device_supported?: boolean;
   disk_space_gb?: number;
   download_progress?: DownloadProgress | null;
   embedding_model_loaded?: boolean;

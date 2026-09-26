@@ -35,7 +35,6 @@ function status(over: Partial<SystemStatus>): SystemStatus {
         tokens_per_second: null,
         time_to_first_token: null,
         processor_name: null,
-        device_supported: true,
         context_size_sufficient: true,
         model_downloaded: null,
         default_model_name: MODEL,
