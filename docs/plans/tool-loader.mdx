@@ -192,17 +192,21 @@ the design must handle both:
   *changes*, it invalidates the cache and **re-prefills every turn**, turning a
   first-turn win into an every-turn tax.
 
-Two rules follow:
+Three rules follow:
 
 1. **Select once at conversation start (or change rarely), not aggressively
    per-turn.** Stable selection preserves both the cold-start win and warm-cache
    reuse.
 2. **Place the dynamic tool block at the *end* of the prompt**, after all stable
    instructions. KV cache is prefix-based: everything stays cached up to the
-   first byte that differs, so the volatile part must come last. Note this is a
-   *text-path* lever — native tool-calling models carry tools in the `tools=`
-   param, not the prompt body, so there the only lever is **set stability** (rule
-   1), not ordering.
+   first byte that differs, so the volatile part must come last. On the native
+   path the block's position is the *template's* choice, not ours — several
+   chat templates render `tools=` **before** the system prompt, so the tool list
+   is the prompt's prefix and everything after it re-prefills when it changes.
+3. **Order the offered tools by admission, never alphabetically.** With the
+   list sorted, admitting one tool mid-turn moved every tool after it and cost a
+   re-prefill of the whole block. Appending costs only the tail. This is the one
+   lever that works on the native path, where rule 2 is not ours to set.
 
 ## Phased build
 
@@ -287,20 +291,28 @@ first `select`, additionally fails loudly at runtime if a CORE/bundle name is
 missing from the registry.
 
 **Selection each turn** = CORE ∪ semantically-matched tools (+ their bundles),
-accumulated into a session-scoped *loaded set* that only grows, then sorted. The
-query embedded is the **previous user message + current**, trailing 4,000 chars
-(Open Q4). Below the cap the set is monotonic; at the cap a non-CORE tool is
-**LRU-evicted** (oldest `last_call_ts`, falling back to load time for
-never-called tools); CORE and tools admitted this turn are exempt; if nothing is
-evictable the candidate is skipped and logged. Each turn emits one structured
-`TOOL_LOADER {json}` INFO line (scores, matched, bundle_pulled, admitted,
-evicted, skipped, loaded) for Part-2 tuning and the recall gate.
+accumulated into a session-scoped *loaded set* that only grows, returned in
+**admission order** (CORE in registry order, then each later admission appended)
+and never re-sorted. The query embedded is the **previous user message +
+current**, trailing 4,000 chars (Open Q4). Below the cap the set is monotonic;
+at the cap a non-CORE tool is **LRU-evicted** (oldest `last_call_ts`, falling
+back to load time for never-called tools); CORE and tools admitted this turn are
+exempt; if nothing is evictable the candidate is skipped and logged. Each turn
+emits one structured `TOOL_LOADER {json}` INFO line (scores, matched,
+bundle_pulled, admitted, evicted, skipped, loaded) for Part-2 tuning and the
+recall gate.
 
-**Caching seam.** The system prompt is recomputed **only** when the sorted
-selection changes, so steady-state turns serialize byte-identically and the
-backend KV prefix stays warm. When a filter is active the tools block moves
-**after** the response-format template (volatile content last); with no filter
-the legacy order and bytes are preserved exactly.
+**Caching seam.** The system prompt is recomputed **only** when the selection
+changes — compared as an ordered list — so steady-state turns serialize
+byte-identically and the backend KV prefix stays warm. Admission order is what
+makes a *growing* turn cheap too: a newly admitted tool is appended, so every
+byte before it is unchanged and only the tail re-prefills. (Alphabetical order
+re-shuffled everything after the insertion point, which is why one mid-turn
+`load_tools` used to cost a near-full re-prefill of the tool block.) Eviction
+therefore happens **only at a turn boundary**, inside `select`; mid-turn the set
+is add-only. When a filter is active the tools block moves **after** the
+response-format template (volatile content last); with no filter the legacy
+order and bytes are preserved exactly.
 
 **Native known gap (Amendment 2) — closed by Part 2.** `_execute_tool` is never
 tightened, so a non-tool-calling model that names an unlisted tool still runs it
@@ -365,11 +377,13 @@ system prompt move together. Because `system_prompt` and `_openai_tools` are
 read live at every LLM call, the expanded set is visible to the very next step
 in the same query, which is what lets `smart_discovery` recover on turn 1.
 
-**`load_bundle` is cap-aware.** It resolves a bundle name (or a bare tool name,
-via the reverse index) and admits members with the same LRU-evict path `select()`
-uses — protecting CORE and the members being loaded now — so `max_tools` holds at
-all times. It emits a same-turn `TOOL_LOADER {…, "event": "load_tools", …}`
-superset line.
+**`load_bundle` is add-only.** It resolves a bundle name (or a bare tool name,
+via the reverse index) and appends members in registry order. It does **not**
+evict to stay under `max_tools`: it runs mid-turn, and dropping a tool from the
+middle of the offered list re-prefills every tool after it — the cost the escape
+hatch exists to avoid. The overshoot is bounded (one bundle per call), logged
+with an `over_cap` count, and trimmed LRU-first by the next `select`. It emits a
+same-turn `TOOL_LOADER {…, "event": "load_tools", …}` superset line.
 
 **Menu is stable and native-only.** A compact bundle menu (name + one-line
 description, from `ToolBundle.description`) is injected into the **stable** prefix

@@ -31,6 +31,10 @@ logger = get_logger(__name__)
 #: Human label used in the cap-exhausted error below.
 AGENT_LABEL = "GAIA"
 
+#: Inference backends, spelled as ``/query``'s ``provider`` field spells them.
+PROVIDER_LOCAL = "lemonade"
+PROVIDER_CLAUDE = "claude"
+
 #: Distinguishes "id was in _evicted_ids" from "id mapped to None" — dict.pop's
 #: default can't do that since the dict's values are always None already.
 _SENTINEL = object()
@@ -45,6 +49,22 @@ def build_session_agent(**config_kwargs: Any):
     from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
+
+
+def _permission_state():
+    """Build the per-session permission state.
+
+    Imported lazily, like :func:`build_session_agent`, so this module stays
+    dependency-light until a session actually exists.
+
+    ``lifts_shell_gates=False`` because these sessions belong to the HTTP
+    transport: ``/sessions/{id}/bypass`` may stop asking for approval, but the
+    shell guardrails are a stdio affordance (#3373) — lifting them for a bound
+    socket is remote code execution, not a relaxed permission model.
+    """
+    from gaia_agent.stdio import PermissionState
+
+    return PermissionState(lifts_shell_gates=False)
 
 
 class SessionCapacityError(RuntimeError):
@@ -62,7 +82,13 @@ class _AgentSession:
     second turn cannot corrupt the cached agent's conversation state.
     """
 
-    def __init__(self, session_id: str, agent: Any, model_id: Any = None) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        agent: Any,
+        model_id: Any = None,
+        provider: str = PROVIDER_LOCAL,
+    ) -> None:
         self.session_id = session_id
         self.agent = agent
         #: The ``model_id`` this session's agent was BUILT with (``None`` = the
@@ -70,6 +96,9 @@ class _AgentSession:
         #: asking for a different one cannot be honoured — the server compares
         #: against this and refuses rather than running the old model silently.
         self.model_id = model_id
+        #: The backend the agent is on now — ``PROVIDER_LOCAL`` or
+        #: ``PROVIDER_CLAUDE`` — so a turn naming another one is a switch.
+        self.provider = provider
         self.run_lock = threading.Lock()
         #: True exactly once, on the session built to replace one this
         #: registry involuntarily evicted (LRU cap or idle timeout) — never
@@ -80,6 +109,39 @@ class _AgentSession:
         #: docstring), and an LRU-cap eviction can happen to a conversation
         #: that is still very much in use, just crowded out by others.
         self.reclaimed_after_eviction = False
+        #: Permission state that outlives any single turn: whether bypass is on,
+        #: and which calls the user has granted "always". A fresh
+        #: ``SSEOutputHandler`` is built per turn, so without this both are lost
+        #: at every turn boundary — which re-prompts for a call the user already
+        #: approved, the same defect as never having asked.
+        #:
+        #: Reuses the stdio transport's ``PermissionState`` rather than a second
+        #: copy: the two transports must not disagree about what "always" means
+        #: or when bypass takes effect.
+        self.permissions = _permission_state()
+
+    def switch_model(self, target: str) -> str:
+        """Move this session's retained agent onto *target*, keeping the chat.
+
+        Delegates to ``gaia_agent.stdio.switch_model`` — the same in-place client
+        swap the stdio transport's ``/model`` performs, and the reason a switch
+        keeps ``conversation_history`` and ``loaded_skills`` instead of
+        destroying them the way a rebuilt agent would. Two implementations of
+        that would be two things to get wrong.
+
+        Must be called with ``run_lock`` held: swapping the client under a turn
+        that is mid-inference would leave that turn talking to two backends.
+
+        Returns the friendly display name. Raises ``RuntimeError`` with an
+        actionable message on failure, having left the agent untouched.
+        """
+        from gaia_agent.stdio import is_claude_model
+        from gaia_agent.stdio import switch_model as _switch
+
+        display = _switch(self.agent, target)
+        self.model_id = target
+        self.provider = PROVIDER_CLAUDE if is_claude_model(target) else PROVIDER_LOCAL
+        return display
 
     def is_running(self) -> bool:
         return self.run_lock.locked()
@@ -217,7 +279,21 @@ class _SessionRegistry:
             # "your loaded skills were reset" warning would reach no one.
             reclaimed = self._evicted_ids.pop(session_id, _SENTINEL) is not _SENTINEL
             session = _AgentSession(
-                session_id, agent, model_id=config_kwargs.get("model_id")
+                session_id,
+                agent,
+                # Either spelling, because the two backends name their model in
+                # different kwargs: local builds pass ``model_id``, Claude
+                # passes ``claude_model``. Recording only the first left a
+                # Claude session reporting no model at all, so the caller's very
+                # next turn saw a "change" and tried to switch a session that
+                # had just been built with exactly what it asked for.
+                model_id=config_kwargs.get("model_id")
+                or config_kwargs.get("claude_model"),
+                provider=(
+                    PROVIDER_CLAUDE
+                    if config_kwargs.get("use_claude")
+                    else PROVIDER_LOCAL
+                ),
             )
             session.reclaimed_after_eviction = reclaimed
             self._sessions[session_id] = session

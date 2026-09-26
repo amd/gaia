@@ -529,9 +529,38 @@ def check_output(tool_name: str, result: Any) -> str:
     return observed_text(result)[-_CHECK_OUTPUT_TAIL:]
 
 
+#: Counts only a test runner reports. Anything else printing these numbers is
+#: already claiming to have run tests.
+_PYTEST_HARD_OUTCOME_RE = re.compile(
+    r"\d+ (?:passed|failed|errors?|xfailed|xpassed)", re.I
+)
+#: pytest's own decoration: the ``=`` rule or the ``in 0.12s`` tail.
+_PYTEST_DECORATION_RE = re.compile(r"^[ \t]*=|\bin[ \t]+\d+(?:\.\d+)?m?s\b", re.I)
+
+
 def has_test_run_summary(output: str) -> bool:
-    """True when *output* carries a pytest or unittest summary line."""
-    return bool(output) and bool(_TEST_SUMMARY_RE.search(output))
+    """True when *output* carries a pytest or unittest summary line.
+
+    A line of nothing but soft counts — ``2 warnings``, ``12 skipped`` — is
+    what a compiler or a downloader prints too, and reading one as "the tests
+    ran" silently cancels the reminder this module exists to raise. Those count
+    only when pytest's own rule or timing tail is on the line; a real outcome,
+    ``no tests ran``, or unittest's ``Ran N tests`` stands on its own.
+    """
+    if not output:
+        return False
+    for match in _TEST_SUMMARY_RE.finditer(output):
+        line = match.group(0)
+        lowered = line.lower()
+        if (
+            _PYTEST_HARD_OUTCOME_RE.search(line)
+            or "no tests ran" in lowered
+            or lowered.lstrip().startswith("ran ")
+        ):
+            return True
+        if _PYTEST_DECORATION_RE.search(line):
+            return True
+    return False
 
 
 def is_mutating_tool(tool_name: str) -> bool:

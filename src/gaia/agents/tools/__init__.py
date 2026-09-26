@@ -18,6 +18,7 @@ from .rag_tools import RAGToolsMixin
 from .scratchpad_tools import ScratchpadToolsMixin
 from .screenshot_tools import ScreenshotToolsMixin
 from .shell_tools import ShellToolsMixin
+from .wait_tools import WaitToolsMixin
 
 __all__ = [
     "AudioToolsMixin",
@@ -32,4 +33,5 @@ __all__ = [
     "ScratchpadToolsMixin",
     "ScreenshotToolsMixin",
     "ShellToolsMixin",
+    "WaitToolsMixin",
 ]

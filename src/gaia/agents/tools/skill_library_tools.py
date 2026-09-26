@@ -43,6 +43,11 @@ a model that would happily approve itself:
 
 Each surfaces as an error naming what would proceed instead.
 
+A fifth boundary defers rather than refuses: ``capture_skill`` lands a skill
+from pasted text, a URL, or a folder, but any code it carries stays **inert**
+(``gaia.skills.capture`` — instructions load, ``tools.py`` never imports) until
+the human runs ``gaia skill promote <name>`` in a terminal.
+
 Loading stays opt-in
 --------------------
 Registering these tools does not load anything. Skill bodies cost prompt tokens
@@ -73,6 +78,7 @@ SKILL_LIBRARY_TOOL_NAMES = (
     "list_skills",
     "search_skill_hub",
     "install_skill",
+    "capture_skill",
     "remove_skill",
     "load_skill",
     "unload_skill",
@@ -205,7 +211,7 @@ class SkillLibraryToolsMixin:
     """
 
     def register_skill_library_tools(self) -> None:
-        """Register the seven skill-library tools onto this agent.
+        """Register the eight skill-library tools onto this agent.
 
         Call this **before** ``super()._register_tools()``: ChatAgent's
         registration ends by snapshotting the global registry, and a tool added
@@ -221,24 +227,15 @@ class SkillLibraryToolsMixin:
 
         @tool(atomic=True)
         def list_skills() -> dict:
-            """List the skills available on this machine, loaded or not.
+            """List the skills installed on this machine, loaded or not.
 
-            Call this before load_skill to see what you can activate. Covers
-            every discovery root: skills bundled with this agent, skills
-            installed into ~/.gaia/skills, and skills imported from
-            .claude/skills. It does not touch the network — use
-            search_skill_hub to find skills that are not installed yet.
-
-            Presenting the result: give the user a markdown list, one skill per
-            line, loaded ones first — never a comma-separated run. Thirty names
-            in a paragraph wrap mid-word (``testing-`` / ``the-`` / ``gaia-agent``
-            on three lines) and cannot be scanned. Wrap each name in backticks so
-            it is never broken at its hyphens.
+            Call before load_skill to see what you can activate. Never touches
+            the network — use search_skill_hub for skills not installed yet.
+            Present as a markdown list, one backticked name per line, loaded
+            ones first.
 
             Returns:
-                Dictionary with the skill list (name, description, version,
-                origin root, security tier, tools it provides, and whether it
-                is currently loaded), the roots searched, and any skill folder
+                Each skill (name, version, tier, tools, loaded) and any folder
                 that failed to parse.
             """
             from gaia.skills.errors import SkillError
@@ -282,9 +279,8 @@ class SkillLibraryToolsMixin:
         def search_skill_hub(query: str = "") -> dict:
             """Search the GAIA Agent Hub for skills you could install.
 
-            Needs network access. This only reads the catalog — nothing is
-            downloaded, installed, or activated. Use install_skill to add one
-            of the results.
+            Needs network access. Reads the catalog only — nothing is
+            downloaded or activated; use install_skill to add a result.
 
             Args:
                 query: Words to match against skill name, description, and the
@@ -292,10 +288,9 @@ class SkillLibraryToolsMixin:
                     published skill.
 
             Returns:
-                Dictionary with the matching hub entries (id, name,
-                description, version, security tier, and whether that skill is
-                already installed here) plus a warning when the catalog came
-                from the offline cache and may be stale.
+                Matching entries (name, description, version, tier, whether
+                already installed), plus a warning when the catalog came from
+                the offline cache and may be stale.
             """
             from gaia.skills.errors import SkillError
             from gaia.skills.hub import search_skills
@@ -350,19 +345,10 @@ class SkillLibraryToolsMixin:
         def install_skill(name: str, version: str = "*") -> dict:
             """Download a skill from the Agent Hub into ~/.gaia/skills.
 
-            The user is asked to approve this before it runs. It then goes
-            through the hub's full trust path — checksum, signature, trust
-            tier, and permission ceiling. Any check that fails refuses the
-            install and leaves nothing behind. Installing does not activate the
-            skill: call load_skill afterwards.
-
-            Two refusals you cannot override from here, by design. Report them
-            to the user and stop; do not look for a way around them.
-              - An unsigned ("experimental") skill needs the user to run
-                `gaia skill install <name> --allow-experimental` in a terminal,
-                because its code would run inside this agent's own process.
-              - A skill requesting a dangerous permission needs the user to
-                grant it with `gaia skill install <name> --yes`.
+            Installing does not activate it — call load_skill after. An
+            unsigned skill or a dangerous permission is refused; only the user
+            can approve those, in a terminal (`gaia skill install <name>
+            --allow-experimental` / `--yes`). Report that and stop.
 
             Args:
                 name: Skill name exactly as search_skill_hub reported it.
@@ -371,9 +357,7 @@ class SkillLibraryToolsMixin:
                     version.
 
             Returns:
-                Dictionary with the installed version, path, the trust tier it
-                actually landed on (which may be lower than the tier it
-                claimed), and the permissions it declares.
+                Version, path, the tier it landed on, and its permissions.
             """
             from gaia.skills.errors import SkillError
             from gaia.skills.install import install_skill as _hub_install
@@ -425,14 +409,87 @@ class SkillLibraryToolsMixin:
             return payload
 
         @tool
+        def capture_skill(source: str, name: str = "") -> dict:
+            """Capture a skill from pasted SKILL.md text, a URL, or a local path into ~/.gaia/skills.
+
+            The user approves first, and a BLOCK from the security audit
+            refuses the capture. Bundled code stays INERT until the user
+            runs `gaia skill promote <name>` — never claim those tools work
+            before that.
+
+            Args:
+                source: Pasted SKILL.md text, an http(s) URL, or a local path.
+                name: Optional name to install under instead of the skill's own.
+
+            Returns:
+                Name, path, tier, whether code is inert, and audit findings.
+            """
+            from gaia.skills.capture import capture_skill as _capture
+            from gaia.skills.errors import SkillError
+
+            if name:
+                rejection = _reject_bad_name("capture_skill", name)
+                if rejection is not None:
+                    return rejection
+
+            try:
+                result = _capture(
+                    source,
+                    name=name.strip() or None,
+                    manager=agent.skill_manager,
+                )
+            except SkillError as exc:
+                return _failure("capture_skill", exc)
+
+            payload: Dict[str, Any] = {
+                "status": "success",
+                "name": result.name,
+                "path": str(result.path),
+                "security_tier": result.tier,
+                "source_kind": result.source_kind,
+                "has_code": result.has_code,
+                "next_step": (
+                    f"Captured but not active. Call load_skill('{result.name}') "
+                    "to use its instructions in this session."
+                ),
+            }
+            if result.has_code:
+                count = len(result.deferred_tools) or "its"
+                payload["deferred_tools"] = list(result.deferred_tools)
+                # State exactly what is withheld. Registration and binary grants
+                # are enforced; a bundled scripts/ file is still a file on disk
+                # that the shell tool can be asked to run, so calling it "inert"
+                # would be a promise this code does not keep.
+                payload["code_inert"] = (
+                    f"This skill's {count} tool(s) are NOT registered and its "
+                    "binary grants are withheld until the user runs "
+                    f"`gaia skill promote {result.name}` in a terminal. Its "
+                    "instructions load now; its tools do not work. Say exactly "
+                    "that — do not claim the tools work."
+                )
+                if result.has_scripts:
+                    payload["scripts_warning"] = (
+                        "It also ships a scripts/ directory. Those files are on "
+                        "disk and are NOT execution-gated — do not run them, and "
+                        "do not describe them as safe, until it is promoted."
+                    )
+            if result.review_findings:
+                payload["audit_findings"] = list(result.review_findings)
+                payload["warning"] = (
+                    f"The security audit flagged {len(result.review_findings)} "
+                    "finding(s) (listed under 'audit_findings'). The capture "
+                    "landed, but tell the user about them before using it."
+                )
+            return payload
+
+        @tool
         def remove_skill(name: str) -> dict:
             """Delete an installed skill from ~/.gaia/skills.
 
-            The user is asked to approve this before it runs. Only removes
-            skills installed from the hub. A skill bundled with
-            this agent, or imported from .claude/skills, is refused with the
-            reason — those are removed by uninstalling the agent or deleting
-            the folder. If the skill is loaded right now, it is unloaded too.
+            The user approves first. Removes hub-installed or captured
+            skills only; a bundled skill, or one imported from
+            .claude/skills, is refused with the reason. A loaded skill is
+            unloaded on the way out.
 
             Args:
                 name: Skill name, as shown by list_skills.
@@ -470,24 +527,20 @@ class SkillLibraryToolsMixin:
 
         @tool
         def load_skill(name: str) -> dict:
-            """Activate an installed skill and show you its full instructions now.
+            """Activate an installed skill and show its full instructions now.
 
-            Registers any tools it provides for the rest of the session. Its
-            instructions stay visible while your requests keep relating to
-            it; once the topic moves on they collapse to a one-line reminder
-            to save space — call load_skill on the same name again anytime to
-            bring them back, even though it is already loaded. unload_skill
-            fully deregisters it (tools included) when you are done with it.
+            Registers the tools it provides for the session. Its instructions
+            collapse to a one-line reminder once the topic moves on; call
+            load_skill again to bring them back.
 
             Args:
                 name: Skill name, as shown by list_skills. Install it first
                     with install_skill if list_skills does not show it.
 
             Returns:
-                Dictionary with the loaded skill's tier, the tools it
-                registered, and how many prompt tokens the loaded set now
-                costs. A "warning" key appears when the skill's instructions
-                depend on tools this agent does not have.
+                The skill's tier, its directory (resolve relative paths
+                against it), the tools it registered, and a warning when it
+                needs tools this agent lacks.
             """
             from gaia.skills.errors import SkillError
             from gaia.skills.manager import ROOT_CLAUDE_IMPORT
@@ -514,6 +567,12 @@ class SkillLibraryToolsMixin:
             except SkillError as exc:
                 return _failure("load_skill", exc)
 
+            # Captured-but-unpromoted code never registered (gaia.skills.capture)
+            # — report that honestly instead of listing tools that do not exist.
+            from gaia.skills.capture import code_is_deferred
+
+            deferred = code_is_deferred(skill)
+
             payload: Dict[str, Any] = {
                 "status": "success",
                 "name": skill.name,
@@ -530,14 +589,27 @@ class SkillLibraryToolsMixin:
                     f"Paths in this skill's instructions are relative to "
                     f"{skill.directory} — join them onto it before use."
                 ),
-                "registered_tools": [
-                    skill.namespaced_tool_name(t) for t in skill.tool_names
-                ],
+                "registered_tools": (
+                    []
+                    if deferred
+                    else [skill.namespaced_tool_name(t) for t in skill.tool_names]
+                ),
                 "loaded_skills": sorted(agent.loaded_skills),
                 "prompt_tokens_estimate": estimate_prompt_tokens(
                     agent.get_skills_system_prompt()
                 ),
             }
+            if deferred:
+                payload["deferred_tools"] = list(skill.tool_names)
+                payload["warning"] = (
+                    f"Skill '{skill.name}' was captured and its code is not "
+                    f"yet trusted: its {len(skill.tool_names)} tool(s) "
+                    f"({', '.join(skill.tool_names)}) did NOT register. Its "
+                    "instructions are loaded and usable. Tell the user the "
+                    "tools stay inert until they run "
+                    f"`gaia skill promote {skill.name}` in a terminal — do "
+                    "not claim to run these tools."
+                )
 
             # tools_required is advisory at load time — the base loader logs the
             # gap and loads anyway, so surface it here or the model discovers it
@@ -549,11 +621,15 @@ class SkillLibraryToolsMixin:
             ]
             if unmet:
                 payload["unmet_tools_required"] = unmet
-                payload["warning"] = (
+                unmet_warning = (
                     f"Skill '{skill.name}' expects tool(s) {', '.join(unmet)}, which "
                     "this agent does not have registered. The parts of its "
                     "instructions that use them cannot run — say so instead of "
                     "improvising a substitute."
+                )
+                existing = payload.get("warning")
+                payload["warning"] = (
+                    f"{existing} {unmet_warning}" if existing else unmet_warning
                 )
             return payload
 
@@ -599,18 +675,13 @@ class SkillLibraryToolsMixin:
         def skill_status() -> dict:
             """Report which skills are loaded right now and what they cost.
 
-            Use this to decide whether to unload something before loading
-            more, or to answer "what skills do you have loaded?".
+            Use to decide whether to unload something before loading more.
 
             Returns:
-                Dictionary with each loaded skill's prompt-token estimate
-                (worst case, as if its body were showing this turn),
-                whether its body is actually showing this turn
-                ("active_this_turn" — a loaded-but-inactive skill collapses to
-                a one-line menu entry to save space; load_skill(name) again
-                brings it back), the real total for what is showing right
-                now, the active skill set (if the agent launched with one),
-                and how many skills are installed but not loaded.
+                Per loaded skill, its prompt-token estimate and whether its
+                body is showing this turn ("active_this_turn" — an inactive
+                one collapses to a menu line; load_skill brings it back), plus
+                how many skills are installed but not loaded.
             """
             loaded = agent.loaded_skills
             skill_filter = getattr(agent, "_active_skill_filter", None)

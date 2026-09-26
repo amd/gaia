@@ -615,6 +615,7 @@ skills lane:
 gaia skill search "web search" [--json] [--hub-url URL]
 gaia skill install <name[@semver-range]> [--allow-experimental] [--force] [--yes]
 gaia skill remove <name>
+gaia skill lock [--check|--relock] [--json]
 gaia skill publish ./my-skill/ [--unsigned] [--audit-report FILE] [--dry-run]
 gaia skill keygen [--key-name NAME] [--force]
 gaia skill trust {list|add <key> [--role publisher|amd]|remove <key-id>}
@@ -623,7 +624,18 @@ gaia skill trust {list|add <key> [--role publisher|amd]|remove <key-id>}
 `install` accepts a SemVer range and takes the highest published version
 satisfying it — the same rule agent `dependencies:` use. Installs are recorded in
 `~/.gaia/skills/skill-lock.json` with the requested range, the resolved version,
-the artifact SHA-256, the signing key, and the tier actually installed at.
+the artifact SHA-256, a digest of the installed files, the signing key, and the
+tier actually installed at.
+
+`lock` reads that record back: `--check` (the default) reports version, tier,
+content, and presence drift between the lock and the disk, exiting `4` when
+anything differs; `--relock` re-records the current state after an intentional
+change. A `community` / `verified` skill whose files drifted refuses to load and
+cannot be relocked — those bytes are not the ones its signature covered. Nor can
+one with no digest recorded yet (an entry from a pre-digest build): stamping the
+current bytes there would assert a signature nothing checked, so those reinstall
+instead. An unreadable lock refuses **every** user-root skill, local ones
+included — it cannot say which are attested.
 
 **Still PROPOSED** — `update` (marketplace):
 
@@ -843,14 +855,13 @@ round-trip against their `tools.py`.
 
 <Warning>
 **Several examples declare permissions GAIA refuses.** `rag-search` (4a) and
-`file-operations` (4c) declare `filesystem:*`, and the migrated `git-status` (6)
-declares `shell:execute:git` — a binary with no entry in `BINARY_POLICIES`. These
-are **valid manifests** — they parse and validate — but `load_skill` refuses them
-until the sandbox lands
+`file-operations` (4c) declare `filesystem:*`. These are **valid manifests** —
+they parse and validate — but `load_skill` refuses them until the sandbox lands
 ([#1019](https://github.com/amd/gaia/issues/1019)), because GAIA will not load a
 grant it cannot enforce. They are kept here as the format's target state; the
-examples that load **today** are the instruction-only ones (1, 3) and the
-`network`/`mcp`-scoped ones (2, 4b).
+examples that load **today** are the instruction-only ones (1, 3), the
+`network`/`mcp`-scoped ones (2, 4b), and the migrated `git-status` (6) — `git`
+now has a `BINARY_POLICIES` entry, so its grant is enforceable and loads.
 </Warning>
 
 <AccordionGroup>
@@ -1110,15 +1121,14 @@ An OpenClaw skill and the mapping `migrate` computes for it.
 `metadata.openclaw` requirements map to `metadata.gaia` fields and trust resets
 to `experimental`.
 
-<Warning>
-**This particular skill does not install in v1.** `bins: [git]` maps to
-`shell:execute:git`, and `git` has no entry in `BINARY_POLICIES`, so nothing could
-gate its subcommands; `gaia skill migrate` reports `git-status` as **unmigratable
-with that reason** rather than writing it. The AFTER block below is the mapping —
-the target state once a `git` policy exists — not a file v1 produces. A skill
-needing local access is never silently stripped of the permission to make the
-migration succeed.
-</Warning>
+<Note>
+**This skill migrates.** `bins: [git]` maps to `shell:execute:git`, and `git`
+has a `BINARY_POLICIES` entry gating its subcommands, so `gaia skill migrate`
+writes the AFTER block below. A binary with no policy is still reported
+**unmigratable with that reason** rather than written — a skill needing local
+access is never silently stripped of the permission to make the migration
+succeed. `docker` is the example that still refuses.
+</Note>
 
 ```yaml
 # BEFORE — OpenClaw
@@ -1477,6 +1487,7 @@ Only the sandbox/run-time-enforcement and REST/UI layers are greenfield; the mar
 | Hub catalog lane (server side) | `skill` catalog `type`, `POST /publish/skill`, `skills/` R2 prefix, SKILL.md publish validation, audit gate | `workers/agent-hub/src/` | **Exists** (#2467) |
 | **Project-local `./.gaia/skills/` root** | — | **NOT FOUND** | **Deferred — PROPOSED** |
 | **Registry lock (`skill-lock.json`)** | `SkillLock`, `LockEntry` | `skills/lock.py` | **Exists** (#2467) |
+| **Lock drift detection + relock** | `check_drift()`, `assert_no_fatal_drift()`, `relock()`, `gaia skill lock` | `skills/drift.py` | **Exists** (#2467) |
 
 ---
 
