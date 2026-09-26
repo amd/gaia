@@ -530,7 +530,9 @@ class ToolLoader:
                 :meth:`select`).
 
         Returns:
-            The sorted loaded set after admission.
+            The loaded set after admission, in admission order like
+            :meth:`select` and :meth:`load_bundle` — re-sorting it would move
+            already-offered tools and void the model's cached prompt prefix.
         """
         sel = _Selection()
         admitted_this_turn: set[str] = set()
@@ -566,7 +568,7 @@ class ToolLoader:
                     }
                 ),
             )
-        return sorted(self._loaded)
+        return list(self._loaded)
 
     # ── internals ────────────────────────────────────────────────────────
 
