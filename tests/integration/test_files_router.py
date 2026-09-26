@@ -538,14 +538,30 @@ class TestFileBrowse:
 # ── TestFileSearch ───────────────────────────────────────────────────────────
 
 
+@pytest.fixture
+def search_root(tmp_path, monkeypatch):
+    """A fake home with an empty Documents dir; the search walks nothing else.
+
+    The endpoint walks the real home tree, which on a developer machine takes
+    minutes and makes every result depend on what that user happens to own.
+    """
+    fake_home = tmp_path / "home"
+    documents = fake_home / "Documents"
+    documents.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    assert Path.home() == fake_home
+    return documents
+
+
 class TestFileSearch:
     """Tests for GET /api/files/search."""
 
-    def test_search_finds_file(self, client, home_tmp_dir, sample_text_file):
+    def test_search_finds_file(self, client, search_root):
         """Search for a known filename should find it."""
-        # The search scans Documents/Downloads/Desktop/OneDrive then home.
-        # Our file is under <home>/test_files_router/, so it should be
-        # found in the home fallback scan.
+        target = search_root / "sample.txt"
+        target.write_text("Hello, GAIA!", encoding="utf-8")
+
         resp = client.get(
             "/api/files/search",
             params={"query": "sample.txt", "max_results": 50},
@@ -554,21 +570,13 @@ class TestFileSearch:
 
         data = resp.json()
         assert data["query"] == "sample.txt"
-        assert isinstance(data["results"], list)
         assert isinstance(data["searched_locations"], list)
-        assert data["total"] == len(data["results"])
-
-        # The file might or might not be found depending on the scan depth
-        # and directory structure. If found, verify structure.
-        if data["total"] > 0:
-            result = data["results"][0]
-            assert "name" in result
-            assert "path" in result
-            assert "size" in result
-            assert "size_display" in result
-            assert "extension" in result
-            assert "modified" in result
-            assert "directory" in result
+        assert data["total"] == len(data["results"]) == 1
+        result = data["results"][0]
+        assert result["name"] == "sample.txt"
+        assert result["path"] == str(target)
+        for field in ("size", "size_display", "extension", "modified", "directory"):
+            assert field in result
 
     def test_search_empty_query(self, client):
         """Empty search query should return 400."""
@@ -587,8 +595,11 @@ class TestFileSearch:
         assert resp.status_code == 400
         assert "Invalid" in resp.json()["detail"]
 
-    def test_search_with_file_type_filter(self, client):
+    def test_search_with_file_type_filter(self, client, search_root):
         """Search with file_types filter should only return matching extensions."""
+        (search_root / "test_notes.txt").write_text("a", encoding="utf-8")
+        (search_root / "test_data.csv").write_text("a", encoding="utf-8")
+
         resp = client.get(
             "/api/files/search",
             params={"query": "test", "file_types": "txt"},
@@ -596,24 +607,26 @@ class TestFileSearch:
         assert resp.status_code == 200
 
         data = resp.json()
-        for result in data["results"]:
-            assert (
-                result["extension"] == ".txt"
-            ), f"Expected .txt extension, got {result['extension']}"
+        assert [r["name"] for r in data["results"]] == ["test_notes.txt"]
 
-    def test_search_max_results_limit(self, client):
+    def test_search_max_results_limit(self, client, search_root):
         """Verify max_results is clamped to 100."""
-        # Requesting 200 should be clamped to 100
+        for i in range(105):
+            (search_root / f"test_{i}.txt").write_text("a", encoding="utf-8")
+
         resp = client.get(
             "/api/files/search",
             params={"query": "test", "max_results": 200},
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] <= 100
+        assert data["total"] == 100
 
-    def test_search_max_results_minimum(self, client):
+    def test_search_max_results_minimum(self, client, search_root):
         """Verify max_results minimum is 1."""
+        for i in range(3):
+            (search_root / f"test_{i}.txt").write_text("a", encoding="utf-8")
+
         resp = client.get(
             "/api/files/search",
             params={"query": "test", "max_results": 0},
@@ -623,13 +636,12 @@ class TestFileSearch:
         # max(0, 1) = 1, so it should return at most 1 result.
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] <= 1
+        assert data["total"] == 1
 
-    def test_search_returns_file_metadata(self, client, home_tmp_dir):
+    def test_search_returns_file_metadata(self, client, search_root):
         """Verify all fields present in FileSearchResult."""
-        # Create a distinctively named file so we can search for it
         unique_name = f"gaia_test_metadata_{uuid.uuid4().hex[:6]}.txt"
-        test_file = home_tmp_dir / unique_name
+        test_file = search_root / unique_name
         test_file.write_text("metadata test content", encoding="utf-8")
 
         resp = client.get(
@@ -639,24 +651,23 @@ class TestFileSearch:
         assert resp.status_code == 200
 
         data = resp.json()
-        # File might not be found if home_tmp_dir is too deep, but if found:
         found = [r for r in data["results"] if unique_name in r["name"]]
-        if found:
-            result = found[0]
-            assert result["name"] == unique_name
-            assert result["size"] > 0
-            assert result["size_display"]  # Non-empty string
-            assert result["extension"] == ".txt"
-            assert result["modified"]  # ISO format timestamp
-            assert result["directory"] == str(home_tmp_dir)
+        assert len(found) == 1, data
+        result = found[0]
+        assert result["name"] == unique_name
+        assert result["size"] > 0
+        assert result["size_display"]  # Non-empty string
+        assert result["extension"] == ".txt"
+        assert result["modified"]  # ISO format timestamp
+        assert result["directory"] == str(search_root)
 
-    def test_search_skips_hidden_files(self, client, home_tmp_dir):
+    def test_search_skips_hidden_files(self, client, search_root):
         """Files starting with . should be excluded from results."""
-        hidden = home_tmp_dir / ".hidden_file.txt"
+        hidden = search_root / ".hidden_file.txt"
         hidden.write_text("secret", encoding="utf-8")
 
         visible_name = f"visible_gaia_{uuid.uuid4().hex[:6]}.txt"
-        visible = home_tmp_dir / visible_name
+        visible = search_root / visible_name
         visible.write_text("visible", encoding="utf-8")
 
         # Search specifically for the hidden file name
@@ -672,7 +683,7 @@ class TestFileSearch:
             len(hidden_found) == 0
         ), "Hidden files (starting with .) should be excluded"
 
-    def test_search_sorted_by_modified(self, client, home_tmp_dir):
+    def test_search_sorted_by_modified(self, client, search_root):
         """Results should be sorted by modification date, most recent first."""
         import time
 
@@ -680,11 +691,11 @@ class TestFileSearch:
         old_name = f"gaia_old_{uuid.uuid4().hex[:6]}.txt"
         new_name = f"gaia_new_{uuid.uuid4().hex[:6]}.txt"
 
-        old_file = home_tmp_dir / old_name
+        old_file = search_root / old_name
         old_file.write_text("old", encoding="utf-8")
         # Force a time gap
         time.sleep(0.1)
-        new_file = home_tmp_dir / new_name
+        new_file = search_root / new_name
         new_file.write_text("new", encoding="utf-8")
 
         resp = client.get(
@@ -694,15 +705,9 @@ class TestFileSearch:
         assert resp.status_code == 200
 
         results = resp.json()["results"]
-        if len(results) >= 2:
-            # Verify descending order by modified timestamp
-            for i in range(len(results) - 1):
-                assert results[i]["modified"] >= results[i + 1]["modified"], (
-                    f"Results not sorted by modified date descending: "
-                    f"{results[i]['modified']} < {results[i+1]['modified']}"
-                )
+        assert [r["name"] for r in results] == [new_name, old_name]
 
-    def test_search_response_structure(self, client):
+    def test_search_response_structure(self, client, search_root):
         """Verify the top-level response structure of FileSearchResponse."""
         resp = client.get(
             "/api/files/search",

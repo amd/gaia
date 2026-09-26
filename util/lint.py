@@ -642,6 +642,38 @@ def check_workflow_ancestor_skip() -> CheckResult:
     return CheckResult("Workflow Ancestor-Skip", True, True, 0, "")
 
 
+def check_test_lanes() -> CheckResult:
+    """Reject test files that no CI lane runs and no allowlist entry explains."""
+    print("\nChecking every test file is run by a CI lane...")
+    print("-" * 40)
+
+    try:
+        from check_test_lane_coverage import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_test_lane_coverage import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_test_lane_coverage.py: {exc}")
+            return CheckResult("Test Lane Coverage", False, False, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "Test Lane Coverage",
+            False,
+            False,
+            1,
+            "See output above; name the file in a workflow's pytest step, or "
+            "add it to util/test_lane_allowlist.yml with a reason (#4205).",
+        )
+
+    return CheckResult("Test Lane Coverage", True, False, 0, "")
+
+
 def check_doc_versions() -> CheckResult:
     """Check documentation version consistency."""
     print("\n[12/12] Checking documentation version consistency...")
@@ -833,6 +865,11 @@ def main():
         help="Warn on job if: conditions vulnerable to GitHub Actions' ancestor-skip gotcha",
     )
     parser.add_argument(
+        "--test-lanes",
+        action="store_true",
+        help="Reject test files that no CI lane runs (see util/test_lane_allowlist.yml)",
+    )
+    parser.add_argument(
         "--doc-versions",
         action="store_true",
         help="Check doc version consistency",
@@ -858,6 +895,7 @@ def main():
             args.dependabot,
             args.workflow_triggers,
             args.workflow_ancestor_skip,
+            args.test_lanes,
             args.doc_versions,
             args.all,
         ]
@@ -918,6 +956,9 @@ def main():
 
     if args.workflow_ancestor_skip or run_all:
         results.append(check_workflow_ancestor_skip())
+
+    if args.test_lanes or run_all:
+        results.append(check_test_lanes())
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())
