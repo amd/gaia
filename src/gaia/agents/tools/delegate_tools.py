@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,9 +34,12 @@ DELEGATE_ENV_VAR = "GAIA_DELEGATE"
 DELEGATE_MAX_STEPS_ENV_VAR = "GAIA_DELEGATE_MAX_STEPS"
 DEFAULT_DELEGATE_MAX_STEPS = 40
 
-#: Serialized size the returned dict stays under; the transcript keeps the rest.
-RESULT_BUDGET_CHARS = 3800
-COMMANDS_CAP = 20
+#: Serialized size the returned dict stays under: one read_tool_output page.
+RESULT_BUDGET_CHARS = 8000
+#: The child's answer is the deliverable; it is kept whole up to this size and
+#: comes back as a chunk index of its own archive beyond it.
+ANSWER_WHOLE_CHARS = 6500
+COMMANDS_CAP = 12
 COMMAND_CHARS = 200
 FILES_CAP = 50
 TESTS_CAP = 10
@@ -45,6 +49,9 @@ TESTS_CAP = 10
 PROVIDER_ERROR_TYPES = frozenset(
     {"llm_connection_error", "llm_streaming_error", "llm_error"}
 )
+
+#: The shell tool's own ``cd <workdir> && `` prefix says nothing about the task.
+_CD_PREFIX_RE = re.compile(r"^\s*cd\s+\S+\s*&&\s*")
 
 _SKIP_DIRS = frozenset({"node_modules", "__pycache__"})
 _MTIME_SCAN_CAP = 200_000
@@ -162,9 +169,13 @@ class DelegateToolsMixin:
                 return_format: The shape of the answer wanted back, e.g. "file:line and a one-paragraph explanation".
 
             Returns:
-                result, evidence (files_changed, commands_run, tests), steps,
-                tool_calls, tokens, hit_step_limit, and a transcript handle
-                for read_tool_output.
+                result (the worker's answer, whole; a very long one comes back
+                as shown parts plus a numbered index of its own archive, read
+                with read_tool_output(artifact, entry=n)), evidence
+                (files_changed, commands_run, tests), steps, tool_calls,
+                tokens, hit_step_limit, and transcript: the worker's full
+                conversation log, for drilling into how it worked, never
+                needed to use the answer.
             """
             return self._delegate_task(goal, scope, done_when, return_format)
 
@@ -244,7 +255,7 @@ class DelegateToolsMixin:
         }
         if failure:
             result["error"] = failure
-        return _bounded(result)
+        return _bounded(result, store_for(self))
 
     def _delegate_brief(self, fields: Dict[str, str]) -> str:
         return "\n".join(
@@ -347,7 +358,9 @@ class DelegateToolsMixin:
     ) -> Dict[str, Any]:
         executions = getattr(child, "_turn_tool_executions", None) or []
         commands = [
-            str(e.get("args", {}).get("command", ""))[:COMMAND_CHARS]
+            _CD_PREFIX_RE.sub("", str(e.get("args", {}).get("command", "")))[
+                :COMMAND_CHARS
+            ]
             for e in executions
             if e.get("tool") == "run_shell_command"
         ]
@@ -469,16 +482,42 @@ def _provider_failure(outcome: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _bounded(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Keep the serialized result under the budget by eliding the answer only."""
-    if len(json.dumps(result, ensure_ascii=False)) <= RESULT_BUDGET_CHARS:
-        return result
+def _serialize(value: Any) -> str:
+    return json.dumps(value, default=str, ensure_ascii=False)
+
+
+def _bounded(result: Dict[str, Any], store) -> Dict[str, Any]:
+    """Keep the dict under the budget without shortening the answer below its size.
+
+    A short answer is returned whole. A long one is archived under its own
+    handle and comes back as a chunk index of that archive; ``transcript`` is
+    untouched and ``artifact`` never points at it.
+    """
+    from gaia.agents.base.chunk_index import condense_result
+
     answer = result["result"]
+    if (
+        len(answer) <= ANSWER_WHOLE_CHARS
+        and len(_serialize(result)) <= RESULT_BUDGET_CHARS
+    ):
+        return result
+    condensed = condense_result(
+        "delegate_task", result, None, RESULT_BUDGET_CHARS, store, _serialize
+    )
+    if condensed is not None:
+        return condensed
+    # One structureless block: head and tail, the middle in its own archive.
+    handle = store.put(answer)
     shell = dict(result)
     shell["result"] = {}
-    room = RESULT_BUDGET_CHARS - len(json.dumps(shell, ensure_ascii=False)) - 80
+    room = RESULT_BUDGET_CHARS - len(_serialize(shell)) - 120
     excerpt = elide_text(answer, max(300, room))
-    excerpt["continuation"] = "read_tool_output"
-    excerpt["artifact"] = result["transcript"]
+    excerpt.update(
+        {
+            "artifact": handle,
+            "continuation": "read_tool_output",
+            "offset_unit": "characters",
+        }
+    )
     shell["result"] = excerpt
     return shell

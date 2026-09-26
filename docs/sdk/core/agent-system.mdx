@@ -518,15 +518,19 @@ The child is a new instance of the same agent class with the same config
 fresh conversation, its own step budget, a silent console, and no
 `delegate_task` of its own — depth is one. It starts with no memory of the
 conversation, so the brief must carry every path, name and criterion. The
-result the parent sees stays under 4,000 characters:
+result the parent sees stays under 8,000 characters (one `read_tool_output`
+page):
 
-- `result` — the child's answer; a long one is elided and kept whole in the transcript.
+- `result` — the child's answer, whole up to ~6,500 characters. A longer one
+  is archived on its own and returned as a chunk index (`shown` parts plus a
+  numbered `index`; `read_tool_output(artifact, entry=n)` reads one part).
 - `evidence` — `files_changed` (from `git status` before and after, or a
-  modification-time scan outside a repository), `commands_run` (up to 20, with
-  the total), and `tests` (the child's test, lint and build runs).
+  modification-time scan outside a repository), `commands_run` (up to 12,
+  with the total, minus the shell tool's `cd <workdir> &&` prefix), and
+  `tests` (the child's test, lint and build runs).
 - `steps`, `tool_calls`, `tokens` (`input`, `output`, `cached`), `hit_step_limit`.
-- `transcript` — an artifact handle for the child's full conversation, readable
-  with `read_tool_output`.
+- `transcript` — an artifact handle for the child's full conversation log, for
+  drilling into how it worked; never needed to use the answer.
 
 A child that raises, or whose backend fails, comes back as
 `{"status": "error", "error": ..., "transcript": ...}` — never retried, never

@@ -308,9 +308,10 @@ def test_parent_conversation_grows_only_by_small_result_and_tokens(repo):
     outcome = parent.process_query("do the thing")
 
     seen = _last_tool_result(parent)
-    assert len(json.dumps(seen)) < 4000
+    assert len(json.dumps(seen)) <= 8000
     assert seen["result"]["truncated"] is True
     assert seen["evidence"]["commands_run"] == ["ls", "cat notes.txt"]
+    assert seen["result"]["artifact"] != seen["transcript"]
     assert "x" * 100 in seen["result"]["head"]
     # The whole answer and the child's conversation are one page-read away.
     transcript = json.loads(delegate_tools.store_for(parent).text(seen["transcript"]))
@@ -339,12 +340,69 @@ def test_parent_conversation_grows_only_by_small_result_and_tokens(repo):
     )
 
 
-def test_result_stays_under_budget_with_long_answer(repo):
-    SCRIPTS[1] = [_answer("y" * 50000)]
+def _paragraphs(total: int, seed: str) -> str:
+    """Prose with paragraph structure, ``total`` characters long."""
+    text = ""
+    n = 0
+    while len(text) < total:
+        text += f"{seed} paragraph {n} " + ("word " * 30).strip() + "\n\n"
+        n += 1
+    return text[:total]
+
+
+def test_answer_up_to_6500_chars_comes_back_whole(repo):
+    answer = _paragraphs(6500, "whole")
+    SCRIPTS[1] = [_answer(answer)]
     result = Kid()._delegate_task(**_BRIEF)
-    assert len(json.dumps(result)) < 4000
+    assert result["result"] == answer
+    assert len(json.dumps(result)) <= 8000
+
+
+def test_long_answer_comes_back_as_its_own_chunk_index(repo):
+    answer = _paragraphs(20000, "long")
+    SCRIPTS[1] = [_answer(answer)]
+    parent = Kid()
+    result = parent._delegate_task(**_BRIEF)
+    assert len(json.dumps(result)) <= 8000
+    assert result["truncated"] is True
+    assert result["original_chars"] == len(answer)
+    assert result["artifact"] != result["transcript"]
+    assert result["transcript"].startswith("output_")
+    assert result["shown"] and result["index"]
+    store = delegate_tools.store_for(parent)
+    assert store.text(result["artifact"]) == answer
+    for entry in result["index"]:
+        page = store.read(result["artifact"], entry=entry["n"])
+        assert (
+            page["content"]
+            == answer[entry["offset"] : entry["offset"] + entry["length"]]
+        )
+    assert "long paragraph" in json.loads(store.text(result["transcript"]))["result"]
+
+
+def test_structureless_long_answer_is_elided_with_its_own_archive(repo):
+    answer = "y" * 50000
+    SCRIPTS[1] = [_answer(answer)]
+    parent = Kid()
+    result = parent._delegate_task(**_BRIEF)
+    assert len(json.dumps(result)) <= 8000
     assert result["result"]["original_chars"] >= 50000
-    assert result["result"]["artifact"] == result["transcript"]
+    assert result["result"]["artifact"] != result["transcript"]
+    assert delegate_tools.store_for(parent).text(result["result"]["artifact"]) == answer
+
+
+def test_commands_lose_the_cd_prefix_and_are_capped(repo, monkeypatch):
+    monkeypatch.setenv("GAIA_DELEGATE_MAX_STEPS", "20")
+    SCRIPTS[1] = [
+        _call("run_shell_command", command=f"cd {repo} && pytest -q tests"),
+        *[_call("run_shell_command", command=f"ls {i}") for i in range(14)],
+        _answer("done"),
+    ]
+    result = _approving_parent()._delegate_task(**_BRIEF)
+    commands = result["evidence"]["commands_run"]
+    assert commands[0] == "pytest -q tests"
+    assert len(commands) == 12
+    assert result["evidence"]["commands_total"] == 15
 
 
 def test_registry_exposes_delegate_mixin():
