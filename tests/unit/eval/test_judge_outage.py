@@ -195,6 +195,10 @@ class TestJudgeCompletionText:
 
 def _patch_failing_client(monkeypatch, error):
     """Make ``ClaudeClient(...)`` hand back a client whose judge call fails."""
+    # Pin the transport: make_judge_client picks ClaudeClient only when the API
+    # key is set, so without this the test asserts nothing on a keyless runner.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     client = MagicMock()
     client.get_completion.side_effect = error
     monkeypatch.setattr("gaia.eval.claude.ClaudeClient", MagicMock(return_value=client))
