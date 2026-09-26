@@ -21,6 +21,7 @@ fakes/monkeypatching only.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time as _t
 
@@ -758,6 +759,9 @@ def test_reap_stale_never_kills_live_pid_on_port_evidence_alone(
     assert ledger.read_entries() == []
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows cannot group-kill a dead leader's survivors"
+)
 def test_reap_stale_dead_leader_live_child_group_kills_pid_as_pgid(
     daemon_home, monkeypatch
 ):
@@ -825,6 +829,9 @@ def test_pid_alive_excludes_zombies(monkeypatch):
     assert ledger._pid_alive(4321) is True
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows cannot group-kill a dead leader's survivors"
+)
 def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeypatch):
     # An unreaped leader has already exited, so its re-parented child is what
     # still serves the port: group-kill, NOT the "pid reused, leave it" branch.
