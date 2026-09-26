@@ -140,6 +140,20 @@ _PATH_ARG_KEYS = (
 )
 
 
+def _git_subcommand(cmd_parts: list) -> "str | None":
+    """The git subcommand after any global options (``git -C x log`` -> ``log``)."""
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            return token
+        if token in ("-C", "-c", "--git-dir", "--work-tree", "--namespace"):
+            index += 2
+            continue
+        index += 1
+    return None
+
+
 def is_read_only_command(command: str) -> bool:
     """Does every part of *command* only read?
 
@@ -154,7 +168,6 @@ def is_read_only_command(command: str) -> bool:
         _ENV_ASSIGNMENT_RE,
         DANGEROUS_FIND_ACTIONS,
         _outside_double_quotes,
-        _resolve_git_subcommand,
         _rewrites_in_place,
         _split_connectors,
         _split_pipeline,
@@ -182,7 +195,7 @@ def is_read_only_command(command: str) -> bool:
             if program not in READ_ONLY_PROGRAMS:
                 return False
             if program == "git":
-                subcommand, _error = _resolve_git_subcommand(segment)
+                subcommand = _git_subcommand(segment)
                 if subcommand not in READ_ONLY_GIT_SUBCOMMANDS:
                     return False
             elif program in ("sed", "awk") and _rewrites_in_place(program, segment):
