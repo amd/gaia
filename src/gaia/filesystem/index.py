@@ -161,7 +161,9 @@ class FileSystemIndexService(DatabaseMixin):
             db_path: Path to the SQLite database file. Defaults to
                      ``~/.gaia/file_index.db``.
         """
-        resolved_path = str(Path(db_path or (gaia_home() / "file_index.db")).expanduser())
+        resolved_path = str(
+            Path(db_path or (gaia_home() / "file_index.db")).expanduser()
+        )
         self.init_db(resolved_path)
 
         # WAL + integrity check in a single try so corruption of the on-disk
