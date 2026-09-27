@@ -23,6 +23,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from gaia.logger import get_logger
 from gaia.schedule import runner
+from gaia.schedule.lock import daemon_lock
 from gaia.schedule.store import (
     DEFAULT_STORE_PATH,
     Schedule,
@@ -143,22 +144,27 @@ def _reload_or_keep_armed(scheduler: BackgroundScheduler, store: ScheduleStore) 
 
 
 def run_daemon(store_path: Path = DEFAULT_STORE_PATH) -> None:
-    """Start the scheduler and block until SIGINT/SIGTERM."""
-    store = TomlScheduleStore(store_path)
-    scheduler = build_scheduler(store)
-    scheduler.start()
+    """Start the scheduler and block until SIGINT/SIGTERM.
 
-    stop = threading.Event()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, lambda *_: stop.set())
+    Raises :class:`~gaia.schedule.lock.ScheduleLockError` if another daemon is
+    already running against the same store.
+    """
+    with daemon_lock(store_path):
+        store = TomlScheduleStore(store_path)
+        scheduler = build_scheduler(store)
+        scheduler.start()
 
-    log.info("schedule daemon running (store=%s); press Ctrl-C to stop", store.path)
-    try:
-        while not stop.wait(STORE_REFRESH_SECONDS):
-            _reload_or_keep_armed(scheduler, store)
-    finally:
-        scheduler.shutdown(wait=False)
-        log.info("schedule daemon stopped")
+        stop = threading.Event()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda *_: stop.set())
+
+        log.info("schedule daemon running (store=%s); press Ctrl-C to stop", store.path)
+        try:
+            while not stop.wait(STORE_REFRESH_SECONDS):
+                _reload_or_keep_armed(scheduler, store)
+        finally:
+            scheduler.shutdown(wait=False)
+            log.info("schedule daemon stopped")
 
 
 def next_fire_time(cron: str) -> Optional[str]:

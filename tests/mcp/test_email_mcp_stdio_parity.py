@@ -15,10 +15,10 @@ and asserts the structured output is **byte-identical** for a fixed fixture.
 Both surfaces call the *same* service through the *same* frozen #1262
 contract, so identical output is the property we lock in here.
 
-No Lemonade, no network, no Google credentials: triage is deterministic
-(heuristic categorizer + rule-based summary), and the MCP server constructs
-its agent with ``skip_lemonade=True``. The only subprocess is the stdio MCP
-server itself, spawned on stdin/stdout.
+Both surfaces triage with the local LLM, so this needs a live Lemonade
+Server; without one each triage call fails loudly with ``LLMTriageError``.
+No network or Google credentials are needed. The only subprocess is the stdio
+MCP server itself, spawned on stdin/stdout.
 
 The send-confirmation gate (#1264) is exercised too: a ``send_email`` MCP
 call without a valid, payload-bound confirmation token must be REJECTED (a

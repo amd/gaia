@@ -55,6 +55,10 @@ interface AgentState {
   // ── Config Actions ───────────────────────────────────────────────────
   setConfig: (id: string, config: AgentConfig) => void;
   setConfigs: (configs: Record<string, AgentConfig>) => void;
+  /** Hydrate `configs` from the persisted Electron settings file. */
+  loadConfigs: () => Promise<void>;
+  /** Persist one agent's config; resolves true only once it is on disk. */
+  saveConfig: (id: string, config: AgentConfig) => Promise<boolean>;
 
   // ── Install Actions ──────────────────────────────────────────────────
   setInstallProgress: (id: string, progress: AgentInstallProgress) => void;
@@ -157,6 +161,38 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     })),
 
   setConfigs: (configs) => set({ configs }),
+
+  loadConfigs: async () => {
+    const api = window.gaiaAPI;
+    if (!api) return;
+    try {
+      const persisted = await api.tray.getConfig();
+      set({ configs: persisted.agents });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ lastError: `Failed to load agent settings: ${message}` });
+      console.error('[agentStore] Failed to load agent configs:', err);
+    }
+  },
+
+  saveConfig: async (id, config) => {
+    const api = window.gaiaAPI;
+    if (!api) {
+      set({ lastError: 'Electron API not available (running in browser?)' });
+      return false;
+    }
+    try {
+      set({ lastError: null });
+      const persisted = await api.tray.setConfig({ agents: { [id]: config } });
+      set({ configs: persisted.agents });
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ lastError: `Failed to save settings for ${id}: ${message}` });
+      console.error(`[agentStore] Failed to save config for ${id}:`, err);
+      return false;
+    }
+  },
 
   // ── Install Actions ──────────────────────────────────────────────────
 

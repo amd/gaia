@@ -234,6 +234,7 @@ setup(
         ],
         "telegram": [
             "python-telegram-bot>=20.3",
+            "psutil>=5.9.0",
         ],
         "slack": [
             "slack-sdk>=3.27",

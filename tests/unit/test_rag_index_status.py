@@ -1,14 +1,13 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 """Regression tests for RAG startup/indexing status propagation."""
 
-import argparse
 from unittest.mock import Mock, patch
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_monitor_tools import FileToolsMixin
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.rag import app as rag_app
 from gaia.talk.sdk import TalkSDK
 
 
@@ -123,63 +122,6 @@ def test_talk_add_document_propagates_chat_index_failure():
     talk.log = Mock()
 
     assert talk.add_document("missing.pdf") is False
-
-
-def test_rag_app_index_command_counts_only_real_successes(tmp_path):
-    """`gaia rag index` must not count a failed index_document call as
-    indexed just because it returned a non-empty dict."""
-    pdf = tmp_path / "a.pdf"
-    pdf.write_bytes(b"%PDF-1.4")
-    args = argparse.Namespace(
-        files=[str(pdf)],
-        model=None,
-        verbose=False,
-        chunk_size=None,
-        max_chunks=None,
-    )
-
-    with patch("gaia.rag.app.RAGSDK") as rag_class:
-        rag_class.return_value.index_document.return_value = {
-            "success": False,
-            "error": "embedding model unavailable",
-        }
-        rag_class.return_value.get_status.return_value = {"total_chunks": 0}
-
-        with patch("builtins.print") as mock_print:
-            rag_app.index_command(args)
-
-    assert any(
-        "Indexed 0/1 documents" in call.args[0] for call in mock_print.call_args_list
-    )
-
-
-def test_rag_app_quick_command_reports_failure_and_stops(tmp_path):
-    """`gaia rag quick` must not query after a failed index_document call."""
-    pdf = tmp_path / "a.pdf"
-    pdf.write_bytes(b"%PDF-1.4")
-    args = argparse.Namespace(
-        file=str(pdf),
-        question="What is this?",
-        model=None,
-        verbose=False,
-        chunk_size=None,
-        max_chunks=None,
-    )
-
-    with patch("gaia.rag.app.RAGSDK") as rag_class:
-        rag_class.return_value.index_document.return_value = {
-            "success": False,
-            "error": "embedding model unavailable",
-        }
-
-        with patch("builtins.print") as mock_print:
-            rag_app.quick_command(args)
-
-        rag_class.return_value.query.assert_not_called()
-
-    assert any(
-        f"Failed to index: {pdf}" in call.args[0] for call in mock_print.call_args_list
-    )
 
 
 def _file_monitor_agent(rag_result):

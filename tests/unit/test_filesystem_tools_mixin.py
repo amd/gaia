@@ -992,6 +992,33 @@ class TestReadFile:
         result = self.read(file_path=str(f))
         assert "Binary file" in result or "Hex preview" in result
 
+    def test_read_file_whose_size_a_read_does_not_deliver(self, tmp_path):
+        """A non-zero stat size with an empty read must not divide by zero.
+
+        Pseudo-files and a truncation racing the read both land here. The
+        binary sniff should fall through to reading it as text, not surface
+        "Error reading file: division by zero".
+        """
+        f = tmp_path / "shrinks.txt"
+        f.write_bytes(b"x" * 64)
+
+        real_open = open
+
+        def _open_returning_nothing(path, mode="r", *args, **kwargs):
+            if "b" in mode and str(path) == str(f):
+                handle = MagicMock()
+                handle.__enter__ = lambda _s: handle
+                handle.__exit__ = lambda *_a: False
+                handle.read = lambda *_a: b""
+                return handle
+            return real_open(path, mode, *args, **kwargs)
+
+        with patch("builtins.open", _open_returning_nothing):
+            result = self.read(file_path=str(f))
+
+        assert "division by zero" not in result
+        assert "Error reading file" not in result
+
     def test_read_empty_text_file(self, tmp_path):
         """Reading an empty text file works without error."""
         f = tmp_path / "empty.txt"

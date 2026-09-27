@@ -17,6 +17,7 @@ metadata:
       - search_file_content
       - search_code_index
       - run_python
+      - run_shell_command
     provenance:
       source: starter-pack
 ---
@@ -67,10 +68,10 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest` and `python`, so run the suite directly. Prefer the
-`python -m` spelling — it puts the project's own directory on `sys.path`, so it
-works on a checkout that was never installed, where bare `pytest` fails to
-import the project:
+This skill grants `pytest` and `python`, so run the suite directly with
+`run_shell_command`. Prefer the `python -m` spelling — it puts the project's own
+directory on `sys.path`, so it works on a checkout that was never installed,
+where bare `pytest` fails to import the project:
 
 ```
 python -m pytest -q tests/

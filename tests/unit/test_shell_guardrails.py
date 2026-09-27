@@ -3,6 +3,9 @@
 
 """Unit tests for shell command guardrails in ShellToolsMixin._validate_command."""
 
+import time
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -41,9 +44,13 @@ def test_reviewed_switches_and_relative_path_reads_remain_allowed(command):
     assert ShellToolsMixin()._validate_shell_command(command)[0] is None
 
 
+from gaia.agents.tools import shell_tools
 from gaia.agents.tools.shell_tools import (
+    ALLOWED_COMMANDS,
     DANGEROUS_SHELL_OPERATORS,
+    DEVELOPER_COMMANDS,
     ShellToolsMixin,
+    _is_lone_granted_segment,
 )
 
 # ---------------------------------------------------------------------------
@@ -55,6 +62,50 @@ def validate(command: str):
     """Return the validation error dict, or None if allowed."""
     parts = command.split()
     return ShellToolsMixin._validate_command(parts[0], parts, command)
+
+
+class _Console:
+    """The one attribute the shell gates read off a session's output handler."""
+
+    def __init__(self, bypass: bool):
+        self.bypass_permissions = bypass
+
+
+class _Shell(ShellToolsMixin):
+    """A bare host for the mixin, wired to a console in a known bypass state."""
+
+    def __init__(self, bypass: bool):
+        self.console = _Console(bypass)
+
+
+class _Grants:
+    """Stand-in for BinaryGrants — the one method the shell gates call."""
+
+    def __init__(self, *binaries: str):
+        self._binaries = frozenset(binaries)
+
+    def binaries(self) -> frozenset:
+        return self._binaries
+
+
+class _GrantedShell(_Shell):
+    """A host whose loaded skills granted ``shell:execute:<binary>``."""
+
+    def __init__(self, bypass: bool, *binaries: str):
+        super().__init__(bypass)
+        self._granted_binaries = _Grants(*binaries)
+
+
+def check(command: str, *, bypass: bool):
+    """Run the full text-level validation for one mode. None means allowed."""
+    error, _segments = _Shell(bypass)._validate_shell_command(command)
+    return error
+
+
+def segments_for(command: str, *, bypass: bool):
+    """Every segment on the line, in order, flattened across its steps."""
+    _error, steps = _Shell(bypass)._validate_shell_command(command)
+    return [segment for step in steps for segment in step.segments]
 
 
 # ---------------------------------------------------------------------------
@@ -552,3 +603,527 @@ class TestPowerShellRunsAFileInsteadOfACmdlet:
     def test_a_path_operand_is_still_a_read(self, command):
         """The rule is command position only, or every file argument breaks."""
         assert not refused(command)
+
+
+# ---------------------------------------------------------------------------
+# Bypass permissions: shell gates (#3373, #3374)
+#
+# The switch is the sidecar's existing --bypass-permissions / TUI /bypass, which
+# already turned confirmation prompts off; these tests cover the shell gates it
+# now lifts with them.
+#
+# Every case asserts BOTH states. The default tier is what ships; the bypass
+# tier is what the user turned on deliberately. A test that only covered the
+# bypass side could not catch a new binary leaking into the default set.
+# ---------------------------------------------------------------------------
+
+#: The developer set's headline entries, named individually so a future edit
+#: cannot quietly move one into ALLOWED_COMMANDS unnoticed (#3374).
+DEVELOPER_BINARY_SAMPLES = [
+    "python",
+    "python3",
+    "pytest",
+    "npm",
+    "node",
+    "make",
+    "cmake",
+    "go",
+    "cargo",
+    "gh",
+    "sed",
+    "awk",
+    "curl",
+    "sleep",
+    "timeout",
+    "export",
+    "cp",
+    "mv",
+]
+
+
+class TestDeveloperSetIsSeparate:
+    def test_allowed_commands_carries_no_developer_binary(self):
+        # #2768 hardens ALLOWED_COMMANDS as a read-only tier; the developer set
+        # must stay beside it, never merged into it.
+        assert ALLOWED_COMMANDS.isdisjoint(DEVELOPER_COMMANDS)
+
+    def test_rm_is_in_neither_set(self):
+        # Deliberate: not a security boundary (python can delete), an accident
+        # tripwire. Adding it later is cheaper than taking it back.
+        assert "rm" not in ALLOWED_COMMANDS
+        assert "rm" not in DEVELOPER_COMMANDS
+
+    @pytest.mark.parametrize("binary", DEVELOPER_BINARY_SAMPLES)
+    def test_developer_binary_declared(self, binary):
+        assert binary in DEVELOPER_COMMANDS
+
+
+class TestDeveloperBinariesRefusedByDefault:
+    """With the flag OFF every developer binary is still refused, as today."""
+
+    @pytest.mark.parametrize("binary", DEVELOPER_BINARY_SAMPLES)
+    def test_refused_with_bypass_off(self, binary):
+        result = check(f"{binary} --version", bypass=False)
+        assert result is not None, f"{binary} leaked into the default tier"
+        assert result["status"] == "error"
+
+    @pytest.mark.parametrize("binary", DEVELOPER_BINARY_SAMPLES)
+    def test_allowed_with_bypass_on(self, binary):
+        assert check(f"{binary} --version", bypass=True) is None
+
+    def test_default_refusal_text_unchanged(self):
+        # The existing wording, asserted so bypass mode cannot alter the
+        # message a normal user sees.
+        result = check("make build", bypass=False)
+        assert "not in the allowed list for security reasons" in result["error"]
+
+    def test_gh_default_refusal_still_points_at_the_skill_grant(self):
+        # gh has a BINARY_POLICIES entry, so its refusal is the grant message,
+        # not the allowlist one. Bypass is an additional path to gh, not a
+        # replacement for skill_granted_binaries.
+        result = check("gh issue list", bypass=False)
+        assert "shell:execute:gh" in result["error"]
+
+
+class TestBypassIsStillASet:
+    @pytest.mark.parametrize("command", ["rm -rf /tmp/foo", "evil_binary --flag"])
+    def test_refused_in_both_modes(self, command):
+        assert check(command, bypass=False) is not None
+        assert check(command, bypass=True) is not None
+
+    def test_bypass_refusal_names_the_developer_set(self):
+        result = check("rm -rf /tmp/foo", bypass=True)
+        assert "developer command set" in result["error"]
+
+    def test_read_only_commands_still_allowed_under_bypass(self):
+        assert check("ls -la", bypass=True) is None
+        assert check("grep -r foo src/", bypass=True) is None
+
+
+class TestOperatorsUnderBypass:
+    def test_chaining_is_allowed_in_both_modes(self):
+        # `&&`, `||` and `;` are no longer bypass-only: the default tier walks
+        # every step of a chain and judges each one on its own binary.
+        assert check("cd . && ls", bypass=False) is None
+        assert check("cd . && ls", bypass=True) is None
+
+    def test_compound_allowed_under_bypass(self):
+        assert check("cd . && ls | head -3", bypass=True) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cd build && cmake ..",
+            "pytest -q || echo failed",
+            "echo one ; echo two",
+            "pytest -q | tail -20",
+            "make build > out.txt",
+        ],
+    )
+    def test_sequences_parse_under_bypass(self, command):
+        assert check(command, bypass=True) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "make build > out.txt",
+            "ls &",
+            "echo `whoami`",
+            "echo $(whoami)",
+            "ls\necho hi",
+        ],
+    )
+    def test_shell_only_operators_still_refused_by_default(self, command):
+        # What bypass actually lifts now: redirection, backgrounding,
+        # substitution and the newline — the operators that only a shell can
+        # act on, and that no per-segment check can judge.
+        result = check(command, bypass=False)
+        assert result is not None
+        assert "Shell operators" in result["error"]
+
+    def test_a_pipe_is_refused_for_its_binary_not_for_the_pipe(self):
+        # Pipes were never blocked. `pytest -q | tail -20` is refused with
+        # bypass off because pytest is ungranted, NOT by the operator block —
+        # #3373 cites it as an operator case and is wrong about that.
+        result = check("pytest -q | tail -20", bypass=False)
+        assert result is not None
+        assert "Shell operators" not in result["error"]
+        assert "shell:execute:pytest" in result["error"]
+
+
+class TestPerSegmentWalkSurvivesBypass:
+    """The per-segment walk is what produces the audit record; it must not be
+    short-circuited just because the operators now parse."""
+
+    def test_denied_binary_in_segment_two_refuses_the_whole_command_by_default(self):
+        result = check("ls && rm -rf /tmp/foo", bypass=False)
+        assert result is not None
+        assert "rm" in result["error"]
+
+    def test_denied_binary_in_segment_two_refuses_the_whole_command_under_bypass(self):
+        result = check("ls && rm -rf /tmp/foo", bypass=True)
+        assert result is not None
+        assert "rm" in result["error"]
+
+    def test_denied_binary_in_pipe_segment_two_refused_in_both_modes(self):
+        # No operator involved, so both modes reach the per-segment walk.
+        assert check("ls | rm -rf /tmp/foo", bypass=False) is not None
+        assert check("ls | rm -rf /tmp/foo", bypass=True) is not None
+
+    def test_every_segment_is_recorded_under_bypass(self):
+        segments = segments_for("cd . && ls | head -3", bypass=True)
+        assert [seg[0] for seg in segments] == ["cd", "ls", "head"]
+
+    def test_pipe_segments_recorded_by_default(self):
+        segments = segments_for("ls | grep foo | head -3", bypass=False)
+        assert [seg[0] for seg in segments] == ["ls", "grep", "head"]
+
+
+class TestNewlineSeparatesSegmentsUnderBypass:
+    """A newline reaches the shell as a command separator, so the segment walk
+    has to treat it as one. While it did not, `ls\\nrm -rf /tmp/x` was walked as
+    a single `ls` — the refused binary never checked, and the audit record
+    showing one invocation where two ran."""
+
+    def test_newline_does_not_smuggle_a_refused_binary(self):
+        result = check("ls\nrm -rf /tmp/x", bypass=True)
+        assert result is not None
+        assert "rm" in result["error"]
+
+    def test_each_line_is_recorded_as_its_own_segment(self):
+        segments = segments_for("ls\necho hi", bypass=True)
+        assert [seg[0] for seg in segments] == ["ls", "echo"]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls;\nrm -rf /tmp/x",
+            "ls &&\nrm -rf /tmp/x",
+            "ls |\nrm -rf /tmp/x",
+            "ls\n;rm -rf /tmp/x",
+        ],
+    )
+    def test_newline_fused_to_another_operator_still_separates(self, command):
+        # shlex emits a run of adjacent punctuation as ONE token, so these
+        # arrive as ';\n', '&&\n', '|\n', '\n;' rather than two tokens.
+        result = check(command, bypass=True)
+        assert result is not None
+        assert "rm" in result["error"]
+
+    def test_blank_lines_do_not_create_empty_segments(self):
+        segments = segments_for("ls\n\n\necho hi\n", bypass=True)
+        assert [seg[0] for seg in segments] == ["ls", "echo"]
+
+    def test_a_quoted_newline_is_data_not_a_separator(self):
+        # The regression guard for the fix: quoting must still work, or
+        # `echo "a<newline>b"` would be walked as a bogus `b` command.
+        segments = segments_for('echo "a\nb"', bypass=True)
+        assert segments == [["echo", "a\nb"]]
+        assert check('echo "a\nb"', bypass=True) is None
+
+
+class TestReadOnlySubGuardsLiftUnderBypassOnly:
+    """The find/sort/uniq/git/PowerShell guards all encode "this binary may not
+    write" — the exact assumption bypass mode drops. Each must still hold with
+    the flag off."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git commit -m msg",
+            "find /tmp -name x -delete",
+            "sort -o /tmp/canary /etc/hostname",
+            "uniq in.txt out.txt",
+            "powershell -Command Remove-Item C:/important",
+        ],
+    )
+    def test_refused_by_default(self, command):
+        assert check(command, bypass=False) is not None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git commit -m msg",
+            "find /tmp -name x -delete",
+            "sort -o /tmp/canary /etc/hostname",
+            "uniq in.txt out.txt",
+            "powershell -Command Remove-Item C:/important",
+        ],
+    )
+    def test_allowed_under_bypass(self, command):
+        assert check(command, bypass=True) is None
+
+
+class TestBypassIsOffByDefault:
+    def test_host_with_no_console_is_not_bypassed(self):
+        class Bare:
+            bypass_gates_active = ShellToolsMixin.bypass_gates_active
+
+        assert Bare().bypass_gates_active() is False
+
+    def test_stock_output_handler_is_not_bypassed(self):
+        from gaia.agents.base.console import OutputHandler
+
+        assert OutputHandler.bypass_permissions is False
+
+    def test_auto_approve_alone_does_not_lift_the_shell_gates(self):
+        # An unattended harness that pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS
+        # or auto_approve_gated_tools) must NOT also inherit an unguarded shell.
+        class ApproveOnly:
+            auto_approve_gated_tools = True
+
+        host = _Shell(bypass=False)
+        host.console = ApproveOnly()
+        assert host.bypass_gates_active() is False
+        assert host._validate_shell_command("make build")[0] is not None
+
+    def test_toggling_the_console_flips_the_gates_live(self):
+        # /bypass off mid-session must take effect on the next command, which is
+        # why the mode is read live rather than cached on the agent.
+        host = _Shell(bypass=False)
+        assert host._validate_shell_command("make build")[0] is not None
+        host.console.bypass_permissions = True
+        assert host._validate_shell_command("make build")[0] is None
+        host.console.bypass_permissions = False
+        assert host._validate_shell_command("make build")[0] is not None
+
+    def test_validate_command_defaults_to_the_read_only_tier(self):
+        # The three-positional-argument call every existing test uses.
+        assert ShellToolsMixin._validate_command("pytest", ["pytest"], "pytest")
+
+
+# ---------------------------------------------------------------------------
+# The executor, for real (#3373)
+#
+# Everything above stops at validation. These run the tool end to end and
+# actually spawn a process, because validation passing is not the same as the
+# command working: the operators only reach a shell if the executor asks for
+# one, and the rate-limit deque is created lazily by a check bypass skips.
+# ---------------------------------------------------------------------------
+
+
+class _ExecHost(ShellToolsMixin):
+    """A host with a real tool registry, so run_shell_command can be called."""
+
+    def __init__(self, bypass: bool):
+        self.console = _Console(bypass)
+        self.debug = False
+        self.registered = {}
+
+    def register(self, fn, name):
+        self.registered[name] = fn
+
+
+@pytest.fixture
+def shell_tool(monkeypatch):
+    """Return a factory for the real ``run_shell_command`` closure."""
+
+    def build(bypass: bool, granted: tuple = ()):
+        host = _ExecHost(bypass)
+        if granted:
+            host._granted_binaries = _Grants(*granted)
+        captured = {}
+
+        def fake_tool(**kwargs):
+            def wrap(fn):
+                # The real decorator defaults the tool name to the function's.
+                captured[kwargs.get("name", fn.__name__)] = fn
+                return fn
+
+            return wrap
+
+        import gaia.agents.base.tools as tools_mod
+
+        monkeypatch.setattr(tools_mod, "tool", fake_tool)
+        host.register_shell_tools()
+        return captured["run_shell_command"]
+
+    return build
+
+
+class TestExecutorUnderBypass:
+    def test_a_compound_command_actually_runs(self, shell_tool, tmp_path):
+        """The whole point of #3373: `a && b` reaches a shell and succeeds."""
+        run = shell_tool(bypass=True)
+
+        result = run(
+            "cd . && echo first && echo second", working_directory=str(tmp_path)
+        )
+
+        assert result["status"] == "success", result
+        assert result["return_code"] == 0
+        assert "first" in result["stdout"]
+        assert "second" in result["stdout"]
+
+    def test_a_redirect_never_reaches_a_shell_by_default(self, shell_tool, tmp_path):
+        run = shell_tool(bypass=False)
+        target = tmp_path / "out.txt"
+
+        result = run(f"echo first > {target}", working_directory=str(tmp_path))
+
+        assert result["status"] == "error"
+        assert "Shell operators" in result["error"]
+        assert not target.exists()
+
+    def test_a_redirect_runs_under_bypass(self, shell_tool, tmp_path):
+        run = shell_tool(bypass=True)
+        target = tmp_path / "out.txt"
+
+        result = run(f"echo first > {target}", working_directory=str(tmp_path))
+
+        assert result["status"] == "success", result
+        assert "first" in target.read_text(encoding="utf-8")
+
+    def test_the_rate_limit_is_lifted(self, shell_tool, tmp_path):
+        """More than max_commands_per_10_seconds back to back, no refusal.
+
+        Also covers the deque: _check_rate_limit is what lazily creates it, and
+        bypass skips that call — recording into it anyway raised AttributeError
+        on the very first command.
+        """
+        run = shell_tool(bypass=True)
+
+        for i in range(5):
+            result = run(f"echo run{i}", working_directory=str(tmp_path))
+            assert result["status"] == "success", result
+            assert not result.get("rate_limited")
+
+    def test_the_rate_limit_still_applies_by_default(
+        self, shell_tool, tmp_path, monkeypatch
+    ):
+        # Over the cap the default tier waits its turn rather than refusing, so
+        # what bypass lifts is the wait, not a refusal.
+        slept: list = []
+        now = [1_000_000.0]
+
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += seconds
+
+        monkeypatch.setattr(
+            shell_tools,
+            "time",
+            SimpleNamespace(time=lambda: now[0], sleep=sleep, monotonic=time.monotonic),
+        )
+        run = shell_tool(bypass=False)
+
+        results = [run("echo hi", working_directory=str(tmp_path)) for _ in range(5)]
+
+        assert all(r["status"] == "success" for r in results), results
+        assert slept
+
+    def test_every_execution_is_audited_with_its_arguments(
+        self, shell_tool, tmp_path, monkeypatch
+    ):
+        records = []
+        monkeypatch.setattr(
+            "gaia.security.audit_shell_command",
+            lambda **kw: records.append(kw),
+        )
+        run = shell_tool(bypass=True)
+
+        run("cd . && echo audited", working_directory=str(tmp_path))
+
+        assert len(records) == 1
+        assert records[0]["command"] == "cd . && echo audited"
+        assert records[0]["segments"] == [["cd", "."], ["echo", "audited"]]
+        assert records[0]["mode"] == "bypass"
+
+    def test_a_refused_binary_is_never_executed_or_audited(
+        self, shell_tool, tmp_path, monkeypatch
+    ):
+        records = []
+        monkeypatch.setattr(
+            "gaia.security.audit_shell_command",
+            lambda **kw: records.append(kw),
+        )
+        run = shell_tool(bypass=True)
+
+        result = run("echo hi && rm -rf nope", working_directory=str(tmp_path))
+
+        assert result["status"] == "error"
+        assert records == [], "a refused command must not reach the audit trail"
+
+
+# ---------------------------------------------------------------------------
+# Redirection on the skill-granted path
+#
+# A lone granted CLI is handed argv, never a shell. A `>` would arrive as one
+# more literal argument, so the command would appear to succeed while writing
+# nothing. That is the one outcome worse than a refusal.
+# ---------------------------------------------------------------------------
+
+
+def check_granted(command: str, *, bypass: bool = True, binaries=("gh",)):
+    error, _segments = _GrantedShell(bypass, *binaries)._validate_shell_command(command)
+    return error
+
+
+class TestRedirectionOnTheGrantedPath:
+    def test_a_redirect_is_refused_rather_than_passed_as_text(self):
+        error = check_granted("gh issue list > out.txt")
+        assert error is not None
+        assert "Redirection" in error["error"]
+        assert "gh" in error["error"]
+
+    def test_the_refusal_names_a_way_to_get_the_file_written(self):
+        assert "file tools" in check_granted("gh issue list > out.txt")["hint"]
+
+    def test_append_and_input_redirection_are_refused_too(self):
+        assert check_granted("gh issue list >> out.txt") is not None
+        assert check_granted("gh api graphql < query.txt") is not None
+
+    def test_the_same_command_without_a_redirect_still_runs(self):
+        assert check_granted("gh issue list --state open") is None
+
+    def test_a_quoted_angle_bracket_is_data_not_a_redirect(self):
+        # Tokenisation drops the quotes, so only a quote-aware scan of the raw
+        # text can tell a search operand from a redirect.
+        assert check_granted('gh issue list --search "updated:>2026-01-01"') is None
+
+    def test_a_chained_command_keeps_its_shell_and_so_its_redirect(self):
+        # More than one segment is not the argv-only path: a real shell performs
+        # the redirect, so there is nothing to refuse.
+        assert check_granted("gh issue list > out.txt && echo done") is None
+
+    def test_the_refusal_is_scoped_to_granted_binaries(self):
+        # Same text, no grant: the ordinary bypass path, where a shell redirects.
+        assert check("gh issue list > out.txt", bypass=True) is None
+        assert check("make build > out.txt", bypass=True) is None
+
+    def test_without_bypass_the_operator_blocklist_gets_there_first(self):
+        # The refusal only has to exist under bypass; by default `>` never
+        # reaches tokenisation at all.
+        error = check_granted("gh issue list > out.txt", bypass=False)
+        assert error is not None
+        assert "Shell operators" in error["error"]
+
+    def test_the_pre_flight_and_the_executor_share_one_answer(self):
+        # Extracted precisely so the refusal above and the executor's `use_shell`
+        # cannot disagree about which commands run argv-only.
+        granted = frozenset({"gh"})
+        assert _is_lone_granted_segment([["gh", "issue", "list"]], granted)
+        assert not _is_lone_granted_segment(
+            [["gh", "issue", "list"], ["echo", "done"]], granted
+        )
+        assert not _is_lone_granted_segment([["make", "build"]], granted)
+        assert not _is_lone_granted_segment([["gh", "issue", "list"]], frozenset())
+
+
+class TestGrantedRedirectNeverReachesAProcess:
+    def test_the_tool_refuses_and_audits_nothing(
+        self, shell_tool, tmp_path, monkeypatch
+    ):
+        records = []
+        monkeypatch.setattr(
+            "gaia.security.audit_shell_command",
+            lambda **kw: records.append(kw),
+        )
+        run = shell_tool(bypass=True, granted=("gh",))
+
+        result = run("gh issue list > out.txt", working_directory=str(tmp_path))
+
+        assert result["status"] == "error"
+        assert "Redirection" in result["error"]
+        assert records == [], "a refused command must not reach the audit trail"
+        assert not (tmp_path / "out.txt").exists()

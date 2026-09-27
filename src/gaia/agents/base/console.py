@@ -199,12 +199,34 @@ class OutputHandler(ABC):
     blocking_confirmation: bool = False
     """Whether ``confirm_tool_execution`` waits for an explicit user decision."""
 
+    supports_stdin_prompts: bool = False
+    """Whether the person driving this handler is on the *process's* stdin.
+
+    A server-side handler shares the process stdin with the operator but not
+    with the requester, so a blocking ``input()`` there hangs the request
+    forever while stealing the operator's keystrokes.
+    """
+
     auto_approve_gated_tools: bool = False
     """Explicit opt-in: approve confirmation-gated tools with no human present.
 
     Never default-on. A host sets this (or the operator sets
     ``GAIA_AUTO_APPROVE_TOOLS=1``) when it has already obtained consent or is a
     trusted unattended harness. Every approval taken this way is logged.
+    """
+
+    bypass_permissions: bool = False
+    """Session-wide trust granted by ``--bypass-permissions`` / TUI ``/bypass``.
+
+    Strictly narrower in origin than ``auto_approve_gated_tools`` and wider in
+    effect. Only ``PermissionState`` sets it — an unattended harness that merely
+    pre-approves prompts must not also get an unguarded shell — and in exchange
+    it lifts the shell guardrails too: the operator block, the read-only binary
+    policy (replaced by ``DEVELOPER_COMMANDS``) and the rate limit. See
+    ``gaia.agents.tools.shell_tools.ShellToolsMixin.bypass_gates_active``.
+
+    Mutable for the life of the session: the host can toggle it mid-run over the
+    control channel, and the next gated call sees the new value.
     """
 
     _last_denial: Optional[Tuple[str, str]] = None
@@ -702,6 +724,8 @@ class TerminalConfirmationMixin:
     Mix in alongside ``OutputHandler``, whose ``deny_tool_execution`` /
     ``auto_approve_confirmations_enabled`` / progress hooks this relies on.
     """
+
+    supports_stdin_prompts: bool = True
 
     CONFIRMATION_PROMPT = "Allow this? [y]es / [N]o / [a]lways for this tool: "
     CONFIRMATION_PROMPT_NO_ALWAYS = "Allow this? [y]es / [N]o: "

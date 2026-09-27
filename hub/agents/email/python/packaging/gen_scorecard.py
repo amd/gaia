@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import urllib.error
@@ -395,10 +394,11 @@ def _build_reproduction_command(model, ground_truth_rel: str, limit=None) -> str
     """
     limit_flag = f" \\\n    --limit {limit}" if limit is not None else ""
     return (
-        "# Prerequisites: install the eval extras and start a Lemonade Server\n"
-        "# with the model on AMD Ryzen AI hardware (Strix Halo recommended).\n"
+        "# Prerequisites: the eval extras, and the model on AMD Ryzen AI\n"
+        "# hardware (Strix Halo recommended). GAIA's daemon starts and\n"
+        "# supervises the model server itself.\n"
         'uv pip install -e ".[dev,eval,api]"\n'
-        "lemonade-server serve   # in a separate shell; must stay running\n\n"
+        "gaia daemon start       # starts and supervises the model server\n\n"
         "# Step 0: build the corpus from the committed seed. The mbox +\n"
         "# ground_truth are GENERATED artifacts (gitignored), so a fresh\n"
         "# checkout must materialise them before the benchmark can read them.\n"
@@ -727,18 +727,24 @@ def _query_lemonade_version(base_url: str) -> str:
     """Query the Lemonade Server health endpoint and return its version string.
 
     Args:
-        base_url: Base URL of the running Lemonade Server, e.g.
-            ``http://localhost:13305``.
+        base_url: The server's API base as ``resolve_lemonade_base_url``
+            returns it, e.g. ``http://localhost:13305/api/v1``.
 
     Returns:
-        Version string from ``/api/v1/health``.
+        Version string from ``<base_url>/health``.
 
     Raises:
         RuntimeError: If the endpoint is unreachable or the response lacks a version.
     """
-    url = base_url.rstrip("/") + "/api/v1/health"
+    from gaia.llm.lemonade_client import lemonade_auth_headers, resolve_lemonade_api_key
+
+    url = base_url.rstrip("/") + "/health"
+    # GAIA's own server answers 401 without its key.
+    request = urllib.request.Request(
+        url, headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    )
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        with urllib.request.urlopen(request, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
         # ConnectionError covers http.client.RemoteDisconnected, which escapes
@@ -893,7 +899,9 @@ def main(argv=None) -> int:
     # Resolve lemonade_version: flag wins, then live query.
     lemonade_version: Optional[str] = args.lemonade_version
     if not lemonade_version:
-        base_url = os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305")
+        from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+        base_url = resolve_lemonade_base_url()
         try:
             lemonade_version = _query_lemonade_version(base_url)
         except RuntimeError as exc:

@@ -361,6 +361,60 @@ if cmd_base not in ALLOWED_COMMANDS:
     }
 ```
 
+### Bypass Permissions
+
+Off by default. Turned on only by the flagship sidecar's `--bypass-permissions`
+launch flag or the TUI's `/bypass`, both of which set `bypass_permissions` on
+the session's output handler. `bypass_gates_active()` reads that attribute live,
+so a mid-session toggle takes effect on the next command.
+
+When on, `_validate_command` short-circuits the whole read-only policy above and
+answers one question instead: is the binary in
+`ALLOWED_COMMANDS | DEVELOPER_COMMANDS`?
+
+```python
+DEVELOPER_COMMANDS = frozenset({
+    "node", "npm", "make", "cmake", "go", "cargo",
+    "sed", "awk", "curl", "sleep", "timeout", "export", "cp", "mv",
+    # consolidation, not new reach — these already have their own paths
+    "python", "python3", "pytest", "gh", "git",
+})   # "rm" deliberately excluded
+```
+
+`git` is in the set, so its binary policy's outright refusals — push, reset,
+rebase — do not apply under bypass. That drops a tripwire, not a boundary:
+`python` and `make` reach git by shelling out regardless. Leaving it out would
+also have made bypass *stricter* than the default tier, where git's read-only
+floor still runs `git status`.
+
+`ALLOWED_COMMANDS` is unchanged — the developer set is separate, so the
+read-only tier keeps meaning what it says. The operator block and the rate limit
+come off with it, and the per-segment `_split_pipeline` + `_validate_command`
+walk stays intact so every invocation is still audited to
+`~/.gaia/cache/file_audit.log`.
+
+Chaining and pipes are not what bypass buys: `&&`, `||`, `;` and `|` run by
+default, each step judged on its own binary. What the operator block still holds
+back — and bypass lifts — is redirection (`>`, `<`), backgrounding (`&`),
+substitution (`` ` ``, `$()`) and the newline, the operators only a shell can
+act on. Those are also why a bypassed step runs through a shell on every
+platform, not just Windows.
+
+Segment separators include the newline, not just `&&`, `||`, `;`, `&` and `|` —
+the shell running the string treats a line break as a command separator, so the
+walk has to as well, or a second command rides in unvalidated and unaudited. A
+newline inside quotes stays ordinary data.
+
+A command that is *only* a skill-granted CLI runs argv-only, never through a
+shell, so a redirect on that one path is refused rather than passed to the
+binary as a literal argument. `_is_lone_granted_segment` is what both the
+pre-flight refusal and the executor's `use_shell` read, so they cannot disagree
+about which commands take it.
+
+This permits arbitrary code execution, and is reachable on the stdio transport
+only. See [Security Model](/plans/security-model) §4.5 for the full blast radius
+and why the HTTP transport is excluded.
+
 ### Git Command Filtering
 
 `git` has no subcommand allowlist of its own here. It has a full three-tier

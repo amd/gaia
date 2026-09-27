@@ -1010,7 +1010,7 @@ export function MemoryDashboard() {
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h3>Memory Dashboard <span style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '2px 8px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span></h3>
+                        <h3>Memory Dashboard <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span></h3>
                     </div>
                     <div className="memory-dashboard-header-actions">
                         {/* Embedding coverage indicator */}
@@ -1156,7 +1156,7 @@ export function MemoryDashboard() {
                                     <div className="mem-empty-icon" style={{ opacity: 0.5 }}>
                                         <Shield size={32} />
                                     </div>
-                                    <p style={{ color: '#888', fontSize: 14 }}>Memory is disabled. Enable it in Settings below to start storing knowledge, conversations, and preferences.</p>
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Memory is disabled. Enable it in Settings below to start storing knowledge, conversations, and preferences.</p>
                                 </div>
                             )}
 
@@ -1911,7 +1911,7 @@ export function MemoryDashboard() {
                             {/* ── Settings ─────────────────────── */}
                             <div className="mem-section">
                                 <div className="mem-section-title">
-                                    <Shield size={14} /> Settings <span style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '1px 6px', borderRadius: 4, marginLeft: 6, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span>
+                                    <Shield size={14} /> Settings <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginLeft: 6, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span>
                                 </div>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
@@ -2004,7 +2004,7 @@ export function MemoryDashboard() {
                                     <>
                                         <div
                                             style={{
-                                                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+                                                position: 'fixed', inset: 0, background: 'var(--bg-modal-overlay)',
                                                 zIndex: 9998, backdropFilter: 'blur(4px)',
                                             }}
                                             onClick={() => setBetaConfirm(null)}
@@ -2012,29 +2012,29 @@ export function MemoryDashboard() {
                                         <div style={{
                                             position: 'fixed', top: '50%', left: '50%',
                                             transform: 'translate(-50%, -50%)', zIndex: 9999,
-                                            background: '#1a1a2e', border: '1px solid #333',
+                                            background: 'var(--bg-card)', border: '1px solid var(--border)',
                                             borderRadius: 12, padding: '28px 32px', maxWidth: 420,
-                                            width: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+                                            width: '90vw', boxShadow: 'var(--shadow-lg)',
                                         }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
                                                 <span style={{
-                                                    fontSize: 11, fontWeight: 700, color: '#f59e0b',
-                                                    background: 'rgba(245,158,11,0.15)', padding: '3px 10px',
+                                                    fontSize: 11, fontWeight: 700, color: 'var(--accent-yellow)',
+                                                    background: 'var(--accent-yellow-dim)', padding: '3px 10px',
                                                     borderRadius: 4, letterSpacing: '0.5px',
                                                 }}>BETA</span>
-                                                <span style={{ fontSize: 16, fontWeight: 600, color: '#e0e0e0' }}>
+                                                <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
                                                     {cfg.title}
                                                 </span>
                                             </div>
-                                            <p style={{ fontSize: 13, lineHeight: 1.6, color: '#999', margin: '0 0 8px' }}>
+                                            <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
                                                 {cfg.description}
                                             </p>
-                                            <ul style={{ fontSize: 13, lineHeight: 1.7, color: '#999', margin: '0 0 24px', paddingLeft: 20 }}>
+                                            <ul style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text-secondary)', margin: '0 0 24px', paddingLeft: 20 }}>
                                                 {cfg.bullets.map((parts, i) => (
                                                     <li key={i}>
                                                         {parts.map((part, j) =>
                                                             j % 2 === 1
-                                                                ? <strong key={j} style={{ color: '#ccc' }}>{part}</strong>
+                                                                ? <strong key={j} style={{ color: 'var(--text-primary)' }}>{part}</strong>
                                                                 : <span key={j}>{part}</span>
                                                         )}
                                                     </li>
@@ -2065,8 +2065,8 @@ export function MemoryDashboard() {
                                                     style={{
                                                         padding: '8px 24px', fontSize: 13, fontWeight: 600,
                                                         borderRadius: 6, border: 'none', cursor: 'pointer',
-                                                        background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                                                        color: '#000',
+                                                        background: 'var(--accent-fill)',
+                                                        color: 'var(--accent-fill-text)',
                                                     }}
                                                 >
                                                     {cfg.buttonLabel}

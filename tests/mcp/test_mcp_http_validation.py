@@ -117,7 +117,16 @@ def test_list_tools():
 
 @test("JSON-RPC Initialize", "Test JSON-RPC initialization")
 def test_jsonrpc_initialize():
-    data = {"jsonrpc": "2.0", "id": "test-init", "method": "initialize", "params": {}}
+    data = {
+        "jsonrpc": "2.0",
+        "id": "test-init",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "gaia-http-validation", "version": "1"},
+        },
+    }
     response = make_request("/", method="POST", data=data)
 
     assert "jsonrpc" in response, "Not a valid JSON-RPC response"
@@ -129,8 +138,9 @@ def test_jsonrpc_initialize():
     assert "serverInfo" in result, "Missing server info"
     assert "capabilities" in result, "Missing capabilities"
 
+    assert result["protocolVersion"] == "2025-06-18", "Requested version not echoed"
     caps = result["capabilities"]
-    assert caps.get("tools") is True, "Tools capability not enabled"
+    assert caps == {"tools": {}}, f"Expected only a tools capability object: {caps}"
 
     print(f"   📌 Protocol: {result['protocolVersion']}")
     print(
@@ -151,9 +161,10 @@ def test_jsonrpc_tool_list():
     assert len(tools) > 0, "No tools returned"
 
     # Verify tool structure
-    for tool in tools[:1]:  # Check first tool
+    for tool in tools:
         assert "name" in tool, "Tool missing name"
         assert "description" in tool, "Tool missing description"
+        assert tool["inputSchema"]["type"] == "object", "Tool missing inputSchema"
 
     print(f"   🛠️ {len(tools)} tools available via JSON-RPC")
     return True
@@ -184,15 +195,8 @@ def test_error_unknown_tool():
     }
     response = make_request("/", method="POST", data=data)
 
-    # Should have either error in response or error in result content
-    if "error" in response:
-        print(
-            f"   👍 Properly returned error: {response['error'].get('message', 'Unknown')}"
-        )
-    elif "result" in response:
-        content = json.loads(response["result"]["content"][0]["text"])
-        assert "error" in content, "Should indicate tool error"
-        print(f"   👍 Error handled: {content['error']}")
+    assert response.get("error", {}).get("code") == -32602, response
+    print(f"   👍 Properly returned error: {response['error']['message']}")
     return True
 
 

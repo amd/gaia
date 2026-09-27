@@ -40,7 +40,7 @@ const hasTabs = methods.length > 1;
           aria-selected={i === 0 ? 'true' : 'false'}
           tabindex={i === 0 ? 0 : -1}
           data-im-tab={m.key}
-          class="im-tab rounded-md px-3.5 py-1.5 font-mono text-[12px] uppercase tracking-[0.06em] text-g-faint transition-colors duration-[250ms] ease-g-out hover:text-g-text aria-selected:bg-g-gold aria-selected:text-g-on-gold"
+          class="im-tab rounded-md px-3.5 py-1.5 font-mono text-[12px] uppercase tracking-[0.06em] text-g-faint transition-colors duration-[250ms] ease-g-out hover:text-g-text aria-selected:bg-g-accent-fill aria-selected:text-g-on-accent"
         >
           {m.label}
         </button>
@@ -59,7 +59,7 @@ const hasTabs = methods.length > 1;
       {/* Code chips stay dark in both themes (g-code-bg is theme-invariant), so
           the controls inside them key off g-code-text rather than the page palette. */}
       <div class="g-cmd gap-2.5 px-4 py-3.5 text-[13px]">
-        <span class="select-none text-g-gold" aria-hidden="true">$</span>
+        <span class="select-none text-g-code-accent" aria-hidden="true">$</span>
         {/* Focusable: it scrolls horizontally at narrow widths, and a scroll
             region no keyboard user can reach hides the tail of the command. */}
         <code tabindex="0" class="min-w-0 flex-1 overflow-x-auto whitespace-pre bg-transparent p-0">{m.command}</code>
@@ -67,7 +67,7 @@ const hasTabs = methods.length > 1;
           type="button"
           data-im-copy={m.command}
           aria-label={`Copy install command: ${m.command}`}
-          class="im-copy flex-none rounded-md border border-g-code-text/20 px-2.5 py-1 font-mono text-[11px] text-g-code-text/70 transition-colors duration-[250ms] ease-g-out hover:border-g-gold hover:text-g-gold"
+          class="im-copy flex-none rounded-md border border-g-code-text/20 px-2.5 py-1 font-mono text-[11px] text-g-code-text/70 transition-colors duration-[250ms] ease-g-out hover:border-g-code-accent hover:text-g-code-accent"
         >
           <span class="im-copy-label select-none">copy</span>
         </button>

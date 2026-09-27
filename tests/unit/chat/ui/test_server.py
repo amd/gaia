@@ -116,52 +116,13 @@ class TestSystemStatus:
         data = resp.json()
         assert data["disk_space_gb"] >= 0
 
-    def test_system_status_device_supported_fields_present(self, client):
-        """device_supported and processor_name fields must be present."""
-        resp = client.get("/api/system/status")
+    def test_system_status_names_the_processor_without_a_support_verdict(self, client):
+        """No machine is flagged unsupported: Settings shows the CPU for info only."""
+        with patch("gaia.device.get_processor_name", return_value="Apple M3 Max"):
+            resp = client.get("/api/system/status")
         data = resp.json()
-        assert "device_supported" in data
-        assert isinstance(data["device_supported"], bool)
-        # processor_name is optional (may be None)
-        assert "processor_name" in data
-
-    def test_system_status_skip_device_check_env_forces_supported(self, client):
-        """GAIA_SKIP_DEVICE_CHECK=1 makes device_supported always true."""
-        with patch.dict(os.environ, {"GAIA_SKIP_DEVICE_CHECK": "1"}):
-            with patch(
-                "gaia.device.check_device_supported", return_value=(False, "linux")
-            ):
-                resp = client.get("/api/system/status")
-        data = resp.json()
-        assert data["device_supported"] is True
-
-    def test_system_status_remote_lemonade_url_skips_device_check(self, client):
-        """Non-localhost LEMONADE_BASE_URL means device_supported is always true."""
-        with patch.dict(
-            os.environ, {"LEMONADE_BASE_URL": "https://remote-server:13305/api/v1"}
-        ):
-            with patch(
-                "gaia.device.check_device_supported",
-                return_value=(False, "AMD Ryzen 7 5800X"),
-            ):
-                resp = client.get("/api/system/status")
-        data = resp.json()
-        assert data["device_supported"] is True
-
-    def test_system_status_localhost_lemonade_url_still_checks_device(self, client):
-        """localhost LEMONADE_BASE_URL still runs the device check normally."""
-        with patch.dict(
-            os.environ,
-            {"LEMONADE_BASE_URL": "http://localhost:13305/api/v1"},
-            clear=False,
-        ):
-            with patch(
-                "gaia.device.check_device_supported",
-                return_value=(False, "AMD Ryzen 7 5800X"),
-            ):
-                resp = client.get("/api/system/status")
-        data = resp.json()
-        assert data["device_supported"] is False
+        assert data["processor_name"] == "Apple M3 Max"
+        assert "device_supported" not in data
 
     @patch("httpx.AsyncClient")
     def test_system_status_llm_health_fields_have_safe_defaults(
@@ -2031,7 +1992,7 @@ class TestLemonadeApiKeyInjection:
 
     @patch("httpx.AsyncClient")
     def test_system_status_omits_authorization_header_when_no_key(
-        self, mock_httpx_cls, client
+        self, mock_httpx_cls, client, tmp_path
     ):
         captured_headers = []
 
@@ -2053,6 +2014,9 @@ class TestLemonadeApiKeyInjection:
         mock_httpx_cls.return_value = mock_client
 
         env_no_key = {k: v for k, v in os.environ.items() if k != "LEMONADE_API_KEY"}
+        # Empty GAIA_HOME: otherwise a developer running GAIA's own Lemonade
+        # supplies that server's key and "no key" never happens.
+        env_no_key["GAIA_HOME"] = str(tmp_path)
         with patch.dict(os.environ, env_no_key, clear=True):
             resp = client.get("/api/system/status")
         assert resp.status_code == 200
