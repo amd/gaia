@@ -87,6 +87,7 @@
                     "group": "Core Agents",
                     "pages": [
                       "guides/gaia",
+                      "guides/document-extraction",
                       "guides/ai-providers",
                       "guides/chat",
                       "guides/talk",
