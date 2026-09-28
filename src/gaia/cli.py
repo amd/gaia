@@ -3567,10 +3567,7 @@ Examples:
 def _serve_gateway(args):
     """gaia eval tasks gateway: the model gateway, in the foreground."""
     from gaia.eval.bench.gateway import Gateway
-    from gaia.llm.lemonade_client import (
-        resolve_lemonade_api_key,
-        resolve_lemonade_base_url,
-    )
+    from gaia.llm.lemonade_client import resolve_lemonade_api_key
 
     upstream = resolve_lemonade_base_url(args.upstream)
     gateway = Gateway(
