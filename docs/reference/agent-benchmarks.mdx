@@ -113,17 +113,20 @@ same judge, same toolchain on `PATH`, only the harness changes. Running the same
 model through both legs is how you find out whether a weak score is the model or the
 wrapper around it.
 
-## The two benchmarks
+## The three benchmarks
 
 | Suite | What it is | Scored by |
 |---|---|---|
 | `everyday` | 14 small coding and GitHub tasks on `eval/tasks/toybox`, a synthetic Python project built for this: explain a file, fix a bug with a regression test, triage GitHub issues, find a duplicate, draft a reply, refactor, review a patch, write tests, a weekly CSV report, a shell-injection fix, label issues, config from an env var. The GitHub tasks run against an offline `gh` stand-in serving committed fixtures — no task reaches a personal login. | Running the code, plus the judge |
 | `therock` | 4 real bugs from the public [ROCm/TheRock](https://github.com/ROCm/TheRock) repository, each checked out at the commit **before** its fix. The agent's diff is graded against the pull request that actually fixed it, fetched only after the agent has exited. Two of the four forbid internet use in the prompt. | The judge, against the real fix |
+| `swebench` | Instances of [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), the public benchmark of real GitHub issues: the agent gets the repository at the commit before the fix and the issue text, and its patch is graded by the official SWE-bench harness running the repository's own tests in Docker. Nothing of the dataset is in this repo; see [SWE-bench Verified](#swe-bench-verified) below. | The official harness (the judge grades quality only) |
 
 `everyday` is the one to reach for first — small, fast, cheap, and mechanically
 checkable for most tasks. `therock` is a real 144K-line codebase with a real fix as
 the answer key; it costs more and takes longer, and it's what proves the agent's
-skills transfer past a project built for the benchmark.
+skills transfer past a project built for the benchmark. `swebench` is the public
+yardstick: the same instances, prompt discipline and grader everyone else reports
+against, so a number from it can be set beside a published one.
 
 ## How scoring works
 
@@ -183,6 +186,77 @@ That's deliberate: cutting the network would only measure whether the agent
 record measures whether the agent does what it was told — instruction-following,
 which is the actual thing under test.
 
+## SWE-bench Verified
+
+[SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified)
+is the 500-instance, human-validated subset of SWE-bench: each instance is a real
+GitHub issue from a public Python project (requests, flask, pylint, sphinx, django,
+...), the commit the fix was made against, and the tests the fix made pass. An
+agent is given the repository at that commit and the issue text, and it **resolves**
+the instance when the official harness applies its patch in the instance's own
+Docker image and every `FAIL_TO_PASS` test passes with no `PASS_TO_PASS` test
+breaking.
+
+**Nothing of the dataset is committed here.** `--suite swebench` is built at run
+time: each instance is read from the Hugging Face dataset (the `datasets` package
+when it is installed, the datasets-server REST API otherwise) and cached as one
+JSON file under the work root (`$GAIA_BENCH_WORK_ROOT/swebench/`), which `--fence`
+keeps out of the agent's reach. `--instances a,b,c` names the instances; without
+it the run is the five-instance pilot: `psf__requests-1921`, `psf__requests-5414`,
+`pallets__flask-5014`, `pylint-dev__pylint-4970`, `sphinx-doc__sphinx-8721`.
+
+**The checkout is built the way `therock` builds its own.** A bare cache per
+repository is filled by commit, to a depth of 200, so it never holds the fix that
+landed after the base; each task then gets a single-branch clone over `file://`,
+detached, with no remote. The `file://` matters: git ignores `--depth` on a plain
+local path and copies every object, which is how a TheRock run once found the fix
+as a dangling object and applied it verbatim. Every SWE-bench checkout is checked
+with `git fsck --unreachable --no-reflogs` and refused if anything is off its
+history.
+
+**The prompt is the issue text plus one fixed paragraph**: work only in this
+checkout, make the minimal code change that resolves the issue, do not use the
+internet, and the project's tests cannot be run here (they run later, in the
+container). Web use is reported the same way as for the `therock` no-internet
+tasks. After the agent exits, everything it changed (new files included) becomes
+one row of `DIR/predictions.jsonl` — `{"instance_id", "model_name_or_path",
+"model_patch"}`, exactly what the official harness reads. An agent that changed
+nothing fails the task then and there; there is nothing to submit.
+
+**Grading runs the official harness, one instance at a time.** `run` does it after
+the suite unless `--no-evaluate`; `gaia eval tasks swebench DIR` does it later, or
+again. It needs the `swebench` package (5.x) in the same interpreter and a
+running Docker daemon, and it stops with a message naming which is missing. The
+per-instance images are **amd64-only and about 3 GB each**: on an Apple-silicon
+Mac they run under Rosetta (`--docker-platform linux/amd64`, the default), and
+each image is pulled just before its run and removed right after, so five
+instances need 3 GB of disk, not 15. `--keep-images` skips the pull and the
+removal for a machine that has the space and grades repeatedly. The harness's own
+logs and reports land in `DIR/swebench/`, and each task's scorecard entry gains
+a `swebench` block — resolved or not, whether the patch applied, and the
+`FAIL_TO_PASS` / `PASS_TO_PASS` counts.
+
+```bash
+pip install swebench            # the official harness, in GAIA's interpreter
+
+# GAIA on the pilot, graded in Docker afterwards
+gaia eval tasks run --suite swebench --model fireworks.glm-5p3-flash   --no-judge --out "$BENCH/swe-gaia-glm"
+
+# Claude Code on the same instances; a chosen set instead of the pilot
+gaia eval tasks run --suite swebench --harness claude-code --model claude-opus-5   --instances psf__requests-1921,pallets__flask-5014 --no-judge --out "$BENCH/swe-cc-opus"
+
+# Grade (or re-grade) a run whose agent step already finished
+gaia eval tasks swebench "$BENCH/swe-gaia-glm"
+```
+
+**Reading a SWE-bench number against a published one.** Published SWE-bench
+Verified scores are the resolved fraction of all 500 instances, under each lab's
+own scaffold; a five-instance pilot says which instances an agent resolved, not
+what its rate would be. Compare on the same instances, with `--repeats`, and grow
+the set before quoting a percentage. As of this writing, no Anthropic-published
+SWE-bench Verified figure exists for Claude Opus 5 to set a `--harness
+claude-code --model claude-opus-5` run beside.
+
 ## Prerequisites and cost
 
 Both harnesses reach the model through a local gateway, so no agent process ever
@@ -212,6 +286,8 @@ precisely so you don't have to re-run the agent to do it.
 | `gaia eval tasks controls [--out DIR]` | Grades the three planted attempts described above; with `--out`, also writes each attempt's `transcript.json` and the verdicts to `DIR/controls.json`. |
 | `gaia eval tasks report DIR... --out DIR` | The harness × model table across one or more finished, judged runs. Writes `report.md`, `report.html`, and `report.png` (skipped without a headless Chrome, or with `--no-png`). |
 | `gaia eval tasks gateway --port N` | Runs the model gateway in the foreground, so a whole matrix of runs can share one instead of each starting its own. |
+| `gaia eval tasks run --suite swebench [--instances a,b] [--no-evaluate] [--keep-images] --out DIR` | The SWE-bench suite built from the named instances (default: the pilot), then graded by the official harness in Docker. Writes `DIR/predictions.jsonl` and the harness's logs and reports under `DIR/swebench/`. |
+| `gaia eval tasks swebench DIR [--keep-images] [--docker-platform P]` | Grades (or re-grades) a finished `swebench` run's predictions with the official harness; updates `DIR/scorecard.json` in place. |
 
 **A full comparison**, one harness/model combination per line:
 
@@ -250,7 +326,8 @@ noise — three Claude Code runs on the same model and tasks have ranged from 4:
 Other flags worth knowing: `--tasks a,b` (a subset of the suite), `--run-timeout S`
 (the wall-clock cap per task, default 1800s, the same for every harness in a
 comparison), `--judge-model M` / `--judge-attempts N`. The full flag reference,
-including `--fence`, `--full-access`, and the TheRock-specific flags, is in the
+including `--fence`, `--full-access`, and the TheRock- and SWE-bench-specific
+flags, is in the
 [Evaluation Framework reference](/reference/eval#comparing-harnesses-and-models).
 
 ## Reading the results
