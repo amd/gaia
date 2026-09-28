@@ -679,7 +679,10 @@ def test_a_turn_that_offers_the_shell_keeps_its_commands(repo):
     agent = _FakeAgent(repo)
     agent._active_tool_filter = ["run_python", "run_shell_command"]
 
-    assert "run_shell_command accepts:" in agent.get_project_map_system_prompt()
+    assert (
+        "Read-only commands for run_shell_command:"
+        in agent.get_project_map_system_prompt()
+    )
 
 
 def test_a_wrong_base_order_fails_at_class_definition():
