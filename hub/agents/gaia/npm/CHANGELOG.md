@@ -54,6 +54,21 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Complete inventories from long documents.** Asking for every exercise,
+  action item or finding in a transcript now returns all of them, each with its
+  source quote, instead of a condensed list. The opt-in `document-extract` skill
+  drives new `extract_document_items` and `save_extracted_items` tools; a save is
+  reported only after the exact file is written and read back, and anything
+  unfinished is reported as incomplete. `gaia-voice` gains one routing line
+  (702 tokens).
+- **The agent can set up a skill's CLI instead of handing the job back.** Asking
+  it to triage GitHub issues on a machine without `gh` used to end the
+  conversation. Three new tools — `check_cli_setup` (read-only), `install_cli`
+  and `sign_in_cli` — let it report exactly what is wrong, install the CLI with
+  the machine's package manager, and drive the browser sign-in. Both mutating
+  tools are confirmation-gated on every call and no skill grant pre-approves
+  them; over `/v1/gaia/query` they are refused, like every other gated tool
+  (§8). Registered tool count goes 83 → 86.
 - **Say something while the agent is still working.** `POST
   /v1/gaia/query/{run_id}/followup` hands a live run a message the user typed
   after it started (contract **2.15**). The run is not interrupted and no
@@ -176,7 +191,7 @@ the terminal UI meant building it from source.
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
-  profile.** The model is sent about 28 of its 81 tools on any one call — a
+  profile.** The model is sent about 28 of its 84 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
   whole registry every time. No capability is lost: `load_tools` is an escape
   hatch the model calls mid-turn to pull in a bundle the selector missed; that
@@ -185,7 +200,7 @@ the terminal UI meant building it from source.
   `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
   moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
 - **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`
-  entry, so it is always on and rendered in full on every LLM call — 676 tokens
+  entry, so it is always on and rendered in full on every LLM call — 702 tokens
   of every prompt, and it declares no tools. It is the agent's honesty floor
   (don't claim work you didn't do, don't present empty output as a result,
   don't substitute a near-miss and report success), which is why it is not in an

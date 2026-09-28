@@ -51,6 +51,7 @@ from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
     AudioToolsMixin,
     BrowserToolsMixin,
+    CliSetupToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
@@ -260,6 +261,7 @@ class ChatAgent(
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    CliSetupToolsMixin,
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
     BrowserToolsMixin,
@@ -316,6 +318,7 @@ class ChatAgent(
             config.allowed_paths,
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
             on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+            interactive_check=self._console_accepts_stdin_prompts,
         )
         # Created after tool registration, once we know the agent can write files.
         self.scratch_dir: Optional[Path] = None
@@ -828,6 +831,16 @@ class ChatAgent(
         return self.tool_loader.select(
             query, self._tools_registry, skill_tools=skill_tools
         )
+
+    def _admit_skill_tools(self, names: List[str]) -> None:
+        """Admit a just-loaded skill's tools into the loader (no-op when inactive).
+
+        Keeps the loader's loaded set and ``_active_tool_filter`` in step, so the
+        next turn's selection still carries them and calling one doesn't register
+        as an escape hatch.
+        """
+        if self.tool_loader is not None:
+            self.tool_loader.admit_tools(names, self._tools_registry)
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Record tool-use recency for the loader's LRU (no-op when inactive)."""
@@ -1517,11 +1530,16 @@ No documents are currently indexed.
         if spec.early_return:
             # Minimal: only shell for system queries
             self.register_shell_tools()
+            # Registered on every profile, this one included: "can you install
+            # the GitHub CLI?" is a conversational question, and the answer has
+            # to be yes before any skill needing that CLI can even load.
+            self.register_cli_setup_tools()
             self._register_external_tools_conditional()
             return
 
         # All other profiles get at least shell tools
         self.register_shell_tools()
+        self.register_cli_setup_tools()
         self.register_memory_tools()  # Persistent memory tools
 
         for _group_name in spec.tool_groups:
