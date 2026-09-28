@@ -46,12 +46,12 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, List, Optional
+from typing import ClassVar, FrozenSet, List, Optional
 
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
-from gaia.agents.base.project_map import ProjectMapMixin
+from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
     DEFAULT_SKILL_THRESHOLD,
@@ -183,8 +183,11 @@ class GaiaAgentConfig(ChatAgentConfig):
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
     # of loading it. Swept offline against nine representative queries with 13
     # CORE: 13 dynamic slots lands every matched bundle whole, 9 cut the web
-    # bundle in half on a research question, and 17 buys nothing further. Grows
-    # with CORE so the dynamic share stays 13.
+    # bundle in half on a research question, and 17 buys nothing further. Bump
+    # this literal when FULL_CORE_TOOLS grows so the dynamic share stays 13;
+    # per-session workspace CORE additions (e.g. the shell in a repo) don't
+    # need a bump here — _resolve_dynamic_tools_max() grows the cap by
+    # len(_workspace_core_tools()) automatically.
     dynamic_tools_max: int = 29
 
     # List every installed skill in the system prompt so the model loads one
@@ -325,6 +328,18 @@ class GaiaAgent(
         self.register_code_index_tools()
         self.register_email_tools()
         super()._register_tools()
+
+    def _workspace_core_tools(self) -> FrozenSet[str]:
+        """The shell, always on when this session works in a code repository.
+
+        Coding requests rarely read like shell requests ("skip these tests on
+        PRs"), so semantic selection left a repo session without a shell even
+        though the project map tells the model which commands it accepts.
+        """
+        root = self._project_map_root()
+        if root and is_code_repository(root):
+            return frozenset({"run_shell_command"})
+        return frozenset()
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
 

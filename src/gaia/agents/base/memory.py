@@ -199,29 +199,6 @@ RRF_WEIGHT_BM25 = 0.4
 #: RRF smoothing constant (standard value from the original RRF paper).
 RRF_K = 60
 
-#: A lesson is a failure followed, in the same turn, by a success of the same
-#: operation with different arguments: what went wrong and the call that fixed
-#: it. Stored per workspace, since a project's quirks don't carry to another.
-LESSON_DOMAIN = "lesson"
-LESSON_SOURCE = "tool_lesson"
-
-
-def _is_lesson(item: Dict) -> bool:
-    """Whether *item* is a lesson this agent wrote, not one the model labelled.
-
-    ``source`` is set by the write path; ``domain`` is a string the extraction
-    model chooses, so it alone cannot decide this.
-    """
-    return item.get("source") == LESSON_SOURCE
-LESSON_INITIAL_CONFIDENCE = 0.5
-LESSON_CONFIRM_DELTA = 0.1
-#: Lessons shown in the stable prompt, and each piece's length cap.
-LESSONS_IN_PROMPT = 3
-LESSON_PART_CHARS = 160
-#: Lookup ceiling for a workspace's lessons. One row per operation keeps this
-#: far above any real workspace; the prompt still shows LESSONS_IN_PROMPT.
-LESSON_LOOKUP_LIMIT = 500
-
 #: Memories surfaced per turn for the current request, and the cosine floor a
 #: match must clear. In the embedder's space, unrelated stored memories sit
 #: around 0.3 and same-topic ones above 0.8.
@@ -231,6 +208,30 @@ TURN_RECALL_MIN_SIMILARITY = 0.5
 #: Categories per-turn recall may surface. Reminders have their own due-date
 #: path, and privileged categories live in the stable prompt.
 _TURN_RECALL_CATEGORIES = frozenset({"fact", "preference", "note", "skill", "error"})
+
+#: A lesson is a failure followed, in the same turn, by a success of the same
+#: operation with different arguments: what went wrong and the call that fixed
+#: it. Stored per workspace, since a project's quirks don't carry to another.
+LESSON_DOMAIN = "lesson"
+LESSON_SOURCE = "tool_lesson"
+LESSON_INITIAL_CONFIDENCE = 0.5
+LESSON_CONFIRM_DELTA = 0.1
+#: Lessons shown in the stable prompt, and each piece's length cap.
+LESSONS_IN_PROMPT = 3
+LESSON_PART_CHARS = 160
+#: Lookup ceiling for a workspace's lessons. One row per operation keeps this
+#: far above any real workspace; the prompt still shows LESSONS_IN_PROMPT.
+LESSON_LOOKUP_LIMIT = 500
+
+
+def _is_lesson(item: Dict) -> bool:
+    """Whether *item* is a lesson this agent wrote, not one the model labelled.
+
+    ``source`` is set by the write path; ``domain`` is a string the extraction
+    model chooses, so it alone cannot decide this.
+    """
+    return item.get("source") == LESSON_SOURCE
+
 
 #: Cosine similarity threshold for reconciliation pair detection.
 RECONCILE_SIMILARITY_THRESHOLD = 0.85
@@ -2797,19 +2798,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
             self._mark_reminded(upcoming, now)
 
-        # Lessons learned after the stable prompt was frozen.
-        shown = getattr(self, "_stable_lesson_ids", set())
-        fresh = [
-            item
-            for item in getattr(self, "_session_lessons", [])
-            if item["id"] not in shown
-        ]
-        if fresh:
-            lines.append(
-                "Learned earlier this session:\n"
-                + "\n".join(f"  - {item['content']}" for item in fresh)
-            )
-
         query = getattr(self, "_memory_turn_query", "") or ""
         try:
             relevant = self._recall_memories_for_turn(query)
@@ -2829,6 +2817,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             lines.append(
                 "Stored memories that may bear on this message:\n"
                 + "\n".join(mem_lines)
+            )
+
+        # Lessons learned after the stable prompt was frozen.
+        shown = getattr(self, "_stable_lesson_ids", set())
+        fresh = [
+            item
+            for item in getattr(self, "_session_lessons", [])
+            if item["id"] not in shown
+        ]
+        if fresh:
+            lines.append(
+                "Learned earlier this session:\n"
+                + "\n".join(f"  - {item['content']}" for item in fresh)
             )
 
         return "[GAIA Memory Context]\n" + "\n\n".join(lines)
