@@ -21,7 +21,12 @@ from typing import Dict
 import numpy as np
 import pytest
 
-from gaia.agents.base.memory import MemoryMixin, _embedding_to_blob
+from gaia.agents.base.memory import (
+    LESSON_DOMAIN,
+    LESSON_SOURCE,
+    MemoryMixin,
+    _embedding_to_blob,
+)
 from gaia.agents.base.memory_store import MemoryStore
 
 DIM = 8
@@ -213,6 +218,51 @@ class TestWhatIsNeverSurfaced:
         host._memory_turn_query = QUERY
 
         assert "toybox CI secret-ish row" not in host.get_memory_dynamic_context()
+
+    def test_a_lesson_from_another_workspace_stays_out(self, host, store):
+        """A lesson is filed as a note, but belongs to one workspace.
+
+        Per-turn recall is unscoped in a default ``global`` session, so without
+        a domain check a lesson learned in project A surfaces in project B —
+        and it lands as a bare note, without the anti-injection framing its own
+        path wraps it in, even though its content is raw tool output.
+        """
+        _remember(
+            store,
+            host.vectors,
+            "toybox CI needs --no-sandbox",
+            _axis(0),
+            category="note",
+            domain=LESSON_DOMAIN,
+            source=LESSON_SOURCE,
+            context="workspace:/some/other/project",
+        )
+        host._rebuild_faiss_index()
+        host._memory_context = "global"
+        host._memory_turn_query = QUERY
+
+        assert "--no-sandbox" not in host.get_memory_dynamic_context()
+
+    def test_a_fact_the_model_labelled_lesson_still_surfaces(self, host, store):
+        """``domain`` is the extraction model's word; ``source`` is the code's.
+
+        A turn that merely mentions a lesson gets its ordinary facts tagged
+        ``domain='lesson'`` by the model. Keying the exclusion on that would
+        suppress a real fact from recall permanently.
+        """
+        _remember(
+            store,
+            host.vectors,
+            "toybox CI runs on the nightly image",
+            _axis(0),
+            category="fact",
+            domain=LESSON_DOMAIN,
+            source="llm_extract",
+        )
+        host._rebuild_faiss_index()
+        host._memory_turn_query = QUERY
+
+        assert "nightly image" in host.get_memory_dynamic_context()
 
     def test_an_unrelated_nearest_neighbour_is_below_the_floor(self, host, store):
         _remember(

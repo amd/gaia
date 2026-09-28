@@ -1075,7 +1075,15 @@ def main():
         print(f"\n❌ Error: {e}")
         return 1
     finally:
-        # Cleanup
+        # Cleanup. Draining here rather than beside the one-shot return means
+        # interactive, Ctrl-C and error exits land the last turn's facts too —
+        # extraction now finishes after the answer.
+        try:
+            from gaia.agents.base.memory import drain_memory_extraction
+
+            drain_memory_extraction(agent)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning("memory extraction did not finish before exit: %s", e)
         try:
             agent.stop_watching()
         except Exception as e:  # pylint: disable=broad-except
