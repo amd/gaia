@@ -23,12 +23,26 @@ const FireworksURL = "https://api.fireworks.ai/inference/v1"
 type Recommendation struct {
 	ID   string
 	Note string
+	// Evidence is the measured result behind the note, one line, or empty
+	// when the rank rests on the benchmark alone.
+	Evidence string
 }
 
 // RecommendedModels is ranked by the agent task benchmark (September 2026); refresh it as models change.
+// Evidence: 14 everyday coding tasks (mean of 3 runs) and TheRock, 4 real ROCm
+// build-system bugs in a 144K-line repository (1 run), judged by an independent
+// Opus 5 judge and billed at Fireworks' published rates.
 var RecommendedModels = []Recommendation{
-	{ID: "fireworks.glm-5p3-flash", Note: "best overall, cheapest"},
-	{ID: "fireworks.deepseek-v4p1-flash", Note: "fastest"},
+	{
+		ID:       "fireworks.glm-5p3-flash",
+		Note:     "best overall, cheapest",
+		Evidence: "14/14 tasks · quality 4.89/5 · $0.09 per 14-task run · TheRock 4/4, 3.69/5, $0.42",
+	},
+	{
+		ID:       "fireworks.deepseek-v4p1-flash",
+		Note:     "fastest",
+		Evidence: "14/14 tasks · quality 4.92/5 · $0.10 per 14-task run · TheRock 4/4, 4.44/5, $0.47",
+	},
 	{ID: "fireworks.deepseek-v4-pro-0813", Note: "most truthful"},
 }
 
@@ -47,6 +61,17 @@ func rankKey(id string) string {
 }
 
 // Rank returns a model's 1-based rank and note, or ok=false when it is not recommended.
+// Evidence returns the measured line behind a recommended model, or "".
+func Evidence(id string) string {
+	key := rankKey(id)
+	for _, r := range RecommendedModels {
+		if rankKey(r.ID) == key {
+			return r.Evidence
+		}
+	}
+	return ""
+}
+
 func Rank(id string) (rank int, note string, ok bool) {
 	key := rankKey(id)
 	for i, r := range RecommendedModels {

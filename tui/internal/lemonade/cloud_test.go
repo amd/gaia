@@ -180,3 +180,15 @@ func TestAMDGatewayCustomHeaderAndRuntimeKey(t *testing.T) {
 		t.Fatal("gateway configuration or key lifecycle failed")
 	}
 }
+
+func TestEvidenceFollowsTheRankedEntryInEitherIDForm(t *testing.T) {
+	for _, r := range RecommendedModels {
+		long := "fireworks.accounts/fireworks/models/" + strings.TrimPrefix(r.ID, "fireworks.")
+		if Evidence(r.ID) != r.Evidence || Evidence(long) != r.Evidence {
+			t.Fatalf("%s: evidence %q / %q, want %q", r.ID, Evidence(r.ID), Evidence(long), r.Evidence)
+		}
+	}
+	if Evidence("fireworks.unknown") != "" || Evidence("amd."+strings.TrimPrefix(RecommendedModels[0].ID, "fireworks.")) != "" {
+		t.Fatal("evidence must be empty for an unranked id or another provider")
+	}
+}
