@@ -697,6 +697,13 @@ def _resolve_granted_scopes(
     about carrying scopes the user declined — every downstream coverage check
     then passes against a fabricated record instead of catching the shortfall
     here, loudly, with an actionable message.
+
+    The returned set is persisted as-is, including scopes beyond the request:
+    Google's ``include_granted_scopes=true`` folds earlier grants into every
+    reconnect, and the refresh token really does carry them. Intersecting with
+    the request would understate the connection's authority and keep
+    ``check_scopes`` demanding a reconnect for a scope the token already holds
+    (#2605). Per-agent grants narrow separately, in ``_commit_grants``.
     """
     if "scope" not in payload:
         return list(requested)
@@ -707,9 +714,11 @@ def _resolve_granted_scopes(
             "as no granted scopes"
         )
         return []
-    returned = raw.split()
-    requested_set = set(requested)
-    return [s for s in returned if s in requested_set]
+    granted: "list[str]" = []
+    for scope in raw.split():
+        if scope not in granted:
+            granted.append(scope)
+    return granted
 
 
 #: Bound on each provider-supplied field, matching OAuthProviderError's own.
