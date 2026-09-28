@@ -1,0 +1,325 @@
+---
+title: "Nightly Benchmarks"
+description: "Run the agent benchmark suites from main every night, detect regressions against a rolling band, and route them to the existing auto-fix path"
+icon: "moon"
+---
+
+# Nightly agent benchmarks in CI with regression auto-fix
+
+> **Status:** Proposed — depends on the harness in [#4335](https://github.com/amd/gaia/pull/4335) (open)
+>
+> **Priority:** P1
+>
+> **Related:** the flagship eval gate (`.github/workflows/eval_flagship.yml`,
+> `test_gaia_agent_eval.yml`), the proactive nightly audit
+> (`claude-nightly-audit.yml`), the `bug`-label auto-fix job in `claude.yml`
+
+---
+
+## 1. The goal
+
+**Every night, from `main`, run the benchmark suites on one open model, judge and
+meter them, and compare the numbers to the last few nights.** A regression that
+holds for two nights becomes an issue with the evidence attached, and the existing
+auto-fix path takes it from there. Nobody has to remember to run anything, and a
+number in a README is never older than a day.
+
+Today the benchmark numbers in [#4335](https://github.com/amd/gaia/pull/4335) come
+from a developer machine. They are reproducible — an independent run matched the
+GLM row to the cent — but they are produced by hand, so a change that costs 20% more
+tokens or drops a task from 14/14 to 13/14 is found the next time someone runs the
+suite, which may be weeks later. The flagship eval gate (`eval_flagship.yml`)
+catches *behavioral* regressions on scenario categories against a fixed baseline;
+it does not measure cost, steps, or wall time, and it does not run the task suites.
+
+Three suites, in parallel, on **DeepSeek V4.1 Flash** through Lemonade's
+Fireworks provider (the most reliable open model in the campaign, and the cheapest
+per full pass at ~$0.10 everyday / ~$0.47 TheRock):
+
+| Suite | Tasks | What it proves | Cost per pass (measured) |
+|---|---|---|---|
+| `everyday` | 14 | The developer tasks people actually ask for | ~$0.10, ~5 min |
+| `therock` | 4 (`tr-8319`, `tr-7998`, and their `-cb` variants) | Real fixes in a 144K-line codebase, from the commit before the fix | ~$0.47, ~30 min |
+| Jan long-horizon tier | 3 (`lh-7836`, `lh-8564`, `lh-8391`) | A whole feature built from a spec and graded by the upstream PR's own tests | ~$0.06–0.13 each, ~5–9 min each |
+
+The first two are in `eval/tasks/tasks.json` on the #4335 branch. The Jan tier
+exists as a local suite (`batch8_jan.json` in the bench lab) and needs porting into
+`eval/tasks/` first — see [§6](#6-what-to-build-first-and-what-to-defer).
+
+## 2. What exists today
+
+| Piece | Where | State |
+|---|---|---|
+| Harness that runs a task under GAIA or Claude Code with equal conditions | `src/gaia/eval/bench/harness.py`, `gaia_child.py` | #4335, open |
+| Run config from flags or env (`GAIA_BENCH_*`, `--run-timeout` 1800 s default, `--repeats`) | `bench/config.py` | #4335 |
+| Local gateway that meters tokens per call and strips the client's own key | `bench/gateway.py` | #4335 |
+| TheRock checkouts at the fix's true parent, remote removed, reference diff fetched only by the judge | `bench/therock.py` | #4335 |
+| Cost with its source labelled: `metered`, `api_equivalent`, `harness_counts` | `bench/metering.py` | #4335 |
+| Secret scrub of every artifact; the run **fails** if a secret survives | `bench/leaks.py` (`Scrubber`, `SecretLeakError`) | #4335 |
+| Harness × model table as markdown, HTML and PNG | `bench/report.py` | #4335 |
+| Judge controls (ideal / fabricated / nothing must grade apart) | `bench/controls.py` | #4335 |
+| Transcript reader for either harness, incl. which checks actually ran | `bench/transcripts.py` | #4335; JS runner summaries in [#4387](https://github.com/amd/gaia/pull/4387) |
+| Self-hosted AMD runner pool with parallel lanes, secret-scanned public artifacts | `eval_flagship.yml` | `main` |
+| Nightly Claude job that files one issue per defect, deduped by `cluster_key` | `claude-nightly-audit.yml`, `scripts/audit/prepare_synthesis.py` | `main` |
+| `bug` label → auto-fix job creates a branch and PR; humans gate every merge | `claude.yml` (`labeled` trigger, `contains(labels,'bug')`) | `main` |
+
+The workflow is the missing piece, and #4335 says so in its "Not in this PR"
+section: every choice the workflow makes is already a flag, so it stays thin.
+
+## 3. Workflow design
+
+### 3.1 `bench_suite.yml` — one reusable job
+
+A `workflow_call` workflow that runs **one suite on one model**, N times, and
+uploads the artifacts. Inputs:
+
+| Input | Default | Notes |
+|---|---|---|
+| `suite` | — | `everyday`, `therock`, `jan` |
+| `model` | `fireworks.deepseek-v4p1-flash` | Any id Lemonade's provider list resolves |
+| `runs` | `1` | Passed as `--repeats` |
+| `harness` | `gaia` | `claude-code` for the reference row, on a weekly cadence only |
+| `run_timeout` | `1800` (`3600` for `jan`) | Same cap for every cell of a comparison |
+
+Steps, in order:
+
+1. Check out `main` at the commit the nightly run pinned (every cell uses the same
+   SHA; it is written into the results as `commit`).
+2. Set up the venv through `./.github/actions/setup-venv` and install the flagship
+   (`pip install -e hub/agents/gaia/python`) — the lab-runner convention
+   `eval_flagship.yml` already follows.
+3. Start GAIA's embedded Lemonade with the Fireworks provider registered from the
+   job secret. **The key goes into Lemonade's provider config and nowhere else**:
+   the agent under test never sees it, which `leaks.agent_env()` already enforces by
+   stripping every variable whose name contains KEY, TOKEN, SECRET, PASSWORD or AUTH, plus `ANTHROPIC_*`/`CLAUDE*`, from the
+   child environment.
+4. `gaia eval tasks controls` — the judge must separate honest, fabricated and
+   empty work tonight, not last month. A failed control fails the cell before any
+   money is spent on the suite.
+5. `gaia eval tasks run --suite <suite> --model <model> --repeats <runs>
+   --meter fireworks --out $RUNNER_TEMP/bench/<suite>`.
+6. `gaia eval tasks report` for the cell (markdown + PNG).
+7. Secret scan the output directory with the same scanner the eval gate uses; a
+   hit fails the job. This is a second line behind `leaks.Scrubber`, which
+   already raises `SecretLeakError` at write time — the artifact is public and
+   GitHub does not mask it.
+8. Upload `results.json`, per-task judge files, scrubbed transcripts and the PNG
+   table on `always()`, named `bench-<suite>-<model>-<date>`, 90-day retention.
+
+### 3.2 `nightly_benchmarks.yml` — the matrix
+
+Cron at 03:00 UTC, plus `workflow_dispatch` with the same inputs for a manual
+rerun. A `pin` job resolves `main` to one SHA and skips the night if no commit
+landed since the last run (the nightly audit does the same). Then a matrix of
+three `bench_suite.yml` calls:
+
+```yaml
+strategy:
+  fail-fast: false
+  matrix:
+    include:
+      - { suite: everyday, runs: 3 }
+      - { suite: therock,  runs: 1 }
+      - { suite: jan,      runs: 1, run_timeout: 3600 }
+```
+
+Each cell is its own job on the ephemeral `devlab-dispatch` pool, so each has its
+own machine and its own Lemonade — the same argument `eval_flagship.yml` makes for
+its lanes. No shared concurrency group: `lemonade-eval` serialises by group *name*
+regardless of machine, and one shared group would quietly queue the cells behind
+each other.
+
+A final `compare` job downloads tonight's three artifacts plus the last N nights'
+(`gh run download` by workflow and date), runs the regression rule
+([§4](#4-regression-detection)), writes the step summary, and files or updates an
+issue when the rule fires ([§5](#5-auto-fix)).
+
+### 3.3 Secrets and budget
+
+- **The Fireworks key lives only inside Lemonade.** One repository secret,
+  `FIREWORKS_API_KEY`, consumed by the provider-registration step and then unset.
+  The agent's environment is built by `leaks.agent_env()`; a unit test in #4335
+  already asserts no secret-named variable survives it.
+- **No shared meter between parallel cells.** Fireworks' billing meter is
+  account-wide and trails by ~90 s (`DEFAULT_METER_LAG_S = 150`), so three cells
+  metering at once would each see the others' spend. Two options, in preference
+  order: (a) a Fireworks account per cell (`FIREWORKS_ACCOUNT_ID_<SUITE>`), so
+  `--meter fireworks` stays exact; (b) `harness_counts` from the gateway's own
+  per-call usage, priced by `metering.RATES`, which is what the reports already
+  label as a rate-carded estimate. Ship (b) first — it needs no new accounts and
+  the campaign showed it within a cent of the meter — and move to (a) if the rate
+  card drifts.
+- **A nightly cap.** Sum of the three cells at n=3/1/1 is about $0.90 tonight;
+  the cap is $5 per night and $60 per month, checked before each cell from the
+  previous night's `results.json` totals. When the cap is hit, the remaining cells
+  are **skipped with a visible `::warning::`**, the step summary says which and why,
+  and the compare job treats the night as "did not measure" — never as a pass and
+  never as a regression. Silent degradation is exactly what CLAUDE.md forbids.
+- **Judge cost.** The judge runs on the runner's Claude Code subscription, as it
+  does for `eval_flagship.yml`; there is no `ANTHROPIC_API_KEY` in the job. A
+  missing `claude` on the runner fails the control step, loudly, before the suite.
+
+### 3.4 Artifacts
+
+Per cell: `results.json` (one record per task per run, with `cost_source`),
+`judge/<task>.json`, `transcripts/<task>-<run>.json` (scrubbed), `table.md`,
+`table.png`. The compare job adds `nightly-summary.json` (the band, tonight's
+values, the verdict per metric) and a combined PNG. Nothing is committed to the
+repo — "no result data is ever committed" is a #4335 commitment and holds here.
+The 90-day artifact retention is the history; a longer series can be rebuilt from
+it into a gh-pages table later, not now.
+
+## 4. Regression detection
+
+Per suite, per metric, over the last **N = 7** nights that measured (skipped or
+capped nights are not in the window):
+
+| Metric | Direction | Threshold |
+|---|---|---|
+| `passed` (tasks passed / total) | lower is worse | any task that passed on every night in the window and fails tonight |
+| `quality` (judge mean, 1–5) | lower is worse | below the window median by more than the window's min–max range, and by ≥ 0.15 |
+| `truthful` | lower is worse | same rule as quality |
+| `steps` | higher is worse | above the window median by more than 30% |
+| `tokens` | higher is worse | above the window median by more than 30% |
+| `cost` | higher is worse | above the window median by more than 30% (compared only within one `cost_source`) |
+| `time` | higher is worse | above the window median by more than 50% — wall time is the noisiest metric on shared cloud inference |
+
+The band is the window's min–max, not a standard deviation: with n = 7 and a
+30% run-to-run spread on steps, a σ-based rule fires on noise every few nights.
+Quality has a floor (0.15) because the judge's own repeat spread on one model is
+about 0.3 across three runs and the everyday cell reports a mean of three.
+
+**A single night never files a regression on its own; two consecutive nights
+do.** Night one that breaches writes a `::warning::` and a `pending` marker into
+`nightly-summary.json`; night two that breaches the same suite × metric files the
+issue. One clean night clears the marker. This is the whole defence against
+cloud-provider noise, and it is why the artifact history is the state — there is
+no database.
+
+Per-task deltas are computed alongside the aggregates, because the aggregate only
+says a regression exists and the per-task rows say where. The **worst task** is
+the one with the largest drop in judge score, then the largest step increase.
+
+## 5. Auto-fix
+
+When the rule fires, the compare job opens **one issue per suite × metric**, and
+updates it rather than filing again while the regression persists — the same
+`cluster_key` idea the nightly audit uses (`scripts/audit/prepare_synthesis.py`
+searches the whole open backlog, not one label). The body carries what a fixer
+needs and nothing else:
+
+- The window: seven nights of the metric, the band, tonight's value, the commit
+  range (`last clean SHA..tonight's SHA`).
+- The per-task judge `one_line` for every task in the suite, tonight versus the
+  last clean night.
+- For the worst task: the agent's diff (`therock.agent_diff` or the workdir diff
+  for everyday), the tool-call count by tool, and a link to the scrubbed transcript
+  artifact.
+- The exact command to reproduce locally
+  (`gaia eval tasks run --suite ... --tasks <worst> --model ... --repeats 3`).
+
+It is labelled **`bug`** and `benchmark-regression`. `bug` is what the existing
+auto-fix job in `claude.yml` gates on (`label.name == 'bug'` and
+`contains(labels,'bug')`), so the promotion path is unchanged — the nightly
+benchmark files the issue, and the machinery that already turns a `bug` into a
+branch and PR takes it from there.
+
+Guard rails:
+
+- **Never auto-merge.** The auto-fix job opens a PR; a human merges it, as today.
+  This workflow contains no PR-creation code and no merge step.
+- **The fix PR must show the suite green.** The auto-fix prompt for a
+  `benchmark-regression` issue requires the PR's test plan to include a
+  `bench_suite.yml` dispatch on the PR branch for the regressed suite, and the
+  `compare` step's verdict for that run. A PR without it is not ready for review.
+- **A regression that is intended** (a deliberate model change, a task edit) is
+  closed with a `benchmark-baseline` label, and the compare job restarts that
+  suite's window from the next night — mirroring `--save-baseline` in
+  `gaia eval agent`.
+- **A judge-side change** (model, prompt, rubric) is detected from
+  `results.json`'s `judge_model` field; a change there resets every window, because
+  numbers across judges are not comparable.
+
+## 6. What to build first, and what to defer
+
+**First (one PR, after #4335 merges):**
+
+1. `bench_suite.yml` with `everyday` only, `harness_counts` pricing, controls
+   step, secret scan, artifact upload. Dispatch-only for a week to shake out the
+   runner (Windows pool — every `run:` step is PowerShell, per `eval_flagship.yml`).
+2. `nightly_benchmarks.yml` with the `everyday` cell and the compare job in
+   **report mode**: summary and `::warning::`, no issue filing. Seven nights build
+   the first window.
+3. Turn on issue filing with the two-night rule.
+
+**Second:** the `therock` cell (needs the TheRock history cache on the runner;
+`therock._cache` handles it, but the first night pays the clone), then the Jan
+cell ([§7](#7-the-jan-tier-specifics)).
+
+**Deferred, on purpose:**
+
+- The Claude Code reference row (`--harness claude-code` on Opus) — weekly, not
+  nightly; it exists to keep the "% of Opus cost" column honest, and a week-old
+  ceiling is fine.
+- A second open model. The comparison across models is the campaign's job; the
+  nightly's job is drift on one.
+- A gh-pages history page. Artifacts are enough until someone needs more than
+  90 days.
+- Per-cell Fireworks accounts (§3.3 option a).
+
+## 7. The Jan tier specifics
+
+The long-horizon tier builds a whole feature in [janhq/jan](https://github.com/janhq/jan)
+(Tauri desktop app, ~45K stars) from the upstream PR's description, graded by that
+PR's own tests copied in *after* the agent exits, plus a full web-app regression run
+(1,281–2,855 tests). Three features pass first try on DeepSeek at quality
+4.50–4.75. Everything below was learned by running it and is the difference between
+a cell that works and one that eats the runner:
+
+- **~3 GB per checkout.** Each task is a fresh checkout plus `yarn install` and
+  three builds; three verification copies filled a developer disk once. The runner
+  needs ≥ 20 GB free per cell and the work root is pruned at the end of the job,
+  success or failure.
+- **Clone from `file://`, never a plain local path.** `git clone /path/to/cache`
+  hard-links the object store and **ignores `--depth`**, which carried the fix's
+  unreachable commits into the checkout — `git fsck --unreachable` then found the
+  answer. `file:///path` goes through the transport and honours the depth. The
+  same leak was found and fixed on TheRock (`tr-7998-cb`); `therock.checkout`
+  should be the single clone helper for both tiers.
+- **Baselines are APFS clones (`cp -Rpc`) on macOS, overlay/reflink copies on
+  Linux**, never `copytree`. The baseline copy that the judge diffs against would
+  otherwise cost another 3 GB per task.
+- **Yarn cache** warmed once per runner and mounted read-only into the task; a
+  cold `yarn install` is ~45 s of the setup and the biggest network dependency in
+  the cell.
+- **Node 24 LTS**, pinned; Jan's toolchain assumes it.
+- **`TZ=UTC`** in the cell environment: Jan's test suite has date-formatting
+  tests that depend on the runner's zone.
+- **`--run-timeout 3600`** and `max_steps 200` — the tasks are 42–66 steps and
+  5–9 minutes on DeepSeek, and a cap that binds measures the cap.
+- **JS test summaries** are read by the judge and by GAIA's own verification only
+  once [#4387](https://github.com/amd/gaia/pull/4387) lands; before it, every
+  truthful Jan run scores as fabrication because `checks_actually_run` only knows
+  pytest. The Jan cell is gated on that PR.
+
+## 8. Open questions
+
+- **Budget owner.** $60/month at tonight's shape is small; who approves raising
+  it when the Jan tier and a weekly Claude Code row land, and who gets the alert
+  when the cap trips?
+- **Key rotation.** The Fireworks key is a repository secret read by the runner;
+  the runner is destroyed after every job, which limits exposure, but rotation
+  cadence and the person holding the account are not decided.
+- **Judge model drift.** The judge is whatever `claude` on the runner resolves
+  `opus` to. A silent model bump moves every number. Pinning the judge to an
+  explicit id (`results.json` records it) and resetting windows on change (§5)
+  is the proposal; whether to *block* on an unexpected judge id is open.
+- **Run-to-run variance.** Steps vary ~30% on identical configuration; the
+  30% thresholds are chosen to sit at that edge, which means a real 20% step
+  regression is invisible for a while. Three repeats on `everyday` help; three on
+  `therock` cost $1.40 a night and are not in the first budget.
+- **Which SHA is "clean".** The compare job names a `last clean SHA..tonight`
+  range; if a night was skipped for having no commits, the range is right, but a
+  capped night leaves a gap the bisect has to widen over.
+- **Runner pool.** `devlab-dispatch` is Windows; the Jan tier was built on macOS
+  with APFS clones, and the reflink story on the Windows pool is unverified.

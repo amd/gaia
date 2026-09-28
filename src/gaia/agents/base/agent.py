@@ -40,8 +40,17 @@ from typing import (
     Union,
 )
 
+from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
+from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
+from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
+from gaia.agents.base.extraction import REASONING as EXTRACTION_REASONING
+from gaia.agents.base.extraction import (
+    ExtractionLedger,
+    extraction_response_format,
+    read_snapshot,
+)
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -341,6 +350,13 @@ class ToolExecutionTimeout(Exception):
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
+    # Installs software, and signs a CLI in to the user's account. Both mutate
+    # the machine on the user's behalf, and neither can ever be pre-authorized:
+    # the only grant that skips this gate covers ``run_shell_command`` reads
+    # (``ShellToolsMixin.skill_grant_covers_call``), and ``grant_scope`` offers
+    # no "always" for either, so every call is asked about on its own.
+    "install_cli",
+    "sign_in_cli",
     # Re-runs a shell command until it succeeds; gated for the same reason as
     # the command it polls with.
     "wait_for_condition",
@@ -413,6 +429,19 @@ _STEP_CAP_ANSWER_PROMPT = (
     "your final answer now, using only what the tool results above show: what "
     "you found, what you couldn't finish and why, and what they can do next."
 )
+
+# Sent once, with no tools offered, when the loop guard stops a turn on
+# identical calls that all worked.
+_REPEATED_CALL_ANSWER_PROMPT = (
+    "You called `{tool}` {count} times with the same arguments and got the "
+    "same result each time. Stop calling tools and answer now from what the "
+    "results above show: what you completed, what you could not confirm, and "
+    "what the user should do next."
+)
+
+# Stands in for a call the loop stopped before it ran, so the transcript
+# accounts for every id the model asked for.
+_UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
 
 
 # Tools that mutate external state (mark read, archive, star, …). A small
@@ -788,6 +817,16 @@ _PLAN_HEADING_PATTERN = re.compile(
 )
 
 
+def _same_file(first: str, second: str) -> bool:
+    """Path identity, including case-insensitive filesystems such as APFS."""
+    if first == second:
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
 def _unfinished_answer_kind(answer: str) -> Optional[str]:
     """Classify an answer that did not actually finish the task.
 
@@ -829,27 +868,17 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
 # Fabricated-save guard (#4010): a final answer that asserts a file was
 # written when no write tool ran this turn.
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
-# File-writing tools the guard can name in its correction. Presence of one of
-# these in the registry is what makes the claim checkable at all.
-_FILE_WRITE_TOOLS: Tuple[str, ...] = (
-    "write_file",
-    "write_markdown_file",
-    "write_python_file",
-    "edit_file",
+# Tools that could hand-edit a file save_extracted_items exported this turn.
+_INVENTORY_HAND_EDITS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "write_markdown_file",
+        "write_python_file",
+        "edit_python_file",
+        "replace_function",
+    }
 )
-# Tools whose completed call makes a save claim believable. Two sources: the
-# confirmation set covers the write/execute tools (minus the one entry that
-# merely spawns a notifier), and the names below write a file as a side effect
-# of doing something else, so they are gated on cost rather than on danger and
-# never reach that set.
-_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
-    "notify_desktop"
-} | {
-    "take_screenshot",
-    "text_to_speech",
-    "transcribe_media",
-    "refine_transcript",
-}
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
 # Adverbs the model sprinkles around the verb. They carry no meaning for the
 # guard, but every slot they can occupy has to be spelled out or the claim
@@ -978,23 +1007,34 @@ def _claims_file_write(answer: str) -> bool:
     return False
 
 
+def _skill_tool_names(skill: Any) -> List[str]:
+    """Every tool name *skill* needs: its recipe's plus its own namespaced ones."""
+    return [
+        *skill.gaia.tools_required,
+        *(skill.namespaced_tool_name(tool) for tool in skill.tool_names),
+    ]
+
+
 def _offer_skill_tools(agent: Any, skill: Any) -> None:
     """Add *skill*'s tools to the turn's tool subset so the next step can call them.
 
     The subset is picked from the user's message before the first model call, so
     a skill loaded mid-turn otherwise names tools the model cannot call until the
     next turn — and a one-turn task has no next turn.
+
+    Admits into the dynamic tool loader first, so the loader's own loaded set —
+    the thing the *next* turn rebuilds the subset from — knows about the tools
+    too. Widening only the filter would last exactly one turn, and every call of
+    a skill's tool would count against the escape-hatch signal.
     """
     current = getattr(agent, "_active_tool_filter", None)
     if current is None:
         return
-    wanted = [
-        *skill.gaia.tools_required,
-        *(skill.namespaced_tool_name(tool) for tool in skill.tool_names),
-    ]
+    wanted = _skill_tool_names(skill)
     missing = [
         tool for tool in wanted if tool in agent._tools_registry and tool not in current
     ]
+    agent._admit_skill_tools(wanted)
     if missing:
         # Appended, never re-sorted: a reshuffled list breaks the cached prefix.
         agent._apply_tool_filter([*current, *missing])
@@ -1297,7 +1337,11 @@ Do NOT wrap conversational replies in JSON.
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
             max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
-            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError)
+            max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
+                          The first time the limit is hit the model gets one correction and the call is not run;
+                          a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
+                          more model call with no tool calls allowed and answers from those results; repeats that
+                          errored or were refused report the failure instead.
             min_context_size: Minimum context size required; unset uses the model/device resolver.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
@@ -1474,6 +1518,9 @@ Do NOT wrap conversational replies in JSON.
         # the silent False fallback.
         self._single_tool_done: bool = False
 
+        # Per-agent tool overrides by name (read_tool_output, extraction tools).
+        self._tool_overrides: Dict[str, Any] = {}
+
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
@@ -1482,6 +1529,10 @@ Do NOT wrap conversational replies in JSON.
         self._output_artifacts = ArtifactStore()
         if any(name != "read_tool_output" for name in self._tools_registry):
             self._register_output_reader()
+
+        # Rebuilt by every process_query; None before the first turn.
+        self._extraction_ledger: Optional[ExtractionLedger] = None
+        self._completion_evidence: Optional[CompletionEvidence] = None
 
         # Declarative skills (#2466, #2467 scope D): compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -1845,6 +1896,16 @@ Do NOT wrap conversational replies in JSON.
             return SilentConsole(silence_final_answer=silence_final_answer)
         return AgentConsole()
 
+    def _console_accepts_stdin_prompts(self) -> bool:
+        """True when a blocking ``input()`` on this process reaches the requester.
+
+        Server-side consoles (SSE, API) share the operator's stdin but not the
+        user, so prompting there hangs the request instead of asking anyone.
+        """
+        return bool(
+            getattr(getattr(self, "console", None), "supports_stdin_prompts", False)
+        )
+
     @abc.abstractmethod
     def _register_tools(self):
         """
@@ -1863,6 +1924,9 @@ Do NOT wrap conversational replies in JSON.
                 artifact: Output handle returned by a truncated result.
                 offset: Zero-based character offset in the original output.
                 limit: Page size in characters, 1 to 8000.
+
+            Continue until next_offset is null. For exhaustive item lists from
+            long files, use extract_document_items instead of manual pagination.
             """
             return store_for(self).read(artifact, offset, limit)
 
@@ -1884,6 +1948,215 @@ Do NOT wrap conversational replies in JSON.
         self._tool_overrides["read_tool_output"] = self._output_reader_entry
         if self._instance_tools is not None:
             self._instance_tools["read_tool_output"] = self._output_reader_entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+
+    def _extraction_skill_instructions(self, query, just_loaded=False):
+        """A selected task skill may activate extraction; voice routing may not."""
+        active = set(getattr(self, "_active_skill_filter", None) or ())
+        skills = getattr(self, "_loaded_skills", None) or {}
+        selected = active | {name for name in skills if name in query}
+        if isinstance(just_loaded, str):
+            selected.add(just_loaded)
+        selected -= self._always_on_skill_names
+        return "\n".join(
+            effective_skill_body(self, skills[name])
+            for name in sorted(selected)
+            if name in skills
+        )
+
+    def _read_validator(self):
+        """The agent's file read boundary, or None when it has none."""
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            validator = getattr(self, "_path_validator", None)
+        return validator
+
+    def _check_extraction_sources(self):
+        ledger = self._extraction_ledger
+        validator = self._read_validator()
+        ledger.validate_sources(lambda path: read_snapshot(path, validator))
+        ledger.validate_outputs(
+            lambda path, limit: read_snapshot(path, validator, limit)
+        )
+        # The framework just read each export in full and matched it exactly.
+        for path in ledger.verified:
+            self._completion_evidence.read_by_framework(path)
+
+    def _make_extraction_chat(self):
+        """Isolate SDK state from timed-out workers and subsequent turns."""
+        import copy
+
+        config = copy.deepcopy(self.chat.config)
+        config.temperature = 0
+        return AgentSDK(config)
+
+    def _register_extraction_tool(self):
+        def extract_document_items(
+            file_path: str, fields: Optional[List[str]] = None
+        ) -> dict:
+            """Extract EVERY requested item from a text document, page by page.
+
+            Use for list-all/enumerate-every tasks, including long transcripts.
+            Pages are read automatically; do not manually paginate or summarize.
+            Each item retains requested fields and exact source evidence. Call
+            once per source file. Errors mean incomplete, never an empty success.
+
+            Args:
+                file_path: Source text file permitted in this session.
+                fields: Requested field names; each entry must include every field.
+            """
+            from gaia.agents.base.tools import raise_if_cancelled
+
+            ledger = self._extraction_ledger
+            extraction_chat = self._make_extraction_chat()
+            usage_sink = self._tool_reported_usage
+
+            def check():
+                raise_if_cancelled()
+                event = getattr(self, "_cancel_event", None)
+                if (
+                    self._extraction_ledger is not ledger
+                    or (event is not None and event.is_set())
+                    or self._console_cancelled()
+                ):
+                    raise ValueError("Extraction cancelled or superseded")
+
+            from gaia.llm.lemonade_client import cloud_model_provider
+
+            # A cloud reasoning model can spend its whole budget thinking about
+            # one dense page; copying quotes out of it needs little reasoning.
+            # Local anti-repetition penalties fight verbatim quote copying.
+            sampling = (
+                {"reasoning_effort": EXTRACTION_REASONING}
+                if cloud_model_provider(getattr(self, "model_id", None))
+                else {
+                    "frequency_penalty": 0.0,
+                    "presence_penalty": 0.0,
+                    "repeat_penalty": 1.0,
+                }
+            )
+
+            def send(system, prompt, options):
+                check()
+                response = extraction_chat.send_messages(
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=system,
+                    tools=[],
+                    response_format=extraction_response_format(ledger.fields),
+                    max_tokens=EXTRACTION_MAX_TOKENS,
+                    **options,
+                )
+                check()
+                # These calls are outside the outer conversation's stats.
+                usage = getattr(response, "usage", None)
+                usage_sink.append(
+                    usage if isinstance(usage, dict) else (response.stats or {})
+                )
+                spent = (
+                    usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
+                )
+                exhausted = getattr(response, "finish_reason", None) == "length" or (
+                    isinstance(spent, int) and spent >= EXTRACTION_MAX_TOKENS
+                )
+                return response, exhausted
+
+            def ask(system, prompt):
+                response, exhausted = send(system, prompt, sampling)
+                if exhausted and sampling.get("reasoning_effort") not in (None, "none"):
+                    # Copying quotes needs no reasoning; retry this page without it.
+                    logger.warning(
+                        "Extraction page used its %d-token budget reasoning; "
+                        "retrying the page with reasoning_effort=none",
+                        EXTRACTION_MAX_TOKENS,
+                    )
+                    response, exhausted = send(
+                        system, prompt, {**sampling, "reasoning_effort": "none"}
+                    )
+                if exhausted:
+                    raise ValueError(
+                        f"Extraction reply used its whole {EXTRACTION_MAX_TOKENS}-token "
+                        "output budget without finishing the page"
+                    )
+                return response.text
+
+            # Parallel tool batches share the ledger; serialize its updates.
+            while not ledger.lock.acquire(timeout=0.1):
+                check()
+            try:
+                check()
+                validator = self._read_validator()
+                return ledger.run(
+                    file_path,
+                    lambda path: read_snapshot(path, validator),
+                    ask,
+                    check,
+                    fields,
+                )
+            finally:
+                ledger.lock.release()
+
+        def save_extracted_items(file_path: str) -> dict:
+            """Save the entire extracted inventory without summarizing away items.
+
+            Use after extract_document_items on every source. Output is JSON for
+            .json, CSV for .csv, and text for .txt/.md or extensionless paths.
+            The framework reads it back and checks it; do not edit it by hand.
+            Binary document formats are unsupported.
+
+            Args:
+                file_path: Requested destination for the complete inventory.
+            """
+            ledger = self._extraction_ledger
+            if not isinstance(file_path, str) or "\x00" in file_path:
+                return {"status": "error", "error": "file_path must be a file path"}
+            missing = (ledger.sources | ledger.requested) - ledger.results.keys()
+            if ledger.key(file_path) in ledger.sources | ledger.requested:
+                return {
+                    "status": "error",
+                    "error": "Use a destination different from the source documents",
+                }
+            if missing or not ledger.results:
+                return {
+                    "status": "error",
+                    "error": "Extract every source successfully before saving the inventory",
+                }
+            writer = self._tools_registry.get("write_file")
+            if writer is None:
+                return {
+                    "status": "error",
+                    "error": "write_file is unavailable for this agent",
+                }
+            result = writer["function"](
+                file_path=file_path, content=ledger.export(file_path)
+            )
+            if isinstance(result, dict) and result.get("status") == "success":
+                ledger.exported.add(ledger.key(file_path))
+            return result
+
+        for name, function, gated in (
+            ("extract_document_items", extract_document_items, False),
+            ("save_extracted_items", save_extracted_items, True),
+        ):
+            entry = {
+                "name": name,
+                "description": function.__doc__,
+                "parameters": {"file_path": {"type": "string", "required": True}},
+                "function": function,
+                "atomic": True,
+                "display_label": None,
+                "timeout": EXTRACTION_MAX_SECONDS + 60 if not gated else None,
+                "requires_confirmation": gated,
+            }
+            if name == "extract_document_items":
+                entry["parameters"]["fields"] = {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "required": False,
+                }
+            self._tool_overrides[name] = entry
+            if self._instance_tools is not None:
+                self._instance_tools[name] = entry
         if hasattr(self, "_system_prompt_cache"):
             del self._system_prompt_cache
 
@@ -2035,6 +2308,13 @@ Do NOT wrap conversational replies in JSON.
         so this never gates execution.
         """
 
+    def _admit_skill_tools(self, names: List[str]) -> None:
+        """Tell the dynamic tool loader a loaded skill needs *names*.
+
+        Default: no-op — an agent without a loader has no second owner of the
+        turn's tool set to keep in sync. ChatAgent overrides it.
+        """
+
     def _refresh_active_tool_filter(self, user_input: str) -> None:
         """Update the active tool filter for this turn, recomputing on change.
 
@@ -2063,6 +2343,13 @@ Do NOT wrap conversational replies in JSON.
         expansion is visible to the very next model step — both render paths
         (``system_prompt`` and ``_openai_tools``) read these live.
         """
+        extraction = getattr(self, "_extraction_ledger", None)
+        if extraction is not None and extraction.enabled and new_filter is not None:
+            new_filter = list(
+                dict.fromkeys(
+                    [*new_filter, "extract_document_items", "save_extracted_items"]
+                )
+            )
         self._active_tool_filter = new_filter
         self._system_prompt_cache = self._compose_system_prompt()
 
@@ -2461,12 +2748,14 @@ Do NOT wrap conversational replies in JSON.
             self.loaded_skills[name] = skill
             self._note_skill_active(name)
             self.rebuild_system_prompt()
+            # Inside the guard: it recomposes the prompt and mutates loader
+            # state, so a failure must roll the skill back like any other.
+            _offer_skill_tools(self, skill)
         except Exception:
             unregister_skill_tools(skill.name)
             self.granted_binaries.revoke_skill(skill.name)
             self.loaded_skills.pop(name, None)
             raise
-        _offer_skill_tools(self, skill)
 
         # tools_required names registry tools the skill CONSUMES. A name that is
         # valid but not active in this agent is scoping, not a defect — log it so
@@ -4359,19 +4648,6 @@ Do NOT wrap conversational replies in JSON.
             return bool(flag)
         return tool_name.startswith("mcp_")
 
-    def _tool_can_touch_disk(self, tool_name: str) -> bool:
-        """Whether a call that already ran could have put bytes on disk.
-
-        Deliberately not ``_tool_requires_confirmation``: that one exempts a
-        pre-authorized write and treats an unclassified ``mcp_`` tool as
-        consequential, and both of those readings are inverted here. A
-        third-party tool counts only when it declared the flag itself.
-        """
-        if tool_name in _DISK_TOUCHING_TOOLS:
-            return True
-        entry = self._tools_registry.get(tool_name) or {}
-        return bool(entry.get("requires_confirmation"))
-
     def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
         """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
         against this turn's running total. Called from the single success path
@@ -4388,6 +4664,32 @@ Do NOT wrap conversational replies in JSON.
         logger.debug("Tool '%s' reported its own LLM usage: %s", tool_name, usage)
         self._tool_reported_usage.append(usage)
 
+    def _refuse_inventory_hand_edit(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """An exported inventory is rewritten only by save_extracted_items."""
+        ledger = getattr(self, "_extraction_ledger", None)
+        path = (tool_args or {}).get("file_path")
+        if (
+            ledger is None
+            or not ledger.exported
+            or tool_name not in _INVENTORY_HAND_EDITS
+            or not isinstance(path, str)
+            or "\x00" in path
+            or not any(_same_file(ledger.key(path), out) for out in ledger.exported)
+        ):
+            return None
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": (
+                f"{path} holds the complete extracted inventory written by "
+                "save_extracted_items; editing it by hand would drop or reshape "
+                "entries. Leave it as saved, call save_extracted_items again to "
+                "rewrite it, and read it back with read_file."
+            ),
+        }
+
     def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """Run :meth:`_execute_tool`, timing it for the step and turn records.
 
@@ -4399,6 +4701,19 @@ Do NOT wrap conversational replies in JSON.
         ``_execute_tool`` has — refusals, unknown names, declined confirmations
         — so a refused call's latency is never misfiled as agent overhead.
         """
+        refused = self._refuse_inventory_hand_edit(tool_name, tool_args)
+        if refused is not None:
+            return refused
+        evidence = getattr(self, "_completion_evidence", None)
+        before = (
+            evidence.snapshot(
+                tool_name,
+                tool_args,
+                self._read_validator(),
+            )
+            if evidence is not None
+            else {}
+        )
         recorder = getattr(self, "_turn_recorder", None)
         step_timer = getattr(self, "_step_timer", None)
         # Only the outermost call is timed. A tool body may call another tool
@@ -4408,7 +4723,7 @@ Do NOT wrap conversational replies in JSON.
             self, "_tool_timing_depth", 0
         ):
             result = self._execute_tool(tool_name, tool_args)
-            self._note_verification_signal(tool_name, tool_args, result)
+            self._note_verification_signal(tool_name, tool_args, result, before=before)
             return result
 
         started = time.perf_counter()
@@ -4420,7 +4735,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
-            self._note_verification_signal(tool_name, tool_args, result)
+            self._note_verification_signal(tool_name, tool_args, result, before=before)
             return result
         finally:
             self._tool_timing_depth = 0
@@ -4740,14 +5055,47 @@ Do NOT wrap conversational replies in JSON.
 
         return message
 
-    def _answer_at_step_cap(
+    def _unanswered_tool_call_messages(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Results for tool calls the loop stopped before running.
+
+        Spec-strict providers reject an assistant tool-call turn whose results
+        are missing, and the loop guard stops mid-fan-out leaving exactly that.
+        """
+        last_call_turn = next(
+            (
+                i
+                for i in reversed(range(len(messages)))
+                if messages[i].get("tool_calls")
+            ),
+            None,
+        )
+        if last_call_turn is None:
+            return []
+        answered = {
+            msg.get("tool_call_id")
+            for msg in messages[last_call_turn + 1 :]
+            if msg.get("role") == "tool"
+        }
+        return [
+            self._create_tool_message(
+                call["function"]["name"],
+                _UNRUN_TOOL_CALL_NOTE,
+                tool_call_id=call["id"],
+            )
+            for call in messages[last_call_turn]["tool_calls"]
+            if call["id"] not in answered
+        ]
+
+    def _closing_answer(
         self,
         messages: List[Dict[str, Any]],
         conversation: List[Dict[str, Any]],
-        steps_limit: int,
+        instruction: str,
         step: int,
     ) -> Optional[str]:
-        """Ask for the final answer once the step limit is spent, no tool calls.
+        """Ask for the final answer on the way out of the loop, no tool calls.
 
         Same model path and tools as the loop (streaming or not), plus
         ``tool_choice="none"``. Returns the answer, or ``None`` when the user
@@ -4760,12 +5108,11 @@ Do NOT wrap conversational replies in JSON.
         if self._console_cancelled():
             return None
 
-        request = messages + [
-            {
-                "role": "user",
-                "content": _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
-            }
-        ]
+        request = (
+            messages
+            + self._unanswered_tool_call_messages(messages)
+            + [{"role": "user", "content": instruction}]
+        )
         # Tool history needs the tools on some providers; the model may not call one.
         tools = self._openai_tools
         no_calls = {"tool_choice": "none"} if tools else {}
@@ -5041,6 +5388,25 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             The truncated result or original if within limits
         """
+        extraction = getattr(self, "_extraction_ledger", None)
+        if extraction is not None:
+            extraction.activate_skill(
+                self._extraction_skill_instructions(
+                    extraction.query,
+                    (
+                        (tool_args or {}).get("name")
+                        if tool_name == "load_skill"
+                        else False
+                    ),
+                )
+            )
+            extraction.observe(tool_name, tool_args or {}, tool_result)
+            if (
+                extraction.enabled
+                and "extract_document_items" not in self._tools_registry
+            ):
+                self._register_extraction_tool()
+                self._apply_tool_filter(self._active_tool_filter)
         truncated_result = tool_result
         if isinstance(tool_result, (dict, list, str)):
             # Use custom encoder to handle bytes and other non-serializable types.
@@ -5123,6 +5489,12 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if self.debug:
                     print(f"[DEBUG] Tool result truncated from {len(result_str)} chars")
+
+        evidence = getattr(self, "_completion_evidence", None)
+        if evidence is not None and not self._is_error_result(tool_result):
+            evidence.delivered(
+                tool_name, tool_args or {}, tool_result, truncated_result
+            )
 
         # Add to conversation
         tool_entry: Dict[str, Any] = {
@@ -5783,7 +6155,12 @@ Do NOT wrap conversational replies in JSON.
         return answer
 
     def _note_verification_signal(
-        self, tool_name: str, tool_args: Dict[str, Any], result: Any
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        result: Any,
+        *,
+        before: Optional[dict] = None,
     ) -> None:
         """Record one dispatched tool call for this turn's verification scope.
 
@@ -5806,6 +6183,16 @@ Do NOT wrap conversational replies in JSON.
         record["args"] = tool_args if isinstance(tool_args, dict) else {}
         record["output"] = check_output(tool_name, result)
         log.append(record)
+        evidence = getattr(self, "_completion_evidence", None)
+        if evidence is not None:
+            evidence.record(
+                tool_name,
+                record["args"],
+                result,
+                successful=record["ran"] and not record["failed"],
+                before=before,
+                executed=record["ran"],
+            )
 
     def _verification_project_root(self) -> Optional[str]:
         """The project this turn works in, from the shared project-root resolver."""
@@ -5856,6 +6243,34 @@ Do NOT wrap conversational replies in JSON.
             # The whole "answer" was an echoed scope line; one is still one.
             return statement
         return f"{body.rstrip()}\n\n{statement}"
+
+    def _gate_unsealed_answer(
+        self, answer: Optional[str]
+    ) -> Tuple[Optional[str], List[str]]:
+        """Judge an answer that never passed the loop's own completion gate.
+
+        Every exit that ends a turn early — error, context overflow, the step
+        cap — lands here, so an unverified save or an unfinished extraction is
+        reported as incomplete on those paths too. ``None`` stays ``None`` when
+        nothing is unverified: the caller's max-steps fallback owns that text.
+        """
+        self._check_extraction_sources()
+        gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
+        gaps.extend(self._extraction_ledger.gaps())
+        unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
+        if unsupported:
+            gaps.append(unsupported[1] + ".")
+        if gaps:
+            report = incomplete_answer(gaps)
+            # Keep the error that ended the turn; add what stays unverified.
+            answer = (
+                f"{answer}\n\n{report}" if answer and self.error_history else report
+            )
+        # Items already extracted stay visible when the turn runs out.
+        inventory = self._extraction_ledger.render()
+        if inventory and answer:
+            answer += "\n\n" + inventory
+        return answer, gaps
 
     def process_query(
         self,
@@ -5963,6 +6378,11 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_schemas = None
         self._last_tool_filter = None
 
+        # Relative paths resolve against the working directory, as the file tools do.
+        self._extraction_ledger = ExtractionLedger(
+            user_input, os.getcwd(), available=self._read_validator() is not None
+        )
+
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
@@ -5975,6 +6395,21 @@ Do NOT wrap conversational replies in JSON.
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
+
+        self._extraction_ledger.activate_skill(
+            self._extraction_skill_instructions(user_input)
+        )
+        had_extraction_tools = "extract_document_items" in self._tools_registry
+        if self._extraction_ledger.enabled:
+            self._register_extraction_tool()
+        else:
+            getattr(self, "_tool_overrides", {}).pop("extract_document_items", None)
+            getattr(self, "_tool_overrides", {}).pop("save_extracted_items", None)
+            if self._instance_tools is not None:
+                self._instance_tools.pop("extract_document_items", None)
+                self._instance_tools.pop("save_extracted_items", None)
+        if self._extraction_ledger.enabled or had_extraction_tools:
+            self._apply_tool_filter(self._active_tool_filter)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []
@@ -6005,7 +6440,10 @@ Do NOT wrap conversational replies in JSON.
         # Set when the person at the prompt declines more steps. Distinct from
         # cancelled_by_console, which only the Agent UI Stop button sets.
         user_stopped = False
+        # Diagnostic only — no threshold reads this; it just numbers the warnings.
         error_count = 0
+        # Malformed replies get their own budget: failed tool calls are ordinary work.
+        parse_failures = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
         # Repeated calls already sent one correction; the next repeat ends the turn.
         loop_corrected_calls: set = set()
@@ -6015,7 +6453,8 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         verify_after_change_reprompted = False
         test_claim_corrections = 0
-        file_write_claim_reprompts = 0
+        completion_corrections = 0
+        completion_gaps = []
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -6045,12 +6484,20 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        self._completion_evidence = CompletionEvidence(
+            user_input,
+            os.getcwd(),
+            scratch=getattr(self._read_validator(), "scratch_dir", None),
+        )
         # Files edited this turn, so an empty response can name what it left
         # behind (#3733). Per-turn: an instance persists across queries.
         self._turn_file_edits: List[Dict[str, Any]] = []
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
+        # The loop guard breaks out with an answer nothing has printed yet;
+        # the normal and step-cap paths print theirs where they set it.
+        loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
 
@@ -6832,6 +7279,8 @@ Do NOT wrap conversational replies in JSON.
             # nudge the model to retry with simpler args, and continue the loop.
             try:
                 parsed = self._parse_llm_response(response)
+                # Budget is consecutive: a clean parse gives the retries back.
+                parse_failures = 0
             except ValueError as parse_exc:
                 logger.warning(
                     "Tool-call parse failed (step %d): %s — recovering with retry prompt",
@@ -6846,6 +7295,7 @@ Do NOT wrap conversational replies in JSON.
                     }
                 )
                 error_count += 1
+                parse_failures += 1
                 # Issue #1023: pull the most recent successful image path
                 # out of step_results so both the recovery prompt and the
                 # give-up fallback can surface it.  When the SD two-step
@@ -6866,7 +7316,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 # If we've already retried several times, give up gracefully and
                 # answer in plain text rather than spamming the user.
-                if error_count >= 3:
+                if parse_failures >= 3:
                     if _last_image_path:
                         final_answer = (
                             f"I generated your image at `{_last_image_path}`, "
@@ -7034,6 +7484,8 @@ Do NOT wrap conversational replies in JSON.
                 # Parse the plan response
                 try:
                     parsed_plan = self._parse_llm_response(plan_response)
+                    # Budget is consecutive: a clean parse gives the retries back.
+                    parse_failures = 0
                 except ValueError as plan_parse_exc:
                     logger.warning(
                         "Plan parse failed (step %d): %s — recovering with retry prompt",
@@ -7048,7 +7500,8 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     error_count += 1
-                    if error_count >= 3:
+                    parse_failures += 1
+                    if parse_failures >= 3:
                         final_answer = (
                             "I had trouble formatting my plan. Could you "
                             "rephrase or break the request into smaller pieces?"
@@ -7264,10 +7717,19 @@ Do NOT wrap conversational replies in JSON.
                                 )
                             )
                             continue
-                        final_answer = self._build_loop_break_summary(
-                            tool_name, consecutive_count - 2, recent_results
-                        )
                         self.console.print_repeated_tool_warning()
+                        final_answer, steps_taken = self._answer_after_repeated_calls(
+                            tool_name,
+                            consecutive_count - 2,
+                            recent_results,
+                            messages,
+                            conversation,
+                            steps_taken,
+                        )
+                        if final_answer is None:
+                            cancelled_by_console = True
+                        else:
+                            loop_break_answer_unprinted = True
                         fanout_repeat_break = True
                         break
 
@@ -7503,14 +7965,19 @@ Do NOT wrap conversational replies in JSON.
                         )
                         continue
 
-                    # Force a final answer if the same tool is called repeatedly.
-                    # Branches on whether the recent calls were errors so we
-                    # never claim success on a loop of failures.
-                    final_answer = self._build_loop_break_summary(
-                        tool_name, consecutive_count - 2, recent_results
-                    )
-
                     self.console.print_repeated_tool_warning()
+                    final_answer, steps_taken = self._answer_after_repeated_calls(
+                        tool_name,
+                        consecutive_count - 2,
+                        recent_results,
+                        messages,
+                        conversation,
+                        steps_taken,
+                    )
+                    if final_answer is None:
+                        cancelled_by_console = True
+                    else:
+                        loop_break_answer_unprinted = True
                     break
 
                 # Execute the tool
@@ -7686,6 +8153,7 @@ Do NOT wrap conversational replies in JSON.
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
                 answer_candidate = parsed["answer"]
+                completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
                 # calling index_document but before issuing a query tool call.
@@ -7977,50 +8445,6 @@ Do NOT wrap conversational replies in JSON.
                     )
                     continue
 
-                # Fabricated-save guard: the answer says a file was written but
-                # no tool that can touch disk ran this turn, so nothing was.
-                if (
-                    file_write_claim_reprompts < _MAX_FILE_WRITE_CLAIM_REPROMPTS
-                    and steps_taken < steps_limit - 1
-                    and _claims_file_write(answer_candidate)
-                ):
-                    _registry = self._tools_registry
-                    _write_tool = next(
-                        (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
-                    )
-                    # Read the execution log, not tool_call_log: the latter is
-                    # appended before the call runs, so a refused, errored or
-                    # declined write would silence the guard on the exact harm
-                    # it exists to catch.
-                    _wrote_this_turn = any(
-                        _entry["ran"]
-                        and not _entry["failed"]
-                        and self._tool_can_touch_disk(_entry["tool"])
-                        for _entry in (self._turn_tool_executions or [])
-                    )
-                    if _write_tool and not _wrote_this_turn:
-                        file_write_claim_reprompts += 1
-                        logger.debug(
-                            "[WORKFLOW] Blocking unbacked file-write claim as final "
-                            "answer: %s",
-                            answer_candidate[:120],
-                        )
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "SYSTEM: Your answer says a file was saved, but no "
-                                    "file-writing tool ran in this turn — nothing was "
-                                    "written to disk. If the file is still needed, call "
-                                    f"`{_write_tool}` now with the full content and the "
-                                    "exact path. If you mean a file written earlier in "
-                                    "the conversation, say that explicitly instead of "
-                                    "claiming you just saved it."
-                                ),
-                            }
-                        )
-                        continue
-
                 # Capability-claim-without-attempt guard: catch responses that declare
                 # a tool's availability or unavailability (e.g. "I can generate images
                 # when the --sd flag is active") without having tried the tool first.
@@ -8183,7 +8607,7 @@ Do NOT wrap conversational replies in JSON.
                     )
                     if not can_correct_claim:
                         logger.warning(
-                            "[WORKFLOW] Emitting unsupported test claim %r (%s): "
+                            "[WORKFLOW] Rejecting unsupported test claim %r (%s): "
                             "%d/%d corrections used, step %d/%d",
                             claim,
                             why,
@@ -8192,6 +8616,8 @@ Do NOT wrap conversational replies in JSON.
                             steps_taken,
                             steps_limit,
                         )
+                        completion_gaps = [why + "."]
+                        answer_candidate = incomplete_answer(completion_gaps)
                     else:
                         test_claim_corrections += 1
                         logger.debug(
@@ -8225,11 +8651,77 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     continue
 
-                # Scope line goes on AFTER the subclass hook: a subclass that
-                # rewrites the answer must not be able to drop it (#3376).
-                final_answer = self._with_verification_scope(
-                    self.finalize_answer(answer_candidate, conversation)
+                answer_candidate = self.finalize_answer(answer_candidate, conversation)
+                soft_gaps: List[str] = []
+                self._check_extraction_sources()
+                artifact_gaps = self._completion_evidence.gaps(
+                    answer_candidate, _claims_file_write, soft=soft_gaps
                 )
+                extraction_gaps = self._extraction_ledger.gaps()
+                artifact_gaps.extend(extraction_gaps)
+                if artifact_gaps or soft_gaps:
+                    if (
+                        completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                        and steps_taken < steps_limit - 1
+                        and any(
+                            name in self._tools_registry
+                            for name in (
+                                "write_file",
+                                "write_python_file",
+                                "write_markdown_file",
+                                "edit_file",
+                                "read_file",
+                                "run_python",
+                                "load_tools",
+                            )
+                        )
+                    ):
+                        completion_corrections += 1
+                        correction = (
+                            (
+                                "[check:completion] "
+                                + " ".join(artifact_gaps)
+                                + " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary. Use `write_file` for a missing requested save, then "
+                                "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
+                                "continuation pages. Report only contents observed in "
+                                "tool results. An unrelated tool or file is not evidence."
+                            )
+                            if artifact_gaps
+                            else (
+                                "[check:completion] "
+                                + " ".join(soft_gaps)
+                                + " If the file is needed, write it with `write_file` and read it back. "
+                                "If you were describing where something is usually saved, or a file "
+                                "from an earlier turn, say so without claiming you saved it now."
+                            )
+                        )
+                        messages.append({"role": "user", "content": correction})
+                        conversation.append({"role": "user", "content": correction})
+                        continue
+                    completion_gaps.extend(artifact_gaps)
+                # Validate after subclass rewriting, before console/SSE emission.
+                final_test_claim = unsupported_test_claim(
+                    answer_candidate, self._turn_tool_executions
+                )
+                if (
+                    final_test_claim
+                    and final_test_claim[1] + "." not in completion_gaps
+                ):
+                    completion_gaps.append(final_test_claim[1] + ".")
+                if completion_gaps:
+                    answer_candidate = incomplete_answer(completion_gaps)
+                inventory = self._extraction_ledger.render()
+                if inventory:
+                    # Never ask another synthesis call to reproduce the set; it condenses.
+                    answer_candidate += "\n\n" + inventory
+                    if not completion_gaps:
+                        saved = sorted(self._extraction_ledger.destinations)
+                        if saved:
+                            answer_candidate += (
+                                "\n\nSaved and read back the complete inventory: "
+                                + ", ".join(f"`{path}`" for path in saved)
+                            )
+                final_answer = self._with_verification_scope(answer_candidate)
                 verification_scope_applied = True
                 self.execution_state = self.STATE_COMPLETION
                 # Compute the real token total BEFORE printing the answer so it
@@ -8265,10 +8757,14 @@ Do NOT wrap conversational replies in JSON.
                 self.console.print_warning(max_steps_msg)
 
                 # Ask user if they want to continue (skip in silent mode OR if stdin is not available)
-                # IMPORTANT: Never call input() in API/CI contexts to avoid blocking threads
+                # A server's TTY says nothing about the requester; ask the console.
                 import sys
 
-                has_stdin = sys.stdin and sys.stdin.isatty()
+                has_stdin = (
+                    self._console_accepts_stdin_prompts()
+                    and sys.stdin
+                    and sys.stdin.isatty()
+                )
                 if has_stdin and not (
                     hasattr(self, "silent_mode") and self.silent_mode
                 ):
@@ -8307,8 +8803,11 @@ Do NOT wrap conversational replies in JSON.
                 self.chat.turn_step = steps_taken
             self.execution_state = self.STATE_COMPLETION
             try:
-                cap_answer = self._answer_at_step_cap(
-                    messages, conversation, steps_limit, steps_taken
+                cap_answer = self._closing_answer(
+                    messages,
+                    conversation,
+                    _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+                    steps_taken,
                 )
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
                 logger.warning("Could not write the step-limit summary: %s", e)
@@ -8322,9 +8821,13 @@ Do NOT wrap conversational replies in JSON.
                 if cap_answer is None:
                     cancelled_by_console = True
                 else:
-                    final_answer = self._with_verification_scope(
+                    # Same gate an ordinary answer passes: running out of steps
+                    # mid-extraction still reports incomplete, it does not
+                    # promote the closing reply to a verified one.
+                    gated, completion_gaps = self._gate_unsealed_answer(
                         self.finalize_answer(cap_answer, conversation)
                     )
+                    final_answer = self._with_verification_scope(gated)
                     verification_scope_applied = True
                     _cap_input_tokens, cap_output_tokens = _sum_conversation_tokens(
                         conversation, self._tool_reported_usage
@@ -8366,6 +8869,30 @@ Do NOT wrap conversational replies in JSON.
             self._finish_turn_record("", steps_taken)
             return self.last_result
 
+        # The loop guard returns its answer and breaks, so unlike the normal and
+        # step-cap paths nothing has printed it. On the CLI the console is the
+        # only thing that prints, so without this the turn ends on the repeat
+        # warning and the answer is never shown.
+        if loop_break_answer_unprinted and final_answer is not None:
+            final_answer = self._with_verification_scope(
+                self.finalize_answer(final_answer, conversation)
+            )
+            verification_scope_applied = True
+            _break_input_tokens, break_output_tokens = _sum_conversation_tokens(
+                conversation, self._tool_reported_usage
+            )
+            turn_record = self._finish_turn_record(final_answer, steps_taken)
+            self._publish_turn_metrics(turn_record)
+            self.console.print_final_answer(
+                final_answer,
+                streaming=self.streaming,
+                total_tokens=break_output_tokens,
+                input_tokens=_break_input_tokens,
+                cached_tokens=_sum_cached_tokens(conversation),
+                ttft_seconds=_query_ttft_seconds(conversation),
+                tok_per_s=_query_tok_per_s(conversation),
+            )
+
         # Print completion message
         self.console.print_completion(steps_taken, steps_limit)
 
@@ -8380,6 +8907,9 @@ Do NOT wrap conversational replies in JSON.
         total_input_tokens, total_output_tokens = _sum_conversation_tokens(
             conversation, self._tool_reported_usage
         )
+
+        if not verification_scope_applied and not account_refused:
+            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
@@ -8398,9 +8928,15 @@ Do NOT wrap conversational replies in JSON.
         )  # Check for non-empty answer
         result = {
             "status": (
-                "success"
-                if has_valid_answer and not has_errors and not max_steps_reached
-                else ("failed" if has_errors else "incomplete")
+                "failed"
+                if has_errors
+                else (
+                    "success"
+                    if has_valid_answer
+                    and not completion_gaps
+                    and not max_steps_reached
+                    else "incomplete"
+                )
             ),
             "result": (
                 final_answer
@@ -8408,6 +8944,11 @@ Do NOT wrap conversational replies in JSON.
                 else self._with_verification_scope(
                     self._generate_max_steps_message(
                         conversation, steps_taken, steps_limit
+                    )
+                    + (
+                        "\n\n" + self._extraction_ledger.render()
+                        if self._extraction_ledger.results
+                        else ""
                     )
                 )
             ),
@@ -8425,6 +8966,8 @@ Do NOT wrap conversational replies in JSON.
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
             "tool_schema": self._trace_tool_schema(),
+            "completion_gaps": completion_gaps,
+            "extraction_sources": sorted(self._extraction_ledger.results),
         }
 
         result["model_messages"] = messages.finish(result["result"])
@@ -8558,7 +9101,7 @@ Do NOT wrap conversational replies in JSON.
         """Final-answer text when the loop breaks on repeats; names the real cause."""
         last = recent_results[-1] if recent_results else None
         denied = isinstance(last, dict) and last.get("status") == "denied"
-        if not (denied or Agent._is_error_result(last)):
+        if not self._repeats_carry_a_failure(recent_results):
             # A loop break is evidence of neither outcome: the work may be done
             # (the model kept re-verifying it) or never started (it had no tool
             # for the job). Say which is unknown instead of claiming either,
@@ -8593,6 +9136,61 @@ Do NOT wrap conversational replies in JSON.
             "I couldn't recover from this — please rephrase the request "
             "or try a different approach."
         )
+
+    @staticmethod
+    def _repeats_carry_a_failure(recent_results: list) -> bool:
+        """Did the repeated calls fail or get refused? Then that IS the answer."""
+        last = recent_results[-1] if recent_results else None
+        return Agent._is_error_result(last) or (
+            isinstance(last, dict) and last.get("status") == "denied"
+        )
+
+    def _answer_after_repeated_calls(
+        self,
+        tool_name: str,
+        executed_count: int,
+        recent_results: list,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+    ) -> Tuple[Optional[str], int]:
+        """Final answer when the loop guard stops the turn, and the step count.
+
+        Repeats that worked prove neither outcome, so the model gets one
+        closing call (tools withheld) to say what it did from the results it
+        already has; failed or refused repeats keep the summary, which names
+        the failure. ``executed_count`` counts the calls that ran, as the
+        summary does. Returns ``(None, steps)`` when the user pressed Stop.
+        """
+        summary = self._build_loop_break_summary(
+            tool_name, executed_count, recent_results
+        )
+        if self._repeats_carry_a_failure(recent_results):
+            return summary, steps_taken
+
+        steps_taken += 1
+        if self._turn_recorder is not None and self.chat is not None:
+            self.chat.turn_step = steps_taken
+        self.execution_state = self.STATE_COMPLETION
+        try:
+            answer = self._closing_answer(
+                messages,
+                conversation,
+                _REPEATED_CALL_ANSWER_PROMPT.format(
+                    tool=tool_name, count=executed_count
+                ),
+                steps_taken,
+            )
+        except Exception as e:  # noqa: BLE001 - the reason goes in the answer
+            logger.warning("Could not write the loop-break summary: %s", e)
+            return (
+                f"{summary.rstrip()}\n\nThe summary of what I did couldn't be "
+                f"written: {e}",
+                steps_taken,
+            )
+        # Raw, like the summary branches above — the caller finalizes once.
+        # Subclass hooks append corrections, so a second pass duplicates them.
+        return answer, steps_taken
 
     def _dedup_mutation_call(
         self,

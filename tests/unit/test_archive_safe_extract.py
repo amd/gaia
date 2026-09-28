@@ -11,7 +11,7 @@ import zipfile
 
 import pytest
 
-from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 
 POSIX_ONLY = pytest.mark.skipif(
     platform.system() == "Windows",
@@ -248,6 +248,114 @@ def test_corrupt_zip_raises_the_native_error(tmp_path):
     bogus.write_bytes(b"not a zip")
     with pytest.raises(zipfile.BadZipFile):
         safe_extract(bogus, tmp_path / "dest")
+
+
+def test_a_failed_zip_write_still_closes_the_member_handle(tmp_path, monkeypatch):
+    """A member that cannot be written must not leak its reader.
+
+    An archive holding both a file ``a`` and a file ``a/b.txt`` makes the
+    destination mkdir fail, which is the cheapest way to raise between opening
+    a member and the writer taking ownership of it.
+    """
+    opened = []
+    real_open = zipfile.ZipFile.open
+
+    def spy(self, *args, **kwargs):
+        handle = real_open(self, *args, **kwargs)
+        opened.append(handle)
+        return handle
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", spy)
+
+    archive = _zip(
+        tmp_path / "clash.zip", [("a", b"blocker", None), ("a/b.txt", b"p", None)]
+    )
+    with pytest.raises(OSError):
+        safe_extract(archive, tmp_path / "dest", kind="zip")
+
+    assert opened, "the spy never saw a member open"
+    assert all(h.closed for h in opened)
+
+
+# --- Size caps ---------------------------------------------------------------
+
+
+def _sized_archive(tmp_path, fmt, sizes):
+    names = [f"d/f{i}.bin" for i in range(len(sizes))]
+    if fmt == "zip":
+        return _zip(
+            tmp_path / "a.zip",
+            [(n, b"x" * s, None) for n, s in zip(names, sizes)],
+        )
+    return _tar(
+        tmp_path / "a.tar.gz", [_file(n, b"x" * s) for n, s in zip(names, sizes)]
+    )
+
+
+@pytest.mark.parametrize("fmt", ["zip", "tar"])
+def test_member_over_cap_refused_before_writing(tmp_path, fmt):
+    archive = _sized_archive(tmp_path, fmt, [10, 101])
+    dest = tmp_path / "dest"
+    with pytest.raises(ArchiveSizeError) as excinfo:
+        safe_extract(archive, dest, max_member_bytes=100)
+    err = excinfo.value
+    assert (err.scope, err.member, err.size, err.limit) == (
+        "member",
+        "d/f1.bin",
+        101,
+        100,
+    )
+    assert err.declared
+    _nothing_written(tmp_path, dest)
+
+
+@pytest.mark.parametrize("fmt", ["zip", "tar"])
+def test_total_over_cap_refused_before_writing(tmp_path, fmt):
+    archive = _sized_archive(tmp_path, fmt, [60, 60])
+    dest = tmp_path / "dest"
+    with pytest.raises(ArchiveSizeError) as excinfo:
+        safe_extract(archive, dest, max_member_bytes=100, max_total_bytes=100)
+    err = excinfo.value
+    assert (err.scope, err.size, err.limit) == ("total", 120, 100)
+    assert err.declared
+    _nothing_written(tmp_path, dest)
+
+
+def test_archive_at_the_caps_unpacks(tmp_path):
+    archive = _sized_archive(tmp_path, "zip", [50, 50])
+    dest = tmp_path / "dest"
+    safe_extract(archive, dest, max_member_bytes=50, max_total_bytes=100)
+    assert (dest / "d" / "f1.bin").read_bytes() == b"x" * 50
+
+
+@pytest.mark.parametrize(
+    "caps,scope",
+    [({"max_member_bytes": 100}, "member"), ({"max_total_bytes": 100}, "total")],
+)
+def test_member_larger_than_its_header_is_cut_off(tmp_path, monkeypatch, caps, scope):
+    archive = _sized_archive(tmp_path, "zip", [10])
+    real_open = zipfile.ZipFile.open
+
+    def lying_open(self, name, *args, **kwargs):
+        if getattr(name, "filename", name) == "d/f0.bin":
+            return io.BytesIO(b"x" * 1000)
+        return real_open(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", lying_open)
+    dest = tmp_path / "dest"
+    with pytest.raises(ArchiveSizeError) as excinfo:
+        safe_extract(archive, dest, **caps)
+    err = excinfo.value
+    assert (err.scope, err.limit, err.declared) == (scope, 100, False)
+    assert err.size > 100
+    assert not (dest / "d" / "f0.bin").exists()
+
+
+@pytest.mark.parametrize("cap", ["max_member_bytes", "max_total_bytes"])
+def test_negative_cap_is_refused(tmp_path, cap):
+    archive = _sized_archive(tmp_path, "zip", [1])
+    with pytest.raises(ValueError, match=cap):
+        safe_extract(archive, tmp_path / "dest", **{cap: -1})
 
 
 # --- Every caller routes through safe_extract --------------------------------

@@ -425,7 +425,7 @@ def _ui_gaia_home() -> Path:
         return home
 
     problem = (
-        f"is the filesystem root"
+        "is the filesystem root"
         if reason == GAIA_HOME_IS_FS_ROOT
         else "is your home directory or contains it"
     )

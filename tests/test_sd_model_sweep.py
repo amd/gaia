@@ -138,7 +138,7 @@ def main():
         print(f"Available SD models: {[m['id'] for m in available_models]}")
     except Exception as e:
         print(f"Error: Cannot connect to Lemonade Server: {e}")
-        print("Make sure it's running: lemonade-server serve")
+        print("Make sure it's running: gaia daemon start")
         sys.exit(1)
 
     # Run sweep

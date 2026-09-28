@@ -28,6 +28,7 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
 from gaia.logger import get_logger
 from gaia.mcp.ports import (
     AGENT_UI_MCP_PORT,
@@ -159,6 +160,18 @@ def initialize_lemonade_for_agent(
     if skip_if_external and use_claude:
         return True, base_url or env_base_url
 
+    # The CLI is a front-end, so it is allowed to bring up the machine's
+    # background service — and it has to, because the daemon is what owns the
+    # model server. ensure_ready deliberately only ATTACHES: a readiness check
+    # that boots a daemon behind the caller's back costs every library and test
+    # caller 30 seconds and a process they did not ask for. One status probe
+    # when a daemon is already running.
+    from gaia.llm.lemonade_service import ensure_daemon_owns_lemonade
+
+    ensure_daemon_owns_lemonade()
+
+    # LemonadeManager handles all validation and error printing
+    # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
     # Resolve inside the error boundary so invalid overrides exit cleanly.
     try:
         required_ctx = resolve_ctx_size(device=_configured_device())
@@ -670,7 +683,7 @@ async def async_main(action, **kwargs):
             config = ChatAgentConfig(
                 use_claude=kwargs.get("use_claude", False),
                 use_chatgpt=kwargs.get("use_chatgpt", False),
-                claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
+                claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
                 base_url=kwargs.get(
                     "base_url",
                     resolve_lemonade_base_url(),
@@ -777,10 +790,18 @@ async def async_main(action, **kwargs):
             mic_threshold=kwargs.get("mic_threshold", 0.003),
             enable_tts=not kwargs.get("no_tts", False),
             system_prompt=None,  # Could add this as a parameter later
-            show_stats=kwargs.get("stats", False),
+            # ``--stats``/``--show-stats`` land on dest ``show_stats``.
+            show_stats=kwargs.get("show_stats", False),
             logging_level=kwargs.get(
                 "logging_level", "INFO"
             ),  # Back to INFO now that issues are fixed
+            # LLM backend selection (#124)
+            model=kwargs.get("model") or DEFAULT_MODEL_NAME,
+            max_tokens=kwargs.get("max_tokens", 512),
+            use_claude=kwargs.get("use_claude", False),
+            use_chatgpt=kwargs.get("use_chatgpt", False),
+            claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
+            base_url=lemonade_base_url,
             # RAG configuration
             rag_documents=rag_documents,
         )
@@ -1140,7 +1161,10 @@ def build_parser():
     base_url_parser = argparse.ArgumentParser(add_help=False)
     base_url_parser.add_argument(
         "--base-url",
-        default=None,
+        # SUPPRESS, not None: argparse copies the subparser's namespace over the
+        # parent's, so a None default here would erase a pre-subcommand
+        # `gaia --base-url ... <cmd>`. The top-level parser still defaults it.
+        default=argparse.SUPPRESS,
         help=f"Lemonade LLM server base URL (default: from LEMONADE_BASE_URL env or {DEFAULT_LEMONADE_URL})",
     )
     claude_parser = argparse.ArgumentParser(add_help=False)
@@ -1151,8 +1175,8 @@ def build_parser():
     )
     claude_parser.add_argument(
         "--claude-model",
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use when --use-claude is specified (default: claude-sonnet-4-20250514)",
+        default=DEFAULT_CLAUDE_CHAT_MODEL,
+        help=f"Claude model to use when --use-claude is specified (default: {DEFAULT_CLAUDE_CHAT_MODEL})",
     )
     # A removed provider, not a backend capability: it is parsed only so main()
     # can answer with the migration guidance. It therefore belongs on every
@@ -5061,6 +5085,20 @@ def handle_email_command(args):
     """
     log = get_logger(__name__)
 
+    # The query contract has no server field, so the sidecar would ignore it.
+    base_url = getattr(args, "base_url", None)
+    if base_url:
+        print(
+            "❌ gaia email does not accept --base-url: the email agent runs "
+            "inside the GAIA daemon and uses the daemon's LEMONADE_BASE_URL.\n"
+            "   To use another Lemonade server, run `gaia daemon stop`, set\n"
+            f"   LEMONADE_BASE_URL={base_url} in this shell, and re-run\n"
+            "   `gaia email` — the daemon restarts with that server.\n"
+            "   See https://amd-gaia.ai/docs/guides/email",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     # --spec: generate the HTML endpoint spec and open it in a browser.
     # No LLM, no Lemonade, no daemon — short-circuit before any server check.
     if getattr(args, "spec", False):
@@ -5095,7 +5133,6 @@ def handle_email_command(args):
             agent="email",
             skip_if_external=True,
             # Deliberately omitted: use_claude / use_chatgpt — see AC3.
-            base_url=getattr(args, "base_url", None),
         )
         if not success:
             sys.exit(1)
