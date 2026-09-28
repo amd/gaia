@@ -119,10 +119,13 @@ def start_advice() -> str:
     """
     from gaia.llm.lemonade_launcher import describe_start_hint
 
+    instruction = describe_start_hint().instruction.rstrip()
+    # Some hints end in a bare command; punctuate so appended prose stays readable.
+    if not instruction.endswith((".", "!", "?")):
+        instruction = f"{instruction}."
     return (
         "GAIA starts it automatically — run `gaia daemon start` if the "
-        f"background service is not running. Otherwise: "
-        f"{describe_start_hint().instruction}"
+        f"background service is not running. Otherwise: {instruction}"
     )
 
 
