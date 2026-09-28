@@ -392,16 +392,14 @@ class BrowserUseToolsMixin:
 
         @tool(atomic=True)
         def browser_open(url: str) -> str:
-            """Open a URL in a real browser and return the page's interactive elements.
+            """Open a URL in a real browser and list its interactive elements.
 
-            Use this when a page needs JavaScript to render, or is behind a
-            login. For plain articles and documentation prefer fetch_page —
-            it is much faster and needs no browser.
+            Use when a page needs JavaScript or is behind a login; prefer
+            fetch_page for plain articles and docs — far faster, no browser.
+            Reuses a saved sign-in for the site when one exists.
 
-            Reuses a saved sign-in for the site automatically when one exists.
-            Returns the page title, URL, a numbered list of interactive
-            elements (refs like e1, e2 — pass these to browser_click and
-            browser_type), and the readable page text.
+            Returns the title, URL, numbered element refs (e1, e2 — pass to
+            browser_click and browser_type), and the readable page text.
 
             Args:
                 url: Full URL to open (must start with http:// or https://)
@@ -491,10 +489,9 @@ class BrowserUseToolsMixin:
         def browser_login(url: str) -> str:
             """Ask the user to sign in to a site, then save the session.
 
-            Opens a visible browser window at the sign-in page and waits for
-            the user to authenticate themselves. GAIA never sees or types the
-            password — the user does, along with any MFA step. Once signed in,
-            the session is saved encrypted so later runs skip this.
+            Opens a visible window at the sign-in page and waits for the user
+            to authenticate. GAIA never sees or types the password or any MFA
+            step. The session is then saved encrypted, so later runs skip it.
 
             Use when a page says the user is signed out, or when browser_open
             returns a login screen instead of the content asked for.
