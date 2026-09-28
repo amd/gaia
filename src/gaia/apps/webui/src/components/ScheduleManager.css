@@ -29,7 +29,7 @@
 
 .schedule-form-row input:focus {
     outline: none;
-    border-color: var(--amd-red);
+    border-color: var(--accent);
 }
 
 .schedule-form-row input::placeholder {
@@ -51,7 +51,7 @@
 
 .schedule-prompt-input:focus {
     outline: none;
-    border-color: var(--amd-red);
+    border-color: var(--accent);
 }
 
 .schedule-prompt-input::placeholder {
@@ -66,7 +66,7 @@
 
 .schedule-form-error {
     font-size: 12px;
-    color: var(--amd-red);
+    color: var(--accent);
     margin-top: -4px;
 }
 
@@ -118,7 +118,7 @@
 }
 
 .schedule-card.selected {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
     background: var(--bg-hover);
 }
 
@@ -127,8 +127,8 @@
 }
 
 @keyframes schedule-flash {
-    0% { border-color: var(--accent-green); box-shadow: 0 0 8px rgba(78, 201, 50, 0.3); }
-    100% { border-color: var(--border-light); box-shadow: none; }
+    0% { border-color: var(--accent-green); }
+    100% { border-color: var(--border-light); }
 }
 
 .schedule-card-header {
@@ -157,13 +157,13 @@
 }
 
 .schedule-card-status.active {
-    color: #22c55e;
-    background: rgba(34, 197, 94, 0.1);
+    color: var(--accent-green);
+    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
 }
 
 .schedule-card-status.paused {
-    color: #f59e0b;
-    background: rgba(245, 158, 11, 0.1);
+    color: var(--accent-yellow);
+    background: color-mix(in srgb, var(--accent-yellow) 10%, transparent);
 }
 
 .schedule-card-status.cancelled {
@@ -211,21 +211,21 @@
 }
 
 .schedule-card-actions .btn-sm.chat {
-    color: #3b82f6;
-    border-color: #3b82f6;
+    color: var(--accent-blue);
+    border-color: var(--accent-blue);
 }
 
 .schedule-card-actions .btn-sm.chat:hover {
-    background: rgba(59, 130, 246, 0.1);
+    background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
 }
 
 .schedule-card-actions .btn-sm.danger {
-    color: var(--amd-red);
-    border-color: var(--amd-red);
+    color: var(--accent);
+    border-color: var(--accent);
 }
 
 .schedule-card-actions .btn-sm.danger:hover {
-    background: rgba(237, 28, 36, 0.1);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 /* Results panel */
@@ -275,7 +275,7 @@
 }
 
 .schedule-result-error {
-    color: var(--amd-red);
+    color: var(--accent);
 }
 
 .schedule-results-empty {
@@ -301,7 +301,7 @@
 
 .schedule-nl-input:focus {
     outline: none;
-    border-color: var(--amd-red);
+    border-color: var(--accent);
 }
 
 .schedule-nl-input::placeholder {
@@ -318,13 +318,13 @@
 }
 
 .schedule-parsed-preview.valid {
-    border-color: #22c55e;
-    background: rgba(34, 197, 94, 0.05);
+    border-color: var(--accent-green);
+    background: color-mix(in srgb, var(--accent-green) 5%, transparent);
 }
 
 .schedule-parsed-preview.invalid {
-    border-color: var(--amd-red);
-    background: rgba(237, 28, 36, 0.05);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--danger) 5%, transparent);
 }
 
 .schedule-parsed-loading {
@@ -364,16 +364,16 @@
 
 /* Missing field highlight */
 .schedule-field-missing {
-    border-color: #f59e0b !important;
-    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3);
+    border-color: var(--accent-yellow) !important;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-yellow) 30%, transparent);
 }
 
 .btn-primary {
     padding: 6px 16px;
     border-radius: var(--radius-sm);
     border: none;
-    background: var(--amd-red);
-    color: #fff;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -381,7 +381,7 @@
 }
 
 .btn-primary:hover {
-    background: var(--amd-red-dark);
+    background: var(--accent-fill-hover);
 }
 
 .btn-primary:disabled {

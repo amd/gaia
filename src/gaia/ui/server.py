@@ -276,10 +276,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             at module level, which calls LemonadeManager.ensure_ready() and can
             trigger a model switch.
             """
-            # pylint: disable=unused-import
-            import sys
-
-            import faiss  # noqa: F401
+            import faiss  # noqa: F401  # pylint: disable=unused-import
 
             # sentence-transformers is NOT pre-imported: RAG embeds via Lemonade,
             # and the memory cross-encoder reranker imports it lazily with graceful
@@ -942,7 +939,5 @@ if __name__ == "__main__":
     # gaia.ui.server.  Register it under its canonical name so that
     # sys.modules["gaia.ui.server"] lookups (used by router modules for
     # test-patchable function resolution) succeed.
-    import sys as _sys
-
-    _sys.modules.setdefault("gaia.ui.server", _sys.modules[__name__])
+    sys.modules.setdefault("gaia.ui.server", sys.modules[__name__])
     main()

@@ -87,6 +87,7 @@
                     "group": "Core Agents",
                     "pages": [
                       "guides/gaia",
+                      "guides/document-extraction",
                       "guides/ai-providers",
                       "guides/chat",
                       "guides/talk",
@@ -308,6 +309,12 @@
             ]
           },
           {
+            "group": "Design",
+            "pages": [
+              "spec/gaia-design-language"
+            ]
+          },
+          {
             "group": "Packaging",
             "pages": [
               "spec/electron-integration"
@@ -426,6 +433,7 @@
               "plans/skill-format",
               "plans/skill-synthesis",
               "plans/adaptive-skills",
+              "plans/adaptive-memory",
               "plans/oem-bundling"
             ]
           },
@@ -437,7 +445,8 @@
               "plans/mcp-docs",
               "plans/desktop-installer",
               "plans/tool-loader",
-              "plans/code-index-review"
+              "plans/code-index-review",
+              "plans/nightly-benchmarks"
             ]
           },
           {

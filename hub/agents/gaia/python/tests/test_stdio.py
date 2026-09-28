@@ -342,8 +342,7 @@ def test_an_agent_exception_becomes_a_terminal_error():
 def test_unreachable_lemonade_gets_actionable_copy(monkeypatch):
     """The raw urllib3 repr tells a user nothing; name the fix instead."""
     monkeypatch.setattr(
-        stdio,
-        "describe_start_hint",
+        "gaia.llm.lemonade_launcher.describe_start_hint",
         lambda *a, **k: StartHint(instruction="Run: lemond --port 13305"),
     )
     detail = stdio._terminal_error(
@@ -351,7 +350,12 @@ def test_unreachable_lemonade_gets_actionable_copy(monkeypatch):
     )["detail"]
 
     assert "Lemonade" in detail
-    assert "Run: lemond --port 13305." in detail
+    # A real next step, not a specific launch command. Pinning a literal here
+    # is how `lemonade-server serve` stayed asserted-as-real for releases after
+    # Lemonade 10.7 removed it (CLAUDE.md, "Never hardcode how Lemonade is
+    # started") — the manual fallback is resolved per machine, so there is no
+    # single launch string to assert.
+    assert "gaia daemon start" in detail
     assert "lemonade-server serve" not in detail
 
 
@@ -362,6 +366,7 @@ def test_an_anthropic_outage_is_not_blamed_on_lemonade():
         ConnectionError("anthropic: Max retries exceeded ... Connection refused")
     )["detail"]
 
+    assert "gaia daemon start" not in detail
     assert "Lemonade Server" not in detail
     assert "Max retries exceeded" in detail
 
@@ -376,6 +381,7 @@ def test_an_anthropic_sdk_exception_is_recognised_by_its_module():
 
     detail = stdio._terminal_error(APIConnectionError("Connection refused"))["detail"]
 
+    assert "gaia daemon start" not in detail
     assert "Lemonade Server" not in detail
 
 
@@ -871,7 +877,7 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
     def _unreachable(base_url):
         raise RuntimeError(
             f"Lemonade Server is not reachable at {base_url} (connection refused). "
-            "Start the Lemonade app from Applications, then retry."
+            "GAIA starts it automatically — run `gaia daemon start`."
         )
 
     monkeypatch.setattr(stdio_mod, "_lemonade_models", _unreachable)
@@ -883,7 +889,7 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
     events = _events(out)
     assert len(events) == 1 and events[0]["type"] == "error"
     assert "13305" in events[0]["detail"]
-    assert "Start the Lemonade app" in events[0]["detail"]
+    assert "gaia daemon start" in events[0]["detail"]
     assert agent.chat.llm_client is previous_client
     assert agent.rebuild_count == 0
 
@@ -1089,8 +1095,7 @@ def test_lemonade_models_unreachable_names_url_and_fix(monkeypatch):
     fake.error = stdio_mod.LemonadeClientError("connection refused")
     monkeypatch.setattr(stdio_mod, "LemonadeClient", fake)
     monkeypatch.setattr(
-        stdio_mod,
-        "describe_start_hint",
+        "gaia.llm.lemonade_launcher.describe_start_hint",
         lambda *a, **k: StartHint(instruction="Run: lemond --port 13305"),
     )
 
@@ -1099,7 +1104,8 @@ def test_lemonade_models_unreachable_names_url_and_fix(monkeypatch):
         raise AssertionError("expected RuntimeError")
     except RuntimeError as exc:
         assert "13305" in str(exc)
-        assert "Run: lemond --port 13305." in str(exc)
+        assert "gaia daemon start" in str(exc)
+        assert "Run: lemond --port 13305" in str(exc)
         assert "lemonade-server serve" not in str(exc)
     finally:
         fake.error = None

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import List
 
 from gaia.logger import get_logger
+from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 from gaia.version import __version__
 
 log = get_logger(__name__)
@@ -328,42 +329,24 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
         ) as staging_root_str:
             staging_root = Path(staging_root_str)
 
-            # Extract every non-bundle.json entry into staging_root.
-            # Track aggregate bytes written to catch zip-bombs that spread
-            # across many entries, each staying under the per-file cap.
-            total_written = 0
-            for info in infos:
-                if info.filename == BUNDLE_JSON_NAME:
-                    continue
-                # Defensive: re-check destination lies under staging_root.
-                dest = (staging_root / info.filename).resolve()
-                if dest != staging_root and not dest.is_relative_to(staging_root):
+            try:
+                safe_extract(
+                    bundle_path,
+                    staging_root,
+                    kind="zip",
+                    max_member_bytes=MAX_UNCOMPRESSED_PER_FILE,
+                    max_total_bytes=MAX_UNCOMPRESSED_TOTAL,
+                )
+            except ArchiveSizeError as exc:
+                if exc.scope == "member":
                     raise ValueError(
-                        f"path traversal blocked during extract: {info.filename}"
-                    )
-                if info.is_dir():
-                    dest.mkdir(parents=True, exist_ok=True)
-                    continue
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                bytes_written = 0
-                with zf.open(info) as src, open(dest, "wb") as out:
-                    while True:
-                        chunk = src.read(65536)
-                        if not chunk:
-                            break
-                        bytes_written += len(chunk)
-                        total_written += len(chunk)
-                        if bytes_written > MAX_UNCOMPRESSED_PER_FILE:
-                            raise ValueError(
-                                f"entry {info.filename} exceeds per-file limit "
-                                f"during extraction"
-                            )
-                        if total_written > MAX_UNCOMPRESSED_TOTAL:
-                            raise ValueError(
-                                "bundle exceeds total uncompressed size limit "
-                                "during extraction"
-                            )
-                        out.write(chunk)
+                        f"entry {exc.member} exceeds per-file limit during extraction"
+                    ) from exc
+                raise ValueError(
+                    "bundle exceeds total uncompressed size limit during extraction"
+                ) from exc
+            except ArchiveError as exc:
+                raise ValueError(f"unsafe bundle: {exc}") from exc
 
             # Move each staged agent dir to its final location.
             for agent_id in agent_ids:

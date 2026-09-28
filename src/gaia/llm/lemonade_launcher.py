@@ -321,6 +321,18 @@ def _render_command(argv: List[str], env: Dict[str, str]) -> str:
     return rendered
 
 
+def render_command(spec: StartSpec) -> str:
+    """Render a :class:`StartSpec` as the line a user would actually have to run.
+
+    The env matters as much as the argv and is easy to lose: a modern install
+    carries the context window in ``LEMONADE_CTX_SIZE``, so a bare
+    ``" ".join(argv)`` produces a command that starts a server at the WRONG
+    window — health-green, and failing every long request. Windows quoting is
+    handled too, so the line is copy-pasteable in the shell it names.
+    """
+    return _render_command(spec.argv, spec.env)
+
+
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     """Describe how to start Lemonade Server on THIS machine.
 

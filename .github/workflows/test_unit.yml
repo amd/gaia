@@ -290,6 +290,7 @@ jobs:
             tests/integration/test_documents_router.py \
             tests/integration/test_email_thin_client.py \
             tests/integration/test_files_router.py \
+            tests/integration/test_files_search_budget.py \
             tests/integration/test_folder_indexing.py \
             tests/integration/test_governed_agent_workflow.py \
             tests/integration/test_governed_canonical_name.py \

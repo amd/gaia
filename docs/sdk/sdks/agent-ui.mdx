@@ -871,7 +871,11 @@ class AttachDocumentRequest(BaseModel):
   </Accordion>
 
   <Accordion title="GET /api/files/search">
-    Search files by name/pattern across watched or allowed locations.
+    Search files by name across `~/Documents`, `~/Downloads`, `~/Desktop`,
+    `~/OneDrive`, then the rest of the home directory. The walk is bounded: it
+    stops at `max_results` matches, after 20,000 directory entries, or after
+    about 10 seconds. `truncated: true` in the response means a bound cut the walk
+    short and more matches may exist.
   </Accordion>
 
   <Accordion title="GET /api/files/preview">

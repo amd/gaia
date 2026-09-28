@@ -6,7 +6,6 @@
 import asyncio
 import json
 import logging
-import os
 import shutil
 import sys
 import threading
@@ -732,38 +731,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     init_marker = Path.home() / ".gaia" / "chat" / "initialized"
     status.initialized = init_marker.exists()
 
-    # Device support check.
-    # Skipped when:
-    #   1. GAIA_SKIP_DEVICE_CHECK env var is set to "1", "true", or "yes"
-    #   2. LEMONADE_BASE_URL points to a non-localhost server — inference runs
-    #      remotely so local hardware requirements don't apply.
-    try:
-        from gaia.device import check_device_supported, get_processor_name
+    from gaia.device import get_processor_name
 
-        skip_check = os.environ.get("GAIA_SKIP_DEVICE_CHECK", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        from gaia.llm.lemonade_client import configured_lemonade_url
-
-        lemonade_url = configured_lemonade_url() or ""
-        _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", ""}
-        try:
-            _parsed_hostname = urlparse(lemonade_url).hostname or ""
-        except Exception:
-            _parsed_hostname = ""
-        is_remote = bool(lemonade_url) and _parsed_hostname not in _LOCAL_HOSTS
-
-        if skip_check or is_remote:
-            status.device_supported = True
-            status.processor_name = get_processor_name() or "unknown"
-        else:
-            supported, device_name = check_device_supported(log=logger)
-            status.processor_name = device_name
-            status.device_supported = supported
-    except Exception:
-        pass  # Unknown device — don't block the UI
+    status.processor_name = await asyncio.to_thread(get_processor_name) or None
 
     # Boot-time initialization tracking from the DispatchQueue.
     queue = getattr(request.app.state, "dispatch_queue", None)
