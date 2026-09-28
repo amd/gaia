@@ -246,6 +246,9 @@ def build_doc_agent_skeleton(
                 agent.tool_loader = _build_skeleton_tool_loader(
                     dynamic_tools, profile=profile
                 )
+                # Set by ChatAgent.__init__, which is bypassed here; without it
+                # _select_tools_for_turn raises instead of selecting.
+                agent._dynamic_tools_validated = False
                 agent._register_tools()
                 # Profiles with generic_file_ops end _register_tools by popping
                 # seven code-writing tools out of _instance_tools; re-snapshotting
@@ -309,6 +312,9 @@ def build_full_agent_skeleton(dynamic_tools: bool = True):
                 agent.tool_loader = _build_skeleton_tool_loader(
                     dynamic_tools, profile="full"
                 )
+                # Set by ChatAgent.__init__, which is bypassed here; without it
+                # _select_tools_for_turn raises instead of selecting.
+                agent._dynamic_tools_validated = False
                 agent._register_tools()
                 # Do NOT re-snapshot from the global registry here. The "full"
                 # profile's _register_tools ends by popping the seven
@@ -844,7 +850,7 @@ def _ttft_section(scorecard_path: Optional[str]) -> str:
             "",
             "```bash",
             "python -m gaia.ui.server --port 4200 --host 127.0.0.1   # gemma-4-e4b",
-            "gaia eval agent --category tool_selection --agent-type doc",
+            "gaia eval agent --category tool_selection",
             "#   -> eval/results/<run-id>/scorecard.json",
             "python -m gaia.eval.tool_cost --profile doc \\",
             "    --scorecard eval/results/<run-id>/scorecard.json",

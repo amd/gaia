@@ -261,7 +261,7 @@ class TestLoggerReceivesWarning:
         conversation: list = []
 
         notices = []
-        agent.console.print_info = lambda msg: notices.append(msg)
+        agent.console.print_info = notices.append
 
         agent._handle_large_tool_result("list_inbox", payload, conversation)
 
@@ -499,14 +499,14 @@ class TestSecondGateDoesNotUndoTheFirst:
     def test_the_backstop_tracks_the_device_profile(self, device):
         agent = make_agent()
         agent.device = device
-        _, target = truncation_budget(device)
-        payload = _messages_payload(min_chars=target * 3)
+        threshold, _ = truncation_budget(device)
+        payload = _messages_payload(min_chars=threshold * 3)
 
         text = agent._create_tool_message("list_messages", payload)["content"][0][
             "text"
         ]
 
-        assert len(text) <= target, "the backstop stopped capping anything at all"
+        assert len(text) <= threshold, "the backstop stopped capping anything at all"
         assert (
             len(text) > 2000
         ), f"device={device!r} still capped near the old hardcoded 2,000 chars"
@@ -636,7 +636,15 @@ class TestStringResults:
 
         assert set(result) >= {"head", "tail", "omitted_chars"}
 
-    @pytest.mark.parametrize("text", ["", "normal output", "λ" * 30000, '"' * 30000])
+    @pytest.mark.parametrize(
+        "text",
+        ["", "normal output", "λ" * 30000, '"' * 30000],
+        # Explicit short ids: pytest otherwise derives the node id from the
+        # raw parameter repr, and PYTEST_CURRENT_TEST embeds that id -- a
+        # 30,000-char id blows past Windows's 32,767-char env var limit
+        # (POSIX has no such ceiling, so this only ever failed there).
+        ids=["empty", "short", "unicode_30000", "quotes_30000"],
+    )
     def test_under_threshold_strings_are_byte_identical(self, text):
         agent = make_agent(device="npu")
         result = agent._handle_large_tool_result("read_file", text, [])

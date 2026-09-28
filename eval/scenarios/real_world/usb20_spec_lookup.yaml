@@ -1,7 +1,6 @@
 id: usb20_spec_lookup
 name: "USB 2.0 Specification Hardware Lookup"
 category: real_world
-agent_type: doc
 severity: medium
 description: |
   Agent must retrieve precise numeric values from the USB 2.0 specification overview.

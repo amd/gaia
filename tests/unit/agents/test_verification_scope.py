@@ -565,13 +565,15 @@ def test_scope_is_reset_between_turns(agent):
 # ---------------------------------------------------------------------------
 
 
-def test_cancel_event_timeout_path_carries_the_statement(agent):
+def test_cancel_event_path_carries_the_statement(agent):
     event = threading.Event()
     event.set()
     agent._cancel_event = event
     _stub_chat(agent, _answer("never reached"))
     result = agent.process_query("do something", max_steps=5)
-    assert "exceeded the allowed" in result["result"]
+    assert "stopped before it finished" in result["result"]
+    # Cancel has several triggers now; the text must not claim a timeout.
+    assert "exceeded the allowed" not in result["result"]
     assert "unverified" in _scope_line(result["result"])
 
 
@@ -635,9 +637,9 @@ def test_parse_give_up_path_carries_the_statement(agent):
 def test_loop_break_summary_path_carries_the_statement(agent):
     """A repeated failing check breaks the loop — and still states its scope.
 
-    This exit is the clearest case for the feature: every call errored, the
-    summary must not claim completion (#3750), and the scope line is what tells
-    the user the check did not pass.
+    Every call errored, so the summary must not claim completion (#3750)
+    and must not guess a cause it does not have (#3888); the scope line is
+    what tells the user the check ran and did not pass.
     """
     agent.max_consecutive_repeats = 2
     agent.shell_result = {"status": "error", "error": "boom", "return_code": 1}
@@ -986,7 +988,9 @@ def shell_tool():
 
 
 REFUSED_COMMANDS = [
-    ("not_on_the_allowlist", "/usr/local/bin/python3.14 -m pytest tests/"),
+    # Refused before anything runs on every machine: a global option that can
+    # execute a script behind a read-only-looking subcommand.
+    ("undescribable_git_option", "git -c core.pager=cat status"),
     ("shell_operators", "pytest tests/ && echo done"),
     ("unknown_binary", "definitely-not-a-real-binary --version"),
 ]
@@ -1003,7 +1007,29 @@ def test_a_refused_command_says_it_did_not_run(shell_tool, command):
     assert check_was_executed(result) is False, result
 
 
-def test_a_refused_pytest_leaves_the_turn_unverified(shell_tool):
+@pytest.fixture
+def unattended(monkeypatch):
+    """GAIA_AUTO_APPROVE_TOOLS=1: prompts are pre-approved, the shell is not widened."""
+    monkeypatch.setattr(
+        "gaia.agents.base.console.auto_approve_env_enabled", lambda: True
+    )
+
+
+def test_an_unattended_run_refuses_a_confirmable_check_and_says_so(
+    shell_tool, unattended
+):
+    """A command that would ask a person is refused, unrun, when nobody can answer.
+
+    ``python3`` exists on every machine that runs this suite, so a refusal that
+    stopped working would actually execute here rather than pass by accident.
+    """
+    result = shell_tool("python3 -m pytest --version")
+    assert result["status"] == "error", result
+    assert "stdout" not in result, result
+    assert check_was_executed(result) is False, result
+
+
+def test_a_refused_pytest_leaves_the_turn_unverified(shell_tool, unattended):
     """The whole chain: real refusal -> real classifier -> footer."""
     result = shell_tool("/usr/local/bin/python3.14 -m pytest tests/")
     statement = build_verification_scope(

@@ -34,13 +34,47 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Source of truth
 VERSION_FILE = PROJECT_ROOT / "src" / "gaia" / "version.py"
 
-# Directories and file patterns to scan
+# Directories and file patterns to scan.
+#
+# ``tui`` and ``.claude`` are here because the v2026.39.1 bump found stale pins in
+# both that no gate could see — a bump is only as complete as the paths scanned.
 SCAN_PATHS = [
     (PROJECT_ROOT / "docs", "**/*.mdx"),
     (PROJECT_ROOT / "docs", "**/*.md"),
     (PROJECT_ROOT / "cpp", "**/*.md"),
     (PROJECT_ROOT / "cpp", "**/*.mdx"),
+    (PROJECT_ROOT / "tui", "**/*.md"),
+    (PROJECT_ROOT / "tui", "**/*.go"),
+    (PROJECT_ROOT / ".claude", "**/*.md"),
 ]
+# Deliberately NOT scanned: src/**/*.py. Source comments about Lemonade are
+# mostly history or justification, not pins — "Lemonade v10.1.0 changed its
+# default port" and "EmbeddingGemma is validated on Lemonade v10.9.0" are both
+# statements about a past release that a bump must leave alone. Scanning src/
+# flags exactly those two and nothing that needs to move.
+
+# Files where a BARE "Lemonade <semver>" — no ``v`` prefix — is a PIN reference and
+# must track LEMONADE_VERSION.
+#
+# This is opt-in per file on purpose. The ``v`` prefix is what normally separates a
+# pin from a minimum-version floor, so everywhere else a bare number is ambiguous.
+# Applied repo-wide it matches six things it must not touch for every two it should:
+# floors ("Lemonade **10.2.0** or newer", "against the 10.2.0 floor"), YAML examples
+# (``min_lemonade_version: "10.2.0"``), a recorded observation in a scorecard
+# (``lemonade_version: 10.8.0``), and — because a dotted triple is not necessarily a
+# version at all — the ``127.0.0`` inside ``127.0.0.1``.
+#
+# So: write a pin with ``v`` and it is checked anywhere; write one without ``v`` and
+# it is only checked in the files listed here. Write a FLOOR without ``v`` and never
+# add its file here, or the gate will march it forward and turn a true statement into
+# a false one.
+BARE_VERSION_PIN_FILES = {
+    # Sample CLI output — reproduces what `gaia lemonade embedded start` prints, and
+    # the real command prints no ``v``.
+    "docs/reference/cli.mdx",
+    # "GAIA pins <version>" — a pin claim in prose.
+    ".claude/agents/lemonade-specialist.md",
+}
 
 # Files to exclude from scanning (relative to PROJECT_ROOT)
 EXCLUDE_PATTERNS = [
@@ -132,10 +166,17 @@ def build_lemonade_patterns(version: str) -> list[tuple[str, str]]:
             rf"lemonade(?:-sdk)?/lemonade/releases/tag/v(?P<version>{semver})",
             "Lemonade release page link",
         ),
-        # Explicit version callouts in text: (v<VERSION>) or v<VERSION>
-        # Match patterns like "Lemonade ... v9.3.0" or "(v9.3.0)"
+        # Explicit version callouts in text: (v<VERSION>) or v<VERSION>.
+        #
+        # The trailing guard separates a PIN from a FLOOR. "v11.8.1+" means "that
+        # release or newer" — it names where a feature first shipped and must
+        # never move — while a bare "v11.8.1" is the pinned version and must.
+        # Without this the gate marched a floor forward: docs/guides/npu.mdx then
+        # claimed NPU support needs the newest Lemonade, when the npu profile's
+        # real floor is 10.2.0.
         (
-            rf"[Ll]emonade[^|\n]{{0,60}}v(?P<version>{semver})",
+            rf"[Ll]emonade[^|\n]{{0,60}}v(?P<version>{semver})"
+            rf"(?!\s*\+)(?!\s*\**\s*(?:or later|or newer|or above))",
             "Lemonade version reference in text",
         ),
         # Table cells: | 9.3.0 | (preceded by Lemonade on same line)
@@ -144,6 +185,36 @@ def build_lemonade_patterns(version: str) -> list[tuple[str, str]]:
             "Lemonade version in table",
         ),
     ]
+
+
+def build_bare_pin_pattern() -> tuple[str, str]:
+    """Pattern for a pin written WITHOUT the ``v`` prefix.
+
+    Only applied to :data:`BARE_VERSION_PIN_FILES`. Two guards remain even there:
+    the version must not be preceded by ``v`` or by a digit/dot (so ``v1.2.3`` is
+    left to the v-pattern and ``127.0.0.1`` is not a version), and it must not be
+    followed by a floor marker.
+    """
+    semver = r"\d+\.\d+\.\d+"
+    # "Lemonade" as a whole word, so ``min_lemonade_version`` (a per-agent floor in
+    # a YAML example) does not anchor a match.
+    anchor = r"(?<![\w_])[Ll]emonade"
+    # The run to the version may not cross ``:`` or ``=``. That one character rules
+    # out both ``lemonade_version: 10.8.0`` (a recorded observation in a scorecard)
+    # and the ``127.0.0`` inside ``http://127.0.0.1:9099``.
+    gap = r"[^|\n:=]{0,60}?"
+    not_mid_dotted = r"(?<![vV\d.])"
+    # Not the head of a longer dotted string — an IP's fourth octet. Checks for a dot
+    # followed by a DIGIT so a pin ending a sentence ("pins 2026.39.1.") still counts.
+    not_an_octet = r"(?!\.\d)"
+    # Floor markers, tolerating markup between the number and the words:
+    # "11.8.1+", "**10.2.0** or newer".
+    floor = r"(?!\s*\+)(?!\s*\**\s*(?:or later|or newer|or above))"
+    return (
+        rf"{anchor}{gap}{not_mid_dotted}(?P<version>{semver})"
+        rf"{not_an_octet}{floor}",
+        "Lemonade pin written without a 'v' prefix",
+    )
 
 
 def scan_file(
@@ -186,14 +257,10 @@ def scan_file(
     return mismatches
 
 
-def scan_all(
-    check: CheckConfig, verbose: bool = False
-) -> list[VersionMismatch]:
+def scan_all(check: CheckConfig, verbose: bool = False) -> list[VersionMismatch]:
     """Scan all documentation files for version mismatches."""
     # Compile patterns
-    compiled = [
-        (re.compile(pat), desc) for pat, desc in check.patterns
-    ]
+    compiled = [(re.compile(pat), desc) for pat, desc in check.patterns]
 
     all_mismatches: list[VersionMismatch] = []
     files_scanned = 0
@@ -209,7 +276,13 @@ def scan_all(
                 continue
 
             files_scanned += 1
-            mismatches = scan_file(file_path, compiled, check.expected_version)
+            patterns_for_file = compiled
+            rel_posix = file_path.relative_to(PROJECT_ROOT).as_posix()
+            if rel_posix in BARE_VERSION_PIN_FILES:
+                bare_pat, bare_desc = build_bare_pin_pattern()
+                patterns_for_file = compiled + [(re.compile(bare_pat), bare_desc)]
+
+            mismatches = scan_file(file_path, patterns_for_file, check.expected_version)
             all_mismatches.extend(mismatches)
 
     if verbose:

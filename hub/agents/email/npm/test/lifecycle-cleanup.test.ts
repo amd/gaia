@@ -173,3 +173,81 @@ describe("autoCleanup: false — opts out", () => {
     expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
   });
 });
+
+describe("shutdown — a sidecar that survives the forced kill", () => {
+  it("rejects within the bound, naming the pid and the kill command", async () => {
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((() => true) as typeof process.kill);
+    try {
+      const fakeChild = makeFakeChild(54321); // never emits "exit"
+      const { spawnSidecar, shutdown } = await loadLifecycle(fakeChild);
+      const sidecar = spawnSidecar({ binaryPath: "/fake/email-agent", port: 8199 });
+
+      const started = Date.now();
+      const err = await shutdown(sidecar, 50).then(
+        () => undefined,
+        (e: unknown) => e as Error,
+      );
+
+      expect(err).toBeInstanceOf(Error);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(err!.message).toContain("pid 54321");
+      expect(err!.message).toContain("port 8199");
+      expect(err!.message).toContain(
+        process.platform === "win32" ? "taskkill /PID 54321 /T /F" : "kill -9 -54321",
+      );
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("stays registered so the exit reaper still gets a last chance at it", async () => {
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((() => true) as typeof process.kill);
+    try {
+      const fakeChild = makeFakeChild(54322);
+      const { spawnSidecar, shutdown } = await loadLifecycle(fakeChild);
+      const sidecar = spawnSidecar({ binaryPath: "/fake/email-agent" });
+      await shutdown(sidecar, 20).catch(() => undefined);
+
+      killSpy.mockClear();
+      const { spawnSync } = vi.mocked(await import("node:child_process"));
+      spawnSync.mockClear();
+      const exitListeners = process.listeners("exit");
+      (exitListeners[exitListeners.length - 1] as () => void)();
+
+      if (process.platform === "win32") {
+        expect(spawnSync).toHaveBeenCalledWith(
+          "taskkill", ["/PID", "54322", "/T", "/F"], { stdio: "ignore" },
+        );
+      } else {
+        expect(killSpy).toHaveBeenCalledWith(-54322, "SIGKILL");
+      }
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "resolves once the child exits after the forced kill",
+    async () => {
+      const fakeChild = makeFakeChild(54323);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+        _pid: number,
+        sig?: string | number,
+      ) => {
+        if (sig === "SIGKILL") setImmediate(() => fakeChild.emit("exit", null, "SIGKILL"));
+        return true;
+      }) as typeof process.kill);
+      try {
+        const { spawnSidecar, shutdown } = await loadLifecycle(fakeChild);
+        const sidecar = spawnSidecar({ binaryPath: "/fake/email-agent" });
+        await expect(shutdown(sidecar, 20)).resolves.toBeUndefined();
+      } finally {
+        killSpy.mockRestore();
+      }
+    },
+  );
+});

@@ -10,6 +10,11 @@ these two — they are how every model asks for a test run (``pytest -q 2>&1 |
 tail -20``) — and each cost the call plus a recovery step.
 
 Every other redirection stays refused, ``2>`` to any other path included.
+
+Only the tests that actually launch a process carry ``@posix_only``. The
+refusal and tool-description tests decide before anything reaches a shell, so
+they run everywhere — a module-level skip would hide them on the platform most
+GAIA contributors develop on.
 """
 
 import os
@@ -19,7 +24,7 @@ import pytest
 
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 
-pytestmark = pytest.mark.skipif(
+posix_only = pytest.mark.skipif(
     sys.platform == "win32", reason="Windows runs these through cmd.exe"
 )
 
@@ -47,6 +52,7 @@ def workdir(tmp_path):
     return tmp_path
 
 
+@posix_only
 def test_discarded_stderr_leaves_stdout_intact(workdir):
     result = _run("cat good.txt missing.txt 2>/dev/null", workdir)
 
@@ -55,6 +61,7 @@ def test_discarded_stderr_leaves_stdout_intact(workdir):
     assert result["stderr"] == ""
 
 
+@posix_only
 def test_a_clean_command_still_succeeds_with_the_redirection(workdir):
     result = _run("cat good.txt 2>/dev/null", workdir)
 
@@ -64,6 +71,7 @@ def test_a_clean_command_still_succeeds_with_the_redirection(workdir):
     assert result["has_errors"] is False
 
 
+@posix_only
 def test_merged_stderr_arrives_on_stdout(workdir):
     result = _run("cat good.txt missing.txt 2>&1", workdir)
 
@@ -73,6 +81,7 @@ def test_merged_stderr_arrives_on_stdout(workdir):
     assert result["stderr"] == ""
 
 
+@posix_only
 def test_a_merged_segment_feeds_the_merged_stream_downstream(workdir):
     result = _run('cat good.txt missing.txt 2>&1 | grep "No such file"', workdir)
 
@@ -80,6 +89,7 @@ def test_a_merged_segment_feeds_the_merged_stream_downstream(workdir):
     assert MISSING in result["stdout"]
 
 
+@posix_only
 def test_a_discarding_segment_feeds_only_stdout_downstream(workdir):
     result = _run("cat good.txt missing.txt 2>/dev/null | wc -l", workdir)
 
@@ -89,6 +99,7 @@ def test_a_discarding_segment_feeds_only_stdout_downstream(workdir):
     assert result["has_errors"] is True
 
 
+@posix_only
 def test_discarding_stderr_does_not_launder_a_failure(workdir):
     result = _run("cat missing.txt 2>/dev/null", workdir)
 
@@ -98,6 +109,7 @@ def test_discarding_stderr_does_not_launder_a_failure(workdir):
     assert result["has_errors"] is True
 
 
+@posix_only
 def test_merging_stderr_does_not_launder_a_failure(workdir):
     result = _run("cat missing.txt 2>&1", workdir)
 
@@ -106,6 +118,7 @@ def test_merging_stderr_does_not_launder_a_failure(workdir):
     assert result["has_errors"] is True
 
 
+@posix_only
 def test_the_redirection_applies_to_its_own_segment_only(workdir):
     result = _run("cat missing.txt 2>/dev/null; cat missing.txt", workdir)
 
@@ -114,6 +127,7 @@ def test_the_redirection_applies_to_its_own_segment_only(workdir):
     assert result["has_errors"] is True
 
 
+@posix_only
 def test_a_quoted_redirection_stays_an_argument(workdir):
     (workdir / "log.txt").write_text("run pytest 2>&1 please\n")
 

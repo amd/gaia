@@ -17,6 +17,7 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import re as _re
 import threading
 import time as _time
@@ -27,7 +28,14 @@ from fastapi import HTTPException
 
 from gaia.agents.install_hints import agent_not_installed_message
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
+from gaia.ui.email_sidecar.profiles import (
+    _NO_PROFILE,
+    SIDECAR_AGENT_IDS,
+    api_version_supported,
+    profile_for,
+)
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -39,6 +47,7 @@ from .sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
+from .utils import managed_documents_dir
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +97,8 @@ def _register_agent_memory_ops(agent) -> None:
             _mem_router._consolidate_fn = agent.consolidate_old_sessions
         if hasattr(agent, "reconcile_memory"):
             _mem_router._reconcile_fn = agent.reconcile_memory
-    except Exception:
-        pass  # Non-fatal: dashboard ops degrade gracefully when not registered
+    except Exception as exc:
+        logger.warning("Could not register agent memory operations: %s", exc)
 
 
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
@@ -116,18 +125,65 @@ def get_agent_registry():
 # branch below. Since #2408, an installed sidecar IS registry-loadable (the
 # installer bridge registers it for the connectors grant flow), but its
 # factory always raises — chat dispatch must still go through the branch
-# below, never registry.create_agent().
-_SIDECAR_AGENT_TYPES = frozenset({"email"})
+# below, never registry.create_agent(). Derived from the relay profiles so a
+# new sidecar cannot be half-wired: #4161 shipped the flagship as a binary
+# sidecar and left this set at {"email"}, which sent every flagship turn into
+# registry.create_agent() and surfaced the stub factory's RuntimeError.
+_SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
+
+
+def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
+    """Whether *agent_type* must be served by its daemon sidecar this turn.
+
+    The same agent id can run either way, and which one you have depends on
+    how it was installed, not on its name:
+
+    * a Hub **binary** install ships no importable wheel, so the registry
+      holds only the stand-in whose factory raises — it MUST relay;
+    * a **wheel**/dev install registers a real factory and runs in-process,
+      which is the path ``gaia eval agent`` and a source checkout use.
+
+    Email is the exception and says so on its profile: its in-process loop was
+    retired in #2109, so it relays even when the wheel is importable.
+
+    The "no registration" branches below are defence in depth, not a live
+    path: ``_agent_type_unknown`` already rejects a non-always-relay sidecar
+    that does not resolve, so chat never reaches them today. They keep this
+    function correct on its own terms — a missing registration relays, unless
+    the registry recorded an import failure, in which case that recorded
+    reason is the answer the user needs and relaying would bury it.
+    """
+    profile = profile_for(agent_type)
+    if profile is None:
+        return False
+    if profile.always_relay:
+        return True
+    if registry is None:
+        return True
+    reg = registry.get(agent_type)
+    if reg is not None:
+        # Read the field, never getattr-with-a-default: defaulting a
+        # registration that somehow lacks it to "in-process" would silently
+        # restore the very failure this routing exists to prevent.
+        return bool(reg.is_sidecar)
+    return not registry.get_load_error(agent_type)
 
 
 def _agent_type_unknown(agent_type: str, registry) -> bool:
     """True when *agent_type* must be rejected as unknown before dispatch.
 
-    ``chat`` is the built-in default and sidecar types have their own dispatch
-    branch — neither goes through the registry. Everything else must resolve
-    in the registry or the caller returns the unavailable-agent error.
+    ``chat`` is the built-in default and never goes through the registry.
+    Email is exempt too: its relay does not need a registration to work.
+
+    Every other agent — the flagship included — must resolve in the registry.
+    An agent that was never installed is worth saying so about: "install it
+    from the Hub" beats asking the daemon to start a sidecar that isn't there
+    and surfacing whatever it says about the failure.
     """
-    if agent_type == "chat" or agent_type in _SIDECAR_AGENT_TYPES:
+    if agent_type == "chat":
+        return False
+    profile = profile_for(agent_type)
+    if profile is not None and profile.always_relay:
         return False
     return bool(registry) and not registry.get(agent_type)
 
@@ -149,6 +205,9 @@ _agent_cache: dict[str, dict] = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
+# Non-streaming turns are cut off after this long (seconds).
+_CHAT_TIMEOUT_SECONDS = 600.0
+
 # Alias so call-sites read naturally; the canonical value lives in database.py.
 _DB_DEFAULT_MODEL = SESSION_DEFAULT_MODEL
 
@@ -163,134 +222,14 @@ _mcp_status_lock = threading.Lock()
 model_load_lock = threading.Lock()
 
 
-# ── Lemonade error classification (chat-side helper) ───────────────────────
+# ── Lemonade error classification ──────────────────────────────────────────
 #
-# AgentSDK + the agent loop wrap LLM errors in their own exception types,
-# so a raw ``LemonadeError`` raised by the provider often arrives at the
-# chat layer as ``ValueError("...")`` or ``RuntimeError("...")`` with the
-# original message preserved as text.  We walk the exception chain and
-# also pattern-match the message string so retry decisions don't depend
-# on the exception type bubbling through unchanged.
+# The classifier itself lives with the error classes it returns, in
+# ``gaia.llm.providers.lemonade``, so the CLI can reach it without fastapi.
 
-
-def _classify_chat_exception(exc: BaseException):
-    """Return a typed ``LemonadeError`` instance if *exc* (or anything in
-    its ``__cause__`` chain) corresponds to a known Lemonade failure mode.
-
-    Returns ``None`` when the exception is unrelated.  Used by the chat
-    streaming/non-streaming paths to decide whether to auto-retry and
-    what user-facing message to surface.
-    """
-    from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
-        LemonadeCloudAccountError,
-        LemonadeContextOverflowError,
-        LemonadeError,
-        LemonadeModelNotFoundError,
-        LemonadeModelNotLoadedError,
-        LemonadeNetworkError,
-        LemonadeUpstreamTimeoutError,
-    )
-
-    # 1. Direct typed match anywhere in the cause chain.
-    # Walk both ``__cause__`` (explicit ``raise ... from e``) and ``__context__``
-    # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
-    # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
-    # for handlers that re-raise without ``from``.
-    #
-    # Cycle protection: tracking visited ids defends against pathological
-    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
-    # Without it the walker would loop forever and freeze the chat handler.
-    cur: Optional[BaseException] = exc
-    _seen: set = set()
-    while cur is not None and id(cur) not in _seen:
-        _seen.add(id(cur))
-        if isinstance(cur, LemonadeError):
-            return cur
-        cur = cur.__cause__ or cur.__context__
-
-    # 2. Substring match on the stringified exception — covers the case
-    # where AgentSDK re-raises with ``str(original)`` as the message,
-    # losing the typed-class info.
-    raw = str(exc)
-    text = raw.lower()
-    # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412. The
-    # message itself is kept: it names the provider and where to add funds.
-    refused = _re.search(
-        r"[^\n:]*refused the request \(http 4(?:02|12)\):[^\n]*", raw, _re.IGNORECASE
-    )
-    if refused:
-        return LemonadeCloudAccountError(user_message=refused.group(0).strip())
-    if "no model loaded" in text or "model_not_loaded" in text:
-        return LemonadeModelNotLoadedError()
-    # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
-    # model was never pulled, so this is NOT retryable and NOT the same as
-    # "not loaded". Naming the missing model is actionable (#2243).
-    # "was not found" is anchored to a nearby "model" token so an unrelated
-    # 404 ("file X was not found") isn't mislabelled as a missing model.
-    if (
-        "model_not_found" in text
-        or _re.search(r"\bmodel\b[^\n]{0,80}?\bwas not found\b", text)
-        or ("model not found" in text and "not loaded" not in text)
-    ):
-        m = _re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
-        return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
-    if "exceed_context_size" in text or "exceeds the available context size" in text:
-        err = LemonadeContextOverflowError()
-        # If the textual error mentions a small n_ctx, the model was
-        # loaded with the wrong context size — reload via pre-flight
-        # will fix it, so make the error retryable.
-        m = _re.search(r"context size \((\d+) tokens?\)", text)
-        if not m:
-            m = _re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
-        if m:
-            try:
-                n_ctx = int(m.group(1))
-                # Threshold tracks the chat / rag profile default
-                # (65536) — see lemonade.py:_classify_lemonade_response.
-                if 0 < n_ctx < 65536:
-                    err.retryable = True
-            except ValueError:
-                pass
-        return err
-    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
-    # hung) from real connectivity failures (#1030). The user-facing remediation
-    # is very different.
-    is_timeout = (
-        "timeout was reached" in text
-        or "timed out" in text
-        or "operation_timeout" in text
-    )
-    is_unreachable = (
-        "connection refused" in text
-        or "could not resolve host" in text
-        or "no route to host" in text
-        or "couldn't connect" in text
-    )
-    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between
-    # models or hit an internal recovery state. ``LemonadeClient._send_request``
-    # raises ``LemonadeClientError("Request failed with status 503: ...")`` /
-    # 500/502/504 for these. Pre-iter2 these fell through to the generic
-    # "trouble connecting" UI fallback and the chat layer never retried —
-    # so a transient model-swap stall surfaced as a hard FAIL. Treat them
-    # as the network-flavour transient: retryable=True kicks the chat
-    # layer's auto-reload + one-retry path, which usually recovers.
-    is_backend_5xx = bool(
-        _re.search(r"failed with status 5\d\d", text)
-        or "internal server error" in text
-        or "service unavailable" in text
-        or "bad gateway" in text
-        or "gateway timeout" in text
-    )
-    if is_timeout and not is_unreachable:
-        return LemonadeUpstreamTimeoutError()
-    if (
-        "network_error" in text
-        or "curl error" in text
-        or is_unreachable
-        or is_backend_5xx
-    ):
-        return LemonadeNetworkError()
-    return None
+#: Kept as a module attribute so the many call sites below (and their tests)
+#: keep importing it from here.
+_classify_chat_exception = classify_lemonade_exception
 
 
 # ── Auto-titling ────────────────────────────────────────────────────────────
@@ -478,6 +417,47 @@ async def _maybe_update_session_title(
         logger.debug("Auto-title DB update failed: %s", exc)
 
 
+# Eval-only provider opt-in (plan §5c): lets `gaia eval agent` drive a
+# Claude-backed agent on machines that must never start Lemonade. Explicit by
+# design — no value means exactly the current Lemonade behaviour, and a bad
+# value is a construction-time error, never a silent fallback.
+_EVAL_PROVIDER_ENV = "GAIA_EVAL_AGENT_PROVIDER"
+_EVAL_CLAUDE_MODEL_ENV = "GAIA_EVAL_CLAUDE_MODEL"
+_VALID_EVAL_PROVIDERS = ("claude",)
+
+
+def _eval_provider_kwargs() -> dict:
+    """Provider kwargs for registry.create_agent from the eval opt-in env vars.
+
+    Returns ``{}`` when ``GAIA_EVAL_AGENT_PROVIDER`` is unset/empty (the normal
+    UI path). ``claude`` requires ``GAIA_EVAL_CLAUDE_MODEL`` and yields
+    ``use_claude=True`` + ``claude_model=<value>``; the base ``Agent.__init__``
+    then skips Lemonade entirely. Any other value raises.
+
+    Raises:
+        ValueError: unknown provider value, or provider=claude with no model —
+            both actionable, neither falls back to Lemonade.
+    """
+    provider = os.environ.get(_EVAL_PROVIDER_ENV, "").strip().lower()
+    if not provider:
+        return {}
+    if provider not in _VALID_EVAL_PROVIDERS:
+        raise ValueError(
+            f"{_EVAL_PROVIDER_ENV}={provider!r} is not a supported eval agent "
+            f"provider. Valid values: {', '.join(_VALID_EVAL_PROVIDERS)} (or unset "
+            "the variable for the default Lemonade backend). Refusing to guess a "
+            "backend."
+        )
+    claude_model = os.environ.get(_EVAL_CLAUDE_MODEL_ENV, "").strip()
+    if not claude_model:
+        raise ValueError(
+            f"{_EVAL_PROVIDER_ENV}=claude requires {_EVAL_CLAUDE_MODEL_ENV} to name "
+            "the Claude model (e.g. claude-haiku-4-5). Set both variables, or unset "
+            f"{_EVAL_PROVIDER_ENV} for the default Lemonade backend."
+        )
+    return {"use_claude": True, "claude_model": claude_model}
+
+
 def _build_create_kwargs(
     *,
     custom_model: str | None,
@@ -504,9 +484,22 @@ def _build_create_kwargs(
     requested device is validated at runtime. Agent factories filter unknown
     kwargs via ``dataclasses.fields``, so this is safe for agents whose config
     doesn't declare them.
+
+    ``GAIA_EVAL_AGENT_PROVIDER=claude`` (eval-only opt-in, see
+    :func:`_eval_provider_kwargs`) additionally passes ``use_claude=True`` and
+    ``claude_model`` so the eval harness can run agents off-Lemonade.
     """
     suffix = " (streaming)" if streaming else ""
     kwargs: dict = {"silent_mode": not streaming, "debug": False}
+    provider_kwargs = _eval_provider_kwargs()
+    if provider_kwargs:
+        kwargs.update(provider_kwargs)
+        logger.info(
+            "create_agent: %s=claude -> use_claude=True, claude_model=%s%s",
+            _EVAL_PROVIDER_ENV,
+            provider_kwargs["claude_model"],
+            suffix,
+        )
     if streaming:
         kwargs["streaming"] = True
     if device is not None:
@@ -939,12 +932,8 @@ def _resolve_rag_paths(db: ChatDatabase, document_ids: list) -> tuple:
 
 
 def _managed_documents_dir() -> Path:
-    """The Agent UI's own documents folder — the session's writable scratch space.
-
-    Resolved late rather than imported as a constant so a test that relocates
-    ``Path.home()`` gets the relocated directory.
-    """
-    return (Path.home() / ".gaia" / "documents").resolve()
+    """The Agent UI's own documents folder — the session's writable scratch space."""
+    return managed_documents_dir().resolve()
 
 
 def _unsafe_directory_grant_reason(directory: Path) -> str:
@@ -1070,24 +1059,12 @@ def _session_mail_provider(session: dict) -> str | None:
     return session.get("mail_provider") or None
 
 
-# Minimum sidecar contract version the /query relay requires (#2109). The
-# daemon's own version gate only pins MAJOR (the spec's expected_api_major),
-# so a pre-2.4 Hub binary passes that handshake and then 404s every /query
-# call — this finer MAJOR.MINOR check catches it before the first POST.
-_EMAIL_QUERY_MIN_API_VERSION = (2, 4)
-
-
-def _email_query_version_supported(api_version: str | None) -> bool:
-    """True when ``api_version`` is at least the /query relay's floor (2.4)."""
-    if not api_version:
-        return False
-    parts = str(api_version).split(".")
-    try:
-        major = int(parts[0])
-        minor = int(parts[1]) if len(parts) > 1 else 0
-    except (ValueError, IndexError):
-        return False
-    return (major, minor) >= _EMAIL_QUERY_MIN_API_VERSION
+# The per-agent /query contract floor and its upgrade copy live on the relay
+# profile (``gaia.ui.email_sidecar.profiles``); ``api_version_supported``
+# applies it. The daemon's own gate only pins MAJOR (the spec's
+# expected_api_major), so a too-old Hub binary passes that handshake and then
+# 404s every /query call — the profile's finer MAJOR.MINOR check catches it
+# before the first POST.
 
 
 def _query_context_from_history(history_pairs: list) -> list[dict]:
@@ -1111,13 +1088,65 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
-def _dispatch_email_query(
+def _restore_model_history(agent, db, session_id: str, query: str) -> None:
+    """Reserve the current prompt and output before admitting completed turns."""
+    from gaia.agents.base.history import (
+        history_budget,
+        select_history,
+        text_tool_history,
+        transcript_turns,
+    )
+
+    turns = transcript_turns(db.get_context_messages(session_id))
+    if (
+        hasattr(agent, "_uses_native_tool_calls")
+        and not agent._uses_native_tool_calls()
+    ):
+        turns = text_tool_history(turns)
+    agent.conversation_history = select_history(turns, history_budget(agent, query))
+
+
+def _probe_is_only_unreachable(init_body: dict | None) -> bool:
+    """True when the sidecar's ``/init`` 503 is ONLY "cannot reach Lemonade".
+
+    That is the one cause worth continuing past: the probe reports it against
+    an auth-protected Lemonade whose ``/query`` answers normally. The other
+    two causes it reports — the model is not downloaded, the server is below
+    the required version — are not false negatives, and a turn that proceeds
+    past them fails deeper with a worse message than the hint already gives.
+    """
+    lemonade = (init_body or {}).get("lemonade") or {}
+    if lemonade.get("reachable") is not False:
+        return False
+    # Unreachable is the ONLY complaint: nothing can be known about the model
+    # or the version until the server answers, so those are not evidence.
+    return True
+
+
+def _host_corrected_hint(hint: str | None) -> str | None:
+    """Replace a sidecar hint that names a command this host does not have.
+
+    An agent package ships its own copy of the "start Lemonade" advice, and an
+    older one still names ``lemonade-server serve`` — a CLI that Lemonade
+    10.7 removed. The host knows what is actually installed, so it substitutes
+    its own answer rather than relaying one the user cannot act on.
+    """
+    if not hint or "lemonade-server serve" not in hint:
+        return hint
+    from gaia.llm.lemonade_launcher import describe_start_hint
+
+    return describe_start_hint().instruction
+
+
+def _dispatch_sidecar_query(
     sse_handler,
     request: ChatRequest,
     history_pairs: list,
     model_id: str | None,
+    agent_type: str,
+    session_id: str | None = None,
 ) -> None:
-    """Handle ``agent_type == "email"`` for the streaming chat producer (#2109).
+    """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1136,52 +1165,81 @@ def _dispatch_email_query(
     """
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
-    from gaia.ui.email_sidecar.relay import (
-        EMAIL_QUERY_VERSION_UPGRADE_MESSAGE,
-        relay_query,
-    )
+    from gaia.ui.email_sidecar.relay import relay_query
+
+    profile = profile_for(agent_type)
+    if profile is None:
+        # Unreachable via the dispatch branches (both gate on
+        # _SIDECAR_AGENT_TYPES, which IS the profile registry) — loud rather
+        # than a silent no-answer turn if a future caller bypasses them.
+        raise ValueError(
+            f"'{agent_type}' has no sidecar relay profile; it cannot be "
+            f"relayed. Known sidecars: {sorted(SIDECAR_AGENT_IDS)}."
+        )
 
     try:
-        handle = daemon_client.acquire_handle()
+        handle = daemon_client.acquire_handle(agent_type)
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
 
-    if not _email_query_version_supported(handle.api_version):
+    if not api_version_supported(profile, handle.api_version):
         sse_handler._emit(
-            {"type": "agent_error", "content": EMAIL_QUERY_VERSION_UPGRADE_MESSAGE}
+            {"type": "agent_error", "content": profile.version_upgrade_message}
         )
         return
 
     proxy = handle.proxy()
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
-    # /v1/email/init is contract ("not ready yet"), not a transport failure.
+    # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
     try:
         status_code, init_body = proxy.init()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
     if status_code != 200:
-        hint = (init_body or {}).get("hint")
-        msg = (
-            "The email agent isn't ready yet"
-            + (f": {hint}." if hint else ".")
-            + " Finish setup from the Email agent card, then retry."
+        hint = _host_corrected_hint((init_body or {}).get("hint"))
+        if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
+            msg = (
+                f"The {profile.display_name} agent isn't ready yet"
+                + (f": {hint}." if hint else ".")
+                + f" Finish setup from the {profile.display_name} agent card, "
+                "then retry."
+            )
+            sse_handler._emit({"type": "agent_error", "content": msg})
+            return
+        # Advisory only: the probe is documented as unreliable (see
+        # RelayProfile.readiness_is_blocking), so it is recorded and framed as
+        # a probe result rather than stated as fact, and the run continues.
+        logger.info(
+            "chat: %s sidecar reported not ready (continuing): %s",
+            agent_type,
+            hint or "no hint given",
         )
-        sse_handler._emit({"type": "agent_error", "content": msg})
-        return
+        if hint:
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "message": f"Readiness check reported: {hint} — continuing.",
+                }
+            )
 
     if sse_handler.cancelled.is_set():
         return
 
     context = _query_context_from_history(history_pairs)
+    # Known gap: session-attached documents do not cross this hop. The body
+    # carries the transcript, not rag_file_paths, so a relayed agent cannot
+    # see a file the user attached in this session (#4166).
     relay_query(
         sse_handler,
         proxy,
         query=request.message,
         context=context,
         model_id=model_id,
+        profile=profile,
+        session_id=session_id,
     )
 
 
@@ -1295,6 +1353,15 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     the one-shot retry in the streaming worker (see ``_run_agent``).
     """
     if not model_id:
+        return
+    # Provider override is authoritative: with GAIA_EVAL_AGENT_PROVIDER=claude
+    # the agent runs on Claude, and this Lemonade preflight would contact — and
+    # possibly load a model into — a backend the eval must never touch.
+    if _eval_provider_kwargs():
+        logger.info(
+            "Pre-flight skipped: %s=claude — Lemonade is not in use",
+            _EVAL_PROVIDER_ENV,
+        )
         return
     try:
         import httpx
@@ -1441,7 +1508,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
 
 async def _get_chat_response(
-    db: ChatDatabase, session: dict, request: ChatRequest
+    db: ChatDatabase,
+    session: dict,
+    request: ChatRequest,
+    *,
+    model_messages: list | None = None,
 ) -> str:
     """Get a non-streaming chat response from the ChatAgent.
 
@@ -1451,12 +1522,10 @@ async def _get_chat_response(
     Runs the synchronous agent in a thread pool executor
     to avoid blocking the async event loop.
     """
+    # Set on timeout so the agent loop stops at its next step boundary.
+    cancel_event = threading.Event()
 
     def _do_chat():
-        # Build conversation history from database
-        messages = db.get_recent_messages(request.session_id, limit=20)
-        history_pairs = _build_history_pairs(messages)
-
         # Resolve document IDs to file paths.
         document_ids = session.get("document_ids", [])
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
@@ -1534,7 +1603,11 @@ async def _get_chat_response(
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
         if cached_agent is not None:
+            from gaia.agents.base.console import SilentConsole
+
             agent = cached_agent
+            # A prior streaming turn leaves its dead SSE console behind.
+            agent.console = SilentConsole()
             agent._register_tools()
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
@@ -1586,19 +1659,20 @@ async def _get_chat_response(
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
             _register_agent_memory_ops(agent)
-        elif agent_type == "email":
-            # #2109: email chat is served exclusively by the sidecar's
-            # canonical /query loop, which is a streaming-only SSE contract
-            # (see the streaming branch in _stream_chat_impl). There is no
+        elif _should_relay_to_sidecar(agent_type, _agent_registry):
+            # #2109: a sidecar agent is served exclusively by its canonical
+            # /query loop, which is a streaming-only SSE contract (see the
+            # streaming branch in _stream_chat_impl). There is no
             # non-streaming shape to relay, and zero verified callers exist
             # today (the frontend hardcodes stream=true; ChatRequest.stream
             # defaults True). Fail loud rather than ship a speculative,
             # untested drained-response path.
+            named = (profile_for(agent_type) or _NO_PROFILE).display_name
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Email chat requires streaming (stream=true); "
-                    "non-streaming email chat is not supported."
+                    f"The {named} agent requires streaming (stream=true); "
+                    f"non-streaming {named} chat is not supported."
                 ),
             )
         else:
@@ -1681,22 +1755,7 @@ async def _get_chat_response(
             memory_globally_off = db.get_setting("memory_enabled", "false") == "false"
             agent._incognito = memory_globally_off or bool(session.get("private", 0))
 
-        # Restore conversation history (limited to prevent context overflow).
-        # Always re-inject from DB so the history is consistent with what was
-        # persisted — regardless of whether the agent was cached or fresh.
-        # 5 pairs × 2 msgs × ~500 tokens ≈ 5 000 tokens — well within 32K.
-        # 2000-char truncation preserves enough assistant context for cross-turn
-        # recall, pronoun resolution, and multi-step planning.
-        _MAX_PAIRS = 5
-        _MAX_CHARS = 2000
-        agent.conversation_history = []
-        for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
-            u = user_msg[:_MAX_CHARS]
-            a = assistant_msg[:_MAX_CHARS]
-            if len(assistant_msg) > _MAX_CHARS:
-                a += "... (truncated)"
-            agent.conversation_history.append({"role": "user", "content": u})
-            agent.conversation_history.append({"role": "assistant", "content": a})
+        _restore_model_history(agent, db, session_id, request.message)
 
         # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
@@ -1704,6 +1763,8 @@ async def _get_chat_response(
         # the existing 100-900s silent-hang protection for all code paths.
         effective = _effective_model(agent, model_id)
         _maybe_load_expected_model(effective)
+
+        agent._cancel_event = cancel_event
 
         # One automatic retry on transient Lemonade failures (model
         # evicted between turns, network blip).  Mirror of the streaming
@@ -1724,8 +1785,8 @@ async def _get_chat_response(
             )
             try:
                 _maybe_load_expected_model(effective)
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Model reload before retry failed: %s", exc)
             try:
                 result = agent.process_query(request.message)
             except Exception as second_exc:  # pylint: disable=broad-except
@@ -1737,6 +1798,8 @@ async def _get_chat_response(
                 raise
 
         if isinstance(result, dict):
+            if model_messages is not None:
+                model_messages.extend(result.get("model_messages", []))
             # process_query returns {"result": "...", "status": "...", ...}
             # Use explicit None check so an intentional empty string isn't
             # overridden by fallback to "answer".
@@ -1748,15 +1811,22 @@ async def _get_chat_response(
         return _clean_answer_json(result_str)
 
     try:
-        loop = asyncio.get_running_loop()
-        # Apply a 600-second timeout to prevent indefinite hangs when the
-        # LLM gets stuck in a tool loop or Lemonade becomes unresponsive
-        return await asyncio.wait_for(
-            loop.run_in_executor(None, _do_chat),
-            timeout=600.0,
-        )
+        worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
+        try:
+            done, _ = await asyncio.wait({worker}, timeout=_CHAT_TIMEOUT_SECONDS)
+        finally:
+            if not worker.done():
+                cancel_event.set()
+                # The caller's session lock must outlive the worker thread.
+                await asyncio.wait({worker})
+        if not done:
+            late_error = worker.exception()
+            if late_error is not None:
+                logger.warning("Timed-out chat worker then failed: %s", late_error)
+            raise asyncio.TimeoutError
+        return worker.result()
     except asyncio.TimeoutError:
-        logger.error("Chat response timed out after 600 seconds")
+        logger.error("Chat response timed out after %s seconds", _CHAT_TIMEOUT_SECONDS)
         return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
     except HTTPException:
         # A deliberate, actionable rejection (e.g. the email non-streaming
@@ -1809,7 +1879,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     # and the producer thread is actually reaped (see agent._cancel_event).
     cancel_event = threading.Event()
 
-    def _cleanup_stream():
+    async def _cleanup_stream():
         nonlocal cleanup_done
         if cleanup_done:
             return
@@ -1822,9 +1892,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             sse_handler.close_active_relay_response()
         _active_sse_handlers.pop(session_id, None)
         if producer is not None:
-            producer.join(timeout=5.0)
+            await asyncio.to_thread(producer.join, 5.0)
             if producer.is_alive():
-                logger.warning("Producer thread still running after stream ended")
+                logger.warning(
+                    "Producer thread still running after stream ended; "
+                    "holding the session until it exits"
+                )
+                # The run (and so the session lock) must outlive the producer.
+                await asyncio.to_thread(producer.join)
 
     try:
         # Create SSE handler for streaming events
@@ -1851,9 +1926,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             ": " + "x" * 512 + "\n\n"
         )
 
-        # Build conversation history
-        messages = db.get_recent_messages(request.session_id, limit=20)
-        history_pairs = _build_history_pairs(messages)
+        # Only the email relay consumes text pairs; other agents restore traces below.
+        history_pairs = (
+            _build_history_pairs(db.get_context_messages(request.session_id))
+            if (request.agent_type or session.get("agent_type")) == "email"
+            else []
+        )
 
         # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
@@ -2102,23 +2180,26 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         }
                     )
 
-                elif agent_type == "email":
-                    # #2109: email chat is a SELF-CONTAINED early-exit path —
-                    # it relays the sidecar's canonical /query loop and
+                elif _should_relay_to_sidecar(agent_type, _agent_registry):
+                    # #2109: a sidecar turn is a SELF-CONTAINED early-exit
+                    # path — it relays the sidecar's canonical /query loop and
                     # returns HERE, before the shared trunk below (which
                     # assumes a constructed in-process `agent` and calls
                     # `agent.process_query`/`_maybe_load_expected_model`).
                     # The sidecar owns its own model lifecycle; nothing below
-                    # this branch may run for an email turn.
+                    # this branch may run for a sidecar turn.
                     logger.info(
-                        "chat: relaying email query (sidecar) for session %s",
+                        "chat: relaying %s query (sidecar) for session %s",
+                        agent_type,
                         session_id[:8],
                     )
-                    _dispatch_email_query(
+                    _dispatch_sidecar_query(
                         sse_handler,
                         request,
                         history_pairs,
                         model_id,
+                        agent_type,
+                        session_id=session_id,
                     )
                     return
 
@@ -2238,28 +2319,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
-                # -- Phase 4: Conversation history --
-                # Always re-inject from DB so history is consistent regardless of
-                # whether the agent was cached or freshly constructed.  Clears any
-                # stale history accumulated in prior turns of a cached agent.
-                # 5 pairs × 2 msgs × ~500 tokens ≈ 5 000 tokens — well within 32K.
-                _MAX_HISTORY_PAIRS = 5
-                _MAX_MSG_CHARS = 2000
-                agent.conversation_history = []
-                if history_pairs:
-                    recent = history_pairs[-_MAX_HISTORY_PAIRS:]
-                    for user_msg, assistant_msg in recent:
-                        # Truncate to keep context manageable
-                        u = user_msg[:_MAX_MSG_CHARS]
-                        a = assistant_msg[:_MAX_MSG_CHARS]
-                        if len(assistant_msg) > _MAX_MSG_CHARS:
-                            a += "... (truncated)"
-                        agent.conversation_history.append(
-                            {"role": "user", "content": u}
-                        )
-                        agent.conversation_history.append(
-                            {"role": "assistant", "content": a}
-                        )
+                _restore_model_history(agent, db, session_id, request.message)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -2302,10 +2362,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         _maybe_load_expected_model(
                             _effective_model(agent, model_id), sse_handler
                         )
-                    except Exception:  # pylint: disable=broad-except
-                        # Reload failure is non-fatal — the retry might
-                        # still succeed if Lemonade caught up on its own.
-                        pass
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning("Model reload before retry failed: %s", exc)
                     # Surface a brief status line to the SSE so the user
                     # sees we're recovering, not silently retrying.
                     sse_handler._emit(
@@ -2333,6 +2391,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     _time.monotonic() - t_query,
                 )
                 if isinstance(result, dict):
+                    result_holder["model_messages"] = result.get("model_messages")
                     val = result.get("result")
                     result_holder["answer"] = (
                         val if val is not None else result.get("answer", "")
@@ -2619,7 +2678,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         turn_cancelled = sse_handler.cancelled.is_set()
 
         # Signal cancellation (handles client disconnect) then wait for producer.
-        _cleanup_stream()
+        await _cleanup_stream()
 
         # Finalize all captured steps (mark as inactive)
         for s in captured_steps:
@@ -2748,20 +2807,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     exc,
                 )
 
-            if (
-                persisted_policy_block_msg_id is not None
-                and full_response == persisted_policy_block_content
-            ):
-                msg_id = persisted_policy_block_msg_id
-            else:
-                msg_id = db.upsert_message(
-                    request.session_id,
-                    persisted_policy_block_msg_id,
-                    "assistant",
-                    full_response,
-                    agent_steps=captured_steps if captured_steps else None,
-                    inference_stats=inference_stats,
-                )
+            msg_id = db.upsert_message(
+                request.session_id,
+                persisted_policy_block_msg_id,
+                "assistant",
+                full_response,
+                agent_steps=captured_steps if captured_steps else None,
+                inference_stats=inference_stats,
+                model_messages=result_holder.get("model_messages"),
+            )
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
@@ -2831,6 +2885,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     "assistant",
                     content,
                     agent_steps=steps_to_persist,
+                    model_messages=result_holder.get("model_messages"),
                 )
                 done_event = {
                     "type": "done",
@@ -2841,16 +2896,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
-        _cleanup_stream()
+        await _cleanup_stream()
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Could not persist chat error: %s", exc)
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
     finally:
-        _cleanup_stream()
+        await _cleanup_stream()
 
 
 async def _run_chat_lifecycle(
@@ -2873,8 +2928,8 @@ async def _run_chat_lifecycle(
         from gaia.ui.agent_loop import agent_loop
 
         agent_loop.notify_user_message(request.session_id)
-    except Exception:  # pylint: disable=broad-except
-        pass
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Could not notify agent loop: %s", exc)
 
 
 async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):

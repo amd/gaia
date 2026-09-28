@@ -385,3 +385,73 @@ class TestPromptSectionGating:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# Scratch directory
+# ---------------------------------------------------------------------------
+
+
+class TestChatAgentScratchDirectory:
+    """The agent owns one scratch directory for throwaway files."""
+
+    def test_scratch_dir_is_created_granted_and_announced(self):
+        agent = _build_agent()
+        try:
+            scratch = agent.scratch_dir
+            assert scratch.is_dir()
+            assert scratch.name.startswith("gaia-scratch-")
+            assert agent.path_validator.is_path_allowed(
+                str(scratch / "run_tests.py"), prompt_user=False
+            )
+            assert str(scratch) in agent._get_system_prompt()
+            assert scratch == agent.path_validator.scratch_dir
+        finally:
+            agent.__del__()
+
+    def test_profile_without_file_writing_tools_gets_no_scratch_dir(self):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        # "chat" reads the shared registry; earlier agents' tools would leak in.
+        with patch.dict(_TOOL_REGISTRY, clear=True):
+            agent = _build_agent(prompt_profile="chat")
+            try:
+                assert "write_file" not in agent._tools_registry
+                assert agent.scratch_dir is None
+                assert agent.path_validator.scratch_dir is None
+                assert "Scratch directory" not in agent._get_system_prompt()
+            finally:
+                agent.__del__()
+
+    def test_cached_prompt_includes_the_scratch_line(self):
+        agent = _build_agent()
+        try:
+            assert str(agent.scratch_dir) in agent.system_prompt
+        finally:
+            agent.__del__()
+
+    def test_execute_python_file_denial_names_scratch_dir(self):
+        import tempfile
+        from pathlib import Path
+
+        agent = _build_agent()
+        try:
+            execute = agent._tools_registry["execute_python_file"]["function"]
+            outside = Path(tempfile.gettempdir()) / "gaia-not-scratch" / "run.py"
+            with patch.object(
+                agent.path_validator, "_prompt_user_for_access", return_value=False
+            ):
+                result = execute(str(outside))
+            assert result["status"] == "error"
+            assert str(agent.scratch_dir) in result["error"]
+        finally:
+            agent.__del__()
+
+    def test_scratch_dir_is_removed_on_cleanup(self):
+        agent = _build_agent()
+        scratch = agent.scratch_dir
+        (scratch / "run_tests.py").write_text("print(1)\n", encoding="utf-8")
+        agent.__del__()
+        assert not scratch.exists()
+        assert agent.scratch_dir is None
+        agent.__del__()

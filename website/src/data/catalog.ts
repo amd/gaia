@@ -87,7 +87,7 @@ export interface Agent {
   eval_score?: number;
   // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
   // distributed as an npm client + frozen sidecar. Present → GAIA install is
-  // shown first, with npm as the embed path. Absent → pip/GAIA (language-driven).
+  // shown first, with npm as the embed path. Absent → GAIA and source installs.
   npm_package?: string;
   // Localhost URL of the agent's interactive playground, served by its sidecar
   // (e.g. "http://127.0.0.1:8131/v1/email/playground"). Only resolves once the
@@ -211,13 +211,12 @@ async function loadCatalog(): Promise<CatalogFile> {
  * Every catalog entry, all lanes, sorted: verified first, then alphabetical.
  * Use this when you genuinely want everything (e.g. generating a page per
  * published package); use getAgentPackages()/getSkills() to render one lane.
+ *
+ * Every entry the hub serves is rendered — there is no hide list. The home
+ * page offers the Agent UI desktop app as one of two primary downloads, so
+ * suppressing its /hub page would leave a visitor who clicks Download with
+ * nowhere on the site that says what it needs or what changed in it.
  */
-// Published to the hub, deliberately absent from the site: the Agent UI desktop
-// app is no longer maintained, and the terminal hub replaced it as the way in.
-// Filtered here rather than per-page so it cannot reappear in a listing, a
-// category pill, a stat count, or a generated /hub/<id> page.
-const HIDDEN_FROM_SITE = new Set(["agent-ui"]);
-
 export async function getCatalog(): Promise<Agent[]> {
   const { agents } = await loadCatalog();
   const tierRank: Record<SecurityTier, number> = {
@@ -225,14 +224,12 @@ export async function getCatalog(): Promise<Agent[]> {
     community: 1,
     experimental: 2,
   };
-  return [...agents]
-    .filter((a) => !HIDDEN_FROM_SITE.has(a.id))
-    .sort((a, b) => {
-      if (a.deprecated !== b.deprecated) return a.deprecated ? 1 : -1;
-      const tier = tierRank[a.security_tier] - tierRank[b.security_tier];
-      if (tier !== 0) return tier;
-      return a.name.localeCompare(b.name);
-    });
+  return [...agents].sort((a, b) => {
+    if (a.deprecated !== b.deprecated) return a.deprecated ? 1 : -1;
+    const tier = tierRank[a.security_tier] - tierRank[b.security_tier];
+    if (tier !== 0) return tier;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /**
@@ -263,6 +260,20 @@ export interface PlatformBinary {
   url: string;
 }
 
+/**
+ * One artifact exactly as the manifest publishes it. `path` is the hub's own
+ * object key (`agents/<id>/<version>/<filename>`) and
+ * workers/agent-hub/schemas/manifest.schema.json requires it on every
+ * artifact — so it is the thing a download URL is built from, never a shape
+ * this file re-derives. There is no `url` field to use instead.
+ */
+interface HubArtifact {
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  path?: string;
+}
+
 export interface ComponentRelease {
   version: string;
   binaries: PlatformBinary[];
@@ -275,6 +286,8 @@ const componentReleases = new Map<string, Promise<ComponentRelease>>();
  * `agents/<id>/manifest.json`. index.json carries a single representative
  * download size, not the artifact list, so a per-platform download link has to
  * come from here.
+ *
+ * Each URL is the hub origin joined to the artifact's own published `path`.
  *
  * Fails loudly for the same reason the catalog does: a download button built
  * from stale or guessed filenames 404s on the visitor, and the filenames are
@@ -311,7 +324,7 @@ export async function getComponentRelease(
     }
     const manifest = (await res.json()) as {
       latest_version?: string;
-      versions?: Record<string, { artifacts?: Omit<PlatformBinary, "url">[] }>;
+      versions?: Record<string, { artifacts?: HubArtifact[] }>;
     };
     const version = manifest.latest_version;
     if (!version) {
@@ -331,10 +344,25 @@ export async function getComponentRelease(
     );
     return {
       version,
-      binaries: artifacts.map((a) => ({
-        ...a,
-        url: `${base}/agents/${id}/${version}/${a.filename}`,
-      })),
+      binaries: artifacts.map((a) => {
+        // The hub's own object key, never a re-derived one: a CDN move or a
+        // per-OS subdirectory would 404 every link on the site silently.
+        if (!a.path) {
+          throw new Error(
+            `[catalog] The '${id}' artifact '${a.filename}' at ${version} publishes no ` +
+              `'path'. manifest.schema.json requires it on every artifact and the download ` +
+              `URL is built from it — the site will not guess an object key. Republish ` +
+              `'${id}' from a hub Worker that emits complete artifacts (see ${url} and ` +
+              `workers/agent-hub/schemas/manifest.schema.json).`,
+          );
+        }
+        return {
+          filename: a.filename,
+          sha256: a.sha256,
+          size_bytes: a.size_bytes,
+          url: `${base}/${a.path.replace(/^\/+/, "")}`,
+        };
+      }),
     };
   };
 
@@ -476,8 +504,8 @@ export function isNpmSidecar(agent: Agent): boolean {
  *    client + frozen binary, NOT a PyPI wheel. We show GAIA first (recommended)
  *    and npm as the embed option — no broken `pip install` (there's no wheel)
  *    and no unverified source build.
- *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
- *    source build (language-driven, the long-standing default).
+ *  - Otherwise: the GAIA app install and a source build. Implementation
+ *    language does not prove that a package was published to PyPI.
  */
 export function installMethods(agent: Agent): InstallMethod[] {
   // A skill is not an agent package: it installs into ~/.gaia/skills/ and is
@@ -545,14 +573,6 @@ export function installMethods(agent: Agent): InstallMethod[] {
       note: "Recommended — installs into your GAIA app and registers the agent automatically.",
     },
   ];
-  if (agent.language === "python") {
-    methods.push({
-      key: "pip",
-      label: "pip",
-      command: `pip install gaia-agent-${agent.id}`,
-      note: "Python package from PyPI. Discovered via the gaia.agent entry-point group.",
-    });
-  }
   methods.push({
     key: "source",
     label: "Source",

@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -271,6 +272,162 @@ def test_select_skill_tools_empty_kwarg_on_graceful_absence():
     assert kwargs["skill_tools"] == []
 
 
+# ── loaded skills feed the SKILL signal (#3901) ───────────────────────────
+
+_HUB_SKILLS = Path(__file__).resolve().parents[2] / "hub" / "skills"
+
+
+def _skill_agent(tmp_path, loader, registry, *skill_dirs):
+    """A bare ChatAgent that can really ``load_skill`` from *skill_dirs*."""
+    from gaia.skills.manager import SkillManager
+
+    a = _bare_agent(
+        tool_loader=loader,
+        _instance_tools=None,
+        _loaded_skills=None,
+        _active_skill_filter=None,
+        _granted_binaries=None,
+        REQUIRED_CONNECTORS=[],
+        _skill_manager=SkillManager(
+            agent_skill_dirs=list(skill_dirs),
+            user_skills_root=tmp_path / "user-skills",
+            claude_skill_dirs=[tmp_path / "claude-skills"],
+        ),
+    )
+    a.rebuild_system_prompt = lambda: None
+    a._registry = registry
+    return a
+
+
+def _registry(*names):
+    return {n: {"description": f"{n} tool"} for n in names}
+
+
+@pytest.fixture
+def gh_on_path(monkeypatch):
+    """Skills granting a binary refuse to load when it is missing — fake it present."""
+    import gaia.skills.binaries as binaries
+
+    monkeypatch.setattr(binaries.shutil, "which", lambda b: f"/usr/bin/{b}")
+
+
+@pytest.fixture
+def registry_property():
+    with patch.object(
+        ChatAgent,
+        "_tools_registry",
+        new_callable=lambda: property(lambda self: self._registry),
+    ):
+        yield
+
+
+def test_loaded_skill_admits_its_declared_tools(
+    tmp_path, gh_on_path, registry_property
+):
+    registry = _registry("c1", "run_shell_command", "read_file")
+    loader = _real_loader()
+    a = _skill_agent(tmp_path, loader, registry, _HUB_SKILLS)
+
+    assert "run_shell_command" not in a._select_tools_for_turn("triage my inbox")
+
+    a.load_skill("github-triage")
+    assert a._loaded_skill_tools() == ["run_shell_command"]
+    assert "run_shell_command" in a._select_tools_for_turn("triage my inbox")
+
+
+def test_unloaded_skill_stops_contributing(tmp_path, gh_on_path, registry_property):
+    registry = _registry("c1", "run_shell_command")
+    loader = _real_loader()
+    a = _skill_agent(tmp_path, loader, registry, _HUB_SKILLS)
+    a.load_skill("github-triage")
+    assert "run_shell_command" in a._select_tools_for_turn("triage")
+
+    assert a.unload_skill("github-triage") is True
+    assert a._loaded_skill_tools() == []
+    # The loaded set is session-monotonic; a new session shows the signal is gone.
+    loader.reset_session()
+    assert a._select_tools_for_turn("triage") == ["c1"]
+
+
+def test_binary_grant_admits_shell_even_when_tools_required_omits_it(
+    tmp_path, gh_on_path, registry_property
+):
+    root = tmp_path / "skills"
+    (root / "gh-lite").mkdir(parents=True)
+    (root / "gh-lite" / "SKILL.md").write_text(
+        "---\nname: gh-lite\ndescription: List GitHub issues with gh.\n"
+        "metadata:\n  gaia:\n    permissions:\n      - shell:execute:gh\n"
+        "---\n\nRun gh issue list.\n",
+        encoding="utf-8",
+    )
+    registry = _registry("c1", "run_shell_command")
+    a = _skill_agent(tmp_path, _real_loader(), registry, root)
+
+    a.load_skill("gh-lite")
+    assert a._loaded_skill_tools() == ["run_shell_command"]
+    assert "run_shell_command" in a._select_tools_for_turn("list issues")
+
+
+def test_loaded_skill_tools_are_cap_bound(tmp_path, registry_property):
+    root = tmp_path / "skills"
+    (root / "many").mkdir(parents=True)
+    (root / "many" / "SKILL.md").write_text(
+        "---\nname: many\ndescription: Needs several tools.\n"
+        "metadata:\n  gaia:\n    tools_required:\n"
+        "      - t1\n      - t2\n      - t3\n---\n\nUse them.\n",
+        encoding="utf-8",
+    )
+    loader = ToolLoader(
+        core_tools=frozenset({"c1"}),
+        bundles=[],
+        embed_fn=lambda t: np.zeros(768, dtype=np.float32),
+        threshold=0.55,
+        max_tools=2,
+    )
+    a = _skill_agent(tmp_path, loader, _registry("c1", "t1", "t2", "t3"), root)
+
+    a.load_skill("many")
+    assert a._select_tools_for_turn("go") == ["c1", "t1"]
+
+
+def test_skill_hidden_this_turn_holds_no_tool_slots(
+    tmp_path, gh_on_path, registry_property
+):
+    """Only skills whose body renders this turn feed the SKILL signal."""
+    registry = _registry("c1", "run_shell_command")
+    a = _skill_agent(tmp_path, _real_loader(), registry, _HUB_SKILLS)
+    a.load_skill("github-triage")
+
+    a._active_skill_filter = ["some-other-skill"]
+    assert a._loaded_skill_tools() == []
+    assert "run_shell_command" not in a._select_tools_for_turn("what's the weather")
+
+    a._active_skill_filter = ["github-triage"]
+    assert a._loaded_skill_tools() == ["run_shell_command"]
+    assert "run_shell_command" in a._select_tools_for_turn("triage my inbox")
+
+
+def test_loaded_skill_tools_lead_and_recalled_tools_are_deduped():
+    """Loaded-skill tools come first; recalled-procedure tools follow, once each."""
+    loaded = MagicMock()
+    loaded.name = "coding"
+    loaded.gaia.tools_required = ["read_file", "edit_file"]
+    loader = MagicMock()
+    loader.session_disabled = False
+    loader.select.return_value = ["c1"]
+    a = _bare_agent(
+        tool_loader=loader,
+        _loaded_skills={"coding": loaded},
+        _recalled_skills=[_skill("s1", ["edit_file", "query_documents"])],
+    )
+    with patch.object(
+        ChatAgent, "_tools_registry", new_callable=lambda: property(lambda self: {})
+    ):
+        a._select_tools_for_turn("fix the bug")
+    _, kwargs = loader.select.call_args
+    assert kwargs["skill_tools"] == ["read_file", "edit_file", "query_documents"]
+
+
 # ── selection query builder ───────────────────────────────────────────────
 
 
@@ -430,3 +587,47 @@ def test_loader_off_doc_prompt_omits_load_tools_menu():
     agent.rag = None
     prompt = agent._get_system_prompt()
     assert "LOADABLE TOOL BUNDLES" not in prompt
+
+
+# ── turn setup ordering ───────────────────────────────────────────────────
+
+
+class _TurnSetupDone(Exception):
+    """Stops the turn once the setup steps under test have run."""
+
+
+def test_skill_body_filter_runs_before_the_turn_tool_filter(monkeypatch):
+    """The tool filter admits the ``tools_required`` of the skills active this
+    turn, so the body filter that decides which skills are active has to run
+    first. The other order hands the model a recipe naming tools the same
+    prompt does not contain.
+    """
+    order: list[str] = []
+    agent = _bare_agent(_turn_seq=0)
+
+    monkeypatch.setattr(
+        ChatAgent, "_begin_turn_provenance", lambda self: None, raising=True
+    )
+    monkeypatch.setattr(ChatAgent, "_on_task_start", lambda self, q: None, raising=True)
+    monkeypatch.setattr(
+        ChatAgent,
+        "_refresh_active_skill_filter",
+        lambda self, q: order.append("bodies"),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        ChatAgent,
+        "_refresh_active_tool_filter",
+        lambda self, q: order.append("tools"),
+        raising=True,
+    )
+
+    def _stop(self, user_input):
+        raise _TurnSetupDone
+
+    monkeypatch.setattr(ChatAgent, "_begin_turn_record", _stop, raising=True)
+
+    with pytest.raises(_TurnSetupDone):
+        agent._process_query_impl("read me an rss feed")
+
+    assert order == ["bodies", "tools"]

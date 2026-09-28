@@ -142,3 +142,33 @@ describe('FileBrowser row selection', () => {
         });
     });
 });
+
+describe('FileBrowser search truncation', () => {
+    const runSearch = async (truncated: boolean) => {
+        mockedApi.searchFiles.mockResolvedValue({
+            results: [
+                { name: 'report.pdf', path: '/home/user/docs/report.pdf', size: 1024, size_display: '1 KB', extension: '.pdf', modified: '', directory: '/home/user/docs' },
+            ],
+            total: 1,
+            query: 'report',
+            searched_locations: ['/home/user/Documents'],
+            truncated,
+        });
+        render(<FileBrowser />);
+        await screen.findByText('report.pdf');
+        const input = screen.getByPlaceholderText('Search files on your PC...');
+        fireEvent.change(input, { target: { value: 'report' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        await screen.findByText(/Found 1 result/);
+    };
+
+    it('says the search stopped early when the backend truncated the walk', async () => {
+        await runSearch(true);
+        expect(screen.getByText(/Search stopped early/)).toBeInTheDocument();
+    });
+
+    it('shows no truncation note for a complete search', async () => {
+        await runSearch(false);
+        expect(screen.queryByText(/Search stopped early/)).not.toBeInTheDocument();
+    });
+});

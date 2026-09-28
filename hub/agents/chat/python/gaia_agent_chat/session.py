@@ -6,12 +6,41 @@ Session management for Chat Agent with path validation and history.
 
 import json
 import logging
+import os
+import re
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia import config as gaia_config
+
 logger = logging.getLogger(__name__)
+
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
+
+
+class SessionCorruptError(RuntimeError):
+    """A session file exists but cannot be parsed into a ChatSession."""
+
+
+def validate_session_id(session_id: Any) -> None:
+    """Raise ValueError unless ``session_id`` is safe to use as a file name."""
+    if (
+        not isinstance(session_id, str)
+        or not _SESSION_ID_RE.fullmatch(session_id)
+        or not session_id.strip(".")
+    ):
+        raise ValueError(
+            f"Invalid session_id {session_id!r}: use 1-128 characters from "
+            "A-Z, a-z, 0-9, '.', '_' and '-' (not only dots)."
+        )
+
+
+def default_session_dir() -> Path:
+    """Default session directory: ``<GAIA_CONFIG_DIR>/sessions``."""
+    return Path(gaia_config.GAIA_CONFIG_DIR) / "sessions"
 
 
 @dataclass
@@ -61,15 +90,18 @@ class ChatSession:
 class SessionManager:
     """Manage chat sessions with path validation and persistence."""
 
-    def __init__(self, session_dir: str = ".gaia/sessions", auto_cleanup: bool = True):
+    def __init__(self, session_dir: Optional[str] = None, auto_cleanup: bool = True):
         """
         Initialize session manager with optional automatic cleanup.
 
         Args:
             session_dir: Directory to store session files
+                (default: ``~/.gaia/sessions``, honouring ``GAIA_CONFIG_DIR``)
             auto_cleanup: Automatically clean up old sessions on init (default: True)
         """
-        self.session_dir = Path(session_dir)
+        self.session_dir = (
+            Path(session_dir).expanduser() if session_dir else default_session_dir()
+        )
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
         # Cache directory for path permissions
@@ -266,6 +298,17 @@ class SessionManager:
             logger.error(f"Error validating directory {directory}: {e}")
             return False
 
+    def _session_path(self, session_id: str) -> Path:
+        """Return the file for ``session_id``, rejecting ids that could escape the dir."""
+        validate_session_id(session_id)
+        base = self.session_dir.resolve()
+        path = (base / f"{session_id}.json").resolve()
+        if path.parent != base:
+            raise ValueError(
+                f"Invalid session_id {session_id!r}: resolves outside {base}."
+            )
+        return path
+
     def create_session(self, session_id: Optional[str] = None) -> ChatSession:
         """
         Create a new chat session.
@@ -278,6 +321,7 @@ class SessionManager:
         """
         if session_id is None:
             session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self._session_path(session_id)
 
         now = datetime.now().isoformat()
         session = ChatSession(
@@ -304,12 +348,22 @@ class SessionManager:
         Returns:
             True if successful
         """
+        session_file = self._session_path(session.session_id)
         try:
             session.updated_at = datetime.now().isoformat()
-            session_file = self.session_dir / f"{session.session_id}.json"
-
-            with open(session_file, "w", encoding="utf-8") as f:
-                json.dump(session.to_dict(), f, indent=2)
+            # Write-then-rename so a crash mid-save never truncates the old file.
+            fd, tmp_name = tempfile.mkstemp(
+                dir=session_file.parent, prefix=f".{session_file.name}.", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(session.to_dict(), f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_name, session_file)
+            except BaseException:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
 
             logger.info(f"Saved session: {session.session_id}")
             return True
@@ -326,25 +380,31 @@ class SessionManager:
             session_id: Session ID to load
 
         Returns:
-            ChatSession if found, None otherwise
+            ChatSession if found, None if no file exists for ``session_id``
+
+        Raises:
+            ValueError: If ``session_id`` is not a safe file name.
+            SessionCorruptError: If the file exists but cannot be parsed.
         """
+        session_file = self._session_path(session_id)
+
+        if not session_file.exists():
+            logger.warning(f"Session not found: {session_id}")
+            return None
+
         try:
-            session_file = self.session_dir / f"{session_id}.json"
-
-            if not session_file.exists():
-                logger.warning(f"Session not found: {session_id}")
-                return None
-
             with open(session_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-
             session = ChatSession.from_dict(data)
-            logger.info(f"Loaded session: {session_id}")
-            return session
+        except (OSError, ValueError, TypeError, AttributeError) as e:
+            raise SessionCorruptError(
+                f"Session file {session_file} is unreadable or corrupt ({e}). "
+                "Move or delete it to start a fresh session with this id; it "
+                "was left untouched."
+            ) from e
 
-        except Exception as e:
-            logger.error(f"Error loading session {session_id}: {e}")
-            return None
+        logger.info(f"Loaded session: {session_id}")
+        return session
 
     def list_sessions(self) -> List[Dict[str, str]]:
         """
@@ -389,9 +449,8 @@ class SessionManager:
         Returns:
             True if successful
         """
+        session_file = self._session_path(session_id)
         try:
-            session_file = self.session_dir / f"{session_id}.json"
-
             if session_file.exists():
                 session_file.unlink()
                 logger.info(f"Deleted session: {session_id}")

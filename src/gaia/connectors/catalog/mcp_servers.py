@@ -24,6 +24,8 @@ from gaia.connectors.spec import ConfigField, ConnectorSpec
 # ---------------------------------------------------------------------------
 # Curated catalog
 # ---------------------------------------------------------------------------
+# Package versions are pinned; refresh them with the steps in
+# docs/reference/dependency-management.mdx ("MCP connector catalog pins").
 
 _GITHUB = ConnectorSpec(
     id="mcp-github",
@@ -35,11 +37,11 @@ _GITHUB = ConnectorSpec(
     description="Repos, PRs, issues, workflows — full GitHub access.",
     docs_url="https://amd-gaia.ai/docs/connectors/github",
     mcp_command="npx",
-    mcp_args=("-y", "@modelcontextprotocol/server-github"),
-    mcp_env_keys=("GITHUB_TOKEN",),
+    mcp_args=("-y", "@modelcontextprotocol/server-github@2025.4.8"),
+    mcp_env_keys=("GITHUB_PERSONAL_ACCESS_TOKEN",),
     config_schema=(
         ConfigField(
-            key="GITHUB_TOKEN",
+            key="GITHUB_PERSONAL_ACCESS_TOKEN",
             label="GitHub Personal Access Token",
             kind="secret",
             placeholder="ghp_…",
@@ -59,7 +61,7 @@ _TAVILY = ConnectorSpec(
     description="Web search and content extraction for agents through the Tavily API.",
     docs_url="https://amd-gaia.ai/docs/connectors/tavily",
     mcp_command="npx",
-    mcp_args=("-y", "tavily-mcp@latest"),
+    mcp_args=("-y", "tavily-mcp@0.2.22"),
     mcp_env_keys=("TAVILY_API_KEY",),
     config_schema=(
         ConfigField(
@@ -82,7 +84,7 @@ _MEMORY = ConnectorSpec(
     type="mcp_server",
     description="Knowledge graph-based persistent memory for agents.",
     mcp_command="npx",
-    mcp_args=("-y", "@modelcontextprotocol/server-memory"),
+    mcp_args=("-y", "@modelcontextprotocol/server-memory@2026.8.31"),
 )
 
 _GIT = ConnectorSpec(
@@ -92,9 +94,10 @@ _GIT = ConnectorSpec(
     category="dev-tools",
     tier=1,
     type="mcp_server",
-    description="Git repository tools: log, diff, status, blame.",
-    mcp_command="npx",
-    mcp_args=("-y", "@modelcontextprotocol/server-git"),
+    description="Git repository tools: status, diff, log, show, branch, and commit.",
+    # The reference Git server ships on PyPI only; the npm name never existed.
+    mcp_command="uvx",
+    mcp_args=("mcp-server-git==2026.8.18",),
 )
 
 # ---------------------------------------------------------------------------

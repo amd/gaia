@@ -3,7 +3,7 @@
 #
 # Fork PR Support:
 # - pr-review (pull_request_target): ✅ Works on fork PRs - full review when PR opened / marked ready
-# - pr-rereview (pull_request_target): ✅ Works on fork PRs - lightweight Sonnet re-review on each push (synchronize); flags only new regressions, silent otherwise.
+# - pr-rereview (pull_request_target): ✅ Works on fork PRs - lightweight re-review on each push (synchronize); flags only new regressions, silent otherwise.
 #   ESCALATION: if it finds NO prior Claude review on the PR (the full pr-review was skipped because
 #   the fork-PR approval gate landed after a push, so only this synchronize run ever fired) it does a
 #   FULL first review instead of staying silent — see the job's STEP 0 / FULL-REVIEW MODE prompt.
@@ -42,8 +42,8 @@
 # consistent grep. To bump every model: grep this file for `--model` (7 hits), plus
 # AUDIT_MODEL / WALKTHROUGH_*_MODEL in the audit + walkthrough workflows, the canary's
 # own default, and the pinned CLI model in claude-run.yml's evidence stage.
-# EVAL_MODEL in test_eval_agent_gemma_consolidation.yml is in that list but is NOT a
-# like-for-like bump: it is the JUDGE that scores eval runs, so moving it changes what a
+# EVAL_MODEL in eval_flagship.yml is in that list but is NOT a like-for-like
+# bump: it is the JUDGE that scores eval runs, so moving it changes what a
 # score means and the committed baselines (scored by Sonnet 4.6) stop being comparable.
 # It moved to Opus 5 here without regenerated baselines, so `--compare` now warns on the
 # judge mismatch instead of silently reading the shift as a regression — see
@@ -63,9 +63,10 @@
 # holds it, so the env-scrub + no-code-execution mitigations below matter more, not less,
 # than they did under the old API key. A monthly canary (claude-auth-canary.yml) detects
 # token expiry, which would otherwise dark every Claude job silently.
-# NOTE: this covers only the claude-code-action jobs here. The Claude judge in
-# test_eval_rag.yml still needs `ANTHROPIC_API_KEY` — OAuth tokens are scoped to Claude Code
-# and cannot authenticate direct Anthropic API/SDK calls.
+# NOTE: this covers only the claude-code-action jobs here. The Claude judge in the
+# scenario eval (eval_flagship.yml) still needs `ANTHROPIC_API_KEY` as a
+# fallback — OAuth tokens are scoped to Claude Code and
+# cannot authenticate direct Anthropic API/SDK calls.
 #
 # Mode: All jobs run in AUTOMATION mode (via `prompt` input), not tag mode.
 # Tag mode has an open bug (anthropics/claude-code-action#1223) where `--model` is
@@ -101,8 +102,8 @@
 # COST: Fork PRs consume your Anthropic quota — the Max subscription pool when
 # CLAUDE_CODE_OAUTH_TOKEN is set, otherwise per-token API billing. The full pr-review runs
 # only on open / reopen / ready; each subsequent push gets the lightweight pr-rereview
-# (Sonnet, flags only new regressions) — UNLESS no prior review exists, in which case
-# pr-rereview escalates to a full first review (still Sonnet). Both groups cancel
+# (flags only new regressions) — UNLESS no prior review exists, in which case
+# pr-rereview escalates to a full first review. Both groups cancel
 # in-progress runs on rapid pushes.
 # On the API-key fallback path (OAuth token expired), the Opus jobs bill per-token at up to
 # --max-turns 100 each until the monthly auth canary (claude-auth-canary.yml) flags the outage.
@@ -435,11 +436,11 @@ jobs:
 
       claude_args: |
         --max-turns 100
-        --model claude-opus-5
+        --model claude-opus-5-5
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
-  # Lightweight re-review on each push (synchronize): a Sonnet pass that flags only NEW
-  # regressions and stays silent otherwise, instead of re-running the full Opus review.
+  # Lightweight re-review on each push (synchronize): same model as the full review, but a
+  # prompt that flags only NEW regressions and stays silent otherwise.
   # (A true per-push delta isn't available — the pull_request event carries no before/after
   # SHA — so it scans the full diff but is told to flag only what's new, not repeat the
   # first review. cancel-in-progress collapses rapid pushes to the latest.)
@@ -567,8 +568,8 @@ jobs:
         - Write for the human: plain language, only the detail they need to act.
         - ~150 words max. No Summary / Strengths / Verdict scaffolding — this is a re-review, not a full review.
       claude_args: |
-        --max-turns 80
-        --model claude-sonnet-4-6
+        --max-turns 100
+        --model claude-opus-5-5
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
@@ -690,7 +691,7 @@ jobs:
 
       claude_args: |
         --max-turns 100
-        --model claude-opus-5
+        --model claude-opus-5-5
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to new issues or @claude mentions in PR conversations (including forks)
@@ -858,7 +859,7 @@ jobs:
 
       claude_args: |
         --max-turns 100
-        --model claude-opus-5
+        --model claude-opus-5-5
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Issue triage: label / dedupe / chase repro steps on newly opened issues.
@@ -984,8 +985,8 @@ jobs:
             Do not include any AI/Claude attribution anywhere.
 
       claude_args: |
-        --max-turns 20
-        --model claude-opus-5
+        --max-turns 100
+        --model claude-opus-5-5
         --allowedTools Read,Grep,Glob,Bash
 
   # Auto-fix: attempt to implement a fix for bulletproof, easy bug reports
@@ -1065,7 +1066,7 @@ jobs:
 
       - name: Attempt auto-fix
         id: claude   # referenced by the Notify step's execution_file check below
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1347,7 +1348,7 @@ jobs:
 
           claude_args: |
             --max-turns 100
-            --model claude-opus-5
+            --model claude-opus-5-5
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
       # auto-fix has no continue-on-error (a code-writing job must fail loudly), but
@@ -1540,7 +1541,7 @@ jobs:
         # continue-on-error: a rate-limit / expired-token / outage failure here is
         # caught by the "Verify and validate release notes" step (which fails the job)
         # and the "Notify on failure" step opens a tracking issue.
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
@@ -1690,8 +1691,8 @@ jobs:
             into a mandatory review step.)
 
           claude_args: |
-            --max-turns 30
-            --model claude-opus-5
+            --max-turns 100
+            --model claude-opus-5-5
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
       - name: Verify and validate release notes

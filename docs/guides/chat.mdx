@@ -317,7 +317,8 @@ with tools whose descriptions best match the conversation, which shrinks the
 first-turn prompt and speeds up the first reply.
 
 It activates only on the `doc` profile (the registered `doc` agent, the SDK with
-`ChatAgentConfig(prompt_profile="doc")`, or `gaia eval agent --agent-type doc`).
+`ChatAgentConfig(prompt_profile="doc")`, or `gaia eval agent --agent-type doc` —
+an explicit override, since the eval otherwise scores the flagship `gaia` agent).
 Turn it on with the config field, an environment variable, or the Agent UI
 **Settings → Dynamic Tools (Beta)** toggle. The env var wins over both — when it
 is set, the UI toggle reflects the effective value and disables itself — which is

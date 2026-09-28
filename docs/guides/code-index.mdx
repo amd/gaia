@@ -39,11 +39,7 @@ Install the `[rag]` extras (FAISS + numpy live there):
 uv pip install -e '.[rag]'
 ```
 
-Start Lemonade Server so embeddings can be generated:
-
-```bash
-lemonade-server serve
-```
+Embeddings are generated locally by Lemonade. If you haven't installed it yet, `gaia init` installs the server and pulls the model — `gaia daemon` starts and supervises it from there.
 
 <Note>
 The default embedder is now `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M), replacing `nomic-embed-text-v2-moe-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so retrieval behavior is unchanged. A cached index (under `~/.gaia/code_index/`) records the model it was built with: re-indexing rebuilds every embedding with the new model, and searching a stale index fails loudly with a model-mismatch error until you rebuild.

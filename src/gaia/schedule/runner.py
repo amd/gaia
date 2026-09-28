@@ -36,6 +36,7 @@ def fire(schedule: Schedule) -> str:
     from gaia.chat.sdk import AgentConfig, AgentSDK
 
     prompt = resolve_input(schedule)
+    sinks.validate(schedule.sink, schedule.sink_args)
     log.info("schedule %r firing (sink=%s)", schedule.name, schedule.sink)
 
     sdk = AgentSDK(AgentConfig())

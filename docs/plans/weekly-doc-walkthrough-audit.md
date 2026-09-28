@@ -163,7 +163,7 @@ Each matrix entry:
    session is exactly the kind of false-negative risk that would quietly erode trust in
    this workflow the way a false positive would.
 
-   > **Superseded:** both passes now run `claude-opus-5` — the repo standardised every
+   > **Superseded:** both passes now run `claude-opus-5-5` — the repo standardised every
    > Claude workflow on it, so this is no longer a cost split. What still matters is the
    > **structural** split: the judge is a fresh context that never sees the executor's
    > self-assessment. If a cheaper executor is reintroduced, change only

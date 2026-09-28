@@ -33,10 +33,13 @@ var paletteCommands = []paletteCommand{
 	{"/help", "Show the keyboard shortcuts and commands panel"},
 	{"/clear", "Clear this conversation"},
 	{"/memory", "View this agent's memory"},
-	{"/bypass", "Run every tool without asking first — shows a warning before it turns on"},
+	{"/full-access", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
+	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
+	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
+	{"/cost", "What this session has spent; /cost help for rates"},
 	{"/agents", "List installed agents and switch this session to one"},
 }
 
@@ -44,7 +47,7 @@ var paletteCommands = []paletteCommand{
 // command name plus the space that starts its argument.
 //
 // `/model` takes a free-form model id, so it cannot be a flat palette row the
-// way `/bypass on` could — one row per id at the top level would bury the
+// way `/full-access on` could — one row per id at the top level would bury the
 // real commands under a model list nobody was looking for. So the palette
 // gets a second level instead: `/model` stays one row, and typing the space
 // after it swaps the list for the ids. The set is closed and known at compile
@@ -333,10 +336,8 @@ var (
 	paletteDescStyle = lipgloss.NewStyle().
 				Foreground(theme.Dim)
 
-	// The selected row is marked by a caret and colour alone — bold
-	// AccentBright text, no filled background — matching the rest of the
-	// TUI's move away from background-tinted rows (see the code-block and
-	// status-bar fixes this pairs with).
+	// Marked by a caret and colour alone — no filled background — matching the
+	// rest of the TUI's move away from background-tinted rows.
 	paletteSelectedNameStyle = lipgloss.NewStyle().
 					Bold(true).
 					Foreground(theme.Selected)
@@ -473,7 +474,9 @@ func paletteHitTest(query string, items []paletteCommand, selected, width, heigh
 // typed filter text, a blank line, then one row per matching command.
 func paletteBodyLines(query string, items []paletteCommand, selected, inner int) []string {
 	lines := []string{
-		paletteTitleStyle.Render("Slash Commands"),
+		// Truncated like every other line: at a narrow width the title wrapped
+		// onto two rows and pushed the box past the window.
+		ansi.Truncate(paletteTitleStyle.Render("Slash Commands"), inner, "…"),
 		dividerStyle.Render(strings.Repeat("─", inner)),
 		ansi.Truncate(paletteQueryStyle.Render(query)+"▏", inner, "…"),
 		"",

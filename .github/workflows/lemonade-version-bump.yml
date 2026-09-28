@@ -6,8 +6,9 @@
 # lemonade-sdk/lemonade GitHub API on a schedule. When a newer stable release exists
 # than the LEMONADE_VERSION pinned in src/gaia/version.py — and the Windows installer
 # assets are actually published for it — it hands off to Claude to open a bump PR with
-# a changelog-aware description (bumping version.py plus the hardcoded Lemonade version
-# strings in docs that util/check_doc_versions.py enforces). The cheap shell gate runs
+# a changelog-aware description (bumping version.py, refreshing the embeddable SHA-256
+# pins, plus the hardcoded Lemonade version strings in docs that util/check_doc_versions.py
+# enforces). The cheap shell gate runs
 # weekly; the (paid) Claude
 # step only fires when there is genuinely something to bump, and never twice for the
 # same version (it skips when a bump PR for that version is already open).
@@ -89,15 +90,39 @@ jobs:
             fi
           fi
 
-          # Guard 2: don't bump to a release missing the Windows installers GAIA downloads
-          # (a release can exist before all assets finish uploading).
-          for required in lemonade.msi lemonade-server-minimal.msi; do
+          # Guard 2: don't bump to a release missing an asset GAIA downloads (a release can
+          # exist before all assets finish uploading). Covers the Windows installers AND the
+          # four embeddable archives, whose SHA-256 pins the bump has to refresh — catching a
+          # partial upload here is free, whereas discovering it inside the Claude step is not.
+          for required in lemonade.msi lemonade-server-minimal.msi \
+                          "lemonade-embeddable-${target}-windows-x64.zip" \
+                          "lemonade-embeddable-${target}-ubuntu-x64.tar.gz" \
+                          "lemonade-embeddable-${target}-ubuntu-arm64.tar.gz" \
+                          "lemonade-embeddable-${target}-macos-arm64.tar.gz"; do
             if ! echo "$assets" | grep -qx "$required"; then
               echo "::warning::Lemonade $target is published but missing asset '$required' — skipping bump until it appears."
+              echo "⚠️ Skipped the bump to **$target**: asset \`$required\` is not published. If this repeats, the asset was renamed and the guard list needs updating." >> "$GITHUB_STEP_SUMMARY"
               echo "should_bump=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           done
+
+          # Guard 2b: every embeddable asset must carry a sha256 digest, since the bump
+          # rewrites EMBEDDABLE_SHA256 from it. No digest -> nothing trustworthy to pin.
+          #
+          # Both this and Guard 2 skip rather than fail, because the usual cause is a
+          # release whose assets are still uploading. That is right for a race and wrong
+          # for a rename: an asset that never comes back leaves the pin silently frozen.
+          # Every skip therefore writes to the job summary, so a run that keeps skipping
+          # is visible without reading logs.
+          missing_digest=$(echo "$release_json" | jq -r \
+            '.assets[] | select(.name|test("embeddable")) | select((.digest // "") | startswith("sha256:") | not) | .name')
+          if [ -n "$missing_digest" ]; then
+            echo "::warning::Lemonade $target publishes no sha256 digest for: $missing_digest — skipping bump."
+            echo "⚠️ Skipped the bump to **$target**: no sha256 digest published for $missing_digest. If this repeats, upstream stopped publishing digests and the pins need another source." >> "$GITHUB_STEP_SUMMARY"
+            echo "should_bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # Guard 3: idempotency — don't re-open a bump PR for a version already handled.
           # --state all (not just open) so a bump PR a maintainer deliberately CLOSED isn't
@@ -137,7 +162,7 @@ jobs:
 
       - name: Open Lemonade bump PR
         if: steps.detect.outputs.should_bump == 'true'
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590  # v1.0.230
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -184,9 +209,27 @@ jobs:
                download URLs from it. Do NOT touch the per-profile `min_lemonade_version`
                floors in src/gaia/installer/init_command.py (those are deliberately
                conservative minimums, not "latest").
-            3. Sync the hardcoded Lemonade version strings in the docs. CI runs
+            3. Refresh the embeddable SHA-256 pins. `gaia lemonade embedded install`
+               verifies its download against the digests in
+               `EMBEDDABLE_SHA256` (src/gaia/llm/lemonade_embedded.py), keyed by asset
+               filename — which contains the version. Bumping LEMONADE_VERSION without
+               refreshing them leaves every key stale, so the embedded install fails for
+               users and tests/integration/test_lemonade_embeddable_assets.py fails in CI.
+               Read the real digests from the release API. It publishes them as
+               `sha256:<hex>`, but EMBEDDABLE_SHA256 stores the BARE hex — that is what
+               `_verify` compares a downloaded file against — so STRIP the `sha256:`
+               prefix. This jq already does:
+                 ```
+                 gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} \
+                   --jq '.assets[] | select(.name|test("embeddable")) | "\(.name) \(.digest | sub("^sha256:";""))"'
+                 ```
+               Rewrite the dict so it has exactly those four keys. Use what the API
+               returns — never carry over an old value, and never invent one. If any of
+               the four embeddable assets has no digest, do NOT open a PR: delete the
+               branch and stop.
+            4. Sync the hardcoded Lemonade version strings in the docs. CI runs
                `python util/check_doc_versions.py`, which FAILS the build when any doc or
-               README under docs/ or cpp/ still references the OLD Lemonade version (release
+               README under docs/, cpp/, tui/ or .claude/ still references the OLD Lemonade version (release
                download URLs, release-page links, .deb filenames, "vX.Y.Z" text callouts,
                version table cells). A bump PR that skips this step is guaranteed to fail CI.
                Run the checker to list every stale reference:
@@ -197,20 +240,25 @@ jobs:
                re-run the checker until it prints `[OK] All documentation version references
                are consistent!`. Change nothing but the version numbers — no surrounding
                prose, and never edit files the checker excludes (docs/releases/, docs/plans/).
-            4. Validate the target release's Windows installers actually exist (a sanity
+               NEVER bump a minimum-version FLOOR. A trailing "+" or "or later" —
+               "Lemonade 11.8.1+", "v10.2.0+", "requires Lemonade 11.8.1 or later" —
+               names the release a feature first shipped in, not the pin, and moving one
+               makes the docs lie. The checker skips those, so if it stayed silent on a
+               version, leave that version alone; only change what it flags.
+            5. Validate the target release's Windows installers actually exist (a sanity
                re-check; the workflow already gated on this):
                  `gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} --jq '.assets[].name'`
                Confirm `lemonade.msi` and `lemonade-server-minimal.msi` are present. If either
                is missing, do NOT open a PR — delete the branch and stop.
-            5. Run lint on the changed files so formatting stays clean:
+            6. Run lint on the changed files so formatting stays clean:
                  `python util/lint.py --black --isort`
                (Tooling is pre-installed. The version.py edit and doc edits should produce
                no formatting changes.)
 
             ## Commit
-            Stage version.py plus every doc file you updated in step 3 (`git add -u` picks up
-            all modified tracked files — you have only edited version.py and flagged docs, so
-            this stays in scope):
+            Stage version.py, lemonade_embedded.py, plus every doc file you updated (`git add -u` picks up
+            all modified tracked files — you have only edited version.py,
+            lemonade_embedded.py and flagged docs, so this stays in scope):
             ```
             git add -u
             git commit -m "chore(deps): bump Lemonade Server to v${{ steps.detect.outputs.target_version }}"
@@ -315,8 +363,9 @@ jobs:
                If you filed no issues, leave the PR body as-is.
 
             ## Hard constraints
-            - The only repo FILES you may change are src/gaia/version.py and the docs/README
-              files under docs/ or cpp/ that `util/check_doc_versions.py` flags for a Lemonade
+            - The only repo FILES you may change are src/gaia/version.py,
+              src/gaia/llm/lemonade_embedded.py (the EMBEDDABLE_SHA256 dict only), and the docs/README
+              files under docs/, cpp/, tui/ or .claude/ that `util/check_doc_versions.py` flags for a Lemonade
               version update — and in those docs, only the version numbers. No other files, no
               drive-by edits. (Feature scouting creates GitHub issues only — it never edits files.)
             - No Claude attribution anywhere (commit, PR body, issues) — including Co-Authored-By.
@@ -325,7 +374,7 @@ jobs:
               is clearly met, capped at two.
           claude_args: |
             --max-turns 100
-            --model claude-opus-5
+            --model claude-opus-5-5
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
       # Fail loudly: a silent failure here means the pin quietly goes stale. Fires on ANY

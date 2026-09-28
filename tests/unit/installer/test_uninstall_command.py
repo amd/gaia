@@ -22,6 +22,10 @@ import pytest
 
 from gaia.installer import uninstall_command as uc
 
+# Import before pyfakefs starts: it unloads modules first imported under a fake
+# filesystem, which would orphan the monkeypatched EmbeddedLemonade.status.
+from gaia.llm import lemonade_embedded
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -101,6 +105,9 @@ def fake_home(fs, monkeypatch):
     home = Path("/fake/home/user")
     fs.create_dir(home)
     monkeypatch.setattr(Path, "home", lambda: home)
+    # Keep every cache under the fake home; Windows would use the real AppData.
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
     # Auto-yes path: default to interactive-tty FALSE so prompts never block.
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     return home
@@ -213,9 +220,11 @@ class TestDryRun:
         exit_code = uc.run(_ns(**kwargs), printer=captured)
 
         assert exit_code == uc.EXIT_OK, captured.text
+        # The needles use "/"; Windows prints its own separator.
+        output = captured.text.replace("\\", "/")
         for needle in expected_substrings:
             assert (
-                needle in captured.text
+                needle in output
             ), f"missing {needle!r} in dry-run output:\n{captured.text}"
         # Filesystem must be unchanged.
         gaia = fake_home / ".gaia"
@@ -323,8 +332,7 @@ class TestPurgeRemoval:
         embedded.mkdir()
         (embedded / "state.json").write_text("{}")
         monkeypatch.setattr(
-            "gaia.llm.lemonade_embedded.EmbeddedLemonade.status",
-            lambda self: status,
+            lemonade_embedded.EmbeddedLemonade, "status", lambda self: status
         )
         captured = _Capture()
 
@@ -695,7 +703,7 @@ class TestGaiaHomeEnvVar:
         monkeypatch.setattr(Path, "home", lambda: Path("/fake/home/user"))
 
         resolved = uc._gaia_home()
-        assert Path(resolved) == alt
+        assert Path(resolved) == alt.resolve()
 
     def test_env_var_unset_uses_home_dot_gaia(self, fs, monkeypatch):
         monkeypatch.delenv("GAIA_HOME", raising=False)

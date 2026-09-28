@@ -936,6 +936,76 @@ describe("NotificationService", () => {
         )
       ).resolves.not.toThrow();
     });
+
+    describe("rejects bad responses from the renderer", () => {
+      function createPermissionRequest(extra = {}) {
+        service.handleAgentNotification("ipc-agent", {
+          type: "permission_request",
+          title: "Allow?",
+          message: "ipc test",
+          ...extra,
+        });
+        return service.notifications[0];
+      }
+
+      it.each([[undefined], [null], [42], [{ id: "x" }], [""]])(
+        "ignores a response with notification id %p",
+        async (badId) => {
+          const notif = createPermissionRequest();
+
+          await electronMock.ipcMain.simulateInvoke(
+            "notification:respond",
+            badId,
+            "allow",
+            true
+          );
+
+          expect(notif.responded).toBe(false);
+          expect(agentProcessManager._sendJsonRpcRaw).not.toHaveBeenCalled();
+        }
+      );
+
+      it("a second response cannot overturn the first", async () => {
+        const notif = createPermissionRequest();
+
+        await electronMock.ipcMain.simulateInvoke("notification:respond", notif.id, "deny", false);
+        await electronMock.ipcMain.simulateInvoke("notification:respond", notif.id, "allow", true);
+
+        expect(notif.response).toEqual({ action: "deny", remember: false });
+        expect(agentProcessManager._sendJsonRpcRaw).toHaveBeenCalledTimes(1);
+      });
+
+      it("a late allow after the auto-deny timeout does not reach the agent", async () => {
+        jest.useFakeTimers();
+        try {
+          const notif = createPermissionRequest({ timeout_seconds: 5 });
+          jest.advanceTimersByTime(5 * 1000);
+
+          await electronMock.ipcMain.simulateInvoke("notification:respond", notif.id, "allow", true);
+
+          expect(notif.response).toEqual({ action: "deny", remember: false });
+          expect(agentProcessManager._sendJsonRpcRaw).toHaveBeenCalledTimes(1);
+          expect(agentProcessManager._sendJsonRpcRaw.mock.calls[0][2].action).toBe("deny");
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it("a response before the timeout cancels the pending auto-deny", async () => {
+        jest.useFakeTimers();
+        try {
+          const notif = createPermissionRequest({ timeout_seconds: 5 });
+
+          await electronMock.ipcMain.simulateInvoke("notification:respond", notif.id, "allow", false);
+          jest.advanceTimersByTime(10 * 1000);
+
+          expect(notif.response).toEqual({ action: "allow", remember: false });
+          expect(agentProcessManager._sendJsonRpcRaw).toHaveBeenCalledTimes(1);
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+    });
   });
 
   // ====================================================================

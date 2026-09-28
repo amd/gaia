@@ -135,6 +135,21 @@ class TestStatsAndActivity:
 
 
 class TestKnowledgeCRUD:
+    @pytest.mark.parametrize("keyword", ["AND", "OR", "NOT"])
+    def test_search_literal_keywords(self, client, test_store, keyword):
+        content = f"The {keyword} operator is documented"
+        kid = test_store.store(category="fact", content=content)
+        test_store.store_turn("literal-query", "user", content)
+
+        response = client.get("/api/memory/knowledge", params={"search": keyword})
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()["items"]] == [kid]
+
+        response = client.get(
+            "/api/memory/conversations/search", params={"query": keyword}
+        )
+        assert response.status_code == 200
+        assert content in response.text
 
     def test_create_knowledge(self, client):
         resp = client.post(
@@ -952,6 +967,89 @@ class TestReconcileEndpoint:
         data = resp.json()
         assert data["pairs_checked"] == 10
         assert data["contradicted"] == 1
+
+    def test_a_memory_contradicting_two_others_is_penalised_once(
+        self, client, test_store
+    ):
+        """A contradicts B and C: both markers survive, so a rerun changes nothing."""
+        require_faiss()
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        ids = {}
+        for label, content in [
+            ("A", "Kalin prefers tea over coffee"),
+            ("B", "Monday standups start at nine"),
+            ("C", "Invoices are due on the fifth"),
+        ]:
+            ids[label] = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(ids[label], vec)
+
+        def classify(messages, **_kwargs):
+            prompt = messages[0]["content"]
+            if "tea over coffee" in prompt:
+                return '{"relationship": "contradict", "action": "noop"}'
+            return '{"relationship": "neutral", "action": "noop"}'
+
+        fake_llm = MagicMock()
+        fake_llm.chat.side_effect = classify
+        with patch("gaia.llm.create_client", return_value=fake_llm):
+            first = client.post("/api/memory/reconcile")
+            after_first = {k: test_store.get_item(v) for k, v in ids.items()}
+            second = client.post("/api/memory/reconcile")
+        after_second = {k: test_store.get_item(v) for k, v in ids.items()}
+
+        assert first.status_code == 200
+        assert first.json()["contradicted"] == 2
+        assert set(after_first["A"]["metadata"]["reconciled_with"]) == {
+            ids["B"],
+            ids["C"],
+        }
+        assert ids["A"] in after_first["B"]["metadata"]["reconciled_with"]
+        assert ids["A"] in after_first["C"]["metadata"]["reconciled_with"]
+        assert second.status_code == 200
+        assert second.json()["pairs_checked"] == 0
+        assert {k: v["confidence"] for k, v in after_second.items()} == {
+            k: v["confidence"] for k, v in after_first.items()
+        }
+
+    def test_a_failed_marker_write_fails_the_request(self, client, test_store):
+        """An unrecorded pair would be re-penalised next run, so say so."""
+        require_faiss()
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        for content in ("alpha fact one", "alpha fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = '{"relationship": "neutral", "action": "noop"}'
+        with (
+            patch("gaia.llm.create_client", return_value=fake_llm),
+            patch.object(
+                test_store, "update", side_effect=RuntimeError("database is locked")
+            ),
+        ):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 500
+        assert "database is locked" in resp.json()["detail"]
+
+    def test_a_failing_agent_reconcile_is_reported_not_replaced(self, client, mocker):
+        """No silent switch to the standalone path when the agent's run fails."""
+
+        def broken():
+            raise RuntimeError("agent index unavailable")
+
+        memory_router_mod._reconcile_fn = broken
+        standalone = mocker.patch("gaia.ui.routers.memory._get_store")
+
+        resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 500
+        assert "agent index unavailable" in resp.json()["detail"]
+        standalone.assert_not_called()
 
     def test_reconcile_runtime_error_returns_500(self, client, mocker):
         """POST /api/memory/reconcile returns 500 when standalone path raises a runtime error."""

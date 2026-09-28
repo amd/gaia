@@ -258,10 +258,10 @@ _CONTEXT_DEPENDENT = re.compile(
 #: session means replaying real instructions, and an eval usually runs with
 #: confirmations off — "lets commit and push those changes" and "discard any
 #: local changes" both appeared in the first ten cases drawn from these
-#: transcripts. Nothing happened, because the shell refuses git writes
-#: (SAFE_GIT_COMMANDS), but that is a defence we happen to have rather than one
-#: this recipe arranged. A benchmark must not be able to mutate the machine it
-#: is measuring.
+#: transcripts. Nothing happened, because an eval agent loads no skill granting
+#: 'shell:execute:git', so git writes never leave the REFUSE tier — but that is
+#: a defence we happen to have rather than one this recipe arranged. A benchmark
+#: must not be able to mutate the machine it is measuring.
 _DESTRUCTIVE = re.compile(
     r"\b(push|commit|merge|rebase|reset|revert|discard|delete|remove|rm|drop|"
     r"uninstall|overwrite|force|publish|deploy|release)\b",

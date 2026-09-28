@@ -630,6 +630,24 @@ func TestHelperProcess(t *testing.T) {
 	}
 	defer os.Exit(0)
 
+	// Like the real `gaia daemon start`, take the start lock without waiting on
+	// the caller: a caller still holding it would deadlock a real launcher.
+	if os.Getenv("GAIA_TUI_TEST_TAKE_LOCK") == "1" {
+		path, err := LockPath()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "helper: %v\n", err)
+			os.Exit(2)
+		}
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "helper: %v\n", err)
+			os.Exit(2)
+		}
+		if ok, err := tryLock(f); err != nil || !ok {
+			fmt.Fprintf(os.Stderr, "helper: start lock is held by the caller (%v)\n", err)
+			os.Exit(1)
+		}
+	}
 	if payload := os.Getenv("GAIA_TUI_TEST_INSTANCE"); payload != "" {
 		path := filepath.Join(os.Getenv(EnvHome), "instance.json")
 		if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
@@ -680,6 +698,32 @@ func TestStartOrAttachSpawnsWhenNothingIsRegistered(t *testing.T) {
 	}
 	if got.Port != f.port() {
 		t.Errorf("attached to port %d, want %d", got.Port, f.port())
+	}
+}
+
+func TestStartOrAttachReleasesTheStartLockBeforeSpawning(t *testing.T) {
+	f := newFakeDaemon(t)
+	inst := &Instance{
+		PID: os.Getpid(), Port: f.port(), Token: "token-A",
+		Host: DefaultHost, APIVersion: "1.1", Service: ServiceID,
+	}
+	payload, err := json.Marshal(inst)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := testClient(t, func(o *Options) {
+		start := launcher(t, f.dir, string(payload), "")
+		o.StartCommand = func(ctx context.Context) (*exec.Cmd, error) {
+			cmd, err := start(ctx)
+			if err == nil {
+				cmd.Env = append(cmd.Env, "GAIA_TUI_TEST_TAKE_LOCK=1")
+			}
+			return cmd, err
+		}
+	})
+	if _, err := c.StartOrAttach(context.Background()); err != nil {
+		t.Fatalf("a launcher that takes the start lock itself must be able to start the daemon: %v", err)
 	}
 }
 

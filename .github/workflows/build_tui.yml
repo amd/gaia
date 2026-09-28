@@ -30,6 +30,8 @@ on:
       - 'hub/agents/email/python/gaia_agent_email/scopes.py'
       - 'hub/agents/email/python/gaia_agent_email/outlook_scopes.py'
       - 'tests/fixtures/connectors/email_scopes.json'
+      # The shared TUI <-> flagship stdio wire fixture both languages test against.
+      - 'tests/fixtures/stdio/gaia_stdio_wire.json'
       # Nothing else runs pre-release on these — the PE check this job invokes,
       # and the installers that package the binaries it builds.
       - 'util/check_pe_resources.py'
@@ -56,6 +58,8 @@ on:
       - 'hub/agents/email/python/gaia_agent_email/scopes.py'
       - 'hub/agents/email/python/gaia_agent_email/outlook_scopes.py'
       - 'tests/fixtures/connectors/email_scopes.json'
+      # The shared TUI <-> flagship stdio wire fixture both languages test against.
+      - 'tests/fixtures/stdio/gaia_stdio_wire.json'
       # Nothing else runs pre-release on these — the PE check this job invokes,
       # and the installers that package the binaries it builds.
       - 'util/check_pe_resources.py'
