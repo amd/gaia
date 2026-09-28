@@ -47,6 +47,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "filesystem": ("gaia.agents.tools.filesystem_tools", "FileSystemToolsMixin"),
     "scratchpad": ("gaia.agents.tools.scratchpad_tools", "ScratchpadToolsMixin"),
     "browser": ("gaia.agents.tools.browser_tools", "BrowserToolsMixin"),
+    "browser_use": (
+        "gaia.agents.tools.browser_use_tools",
+        "BrowserUseToolsMixin",
+    ),
     "email": ("gaia.agents.tools.email_tools", "EmailToolsMixin"),
     "sd": ("gaia.sd.mixin", "SDToolsMixin"),
     "vlm": ("gaia.vlm.mixin", "VLMToolsMixin"),

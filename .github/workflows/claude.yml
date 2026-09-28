@@ -1058,10 +1058,11 @@ jobs:
       - name: Install dependencies
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
-          # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py;
+          # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py,
+          # playwright by tests/unit/agents/test_builder_template_host_wiring.py;
           # PHASE 3 below runs the full tests/unit/ suite with -x.
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pyfakefs \
-                                  keyring httpx respx faiss-cpu pypdf
+                                  keyring httpx respx faiss-cpu pypdf playwright
           uv pip install --system -e ".[api]"
 
       - name: Attempt auto-fix

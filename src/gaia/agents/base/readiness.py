@@ -462,9 +462,26 @@ def version_meets_min(found: Optional[str], minimum: Optional[str]) -> Optional[
 def pull_model(probe_base: str, model_id: str) -> None:
     """Tell a RUNNING backend to download ``model_id``.
 
-    Posts ONLY ``model_name`` — sending ``recipe`` for a built-in Lemonade model
-    makes it 400 (#1655), and that failure only reproduces on a cold cache, so
-    it survives every warm-machine test. Raises ``requests.RequestException`` on
+    Lemonade wants opposite payloads for its two kinds of model, and sending the
+    wrong one fails on a COLD cache only — so both directions survive every
+    warm-machine test:
+
+    * **Built-in** (``Gemma-4-E4B-it-GGUF``, the ``*-FLM`` models) — name only.
+      Passing ``recipe`` makes Lemonade treat the call as a *new* registration,
+      which requires a ``user.`` prefix, and it 400s (#1655).
+    * **Custom, ``user.``-prefixed** (the EmbeddingGemma embedder) — these are
+      not registered yet, so the first pull must carry ``checkpoint`` +
+      ``recipe`` (+ ``embedding`` for an embedder). Name only returns HTTP 500
+      ``not registered with Lemonade Server``.
+
+    Sending name only for everything is what this used to do, which made the
+    embedder unpullable: the TUI's setup gate offered "press f to fix" and the
+    fix could not succeed. Found on a machine whose chat model already worked.
+
+    A gateway-hosted model has no weights at all and raises ``RuntimeError``
+    before any request goes out.
+
+    Raises ``requests.RequestException``, ``ValueError`` or ``RuntimeError`` on
     failure; the caller surfaces it as a loud ``✗`` line.
 
     This is the ONLY provisioning an agent process can do. It cannot install the
@@ -473,6 +490,7 @@ def pull_model(probe_base: str, model_id: str) -> None:
     import requests
 
     from gaia.llm.lemonade_client import (
+        MODELS,
         is_cloud_model,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
@@ -487,9 +505,25 @@ def pull_model(probe_base: str, model_id: str) -> None:
             f"with `gaia gateway status`."
         )
 
+    payload = {"model_name": model_id}
+    if model_id.startswith("user."):
+        requirement = next((m for m in MODELS.values() if m.model_id == model_id), None)
+        if requirement is None:
+            raise ValueError(
+                f"Cannot pull custom model '{model_id}': it is not in GAIA's "
+                "model registry, so its checkpoint and recipe are unknown. "
+                "Add it to MODELS in gaia.llm.lemonade_client, or run "
+                "`gaia init`."
+            )
+        payload.update(
+            checkpoint=requirement.checkpoint,
+            recipe=requirement.recipe,
+            embedding=requirement.embedding,
+        )
+
     resp = requests.post(
         f"{probe_base}/pull",
-        json={"model_name": model_id},
+        json=payload,
         headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=PULL_TIMEOUT,
     )
@@ -683,7 +717,13 @@ def provision_progress(
     yield line(f"→ Pulling {model_id} — a first download can take several minutes…")
     try:
         pull_model(probe_base, model_id)
-    except requests.exceptions.RequestException as exc:
+    except (
+        requests.exceptions.RequestException,
+        ValueError,
+        RuntimeError,
+    ) as exc:
+        # ValueError: an undeclared `user.` id. RuntimeError: a gateway-hosted
+        # model with nothing to download. This generator promises a ✗ line.
         yield line(f"✗ Provisioning failed: {type(exc).__name__}: {exc}")
         yield line(
             "✗ The model was not downloaded. Check the Lemonade Server logs, "
