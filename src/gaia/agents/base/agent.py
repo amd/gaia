@@ -773,6 +773,61 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 # One correction — a second disagreement is better than a loop, and the
 # verification footer states the truth either way.
 _MAX_TEST_CLAIM_CORRECTIONS = 1
+_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# Anchored: only a reply that *opens* with an unclosed block was cut off
+# mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
+# reasoning silently deletes everything the model said after it.
+_CUT_OFF_THINK_PATTERN = re.compile(r"\A<think>(?!.*</think>)(.*)\Z", re.DOTALL)
+
+
+def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
+    """Split inline ``<think>`` reasoning out of a reply.
+
+    Returns ``(answer_text, reasoning)``. A reply that *opens* with an unclosed
+    ``<think>`` was cut off mid-thought and is reasoning to the end, and text
+    before a lone ``</think>`` (the template opened the block in the prompt) is
+    reasoning.
+    """
+    parts: List[str] = []
+    if "</think>" in text and "<think>" not in text.split("</think>", 1)[0]:
+        head, _, text = text.partition("</think>")
+        parts.append(head.strip())
+    cut_off = _CUT_OFF_THINK_PATTERN.match(text.lstrip())
+    if cut_off:
+        parts.append(cut_off.group(1).strip())
+        text = ""
+    parts.extend(m.strip() for m in _THINK_BLOCK_PATTERN.findall(text))
+    answer = _THINK_BLOCK_PATTERN.sub("", text).strip()
+    return answer, "\n\n".join(p for p in parts if p) or None
+
+
+def _response_reasoning(response: Any) -> Optional[str]:
+    """The model's reasoning off a chat response, or ``None`` when it has none.
+
+    ``AgentResponse.reasoning`` is declared ``Optional[str]``, but this reads it
+    with ``getattr`` because older responses and test doubles may not carry the
+    attribute at all. Anything that is not a non-empty string is "no reasoning":
+    it would otherwise ride into the request history as ``reasoning_content``
+    and into the trace file, neither of which can serialise it.
+    """
+    value = getattr(response, "reasoning", None)
+    return value if isinstance(value, str) and value else None
+
+
+# A reply that ended on the output-token limit (finish_reason=length).
+_MAX_CUT_OFF_CONTINUATIONS = 2
+_CUT_OFF_CONTINUE_PROMPT = (
+    "Your last reply was cut off at the output-token limit before it finished, "
+    "so nothing in it was carried out. Continue from where you stopped: keep "
+    "your reasoning brief and make the next tool call, or give the final "
+    "answer if the task is complete."
+)
+_CUT_OFF_FAILURE_ANSWER = (
+    "I could not finish this task: my replies kept getting cut off at the "
+    "model's output-token limit, so the work they described was never carried "
+    "out. Retry with a higher output-token limit (max_tokens) or a model that "
+    "reasons more briefly."
+)
 
 # Unfinished-answer guard (#3887): a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
@@ -1293,6 +1348,7 @@ Do NOT wrap conversational replies in JSON.
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
+        resend_reasoning_across_requests: bool = False,
         max_output_tokens: Optional[int] = None,
     ):
         """
@@ -1334,6 +1390,10 @@ Do NOT wrap conversational replies in JSON.
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
+            resend_reasoning_across_requests: If True, reasoning stored on
+                          ``conversation_history`` from earlier user requests
+                          is sent back to the model. Within one request it is
+                          always sent back (default: False).
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
@@ -1356,6 +1416,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_output_tokens = max_output_tokens
         self.device = device
+        self.resend_reasoning_across_requests = resend_reasoning_across_requests
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
         self._requested_skill_set = skill_set
@@ -1891,26 +1952,51 @@ Do NOT wrap conversational replies in JSON.
     def _register_output_reader(self):
         from gaia.agents.base.artifacts import store_for
 
-        def read_tool_output(artifact: str, offset: int = 0, limit: int = 2000) -> dict:
-            """Read exact omitted tool output by handle, without rerunning the tool.
+        def read_tool_output(
+            artifact: str,
+            offset: int = 0,
+            limit: Optional[int] = None,
+            entry: Optional[int] = None,
+        ) -> dict:
+            """Read one part of a condensed tool result, verbatim, without rerunning the tool.
 
-            Args:
-                artifact: Output handle returned by a truncated result.
-                offset: Zero-based character offset in the original output.
-                limit: Page size in characters, 1 to 8000.
-
-            Continue until next_offset is null. For exhaustive item lists from
-            long files, use extract_document_items instead of manual pagination.
+            Pass the result's artifact and the n of the index entry you need.
+            The index already names every omitted part, so paging through a
+            whole output is almost never needed. For exhaustive item lists from
+            long files, use extract_document_items instead.
             """
-            return store_for(self).read(artifact, offset, limit)
+            # Per-argument detail lives in the schema below, not here: this
+            # docstring is the tool description and is re-sent every call.
+            return store_for(self).read(artifact, offset, limit, entry)
 
         self._output_reader_entry = {
             "name": "read_tool_output",
             "description": read_tool_output.__doc__,
             "parameters": {
-                "artifact": {"type": "string", "required": True},
-                "offset": {"type": "integer", "required": False},
-                "limit": {"type": "integer", "required": False},
+                "artifact": {
+                    "type": "string",
+                    "required": True,
+                    "description": "The condensed result's artifact handle.",
+                },
+                "entry": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "The n of an index entry; returns exactly that part.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "Character offset, only when reading without an entry.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "required": False,
+                    "description": (
+                        "Characters to return; defaults to the entry's length. A part "
+                        "over 8000 chars pages: set offset=next_offset and "
+                        "limit=remaining."
+                    ),
+                },
             },
             "function": read_tool_output,
             "atomic": True,
@@ -5382,7 +5468,11 @@ Do NOT wrap conversational replies in JSON.
                 self._register_extraction_tool()
                 self._apply_tool_filter(self._active_tool_filter)
         truncated_result = tool_result
-        if isinstance(tool_result, (dict, list, str)):
+        # Its pages are bounded by the store; condensing one would archive it again.
+        if (
+            isinstance(tool_result, (dict, list, str))
+            and tool_name != "read_tool_output"
+        ):
             # Use custom encoder to handle bytes and other non-serializable types.
             # ensure_ascii=False: this text reaches the model as prose, not a
             # wire format re-parsed on the other end -- escaping would hand it
@@ -5398,55 +5488,9 @@ Do NOT wrap conversational replies in JSON.
             )
             threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
-                from gaia.agents.base.artifacts import store_for
-
-                if not hasattr(self, "_output_reader_entry"):
-                    self._register_output_reader()
-                handle = store_for(self).put(result_str)
-                metadata = {
-                    "artifact": handle,
-                    "continuation": "read_tool_output",
-                    "total_chars": len(result_str),
-                }
-                target -= len(json.dumps(metadata, ensure_ascii=False)) + 4
-                # Some tools hand back json.dumps(...) as a str (code search,
-                # index status). Eliding those mid-record leaves the model half
-                # an entry at each end, so parse first and let the structured
-                # path drop whole items instead.
-                structured = self._as_structured_payload(tool_result)
-                if structured is None:
-                    from gaia.agents.base.tool_output import elide_text
-
-                    truncated_result = elide_text(tool_result, target)
-                else:
-                    # Structured results must remain valid JSON for the model.
-                    truncated_str = self._truncate_large_content(
-                        structured, max_chars=target, as_json=True
-                    )
-                    truncated_result = json.loads(truncated_str)
-                    if isinstance(tool_result, str):
-                        # It arrived as text; hand text back so the tool's
-                        # declared result type does not change under the caller.
-                        truncated_result = json.dumps(
-                            truncated_result, ensure_ascii=False
-                        )
-                was_text = isinstance(truncated_result, str)
-                if was_text:
-                    truncated_result = json.loads(truncated_result)
-                if isinstance(truncated_result, dict):
-                    truncated_result.update(metadata)
-                elif (
-                    truncated_result
-                    and isinstance(truncated_result[-1], dict)
-                    and truncated_result[-1].get("truncated") is True
-                    and truncated_result != structured
-                ):
-                    truncated_result[-1].update(metadata)
-                else:
-                    # Whitespace-heavy JSON can fit after parsing, with no marker.
-                    truncated_result.append(metadata)
-                if was_text:
-                    truncated_result = json.dumps(truncated_result, ensure_ascii=False)
+                truncated_result = self._condense_tool_result(
+                    tool_name, tool_result, tool_args, target
+                )
                 # Notify user about truncation
                 self.console.print_info(
                     f"Note: Large result ({len(result_str)} chars) truncated for LLM context"
@@ -5480,6 +5524,145 @@ Do NOT wrap conversational replies in JSON.
             tool_entry["tool_args"] = tool_args
         conversation.append(tool_entry)
         return truncated_result
+
+    def _condense_tool_result(
+        self,
+        tool_name: str,
+        tool_result: Any,
+        tool_args: Optional[Dict[str, Any]],
+        target: int,
+    ) -> Any:
+        """Fit an over-budget result into ``target`` chars, archiving all of it.
+
+        Text is split along its own structure into ``shown`` + ``index``
+        (``chunk_index``). Records (a dict or list without one dominant text)
+        keep whole leading items and index the dropped ones. Text with no
+        structure to split -- a single long line -- is the one case left to a
+        head/tail excerpt.
+        """
+        from gaia.agents.base import chunk_index
+        from gaia.agents.base.artifacts import store_for
+
+        if not hasattr(self, "_output_reader_entry"):
+            self._register_output_reader()
+        store = store_for(self)
+
+        def serialize(value: Any) -> str:
+            return json.dumps(
+                value, default=self._json_serialize_fallback, ensure_ascii=False
+            )
+
+        # Some tools hand back json.dumps(...) as a str (code search, index
+        # status); those are records, so they take the record path below.
+        structured = self._as_structured_payload(tool_result)
+        if not (isinstance(tool_result, str) and structured is not None):
+            condensed = chunk_index.condense_result(
+                tool_name, tool_result, tool_args, target, store, serialize
+            )
+            if condensed is not None:
+                return condensed
+        if structured is None:
+            return self._elide_with_index(tool_result, target, store)
+        return self._drop_records_with_index(
+            tool_result, structured, target, store, serialize
+        )
+
+    @staticmethod
+    def _elide_with_index(text: str, target: int, store) -> Dict[str, Any]:
+        """Head and tail of structureless text; the index names the middle."""
+        from gaia.agents.base.chunk_index import FETCH_HINT
+        from gaia.agents.base.tool_output import elide_text
+
+        metadata: Dict[str, Any] = {
+            "index": [
+                {
+                    "n": 1,
+                    "label": f"omitted middle ({len(text)} chars)",
+                    "offset": len(text),
+                    "length": len(text),
+                }
+            ],
+            "artifact": store.put(text),
+            "continuation": "read_tool_output",
+            "fetch": FETCH_HINT,
+            "total_chars": len(text),
+        }
+        excerpt = elide_text(
+            text, target - len(json.dumps(metadata, ensure_ascii=False)) - 4
+        )
+        omitted = excerpt["omitted_chars"]
+        metadata["index"] = [
+            {
+                "n": 1,
+                "label": f"omitted middle ({omitted} chars)",
+                "offset": len(excerpt["head"]),
+                "length": omitted,
+            }
+        ]
+        store.set_index(metadata["artifact"], metadata["index"])
+        excerpt.update(metadata)
+        return excerpt
+
+    def _drop_records_with_index(
+        self,
+        tool_result: Any,
+        structured: Any,
+        target: int,
+        store,
+        serialize,
+    ) -> Any:
+        """Whole leading records, plus an index of the records left out."""
+        from gaia.agents.base import chunk_index
+
+        # One record per line, so each index entry starts on its own line; a
+        # str keeps its exact original bytes.
+        archived = (
+            tool_result
+            if isinstance(tool_result, str)
+            else json.dumps(
+                structured,
+                indent=1,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
+            )
+        )
+        chunks = chunk_index.split_oversized(archived, chunk_index.chunk_json(archived))
+        short = False
+        if chunks:
+            chunks, short = chunk_index.fit_index(chunks, target // 4)
+        metadata: Dict[str, Any] = {
+            "index": chunk_index.index_entries(chunks, short),
+            "artifact": store.put(archived),
+            "continuation": "read_tool_output",
+            "fetch": chunk_index.FETCH_HINT,
+            "total_chars": len(archived),
+        }
+        budget = target - len(serialize(metadata)) - 4
+        # Structured results must remain valid JSON for the model.
+        shown = json.loads(
+            self._truncate_large_content(structured, max_chars=budget, as_json=True)
+        )
+        metadata["index"] = chunk_index.index_entries(
+            [c for c in chunks if not chunk_index.covered(c, structured, shown)], short
+        )
+        store.set_index(metadata["artifact"], metadata["index"])
+        if isinstance(shown, dict):
+            shown.update(metadata)
+        elif (
+            shown
+            and isinstance(shown[-1], dict)
+            and shown[-1].get("truncated") is True
+            and shown != structured
+        ):
+            shown[-1].update(metadata)
+        else:
+            # Whitespace-heavy JSON can fit after parsing, with no marker.
+            shown.append(metadata)
+        if isinstance(tool_result, str):
+            # It arrived as text; hand text back so the tool's declared result
+            # type does not change under the caller.
+            return json.dumps(shown, ensure_ascii=False)
+        return shown
 
     def _progress_label(self) -> str:
         """Name the phase the loop is in, in the user's terms (#2804).
@@ -5667,7 +5850,50 @@ Do NOT wrap conversational replies in JSON.
                 shrunk_rest.append(shrunk)
             else:
                 shrunk_rest.append(m)
-        return [first] + shrunk_rest
+        return self._with_overflow_note([first] + shrunk_rest)
+
+    def _with_overflow_note(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Restate a mixin's ``overflow_recovery_note`` on the last user message.
+
+        Stubbing old tool results drops what they taught this turn (memory's
+        lessons). User messages are never stubbed, so the note survives.
+        """
+        hook = getattr(self, "overflow_recovery_note", None)
+        try:
+            note = hook() if callable(hook) else ""
+        except Exception as exc:
+            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
+            logger.debug("Could not build the overflow recovery note: %s", exc)
+            return messages
+        if not note:
+            return messages
+
+        def _text(content: Any) -> str:
+            if isinstance(content, list):
+                return "\n".join(
+                    str(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict)
+                )
+            return str(content or "")
+
+        if any(note in _text(m.get("content")) for m in messages):
+            return messages
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            content = message.get("content")
+            if message.get("role") != "user":
+                continue
+            if isinstance(content, str):
+                content = f"{content}\n\n{note}"
+            elif isinstance(content, list):
+                content = [*content, {"type": "text", "text": note}]
+            else:
+                continue
+            return messages[:i] + [{**message, "content": content}] + messages[i + 1 :]
+        return messages
 
     def _create_tool_message(
         self,
@@ -5690,17 +5916,21 @@ Do NOT wrap conversational replies in JSON.
                 a fresh uuid is synthesised for backward compatibility
                 with embedded-JSON paths that don't carry an id.
         """
-        if isinstance(tool_output, str):
+        if isinstance(tool_output, str) or tool_name == "read_tool_output":
+            # A read_tool_output page is bounded by the store and must stay exact.
             text_content = tool_output
         else:
             # Every call site hands this a result ``_handle_large_tool_result``
             # already fitted to the device budget, so this is a backstop, not
-            # the real gate -- it must not be tighter than the gate it backs.
-            _, target = self._truncation_budget()
+            # the real gate -- it must not be tighter than the gate it backs,
+            # which passes anything up to its threshold untouched.
+            threshold, _ = self._truncation_budget()
             # Prose call site: text_content is spliced into a message's text
             # field, never json.loads'd -- stays on the default prose path,
             # not the JSON-safe envelope (#2620, reflection C2).
-            text_content = self._truncate_large_content(tool_output, max_chars=target)
+            text_content = self._truncate_large_content(
+                tool_output, max_chars=threshold
+            )
 
         if not isinstance(text_content, str):
             text_content = json.dumps(
@@ -5720,8 +5950,24 @@ Do NOT wrap conversational replies in JSON.
                     break
         return msg
 
+    def _history_for_request(self) -> List[Dict[str, Any]]:
+        """``conversation_history``, with earlier requests' reasoning stripped.
+
+        Every subclass that prepopulates a request from history must go through
+        here, or ``resend_reasoning_across_requests`` only holds for some of them.
+        """
+        history = getattr(self, "conversation_history", None) or []
+        if self.resend_reasoning_across_requests:
+            return list(history)
+        return [
+            {k: v for k, v in m.items() if k != "reasoning_content"} for m in history
+        ]
+
     def _build_assistant_message(
-        self, raw_response: str, parsed: Dict[str, Any]
+        self,
+        raw_response: str,
+        parsed: Dict[str, Any],
+        reasoning: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Construct the assistant message to append to the LLM context.
@@ -5737,11 +5983,16 @@ Do NOT wrap conversational replies in JSON.
 
         For embedded-JSON / plain-text responses we keep passing the raw
         response text through unchanged.
+
+        ``reasoning`` rides along as ``reasoning_content`` so the model keeps
+        its own reasoning across the steps of one request.
         """
+        extra = {"reasoning_content": reasoning} if reasoning else {}
         tc_list = parsed.get("tool_calls")
         if not tc_list:
-            return {"role": "assistant", "content": raw_response}
+            return {"role": "assistant", "content": raw_response, **extra}
         return {
+            **extra,
             "role": "assistant",
             "content": parsed.get("content"),
             "tool_calls": [
@@ -6380,7 +6631,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self.conversation_history)
+            messages.extend(self._history_for_request())
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
@@ -6406,6 +6657,7 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         verify_after_change_reprompted = False
         test_claim_corrections = 0
+        cut_off_continuations = 0
         completion_corrections = 0
         completion_gaps = []
         # Issue #1023: track the latest outcome of any capability tool
@@ -6878,6 +7130,8 @@ Do NOT wrap conversational replies in JSON.
             # Handle streaming or non-streaming LLM response
             # Initialize response_stats so it's always in scope
             response_stats = None
+            response_finish_reason = None
+            response_reasoning = None
 
             if self.streaming:
                 # Streaming mode - raw response will be streamed
@@ -6928,6 +7182,10 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
+                                response_finish_reason = getattr(
+                                    chunk_response, "finish_reason", None
+                                )
+                                response_reasoning = _response_reasoning(chunk_response)
                                 # Non-empty complete chunk = tool_calls sentinel from
                                 # native tool-calling path (no streaming for tool calls)
                                 if chunk_response.text:
@@ -7087,6 +7345,10 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
+                        response_finish_reason = getattr(
+                            chat_response, "finish_reason", None
+                        )
+                        response_reasoning = _response_reasoning(chat_response)
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
@@ -7214,19 +7476,51 @@ Do NOT wrap conversational replies in JSON.
                 # Stop the progress indicator
                 self.console.stop_progress()
 
-            # Strip <think>...</think> blocks emitted by reasoning models
-            # (e.g. Qwen3.5).  Must happen before parsing so the JSON extractor
-            # finds clean input, and before the response is stored in
-            # conversation_history so the thinking text never bleeds into the
-            # next turn and confuses the model about the current user message.
-            response = re.sub(
-                r"<think>.*?</think>", "", response, flags=re.DOTALL
-            ).strip()
+            # Reasoning is kept as reasoning: never parsed, never the answer.
+            response, inline_reasoning = _split_reasoning(response)
+            reasoning = response_reasoning or inline_reasoning
 
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")
             if self.show_prompts:
                 self.console.print_response(response, "LLM Response")
+
+            # A reply the output-token limit cut off is unfinished whatever it
+            # says; parsing it would turn half a thought into the answer.
+            if response_finish_reason == "length" and not response.startswith(
+                '{"__tool_calls__":'
+            ):
+                self.error_history.append(
+                    {
+                        "step": steps_taken,
+                        "error": "reply cut off at the output-token limit",
+                        "type": "output_truncated",
+                    }
+                )
+                if (
+                    cut_off_continuations >= _MAX_CUT_OFF_CONTINUATIONS
+                    or steps_taken >= steps_limit
+                ):
+                    logger.warning(
+                        "[WORKFLOW] Reply cut off at the output-token limit "
+                        "%d time(s) this turn; stopping (step %d/%d)",
+                        cut_off_continuations + 1,
+                        steps_taken,
+                        steps_limit,
+                    )
+                    final_answer = _CUT_OFF_FAILURE_ANSWER
+                    break
+                cut_off_continuations += 1
+                logger.info(
+                    "[WORKFLOW] Reply cut off at the output-token limit; "
+                    "asking the model to continue (%d/%d)",
+                    cut_off_continuations,
+                    _MAX_CUT_OFF_CONTINUATIONS,
+                )
+                if response:
+                    messages.append({"role": "assistant", "content": response})
+                messages.append({"role": "user", "content": _CUT_OFF_CONTINUE_PROMPT})
+                continue
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed
             # tool_calls JSON — concatenated enum values, unterminated strings,
@@ -7315,12 +7609,15 @@ Do NOT wrap conversational replies in JSON.
                 steps_taken += 1
                 continue
             logger.debug(f"Parsed response: {parsed}")
-            conversation.append({"role": "assistant", "content": parsed})
+            conversation.append(
+                {"role": "assistant", "content": parsed}
+                | ({"reasoning": reasoning} if reasoning else {})
+            )
 
             # Add assistant response to messages for chat history (OpenAI
             # shape for native tool_calls, raw text otherwise — see
             # ``_build_assistant_message`` for the why).
-            messages.append(self._build_assistant_message(response, parsed))
+            messages.append(self._build_assistant_message(response, parsed, reasoning))
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -7371,6 +7668,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Handle streaming as before
                     full_response = ""
+                    plan_reasoning = None
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
 
@@ -7384,6 +7682,7 @@ Do NOT wrap conversational replies in JSON.
 
                     for chunk_response in stream_gen:
                         if chunk_response.is_complete:
+                            plan_reasoning = _response_reasoning(chunk_response)
                             if chunk_response.text:
                                 full_response = chunk_response.text
                         else:
@@ -7425,12 +7724,11 @@ Do NOT wrap conversational replies in JSON.
                         max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
+                    plan_reasoning = _response_reasoning(chat_response)
                     self.console.stop_progress()
 
-                # Strip <think> blocks before parsing (same reason as main path)
-                plan_response = re.sub(
-                    r"<think>.*?</think>", "", plan_response, flags=re.DOTALL
-                ).strip()
+                plan_response, inline_plan_reasoning = _split_reasoning(plan_response)
+                plan_reasoning = plan_reasoning or inline_plan_reasoning
 
                 # Parse the plan response
                 try:
@@ -7473,7 +7771,10 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken += 1
                     continue
                 logger.debug(f"Parsed plan response: {parsed_plan}")
-                conversation.append({"role": "assistant", "content": parsed_plan})
+                conversation.append(
+                    {"role": "assistant", "content": parsed_plan}
+                    | ({"reasoning": plan_reasoning} if plan_reasoning else {})
+                )
 
                 # Add plan response to messages for chat history. Same
                 # OpenAI-shape rule as the main-response append (issue
@@ -7483,7 +7784,9 @@ Do NOT wrap conversational replies in JSON.
                 # assistant turn so the fan-out below can correlate
                 # results back via ``tool_call_id``.
                 messages.append(
-                    self._build_assistant_message(plan_response, parsed_plan)
+                    self._build_assistant_message(
+                        plan_response, parsed_plan, plan_reasoning
+                    )
                 )
 
                 # Display the agent's reasoning for the plan
