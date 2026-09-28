@@ -44,6 +44,11 @@ When a grant is requested during OAuth connect, GAIA records only the
 intersection of the agent's requested scopes and the scopes the token endpoint
 actually grants.
 
+The connection record itself is the opposite: it stores exactly the scope set the
+token endpoint returned, including scopes granted by an earlier connect that
+Google folds back in. The record therefore states what the refresh token can do,
+while grants state what each agent may use it for.
+
 ## Revocation
 
 You can revoke access at any level:

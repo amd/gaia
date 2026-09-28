@@ -238,6 +238,48 @@ class TestGrantedScopesTruthfulness:
         blob = peek_connection("google")
         assert set(blob["scopes"]) == {"openid", "email"}
 
+    @respx.mock
+    async def test_wider_returned_scope_is_what_gets_persisted(self, google_provider):
+        """#3851: ``include_granted_scopes=true`` makes Google return scopes
+        granted under earlier connections too. The token carries them, so the
+        connection record must carry them — dropping them keeps ``check_scopes``
+        asking for a reconnect the user already completed."""
+        requested = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
+        extra = "https://www.googleapis.com/auth/calendar.readonly"
+        respx.post("https://oauth2.googleapis.com/token").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "fresh-access",
+                    "refresh_token": "fresh-refresh",
+                    "expires_in": 3600,
+                    # Calendar was granted by an earlier connect and folded in.
+                    "scope": " ".join(requested + [extra]),
+                    "id_token": (
+                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                    ),
+                },
+            )
+        )
+        respx.route(host="127.0.0.1").pass_through()
+
+        from gaia.connectors.store import peek_connection
+
+        info = await start_authorization("google", scopes=requested)
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+        async with httpx.AsyncClient(trust_env=False) as c:
+            await c.get(f"{redirect_uri}?code=ok&state={state}")
+        result = await asyncio.wait_for(
+            complete_authorization(info["flow_id"]), timeout=2.0
+        )
+
+        expected = set(requested) | {extra}
+        assert set(result["scopes"]) == expected
+        blob = peek_connection("google")
+        assert set(blob["scopes"]) == expected
+
 
 class TestTenantRecordedOnConnect:
     """D8 (#2628): the loopback exchange must record the minting authority
