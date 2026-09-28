@@ -1574,6 +1574,24 @@ class TestInstallerLeftovers:
         assert exit_code == uc.EXIT_OK, captured.text
         assert (outside / "instance.json").exists()
         assert str(outside) in captured.text
+        assert "(GAIA_DAEMON_HOME)" in captured.text
+
+    def test_skip_note_names_no_variable_when_none_is_set(
+        self, installer_home, monkeypatch, fs
+    ):
+        """The note must not blame a variable the user never exported."""
+        outside = Path("/elsewhere/daemon")
+        fs.create_file(outside / "instance.json", contents="{}")
+        monkeypatch.setattr(uc, "_daemon_host_dir", lambda: outside)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert (outside / "instance.json").exists()
+        assert "is outside the GAIA home, so it is left alone" in captured.text
+        assert "GAIA_DAEMON_HOME" not in captured.text
+        assert "GAIA_HOME" not in captured.text
 
     def test_running_daemon_is_stopped_before_host_is_deleted(
         self, installer_home, monkeypatch

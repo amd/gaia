@@ -672,11 +672,12 @@ def _plan_installer_leftovers(plan: UninstallPlan, home: Optional[Path]) -> None
         plan.tiered_paths.append(("--purge", host))
         plan.stop_daemon = True
     elif host.exists():
-        cause = (
-            "GAIA_DAEMON_HOME" if os.environ.get("GAIA_DAEMON_HOME") else "GAIA_HOME"
-        )
+        # Name a variable only when one is actually set: a symlinked host/ lands
+        # here with neither exported.
+        set_vars = [v for v in ("GAIA_DAEMON_HOME", "GAIA_HOME") if os.environ.get(v)]
+        cause = f" ({set_vars[0]})" if set_vars else ""
         plan.notes.append(
-            f"Daemon state at {host} is outside the GAIA home ({cause}), "
+            f"Daemon state at {host} is outside the GAIA home{cause}, "
             "so it is left alone. Run `gaia daemon stop`, then delete it yourself."
         )
 
