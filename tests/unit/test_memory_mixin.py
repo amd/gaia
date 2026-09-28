@@ -1622,6 +1622,24 @@ class TestToolExecutionLogging:
 
         stats = mixin_host.memory_store.get_tool_stats("read_file")
         assert stats["total_calls"] >= 1
+        assert stats["success_rate"] == 1.0
+
+    def test_execute_tool_logs_denied_call_as_failure(self, mixin_host, monkeypatch):
+        """A call denied before execution is unsuccessful in tool_history."""
+        error = "Tool 'write_file' was denied by the user."
+
+        def denied_tool(self_arg, name, args):
+            return {"status": "denied", "error": error}
+
+        monkeypatch.setattr(FakeAgent, "_execute_tool", denied_tool)
+
+        result = mixin_host._execute_tool("write_file", {"path": "/test.py"})
+
+        assert result == {"status": "denied", "error": error}
+        rows = mixin_host.memory_store.get_tool_history("write_file")
+        assert len(rows) == 1
+        assert rows[0]["success"] == 0
+        assert rows[0]["error"] == error
 
     def test_execute_tool_logs_failure(self, mixin_host):
         """_execute_tool logs failed tool calls with error details."""

@@ -2948,7 +2948,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             duration_ms = int((time.time() - start) * 1000)
 
             # Determine success from result dict
-            is_error = isinstance(result, dict) and result.get("status") == "error"
+            is_error = isinstance(result, dict) and result.get("status") in (
+                "error",
+                "denied",
+            )
             if is_error:
                 error_msg = str(
                     result.get("error_brief") or result.get("error") or "Unknown error"
