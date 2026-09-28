@@ -20,6 +20,7 @@ import pytest
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.eval import flagship_tasks as ft
 from gaia.eval import task_setups as setups
+from gaia.eval.bench import gaia_child, harness
 
 ALL_TASKS = ft.load_suite("full")
 TASKS = {t.id: t for t in ALL_TASKS}
@@ -197,7 +198,7 @@ ADVERSARIAL = {
 
 def test_every_suite_loads_and_core_is_a_subset_of_full():
     suites = {name: {t.id for t in ft.load_suite(name)} for name in ft.suite_names()}
-    assert set(suites) == {"core", "full", "adversarial"}
+    assert set(suites) == {"core", "full", "adversarial", "everyday", "therock"}
     assert suites["core"] <= suites["full"] and suites["adversarial"] <= suites["full"]
     assert suites["adversarial"] == ADVERSARIAL
     # CI runs core: only the short adversarial tasks, never the one that hangs.
@@ -213,7 +214,8 @@ def test_every_stated_task_has_a_reference_answer():
 
 
 def test_every_setup_is_used_by_a_task():
-    assert {t.setup for t in ALL_TASKS if t.setup} == set(setups.SETUPS)
+    every = [t for name in ft.suite_names() for t in ft.load_suite(name)]
+    assert {t.setup for t in every if t.setup} == set(setups.SETUPS)
 
 
 def test_the_fixture_suite_passes_untouched(tmp_path):
@@ -625,6 +627,10 @@ class _FakeAgent:
         self.config = config
         self.console = SimpleNamespace(auto_approve_gated_tools=False)
         self.error_history = list(type(self).error_history)
+        self.chat = SimpleNamespace(send_messages=lambda *a, **k: None)
+
+    def _execute_tool(self, tool_name, tool_args):
+        return {"status": "success"}
 
     def process_query(self, prompt):
         type(self).seen.append(
@@ -647,8 +653,28 @@ class _FakeAgent:
         }
 
 
+def inline_launch(cmd, *, env, cwd, timeout_s, stdout_path, stderr_path):
+    """The GAIA harness's child, run in this process so the stand-in agent is seen.
+
+    The environment the child would get replaces this process's for the call.
+    """
+    assert cmd[1:3] == ["-m", "gaia.eval.bench.gaia_child"], cmd
+    saved = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(env)
+    try:
+        return gaia_child.main([cmd[3]]), False
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
 @pytest.fixture
 def fake_agent(monkeypatch, tmp_path):
+    monkeypatch.setattr(harness, "launch", inline_launch)
+    monkeypatch.setenv("GAIA_BENCH_WORK_ROOT", str(tmp_path / "work"))
+    # The run's gateway must never point at a live Lemonade.
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
     _FakeAgent.seen = []
     _FakeAgent.behaviour = staticmethod(lambda workdir: "done")
     _FakeAgent.error_history = []
