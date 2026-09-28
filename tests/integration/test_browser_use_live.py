@@ -483,9 +483,28 @@ def test_a_redirect_to_a_blocked_address_never_returns_its_body(
     assert "INTERNAL-SECRET-BODY" not in str(excinfo.value)
 
 
-def test_an_allowed_navigation_still_works(guarded_driver, ssrf_url):
+@pytest.fixture
+def own_guarded_driver(ssrf_url):
+    """Like ``guarded_driver``, but not shared with the refusal tests.
+
+    Refusing a navigation aborts it, which parks Chrome on
+    ``chrome-error://chromewebdata/`` with the abort still settling. On the
+    module-scoped driver the next ``goto`` races that and loses on a loaded
+    runner: "Navigation to … is interrupted by another navigation".
+    """
+
+    def allow(url):
+        return url.startswith(ssrf_url)
+
+    d = browser_driver.PlaywrightDriver(headless=True, allow_navigation=allow)
+    d.start()
+    yield d
+    d.close()
+
+
+def test_an_allowed_navigation_still_works(own_guarded_driver, ssrf_url):
     """The guard must not block the ordinary case."""
-    snap = guarded_driver.goto(f"{ssrf_url}/index.html")
+    snap = own_guarded_driver.goto(f"{ssrf_url}/index.html")
     assert "index.html" in snap["url"]
 
 

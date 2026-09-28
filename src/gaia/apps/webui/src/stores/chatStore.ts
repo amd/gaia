@@ -165,18 +165,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Agents
     agents: [],
     activeAgentId: readPref('gaia-active-agent-id', FLAGSHIP_AGENT_ID),
-    // Re-point a stored selection that the backend no longer offers (a retired
-    // agent, an uninstalled one) so the picker is never highlighting nothing.
-    // An empty list means discovery is still in flight — keep the selection.
+    // Re-point a stored selection the backend no longer offers -- a retired
+    // `chat`/`doc`/`file`, or an uninstalled agent -- so the picker is never
+    // highlighting nothing. Only ever TO the flagship, and only when the
+    // flagship is actually in the list: a list without it is discovery still
+    // settling, and falling back to whatever came first would drop the user on
+    // an agent nobody chose.
     setAgents: (agents) => {
         const { activeAgentId } = get();
-        if (!agents.length || agents.some((a) => a.id === activeAgentId)) {
+        const flagship = agents.find((a) => a.id === FLAGSHIP_AGENT_ID);
+        if (!flagship || agents.some((a) => a.id === activeAgentId)) {
             set({ agents });
             return;
         }
-        const next = agents.find((a) => a.id === FLAGSHIP_AGENT_ID) ?? agents[0];
-        writePref('gaia-active-agent-id', next.id);
-        set({ agents, activeAgentId: next.id });
+        writePref('gaia-active-agent-id', flagship.id);
+        set({ agents, activeAgentId: flagship.id });
     },
     setActiveAgentId: (id) => {
         writePref('gaia-active-agent-id', id);

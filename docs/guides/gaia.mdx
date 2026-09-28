@@ -177,7 +177,7 @@ Use it when you know the session is chat: a voice front-end, a quick question, a
 
 Thirteen tools mutate your machine or your accounts and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`wait_for_condition`** (it re-runs a shell command until it succeeds), **`execute_python_file`**, **`run_python`**, **`notify_desktop`** (on Windows it spawns a PowerShell child to draw the notification), **`install_cli`** and **`sign_in_cli`** (they install software and sign you in to an account), **`browser_login`** (it opens a window and persists a signed-in session), and — because installing or capturing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`**, **`capture_skill`**, and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory, and `check_cli_setup` — runs without asking.
 
-The browser's acting tools are gated by *situation* rather than by name: clicking and typing on the open web is ungated, the same as fetching a page, but the same click **inside a session you signed in to** asks first, as does anything whose label reads irreversible. See [Driving a browser](/docs/guides/browser-use).
+The browser's acting tools are gated by *situation* rather than by name: clicking and typing on the open web is ungated, the same as fetching a page, but the same click **inside a session you signed in to** asks first, as does anything whose label reads irreversible. See [Driving a browser](/guides/browser-use).
 
 <Warning>
   **Over the sidecar's `/query` stream, a gated tool asks only if you can answer.** Pass a

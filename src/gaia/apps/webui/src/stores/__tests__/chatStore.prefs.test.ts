@@ -53,7 +53,9 @@ describe('UI preferences survive a blocked localStorage -- loudly', () => {
 
         const { useChatStore } = await import('../chatStore');
 
-        expect(useChatStore.getState().activeAgentId).toBe('chat');
+        // The flagship, not `chat` — that id is hidden from the picker now, so
+        // falling back to it would open on an agent the backend does not list.
+        expect(useChatStore.getState().activeAgentId).toBe('gaia');
         expect(warn, 'an unreadable preference was swallowed silently').toHaveBeenCalled();
         expect(warnings()).toMatch(/unreadable/);
     });
