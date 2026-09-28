@@ -204,6 +204,15 @@ RRF_K = 60
 #: it. Stored per workspace, since a project's quirks don't carry to another.
 LESSON_DOMAIN = "lesson"
 LESSON_SOURCE = "tool_lesson"
+
+
+def _is_lesson(item: Dict) -> bool:
+    """Whether *item* is a lesson this agent wrote, not one the model labelled.
+
+    ``source`` is set by the write path; ``domain`` is a string the extraction
+    model chooses, so it alone cannot decide this.
+    """
+    return item.get("source") == LESSON_SOURCE
 LESSON_INITIAL_CONFIDENCE = 0.5
 LESSON_CONFIRM_DELTA = 0.1
 #: Lessons shown in the stable prompt, and each piece's length cap.
@@ -2684,7 +2693,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 # Lessons are filed as notes but belong to one workspace and
                 # carry raw tool output. They have their own path, which scopes
                 # them and frames them against injection; this one does neither.
-                or item.get("domain") == LESSON_DOMAIN
+                # Keyed on source, not domain: the extraction model picks the
+                # domain string and will tag an ordinary fact "lesson" if the
+                # turn mentioned one, which would suppress that fact forever.
+                or _is_lesson(item)
                 or (contexts is not None and item.get("context") not in contexts)
             ):
                 continue
@@ -3649,9 +3661,16 @@ class MemoryMixin(ProceduralMemoryMixin):
             started - job.queued_at,
         )
         try:
-            existing = self._hybrid_search(
-                job.user_input, context=job.read_scope, top_k=10
-            )
+            # Same workspace rule as per-turn recall: the read scope is
+            # unfiltered in a global session, so without this another
+            # project's lessons reach this prompt as "existing memory".
+            existing = [
+                item
+                for item in self._hybrid_search(
+                    job.user_input, context=job.read_scope, top_k=10
+                )
+                if not _is_lesson(item)
+            ]
             operations = self._extract_via_llm(
                 job.user_input, job.assistant_response, existing, job.tool_record
             )

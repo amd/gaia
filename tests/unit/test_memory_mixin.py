@@ -5225,6 +5225,41 @@ class TestBackgroundExtraction:
             for item in host._memory_store.get_by_category("fact", context="global")
         ]
 
+    def test_another_workspaces_lesson_stays_out_of_the_extraction_prompt(
+        self, bg_host
+    ):
+        """The extraction call is a prompt too, and it is not user-visible.
+
+        Its "existing memory" list comes from an unfiltered read scope in a
+        global session, so without a lesson filter another project's raw tool
+        output reaches this prompt — the same leak the per-turn path was fixed
+        for, one call further in.
+        """
+        from gaia.agents.base.memory import LESSON_DOMAIN, LESSON_SOURCE
+
+        bg_host._memory_store.store(
+            category="note",
+            content="pytest needs PYTHONHASHSEED=0 in the other project",
+            domain=LESSON_DOMAIN,
+            source=LESSON_SOURCE,
+            context="workspace:/some/other/project",
+        )
+        prompts = []
+
+        def _send(messages, **_kwargs):
+            prompts.append(messages[0]["content"])
+            return MagicMock(text=self._add_op("Priya deploys on Fridays"))
+
+        bg_host.chat = MagicMock()
+        bg_host.chat.send_messages.side_effect = _send
+        user, assistant = self._turn()
+
+        bg_host._after_process_query(user, assistant)
+        assert bg_host.wait_for_memory_extraction(timeout=10) is True
+
+        assert prompts, "extraction never ran"
+        assert not any("PYTHONHASHSEED" in p for p in prompts)
+
     def test_turn_returns_before_extraction_finishes(self, bg_host):
         """The answer is done the moment the turn ends; extraction follows."""
         release = threading.Event()
