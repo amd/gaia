@@ -98,6 +98,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalTokenEvent:
 		m.buffer += e.Delta
+		// Deliberately NOT the shared updateViewport tail below: see markDirty.
+		// A token is the one event that arrives faster than a person types, and
+		// re-rendering the whole transcript for each one is what makes the
+		// composer feel dead while an answer streams.
+		m.markDirty()
+		return m, waitForEvent(m.events), true
 
 	case event.CanonicalToolCallEvent:
 		item := ActivityItem{

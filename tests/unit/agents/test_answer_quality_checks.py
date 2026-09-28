@@ -241,10 +241,14 @@ class TestVerifyAfterChangeSilent:
 
     def test_writing_a_report_is_not_a_code_change(self, project, scripted):
         agent, chat = scripted(
-            [_call("write_file", path="notes.md", content="# Notes\n"), _answer("Ok.")]
+            [
+                _call("write_file", path="notes.md", content="# Notes\n"),
+                _call("read_file", path="notes.md"),
+                _answer("Ok."),
+            ]
         )
         result = agent.process_query("Jot some notes down.")
-        assert chat.send_messages.call_count == 2
+        assert chat.send_messages.call_count == 3
         assert not _tagged(result, VERIFY_AFTER_CHANGE_TAG)
 
 
@@ -292,3 +296,36 @@ class TestVerifyAfterChangeHelpers:
 
     def test_no_root_means_no_suite(self):
         assert not project_has_tests(None)
+
+
+@pytest.mark.parametrize(
+    "output,is_a_test_run",
+    [
+        # A compiler, a downloader, a packager — all print these, and reading
+        # one as "the tests ran" silently cancels the reminder.
+        ("2 warnings", False),
+        ("12 skipped", False),
+        ("Found 3 errors", False),
+        # A real runner: an outcome, or pytest's own rule / timing tail.
+        ("1 failed, 2 passed in 0.20s", True),
+        ("===== 3 skipped in 0.01s =====", True),
+        ("3 skipped in 0.01s", True),
+        ("===== 2 warnings =====", True),
+        ("no tests ran", True),
+        ("Ran 4 tests in 0.003s", True),
+        # The other runners the record knows, by their own summary lines.
+        ("Tests:       10 passed, 10 total", True),
+        ("      Tests  1 failed | 2 passed (3)", True),
+        ("  10 passing (52ms)", True),
+        ("ok  \tgithub.com/x/pkg\t0.012s", True),
+        (
+            "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+            True,
+        ),
+        ("ok  \tgithub.com/x/pkg\t0.002s [no tests to run]", False),
+    ],
+)
+def test_soft_counts_alone_are_not_a_test_run(output, is_a_test_run):
+    from gaia.agents.base.verification import has_test_run_summary
+
+    assert has_test_run_summary(output) is is_a_test_run

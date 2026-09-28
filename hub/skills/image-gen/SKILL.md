@@ -96,8 +96,8 @@ The common failures and what to say:
 - **Cannot reach Lemonade Server** — inference is not running. Tell them to
   start it; nothing here works until it is up.
 - **Timed out** — usually the first use of a model, downloading several GB.
-  The server is fine. Tell them to pre-fetch it (`lemonade-server pull
-  <model>`) and retry, rather than restarting anything.
+  The server is fine. Tell them to pre-fetch it with the pull command the
+  error names for their install, then retry, rather than restarting anything.
 - **Invalid model or size** — you passed something outside the supported set.
   Call `list_sd_models()` and pick from what it returned.
 

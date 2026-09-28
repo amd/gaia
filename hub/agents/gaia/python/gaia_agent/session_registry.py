@@ -31,6 +31,10 @@ logger = get_logger(__name__)
 #: Human label used in the cap-exhausted error below.
 AGENT_LABEL = "GAIA"
 
+#: Inference backends, spelled as ``/query``'s ``provider`` field spells them.
+PROVIDER_LOCAL = "lemonade"
+PROVIDER_CLAUDE = "claude"
+
 #: Distinguishes "id was in _evicted_ids" from "id mapped to None" — dict.pop's
 #: default can't do that since the dict's values are always None already.
 _SENTINEL = object()
@@ -52,10 +56,15 @@ def _permission_state():
 
     Imported lazily, like :func:`build_session_agent`, so this module stays
     dependency-light until a session actually exists.
+
+    ``lifts_shell_gates=False`` because these sessions belong to the HTTP
+    transport: ``/sessions/{id}/bypass`` may stop asking for approval, but the
+    shell guardrails are a stdio affordance (#3373) — lifting them for a bound
+    socket is remote code execution, not a relaxed permission model.
     """
     from gaia_agent.stdio import PermissionState
 
-    return PermissionState()
+    return PermissionState(lifts_shell_gates=False)
 
 
 class SessionCapacityError(RuntimeError):
@@ -73,7 +82,13 @@ class _AgentSession:
     second turn cannot corrupt the cached agent's conversation state.
     """
 
-    def __init__(self, session_id: str, agent: Any, model_id: Any = None) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        agent: Any,
+        model_id: Any = None,
+        provider: str = PROVIDER_LOCAL,
+    ) -> None:
         self.session_id = session_id
         self.agent = agent
         #: The ``model_id`` this session's agent was BUILT with (``None`` = the
@@ -81,6 +96,9 @@ class _AgentSession:
         #: asking for a different one cannot be honoured — the server compares
         #: against this and refuses rather than running the old model silently.
         self.model_id = model_id
+        #: The backend the agent is on now — ``PROVIDER_LOCAL`` or
+        #: ``PROVIDER_CLAUDE`` — so a turn naming another one is a switch.
+        self.provider = provider
         self.run_lock = threading.Lock()
         #: True exactly once, on the session built to replace one this
         #: registry involuntarily evicted (LRU cap or idle timeout) — never
@@ -117,10 +135,12 @@ class _AgentSession:
         Returns the friendly display name. Raises ``RuntimeError`` with an
         actionable message on failure, having left the agent untouched.
         """
+        from gaia_agent.stdio import is_claude_model
         from gaia_agent.stdio import switch_model as _switch
 
         display = _switch(self.agent, target)
         self.model_id = target
+        self.provider = PROVIDER_CLAUDE if is_claude_model(target) else PROVIDER_LOCAL
         return display
 
     def is_running(self) -> bool:
@@ -140,12 +160,22 @@ _DEFAULT_MAX_SESSIONS = 100
 def close_agent(agent: Any) -> None:
     """Release one agent's handles — RAG/index, scratchpad DB, HTTP session.
 
+    Waits, briefly and boundedly, for the agent's background memory extraction
+    first: for a one-shot agent this is the only chance the last turn's facts
+    get to reach disk. Callers are off the turn's critical path by then — the
+    sidecar closes only after ``signal_done``.
+
     ``close()`` is the flagship's teardown; ``close_db()`` is the email agent's,
     accepted so a caller can hand either here. An agent exposing neither is a
     LOUD error, not a quiet skip: this helper reached that state once already by
     probing only ``close_db``, which ``GaiaAgent`` does not define, and every
     eviction leaked the whole agent while looking like it had cleaned up.
     """
+    # Background memory extraction still holds this agent's store and embedder.
+    from gaia.agents.base.memory import drain_memory_extraction
+
+    drain_memory_extraction(agent)
+
     close = getattr(agent, "close", None)
     if not callable(close):
         close = getattr(agent, "close_db", None)
@@ -246,34 +276,51 @@ class _SessionRegistry:
             with self._lock:
                 self._pending.discard(session_id)
             raise
+        # The agent to tear down if this creator lost the race. Closed AFTER
+        # the critical section: close_agent drains background extraction, which
+        # is bounded in seconds, and no other session should queue behind a
+        # throwaway agent's teardown. One lock block still decides the winner.
+        lost_the_race = None
         with self._lock:
             self._pending.discard(session_id)
             existing = self._sessions.get(session_id)
             if existing is not None:
-                close_agent(agent)
+                lost_the_race = agent
+                session = existing
                 self._last_used[session_id] = time.monotonic()
-                return existing
-            # Consume the eviction tombstone HERE, on the branch that installs
-            # the session — popped any earlier, a racing creator for the same
-            # id could win the install with the flag already consumed, and the
-            # "your loaded skills were reset" warning would reach no one.
-            reclaimed = self._evicted_ids.pop(session_id, _SENTINEL) is not _SENTINEL
-            session = _AgentSession(
-                session_id,
-                agent,
-                # Either spelling, because the two backends name their model in
-                # different kwargs: local builds pass ``model_id``, Claude
-                # passes ``claude_model``. Recording only the first left a
-                # Claude session reporting no model at all, so the caller's very
-                # next turn saw a "change" and tried to switch a session that
-                # had just been built with exactly what it asked for.
-                model_id=config_kwargs.get("model_id")
-                or config_kwargs.get("claude_model"),
-            )
-            session.reclaimed_after_eviction = reclaimed
-            self._sessions[session_id] = session
-            self._last_used[session_id] = time.monotonic()
-            return session
+            else:
+                # Consume the eviction tombstone HERE, on the branch that
+                # installs the session — popped any earlier, a racing creator
+                # for the same id could win the install with the flag already
+                # consumed, and the "your loaded skills were reset" warning
+                # would reach no one.
+                reclaimed = (
+                    self._evicted_ids.pop(session_id, _SENTINEL) is not _SENTINEL
+                )
+                session = _AgentSession(
+                    session_id,
+                    agent,
+                    # Either spelling, because the two backends name their model
+                    # in different kwargs: local builds pass ``model_id``,
+                    # Claude passes ``claude_model``. Recording only the first
+                    # left a Claude session reporting no model at all, so the
+                    # caller's very next turn saw a "change" and tried to switch
+                    # a session that had just been built with exactly what it
+                    # asked for.
+                    model_id=config_kwargs.get("model_id")
+                    or config_kwargs.get("claude_model"),
+                    provider=(
+                        PROVIDER_CLAUDE
+                        if config_kwargs.get("use_claude")
+                        else PROVIDER_LOCAL
+                    ),
+                )
+                session.reclaimed_after_eviction = reclaimed
+                self._sessions[session_id] = session
+                self._last_used[session_id] = time.monotonic()
+        if lost_the_race is not None:
+            close_agent(lost_the_race)
+        return session
 
     def _claim_lru_locked(self) -> Optional[_AgentSession]:
         """Pop the least-recently-used session whose ``run_lock`` this call

@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
 
 from gaia.logger import get_logger
 
@@ -37,6 +37,7 @@ from gaia.agents.base.checks import (
 )
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.project_map import resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
 # gaia_agent_chat.agent keep working; its canonical home is the core tool_loader
@@ -50,12 +51,18 @@ from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
     AudioToolsMixin,
     BrowserToolsMixin,
+    CliSetupToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
     RAGToolsMixin,
     ScreenshotToolsMixin,
     ShellToolsMixin,
+    WaitToolsMixin,
+)
+from gaia.llm.inference_location import (
+    InferenceLocation,
+    resolve_inference_location,
 )
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
@@ -110,6 +117,33 @@ def _imports_gaia_tools(code: str) -> Optional[str]:
     return match.group(0).strip() if match else None
 
 
+def _python_script_run_context(
+    script: Path, project_dir: os.PathLike | str | None
+) -> tuple[Path, Dict[str, str]]:
+    """Working directory and environment for running *script* as a subprocess.
+
+    A script under *project_dir* runs from it with it on ``PYTHONPATH``, so
+    ``tests/test_x.py`` can import the project's packages. Anything else — and
+    every run with no project at all, where *project_dir* is ``None`` — runs
+    from its own folder with the environment unchanged.
+
+    Only flat-layout projects become importable this way: a ``src/`` layout
+    needs ``src/`` on the path, which this does not add.
+    """
+    script = Path(script).resolve()
+    env = dict(os.environ)
+    if project_dir is None:
+        return script.parent, env
+    project = Path(project_dir).resolve()
+    if not script.is_relative_to(project):
+        return script.parent, env
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        os.pathsep.join([str(project), existing]) if existing else str(project)
+    )
+    return project, env
+
+
 @dataclass
 class ChatAgentConfig:
     """Configuration for ChatAgent."""
@@ -128,6 +162,8 @@ class ChatAgentConfig:
     # NPU's FLM build runs at 4K, so a device config can override the 32K ctx.
     device: Optional[str] = None
     min_context_size: Optional[int] = None
+    # None = per-model default (larger for Lemonade cloud models).
+    max_output_tokens: Optional[int] = None
 
     # Debug/output settings
     debug: bool = False
@@ -225,6 +261,7 @@ class ChatAgent(
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    CliSetupToolsMixin,
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
     BrowserToolsMixin,
@@ -234,6 +271,7 @@ class ChatAgent(
     ScreenshotToolsMixin,
     SDToolsMixin,
     AudioToolsMixin,
+    WaitToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -280,6 +318,7 @@ class ChatAgent(
             config.allowed_paths,
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
             on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+            interactive_check=self._console_accepts_stdin_prompts,
         )
         # Created after tool registration, once we know the agent can write files.
         self.scratch_dir: Optional[Path] = None
@@ -479,6 +518,7 @@ class ChatAgent(
                 if config.min_context_size is not None
                 else 32768
             ),
+            max_output_tokens=config.max_output_tokens,
         )
 
         # Without this, throwaway scripts land in the user's project. One path
@@ -676,7 +716,7 @@ class ChatAgent(
         if profile_config is None:
             return None
         return ToolLoader(
-            core_tools=profile_config.core,
+            core_tools=profile_config.core | self._workspace_core_tools(),
             bundles=profile_config.bundles,
             optional_tools=profile_config.optional,
             embed_fn=self._embed_text,
@@ -684,6 +724,14 @@ class ChatAgent(
             threshold=self._resolve_dynamic_tools_threshold(),
             max_tools=self._resolve_dynamic_tools_max(),
         )
+
+    def _workspace_core_tools(self) -> FrozenSet[str]:
+        """Tools the session's workspace makes always-on, beyond the profile CORE.
+
+        Fixed when the loader is built, so the offered prefix is stable from the
+        first turn. Default: none.
+        """
+        return frozenset()
 
     def _resolve_dynamic_tools_enabled(self) -> bool:
         """Toggle: ``GAIA_DYNAMIC_TOOLS`` (truthy) wins over the config field."""
@@ -705,10 +753,16 @@ class ChatAgent(
             ) from e
 
     def _resolve_dynamic_tools_max(self) -> int:
-        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly."""
+        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly.
+
+        Grown by any workspace-added CORE tools (e.g. the shell in a repo
+        session) so they don't eat into the dynamic selection budget.
+        """
         raw = os.getenv("GAIA_DYNAMIC_TOOLS_MAX")
         if raw is None:
-            return int(self.config.dynamic_tools_max)
+            return int(self.config.dynamic_tools_max) + len(
+                self._workspace_core_tools()
+            )
         try:
             return int(raw)
         except ValueError as e:
@@ -744,7 +798,7 @@ class ChatAgent(
         )
 
     def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
-        """Return this turn's sorted tool subset, or ``None`` for the full registry.
+        """Return this turn's tool subset in admission order, or ``None``.
 
         The SKILL signal (#1451) and the semantic query use deliberately
         different inputs: ``skill_tools`` derives from the **clean current goal**
@@ -756,6 +810,11 @@ class ChatAgent(
         "summarize it". ``_recalled_skill_tools`` is ``[]`` on every off-state
         (no recall / memory disabled), so the loader runs on CORE + semantic
         exactly as in Parts 1-2.
+
+        The ``tools_required`` of loaded skills whose body renders this turn
+        join the same signal, ahead of recalled-procedure tools: the user's
+        skill is the stronger signal. A skill stops contributing when the body
+        filter hides it or it is unloaded.
         """
         if not self._dynamic_tools_active():
             return None
@@ -765,9 +824,23 @@ class ChatAgent(
             self.tool_loader.validate_registry(self._tools_registry)
             self._dynamic_tools_validated = True
         query = self._build_tool_selection_query(user_input)
+        skill_tools = self._loaded_skill_tools()
+        for name in self._recalled_skill_tools():
+            if name not in skill_tools:
+                skill_tools.append(name)
         return self.tool_loader.select(
-            query, self._tools_registry, skill_tools=self._recalled_skill_tools()
+            query, self._tools_registry, skill_tools=skill_tools
         )
+
+    def _admit_skill_tools(self, names: List[str]) -> None:
+        """Admit a just-loaded skill's tools into the loader (no-op when inactive).
+
+        Keeps the loader's loaded set and ``_active_tool_filter`` in step, so the
+        next turn's selection still carries them and calling one doesn't register
+        as an escape hatch.
+        """
+        if self.tool_loader is not None:
+            self.tool_loader.admit_tools(names, self._tools_registry)
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Record tool-use recency for the loader's LRU (no-op when inactive)."""
@@ -850,6 +923,45 @@ class ChatAgent(
         prompts = super()._get_mixin_prompts()
         origins = getattr(self, "_mixin_prompt_origins", {})
         return [p for p in prompts if origins.get(p) != "get_sd_system_prompt"]
+
+    def _inference_location(self) -> InferenceLocation:
+        """Where this session's chat turns are actually answered (#3674).
+
+        Reads the live client when there is one. During ``__init__`` the prompt
+        can be composed before ``AgentSDK`` exists (MCP registration rebuilds
+        it), and the same backend choice is already on the agent itself by
+        then; every later rebuild — including the one every model switch runs —
+        sees the client.
+        """
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            # The live client classifies better than the id prefix can: it
+            # holds the catalog metadata, so a cloud provider discovered at
+            # runtime is recognised too.
+            lookup = getattr(
+                getattr(chat, "llm_client", None), "cloud_model_provider", None
+            )
+            return resolve_inference_location(
+                chat.effective_model,
+                use_claude=bool(chat.config.use_claude),
+                use_openai=bool(getattr(chat.config, "use_chatgpt", False)),
+                cloud_provider_lookup=lookup if callable(lookup) else None,
+            )
+        # Pre-client: read the config the client is about to be built from —
+        # it carries the same three answers, including the Claude model id,
+        # which ``model_id`` does not.
+        config = getattr(self, "config", None)
+        use_claude = bool(getattr(config, "use_claude", False))
+        model = (
+            getattr(config, "claude_model", None)
+            if use_claude
+            else getattr(config, "model_id", None)
+        )
+        return resolve_inference_location(
+            model or DEFAULT_MODEL_NAME,
+            use_claude=use_claude,
+            use_openai=bool(getattr(config, "use_chatgpt", False)),
+        )
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
@@ -973,8 +1085,20 @@ No documents are currently indexed.
 - CPU: `lscpu`, GPU: `lspci | grep VGA`, Memory: `free -h`
 """
 
-        base_prompt = f"""You are GAIA — a personal AI running locally on the user's machine. Sharp, witty, genuinely fun. Think: the smartest person at the party, who's also nice.
-{platform_block}
+        location = self._inference_location()
+        whereabouts = "running locally on the user's machine"
+        if location.remote:
+            whereabouts = (
+                "on the user's machine, thinking on " f"{location.display} this session"
+            )
+        inference_block = f"""
+**WHERE THIS SESSION IS PROCESSED:** {location.describe()}
+- Answer any question about your provider, model, or whether you are local or
+  cloud from THIS line. Never read config files or run commands to find out.
+"""
+
+        base_prompt = f"""You are GAIA — a personal AI {whereabouts}. Sharp, witty, genuinely fun. Think: the smartest person at the party, who's also nice.
+{platform_block}{inference_block}
 
 **WHO YOU ARE:**
 - You're GAIA. Not "an AI assistant" or "a helpful tool" — just GAIA.
@@ -1273,6 +1397,17 @@ No documents are currently indexed.
         """
         return self.path_validator.is_path_allowed(path, prompt_user=False)
 
+    def _script_project_root(self) -> Optional[str]:
+        """This session's project root, or ``None`` when there is no project.
+
+        Defers to :class:`ProjectMapMixin` when the subclass mixes it in, so the
+        project map and a script's working directory can never name two
+        different trees.
+        """
+        if hasattr(self, "_project_map_root"):
+            return self._project_map_root()
+        return resolve_project_root(getattr(self.config, "project_root", None))
+
     def _validate_and_open_file(self, file_path: str, mode: str = "r"):
         """
         Safely open a file with path validation using O_NOFOLLOW to prevent TOCTOU attacks.
@@ -1395,11 +1530,16 @@ No documents are currently indexed.
         if spec.early_return:
             # Minimal: only shell for system queries
             self.register_shell_tools()
+            # Registered on every profile, this one included: "can you install
+            # the GitHub CLI?" is a conversational question, and the answer has
+            # to be yes before any skill needing that CLI can even load.
+            self.register_cli_setup_tools()
             self._register_external_tools_conditional()
             return
 
         # All other profiles get at least shell tools
         self.register_shell_tools()
+        self.register_cli_setup_tools()
         self.register_memory_tools()  # Persistent memory tools
 
         for _group_name in spec.tool_groups:
@@ -1419,21 +1559,18 @@ No documents are currently indexed.
             def load_tools(bundle: str) -> dict:
                 """Load a bundle of tools so you can call them on your next step.
 
-                Call this when the capability you need is not in your current
-                tool list. If a "Loadable tool bundles" menu is shown in your
-                instructions, pick a bundle name from it; otherwise pass the name
-                of the specific tool you need and its bundle is loaded. The
-                bundle's tools become available on your **next** step; then call
-                the one you need.
+                Call when the capability you need is not in your current tool
+                list. The bundle's tools become available on your **next**
+                step; then call the one you need.
 
                 Args:
-                    bundle: A bundle name (e.g. "file_search", "rag_index") — from
-                        the menu when one is shown — or a specific tool name to
-                        load its owning bundle.
+                    bundle: A bundle name from the "Loadable tool bundles" menu
+                        when one is shown (e.g. "file_search", "rag_index"), or
+                        a specific tool name to load its owning bundle.
 
                 Returns:
-                    Dictionary with status, the resolved bundle, and the full
-                    loaded_tools list now available to call.
+                    The resolved bundle and the full loaded_tools list now
+                    available to call.
                 """
                 # load_tools is registered only inside ``if self.tool_loader is
                 # not None`` and the loader is never re-nulled after construction,
@@ -1502,13 +1639,18 @@ No documents are currently indexed.
             ) -> dict:
                 """Execute a Python file as a subprocess and capture its output.
 
+                A script inside the agent's project runs from the project root
+                with it on PYTHONPATH, so tests/test_x.py can import the
+                project's packages. Any other script runs from its own folder.
+                Relative paths resolve against that working directory.
+
                 Args:
                     file_path: Path to the .py file to run
                     args: Space-separated CLI arguments to pass to the script
                     timeout: Max seconds to wait (default 60)
 
                 Returns:
-                    Dictionary with stdout, stderr, return_code, and duration
+                    stdout, stderr, return_code, and duration
                 """
                 import shlex
                 import subprocess
@@ -1533,9 +1675,13 @@ No documents are currently indexed.
                 )
                 start = time.monotonic()
                 try:
+                    run_dir, env = _python_script_run_context(
+                        p, self._script_project_root()
+                    )
                     r = subprocess.run(
                         cmd,
-                        cwd=str(p.parent.resolve()),
+                        cwd=str(run_dir),
+                        env=env,
                         capture_output=True,
                         # An inherited stdin leaves the child waiting on a pipe
                         # nobody writes to, and the run only ends at the timeout.
@@ -1578,22 +1724,19 @@ No documents are currently indexed.
             def run_python(code: str, timeout: int = 60) -> dict:
                 """Run a Python snippet and return what it prints.
 
-                Use this to compute, transform data, or run a quick check
-                without creating a file. It runs from the project root, so
-                relative paths reach the user's files, and the snippet itself is
-                never saved in the workspace. Report numbers from its printed
-                output — do not work them out in your head.
+                Compute or check something without creating a file. Runs
+                from the project root, so relative paths reach the user's
+                files. Report numbers from its output — do not work them
+                out in your head.
 
-                This runs a plain Python process with no access to your own
-                tools. `from gaia import <tool>` does not work — to use another
-                tool, call it directly as a tool instead of from here.
+                No access to your tools: `from gaia import <tool>` fails.
 
                 Args:
                     code: Python source to run; print() whatever you need back.
                     timeout: Max seconds to wait (default 60)
 
                 Returns:
-                    Dictionary with stdout, stderr, return_code, and duration
+                    stdout, stderr, return_code, and duration.
                 """
                 import subprocess
                 import sys
@@ -2338,6 +2481,7 @@ No documents are currently indexed.
     # - BrowserToolsMixin (shared): Web browsing, content extraction, download
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
+    # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from ~/.gaia/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:

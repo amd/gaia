@@ -46,12 +46,12 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, List, Optional
+from typing import ClassVar, FrozenSet, List, Optional
 
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
-from gaia.agents.base.project_map import ProjectMapMixin
+from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
     DEFAULT_SKILL_THRESHOLD,
@@ -178,14 +178,17 @@ class GaiaAgentConfig(ChatAgentConfig):
     # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
     dynamic_tools: bool = True
 
-    # 15 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
+    # 16 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
     # of loading it. Swept offline against nine representative queries with 13
     # CORE: 13 dynamic slots lands every matched bundle whole, 9 cut the web
-    # bundle in half on a research question, and 17 buys nothing further. Grows
-    # with CORE so the dynamic share stays 13.
-    dynamic_tools_max: int = 28
+    # bundle in half on a research question, and 17 buys nothing further. Bump
+    # this literal when FULL_CORE_TOOLS grows so the dynamic share stays 13;
+    # per-session workspace CORE additions (e.g. the shell in a repo) don't
+    # need a bump here — _resolve_dynamic_tools_max() grows the cap by
+    # len(_workspace_core_tools()) automatically.
+    dynamic_tools_max: int = 29
 
     # List every installed skill in the system prompt so the model loads one
     # when the work fits, and the user never has to know a skill's name. On for
@@ -326,6 +329,18 @@ class GaiaAgent(
         self.register_email_tools()
         super()._register_tools()
 
+    def _workspace_core_tools(self) -> FrozenSet[str]:
+        """The shell, always on when this session works in a code repository.
+
+        Coding requests rarely read like shell requests ("skip these tests on
+        PRs"), so semantic selection left a repo session without a shell even
+        though the project map tells the model which commands it accepts.
+        """
+        root = self._project_map_root()
+        if root and is_code_repository(root):
+            return frozenset({"run_shell_command"})
+        return frozenset()
+
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
 
     def _resolve_skill_catalog_enabled(self) -> bool:
@@ -393,6 +408,36 @@ class GaiaAgent(
                 "disabled, every loaded skill's body renders in full"
             )
         return active
+
+    def _recalled_skill_tools(self) -> List[str]:
+        """The inherited SKILL signal, plus ``remember_skill_lesson`` when a
+        skill is loaded.
+
+        Semantic selection cannot rank this tool. Someone correcting a skill
+        talks about their meeting brief, not about skills, so the query never
+        resembles the ``skills`` bundle the tool lives in — the same ranking
+        blind spot that moved the file-edit tools to CORE (#3752) and
+        ``load_skill`` to proactive discovery (#3235). Left to semantics it is
+        absent on exactly the turn it exists for, and the model answers from
+        the bundle menu's prose instead: asked to fix a transcript skill's
+        output format it reported the skill "has been updated on your machine"
+        having called nothing at all.
+
+        Conditional rather than CORE, because the flagship ships with no skills
+        and a tool that can only refuse is prompt tax. It rides the SKILL signal
+        rather than adding a second mechanism: cap-bound, ahead of semantic, and
+        empty on every off-state, so a build with nothing loaded — or with
+        learning switched off — stays byte-identical.
+        """
+        tools = super()._recalled_skill_tools()
+        if not getattr(self, "loaded_skills", None):
+            return tools
+        enabled = getattr(self, "learned_skills_enabled", None)
+        if callable(enabled) and not enabled():
+            return tools
+        if "remember_skill_lesson" not in tools:
+            tools.append("remember_skill_lesson")
+        return tools
 
     def _select_skills_for_turn(self, user_input: str) -> Optional[List[str]]:
         """This turn's active skill-body subset, or ``None`` for "render all".

@@ -357,13 +357,14 @@ All images require `LEMONADE_BASE_URL` to connect to a Lemonade Server.
 
 ### Server setup:
 
-```bash
-# Install Lemonade Server
-pip install lemonade-server
+Install Lemonade with `gaia init`, then start it bound to an interface the
+containers can reach rather than loopback. How the server is launched differs
+per platform, so follow the [Lemonade Server
+docs](https://www.lemonade-server.ai) for yours.
 
-# Start server
-lemonade-server serve --host 0.0.0.0
-```
+`gaia daemon start` is not a substitute here: the daemon only ever starts a
+loopback server, and refuses a non-loopback `LEMONADE_BASE_URL` rather than
+silently starting something the containers can't use.
 
 ### Container configuration:
 

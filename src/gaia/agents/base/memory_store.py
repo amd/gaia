@@ -29,6 +29,7 @@ import os
 import re
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union, cast
@@ -145,6 +146,7 @@ MAX_CONTENT_LENGTH: int = 2000
 
 #: Maximum conversation turn length (chars) stored / injected into prompts.
 MAX_TURN_LENGTH: int = 4000
+MAX_EXTRACTION_TURN_LENGTH: int = 256000
 
 #: Maximum FTS5 query length (chars).  Longer queries are pathological input.
 MAX_FTS_QUERY_LENGTH: int = 500
@@ -389,6 +391,21 @@ CREATE INDEX IF NOT EXISTS idx_delta_active ON skill_deltas(status)
     WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_delta_superseded ON skill_deltas(superseded_by)
     WHERE superseded_by IS NOT NULL;
+
+-- Synthesis marks (v5 — procedural memory, #887).
+-- One row per session a synthesis pass already handed to the distiller, with
+-- the outcome. The `meta` watermark alone cannot express this: it is a single
+-- timestamp, so a handled session that sits ABOVE an unhandled older one would
+-- re-enter the window and be distilled again every pass.
+CREATE TABLE IF NOT EXISTS synthesis_marks (
+    session_id  TEXT PRIMARY KEY,
+    outcome     TEXT NOT NULL,   -- distilled | unusable
+    goal        TEXT,
+    detail      TEXT,            -- why, for the unusable case
+    marked_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_synthesis_marks_outcome
+    ON synthesis_marks(outcome);
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -515,6 +532,10 @@ def resolve_memory_db_path() -> Path:
     return gaia_dir / "memory.db"
 
 
+class MemoryStoreClosedError(RuntimeError):
+    """A store call arrived after ``close()``."""
+
+
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
@@ -536,6 +557,7 @@ class MemoryStore:
         self._db_path = db_path
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._lock = threading.Lock()
+        self._closed = False
 
         self._init_schema()
         logger.debug("[MemoryStore] initialized at %s", db_path)
@@ -547,11 +569,11 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v4 schema.  Existing databases at v1–v3 are
-        migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 and
-        v3→v4 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
+        Fresh installs get the full v5 schema.  Existing databases at v1–v4 are
+        migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3, v3→v4
+        and v4→v5 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
         """
-        with self._lock:
+        with self._locked():
             self._conn.execute("PRAGMA journal_mode=WAL")
             # Allow up to 5 s of retries before raising SQLITE_BUSY.  This
             # prevents spurious errors when the dashboard REST singleton and
@@ -566,12 +588,12 @@ class MemoryStore:
                 except sqlite3.OperationalError:
                     pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v4)
+            # Initialize schema_version if empty (fresh install → v5)
             cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (4, _now_iso()),
+                    (5, _now_iso()),
                 )
             else:
                 # Run migrations for existing databases
@@ -589,10 +611,10 @@ class MemoryStore:
         """Run schema migrations if needed. Must hold self._lock.
 
         Migrations are additive — ALTER TABLE ADD COLUMN (v1->v2) and new
-        CREATE TABLEs (v2->v3, v3->v4), both of which SQLite applies without
-        rewriting existing rows.  Each step is guarded so a partial prior
-        migration re-runs cleanly, and the steps chain (a v1 database is taken
-        to v4).
+        CREATE TABLEs (v2->v3, v3->v4, v4->v5), both of which SQLite applies
+        without rewriting existing rows.  Each step is guarded so a partial
+        prior migration re-runs cleanly, and the steps chain (a v1 database is
+        taken to v5).
         """
         cursor = self._conn.execute(
             "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
@@ -659,13 +681,29 @@ class MemoryStore:
             logger.info("[MemoryStore] schema migration to v4 complete")
             current_version = 4
 
+        if current_version < 5:
+            logger.info("[MemoryStore] migrating schema v%d -> v5", current_version)
+
+            # v4 -> v5: add the synthesis_marks table (procedural memory, #887).
+            # Same shape as the two steps above — _SCHEMA_SQL's CREATE TABLE IF
+            # NOT EXISTS already ran in _init_schema(), so this only advances the
+            # marker.  A store written before this build has no marks and no
+            # watermark: synthesis reads that as "nothing consumed yet" and
+            # distils its history once, then records both.
+            self._conn.execute(
+                "UPDATE schema_version SET version = 5, migrated_at = ?",
+                (_now_iso(),),
+            )
+            logger.info("[MemoryStore] schema migration to v5 complete")
+            current_version = 5
+
     # ------------------------------------------------------------------
     # Low-level helpers
     # ------------------------------------------------------------------
 
     def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Execute SQL with lock. Commits automatically."""
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, params)
             self._conn.commit()
             return cursor
@@ -743,21 +781,29 @@ class MemoryStore:
         role: str,
         content: str,
         context: str = "global",
+        *,
+        preserve_full: bool = False,
     ) -> None:
         """Store one conversation turn.
 
         Truncates content to 4000 chars. Code-generation agents can produce
         very long responses; storing the full text would bloat the FTS index
         and slow down conversation queries without adding search value.
+        Extraction inventories can opt into preserve_full: retain one canonical
+        turn up to 256000 characters, or fail explicitly above that bound.
         Empty or whitespace-only turns are silently skipped — they add no
         signal to conversation history and pollute FTS5 with empty entries.
         """
         if not content or not content.strip():
             return  # Skip empty turns
-        if len(content) > MAX_TURN_LENGTH:
+        if preserve_full and len(content) > MAX_EXTRACTION_TURN_LENGTH:
+            raise ValueError(
+                "Extraction conversation exceeds the 256000-character memory limit"
+            )
+        if not preserve_full and len(content) > MAX_TURN_LENGTH:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     "INSERT INTO conversations (session_id, role, content, context, timestamp) "
@@ -803,7 +849,7 @@ class MemoryStore:
             ) sub ORDER BY id ASC
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             rows = cursor.fetchall()
 
@@ -833,7 +879,7 @@ class MemoryStore:
         if not safe_query:
             return []
 
-        with self._lock:
+        with self._locked():
             results = self._fts5_search_conversations_locked(safe_query, context, limit)
             if not results:
                 safe_query_or = _sanitize_fts5_query(query, use_and=False)
@@ -918,7 +964,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             rows = cursor.fetchall()
 
@@ -941,7 +987,7 @@ class MemoryStore:
         if exclude_session is not None:
             sql += " WHERE session_id != ?"
             params = (exclude_session,)
-        with self._lock:
+        with self._locked():
             return int(self._conn.execute(sql, params).fetchone()[0])
 
     # ==================================================================
@@ -1019,7 +1065,7 @@ class MemoryStore:
         metadata_json = json.dumps(metadata) if metadata else None
         now = _now_iso()
 
-        with self._lock:
+        with self._locked():
             # Check for dedup match (scoped to category + context + entity)
             existing_id = self._find_similar_locked(content, category, context, entity)
 
@@ -1242,7 +1288,7 @@ class MemoryStore:
         if not safe_query:
             return []
 
-        with self._lock:
+        with self._locked():
             results = self._fts5_search_knowledge_locked(
                 safe_query,
                 category,
@@ -1393,20 +1439,28 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
     def get_by_category_contexts(
-        self, category: str, context: str, limit: int = 10
+        self, category: str, context: str | None, limit: int = 10
     ) -> List[Dict]:
         """Get non-sensitive knowledge by category for a specific context AND global.
 
-        Single query that replaces two sequential get_by_category() calls in
-        _get_context_items() — avoids the 2-round-trips-per-category overhead
-        during system prompt construction.
+        ``context=None`` reads every context. Single query that replaces two
+        sequential get_by_category() calls in _get_context_items() — avoids the
+        2-round-trips-per-category overhead during system prompt construction.
         """
-        if context == "global":
+        if context is None:
+            sql = f"""
+                SELECT {self._KNOWLEDGE_COLS} FROM knowledge
+                WHERE category = ? AND sensitive = 0 AND superseded_by IS NULL
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT ?
+            """
+            params = (category, limit)
+        elif context == "global":
             sql = f"""
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND context = ? AND sensitive = 0
@@ -1425,7 +1479,7 @@ class MemoryStore:
             """
             params = (category, context, limit)
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, params)
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
@@ -1440,7 +1494,7 @@ class MemoryStore:
             ORDER BY updated_at DESC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (entity, limit))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
@@ -1455,7 +1509,7 @@ class MemoryStore:
         embedding excluded).
         """
         sql = f"SELECT {self._KNOWLEDGE_COLS} FROM knowledge WHERE id = ?"
-        with self._lock:
+        with self._locked():
             row = self._conn.execute(sql, (knowledge_id,)).fetchone()
         return self._row_to_knowledge_dict(row) if row else None
 
@@ -1465,12 +1519,17 @@ class MemoryStore:
         include_overdue: bool = True,
         context: str | None = None,
         limit: int = 10,
+        include_sensitive: bool = False,
     ) -> List[Dict]:
         """Get time-sensitive items due within N days (or overdue).
 
         Returns items where:
         - due_at is within the window (or overdue if include_overdue=True)
         - Either never reminded, or reminded before the due date (needs follow-up)
+        - Not marked sensitive, unless include_sensitive=True
+
+        Sensitive rows are filtered in SQL rather than by the caller so they
+        cannot consume ``limit`` and leave the visible list empty.
         """
         now_iso = _now_iso()
         future_iso = (
@@ -1498,6 +1557,9 @@ class MemoryStore:
             conditions.append("context = ?")
             params.append(context)
 
+        if not include_sensitive:
+            conditions.append("sensitive = 0")
+
         where = "WHERE " + " AND ".join(conditions)
 
         params.append(limit)
@@ -1508,7 +1570,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
@@ -1632,7 +1694,7 @@ class MemoryStore:
         params.append(knowledge_id)
         sql = f"UPDATE knowledge SET {', '.join(sets)} WHERE id = ?"
 
-        with self._lock:
+        with self._locked():
             try:
                 self._validate_existing_category_locked(
                     knowledge_id, allow_privileged=allow_privileged, where="update"
@@ -1654,7 +1716,7 @@ class MemoryStore:
 
     def update_confidence(self, knowledge_id: str, delta: float) -> None:
         """Adjust confidence by delta, clamped to [0.0, 1.0]."""
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     """
@@ -1685,7 +1747,7 @@ class MemoryStore:
         Returns False if not found. Raises ValueError for a privileged row
         unless allow_privileged=True, with the same callers as store().
         """
-        with self._lock:
+        with self._locked():
             try:
                 self._validate_existing_category_locked(
                     knowledge_id, allow_privileged=allow_privileged, where="delete"
@@ -1719,7 +1781,7 @@ class MemoryStore:
         Returns:
             True if the row was found and updated, False if knowledge_id not found.
         """
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     "UPDATE knowledge SET embedding = ? WHERE id = ?",
@@ -1740,7 +1802,7 @@ class MemoryStore:
         knowledge, procedure, and skill-delta embeddings. Returns the total rows
         cleared.
         """
-        with self._lock:
+        with self._locked():
             try:
                 knowledge = self._conn.execute(
                     "UPDATE knowledge SET embedding = NULL WHERE embedding IS NOT NULL"
@@ -1776,7 +1838,7 @@ class MemoryStore:
         that as "no change to detect". Read from the ``meta`` table so every
         connection (agent + UI router) sees the same value.
         """
-        with self._lock:
+        with self._locked():
             row = self._conn.execute(
                 "SELECT value FROM meta WHERE key = ?", (self._EMBEDDER_META_KEY,)
             ).fetchone()
@@ -1784,7 +1846,7 @@ class MemoryStore:
 
     def set_embedder_id(self, model_id: str) -> None:
         """Record the embedder model id that produced the stored embeddings."""
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     "INSERT INTO meta (key, value) VALUES (?, ?) "
@@ -1845,7 +1907,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             return [
                 self._row_to_knowledge_dict_with_embedding(r) for r in cursor.fetchall()
@@ -1865,7 +1927,7 @@ class MemoryStore:
             ORDER BY created_at ASC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (limit,))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
@@ -1875,7 +1937,7 @@ class MemoryStore:
         Returns:
             {total_items, with_embedding, without_embedding, coverage_pct}
         """
-        with self._lock:
+        with self._locked():
             row = self._conn.execute("""
                 SELECT
                     COUNT(*) AS total_items,
@@ -1959,7 +2021,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             return [
                 self._row_to_knowledge_dict_with_embedding(r) for r in cursor.fetchall()
@@ -1996,7 +2058,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (min_turns, cutoff, limit))
             return [row[0] for row in cursor.fetchall()]
 
@@ -2024,7 +2086,7 @@ class MemoryStore:
             ORDER BY id ASC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(sql, (session_id, limit)).fetchall()
 
         return [
@@ -2055,7 +2117,7 @@ class MemoryStore:
             WHERE id IN ({placeholders}) AND consolidated_at IS NULL
         """
 
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(sql, (now, *turn_ids)).rowcount
                 self._conn.commit()
@@ -2089,7 +2151,7 @@ class MemoryStore:
         if error and len(error) > MAX_FTS_QUERY_LENGTH:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     """
@@ -2138,13 +2200,13 @@ class MemoryStore:
             """
             params = (limit,)
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, params)
             return [self._row_to_tool_dict(r) for r in cursor.fetchall()]
 
     def get_tool_stats(self, tool_name: str) -> Dict:
         """Returns: {total_calls, success_rate, avg_duration_ms, last_error}"""
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT COUNT(*) as total,
@@ -2199,7 +2261,7 @@ class MemoryStore:
 
     def get_stats(self) -> Dict:
         """Aggregate statistics across all tables."""
-        with self._lock:
+        with self._locked():
             # Knowledge stats
             k_total = self._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
 
@@ -2446,7 +2508,7 @@ class MemoryStore:
         if conditions:
             where = "WHERE " + " AND ".join(conditions)
 
-        with self._lock:
+        with self._locked():
             # Total count
             count_sql = f"SELECT COUNT(*) FROM knowledge k {fts_join} {where}"
             total = self._conn.execute(count_sql, tuple(params)).fetchone()[0]
@@ -2508,7 +2570,7 @@ class MemoryStore:
                 WHERE success = 0 AND error IS NOT NULL
             ) e ON t.tool_name = e.tool_name AND e.rn = 1
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (limit,))
             rows = cursor.fetchall()
 
@@ -2530,7 +2592,7 @@ class MemoryStore:
         """Daily activity counts for the activity chart."""
         cutoff = (datetime.now().astimezone() - timedelta(days=days)).isoformat()
 
-        with self._lock:
+        with self._locked():
             # Conversation turns per day
             conv_rows = self._conn.execute(
                 """
@@ -2621,7 +2683,7 @@ class MemoryStore:
             ORDER BY timestamp DESC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (limit,))
             return [self._row_to_tool_dict(r) for r in cursor.fetchall()]
 
@@ -2631,7 +2693,7 @@ class MemoryStore:
 
     def get_source_counts(self) -> Dict[str, int]:
         """Return knowledge entry counts grouped by source (tool, user, discovery, …)."""
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(
                 "SELECT source, COUNT(*) FROM knowledge GROUP BY source"
             ).fetchall()
@@ -2644,7 +2706,7 @@ class MemoryStore:
         transaction — avoids the knowledge/FTS divergence that manual per-ID
         deletion without a wrapping transaction would risk.
         """
-        with self._lock:
+        with self._locked():
             try:
                 # FTS cleanup: delete all FTS entries for matching knowledge rows
                 self._conn.execute(
@@ -2668,7 +2730,7 @@ class MemoryStore:
 
         Atomically cleans FTS5 index and knowledge table in one transaction.
         """
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     """
@@ -2691,7 +2753,7 @@ class MemoryStore:
 
         Capped at `limit` rows (default 100) to prevent unbounded payloads.
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT entity, COUNT(*) as count, MAX(updated_at) as last_updated
@@ -2713,7 +2775,7 @@ class MemoryStore:
 
         Capped at `limit` rows (default 100) to prevent unbounded payloads.
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT context, COUNT(*) as count
@@ -2728,7 +2790,7 @@ class MemoryStore:
 
     def get_tool_history(self, tool_name: str, limit: int = 50) -> List[Dict]:
         """Recent call history for a specific tool."""
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT tool_name, args, result_summary, success, error, duration_ms, timestamp
@@ -2758,7 +2820,7 @@ class MemoryStore:
         Uses a single-pass query with a LEFT JOIN to the minimum user-turn ID
         per session, avoiding an N+1 correlated subquery.
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT c.session_id,
@@ -2885,7 +2947,7 @@ class MemoryStore:
         prov_json = json.dumps(provenance) if provenance is not None else None
         now = _now_iso()
 
-        with self._lock:
+        with self._locked():
             try:
                 # existing_id is the str id only when skill_id was provided AND
                 # matches a row — keeping it a narrowed str (not str | None) so
@@ -3023,7 +3085,7 @@ class MemoryStore:
             ORDER BY created_at DESC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(sql, tuple(params)).fetchall()
 
         if with_embedding:
@@ -3039,7 +3101,7 @@ class MemoryStore:
         Returns:
             True if a row was updated, False if ``skill_id`` was not found.
         """
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     "UPDATE procedures SET superseded_by = ? WHERE id = ?",
@@ -3068,7 +3130,7 @@ class MemoryStore:
             return 0
         stamp = when or _now_iso()
         placeholders = ",".join("?" for _ in skill_ids)
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     f"UPDATE procedures SET last_used_at = ? WHERE id IN ({placeholders})",
@@ -3120,7 +3182,7 @@ class MemoryStore:
         result_id = delta_id or f"delta_{uuid4().hex}"
         now = _now_iso()
 
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     """
@@ -3216,7 +3278,7 @@ class MemoryStore:
             sql += " LIMIT ?"
             params.append(limit + 1)
 
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(sql, params).fetchall()
         if limit is not None and len(rows) > limit:
             rows = rows[:limit]
@@ -3262,7 +3324,7 @@ class MemoryStore:
         reached the model.
         """
         stamp = when or _now_iso()
-        with self._lock:
+        with self._locked():
             try:
                 # superseded_by IS NULL: a retired row can never resolve, so
                 # activating one would report consent for a change that is
@@ -3289,7 +3351,7 @@ class MemoryStore:
         existing ``superseded_by`` would rewrite the lineage the audit trail is
         for.
         """
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     "UPDATE skill_deltas SET superseded_by = ? "
@@ -3330,7 +3392,7 @@ class MemoryStore:
         if scope:
             clauses.append("scope = ?")
             params.append(scope)
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     "UPDATE skill_deltas SET status = 'archived' "
@@ -3349,7 +3411,7 @@ class MemoryStore:
             return 0
         stamp = when or _now_iso()
         placeholders = ",".join("?" for _ in delta_ids)
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     f"UPDATE skill_deltas SET last_used_at = ? WHERE id IN ({placeholders})",
@@ -3408,7 +3470,7 @@ class MemoryStore:
             ORDER BY th.session_id, th.id
         """
         params = {"since": since, "min_steps": min_steps}
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(sql, params).fetchall()
 
         # Group the ordered rows into per-session spans.  The eligible CTE has
@@ -3448,6 +3510,189 @@ class MemoryStore:
             if sessions[sid]["success_count"] >= min_steps
         ]
 
+    # ------------------------------------------------------------------
+    # Synthesis progress — what the distiller has already consumed (#887)
+    # ------------------------------------------------------------------
+
+    #: ``meta`` key holding the newest tool-history timestamp synthesis consumed.
+    _SYNTHESIS_WATERMARK_META_KEY = "skill_synthesis_watermark"
+
+    #: The outcomes ``mark_sessions_synthesized`` accepts.
+    SYNTHESIS_OUTCOMES = ("distilled", "unusable")
+
+    #: SQLite caps bound parameters per statement; chunk id lists below it.
+    _MARK_QUERY_CHUNK = 400
+
+    def get_synthesis_watermark(self) -> Optional[str]:
+        """Return the newest tool-history timestamp skill synthesis consumed.
+
+        ``None`` on a store that has never completed a pass — including one
+        written by a build without this column, which reads as "nothing
+        consumed yet" and gets its history distilled once.  Callers pass the
+        value straight to :meth:`iter_sessions` as ``since``.
+        """
+        with self._locked():
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                (self._SYNTHESIS_WATERMARK_META_KEY,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_synthesis_watermark(self, watermark: str) -> None:
+        """Record the newest tool-history timestamp skill synthesis consumed.
+
+        Args:
+            watermark: ISO 8601 timestamp of the last fully consumed session.
+
+        Raises:
+            ValueError: ``watermark`` is empty — an empty marker would silently
+                re-distil the whole history on the next pass.
+        """
+        if not watermark or not str(watermark).strip():
+            raise ValueError(
+                "MemoryStore.set_synthesis_watermark(): watermark is empty. "
+                "Pass the ISO timestamp of the last consumed session, or leave "
+                "the existing watermark in place."
+            )
+        with self._locked():
+            try:
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._SYNTHESIS_WATERMARK_META_KEY, str(watermark)),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def mark_sessions_synthesized(
+        self,
+        session_ids: List[str],
+        outcome: str,
+        goal: str | None = None,
+        detail: str | None = None,
+    ) -> int:
+        """Record that synthesis already handed these sessions to the distiller.
+
+        Marked sessions are excluded from the next pass's DETECT window, so a
+        cluster is distilled once — including a cluster the distiller could not
+        turn into a procedure, which would otherwise be retried on every
+        session start forever.  ``reset_synthesis_progress`` clears the marks
+        for a deliberate retry.
+
+        Args:
+            session_ids: Sessions the pass consumed.
+            outcome: ``"distilled"`` (a procedure was produced) or
+                ``"unusable"`` (SKIP / unparseable / truncated output).
+            goal: The cluster goal, kept for the log trail.
+            detail: Why, for the ``unusable`` case.
+
+        Returns:
+            Number of sessions marked.
+
+        Raises:
+            ValueError: ``outcome`` is not one of ``SYNTHESIS_OUTCOMES`` —
+                an unknown outcome would make the skip trail unreadable.
+        """
+        if outcome not in self.SYNTHESIS_OUTCOMES:
+            raise ValueError(
+                f"MemoryStore.mark_sessions_synthesized(): outcome={outcome!r} "
+                f"is not one of {list(self.SYNTHESIS_OUTCOMES)}."
+            )
+        ids = [sid for sid in (session_ids or []) if sid]
+        if not ids:
+            return 0
+        now = _now_iso()
+        rows = [(sid, outcome, goal, detail, now) for sid in ids]
+        with self._locked():
+            try:
+                self._conn.executemany(
+                    "INSERT INTO synthesis_marks "
+                    "(session_id, outcome, goal, detail, marked_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(session_id) DO UPDATE SET "
+                    "outcome = excluded.outcome, goal = excluded.goal, "
+                    "detail = excluded.detail, marked_at = excluded.marked_at",
+                    rows,
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return len(ids)
+
+    def get_synthesis_marks(
+        self, session_ids: List[str] | None = None
+    ) -> Dict[str, Dict]:
+        """Return the synthesis marks, keyed by session id.
+
+        Args:
+            session_ids: Restrict to these sessions; None returns every mark.
+
+        Returns:
+            ``{session_id: {outcome, goal, detail, marked_at}}``.
+        """
+        marks: Dict[str, Dict] = {}
+
+        def _collect(sql: str, params: tuple) -> None:
+            with self._locked():
+                rows = self._conn.execute(sql, params).fetchall()
+            for session_id, outcome, goal, detail, marked_at in rows:
+                marks[session_id] = {
+                    "outcome": outcome,
+                    "goal": goal,
+                    "detail": detail,
+                    "marked_at": marked_at,
+                }
+
+        cols = "session_id, outcome, goal, detail, marked_at"
+        if session_ids is None:
+            _collect(f"SELECT {cols} FROM synthesis_marks", ())
+            return marks
+
+        ids = [sid for sid in session_ids if sid]
+        for start in range(0, len(ids), self._MARK_QUERY_CHUNK):
+            chunk = ids[start : start + self._MARK_QUERY_CHUNK]
+            placeholders = ",".join("?" for _ in chunk)
+            _collect(
+                f"SELECT {cols} FROM synthesis_marks "
+                f"WHERE session_id IN ({placeholders})",
+                tuple(chunk),
+            )
+        return marks
+
+    def reset_synthesis_progress(self) -> Dict:
+        """Forget what synthesis has consumed, so the next pass re-reads it all.
+
+        The deliberate-retry lever behind ``_synthesize_skills(force=True)``:
+        drops every mark and the watermark, which is what a user wants after
+        fixing the model or the thresholds that made a cluster undistillable.
+
+        Returns:
+            ``{"marks_cleared": int, "watermark_cleared": bool}``.
+        """
+        with self._locked():
+            try:
+                cursor = self._conn.execute("DELETE FROM synthesis_marks")
+                marks_cleared = cursor.rowcount or 0
+                cursor = self._conn.execute(
+                    "DELETE FROM meta WHERE key = ?",
+                    (self._SYNTHESIS_WATERMARK_META_KEY,),
+                )
+                watermark_cleared = bool(cursor.rowcount)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] synthesis progress reset: %d mark(s) cleared, "
+            "watermark cleared=%s",
+            marks_cleared,
+            watermark_cleared,
+        )
+        return {"marks_cleared": marks_cleared, "watermark_cleared": watermark_cleared}
+
     def apply_confidence_decay(
         self, days_threshold: int = 30, decay_factor: float = 0.9
     ) -> int:
@@ -3460,7 +3705,7 @@ class MemoryStore:
         ).isoformat()
         now = _now_iso()
 
-        with self._lock:
+        with self._locked():
             try:
                 cursor = self._conn.execute(
                     """
@@ -3518,7 +3763,7 @@ class MemoryStore:
                AND SUM(CASE WHEN consolidated_at IS NULL THEN 1 ELSE 0 END) > 0
         """
 
-        with self._lock:
+        with self._locked():
             try:
                 # Prune tool_history
                 tool_deleted = self._conn.execute(
@@ -3614,7 +3859,7 @@ class MemoryStore:
         Atomic: if the rebuild fails (e.g. disk full), rolls back so the
         pending DELETE is not committed by the next unrelated operation.
         """
-        with self._lock:
+        with self._locked():
             try:
                 self._rebuild_knowledge_fts_locked()
                 self._rebuild_conversations_fts_locked()
@@ -3635,7 +3880,7 @@ class MemoryStore:
             Dict with counts of deleted rows per table:
             ``{knowledge: int, tool_history: int, conversations: int}``
         """
-        with self._lock:
+        with self._locked():
             try:
                 knowledge_deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
@@ -3665,7 +3910,7 @@ class MemoryStore:
         reset structural state between scenarios while keeping conversation
         history (or vice versa) for cross-session tests.
         """
-        with self._lock:
+        with self._locked():
             try:
                 deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
@@ -3681,7 +3926,7 @@ class MemoryStore:
 
         Leaves knowledge and tool_history untouched.
         """
-        with self._lock:
+        with self._locked():
             try:
                 deleted = self._conn.execute("DELETE FROM conversations").rowcount
                 self._rebuild_conversations_fts_locked()
@@ -3752,7 +3997,7 @@ class MemoryStore:
 
         now = _now_iso()
         ids: List[str] = []
-        with self._lock:
+        with self._locked():
             try:
                 for n in normalized:
                     self._conn.execute(
@@ -3809,8 +4054,32 @@ class MemoryStore:
         )
 
     def close(self) -> None:
-        """Close the database connection."""
-        try:
+        """Close the database connection.
+
+        Takes ``self._lock``: extraction runs on a background thread, and
+        sqlite3 frees a connection closed underneath a running statement —
+        the process segfaults rather than raising. Idempotent.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
             self._conn.close()
-        except Exception:
-            pass
+
+    @contextmanager
+    def _locked(self):
+        """Hold the connection lock, refusing a call that lost the race to close().
+
+        Every DB method goes through this rather than ``self._lock`` directly,
+        so a thread that blocks while ``close()`` runs finds the store shut
+        instead of executing on a freed sqlite3 connection.
+        """
+        with self._lock:
+            if self._closed:
+                raise MemoryStoreClosedError(
+                    f"memory store at {self._db_path} is closed; the call "
+                    "arrived after close(), most likely from the background "
+                    "extraction thread. Drain it with "
+                    "drain_memory_extraction(agent) before closing the agent."
+                )
+            yield

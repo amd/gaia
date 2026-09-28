@@ -25,6 +25,7 @@ function makeSettings(overrides: Partial<Settings> = {}): Settings {
         context_size: null,
         dynamic_tools: false,
         dynamic_tools_locked: false,
+        agent_mode: 'goal_driven',
         ...overrides,
     };
 }
@@ -48,14 +49,14 @@ function makeSystemStatus(): SystemStatus {
         tokens_per_second: null,
         time_to_first_token: null,
         processor_name: null,
-        device_supported: true,
         context_size_sufficient: true,
         model_downloaded: true,
-        default_model_name: null,
+        default_model_name: 'Gemma-4-E4B-it-GGUF',
         default_model_size_gb: null,
-        lemonade_url: null,
+        lemonade_url: 'http://localhost:13305',
         expected_model_loaded: true,
         download_progress: null,
+        active_profile: 'chat',
     };
 }
 

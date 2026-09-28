@@ -58,9 +58,72 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
+_DAEMON_SPAWN_MESSAGE = (
+    "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
+    "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
+    "gaia.ui.email_sidecar.daemon_client.acquire_handle or "
+    "gaia.daemon.client.start_or_attach. Real daemons belong in tests/integration/."
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_daemon_home(tmp_path_factory):
+    """Point the daemon's ``instance.json`` / ledger dir at a per-session tmp dir.
+
+    Against the real ``~/.gaia/host``, ``_block_network`` makes the developer's
+    live daemon fail its probe, so ``start_or_attach`` tree-kills it as hung.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GAIA_DAEMON_HOME", str(tmp_path_factory.mktemp("daemon-home")))
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _forbid_daemon_spawn(monkeypatch):
+    """Fail any unit test that reaches the real ``python -m gaia.daemon`` spawn.
+
+    Callers wrap spawn errors (the email router turns them into a 503), so the
+    attempt is also recorded and failed at teardown where nothing can swallow it.
+    """
+    from gaia.daemon import client
+
+    attempts = []
+
+    def _refuse(*_args, **_kwargs):
+        attempts.append(True)
+        raise RuntimeError(_DAEMON_SPAWN_MESSAGE)
+
+    monkeypatch.setattr(client, "_spawn_and_wait", _refuse)
+    yield
+    if attempts:
+        pytest.fail(_DAEMON_SPAWN_MESSAGE, pytrace=False)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "allow_network: opt out of the _block_network socket guard"
+    )
+    config.addinivalue_line(
+        "markers",
+        "embedded_start: let LemonadeManager.start_embedded_if_stopped run "
+        "(its own dependencies must be mocked)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_embedded_lemonade_start(request, monkeypatch):
+    """Keep ensure_ready() off the developer's real GAIA Lemonade and daemon.
+
+    With the network blocked, a real, running ~/.gaia server looks stopped, and
+    ensure_ready() would ask a real daemon to start it. Opt out with
+    @pytest.mark.embedded_start.
+    """
+    if request.node.get_closest_marker("embedded_start"):
+        return
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    monkeypatch.setattr(
+        LemonadeManager, "start_embedded_if_stopped", classmethod(lambda cls: False)
     )
 
 

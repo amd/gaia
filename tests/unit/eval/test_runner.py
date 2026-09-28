@@ -766,9 +766,11 @@ class TestResolveMcpConfig:
         with caplog.at_level("DEBUG", logger=runner.logger.name):
             runner.resolve_mcp_config(tmp_path)
 
+        # Match the raw args: %r doubles Windows backslashes in the message.
         assert any(
-            "gaia-agent-ui" in r.getMessage() and sys.executable in r.getMessage()
+            "gaia-agent-ui" in r.args and sys.executable in r.args
             for r in caplog.records
+            if isinstance(r.args, tuple)
         )
 
     @pytest.mark.parametrize(

@@ -38,52 +38,51 @@ interface ToolMeta {
     label: string;
     activeLabel: string;
     icon: LucideIcon;
-    color: string;
 }
 
 const TOOL_META: Record<string, ToolMeta> = {
     // File operations
-    search_file:           { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search,     color: '#3b82f6' },
-    search_files:          { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search,     color: '#3b82f6' },
-    search_file_content:   { label: 'Searched content',   activeLabel: 'Searching content',   icon: Search,     color: '#3b82f6' },
-    search_directory:      { label: 'Searched directory', activeLabel: 'Searching directory', icon: Search,     color: '#3b82f6' },
-    read_file:             { label: 'Read file',          activeLabel: 'Reading file',        icon: FileText,   color: '#8b5cf6' },
-    write_file:            { label: 'Wrote file',         activeLabel: 'Writing file',        icon: FileEdit,   color: '#f59e0b' },
-    get_file_info:         { label: 'Got file info',      activeLabel: 'Getting file info',   icon: FileText,   color: '#8b5cf6' },
-    browse_directory:      { label: 'Browsed directory',  activeLabel: 'Browsing directory',  icon: FolderOpen,  color: '#a78bfa' },
-    list_directory:        { label: 'Listed directory',   activeLabel: 'Listing directory',   icon: FolderOpen,  color: '#a78bfa' },
-    list_recent_files:     { label: 'Listed recent files', activeLabel: 'Listing recent files', icon: FolderOpen, color: '#a78bfa' },
-    analyze_data_file:     { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3,   color: '#ec4899' },
+    search_file:           { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search },
+    search_files:          { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search },
+    search_file_content:   { label: 'Searched content',   activeLabel: 'Searching content',   icon: Search },
+    search_directory:      { label: 'Searched directory', activeLabel: 'Searching directory', icon: Search },
+    read_file:             { label: 'Read file',          activeLabel: 'Reading file',        icon: FileText },
+    write_file:            { label: 'Wrote file',         activeLabel: 'Writing file',        icon: FileEdit },
+    get_file_info:         { label: 'Got file info',      activeLabel: 'Getting file info',   icon: FileText },
+    browse_directory:      { label: 'Browsed directory',  activeLabel: 'Browsing directory',  icon: FolderOpen },
+    list_directory:        { label: 'Listed directory',   activeLabel: 'Listing directory',   icon: FolderOpen },
+    list_recent_files:     { label: 'Listed recent files', activeLabel: 'Listing recent files', icon: FolderOpen },
+    analyze_data_file:     { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3 },
     // Shell & code
-    run_shell_command:     { label: 'Ran command',        activeLabel: 'Running command',     icon: Terminal,    color: '#22c55e' },
-    execute_code:          { label: 'Executed code',      activeLabel: 'Executing code',      icon: Code2,       color: '#f59e0b' },
+    run_shell_command:     { label: 'Ran command',        activeLabel: 'Running command',     icon: Terminal },
+    execute_code:          { label: 'Executed code',      activeLabel: 'Executing code',      icon: Code2 },
     // RAG & documents
-    query_documents:       { label: 'Queried documents',  activeLabel: 'Querying documents',  icon: BookOpen,    color: '#06b6d4' },
-    query_specific_file:   { label: 'Queried file',       activeLabel: 'Querying file',       icon: BookOpen,    color: '#06b6d4' },
-    search_indexed_chunks: { label: 'Searched chunks',    activeLabel: 'Searching chunks',    icon: BookOpen,    color: '#06b6d4' },
-    semantic_search:       { label: 'Searched documents', activeLabel: 'Searching documents', icon: BookOpen,    color: '#06b6d4' },
-    evaluate_retrieval:    { label: 'Evaluated retrieval', activeLabel: 'Evaluating retrieval', icon: BookOpen,  color: '#06b6d4' },
-    index_document:        { label: 'Indexed document',   activeLabel: 'Indexing document',   icon: Database,    color: '#f97316' },
-    index_directory:       { label: 'Indexed directory',  activeLabel: 'Indexing directory',   icon: Database,    color: '#f97316' },
-    index_file:            { label: 'Indexed file',       activeLabel: 'Indexing file',       icon: Database,    color: '#f97316' },
-    list_indexed_documents: { label: 'Listed documents',  activeLabel: 'Listing documents',   icon: Database,    color: '#f97316' },
-    summarize_document:    { label: 'Summarized',         activeLabel: 'Summarizing',         icon: FileText,    color: '#8b5cf6' },
-    dump_document:         { label: 'Extracted text',     activeLabel: 'Extracting text',     icon: FileText,    color: '#8b5cf6' },
-    rag_status:            { label: 'Checked RAG status', activeLabel: 'Checking RAG',        icon: Database,    color: '#f97316' },
-    add_watch_directory:   { label: 'Added watch dir',    activeLabel: 'Adding watch dir',    icon: FolderOpen,  color: '#a78bfa' },
+    query_documents:       { label: 'Queried documents',  activeLabel: 'Querying documents',  icon: BookOpen },
+    query_specific_file:   { label: 'Queried file',       activeLabel: 'Querying file',       icon: BookOpen },
+    search_indexed_chunks: { label: 'Searched chunks',    activeLabel: 'Searching chunks',    icon: BookOpen },
+    semantic_search:       { label: 'Searched documents', activeLabel: 'Searching documents', icon: BookOpen },
+    evaluate_retrieval:    { label: 'Evaluated retrieval', activeLabel: 'Evaluating retrieval', icon: BookOpen },
+    index_document:        { label: 'Indexed document',   activeLabel: 'Indexing document',   icon: Database },
+    index_directory:       { label: 'Indexed directory',  activeLabel: 'Indexing directory',   icon: Database },
+    index_file:            { label: 'Indexed file',       activeLabel: 'Indexing file',       icon: Database },
+    list_indexed_documents: { label: 'Listed documents',  activeLabel: 'Listing documents',   icon: Database },
+    summarize_document:    { label: 'Summarized',         activeLabel: 'Summarizing',         icon: FileText },
+    dump_document:         { label: 'Extracted text',     activeLabel: 'Extracting text',     icon: FileText },
+    rag_status:            { label: 'Checked RAG status', activeLabel: 'Checking RAG',        icon: Database },
+    add_watch_directory:   { label: 'Added watch dir',    activeLabel: 'Adding watch dir',    icon: FolderOpen },
     // Web
-    web_search:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe,       color: '#14b8a6' },
-    analyze_data:          { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3,   color: '#ec4899' },
+    web_search:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
+    analyze_data:          { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3 },
 };
 
 const DEFAULT_TOOL_META: ToolMeta = {
-    label: 'Used tool', activeLabel: 'Using tool', icon: Wrench, color: '#3b82f6',
+    label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
 };
 
 function getToolMeta(toolName?: string): ToolMeta {
     if (!toolName) return DEFAULT_TOOL_META;
     if (toolName.startsWith('mcp_')) {
-        return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe, color: '#7c3aed' };
+        return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe };
     }
     return TOOL_META[toolName] || DEFAULT_TOOL_META;
 }
@@ -443,7 +442,6 @@ interface FlowToolCardProps {
 function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
     const meta = getToolMeta(step.tool);
     const Icon = meta.icon;
-    const color = meta.color;
     const friendlyLabel = step.active ? meta.activeLabel : meta.label;
     const hasDetail = !!(step.detail || step.result || step.commandOutput || step.fileList?.files?.length);
 
@@ -456,18 +454,16 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
             >
                 <div className="flow-tool-left">
                     {step.active ? (
-                        <Loader2 size={13} className="flow-tool-spinner" style={{ color }} />
+                        <Loader2 size={13} className="flow-tool-spinner" />
                     ) : step.success === false ? (
-                        <AlertCircle size={13} style={{ color: '#ef4444' }} />
+                        <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
                     ) : step.success === true ? (
-                        <CheckCircle2 size={13} style={{ color: '#22c55e' }} />
+                        <CheckCircle2 size={13} style={{ color: 'var(--accent-green)' }} />
                     ) : (
-                        <Icon size={13} style={{ color }} />
+                        <Icon size={13} className="flow-tool-icon" />
                     )}
                     <span className="flow-tool-label">{friendlyLabel}</span>
-                    <span className="flow-tool-badge" style={{ '--badge-color': color } as React.CSSProperties}>
-                        {step.tool}
-                    </span>
+                    <span className="flow-tool-badge">{step.tool}</span>
                     {step.mcpServer && (
                         <span className="flow-tool-mcp-server">via {step.mcpServer}</span>
                     )}
@@ -629,7 +625,7 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
                                 onClick={() => toggleChunk(chunk.id)}
                             >
                                 <div className="chunk-header-left">
-                                    <BookOpen size={11} style={{ color: '#06b6d4', flexShrink: 0 }} />
+                                    <BookOpen size={11} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
                                     {chunk.source && (
                                         <span className="chunk-source">{chunk.source}</span>
                                     )}

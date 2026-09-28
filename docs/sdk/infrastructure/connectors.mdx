@@ -199,11 +199,11 @@ keys via the `get_credential` dispatcher:
 from gaia.connectors.handler import configure, get_credential
 
 # Configure — stores the key in the OS keyring.
-await configure("github", {"GITHUB_TOKEN": "ghp_..."})
+await configure("mcp-github", {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."})
 
 # Retrieve — used by the MCP bridge to launch the server.
-creds = await get_credential("github")
-# {"GITHUB_TOKEN": "ghp_..."}
+creds = await get_credential("mcp-github")
+# {"env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."}, "command": "npx", "args": [...]}
 ```
 
 The MCP bridge injects these credentials as environment variables when
@@ -217,7 +217,7 @@ gaia connectors connect google \
     --scopes https://www.googleapis.com/auth/gmail.readonly
 
 # MCP: supply API key(s)
-gaia connectors configure github --set GITHUB_TOKEN=ghp_…
+gaia connectors configure mcp-github --set GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…
 gaia connectors configure brave  --set BRAVE_API_KEY=BSA…
 
 # Check status of all connectors

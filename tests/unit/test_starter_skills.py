@@ -161,6 +161,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
     from gaia.agents.tools.shell_tools import ShellToolsMixin
+    from gaia.agents.tools.wait_tools import WaitToolsMixin
     from gaia.sd.mixin import SDToolsMixin
 
     class _Stub:
@@ -188,6 +189,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         (AudioToolsMixin, "register_audio_tools"),
         (MemoryMixin, "register_memory_tools"),
         (EmailToolsMixin, "register_email_tools"),
+        (WaitToolsMixin, "register_wait_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)
@@ -263,6 +265,28 @@ def test_starter_skill_tools_required_are_real_tools(
     assert not unknown, (
         f"{skill.name} declares tools_required that no mixin registers: "
         f"{', '.join(unknown)}"
+    )
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_with_a_shell_grant_declares_run_shell_command(skill_dir: Path):
+    """A ``shell:execute:*`` grant is only usable through ``run_shell_command``.
+
+    Loading a skill brings the tools it declares, so a shell grant without the
+    one tool that consumes it leaves the model unable to run the command.
+    """
+    skill = parse_skill_file(skill_dir)
+    shell_grants = [
+        str(p)
+        for p in skill.parsed_permissions()
+        if p.domain == "shell" and not p.grants_nothing
+    ]
+    if not shell_grants:
+        return
+
+    assert "run_shell_command" in skill.gaia.tools_required, (
+        f"{skill.name} grants {', '.join(shell_grants)} but does not declare "
+        "run_shell_command in tools_required"
     )
 
 
@@ -641,6 +665,46 @@ def test_the_guide_consumes_lists_match_the_manifests():
             f"tools_required: guide={sorted(documented[skill.name])} "
             f"manifest={sorted(skill.gaia.tools_required)}"
         )
+
+
+def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
+    """#4252: daily-brief and the guide once said TTS doesn't exist — it does.
+
+    ``text_to_speech`` is a real, always-registered ChatAgent tool
+    (``gaia_agent_chat/agent.py``), so a doc listing it as a missing capability
+    tells the model to under-promise. Skill-aware scheduling genuinely is still
+    missing (``gaia schedule add --skill`` is rejected, #1019), so that claim
+    must stay.
+    """
+    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
+    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def text_to_speech(" in source
+
+    daily_brief = (STARTER_ROOT / "daily-brief" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    for doc_name, text in (("daily-brief/SKILL.md", daily_brief), ("guide", guide)):
+        lowered = text.lower()
+        assert "text-to-speech" not in lowered or "text_to_speech" in text, (
+            f"{doc_name} still talks about text-to-speech without naming the "
+            "text_to_speech tool that already provides it"
+        )
+        assert (
+            "not exposed as an agent tool" not in lowered
+        ), f"{doc_name} still claims TTS is not an agent tool"
+        assert (
+            "not a tool an agent can call" not in lowered
+        ), f"{doc_name} still claims TTS is not callable by an agent"
+
+    # The scheduling limitation is still real — don't let a future edit
+    # accidentally claim it works before #1019 actually lands.
+    assert "gaia schedule add" in daily_brief
+    assert "gaia schedule add --skill" in guide
 
 
 def test_the_guides_run_a_skill_snippet_still_type_checks():

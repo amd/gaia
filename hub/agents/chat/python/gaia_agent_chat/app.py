@@ -900,28 +900,25 @@ def interactive_mode(agent: ChatAgent):
                     response = input("\nAre you sure? (yes/no): ").strip().lower()
 
                     if response == "yes":
-                        import shutil
+                        try:
+                            agent.rag.clear_cache()
+                        except ValueError as e:
+                            print(f"\n❌ {e}")
+                            continue
+                        print(f"\n✅ Cache cleared: {agent.rag.config.cache_dir}")
 
-                        cache_dir = agent.rag.config.cache_dir
-                        if os.path.exists(cache_dir):
-                            shutil.rmtree(cache_dir)
-                            os.makedirs(cache_dir, exist_ok=True)
-                            print(f"\n✅ Cache cleared: {cache_dir}")
+                        # Clear in-memory state as well
+                        agent.rag.indexed_files.clear()
+                        agent.rag.chunks.clear()
+                        agent.rag.chunk_to_file.clear()
+                        agent.rag.file_to_chunk_indices.clear()
+                        agent.rag.file_metadata.clear()
+                        agent.rag.index = None
+                        agent.indexed_files.clear()
 
-                            # Clear in-memory state as well
-                            agent.rag.indexed_files.clear()
-                            agent.rag.chunks.clear()
-                            agent.rag.chunk_to_file.clear()
-                            agent.rag.file_to_chunk_indices.clear()
-                            agent.rag.file_metadata.clear()
-                            agent.rag.index = None
-                            agent.indexed_files.clear()
-
-                            print(
-                                "\nAll documents will be re-indexed from scratch on next access."
-                            )
-                        else:
-                            print(f"\nℹ️  Cache directory doesn't exist: {cache_dir}")
+                        print(
+                            "\nAll documents will be re-indexed from scratch on next access."
+                        )
                     else:
                         print("\n❌ Cache clear cancelled")
 
@@ -1078,7 +1075,15 @@ def main():
         print(f"\n❌ Error: {e}")
         return 1
     finally:
-        # Cleanup
+        # Cleanup. Draining here rather than beside the one-shot return means
+        # interactive, Ctrl-C and error exits land the last turn's facts too —
+        # extraction now finishes after the answer.
+        try:
+            from gaia.agents.base.memory import drain_memory_extraction
+
+            drain_memory_extraction(agent)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning("memory extraction did not finish before exit: %s", e)
         try:
             agent.stop_watching()
         except Exception as e:  # pylint: disable=broad-except

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import queue
 import sys
+import threading
 import types
 from unittest.mock import MagicMock, patch
 
@@ -353,9 +354,11 @@ class TestDroppedSpeechIsDecidedOnce:
     def test_the_real_guard_is_latched(self):
         """Pins the production code, not just this reconstruction.
 
-        The guard lives in ``process_voice_input``, which nothing in the tree
-        calls today — see ``TestTheLivePlaybackPathIsBounded`` for the path
-        ``gaia talk`` actually takes.
+        ``process_voice_input`` is the message processor
+        ``docs/spec/audio-client.mdx`` tells integrators to pass to
+        ``start_voice_chat``, so it is public surface even though nothing in
+        this tree calls it. ``TestTheLivePlaybackPathIsBounded`` covers the
+        path ``gaia talk`` itself takes.
         """
         import inspect
 
@@ -365,6 +368,28 @@ class TestDroppedSpeechIsDecidedOnce:
         assert "speech_dropped = False" in source
         assert "nonlocal speech_dropped" in source
         assert "if speech_dropped:" in source
+
+    def test_the_guarded_queue_is_actually_bounded(self):
+        """The latch above is unreachable on an unbounded queue.
+
+        ``queue.Full`` cannot be raised without a ``maxsize``, so dropping the
+        bound silently retires the whole drop-on-full path and leaves its
+        docstring describing behaviour the code no longer has. That happened
+        once; the assertions above stayed green through it, because they read
+        the latch and never the queue it depends on.
+        """
+        import inspect
+        import re
+
+        from gaia.audio.audio_client import AudioClient
+
+        source = inspect.getsource(AudioClient.process_voice_input)
+        match = re.search(r"text_queue = queue\.Queue\((.*?)\)", source)
+        assert match, "text_queue construction not found"
+        assert "maxsize=" in match.group(1), (
+            "process_voice_input's text_queue lost its bound, so the "
+            "queue.Full branch below it can never fire"
+        )
 
 
 class TestTheLivePlaybackPathIsBounded:
@@ -395,6 +420,14 @@ class TestTheLivePlaybackPathIsBounded:
         client.log = MagicMock()
         client.enable_tts = True
         client.tts = MagicMock()
+        # State __init__ would have set. The interrupt event is per-session
+        # rather than per-utterance so Enter can reach playback already in
+        # flight; a bare __new__ has to stand it up by hand.
+        client._playback_interrupt = threading.Event()
+        client.whisper_asr = None
+        client.is_speaking = False
+        client.tts_thread = None
+        client.transcription_queue = queue.Queue()
         # The thread starts and immediately does nothing — the broken-speaker
         # case, where generate_speech_streaming used to die on stream open.
         client.tts.generate_speech_streaming = lambda *a, **k: None
