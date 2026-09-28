@@ -7,7 +7,7 @@ Edge case tests for the security module (gaia.security).
 Covers the following untested scenarios:
 1. is_write_blocked with symlink resolution (blocked directory via symlink)
 2. _setup_audit_logging: no duplicate handlers on multiple PathValidator instances
-3. create_backup: PermissionError from shutil.copy2 returns None
+3. create_backup: PermissionError from shutil.copy2 raises BackupError
 4. _prompt_overwrite: actual input loop with mocked input() - 'y', 'n', invalid
 5. is_write_blocked: exception path returns (True, reason) with "unable to validate"
 6. validate_write: file deleted between exists check and stat (OSError graceful)
@@ -26,6 +26,7 @@ import pytest
 
 from gaia.security import (
     BLOCKED_DIRECTORIES,
+    BackupError,
     PathValidator,
     _format_size,
     _get_blocked_directories,
@@ -142,7 +143,7 @@ class TestSetupAuditLoggingNoDuplicates:
 
 
 # ============================================================================
-# 3. create_backup: PermissionError from shutil.copy2 returns None
+# 3. create_backup: PermissionError from shutil.copy2 raises BackupError
 # ============================================================================
 
 
@@ -150,28 +151,26 @@ class TestCreateBackupPermissionError:
     """Test create_backup when shutil.copy2 raises PermissionError."""
 
     @pytest.fixture
-    def validator(self, tmp_path):
+    def validator(self, tmp_path, mock_home):
         return PathValidator(allowed_paths=[str(tmp_path)])
 
-    def test_permission_error_returns_none(self, validator, tmp_path):
-        """create_backup returns None (not crash) when copy2 raises PermissionError."""
+    def test_permission_error_raises_backup_error(self, validator, tmp_path):
+        """A PermissionError from copy2 refuses the edit instead of skipping the backup."""
         target = tmp_path / "locked_file.txt"
         target.write_text("locked content")
 
         with patch("shutil.copy2", side_effect=PermissionError("Access denied")):
-            result = validator.create_backup(str(target))
+            with pytest.raises(BackupError, match="Access denied"):
+                validator.create_backup(str(target))
 
-        assert result is None
-
-    def test_os_error_returns_none(self, validator, tmp_path):
-        """create_backup returns None when copy2 raises OSError."""
+    def test_os_error_raises_backup_error(self, validator, tmp_path):
+        """An OSError from copy2 refuses the edit instead of skipping the backup."""
         target = tmp_path / "error_file.txt"
         target.write_text("content")
 
         with patch("shutil.copy2", side_effect=OSError("Disk full")):
-            result = validator.create_backup(str(target))
-
-        assert result is None
+            with pytest.raises(BackupError, match="Disk full"):
+                validator.create_backup(str(target))
 
     def test_nonexistent_file_returns_none(self, validator, tmp_path):
         """create_backup returns None for nonexistent file."""
@@ -179,15 +178,14 @@ class TestCreateBackupPermissionError:
         result = validator.create_backup(str(ghost))
         assert result is None
 
-    def test_generic_exception_returns_none(self, validator, tmp_path):
-        """create_backup returns None for any unexpected exception."""
+    def test_a_programming_error_is_not_swallowed(self, validator, tmp_path):
+        """Only a filesystem failure becomes a BackupError; a bug surfaces as-is."""
         target = tmp_path / "weird_file.txt"
         target.write_text("data")
 
         with patch("shutil.copy2", side_effect=RuntimeError("Unexpected")):
-            result = validator.create_backup(str(target))
-
-        assert result is None
+            with pytest.raises(RuntimeError):
+                validator.create_backup(str(target))
 
 
 # ============================================================================

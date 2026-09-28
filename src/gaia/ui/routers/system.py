@@ -6,7 +6,6 @@
 import asyncio
 import json
 import logging
-import os
 import shutil
 import sys
 import threading
@@ -20,6 +19,7 @@ from pydantic import BaseModel, Field
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
     lemonade_auth_headers,
+    resolve_effective_ctx_size,
     resolve_lemonade_api_key,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
@@ -58,8 +58,10 @@ _MIN_CONTEXT_SIZE = DEFAULT_CONTEXT_SIZE
 
 
 def _get_lemonade_base_url() -> str:
-    """Return the Lemonade Server API base URL from environment or default."""
-    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+    """Return the Lemonade Server API base URL: configured, else GAIA's own."""
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    return resolve_lemonade_base_url()
 
 
 async def _lemonade_post(
@@ -505,10 +507,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                 status.model_loaded = m_name
                             status.model_device = m.get("device")
                             # Actual loaded context size (preferred over catalog
-                            # default).
+                            # default) — clamped against the model's real
+                            # max_context_window (#2992). recipe_options.ctx_size
+                            # is a config echo, not a measurement: Lemonade can
+                            # report the ctx_size it was ASKED for even after
+                            # silently capping it lower, which without this
+                            # clamp made the UI report a different (higher, wrong)
+                            # context than the CLI for the same running server.
                             ctx = m.get("recipe_options", {}).get("ctx_size")
                             if ctx is not None:
-                                status.model_context_size = ctx
+                                status.model_context_size = resolve_effective_ctx_size(
+                                    ctx, m.get("max_context_window")
+                                )
                             _llm_found = True  # take only the first matching LLM
 
                 # Fallback: older Lemonade versions expose context_size at root level
@@ -525,11 +535,17 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             status.model_size_gb = m.get("size")
                             status.model_labels = m.get("labels")
                             # Only use catalog ctx_size when health data didn't
-                            # provide it (e.g. model not yet fully loaded)
+                            # provide it (e.g. model not yet fully loaded) —
+                            # clamped the same way as the health-derived value
+                            # above.
                             if status.model_context_size is None:
                                 ctx = m.get("recipe_options", {}).get("ctx_size")
                                 if ctx is not None:
-                                    status.model_context_size = ctx
+                                    status.model_context_size = (
+                                        resolve_effective_ctx_size(
+                                            ctx, m.get("max_context_window")
+                                        )
+                                    )
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 
@@ -715,36 +731,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     init_marker = Path.home() / ".gaia" / "chat" / "initialized"
     status.initialized = init_marker.exists()
 
-    # Device support check.
-    # Skipped when:
-    #   1. GAIA_SKIP_DEVICE_CHECK env var is set to "1", "true", or "yes"
-    #   2. LEMONADE_BASE_URL points to a non-localhost server — inference runs
-    #      remotely so local hardware requirements don't apply.
-    try:
-        from gaia.device import check_device_supported, get_processor_name
+    from gaia.device import get_processor_name
 
-        skip_check = os.environ.get("GAIA_SKIP_DEVICE_CHECK", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        lemonade_url = os.environ.get("LEMONADE_BASE_URL", "")
-        _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", ""}
-        try:
-            _parsed_hostname = urlparse(lemonade_url).hostname or ""
-        except Exception:
-            _parsed_hostname = ""
-        is_remote = bool(lemonade_url) and _parsed_hostname not in _LOCAL_HOSTS
-
-        if skip_check or is_remote:
-            status.device_supported = True
-            status.processor_name = get_processor_name() or "unknown"
-        else:
-            supported, device_name = check_device_supported(log=logger)
-            status.processor_name = device_name
-            status.device_supported = supported
-    except Exception:
-        pass  # Unknown device — don't block the UI
+    status.processor_name = await asyncio.to_thread(get_processor_name) or None
 
     # Boot-time initialization tracking from the DispatchQueue.
     queue = getattr(request.app.state, "dispatch_queue", None)

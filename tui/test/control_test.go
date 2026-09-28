@@ -56,7 +56,7 @@ func startLiveTUI(t *testing.T) *liveTUI {
 }
 
 // startLiveTUIWith is startLiveTUI with a chance to adjust the flagship model
-// before it boots — a launch flag such as --bypass-permissions.
+// before it boots — a launch flag such as --full-access.
 func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.FlagshipModel) *liveTUI {
 	t.Helper()
 	t.Setenv(control.EnvHome, t.TempDir())

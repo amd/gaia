@@ -1,0 +1,73 @@
+{
+  "repo": "kovtcharov/toybox",
+  "description": "A tiny Python project used as a fixture for agent benchmarks.",
+  "default_branch": "main",
+  "labels": [
+    {"name": "bug", "color": "d73a4a", "description": "Something isn't working"},
+    {"name": "documentation", "color": "0075ca", "description": "Improvements or additions to documentation"},
+    {"name": "duplicate", "color": "cfd3d7", "description": "This issue or pull request already exists"},
+    {"name": "enhancement", "color": "a2eeef", "description": "New feature or request"},
+    {"name": "good first issue", "color": "7057ff", "description": "Good for newcomers"},
+    {"name": "help wanted", "color": "008672", "description": "Extra attention is needed"},
+    {"name": "invalid", "color": "e4e669", "description": "This doesn't seem right"},
+    {"name": "question", "color": "d876e3", "description": "Further information is requested"},
+    {"name": "wontfix", "color": "ffffff", "description": "This will not be worked on"}
+  ],
+  "issues": [
+    {
+      "number": 1,
+      "title": "parse_updated crashes on lowercase z timestamps",
+      "state": "OPEN",
+      "author": "alice-dev",
+      "createdAt": "2026-08-03T09:12:00Z",
+      "updatedAt": "2026-08-03T09:12:00Z",
+      "labels": [],
+      "comments": [],
+      "body": "Our upstream feed started sending timestamps with a lowercase `z` suffix, and `parse_updated` rejects them:\n\n```\n>>> from toybox.dates import parse_updated\n>>> parse_updated('2026-01-02 03:04:05z')\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\n  File \"toybox/dates.py\", line 15, in parse_updated\n    return datetime.strptime(v, \"%Y-%m-%d %H:%M:%S\")\nValueError: unconverted data remains: z\n```\n\nThe uppercase `Z` form works. A trailing `z` means the same thing and should be accepted too."
+    },
+    {
+      "number": 2,
+      "title": "Three date parsers duplicate the same logic",
+      "state": "OPEN",
+      "author": "bob-maint",
+      "createdAt": "2026-08-05T14:30:00Z",
+      "updatedAt": "2026-08-05T14:30:00Z",
+      "labels": [],
+      "comments": [],
+      "body": "`parse_created`, `parse_updated` and `parse_deleted` in `toybox/dates.py` each call `datetime.strptime` with the same format string, with small differences in what they strip first. It would be easier to keep them consistent if all three delegated to one shared helper."
+    },
+    {
+      "number": 3,
+      "title": "Sorting is unstable for equal keys",
+      "state": "OPEN",
+      "author": "carol-qa",
+      "createdAt": "2026-08-09T11:02:00Z",
+      "updatedAt": "2026-08-09T11:02:00Z",
+      "labels": [],
+      "comments": [],
+      "body": "`sort_items` in `toybox/sorting.py` has a comment saying `reverse=True` flips ties between runs. I think items with the same `ts` can come back in a different order from the one they went in. I haven't written a reproducer yet."
+    },
+    {
+      "number": 4,
+      "title": "How do I change the date format?",
+      "state": "OPEN",
+      "author": "dave-user",
+      "createdAt": "2026-08-12T16:45:00Z",
+      "updatedAt": "2026-08-12T16:45:00Z",
+      "labels": [],
+      "comments": [],
+      "body": "Our timestamps look like `02/01/2026 03:04`. Is there a setting to make toybox parse a different date format, or do I have to change the code?"
+    },
+    {
+      "number": 5,
+      "title": "parse_updated fails with a trailing lowercase z",
+      "state": "OPEN",
+      "author": "erin-ci",
+      "createdAt": "2026-08-20T08:20:00Z",
+      "updatedAt": "2026-08-20T08:20:00Z",
+      "labels": [],
+      "comments": [],
+      "body": "Nightly import failed on `2026-03-04 05:06:07z` with `ValueError: unconverted data remains: z` from `parse_updated`. Looks like only the uppercase `Z` suffix is handled."
+    }
+  ]
+}

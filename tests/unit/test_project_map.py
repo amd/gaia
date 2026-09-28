@@ -23,6 +23,7 @@ from gaia.agents.base.project_map import (
     PROJECT_MAP_TOKEN_BUDGET,
     PROJECT_ROOT_ENV,
     PlatformQuirks,
+    ProjectMap,
     ProjectMapMixin,
     build_project_map,
     clear_project_map_cache,
@@ -179,18 +180,34 @@ def test_map_names_absent_commands_so_the_agent_does_not_try_them(repo, monkeypa
 
 
 def test_shell_allowlist_is_not_conflated_with_what_is_installed(repo):
-    """Claiming run_shell_command accepts ``uv`` causes the very refusal
-    this map exists to prevent."""
+    """Listing ``uv`` as read-only would promise it runs in an unattended
+    session, where anything off that list is refused."""
     from gaia.agents.tools.shell_tools import ALLOWED_COMMANDS
 
     pm = build_project_map(repo)
     assert set(pm.shell_commands) <= ALLOWED_COMMANDS
-    off_limits = set(pm.tools_present) - ALLOWED_COMMANDS
-    accepts = next(
-        (ln for ln in render_project_map(pm).splitlines() if "accepts:" in ln), ""
+    needs_approval = set(pm.tools_present) - ALLOWED_COMMANDS
+    read_only = next(
+        (ln for ln in render_project_map(pm).splitlines() if "Read-only" in ln), ""
     )
-    named = set(re.findall(r"[\w.-]+", accepts.partition(":")[2]))
-    assert not (named & off_limits)
+    named = set(re.findall(r"[\w.-]+", read_only.partition(":")[2]))
+    assert not (named & needs_approval)
+
+
+def test_the_map_never_says_the_shell_refuses_an_installed_tool():
+    """It asks, and a map saying "refuses" teaches the model to decline work
+    the user was there to approve."""
+    pm = ProjectMap(
+        root="/r",
+        is_repository=True,
+        vcs=None,
+        tools_present=["npm", "uv"],
+        shell_commands=["cat", "ls"],
+    )
+    rendered = render_project_map(pm)
+    assert "refuses" not in rendered
+    assert "Read-only commands for run_shell_command: cat, ls" in rendered
+    assert "runs them once the user approves: npm, uv" in rendered
 
 
 # ── the budget, on the 32K profile ────────────────────────────────────────
@@ -647,6 +664,27 @@ def test_shell_commands_are_omitted_for_an_agent_without_the_shell_tool(repo):
     assert "NOT installed" in text
 
 
+def test_a_turn_that_does_not_offer_the_shell_omits_its_commands(repo):
+    """The registry owns the tool; the per-turn filter decides who gets it."""
+    agent = _FakeAgent(repo)
+    agent._active_tool_filter = ["run_python"]
+
+    text = agent.get_project_map_system_prompt()
+
+    assert "run_shell_command" not in text
+    assert "Root:" in text  # the map still rendered
+
+
+def test_a_turn_that_offers_the_shell_keeps_its_commands(repo):
+    agent = _FakeAgent(repo)
+    agent._active_tool_filter = ["run_python", "run_shell_command"]
+
+    assert (
+        "Read-only commands for run_shell_command:"
+        in agent.get_project_map_system_prompt()
+    )
+
+
 def test_a_wrong_base_order_fails_at_class_definition():
     """Silent otherwise: the prompt fragment renders either way."""
     from gaia.agents.base.agent import Agent
@@ -719,3 +757,42 @@ def test_the_flagship_still_picks_its_index_root_the_way_this_pins():
         and any(isinstance(t, ast.Name) and t.id == "index_root" for t in node.targets)
     ]
     assert assigned == ["self._project_map_root() or allowed[0]"]
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "",
+        "src",
+        "a/b/c",
+        "a/b/c/d",
+        # Depths a fixed cap of four silently skipped. Maven/Gradle layout is
+        # six, and this repo's own flagship package sits at five.
+        "a/b/c/d/e",
+        "src/main/java/com/acme/svc",
+        "hub/agents/gaia/python/gaia_agent",
+        "a/b/c/d/e/f/g/h/i/j",
+    ],
+)
+def test_root_is_found_at_any_depth_below_it(tmp_path, monkeypatch, rel):
+    root = tmp_path / "project"
+    (root / ".git").mkdir(parents=True)
+    nested = root.joinpath(*rel.split("/")) if rel else root
+    nested.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(nested)
+    assert resolve_project_root() == str(root.resolve())
+
+
+def test_the_search_still_stops_without_a_repository_above(tmp_path, monkeypatch):
+    """Removing the depth cap must not turn "no project" into a wrong guess.
+
+    The walk is bounded by the home directory and the filesystem root, not by a
+    step count, so a deep directory with no repository anywhere above it still
+    answers ``None``.
+    """
+    nested = tmp_path / "a" / "b" / "c" / "d" / "e" / "f"
+    nested.mkdir(parents=True)
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(nested)
+    assert resolve_project_root() is None

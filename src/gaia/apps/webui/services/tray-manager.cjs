@@ -33,7 +33,46 @@ const DEFAULT_CONFIG = {
     startMinimized: false,
     startOnLogin: false,
   },
+  agents: {},
 };
+
+const AGENT_LOG_LEVELS = ["debug", "info", "warn", "error"];
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Validate an `agents` section (id → AgentConfig), dropping unknown keys. */
+function validateAgents(agents, where) {
+  if (!isPlainObject(agents)) {
+    throw new TypeError(`${where}: agents must be an object`);
+  }
+  const out = {};
+  for (const [id, cfg] of Object.entries(agents)) {
+    if (id.trim() === "") {
+      throw new TypeError(`${where}: agent id must be a non-empty string`);
+    }
+    if (!isPlainObject(cfg)) {
+      throw new TypeError(`${where}: agents.${id} must be an object`);
+    }
+    for (const key of ["autoStart", "restartOnCrash"]) {
+      if (typeof cfg[key] !== "boolean") {
+        throw new TypeError(`${where}: agents.${id}.${key} must be a boolean`);
+      }
+    }
+    if (!AGENT_LOG_LEVELS.includes(cfg.logLevel)) {
+      throw new TypeError(
+        `${where}: agents.${id}.logLevel must be one of ${AGENT_LOG_LEVELS.join(", ")}`
+      );
+    }
+    out[id] = {
+      autoStart: cfg.autoStart,
+      restartOnCrash: cfg.restartOnCrash,
+      logLevel: cfg.logLevel,
+    };
+  }
+  return out;
+}
 
 // ── TrayManager ──────────────────────────────────────────────────────────
 
@@ -53,6 +92,9 @@ class TrayManager {
     /** @type {Electron.Tray | null} */
     this.tray = null;
 
+    /** @type {number} Unread notifications reflected in the tooltip/badge. */
+    this._notificationCount = 0;
+
     /** @type {object} */
     this.config = this._loadConfig();
 
@@ -69,7 +111,8 @@ class TrayManager {
     if (this.tray) return;
 
     this.tray = new Tray(this._icon);
-    this.tray.setToolTip("GAIA");
+    // Re-apply any count that arrived before the tray existed.
+    this.setNotificationCount(this._notificationCount);
 
     // Single-click: show/focus window
     this.tray.on("click", () => this._showWindow());
@@ -93,6 +136,45 @@ class TrayManager {
   /** Update the context menu. */
   refresh() {
     this._rebuildContextMenu();
+  }
+
+  /**
+   * Reflect the unread-notification count in the tray tooltip (and the dock /
+   * launcher badge where the platform has one).
+   *
+   * @param {number} count Unread notifications; negative/NaN is treated as 0.
+   */
+  setNotificationCount(count) {
+    const unread =
+      typeof count === "number" && Number.isFinite(count) && count > 0
+        ? Math.floor(count)
+        : 0;
+    if (unread !== this._notificationCount) {
+      console.log(`[tray] Unread notifications: ${unread}`);
+    }
+    this._notificationCount = unread;
+
+    const trayAlive =
+      this.tray &&
+      !(typeof this.tray.isDestroyed === "function" && this.tray.isDestroyed());
+    if (trayAlive) {
+      this.tray.setToolTip(
+        unread > 0
+          ? `GAIA — ${unread} unread notification${unread === 1 ? "" : "s"}`
+          : "GAIA"
+      );
+    }
+
+    // Dock (macOS) / Unity launcher (Linux) badge. Windows has no
+    // app.setBadgeCount equivalent — the tooltip above is the badge there.
+    if (process.platform !== "win32" && typeof app.setBadgeCount === "function") {
+      app.setBadgeCount(unread);
+    }
+  }
+
+  /** @returns {number} The unread count last passed to setNotificationCount. */
+  get notificationCount() {
+    return this._notificationCount || 0;
   }
 
   /** @returns {boolean} Whether minimize-to-tray is enabled. */
@@ -184,32 +266,63 @@ class TrayManager {
   // ── Private: Config persistence ──────────────────────────────────────
 
   _loadConfig() {
+    let loaded = null;
     try {
       if (fs.existsSync(CONFIG_PATH)) {
-        const raw = fs.readFileSync(CONFIG_PATH, "utf8");
-        const loaded = JSON.parse(raw);
-        return {
-          ...DEFAULT_CONFIG,
-          ...loaded,
-          tray: { ...DEFAULT_CONFIG.tray, ...(loaded.tray || {}) },
-        };
+        loaded = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
       }
     } catch (err) {
       console.warn("[tray] Could not load tray config:", err.message);
     }
-    return { ...DEFAULT_CONFIG };
+    if (!isPlainObject(loaded)) {
+      return { ...DEFAULT_CONFIG, tray: { ...DEFAULT_CONFIG.tray }, agents: {} };
+    }
+
+    // Scoped to the agents section: one bad entry must not cost the user their
+    // tray settings, which the next save would then overwrite with defaults.
+    let agents = {};
+    try {
+      agents = validateAgents(loaded.agents ?? {}, CONFIG_PATH);
+    } catch (err) {
+      console.error(
+        `[tray] Ignoring invalid agents section in ${CONFIG_PATH}: ${err.message}. ` +
+          "Agent settings fall back to defaults; tray settings are kept."
+      );
+    }
+
+    // Repair on read: the pre-validation handler could store wrong-typed
+    // values, and set-config re-reads stored keys the payload omits.
+    const stored = isPlainObject(loaded.tray) ? loaded.tray : {};
+    const tray = { ...DEFAULT_CONFIG.tray };
+    for (const key of Object.keys(DEFAULT_CONFIG.tray)) {
+      if (typeof stored[key] === "boolean") {
+        tray[key] = stored[key];
+      } else if (key in stored) {
+        console.warn(
+          `[tray] Ignoring non-boolean ${key} in ${CONFIG_PATH}; using default`
+        );
+      }
+    }
+
+    return {
+      ...DEFAULT_CONFIG,
+      ...loaded,
+      tray,
+      agents,
+    };
   }
 
-  _saveConfig() {
+  _saveConfig(config) {
     try {
-      if (!fs.existsSync(GAIA_DIR)) {
-        fs.mkdirSync(GAIA_DIR, { recursive: true });
-      }
-      fs.writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2), "utf8");
-      console.log("[tray] Config saved to", CONFIG_PATH);
+      fs.mkdirSync(GAIA_DIR, { recursive: true });
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
     } catch (err) {
-      console.error("[tray] Could not save tray config:", err.message);
+      throw new Error(
+        `Could not save settings to ${CONFIG_PATH}: ${err.message}. ` +
+          "Check that the file and its folder are writable."
+      );
     }
+    console.log("[tray] Config saved to", CONFIG_PATH);
   }
 
   // ── Private: IPC handlers ────────────────────────────────────────────
@@ -220,15 +333,42 @@ class TrayManager {
     });
 
     ipcMain.handle("tray:set-config", (_event, cfg) => {
-      if (cfg.tray) {
-        this.config.tray = { ...this.config.tray, ...cfg.tray };
+      if (!isPlainObject(cfg)) {
+        throw new TypeError("tray:set-config expects an object payload");
+      }
+      if (cfg.tray !== undefined && !isPlainObject(cfg.tray)) {
+        throw new TypeError("tray:set-config: tray must be an object");
+      }
+      const agents =
+        cfg.agents === undefined
+          ? null
+          : validateAgents(cfg.agents, "tray:set-config");
+
+      let tray = null;
+      if (cfg.tray !== undefined) {
+        tray = {};
+        for (const key of Object.keys(DEFAULT_CONFIG.tray)) {
+          const value = key in cfg.tray ? cfg.tray[key] : this.config.tray[key];
+          if (typeof value !== "boolean") {
+            throw new TypeError(`tray:set-config: tray.${key} must be a boolean`);
+          }
+          tray[key] = value;
+        }
       }
 
-      this._saveConfig();
+      if (tray === null && agents === null) {
+        return this.config;
+      }
+      const next = {
+        ...this.config,
+        tray: tray ?? this.config.tray,
+        agents: agents ? { ...this.config.agents, ...agents } : this.config.agents,
+      };
+      this._saveConfig(next);
+      this.config = next;
 
-      // Apply login-item setting if changed
-      if (cfg.tray && "startOnLogin" in cfg.tray) {
-        this._applyLoginItemSetting(cfg.tray.startOnLogin);
+      if (tray !== null && "startOnLogin" in cfg.tray) {
+        this._applyLoginItemSetting(tray.startOnLogin);
       }
 
       return this.config;

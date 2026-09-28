@@ -601,9 +601,9 @@ def _mailbox_failure_caveat(mailbox_errors: Any) -> str:
             # ``degraded`` promised at least one entry here — a malformed
             # one is a broken envelope, not a normal case worth hiding.
             logger.warning(
-                "email agent: degraded check_suspicious_mail envelope has a "
-                "malformed mailbox_errors entry (%r) — omitting it from the "
-                "coverage caveat",
+                "email agent: degraded scan envelope has a malformed "
+                "mailbox_errors entry (%r) — omitting it from the coverage "
+                "caveat",
                 entry,
             )
             continue
@@ -673,7 +673,13 @@ def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
 def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
     """A minimal, always-grounded pre-scan sentence built straight from the
     envelope's own counts — the fallback used when the model's own framing
-    sentence contradicts that same envelope."""
+    sentence contradicts that same envelope.
+
+    A degraded scan gets the same ``_mailbox_failure_caveat`` as
+    ``_honest_suspicious_summary`` (#3768): these counts cover only the
+    mailboxes that answered, so stating them unqualified reads as
+    whole-account coverage when a mailbox was skipped.
+    """
     urgent = len(envelope.get("urgent") or [])
     actionable = len(envelope.get("actionable") or [])
     needs_review = len(envelope.get("needs_review") or [])
@@ -689,7 +695,10 @@ def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
     total_unread = envelope.get("total_unread")
     if isinstance(total_unread, int):
         coverage += f" · {total_unread} unread in your inbox"
-    return f"Here's your inbox pre-scan — {summary}. {coverage}."
+    lead = f"Here's your inbox pre-scan — {summary}. {coverage}."
+    if envelope.get("degraded"):
+        lead += " " + _mailbox_failure_caveat(envelope.get("mailbox_errors"))
+    return lead
 
 
 # ---------------------------------------------------------------------------
@@ -851,15 +860,11 @@ def _attention_card_correction(cached: Dict[str, Any]) -> str:
 # Guard 6 — an invite claimed as sent/received/confirmed (#2766)
 # ---------------------------------------------------------------------------
 #
-# No tool in this package can currently confirm that a genuine calendar
-# invite was sent or received — detect_meeting_request is a text heuristic
-# for PROPOSALS, never a confirmation, and list_calendar_events /
-# detect_calendar_conflicts return real events but an event existing is not
-# evidence anyone emailed an invite for it (see calendar_tools' docstrings).
-# A completion-framed invite claim is therefore always ungrounded today,
-# with one exception: create_event_from_email's own mutation legitimately
-# sends calendar invites to its attendees, so a turn that actually called it
-# licenses the claim (mirrors guard 1's "grounded when a tool ran" shape).
+# No tool in this package can confirm that an invite was emailed, but a
+# calendar event whose provider data says ``organizer.self`` is false does
+# confirm that the user received an invitation to that event. Keep that
+# evidence narrow: it grounds a received-invite claim, not a claim that an
+# email was sent or that the user confirmed the invitation.
 
 _INVITE_CLAIM_RE = re.compile(
     r"\binvite[sd]?\b[^.!?]{0,40}\b(?:sent|received|confirmed)\b"
@@ -904,6 +909,33 @@ def _clause_around(text: str, start: int, end: int) -> str:
     return text[clause_start:clause_end]
 
 
+def _calendar_has_received_invite_evidence(
+    conversation: Optional[List[Dict[str, Any]]],
+) -> bool:
+    """Return whether this turn listed an event organized by someone else."""
+    collections = {
+        "list_calendar_events": "events",
+        "detect_calendar_conflicts": "conflicts",
+    }
+    for entry in _tool_entries(conversation):
+        tool_name = entry.get("name")
+        if not isinstance(tool_name, str):
+            continue
+        collection_key = collections.get(tool_name)
+        if collection_key is None:
+            continue
+        payload = _parse_tool_payload(entry.get("content"))
+        if payload is None:
+            continue
+        events = payload.get(collection_key) or []
+        if any(
+            isinstance(event, dict) and event.get("organizer_self") is False
+            for event in events
+        ):
+            return True
+    return False
+
+
 def find_ungrounded_invite_claim(
     final_answer: Optional[str], conversation: Optional[List[Dict[str, Any]]]
 ) -> Optional[str]:
@@ -916,15 +948,25 @@ def find_ungrounded_invite_claim(
     """
     if not final_answer:
         return None
-    match = _INVITE_CLAIM_RE.search(final_answer)
-    if not match:
-        return None
-    clause = _clause_around(final_answer, match.start(), match.end())
-    if _CLAUSE_NEGATION_RE.search(clause):
+    matches = list(_INVITE_CLAIM_RE.finditer(final_answer))
+    if not matches:
         return None
     if "create_event_from_email" in tools_called_this_turn(conversation):
         return None
-    return f"claims an invite was sent/received/confirmed: {match.group(0)!r}"
+    has_received_evidence = _calendar_has_received_invite_evidence(conversation)
+    for match in matches:
+        clause = _clause_around(final_answer, match.start(), match.end())
+        if _CLAUSE_NEGATION_RE.search(clause):
+            continue
+        claim = match.group(0).lower()
+        if (
+            "received" in claim
+            and not re.search(r"\b(?:sent|confirmed)\b", claim)
+            and has_received_evidence
+        ):
+            continue
+        return f"claims an invite was sent/received/confirmed: {match.group(0)!r}"
+    return None
 
 
 _INVITE_GROUNDING_CORRECTION = (

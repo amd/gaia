@@ -12,6 +12,7 @@
  *   GET  /agents/<id>/<version>/<filename>     artifact / raw manifest download
  *   GET  /skills/<name>/manifest.json          per-skill aggregate manifest
  *   GET  /skills/<name>/<version>/<filename>   skill bundle / SKILL.md download
+ *   POST /reindex                              rebuild index.json from R2 (auth)
  *   GET  /health                               liveness probe
  */
 

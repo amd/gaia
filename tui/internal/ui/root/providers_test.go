@@ -54,6 +54,34 @@ func TestProviderSelectionRebuildsStartupGateWithSelectedModel(t *testing.T) {
 	}
 }
 
+// While an /agents switch gate is up, m.agent is still the OUTGOING agent —
+// launchAgent only overwrites it once the switch commits — so a provider
+// pick made at that gate must reopen readiness for m.pending (the incoming
+// agent the gate on screen is actually for), never for m.agent.
+func TestProviderSelectionAtASwitchGateReopensForTheIncomingAgent(t *testing.T) {
+	m, _ := liveChatModel(t, "email")
+	incoming := m.catalog.Get(catalog.FlagshipID)
+	if incoming == nil {
+		t.Fatal("test setup: catalog has no flagship entry")
+	}
+	// Mid-switch: the gate on screen is for the incoming agent, the live
+	// session behind it is still the outgoing one.
+	m.pending = incoming
+	m.activeView = viewPreflight
+	panel := providers.New("", 80, 24)
+	m.providerPanel = &panel
+
+	updated, _ := m.Update(providers.SelectedMsg{ID: "amd.gpt-4.1"})
+	m = updated.(FlagshipModel)
+
+	if m.pending == nil || m.pending.ID != catalog.FlagshipID {
+		t.Fatalf("gate reopened for %v, want the incoming agent %q", m.pending, catalog.FlagshipID)
+	}
+	if m.agent.ID != "email" {
+		t.Fatalf("the outgoing agent must not change before the switch commits, got %q", m.agent.ID)
+	}
+}
+
 func TestClosingProviderSetupRechecksWithoutChangingStartupModel(t *testing.T) {
 	m := providerBlockedRoot(t).WithModel("fireworks.gemma-4-31b-it")
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})

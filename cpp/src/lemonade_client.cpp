@@ -321,7 +321,7 @@ std::string LemonadeClient::chatCompletions(const json& requestBody, int timeout
                         std::to_string(nPrompt) + " tokens but server n_ctx=" +
                         std::to_string(nCtx) + ".\n" +
                         "  Restart Lemonade with a larger context:\n" +
-                        "    set LEMONADE_CTX_SIZE=32768 before starting the server\n" +
+                        "    set LEMONADE_CTX_SIZE=32768 in the environment before starting the server\n" +
                         "  or via the helper script:\n" +
                         "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
                 } else if (!msg.empty()) {
@@ -400,7 +400,7 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
                             std::to_string(nPrompt) + " tokens but server n_ctx=" +
                             std::to_string(nCtx) + ".\n" +
                             "  Restart Lemonade with a larger context:\n" +
-                            "    set LEMONADE_CTX_SIZE=32768 before starting the server\n" +
+                            "    set LEMONADE_CTX_SIZE=32768 in the environment before starting the server\n" +
                             "  or via the helper script:\n" +
                             "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
                     } else if (!msg.empty()) {

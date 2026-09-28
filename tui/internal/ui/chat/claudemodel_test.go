@@ -27,7 +27,7 @@ func (c *claudeModelTransport) ClaudeModelAtLaunch() string { return c.model }
 
 func claudeLaunchModel(t *testing.T, id string) ChatModel {
 	t.Helper()
-	m := NewChatModelForCatalogAgent(&claudeModelTransport{model: id}, setupAgentID, "GAIA", false)
+	m := NewChatModelForCatalogAgent(&claudeModelTransport{model: id}, setupAgentID, "GAIA", "", false)
 	m.width, m.height = 100, 30
 	return m
 }
@@ -198,9 +198,13 @@ func TestLocalSwitchWithLemonadeDownIsRefusedActionably(t *testing.T) {
 	for _, must := range []string{
 		"Lemonade",               // what is wrong
 		"http://localhost:13305", // where
-		"lemonade-server serve",  // how to fix it
-		"stay on Claude",         // the other way forward
-		"Nothing was switched",   // what did NOT happen
+		// How to fix it — a command that exists on every machine, NOT a launch
+		// command. `lemonade-server serve` was pinned here, and Lemonade 10.7
+		// removed it, so this assertion kept a dead remedy looking verified
+		// (CLAUDE.md, "Never hardcode how Lemonade is started").
+		"gaia daemon status",
+		"stay on Claude",       // the other way forward
+		"Nothing was switched", // what did NOT happen
 	} {
 		if !strings.Contains(last.Content, must) {
 			t.Errorf("refusal must mention %q: %q", must, last.Content)

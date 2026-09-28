@@ -156,15 +156,14 @@ All playbooks assume you have:
   </Tab>
 
   <Tab title="Lemonade Server">
-    Lemonade Server is installed automatically with GAIA:
+    Install the model backend once:
 
     ```bash
-    # Start with NPU/iGPU acceleration
-    lemonade-server serve
+    gaia init
     ```
 
     <Tip>
-    Lemonade Server provides AMD-optimized inference for AI PCs, utilizing NPU and iGPU acceleration. GAIA will auto-start it if not running.
+    Lemonade Server provides AMD-optimized inference for AI PCs, utilizing NPU and iGPU acceleration. You never launch it yourself — `gaia daemon` resolves, starts and supervises it whenever an agent needs inference.
     </Tip>
   </Tab>
 

@@ -12,7 +12,7 @@ What the map carries, and why each part is there:
   else in GAIA states them without the model choosing to call ``tree``.
 * **Which binaries are present** — from ``system_context.probe_binaries``, the
   same probe that backs day-0 memory, widened to the developer toolchain and to
-  the shell tool's own allowlist. Absent commands are named too: "do not run
+  the shell tool's read-only list. Absent commands are named too: "do not run
   ``cargo``" saves the round trip that "command not found" would have cost.
 * **Three platform quirks** — path separator, quoting for spaces, shell dialect.
   Exactly three, enumerated in :class:`PlatformQuirks`.
@@ -234,14 +234,14 @@ class ProjectMap:
     #: Toolchain binaries found on PATH, and those looked for and not found.
     tools_present: List[str] = field(default_factory=list)
     tools_absent: List[str] = field(default_factory=list)
-    #: The subset of the above that ``run_shell_command`` will actually accept.
+    #: The subset of the above on ``run_shell_command``'s read-only list.
     shell_commands: List[str] = field(default_factory=list)
     quirks: PlatformQuirks = field(default_factory=detect_platform_quirks)
     fingerprint: str = ""
 
 
 def _shell_allowlisted_commands() -> Tuple[str, ...]:
-    """Commands ``run_shell_command`` will accept, as a sorted tuple.
+    """``run_shell_command``'s read-only (no-prompt) list, as a sorted tuple.
 
     Imported lazily to keep ``agents/base`` free of an import-time dependency
     on ``agents/tools``.
@@ -369,7 +369,7 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
     tools_absent = sorted(n for n in DEV_TOOL_PROBES if not probed.get(n))
     # Installed AND allowlisted. Kept separate from ``tools_present`` because
     # most of the toolchain is not allowlisted — ``uv`` and ``npm`` are on this
-    # machine and ``run_shell_command`` refuses both.
+    # machine and ``run_shell_command`` runs either only once the user approves.
     shell_commands = sorted(n for n in allowlist if probed.get(n))
 
     return ProjectMap(
@@ -408,9 +408,6 @@ def _declared_npm_scripts(path: Path) -> List[str]:
 
 #: Overrides the resolved root. Set by a host that knows the workspace.
 PROJECT_ROOT_ENV = "GAIA_PROJECT_ROOT"
-
-#: How far up from the working directory to look for a repository root.
-_MAX_ASCEND = 4
 
 #: Directory names that mark an installed (non-editable) distribution. A ``gaia``
 #: package under one of these is a wheel in somebody else's venv, not a checkout.
@@ -452,8 +449,9 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
     """The project this task is about, or ``None`` when there isn't one.
 
     Order: *explicit* argument, then ``GAIA_PROJECT_ROOT``, then the working
-    directory or the nearest repository above it (at most :data:`_MAX_ASCEND`
-    levels, never the home directory and never :func:`is_agent_own_source`).
+    directory or the nearest repository above it — searching upward until the
+    home directory or the filesystem root, and never
+    :func:`is_agent_own_source`.
 
     ``None`` is a real answer, not a degraded one — an agent answering questions
     from a home directory is not in a project, and inventing a map of ``~``
@@ -474,7 +472,11 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
 
     cwd = Path.cwd().resolve()
     home = Path.home().resolve()
-    for ancestor in [cwd, *list(cwd.parents)[: _MAX_ASCEND - 1]]:
+    # Walk to the home directory or the filesystem root, the way git does. A
+    # fixed depth cap looks safe and silently skips the map on ordinary trees:
+    # Maven's `src/main/java/com/acme/svc` is six deep, and this repo's own
+    # `hub/agents/gaia/python/gaia_agent` is five.
+    for ancestor in [cwd, *cwd.parents]:
         if ancestor == home or ancestor == ancestor.parent:
             break
         if not is_code_repository(ancestor):
@@ -560,13 +562,14 @@ def render_project_map(
         allowed = set(pm.shell_commands)
         if pm.shell_commands:
             commands.append(
-                f"run_shell_command accepts: {', '.join(pm.shell_commands)}"
+                "Read-only commands for run_shell_command: "
+                f"{', '.join(pm.shell_commands)}"
             )
-        off_limits = [t for t in pm.tools_present if t not in allowed]
-        if off_limits:
+        needs_approval = [t for t in pm.tools_present if t not in allowed]
+        if needs_approval:
             commands.append(
-                "Installed but run_shell_command refuses them — use a tool, not "
-                f"the shell: {', '.join(off_limits)}"
+                "Also installed; run_shell_command runs them once the user "
+                f"approves: {', '.join(needs_approval)}"
             )
     elif pm.tools_present:
         commands.append(f"Installed: {', '.join(pm.tools_present)}")
@@ -682,8 +685,20 @@ class ProjectMapMixin:
         return render_project_map(
             pm,
             index_status=self._code_index_status(pm),
-            has_shell_tool="run_shell_command" in (self._tool_names()),
+            has_shell_tool=self._shell_tool_offered(),
         )
+
+    def _shell_tool_offered(self) -> bool:
+        """Whether *this turn* offers the shell, not whether the agent owns it.
+
+        A dynamic tool loader narrows the registry per turn, so reading the
+        registry would name a tool the model was not given — the guaranteed
+        failed call ``has_shell_tool`` exists to prevent.
+        """
+        offered = getattr(self, "_active_tool_filter", None)
+        if offered is None:
+            offered = self._tool_names()
+        return "run_shell_command" in offered
 
     def _tool_names(self) -> Dict[str, Any]:
         return getattr(self, "_tools_registry", {}) or {}

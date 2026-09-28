@@ -49,6 +49,7 @@ DOC_CORE_TOOLS = frozenset(
         "request_user_input",
         # escape hatch (#1450) — always-on explicit tool loader for native models
         "load_tools",
+        "read_tool_output",
     }
 )
 
@@ -124,8 +125,32 @@ DOC_BUNDLES = [
     ),
     ToolBundle(
         name="shell",
-        members=frozenset({"run_shell_command", "get_system_info"}),
-        description="Run shell commands and query the system.",
+        members=frozenset(
+            {"run_shell_command", "wait_for_condition", "get_system_info"}
+        ),
+        description="Run shell commands, wait on a condition, and query the system.",
+    ),
+    ToolBundle(
+        name="shell_session",
+        members=frozenset({"get_shell_state", "reset_shell_session"}),
+        description=(
+            "Read the directory earlier shell commands left the session in, "
+            "or return it to where the task started."
+        ),
+    ),
+    ToolBundle(
+        name="cli_setup",
+        members=frozenset(
+            {
+                "check_cli_setup",
+                "install_cli",
+                "sign_in_cli",
+            }
+        ),
+        description=(
+            "Check whether a command-line tool a skill needs (e.g. the GitHub "
+            "CLI 'gh') is installed and signed in, install it, and sign in to it."
+        ),
     ),
     ToolBundle(
         name="clipboard",
@@ -169,16 +194,22 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (12 tools). Deliberately a smaller share of the registry than
+# Always-on set (16 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
-# signalling), the ``load_tools`` escape hatch, ``load_skill`` for proactive
-# skill discovery, and exactly two universal entry points -- ``read_file`` and
+# signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
+# runs), the ``load_tools`` escape hatch, ``read_tool_output`` to page
+# through a result that was cut short, ``load_skill`` for the skill
+# catalogue, two universal entry points -- ``read_file`` and
 # ``query_documents`` -- that answer "what is in this file / what do my
-# documents say" without a round trip. Everything else, shell and the web
-# included, is a bundle: it arrives when the turn asks for it. Both entry
-# points are bundle members too, so a file-shaped or document-shaped turn pulls
-# their whole cohort in with them.
+# documents say" without a round trip, ``run_python`` so a number is computed
+# rather than guessed, and the two file-edit tools. Editing is
+# always on because semantic selection cannot rank it: on explicit edit
+# requests the edit tools lost the dynamic slots to unrelated bundles (#3752).
+# Everything else, shell and the web included, is a bundle: it arrives when the
+# turn asks for it. ``query_documents`` is a bundle member too, so a
+# document-shaped turn pulls its whole cohort in with it; the ``file_edit``
+# cohort is now entirely CORE.
 FULL_CORE_TOOLS = frozenset(
     {
         # memory v2 -- persistent recall is always relevant
@@ -190,13 +221,21 @@ FULL_CORE_TOOLS = frozenset(
         # universal entry points
         "read_file",
         "query_documents",
+        # file editing -- ranked out of the dynamic slots on edit requests (#3752)
+        "write_file",
+        "edit_file",
+        # computation -- without it the model does arithmetic in its head or
+        # writes a throwaway script into the user's repo to get a number
+        "run_python",
         # loop control -- autonomous-turn signalling
         "set_loop_state",
         "request_user_input",
+        "sleep",
         # escape hatch (#1450)
         "load_tools",
-        # proactive skill discovery (#3235) — the shortlist prompt tells the
-        # model to call this even when the skills bundle was not selected.
+        "read_tool_output",
+        # the skill catalogue (#3764) tells the model to call this even when
+        # the skills bundle was not selected.
         "load_skill",
     }
 )
@@ -336,7 +375,8 @@ FULL_BUNDLES = [
         ),
         description=(
             "List, load, and unload the skills installed on this machine, and "
-            "correct a loaded skill's instructions when they are wrong."
+            "change a loaded skill's instructions — when they are wrong, or "
+            "when the user wants its output a different way."
         ),
     ),
     ToolBundle(
@@ -345,21 +385,52 @@ FULL_BUNDLES = [
             {
                 "search_skill_hub",
                 "install_skill",
+                "capture_skill",
                 "remove_skill",
             }
         ),
-        description="Search the Agent Hub for new skills, install and remove them.",
+        description=(
+            "Search the Agent Hub for new skills, install, capture "
+            "(paste/URL/folder), and remove them."
+        ),
     ),
     ToolBundle(
         name="shell",
         members=frozenset(
             {
                 "run_shell_command",
+                "wait_for_condition",
                 "execute_python_file",
+                "run_python",
                 "get_system_info",
             }
         ),
-        description="Run shell commands and Python scripts, and query the system.",
+        description=(
+            "Run shell commands and Python scripts, wait on a condition, and "
+            "query the system."
+        ),
+    ),
+    ToolBundle(
+        name="shell_session",
+        members=frozenset({"get_shell_state", "reset_shell_session"}),
+        description=(
+            "Read the directory earlier shell commands left the session in, "
+            "or return it to where the task started."
+        ),
+    ),
+    ToolBundle(
+        name="cli_setup",
+        members=frozenset(
+            {
+                "check_cli_setup",
+                "install_cli",
+                "sign_in_cli",
+            }
+        ),
+        description=(
+            "Check whether a command-line tool a skill needs (e.g. the GitHub "
+            "CLI 'gh') is installed and signed in, install it, and sign in to it."
+        ),
     ),
     ToolBundle(
         name="clipboard",
@@ -403,8 +474,24 @@ FULL_BUNDLES = [
     ),
     ToolBundle(
         name="loop_control",
-        members=frozenset({"set_loop_state", "request_user_input"}),
-        description="Control the autonomous loop and ask the user questions.",
+        members=frozenset({"set_loop_state", "request_user_input", "sleep"}),
+        description=(
+            "Control the autonomous loop, wait before retrying, and ask the "
+            "user questions."
+        ),
+    ),
+    ToolBundle(
+        name="email",
+        members=frozenset(
+            {
+                "check_mailbox_access",
+                "list_inbox",
+                "search_email",
+                "read_email",
+                "list_mail_folders",
+            }
+        ),
+        description="Read a connected mailbox: list, search, and read messages.",
     ),
     # The description carries the file extensions deliberately: a real turn
     # says "summarize this meeting: <path>.mp4" and never says "transcribe",
@@ -478,7 +565,13 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "remember_skill_lesson",
         "search_skill_hub",
         "install_skill",
+        "capture_skill",
         "remove_skill",
+        "check_mailbox_access",
+        "list_inbox",
+        "search_email",
+        "read_email",
+        "list_mail_folders",
         "generate_image",
         "list_sd_models",
         "get_generation_history",

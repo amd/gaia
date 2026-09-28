@@ -6,6 +6,7 @@ package chat
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -142,4 +143,55 @@ func joinHints(hints []hint) string {
 		out = append(out, h.text)
 	}
 	return strings.Join(out, hintSeparator)
+}
+
+// Claude is the most obviously metered thing the TUI runs: the user is paying
+// Anthropic per token. Keying the spend line on a "fireworks." prefix left
+// exactly that case with no running total.
+func TestClaudeSessionsShowTheirSpend(t *testing.T) {
+	spent := sessionCost{}
+	spent.add(turnCost{duration: time.Second, steps: 1, tools: 0,
+		inTok: 50000, outTok: 2000, cachedTok: 10000, measured: true})
+
+	for _, tc := range []struct {
+		name    string
+		model   ChatModel
+		metered bool
+	}{
+		{"claude", ChatModel{modelBackend: "claude", modelID: "claude-sonnet-5", modelRemote: true}, true},
+		{"fireworks", ChatModel{modelBackend: "fireworks", modelID: "fireworks.glm-5p3", modelRemote: true}, true},
+		{"amd gateway", ChatModel{modelBackend: "amd", modelID: "amd.gpt-4.1", modelRemote: true}, false},
+		{"local", ChatModel{modelBackend: "lemonade", modelID: "Gemma-4-E4B-it-GGUF"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.model
+			m.cost = spent
+			if got := m.isMeteredModel(); got != tc.metered {
+				t.Fatalf("isMeteredModel = %v, want %v", got, tc.metered)
+			}
+			hint := m.sessionSpendHint()
+			if tc.metered && hint == "" {
+				t.Error("a metered session shows no running spend")
+			}
+			if !tc.metered && hint != "" {
+				t.Errorf("an unmetered session claims a spend: %q", hint)
+			}
+		})
+	}
+}
+
+// A session that really has spent something must never render as "$0.000" —
+// that reads as free, and /cost would disagree with the status bar.
+func TestATinySpendIsNotShownAsZero(t *testing.T) {
+	noPriceFile(t)
+	m := ChatModel{modelBackend: "fireworks", modelID: "fireworks.glm-5p3-flash", modelRemote: true}
+	m.cost.add(turnCost{duration: time.Second, steps: 1, inTok: 100, outTok: 10, measured: true})
+
+	hint := m.sessionSpendHint()
+	if strings.Contains(hint, "$0.000 ") {
+		t.Errorf("a real spend rendered as zero: %q", hint)
+	}
+	if !strings.Contains(hint, "<$0.001") {
+		t.Errorf("want a below-threshold marker, got %q", hint)
+	}
 }

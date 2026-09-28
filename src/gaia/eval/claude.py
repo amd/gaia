@@ -3,6 +3,7 @@
 
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -22,6 +23,37 @@ from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.logger import get_logger
 
 load_dotenv()
+
+
+def first_text_block(blocks, model):
+    """Return the text of the first text block in an Anthropic content list.
+
+    Thinking-enabled models (the default judge among them) answer with
+    ``[thinking, text]``, so block zero has no ``.text``.
+
+    Args:
+        blocks: The ``content`` list of an Anthropic ``Message``.
+        model (str): Model that produced the response, for the error message.
+
+    Returns:
+        str: The first text block's text.
+
+    Raises:
+        ValueError: No block in the response carried text.
+    """
+    for block in blocks:
+        text = getattr(block, "text", None)
+        if text is not None:
+            return text
+
+    block_types = [getattr(block, "type", type(block).__name__) for block in blocks]
+    raise ValueError(
+        f"No text block in the response from model '{model}' "
+        f"(block types received: {block_types}).\n"
+        "A text reply is required to score with. Pass a model that returns one "
+        "to ClaudeClient(model=...), or check DEFAULT_CLAUDE_MODEL in "
+        "src/gaia/eval/config.py."
+    )
 
 
 class ClaudeClient:
@@ -106,6 +138,10 @@ class ClaudeClient:
             return {}
         return {"temperature": self.temperature}
 
+    def _extract_text(self, message):
+        """Text of the first text block in ``message`` — block zero may be thinking."""
+        return first_text_block(message.content, self.model)
+
     def calculate_cost(self, input_tokens, output_tokens):
         """
         Calculate the cost of an API call based on token usage.
@@ -133,7 +169,10 @@ class ClaudeClient:
 
     def get_completion(self, prompt):
         self.log.debug("Getting completion from Claude")
-        self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
+        # count_tokens is a second billed round-trip — only pay it if the debug
+        # line will actually be emitted.
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
         try:
             message = self.client.messages.create(
                 model=self.model,
@@ -273,7 +312,7 @@ class ClaudeClient:
                     **self._sampling_kwargs(),
                 )
                 self.log.info("Successfully analyzed HTML content")
-                return message.content[0].text
+                return self._extract_text(message)
 
             # For other file types, use the original base64 encoding method
             mime_types = {
@@ -315,7 +354,7 @@ class ClaudeClient:
                 **self._sampling_kwargs(),
             )
             self.log.info("Successfully analyzed file")
-            return message.content[0].text
+            return self._extract_text(message)
 
         except Exception as e:
             self.log.error(f"Error analyzing file: {e}")
@@ -384,7 +423,7 @@ class ClaudeClient:
                 )
 
                 return {
-                    "content": message.content[0].text,
+                    "content": self._extract_text(message),
                     "usage": usage,
                     "cost": cost,
                 }
@@ -439,7 +478,11 @@ class ClaudeClient:
             }
             cost = self.calculate_cost(usage["input_tokens"], usage["output_tokens"])
 
-            return {"content": message.content[0].text, "usage": usage, "cost": cost}
+            return {
+                "content": self._extract_text(message),
+                "usage": usage,
+                "cost": cost,
+            }
 
         except Exception as e:
             self.log.error(f"Error analyzing file: {e}")

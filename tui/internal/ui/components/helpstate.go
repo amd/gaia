@@ -19,12 +19,20 @@ type HelpState struct {
 	Open   bool
 	Ctx    HelpContext
 	Scroll int
+	// Commands is the caller's current available-command set (chat's
+	// availableCommandNames) -- nil shows every command, same as before
+	// per-agent gating existed. Set at Toggle time rather than read live, so
+	// an open panel never re-renders mid-frame against a different session.
+	Commands []string
 }
 
 // Toggle opens or closes the panel, always starting a fresh open at the top.
-func (h *HelpState) Toggle(ctx HelpContext) {
+// commands is the caller's current available-command set; nil shows every
+// command (see RenderHelpOverlayForCommands).
+func (h *HelpState) Toggle(ctx HelpContext, commands []string) {
 	h.Open = !h.Open
 	h.Ctx = ctx
+	h.Commands = commands
 	h.Scroll = 0
 }
 
@@ -42,7 +50,7 @@ func (h *HelpState) HandleKey(msg tea.KeyMsg, width, height int) bool {
 		return false
 	}
 	if delta, jump, handled := HelpScrollKey(msg, height); handled {
-		max := HelpMaxScroll(h.Ctx, width, height)
+		max := HelpMaxScrollForCommands(h.Ctx, width, height, h.Commands)
 		if jump {
 			h.Scroll = clampInt(delta, 0, max)
 		} else {
@@ -66,7 +74,7 @@ func (h *HelpState) HandleWheel(up bool, width, height int) bool {
 	if up {
 		delta = -1
 	}
-	h.Scroll = clampInt(h.Scroll+delta, 0, HelpMaxScroll(h.Ctx, width, height))
+	h.Scroll = clampInt(h.Scroll+delta, 0, HelpMaxScrollForCommands(h.Ctx, width, height, h.Commands))
 	return true
 }
 
@@ -75,7 +83,7 @@ func (h HelpState) Render(base string, width, height int) string {
 	if !h.Open {
 		return base
 	}
-	return RenderHelpOverlay(h.Ctx, base, width, height, h.Scroll)
+	return RenderHelpOverlayForCommands(h.Ctx, base, width, height, h.Scroll, h.Commands)
 }
 
 // helpScrollToEnd is an intentionally-oversized jump target for the End key —

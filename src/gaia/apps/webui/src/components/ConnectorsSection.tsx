@@ -61,11 +61,44 @@ const MCP_DEFAULT_GRANT_SCOPES = ['use'];
 
 // ── ConnectorsSection ────────────────────────────────────────────────────────
 
+/**
+ * Turn a ``connector.disconnected`` SSE payload into a user-facing notice,
+ * or ``null`` when the disconnect was a full, confirmed revoke and there is
+ * nothing more to say (#2591 review — the Disconnect button previously
+ * always implied a full revoke, even when only the local credential was
+ * cleared). Mirrors the CLI wording in ``connectors/cli.py::_handle_disconnect``.
+ */
+function describeDisconnectOutcome(payload: Record<string, unknown>): string | null {
+    if (!('revoke_supported' in payload)) {
+        // Handler type with no remote-revoke concept (e.g. MCP servers).
+        return null;
+    }
+    if (payload.revoke_supported && payload.revoked_remotely) {
+        return null;
+    }
+    if (payload.revoke_supported && !payload.revoked_remotely) {
+        return `Disconnected locally, but the provider did not confirm the revoke (${String(
+            payload.revoke_error ?? 'unknown error',
+        )}). It may still show as connected in your account's app permissions.`;
+    }
+    if (payload.revoke_error) {
+        // Not attempted for a reason other than "no endpoint" — e.g. a
+        // forwarded connection, or the provider couldn't be resolved.
+        return `Disconnected locally. ${String(payload.revoke_error)}`;
+    }
+    return (
+        'Disconnected locally. This provider has no API to revoke access ' +
+        "remotely — remove GAIA from your account's connected-apps page if " +
+        'you want to fully revoke it.'
+    );
+}
+
 export function ConnectorsSection() {
     const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
     const [agentMcps, setAgentMcps] = useState<AgentMcpServer[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
 
     const load = useCallback(async () => {
@@ -106,6 +139,12 @@ export function ConnectorsSection() {
     useConnectorsSSE(
         useCallback(
             (event) => {
+                if (event.reason === 'disconnected') {
+                    // #2591 review: the disconnect button used to always
+                    // read as a full revoke. Surface the honest outcome the
+                    // backend now reports on this event.
+                    setDisconnectNotice(describeDisconnectOutcome(event.payload));
+                }
                 if (event.connectorId) {
                     void onChanged(event.connectorId);
                 } else {
@@ -129,6 +168,17 @@ export function ConnectorsSection() {
                 <div className="error-banner">
                     <AlertCircle size={14} />
                     <span>{error}</span>
+                </div>
+            )}
+
+            {disconnectNotice && (
+                <div
+                    className="error-banner"
+                    role="status"
+                    onClick={() => setDisconnectNotice(null)}
+                >
+                    <AlertCircle size={14} />
+                    <span>{disconnectNotice}</span>
                 </div>
             )}
 

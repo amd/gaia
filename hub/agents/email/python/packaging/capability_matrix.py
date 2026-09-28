@@ -95,7 +95,7 @@ _SUITE_REPORT_FILENAMES: Dict[str, str] = {
 # literal here silently drifts from what this file computes.
 TOOLS_COUNT_DEFINITION = (
     "tools_count = the number of internal @tool-decorated agent-loop "
-    "functions across gaia_agent_email/tools/*.py mixins (one per capability "
+    "functions across gaia_agent_email/tools/*.py mixins plus the framework output reader (one per capability "
     "the agent's own LLM tool-calling loop can invoke). This is distinct "
     "from, and larger than, the REST API's {rest_functional} functional verbs "
     "and the MCP interface's {mcp_tools} task-level tools -- both smaller, "
@@ -437,6 +437,9 @@ def derive_matrix(repo_root: Path | None = None) -> CapabilityMatrix:
     module's own location -- the fixed hop chain, never a dynamic walk-up.
     """
     tools_by_mixin = _derive_tools_by_mixin(_TOOLS_DIR)
+    # The base agent adds one session-owned continuation tool outside the
+    # email mixins. The live-registry test independently guards this count.
+    tools_by_mixin["framework_output"] = 1
     tools_total = sum(tools_by_mixin.values())
 
     # Fail loud at generation/--check time too, not only under pytest: a

@@ -214,7 +214,17 @@ jobs:
   deploy-worker:
     name: Deploy Agent Hub Worker
     needs: [version, worker-check]
-    if: needs.version.outputs.dry_run == 'false'
+    # Neither ancestor is conditionally skippable today, so this is not a live
+    # bug -- but the bare comparison below has no status-check function, which
+    # means GitHub Actions implicitly ANDs it with success() (the same pattern
+    # that broke redeploy-website, #3929). Making that explicit here means a
+    # future change that makes either ancestor conditional can't silently
+    # reintroduce the ancestor-skip bug.
+    if: |
+      !cancelled()
+      && needs.version.outputs.dry_run == 'false'
+      && needs.version.result == 'success'
+      && needs.worker-check.result == 'success'
     runs-on: ubuntu-latest
     environment: worker-deploy
     steps:
@@ -601,7 +611,19 @@ jobs:
   redeploy-website:
     name: Redeploy website
     needs: [version, terminal-hub, agent-ui]
-    if: needs.version.outputs.dry_run == 'false'
+    # No status-check function in `needs.version.outputs...` means GitHub
+    # implicitly ANDs this with success() -- so a 'skipped' terminal-hub or
+    # agent-ui (e.g. worker-check failed, or tui's binaries were not ok) would
+    # silently skip this too, with no error, even on a real release. That
+    # happened to be the desired outcome so far by accident, not by the
+    # explicit intent below: redeploy only on a real (non-dry-run) release
+    # where both components actually published, and never leave a cancelled
+    # run's ambiguous state silently wired through.
+    if: |
+      !cancelled()
+      && needs.version.outputs.dry_run == 'false'
+      && needs.terminal-hub.result == 'success'
+      && needs.agent-ui.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write

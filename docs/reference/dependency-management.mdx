@@ -94,6 +94,23 @@ See the [official Dependabot docs](https://docs.github.com/en/code-security/depe
 - **Pre-merge maintainer setting:** "Allow auto-merge" AND "Allow squash merging" must both be enabled in repo Settings → General → Pull Requests. Without either, `gh pr merge --auto --squash` queues successfully but GitHub cancels the merge. Verify: `gh api repos/amd/gaia --jq '{allow_auto_merge: .allow_auto_merge, allow_squash_merge: .allow_squash_merge}'`.
 - **Diagnosing "why didn't this PR auto-merge?":** the workflow logs `dependency-names`, `dependency-type`, and `update-type` for every run. Check the workflow run's "Log metadata for debugging" step.
 
+## MCP connector catalog pins
+
+The MCP servers in the connector catalog ([`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)) launch through `npx` or `uvx` at an exact version, so an upstream release that renames or drops a tool can't break users' connectors overnight. `tests/unit/connectors/test_catalog_pins.py` fails on any spec that is unpinned, uses `@latest`, or uses a version range.
+
+Dependabot can't see these pins because they are string literals in Python, so refresh them by hand at least once per release cycle:
+
+1. **Find the latest version.** `npm view <package> version` for `npx` servers; `curl -s https://pypi.org/pypi/<package>/json | jq -r .info.version` for `uvx` servers. Check `npm view <package> deprecated` too — a deprecated package needs a replacement, not a bump.
+2. **Launch it and list its tools.** Write a throwaway config and ask the GAIA CLI for the tool list:
+   ```bash
+   echo '{"mcpServers": {"check": {"command": "npx", "args": ["-y", "tavily-mcp@<new>"], "env": {"TAVILY_API_KEY": "tvly-x"}}}}' > /tmp/pin-check.json
+   gaia mcp tools check --config /tmp/pin-check.json
+   ```
+3. **Compare tool names against what GAIA references.** Grep `docs/connectors/`, `hub/skills/`, and `src/` for the old names and update every hit in the same PR.
+4. **Bump the pin** in `mcp_servers.py` and run `python -m pytest tests/unit/connectors/ -q`.
+
+A configured connector keeps the command it was saved with in `~/.gaia/mcp_servers.json`. Existing users pick up a new pin when they re-run `gaia connectors configure <id>` (or re-save the tile in Settings → Connections), so call out tool renames in the release notes.
+
 ## See also
 
 - [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) — authoritative config

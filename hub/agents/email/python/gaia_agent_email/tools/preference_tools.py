@@ -39,13 +39,19 @@ the *set* tool instead. Every removal tool below reports its outcome via
 an explicit ``removed`` field rather than relying on ``ok: true`` alone,
 so the agent-loop model has an unambiguous signal to narrate from and
 cannot claim a mutation that did not happen (see each tool's docstring).
+
+The set-sender tools additionally refuse an address that is a
+near-duplicate, by local part, of one already in either sender list
+(``_find_ambiguous_senders``), naming the candidates rather than
+guessing which was meant.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.triage_heuristics import (
@@ -181,6 +187,51 @@ def _normalize_email(value: str) -> str:
     if "<" in cleaned or ">" in cleaned:
         return ""
     return cleaned.lower()
+
+
+# Only collisions with an already-stored sender are detectable here; a
+# first-time address has nothing to compare against and must go through.
+_SENDER_AMBIGUITY_RATIO = 0.82
+
+
+def _local_part(email: str) -> str:
+    """The portion before ``@``, used as the near-duplicate comparison basis.
+
+    Comparing local parts (not full addresses) is what catches a look-alike
+    like ``tomasz.iniewicz@gmail.com`` vs. ``tomasz.testingiewicz@outlook.com``
+    — the domains differ entirely, so comparing full strings would dilute the
+    similarity score below any sane threshold.
+    """
+    return email.split("@", 1)[0]
+
+
+def _find_ambiguous_senders(normalized: str, known: Set[str]) -> List[str]:
+    """Return other addresses in ``known`` whose local-part nearly — but not
+    exactly — matches, i.e. a likely typo of the same mailbox.
+
+    Skips an exact match to ``normalized`` itself (re-adding the same address
+    is a no-op, not an ambiguity). Also skips any ``other`` whose local part
+    is IDENTICAL to ``candidate_local``: an identical local part on a
+    different domain (``noreply@github.com`` vs. ``noreply@stripe.com``, or
+    one person's separate work/personal mailbox) is a distinct, deliberate
+    address, not a typo — the domain is what disambiguates it, and two
+    different addresses do not become one just because both use a common
+    mailbox name. A match ratio >= ``_SENDER_AMBIGUITY_RATIO`` on the local
+    part is what flags e.g. ``bob.smith`` vs. ``bob.smyth``, or the near-typo
+    ``tomasz.iniewicz`` vs. ``tomasz.testingiewicz`` (also across different
+    domains) — both share almost, but not all, of the local part, which is
+    the signal an exact-local-part match lacks.
+    """
+    candidate_local = _local_part(normalized)
+    matches = [
+        other
+        for other in known
+        if other != normalized
+        and _local_part(other) != candidate_local
+        and difflib.SequenceMatcher(None, candidate_local, _local_part(other)).ratio()
+        >= _SENDER_AMBIGUITY_RATIO
+    ]
+    return sorted(matches)
 
 
 def _validate_session_preferences(prefs: Dict[str, Any]) -> None:
@@ -367,7 +418,7 @@ class PreferenceToolsMixin:
         agent = self  # captured for live access to ``_session_preferences``
 
         @tool
-        def set_priority_sender(email: str) -> str:
+        def set_priority_sender(email: str, confirmed: bool = False) -> str:
             """Mark a sender as high-priority (#2632: never forces urgency).
 
             Senders flagged here are tagged ``preference_applied:
@@ -391,10 +442,20 @@ class PreferenceToolsMixin:
             is session-only and was not saved — never that it applies
             "going forward".
 
+            If the address closely resembles one already configured (e.g.
+            ``priya@x.com`` vs. an existing ``priyanka@x.com``), this fails
+            and names the candidates rather than applying to the wrong
+            sender. Confirm the exact address with the user, then retry with
+            ``confirmed=True``.
+
             Args:
                 email: A bare email address, e.g. ``alice@example.com``.
                     Headers like ``"Alice <alice@example.com>"`` are
                     rejected; pass the bare address only.
+                confirmed: Set True to apply ``email`` even though it closely
+                    resembles an already-configured address. Only set this
+                    after the user has explicitly confirmed ``email`` is the
+                    one they meant — never on a bare retry of the same call.
             """
             try:
                 normalized = _normalize_email(email)
@@ -405,6 +466,16 @@ class PreferenceToolsMixin:
                     )
                 prefs = agent._session_preferences
                 _validate_session_preferences(prefs)
+                known = prefs["priority_senders"] | prefs["low_priority_senders"]
+                ambiguous = _find_ambiguous_senders(normalized, known)
+                if ambiguous and not confirmed:
+                    return _envelope_err(
+                        f"set_priority_sender: {normalized!r} closely resembles "
+                        f"already-configured address(es) "
+                        f"{', '.join(ambiguous)} — refusing to guess which one "
+                        "was meant. Confirm the exact address with the user, "
+                        "then retry with confirmed=True to apply it anyway."
+                    )
                 prefs["priority_senders"].add(normalized)
                 # If the same sender was previously low-priority, the new
                 # priority designation supersedes — silently drop the
@@ -487,7 +558,7 @@ class PreferenceToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def set_low_priority_sender(email: str) -> str:
+        def set_low_priority_sender(email: str, confirmed: bool = False) -> str:
             """Mark a sender as low-priority (#2666: never forces PROMOTIONAL).
 
             Senders flagged here are tagged ``preference_applied:
@@ -510,9 +581,18 @@ class PreferenceToolsMixin:
             is session-only and was not saved — never that it applies
             "going forward".
 
+            If the address closely resembles one already on either sender
+            list, this fails and names the candidates rather than applying to
+            the wrong sender. Confirm the exact address with the user, then
+            retry with ``confirmed=True``.
+
             Args:
                 email: A bare email address, e.g.
                     ``newsletter@stripe.com``.
+                confirmed: Set True to apply ``email`` even though it closely
+                    resembles an already-configured address. Only set this
+                    after the user has explicitly confirmed ``email`` is the
+                    one they meant — never on a bare retry of the same call.
             """
             try:
                 normalized = _normalize_email(email)
@@ -523,6 +603,16 @@ class PreferenceToolsMixin:
                     )
                 prefs = agent._session_preferences
                 _validate_session_preferences(prefs)
+                known = prefs["priority_senders"] | prefs["low_priority_senders"]
+                ambiguous = _find_ambiguous_senders(normalized, known)
+                if ambiguous and not confirmed:
+                    return _envelope_err(
+                        f"set_low_priority_sender: {normalized!r} closely "
+                        f"resembles already-configured address(es) "
+                        f"{', '.join(ambiguous)} — refusing to guess which one "
+                        "was meant. Confirm the exact address with the user, "
+                        "then retry with confirmed=True to apply it anyway."
+                    )
                 prefs["low_priority_senders"].add(normalized)
                 # Same conflict resolution as set_priority_sender —
                 # later wins.

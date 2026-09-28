@@ -34,7 +34,7 @@ func TestTheTranscriptCarriesWhatTheCardShowed(t *testing.T) {
 	})
 
 	s := &SSEClient{}
-	s.appendTurn("triage my inbox", "Here's your inbox pre-scan.", []string{line})
+	s.appendTurn("triage my inbox", "Here's your inbox pre-scan.", []string{line}, nil)
 
 	turns := s.Transcript()
 	if len(turns) != 2 {
@@ -57,7 +57,7 @@ func TestTheTranscriptCarriesWhatTheCardShowed(t *testing.T) {
 // has nothing to put in.
 func TestAnOrdinaryTurnIsRecordedUnchanged(t *testing.T) {
 	s := &SSEClient{}
-	s.appendTurn("thanks", "You're welcome!", nil)
+	s.appendTurn("thanks", "You're welcome!", nil, nil)
 	if got := s.Transcript()[1].Content; got != "You're welcome!" {
 		t.Errorf("a card-less turn was rewritten: %q", got)
 	}
@@ -70,7 +70,7 @@ func TestAnOrdinaryTurnIsRecordedUnchanged(t *testing.T) {
 func TestCardMarkerCannotBeMistakenForContent(t *testing.T) {
 	s := &SSEClient{}
 	s.appendTurn("triage my inbox", "Here's your inbox pre-scan.",
-		[]string{"- [suggested_archives] DMW Martial Arts — SUMMER HOLIDAY SALE (id abc123)"})
+		[]string{"- [suggested_archives] DMW Martial Arts — SUMMER HOLIDAY SALE (id abc123)"}, nil)
 
 	got := s.Transcript()[1].Content
 	if strings.Contains(got, "[shown to the user]") {
@@ -81,5 +81,31 @@ func TestCardMarkerCannotBeMistakenForContent(t *testing.T) {
 	}
 	if !strings.Contains(got, "abc123") {
 		t.Errorf("the marker rename must not drop the row content:\n%s", got)
+	}
+}
+
+// A follow-up delivered mid-turn is part of that turn's conversation. It has to
+// be recorded between the question and the answer: /query is stateless, so this
+// transcript is the only copy that survives into the next turn's pushed
+// context, and an answer filed before the words it responds to reads as a
+// non-sequitur to the model on every turn after.
+func TestAFollowUpIsRecordedBetweenTheQuestionAndTheAnswer(t *testing.T) {
+	s := &SSEClient{}
+	s.appendTurn("triage my inbox", "Done — 3 archived.", nil,
+		[]string{"only the unread ones", "and skip newsletters"})
+
+	turns := s.Transcript()
+	var got []string
+	for _, turn := range turns {
+		got = append(got, turn.Role+":"+turn.Content)
+	}
+	want := []string{
+		"user:triage my inbox",
+		"user:only the unread ones",
+		"user:and skip newsletters",
+		"assistant:Done — 3 archived.",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("transcript = %v, want %v", got, want)
 	}
 }

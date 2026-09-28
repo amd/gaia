@@ -22,22 +22,20 @@ import pytest
 
 from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.tools.file_edit import FileStateTracker
-
-
-@pytest.fixture(autouse=True)
-def clean_tracker():
-    """The tracker is process-wide; no test may inherit another's ledger."""
-    FileStateTracker.instance().clear()
-    yield
-    FileStateTracker.instance().clear()
+from gaia.security import PathValidator
 
 
 @pytest.fixture
-def file_tools():
-    """``(tool_name) -> callable`` for the file-I/O mixin, console attachable."""
+def file_tools(tmp_path):
+    """``(tool_name) -> callable`` for the file-I/O mixin, console attachable.
+
+    The host binds ``path_validator`` (#3316) — a write tool without one
+    reports the missing setup instead of reaching the display contract.
+    """
     module = importlib.import_module("gaia.agents.tools.file_io_tools")
     mixin = module.FileIOToolsMixin()
+    mixin.path_validator = PathValidator()
+    mixin.path_validator.allowed_paths.add(tmp_path.resolve())
 
     saved = dict(_TOOL_REGISTRY)
     try:
@@ -161,6 +159,7 @@ class TestEditFileReportsTheWrite:
     ):
         path = tmp_path / "note.txt"
         path.write_text("alpha\n", encoding="utf-8")
+        file_tools("read_file")(str(path))  # edit_file refuses an unread file
         file_tools.mixin.console = console
 
         result = file_tools("edit_file")(str(path), "alpha", "beta")
@@ -173,6 +172,7 @@ class TestEditFileReportsTheWrite:
     ):
         path = tmp_path / "note.txt"
         path.write_text("alpha\n", encoding="utf-8")
+        file_tools("read_file")(str(path))  # edit_file refuses an unread file
         file_tools.mixin.console = RaisingConsole()
 
         result = file_tools("edit_file")(str(path), "alpha", "beta")
@@ -186,6 +186,7 @@ class TestEditFileReportsTheWrite:
     def test_a_clean_edit_carries_no_display_error(self, file_tools, tmp_path):
         path = tmp_path / "note.txt"
         path.write_text("alpha\n", encoding="utf-8")
+        file_tools("read_file")(str(path))  # edit_file refuses an unread file
         file_tools.mixin.console = _ui_handler()
 
         result = file_tools("edit_file")(str(path), "alpha", "beta")

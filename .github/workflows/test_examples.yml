@@ -138,6 +138,9 @@ jobs:
                   -Port 8000 `
                   -CtxSize 8192 `
                   -InitWaitTime 15
+              # Stop here on setup failure: the script exits non-zero without
+              # loading the model, so the suite would run at Lemonade's own ctx.
+              if ($LASTEXITCODE -ne 0) { throw "Lemonade setup failed (exit $LASTEXITCODE)" }
 
               Write-Host "=== Running example agent integration tests ==="
               python -m pytest tests/integration/test_example_agents.py `

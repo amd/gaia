@@ -1,7 +1,6 @@
 id: screenshot_capture
 name: "Screenshot Tool -- Capture and Report"
 category: vision
-agent_type: chat
 severity: medium
 description: |
   Tests that the take_screenshot tool is registered and working in ChatAgent.

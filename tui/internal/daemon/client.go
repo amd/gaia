@@ -45,6 +45,8 @@ type Options struct {
 	// StartCommand builds the command that starts the daemon. Defaults to
 	// `gaia daemon start`, which is preferred over invoking the module directly
 	// because it validates the required extras and produces better errors.
+	// The launcher MUST take the start lock (LockPath) itself: StartOrAttach
+	// releases it before spawning, since `gaia daemon start` waits on it.
 	// Overridden by tests.
 	StartCommand func(ctx context.Context) (*exec.Cmd, error)
 
@@ -190,7 +192,8 @@ func (c *Client) probe(ctx context.Context, inst *Instance) (StaleKind, error) {
 }
 
 // StartOrAttach returns the running daemon, starting one only if needed.
-// Single-instance is guaranteed by the exclusive start lock.
+// Single-instance is guaranteed by the exclusive start lock, which the launcher
+// takes itself — so it is released before the launcher runs.
 func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	inst, err := c.Attach(ctx)
 	if err == nil {
@@ -203,6 +206,16 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	}
 	c.opts.Logf("daemon: no attachable instance (%v); starting one", err)
 
+	inst, err = c.checkUnderLock(ctx)
+	if inst != nil || err != nil {
+		return inst, err
+	}
+	return c.spawnAndWait(ctx)
+}
+
+// checkUnderLock re-checks the registry under the start lock. It returns the
+// instance to attach to, an error to surface, or (nil, nil) when a start is due.
+func (c *Client) checkUnderLock(ctx context.Context) (*Instance, error) {
 	if _, derr := ensureHostDir(); derr != nil {
 		return nil, derr
 	}
@@ -217,7 +230,7 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 	defer lock.release()
 
 	// Re-check under the lock: a concurrent caller may have just started it.
-	inst, err = c.Attach(ctx)
+	inst, err := c.Attach(ctx)
 	if err == nil {
 		return inst, nil
 	}
@@ -242,8 +255,7 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 					"Run `gaia daemon restart` to reclaim it", rec.PID, rec.Port)}
 		}
 	}
-
-	return c.spawnAndWait(ctx)
+	return nil, nil
 }
 
 // installGaiaHint is the one place the install commands are written, so the
@@ -627,23 +639,31 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	return inst, nil
 }
 
-// callerMode mirrors the built-in sidecar mode environment variables used by
-// the Python callers. Unknown IDs intentionally default to user mode: only
-// registered built-in agents have a caller-owned mode switch.
-func callerMode(agentID string) string {
-	envVar := ""
+// ModeEnvVar names the sidecar mode variable for the built-in agents, "" for an
+// agent that has no mode switch. Only registered built-in agents have one.
+func ModeEnvVar(agentID string) string {
 	switch agentID {
 	case "email":
-		envVar = "GAIA_EMAIL_AGENT_MODE"
+		return "GAIA_EMAIL_AGENT_MODE"
 	case "gaia":
-		envVar = "GAIA_GAIA_AGENT_MODE"
+		return "GAIA_GAIA_AGENT_MODE"
 	}
-	if envVar != "" {
-		if mode := os.Getenv(envVar); mode != "" {
-			return mode
-		}
+	return ""
+}
+
+// CallerMode mirrors the built-in sidecar mode environment variables used by
+// the Python callers, and reports whether the caller expressed a preference at
+// all. An unset variable is NO preference: the daemon attaches to whatever is
+// running and only conflicts on an explicit, differing mode.
+func CallerMode(agentID string) (string, bool) {
+	envVar := ModeEnvVar(agentID)
+	if envVar == "" {
+		return "", false
 	}
-	return "user"
+	if mode := strings.TrimSpace(os.Getenv(envVar)); mode != "" {
+		return mode, true
+	}
+	return "", false
 }
 
 // callerDevSrcDir resolves the same per-agent source layout as the daemon,
@@ -679,8 +699,14 @@ func callerDevSrcDir(agentID string) (string, error) {
 }
 
 func ensureRequestBody(agentID string) ([]byte, error) {
-	mode := callerMode(agentID)
-	body := map[string]string{"mode": mode}
+	body := map[string]string{}
+	mode, explicit := CallerMode(agentID)
+	if !explicit {
+		// No key at all — the daemon reads a present "mode" as a REQUEST and
+		// 409s a sidecar already running in the other one.
+		return json.Marshal(body)
+	}
+	body["mode"] = mode
 	if mode == "dev" {
 		devSrcDir, err := callerDevSrcDir(agentID)
 		if err != nil {

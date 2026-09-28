@@ -133,12 +133,10 @@ run an eval on a docs-only or CI-only change.
 **If it applies, run it** (backend must be up first):
 ```
 python -m gaia.ui.server --port 4200 --host 127.0.0.1     # terminal 1
-gaia eval agent --category <category> --agent-type <type>  # terminal 2 — prints the run dir
-gaia eval agent --compare <matching-baseline>/scorecard_<category>.json <run-dir>/scorecard.json
+gaia eval agent --category <category>                      # terminal 2 — prints the run dir
+gaia eval agent --compare tests/fixtures/eval_baselines/gaia-flagship/scorecard_<category>.json <run-dir>/scorecard.json
 ```
-`--compare` only diffs two scorecards; it does not run anything. Pick the baseline under
-`tests/fixtures/eval_baselines/` that matches your model — don't `ls -t` for the newest,
-a fresh clone stamps them all with the checkout time.
+`--compare` only diffs two scorecards; it does not run anything. No flagship baseline is committed yet, so `--compare` has nothing to diff against; report the scores you measured and say the run had no baseline. Never hand-author or copy forward a number to fill the gap.
 
 ⚠️ **Run evals SERIALLY — never two at once.** Concurrent runs race-evict each other's
 models on the shared Lemonade backend and produce garbage failures (`ctx_size` errors,

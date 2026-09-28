@@ -19,12 +19,12 @@ The pre-existing live test
 (``tests/test_lemonade_client.py::test_integration_health_check_914_format``)
 cannot catch that: every assertion in it sits inside an ``if field in response``
 guard, so a rename prints a warning and passes. This file asserts unconditionally,
-and *skips loudly* rather than passing vacuously when there is nothing to inspect.
+and explicitly loads a model before inspecting the loaded-entry schema.
 """
 
 import pytest
 
-from gaia.llm.lemonade_client import LemonadeClient
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient
 
 pytestmark = pytest.mark.integration
 
@@ -51,15 +51,17 @@ def test_all_models_loaded_is_present_and_a_list(health):
     assert isinstance(health["all_models_loaded"], list), health["all_models_loaded"]
 
 
-def test_loaded_model_entry_carries_the_fields_callers_read(health):
+def test_loaded_model_entry_carries_the_fields_callers_read(require_lemonade):
     """A loaded entry must expose model identity and its context size.
 
     ``_ensure_model_loaded`` matches on ``id`` *or* ``model_name``, so either is
     acceptable -- but at least one must be there.
     """
+    client = LemonadeClient()
+    client.load_model(DEFAULT_MODEL_NAME)
+    health = client.health_check()
     models = health["all_models_loaded"]
-    if not models:
-        pytest.skip("no model resident -- load one to exercise the entry schema")
+    assert models, "Lemonade reported no loaded model after a successful load"
 
     entry = models[0]
     assert "id" in entry or "model_name" in entry, (

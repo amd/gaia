@@ -14,7 +14,7 @@ import (
 
 func TestProviderPanelNeverSendsCredentialAsChat(t *testing.T) {
 	c := &queryCapturingClient{}
-	m := NewChatModelForFlagship(c, "gaia", "GAIA", true, true)
+	m := NewChatModelForFlagship(c, "gaia", "GAIA", "", true, true)
 	m.width = 80
 	m.height = 24
 	updated, _ := m.submit("/provider")
@@ -54,7 +54,7 @@ type cloudLaunchClient struct{ nullClient }
 
 func (*cloudLaunchClient) ModelAtLaunch() string { return "fireworks.gemma-4-31b-it" }
 func TestCloudLaunchHasProviderBeforeFirstAgentEvent(t *testing.T) {
-	m := NewChatModelForFlagship(&cloudLaunchClient{}, "gaia", "GAIA", true, true)
+	m := NewChatModelForFlagship(&cloudLaunchClient{}, "gaia", "GAIA", "", true, true)
 	if !m.skipLocalChatSetup() || !m.modelRemote || m.modelBackend != "fireworks" {
 		t.Fatal("cloud launch lost before first turn")
 	}
@@ -65,7 +65,7 @@ func TestCloudLaunchHasProviderBeforeFirstAgentEvent(t *testing.T) {
 
 func TestProviderSelectionSetsUnstartedChildModel(t *testing.T) {
 	c := client.NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--dev"}, true)
-	m := NewChatModelForFlagship(c, "gaia", "GAIA", true, true)
+	m := NewChatModelForFlagship(c, "gaia", "GAIA", "", true, true)
 	m.width, m.height = 80, 24
 	updated, _ := m.submit("/provider")
 	m = updated.(ChatModel)

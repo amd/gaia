@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import urllib.error
@@ -255,7 +254,7 @@ def _load_report_metrics(report_path, group: str, mapping: dict) -> dict:
     if data.get("skipped"):
         raise ValueError(
             f"Report {report_path} is marked skipped, but a judged eval must not "
-            f"skip (ANTHROPIC_API_KEY is required). Re-run it with the key set."
+            f"skip (a judge credential is required). Re-run it with one set."
         )
     section = data.get("summary", {}).get(group, {})
     out: dict = {}
@@ -264,7 +263,7 @@ def _load_report_metrics(report_path, group: str, mapping: dict) -> dict:
         if val is None:
             raise ValueError(
                 f"No summary.{group}.{src} in {report_path} (judged run expected). "
-                f"Re-run the eval with ANTHROPIC_API_KEY set."
+                f"Re-run the eval with a judge credential set."
             )
         out[dst] = round(float(val), 4)
     return out
@@ -395,10 +394,11 @@ def _build_reproduction_command(model, ground_truth_rel: str, limit=None) -> str
     """
     limit_flag = f" \\\n    --limit {limit}" if limit is not None else ""
     return (
-        "# Prerequisites: install the eval extras and start a Lemonade Server\n"
-        "# with the model on AMD Ryzen AI hardware (Strix Halo recommended).\n"
+        "# Prerequisites: the eval extras, and the model on AMD Ryzen AI\n"
+        "# hardware (Strix Halo recommended). GAIA's daemon starts and\n"
+        "# supervises the model server itself.\n"
         'uv pip install -e ".[dev,eval,api]"\n'
-        "lemonade-server serve   # in a separate shell; must stay running\n\n"
+        "gaia daemon start       # starts and supervises the model server\n\n"
         "# Step 0: build the corpus from the committed seed. The mbox +\n"
         "# ground_truth are GENERATED artifacts (gitignored), so a fresh\n"
         "# checkout must materialise them before the benchmark can read them.\n"
@@ -439,16 +439,16 @@ def _load_draft_approval_rate(drafting_report: Path) -> float:
     if data.get("skipped"):
         raise ValueError(
             f"Drafting report {drafting_report} is marked skipped, but the judged "
-            f"drafting eval must not skip (ANTHROPIC_API_KEY is required and "
-            f"eval_drafting_report.py exits 1 when it is absent). Re-run "
-            f"eval_drafting_report.py with ANTHROPIC_API_KEY set."
+            f"drafting eval must not skip (a judge credential is required and "
+            f"eval_drafting_report.py exits 1 without one). Re-run "
+            f"eval_drafting_report.py with a judge credential set."
         )
     rate = data.get("summary", {}).get("drafting", {}).get("draft_approval_rate")
     if rate is None:
         raise ValueError(
             f"No summary.drafting.draft_approval_rate in {drafting_report} "
-            f"(judged run expected). Re-run eval_drafting_report.py with "
-            f"ANTHROPIC_API_KEY set."
+            f"(judged run expected). Re-run eval_drafting_report.py with a judge "
+            f"credential set."
         )
     return float(rate)
 
@@ -727,20 +727,28 @@ def _query_lemonade_version(base_url: str) -> str:
     """Query the Lemonade Server health endpoint and return its version string.
 
     Args:
-        base_url: Base URL of the running Lemonade Server, e.g.
-            ``http://localhost:13305``.
+        base_url: The server's API base as ``resolve_lemonade_base_url``
+            returns it, e.g. ``http://localhost:13305/api/v1``.
 
     Returns:
-        Version string from ``/api/v1/health``.
+        Version string from ``<base_url>/health``.
 
     Raises:
         RuntimeError: If the endpoint is unreachable or the response lacks a version.
     """
-    url = base_url.rstrip("/") + "/api/v1/health"
+    from gaia.llm.lemonade_client import lemonade_auth_headers, resolve_lemonade_api_key
+
+    url = base_url.rstrip("/") + "/health"
+    # GAIA's own server answers 401 without its key.
+    request = urllib.request.Request(
+        url, headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    )
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        with urllib.request.urlopen(request, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+        # ConnectionError covers http.client.RemoteDisconnected, which escapes
+        # URLError - see urllib.request.AbstractHTTPHandler.do_open.
         raise RuntimeError(
             f"Cannot determine lemonade_version: health endpoint unreachable at "
             f"{url}: {exc}. "
@@ -891,7 +899,9 @@ def main(argv=None) -> int:
     # Resolve lemonade_version: flag wins, then live query.
     lemonade_version: Optional[str] = args.lemonade_version
     if not lemonade_version:
-        base_url = os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305")
+        from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+        base_url = resolve_lemonade_base_url()
         try:
             lemonade_version = _query_lemonade_version(base_url)
         except RuntimeError as exc:

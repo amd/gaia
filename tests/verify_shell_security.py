@@ -21,27 +21,44 @@ def test_shell_injection():
 
     run_shell = _TOOL_REGISTRY["run_shell_command"]["function"]
 
-    # Test 1: Command Chaining
-    print("Test 1: Command Chaining (ls; echo 'hacked')")
-    result = run_shell("ls; echo 'hacked'", working_directory=os.getcwd())
-    # Should fail or treat as file not found, NOT execute echo
-    if "hacked" in result.get("stdout", "") and "ls" not in result.get("stdout", ""):
-        print("FAIL: Command chaining executed!")
+    # Test 1: Chaining runs, but every command on the line is still validated
+    print("Test 1: Command Chaining (ls; rm -rf /tmp/x)")
+    result = run_shell("ls; rm -rf /tmp/x", working_directory=os.getcwd())
+    if result["status"] == "error" and result.get("executed") is False:
+        print(f"PASS: whole line refused before anything ran - {result['error']}")
     else:
-        print(
-            f"PASS: Result: {result.get('status')} - {result.get('error') or result.get('stdout')[:50]}..."
-        )
+        print("FAIL: a command outside the allowlist ran in a chain!")
+
+    print("\nTest 1b: Allowed chaining (ls && pwd)")
+    result = run_shell("ls && pwd", working_directory=os.getcwd())
+    if result["status"] == "success" and len(result.get("steps", [])) == 2:
+        print(f"PASS: both commands ran - steps={result['steps']}")
+    else:
+        print(f"FAIL: chaining did not run - {result.get('error')}")
+
+    # Test 1c: An assignment sets one command's environment, and cannot be
+    # used to redirect the loader at an allowed command.
+    print("\nTest 1c: Loader variable (LD_PRELOAD=/tmp/x.so ls)")
+    result = run_shell("LD_PRELOAD=/tmp/x.so ls", working_directory=os.getcwd())
+    if result["status"] == "error" and result.get("executed") is False:
+        print(f"PASS: refused before anything ran - {result['error']}")
+    else:
+        print("FAIL: a loader variable reached a command!")
+
+    print("\nTest 1d: Allowed assignment (TZ=UTC date +%z)")
+    result = run_shell("TZ=UTC date +%z", working_directory=os.getcwd())
+    if result["status"] == "success" and result.get("stdout", "").strip() == "+0000":
+        print("PASS: the assignment reached that one command")
+    else:
+        print(f"FAIL: assignment did not apply - {result.get('error')}")
 
     # Test 2: Pipe
     print("\nTest 2: Pipe (ls | grep py)")
     result = run_shell("ls | grep py", working_directory=os.getcwd())
-    # Should fail to pipe, ls will look for file "|" and "grep" and "py"
-    if result["status"] == "success" and "|" not in result["stderr"]:
-        # If it actually piped, that's bad (unless we want to allow pipes? No, subprocess(list) won't pipe)
-        # Actually, ls will complain about missing files
-        print(f"PASS (likely): {result.get('stderr')[:50]}...")
+    if result["status"] == "success" and ".py" in result.get("stdout", ""):
+        print("PASS: the pipeline ran as a pipeline")
     else:
-        print(f"PASS: {result.get('error') or result.get('stderr')[:50]}...")
+        print(f"CHECK: {result.get('error') or result.get('stderr')[:50]}...")
 
 
 def test_argument_path_traversal():

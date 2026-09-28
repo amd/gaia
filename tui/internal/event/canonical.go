@@ -174,13 +174,19 @@ type CanonicalFinalEvent struct {
 // agent ran with GAIA_TURN_LOG set. Nil on every ordinary turn and from any
 // agent older than the record — callers must treat absence as normal.
 type CanonicalUsage struct {
-	Steps     int                 `json:"steps"`
-	ToolsUsed int                 `json:"tools_used"`
-	Elapsed   float64             `json:"elapsed"`
-	Tokens    int                 `json:"tokens"`
-	TTFT      float64             `json:"ttft"`
-	TokPerS   float64             `json:"tok_per_s"`
-	Metrics   *CanonicalTurnStats `json:"-"`
+	Steps     int     `json:"steps"`
+	ToolsUsed int     `json:"tools_used"`
+	Elapsed   float64 `json:"elapsed"`
+	Tokens    int     `json:"tokens"`
+	TTFT      float64 `json:"ttft"`
+	TokPerS   float64 `json:"tok_per_s"`
+	// InputTokens is the prompt the turn sent, CachedTokens the part of it the
+	// backend served from its own cache. Cached is the one class billed
+	// differently, so a session total that does not separate it cannot be
+	// turned into a cost.
+	InputTokens  int                 `json:"input_tokens"`
+	CachedTokens int                 `json:"cached_tokens"`
+	Metrics      *CanonicalTurnStats `json:"-"`
 }
 
 // usageWire decodes the usage object with the record left as raw bytes, so a

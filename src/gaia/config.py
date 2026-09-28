@@ -36,6 +36,43 @@ class GaiaConfigError(Exception):
     """
 
 
+class UnsafeGaiaHomeError(RuntimeError):
+    """The resolved GAIA home is not a directory GAIA may own files in.
+
+    Every caller that creates, serves or deletes files under the GAIA home
+    raises this, so one ``except`` covers the uninstaller and the Agent UI
+    alike.
+    """
+
+
+# Why a GAIA home is structurally unsafe, as returned by
+# :func:`unsafe_gaia_home_reason`.
+GAIA_HOME_IS_FS_ROOT = "fs_root"
+GAIA_HOME_HOLDS_USER_HOME = "user_home"
+
+
+def unsafe_gaia_home_reason(resolved: Path, user_home: Path) -> Optional[str]:
+    """Return why owning files under ``resolved`` is unsafe, or None if it isn't.
+
+    Shared so the uninstaller and the Agent UI cannot drift on the question,
+    while each keeps its own wording and its own remedy. Both paths treat
+    ``<GAIA_HOME>/documents`` as GAIA's to delete, and under ``GAIA_HOME=$HOME``
+    that resolves onto the real ``Documents`` folder on Windows and APFS.
+
+    Args:
+        resolved: The GAIA home, already resolved to an absolute path.
+        user_home: The user's home directory, already resolved.
+
+    Returns:
+        ``GAIA_HOME_IS_FS_ROOT``, ``GAIA_HOME_HOLDS_USER_HOME``, or None.
+    """
+    if resolved == resolved.parent:
+        return GAIA_HOME_IS_FS_ROOT
+    if resolved == user_home or user_home.is_relative_to(resolved):
+        return GAIA_HOME_HOLDS_USER_HOME
+    return None
+
+
 @dataclass
 class GaiaConfig:
     """Persistent GAIA configuration.
@@ -46,14 +83,64 @@ class GaiaConfig:
             GPU is the default — it's the most broadly available accelerated
             path on AMD hardware.
         default_model: Persistent default model ID for model-bearing commands
-            (``gaia chat`` / ``gaia llm`` / ``gaia prompt``). ``None`` means
-            "fall back to each command's built-in default". An explicit
-            ``--model`` flag always wins over this value.
+            (``gaia chat`` / ``gaia llm`` / ``gaia prompt``) and for new
+            Agent UI sessions (``ChatDatabase.create_session``). ``None``
+            means "fall back to each caller's built-in default". An
+            explicit ``--model`` flag, or an explicit model picked in the
+            UI, always wins over this value.
+        full_access: Start every session with confirmation prompts off, so the
+            agent runs gated tools without asking. Opt-in and OFF by default.
+
+            This is the ONLY thing that turns full access on without someone
+            asking for it on that launch, which is why it lives here and
+            nowhere else: ``~/.gaia/config.json`` is the user's own file. A
+            project-local ``.env`` or a checked-in config must never be able to
+            switch off another person's confirmation prompts. The TUI still
+            shows its banner on every frame while it is on.
     """
 
     profile: str = "chat"
     default_device: str = "gpu"
     default_model: Optional[str] = None
+    full_access: bool = False
+
+    #: Strings accepted for a boolean field, and what each means. Anything
+    #: else raises — "false" silently meaning True is the exact accident this
+    #: table exists to prevent, and it would turn confirmation prompts OFF.
+    _BOOL_WORDS = {
+        "true": True,
+        "yes": True,
+        "on": True,
+        "1": True,
+        "false": False,
+        "no": False,
+        "off": False,
+        "0": False,
+    }
+
+    @classmethod
+    def _is_bool_field(cls, key: str) -> bool:
+        """True when *key* is declared ``bool``."""
+        declared = {f.name: f.type for f in fields(cls)}.get(key)
+        return declared is bool or declared == "bool"
+
+    @classmethod
+    def _coerce(cls, key: str, value: Any) -> Any:
+        """Convert a raw value to the type the field declares.
+
+        The CLI hands every value through as a string, so a ``bool`` field
+        given ``"false"`` would otherwise be stored truthy and read back as
+        enabled.
+        """
+        if not cls._is_bool_field(key) or isinstance(value, bool):
+            return value
+        word = str(value).strip().lower()
+        if word not in cls._BOOL_WORDS:
+            raise GaiaConfigError(
+                f"Config key '{key}' is a true/false setting, but got {value!r}. "
+                f"Use one of: {', '.join(sorted(cls._BOOL_WORDS))}."
+            )
+        return cls._BOOL_WORDS[word]
 
     @classmethod
     def field_names(cls) -> List[str]:
@@ -105,6 +192,16 @@ class GaiaConfig:
             )
 
         known = set(cls.field_names())
+        for key, value in data.items():
+            # Strict, as the TUI's reader is: a string is never a true/false
+            # setting on disk, so "yes" cannot mean on here and off there.
+            if key in known and cls._is_bool_field(key):
+                if not isinstance(value, bool):
+                    raise GaiaConfigError(
+                        f"GAIA config at {config_file}: '{key}' must be true or "
+                        f"false (unquoted), but it is {value!r}. Fix it by hand, "
+                        f"or delete the key to go back to the default."
+                    )
         kwargs = {k: v for k, v in data.items() if k in known}
         return cls(**kwargs)
 
@@ -131,13 +228,13 @@ class GaiaConfig:
         return getattr(self, key)
 
     def set(self, key: str, value: str) -> None:
-        """Set a config field, raising on an unknown key."""
+        """Set a config field, raising on an unknown key or an unusable value."""
         if key not in self.field_names():
             raise GaiaConfigError(
                 f"Unknown config key '{key}'. "
                 f"Valid keys: {', '.join(self.field_names())}."
             )
-        setattr(self, key, value)
+        setattr(self, key, self._coerce(key, value))
 
     def resolve_model(
         self, cli_value: Optional[str], builtin_default: Optional[str]

@@ -154,11 +154,22 @@ curl -X POST http://localhost:4200/v1/connections/google \
 | `POST /v1/connections/{provider}` | Persist a forwarded grant (201). No browser step. |
 | `GET /v1/connections` | List connections — **metadata only, secrets omitted**. |
 | `GET /v1/connections/{provider}` | One connection's metadata (404 if absent). |
-| `DELETE /v1/connections/{provider}` | Revoke: clears token, client, grants, caches. |
+| `DELETE /v1/connections/{provider}` | Clears the local token, client, grants, and caches. Never revokes the host app's own OAuth grant — see below. |
 
 After a successful POST the agent resolves the connection ambiently — the
 triage request carries **no credentials**; `get_access_token` reads the
 persisted grant and refreshes transparently.
+
+<Warning>
+**Disconnecting a forwarded connection never revokes it with the provider.**
+The stored `refresh_token` was minted under the *host app's* OAuth client,
+not GAIA's own — Google's revoke endpoint takes no client auth and would
+kill the whole grant for whoever the token belongs to, signing the host app
+itself out of the user's account. `DELETE /v1/connections/{provider}` (and
+`gaia connectors disconnect`) only ever clears GAIA's local copy for a
+forwarded connection; to fully revoke access, disconnect it from the host
+app that forwarded it, or from the account's connected-apps page.
+</Warning>
 
 <Warning>
 **The host app's initial consent must request the UNION of every scope both
@@ -188,11 +199,11 @@ keys via the `get_credential` dispatcher:
 from gaia.connectors.handler import configure, get_credential
 
 # Configure — stores the key in the OS keyring.
-await configure("github", {"GITHUB_TOKEN": "ghp_..."})
+await configure("mcp-github", {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."})
 
 # Retrieve — used by the MCP bridge to launch the server.
-creds = await get_credential("github")
-# {"GITHUB_TOKEN": "ghp_..."}
+creds = await get_credential("mcp-github")
+# {"env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."}, "command": "npx", "args": [...]}
 ```
 
 The MCP bridge injects these credentials as environment variables when
@@ -206,7 +217,7 @@ gaia connectors connect google \
     --scopes https://www.googleapis.com/auth/gmail.readonly
 
 # MCP: supply API key(s)
-gaia connectors configure github --set GITHUB_TOKEN=ghp_…
+gaia connectors configure mcp-github --set GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…
 gaia connectors configure brave  --set BRAVE_API_KEY=BSA…
 
 # Check status of all connectors

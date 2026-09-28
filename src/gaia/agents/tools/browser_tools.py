@@ -65,7 +65,8 @@ class BrowserToolsMixin:
                 return "Error: Browser tools not initialized. Web browsing is disabled."
 
             # Clamp max_length to prevent extreme values
-            max_length = max(100, min(max_length, 20000))
+            max_length = max(512, min(max_length, 20000))
+            from gaia.agents.base.artifacts import retain_excerpt
 
             # Validate extract mode
             valid_modes = {"text", "html", "links", "tables"}
@@ -96,9 +97,7 @@ class BrowserToolsMixin:
                     for t in ["application/json", "text/plain", "text/csv", "text/xml"]
                 ):
                     # Text-based content — return directly
-                    text = response.text[:max_length]
-                    if len(response.text) > max_length:
-                        text += "\n\n... (truncated)"
+                    text = retain_excerpt(mixin, response.text, max_length)
                     return (
                         f"Content from: {url}\n"
                         f"Type: {content_type}\n"
@@ -124,9 +123,7 @@ class BrowserToolsMixin:
             title = title_tag.get_text(strip=True) if title_tag else "(no title)"
 
             if extract == "html":
-                html = response.text[:max_length]
-                if len(response.text) > max_length:
-                    html += "\n\n... (truncated)"
+                html = retain_excerpt(mixin, response.text, max_length)
                 return (
                     f"Page: {title}\n"
                     f"URL: {url}\n"
@@ -140,16 +137,12 @@ class BrowserToolsMixin:
                     return f"Page: {title}\nURL: {url}\n\nNo links found on this page."
 
                 lines = [f"Page: {title}", f"URL: {url}", f"Links: {len(links)}", ""]
-                for i, link in enumerate(links[:100], 1):  # Cap at 100 links
+                for i, link in enumerate(links, 1):
                     lines.append(f"  {i}. {link['text']}")
                     lines.append(f"     {link['url']}")
 
-                if len(links) > 100:
-                    lines.append(f"\n... and {len(links) - 100} more links")
-
                 result = "\n".join(lines)
-                if len(result) > max_length:
-                    result = result[:max_length] + "\n\n... (truncated)"
+                result = retain_excerpt(mixin, result, max_length)
                 return result
 
             elif extract == "tables":
@@ -171,12 +164,12 @@ class BrowserToolsMixin:
                     lines.append("")
 
                 result = "\n".join(lines)
-                if len(result) > max_length:
-                    result = result[:max_length] + "\n\n... (truncated)"
+                result = retain_excerpt(mixin, result, max_length)
                 return result
 
             else:  # text (default)
-                text = mixin._web_client.extract_text(soup, max_length=max_length)
+                text = mixin._web_client.extract_text(soup, max_length=None)
+                text = retain_excerpt(mixin, text, max_length)
                 return (
                     f"Page: {title}\n"
                     f"URL: {url}\n"

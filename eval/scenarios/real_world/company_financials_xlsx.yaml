@@ -1,7 +1,6 @@
 id: company_financials_xlsx
 name: "Meridian Technology Solutions FY2024 Financial Spreadsheet"
 category: real_world
-agent_type: data
 severity: high
 description: |
   Agent must parse a multi-sheet Excel spreadsheet (Income Statement + Balance Sheet)
