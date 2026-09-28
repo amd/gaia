@@ -647,6 +647,24 @@ def test_shell_commands_are_omitted_for_an_agent_without_the_shell_tool(repo):
     assert "NOT installed" in text
 
 
+def test_a_turn_that_does_not_offer_the_shell_omits_its_commands(repo):
+    """The registry owns the tool; the per-turn filter decides who gets it."""
+    agent = _FakeAgent(repo)
+    agent._active_tool_filter = ["run_python"]
+
+    text = agent.get_project_map_system_prompt()
+
+    assert "run_shell_command" not in text
+    assert "Root:" in text  # the map still rendered
+
+
+def test_a_turn_that_offers_the_shell_keeps_its_commands(repo):
+    agent = _FakeAgent(repo)
+    agent._active_tool_filter = ["run_python", "run_shell_command"]
+
+    assert "run_shell_command accepts:" in agent.get_project_map_system_prompt()
+
+
 def test_a_wrong_base_order_fails_at_class_definition():
     """Silent otherwise: the prompt fragment renders either way."""
     from gaia.agents.base.agent import Agent
