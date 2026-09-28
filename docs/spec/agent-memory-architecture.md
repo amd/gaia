@@ -921,10 +921,13 @@ the same project does not rediscover the quirk.
 - **Quoted text is inert.** Command and error spans are flattened -- whitespace
   collapsed, control characters and backticks dropped -- so tool output cannot open
   a section or close a fence inside the system prompt.
+- **Never surfaced by per-turn recall.** That path is unscoped in a default
+  `global` session and renders a bare note, so a lesson reaching it would cross
+  workspaces and arrive without the framing above.
 
 ### Dynamic Suffix
 
-`get_memory_dynamic_context()` -- prepended to the user message each turn. Contains current time and upcoming/overdue items. Changes every turn.
+`get_memory_dynamic_context()` -- prepended to the user message each turn. Contains current time, upcoming/overdue items, lessons learned since the stable prompt was frozen, and the memories a vector search found relevant to this message. Changes every turn.
 
 ```python
 def get_memory_dynamic_context(self) -> str:

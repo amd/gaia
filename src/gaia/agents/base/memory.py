@@ -2681,6 +2681,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 or item["category"] not in _TURN_RECALL_CATEGORIES
                 or item.get("sensitive")
                 or item.get("superseded_by")
+                # Lessons are filed as notes but belong to one workspace and
+                # carry raw tool output. They have their own path, which scopes
+                # them and frames them against injection; this one does neither.
+                or item.get("domain") == LESSON_DOMAIN
                 or (contexts is not None and item.get("context") not in contexts)
             ):
                 continue
