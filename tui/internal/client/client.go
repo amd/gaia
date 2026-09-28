@@ -140,20 +140,21 @@ type ToolPermissionResponder interface {
 }
 
 // LivePermissionReporter is implemented by a transport whose ability to answer
-// a live permission prompt, or toggle bypass, depends on the peer it reached.
-// Implementing ToolPermissionResponder is a static fact about the Go type; this
-// is the runtime answer. A transport without it is taken as always able.
+// a live permission prompt, or toggle full access, depends on the peer it
+// reached. Implementing ToolPermissionResponder is a static fact about the Go
+// type; this is the runtime answer. A transport without it is taken as always
+// able.
 type LivePermissionReporter interface {
 	SupportsLivePermissions() bool
 }
 
-// PermissionBypasser is implemented by transports that can put the agent into
-// (or take it out of) bypass-permissions mode, where gated tools run without
+// FullAccessSetter is implemented by transports that can put the agent into
+// (or take it out of) full-access mode, where gated tools run without
 // asking.
-type PermissionBypasser interface {
-	// SetBypassPermissions turns unattended approval on or off. It takes
+type FullAccessSetter interface {
+	// SetFullAccess turns unattended approval on or off. It takes
 	// effect on the next gated tool, including one in a turn already running.
-	SetBypassPermissions(enabled bool) error
+	SetFullAccess(enabled bool) error
 }
 
 // Capability names one optional thing a session can do, so the UI can offer

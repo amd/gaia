@@ -8,7 +8,7 @@ skip it. The email sidecar still has its own copy of the mechanism rather than
 importing that one, so the two are not yet a single implementation.
 
 This sidecar is the one that most needs the layer — it exposes shell and file
-tools and a bypass-permissions mode, so an unauthenticated loopback port lets
+tools and a full-access mode, so an unauthenticated loopback port lets
 any web page the user visits drive it (see the shared module for the
 DNS-rebinding and drive-by vectors).
 """

@@ -38,8 +38,8 @@ class _RecordingState(stdio.PermissionState):
         super().__init__()
         self.calls = []
 
-    def set_bypass(self, enabled):
-        self.calls.append(("bypass", enabled))
+    def set_full_access(self, enabled):
+        self.calls.append(("full_access", enabled))
 
     def cancel_active(self, reason="stdin closed mid-turn"):
         # The pump also cancels on EOF; only the host's verb counts here.
@@ -87,7 +87,7 @@ def test_each_control_verb_is_handled_by_the_stdin_pump(monkeypatch):
     """Validity of the call: every verb the fixture lists reaches its handler."""
     lines = [
         json.dumps({STDIN["control_key"]: "tool_decision", "decision": "allow"}),
-        json.dumps({STDIN["control_key"]: "bypass", "enabled": True}),
+        json.dumps({STDIN["control_key"]: "full_access", "enabled": True}),
         json.dumps({STDIN["control_key"]: "cancel"}),
         json.dumps({STDIN["control_key"]: "clear_history"}),
     ]
@@ -99,7 +99,7 @@ def test_each_control_verb_is_handled_by_the_stdin_pump(monkeypatch):
 
     assert state.calls == [
         ("tool_decision", "allow", None),
-        ("bypass", True),
+        ("full_access", True),
         ("cancel", "host asked to cancel"),
     ]
     assert isinstance(drained[0], stdio._ClearHistory)
@@ -118,13 +118,13 @@ def test_each_decision_arrives_unchanged_with_its_confirm_id(monkeypatch, decisi
     assert state.calls == [("tool_decision", decision, "confirm-7")]
 
 
-def test_bypass_reads_its_declared_field(monkeypatch):
-    (field,) = STDIN["control_verbs"]["bypass"]["fields"]
+def test_full_access_reads_its_declared_field(monkeypatch):
+    (field,) = STDIN["control_verbs"]["full_access"]["fields"]
     _, state = _pump(
-        monkeypatch, [json.dumps({STDIN["control_key"]: "bypass", field: True})]
+        monkeypatch, [json.dumps({STDIN["control_key"]: "full_access", field: True})]
     )
 
-    assert state.calls == [("bypass", True)]
+    assert state.calls == [("full_access", True)]
 
 
 def test_a_wrapped_query_is_unwrapped(monkeypatch):

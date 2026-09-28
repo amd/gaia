@@ -27,7 +27,9 @@ import pytest
     ],
 )
 def test_powershell_switches_cannot_hide_executable_body(command):
-    assert ShellToolsMixin()._validate_shell_command(command)[0] is not None
+    error = ShellToolsMixin()._validate_shell_command(command)[0]
+    assert error is not None
+    assert error.get("tier") == TIER_REFUSE, error
 
 
 @pytest.mark.parametrize(
@@ -50,6 +52,8 @@ from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     DANGEROUS_SHELL_OPERATORS,
     DEVELOPER_COMMANDS,
+    TIER_CONFIRM,
+    TIER_REFUSE,
     ShellToolsMixin,
     _is_lone_granted_segment,
 )
@@ -69,7 +73,7 @@ class _Console:
     """The one attribute the shell gates read off a session's output handler."""
 
     def __init__(self, bypass: bool):
-        self.bypass_permissions = bypass
+        self.full_access = bypass
 
 
 class _Shell(ShellToolsMixin):
@@ -173,23 +177,83 @@ class TestBlockedCommands:
 
 
 class TestGitSubcommands:
-    def test_git_push_blocked(self):
+    def test_git_push_is_refused_outright(self):
+        # #3374 made push/reset/rebase refusals the git grant itself will not
+        # run, so no prompt can honestly offer them.
         result = validate("git push origin main")
         assert result is not None
-        assert (
-            "push" in result["error"].lower()
-            or "not allowed" in result["error"].lower()
-        )
+        assert result["tier"] == TIER_REFUSE
+        assert "push" in result["error"].lower() or "grant" in result["error"].lower()
 
-    def test_git_commit_blocked(self):
+    def test_git_commit_needs_confirmation(self):
         result = validate("git commit -m 'msg'")
         assert result is not None
+        assert result["tier"] == TIER_CONFIRM
 
     def test_git_diff_allowed(self):
         assert validate("git diff HEAD") is None
 
     def test_git_show_allowed(self):
         assert validate("git show HEAD") is None
+
+
+# ---------------------------------------------------------------------------
+# Git global options that precede the subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestGitGlobalOptions:
+    """A global flag must not be mistaken for the subcommand (#3624)."""
+
+    def test_dash_c_repo_path_then_read_only_subcommand(self):
+        assert validate("git -C /repo branch --list") is None
+
+    def test_dash_c_repo_path_then_write_subcommand_still_blocked(self):
+        result = validate("git -C /repo push origin main")
+        assert result is not None
+        assert "push" in result["error"]
+
+    def test_git_dir_separate_value(self):
+        assert validate("git --git-dir /repo/.git log --oneline") is None
+
+    def test_git_dir_inline_value(self):
+        assert validate("git --git-dir=/repo/.git status") is None
+
+    def test_work_tree_and_no_pager_combined(self):
+        assert validate("git --no-pager --work-tree /repo status") is None
+
+    def test_namespace_value_is_not_read_as_subcommand(self):
+        # Without value-consumption the walk would land on "reset".
+        result = validate("git --namespace reset status")
+        assert result is None
+
+    def test_version_needs_no_subcommand(self):
+        assert validate("git --version") is None
+
+    def test_config_override_refused(self):
+        result = validate("git -c core.pager=sh status")
+        assert result is not None
+        assert "-c" in result["error"]
+
+    def test_config_env_refused(self):
+        result = validate("git --config-env=core.pager=EVIL status")
+        assert result is not None
+        assert "--config-env" in result["error"]
+
+    def test_exec_path_refused(self):
+        result = validate("git --exec-path=/tmp/evil status")
+        assert result is not None
+        assert "--exec-path" in result["error"]
+
+    def test_unknown_global_option_refused(self):
+        result = validate("git --brand-new-flag status")
+        assert result is not None
+        assert "--brand-new-flag" in result["error"]
+
+    def test_global_option_with_no_subcommand_is_bare_git(self):
+        # The walk hands the policy table `git`, which prints usage. The path
+        # `-C` names is sandbox-checked separately, by _git_path_refusal.
+        assert validate("git -C /repo") is None
 
 
 # ---------------------------------------------------------------------------
@@ -423,9 +487,16 @@ class TestPowerShellFiltering:
 
 
 def refused(command: str) -> bool:
-    """True when the full validator refuses *command*."""
+    """True when the full validator refuses *command* outright.
+
+    A block here must be ``TIER_REFUSE``: a ``TIER_CONFIRM`` one would reach the
+    confirmation prompt and run on a yes, which is not what these probes pin.
+    """
     error, _ = ShellToolsMixin()._validate_shell_command(command)
-    return error is not None
+    if error is None:
+        return False
+    assert error.get("tier") == TIER_REFUSE, error
+    return True
 
 
 class TestUnspacedAmpersandIsAnOperator:
@@ -561,7 +632,7 @@ class TestQuotedOperatorsAreData:
 
     @pytest.mark.parametrize(
         "command",
-        ['dir "a" &calc', 'dir "a&b" & calc', 'echo "a" & calc', 'cat "a.txt" ; id'],
+        ['dir "a" &calc', 'dir "a&b" & calc', 'echo "a" & calc', 'cat "a.txt" > f'],
     )
     def test_an_operator_outside_the_quotes_is_still_an_operator(self, command):
         assert refused(command)
@@ -607,15 +678,16 @@ class TestPowerShellRunsAFileInsteadOfACmdlet:
 
 
 # ---------------------------------------------------------------------------
-# Bypass permissions: shell gates (#3373, #3374)
+# Full access: shell gates (#3373, #3374)
 #
-# The switch is the sidecar's existing --bypass-permissions / TUI /bypass, which
-# already turned confirmation prompts off; these tests cover the shell gates it
-# now lifts with them.
+# The switch is the sidecar's full access (TUI /full-access, formerly
+# --bypass-permissions / /bypass), which already turned confirmation prompts
+# off; these tests cover the shell gates it now lifts with them.
 #
-# Every case asserts BOTH states. The default tier is what ships; the bypass
-# tier is what the user turned on deliberately. A test that only covered the
-# bypass side could not catch a new binary leaking into the default set.
+# Every case asserts BOTH states. The default tier is what ships; the
+# full-access tier is what the user turned on deliberately. A test that only
+# covered the full-access side could not catch a new binary leaking into the
+# default set.
 # ---------------------------------------------------------------------------
 
 #: The developer set's headline entries, named individually so a future edit
@@ -863,14 +935,14 @@ class TestReadOnlySubGuardsLiftUnderBypassOnly:
 class TestBypassIsOffByDefault:
     def test_host_with_no_console_is_not_bypassed(self):
         class Bare:
-            bypass_gates_active = ShellToolsMixin.bypass_gates_active
+            full_access_active = ShellToolsMixin.full_access_active
 
-        assert Bare().bypass_gates_active() is False
+        assert Bare().full_access_active() is False
 
     def test_stock_output_handler_is_not_bypassed(self):
         from gaia.agents.base.console import OutputHandler
 
-        assert OutputHandler.bypass_permissions is False
+        assert OutputHandler.full_access is False
 
     def test_auto_approve_alone_does_not_lift_the_shell_gates(self):
         # An unattended harness that pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS
@@ -880,7 +952,7 @@ class TestBypassIsOffByDefault:
 
         host = _Shell(bypass=False)
         host.console = ApproveOnly()
-        assert host.bypass_gates_active() is False
+        assert host.full_access_active() is False
         assert host._validate_shell_command("make build")[0] is not None
 
     def test_toggling_the_console_flips_the_gates_live(self):
@@ -888,9 +960,9 @@ class TestBypassIsOffByDefault:
         # why the mode is read live rather than cached on the agent.
         host = _Shell(bypass=False)
         assert host._validate_shell_command("make build")[0] is not None
-        host.console.bypass_permissions = True
+        host.console.full_access = True
         assert host._validate_shell_command("make build")[0] is None
-        host.console.bypass_permissions = False
+        host.console.full_access = False
         assert host._validate_shell_command("make build")[0] is not None
 
     def test_validate_command_defaults_to_the_read_only_tier(self):
@@ -1133,3 +1205,200 @@ class TestGrantedRedirectNeverReachesAProcess:
         assert "Redirection" in result["error"]
         assert records == [], "a refused command must not reach the audit trail"
         assert not (tmp_path / "out.txt").exists()
+
+
+# ---------------------------------------------------------------------------
+# Which tier a block lands in, and what full access lifts
+# ---------------------------------------------------------------------------
+
+
+class _Host(ShellToolsMixin):
+    """A host whose console says how a prompt would be approved.
+
+    ``full_access`` is the TUI's switch, which sets both attributes the way
+    ``gaia_agent.stdio.PermissionState`` does. ``auto_approve`` alone is an
+    SDK embedder's unattended opt-in.
+    """
+
+    debug = False
+
+    def __init__(self, full_access=False, auto_approve=False):
+        super().__init__()
+
+        class _Console:
+            pass
+
+        self.console = _Console()
+        self.console.auto_approve_gated_tools = full_access or auto_approve
+        self.console.full_access = full_access
+
+
+def refusal(command, full_access=False, auto_approve=False):
+    """What the pre-prompt gate returns -- None means the user gets asked."""
+    return _Host(full_access, auto_approve).policy_refusal_for_call(
+        "run_shell_command", {"command": command}
+    )
+
+
+def run_tool(host, command, cwd):
+    """Call run_shell_command directly, the way a pre-approved call reaches it."""
+    from gaia.agents.base.tools import get_tool_metadata
+
+    host.register_shell_tools()
+    run = get_tool_metadata("run_shell_command")["function"]
+    return run(command=command, working_directory=str(cwd))
+
+
+@pytest.fixture
+def env_pre_approves(monkeypatch):
+    """GAIA_AUTO_APPROVE_TOOLS=1, as an unattended run sets it."""
+    monkeypatch.setattr(
+        "gaia.agents.base.console.auto_approve_env_enabled", lambda: True
+    )
+
+
+class TestTiers:
+    """A block is refused only when a yes/no prompt cannot honestly describe it."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git commit -m wip",
+            "npm test",
+            "rm notes.txt",
+            "find . -delete",
+            "sort -o out.txt in.txt",
+        ],
+    )
+    def test_a_describable_write_is_confirmable(self, command):
+        assert validate(command)["tier"] == TIER_CONFIRM
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git -c core.pager=evil.sh status",
+            "git --exec-path=/tmp/evil status",
+            "powershell -EncodedCommand aQBlAHgA",
+        ],
+    )
+    def test_an_undescribable_escalation_is_refused(self, command):
+        assert validate(command)["tier"] == TIER_REFUSE
+
+    @pytest.mark.parametrize("command", ["echo hi > f", "cat 'unterminated"])
+    def test_what_the_runner_cannot_execute_is_refused(self, command):
+        error, _ = _Host()._validate_shell_command(command)
+        assert error["tier"] == TIER_REFUSE
+
+    def test_a_block_with_no_tier_is_refused_not_asked(self, monkeypatch):
+        """A guard that forgets its tier fails closed instead of reaching a yes."""
+        monkeypatch.setattr(
+            ShellToolsMixin,
+            "_validate_command",
+            staticmethod(lambda *a, **k: {"status": "error", "error": "no tier"}),
+        )
+        assert refusal("npm test") is not None
+
+
+class TestASpellingDoesNotChangeTheTier:
+    """A refusal follows the program, however its name is written."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/usr/bin/git -c core.pager=evil.sh status",
+            "git.exe -c core.pager=evil.sh status",
+            '"C:\\Program Files\\Git\\cmd\\git.exe" -c core.pager=x status',
+            "/usr/local/bin/powershell -EncodedCommand aQBlAHgA",
+            "pwsh -EncodedCommand aQBlAHgA",
+            "pwsh.exe -enc aQBlAHgA",
+            "/opt/homebrew/bin/gh auth token",
+        ],
+    )
+    def test_a_refused_invocation_stays_refused_by_path_or_alias(self, command):
+        assert refusal(command) is not None
+        assert refusal(command, full_access=True) is not None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/usr/bin/git status",
+            "git.exe log --oneline",
+            "pwsh -Command Get-Process",
+            "/opt/homebrew/bin/gh issue list",
+        ],
+    )
+    def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(self, command):
+        """The no-prompt list names bare programs; nothing else joins it."""
+        assert validate(command)["tier"] == TIER_CONFIRM
+        assert refusal(command) is None
+
+
+class TestConfirmableCommandsReachThePrompt:
+    """The regression this tier exists to prevent: refusing an approvable call."""
+
+    @pytest.mark.parametrize(
+        "command",
+        ["git commit -m wip", "npm test", "rm notes.txt"],
+    )
+    def test_not_refused_before_the_prompt(self, command):
+        assert refusal(command) is None
+
+    @pytest.mark.parametrize(
+        "command", ["git -c core.pager=evil.sh status", "echo hi > f"]
+    )
+    def test_an_escalation_is_refused_until_full_access_lifts_the_gates(self, command):
+        # Refused by default. Full access replaces the read-only policy with
+        # DEVELOPER_COMMANDS and lifts the operator block (#3373, #3374) — a
+        # set that already runs arbitrary code, so these are inside it.
+        assert refusal(command) is not None
+        assert refusal(command, full_access=True) is None
+
+
+class TestBlanketApproval:
+    """A blanket pre-approval skips prompts; it never widens what a run executes.
+
+    Two doors lead to one: GAIA_AUTO_APPROVE_TOOLS, and an embedder passing
+    ``auto_approve_gated_tools=True``. Only full access -- a person's choice,
+    on screen for the session -- runs a command outside the no-prompt list.
+    """
+
+    def test_a_confirmable_command_is_refused_when_only_the_env_approves(
+        self, env_pre_approves
+    ):
+        error = refusal("rm notes.txt")
+        assert error is not None
+        assert "GAIA_AUTO_APPROVE_TOOLS" in error["hint"]
+
+    def test_an_embedders_opt_in_is_refused_the_same_way(self):
+        error = refusal("rm notes.txt", auto_approve=True)
+        assert error is not None
+        assert "auto_approve_gated_tools" in error["hint"]
+
+    def test_the_no_prompt_list_still_runs_under_either(self, env_pre_approves):
+        assert refusal("git status") is None
+        assert refusal("git status", auto_approve=True) is None
+
+    def test_full_access_is_a_person_deciding(self, env_pre_approves):
+        # `cp`, not `rm`: full access swaps the read-only policy for
+        # DEVELOPER_COMMANDS (#3374), which leaves `rm` out on purpose.
+        assert refusal("cp a.txt b.txt", full_access=True) is None
+
+    def test_full_access_still_will_not_run_rm(self, env_pre_approves):
+        assert refusal("rm notes.txt", full_access=True) is not None
+
+    def test_the_execution_path_refuses_too(self, env_pre_approves, tmp_path):
+        """Defence in depth: a direct tool call never skips the same rule."""
+        result = run_tool(_Host(), "touch made.txt", tmp_path)
+        assert result["status"] == "error"
+        assert not (tmp_path / "made.txt").exists()
+
+    def test_the_execution_path_refuses_an_embedders_opt_in(self, tmp_path):
+        result = run_tool(_Host(auto_approve=True), "touch made.txt", tmp_path)
+        assert result["status"] == "error"
+        assert not (tmp_path / "made.txt").exists()
+
+    def test_full_access_runs_it(self, env_pre_approves, tmp_path):
+        (tmp_path / "src.txt").write_text("hi")
+        result = run_tool(_Host(full_access=True), "cp src.txt made.txt", tmp_path)
+        assert result["status"] == "success", result
+        assert (tmp_path / "made.txt").exists()

@@ -58,11 +58,11 @@ func TestEscAgainstTheReleasedProcessShape(t *testing.T) {
 	t.Setenv("MOCKAGENT_TOOL_MS", "4000")
 
 	tui := startLiveTUIWith(t, func(m root.FlagshipModel) root.FlagshipModel {
-		return m.WithBypassPermissions(true)
+		return m.WithFullAccess(true)
 	})
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 40})
 	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}, "timeout_ms": 20000})
-	tui.waitFor(map[string]any{"contains": "BYPASS PERMISSIONS —"})
+	tui.waitFor(map[string]any{"contains": "FULL ACCESS —"})
 
 	ask := func(text string) {
 		t.Helper()
@@ -76,11 +76,11 @@ func TestEscAgainstTheReleasedProcessShape(t *testing.T) {
 		tui.waitFor(map[string]any{"state": map[string]any{"streaming": false}, "timeout_ms": 20000})
 	}
 
-	// /bypass off before the agent has even started must still reach it.
-	ask("/bypass off")
-	tui.waitFor(map[string]any{"absent": "BYPASS PERMISSIONS —"})
-	ask("report bypass")
-	tui.waitFor(map[string]any{"contains": "bypass=false pid=", "timeout_ms": 20000})
+	// /full-access off before the agent has even started must still reach it.
+	ask("/full-access off")
+	tui.waitFor(map[string]any{"absent": "FULL ACCESS —"})
+	ask("report full access")
+	tui.waitFor(map[string]any{"contains": "full_access=false pid=", "timeout_ms": 20000})
 	settled()
 	agent := readPidFile(t, pidfile, 0)
 	boot := readPidFile(t, pidfile+".boot", 0)
@@ -95,8 +95,8 @@ func TestEscAgainstTheReleasedProcessShape(t *testing.T) {
 	if !daemon.PIDAlive(agent) {
 		t.Fatalf("one Esc killed the agent (pid %d)", agent)
 	}
-	ask("report bypass")
-	tui.waitFor(map[string]any{"contains": fmt.Sprintf("bypass=false pid=%d turn=3", agent), "timeout_ms": 20000})
+	ask("report full access")
+	tui.waitFor(map[string]any{"contains": fmt.Sprintf("full_access=false pid=%d turn=3", agent), "timeout_ms": 20000})
 	settled()
 
 	// 2. A call the agent cannot interrupt: the first Esc asks, the second
@@ -117,14 +117,14 @@ func TestEscAgainstTheReleasedProcessShape(t *testing.T) {
 		t.Fatal("the stopped tool call ran to completion")
 	}
 
-	// 3. The restart comes up with /bypass still off, and says what it lost.
-	ask("report bypass")
+	// 3. The restart comes up with /full-access still off, and says what it lost.
+	ask("report full access")
 	tui.waitFor(map[string]any{"contains": "The agent was restarted", "timeout_ms": 20000})
 	respawned := readPidFile(t, pidfile, agent)
-	tui.waitFor(map[string]any{"contains": fmt.Sprintf("bypass=false pid=%d turn=1", respawned), "timeout_ms": 20000})
+	tui.waitFor(map[string]any{"contains": fmt.Sprintf("full_access=false pid=%d turn=1", respawned), "timeout_ms": 20000})
 	settled()
-	if screen := tui.screen(); strings.Contains(screen, "BYPASS PERMISSIONS —") {
-		t.Errorf("the bypass banner came back after the restart:\n%s", screen)
+	if screen := tui.screen(); strings.Contains(screen, "FULL ACCESS —") {
+		t.Errorf("the full access banner came back after the restart:\n%s", screen)
 	}
-	t.Logf("restarted agent pid %d came up with bypass off", respawned)
+	t.Logf("restarted agent pid %d came up with full access off", respawned)
 }

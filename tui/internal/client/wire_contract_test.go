@@ -121,7 +121,7 @@ func TestEveryControlLineTheClientWritesMatchesTheSharedFixture(t *testing.T) {
 		"tool_decision": func(c *SubprocessClient) error {
 			return c.RespondToolPermission("confirm-7", PermissionAlways)
 		},
-		"bypass": func(c *SubprocessClient) error { return c.SetBypassPermissions(true) },
+		"full_access": func(c *SubprocessClient) error { return c.SetFullAccess(true) },
 		"cancel": func(c *SubprocessClient) error { return c.Cancel(context.Background()) },
 	}
 
