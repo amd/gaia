@@ -64,7 +64,7 @@ the terminal UI meant building it from source.
   86 → 94.
 - **Fast mode, for a session that's only conversation.** `GAIA_FAST=1` drops
   the flagship to a plain conversational surface for the whole session —
-  2,860 tokens of fixed prompt instead of 17,652 — so saying "hi" no longer
+  2,860 tokens of fixed prompt instead of 17,620 — so saying "hi" no longer
   costs as much as a repo search. Session-scoped and one-way: a fast session
   has no documents, files, web or skills and cannot pick them up mid-way.
 
@@ -140,6 +140,16 @@ the terminal UI meant building it from source.
   printed, instead of a throwaway script left in your repository. It joins the
   always-on tool set (about 250 more prompt tokens per call) and the `shell`
   bundle.
+- **The shell, always on inside a code repository.** When the project map
+  resolves to a repository (a VCS directory or a known manifest at its root),
+  `run_shell_command` is offered on every turn instead of only when the request
+  happens to sound like a shell request. Coding tasks such as "skip these tests
+  on PRs" previously ran without a shell and did every grep through `run_python`.
+  It follows the *same* root the map already uses, so the sidecar needs
+  `GAIA_PROJECT_ROOT=/path/to/repo` (or `GaiaAgentConfig(project_root=...)` when
+  embedding) to see your repository — its own working directory is whatever
+  started it, not yours. With no repository nothing changes, and the shell's
+  approval gate still applies either way. See SKILL §11.
 - **`sleep`, always on.** The agent can now wait before retrying, e.g. until a
   rate limit resets, instead of giving up; before, its only way to wait was
   `time.sleep` inside a confirmation-gated `run_python`. Up to five minutes per
