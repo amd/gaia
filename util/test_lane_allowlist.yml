@@ -45,3 +45,93 @@ files:
   # Manual runs against running services.
   tests/stress/test_agent_ui_stress.py: A hand-run stress script against a running Agent UI and Lemonade Server; not a pytest suite.
   tests/test_sd_model_sweep.py: A hand-run sweep over every SD model and resolution on a live Lemonade Server, writing an image report; not a pytest suite.
+
+# Test files that skip WHOLESALE in some lane that collects them.
+#
+# Read by util/check_module_skips.py, which each listed lane runs after its
+# install step. A module-scope `pytest.importorskip` makes a file one SKIPPED
+# line in a lane without the dependency, while check_test_lane_coverage.py
+# still counts the file as covered, so a skip nobody listed here fails the lane
+# (#4206).
+#
+# `runs_in` names the workflow that installs what the file needs. The guard
+# fails that lane if the file skips there, and check_test_lane_coverage.py
+# fails when the workflow no longer names the path or no longer runs the guard.
+# A group with no `runs_in` runs nowhere, and its reason has to say why.
+# A path may be a directory; the most specific entry wins.
+
+module_skips:
+  - reason: Needs the gaia-agent-email wheel, which only the email lanes install.
+    runs_in: test_email_agent_unit.yml
+    paths:
+      - tests/unit/agents/email
+      - tests/unit/email
+      - tests/unit/connectors/test_email_scope_drift.py
+      - tests/unit/connectors/test_summarize_error_envelope.py
+      - tests/unit/test_synthetic_mbox.py
+
+  - reason: Needs the gaia-agent-email wheel, which only the email lanes install.
+    runs_in: test_email_agent.yml
+    paths:
+      - tests/unit/agents/test_email_agent.py
+      - tests/unit/agents/test_email_agent_confirmation.py
+      - tests/unit/agents/test_email_agent_local_llm_enforcement.py
+      - tests/unit/agents/test_email_agent_prompt_injection.py
+      - tests/unit/agents/test_email_agent_soft_delete.py
+      - tests/unit/agents/test_email_agent_tools.py
+      - tests/unit/agents/test_email_llm_triage.py
+
+  - reason: Needs the gaia-agent-chat wheel, which test_unit.yml does not install.
+    runs_in: test_chat_agent.yml
+    paths:
+      - tests/unit/agents/test_registry.py
+      - tests/unit/test_chat_agent_integration.py
+      - tests/unit/test_chat_dynamic_tools.py
+      - tests/unit/test_chat_fix_contracts.py
+      - tests/unit/test_chat_inline_web_ssrf.py
+      - tests/unit/test_chat_system_prompt_budget.py
+      - tests/unit/test_chat_tool_bundles.py
+      - tests/unit/test_dynamic_tool_filtering.py
+      - tests/unit/test_prompt_size_budget.py
+      - tests/unit/test_inference_location.py
+      - tests/unit/test_run_python_tool.py
+      - tests/unit/test_skill_tools_same_turn.py
+      - tests/unit/test_tool_admission_order.py
+      - tests/unit/test_tool_loader_disambiguation.py
+
+  - reason: Needs the gaia-agent (flagship) wheel, which test_unit.yml does not install.
+    runs_in: test_gaia_agent.yml
+    paths:
+      - tests/unit/messaging/test_bridge_contract.py
+      - tests/unit/test_execute_python_file_cwd.py
+      - tests/unit/test_flagship_code_index_scope.py
+      - tests/unit/test_stdio_permission_control.py
+
+  - reason: Needs the [mcp] extra, which test_unit.yml does not install.
+    runs_in: test_agent_mcp_server.yml
+    paths:
+      - tests/unit/test_agent_ui_mcp_messages.py
+      - tests/unit/test_mcp2_server.py
+      - tests/unit/test_mcp_bridge_protocol.py
+
+  - reason: Needs reportlab, which the email unit lane collects tests/unit/eval/ without.
+    runs_in: test_unit.yml
+    paths:
+      - tests/unit/eval/test_pdf_document_generator.py
+
+  - reason: >-
+      Broken, and fixing it needs an owner's decision. With the chat wheel
+      installed, 11 of its 17 tests fail: the golden tool sets and prompts predate
+      tools added since (write_clipboard, read_tool_output, ...). The file says a
+      golden update needs sign-off, so it is not updated here. Tracked in #4390.
+    paths:
+      - tests/unit/test_profilespec_characterization.py
+
+  - reason: >-
+      Broken, and fixing it needs an owner's decision. With the chat wheel
+      installed, 4 of its 10 tests fail: the doc profile has 38 tools (pinned 37)
+      and 6498 native tokens (pinned 5128), and the worst-case loaded set (4257
+      tokens) is over its 65% ratio even of the new total, so re-pinning alone
+      would not pass. Tracked in #4391.
+    paths:
+      - tests/unit/test_tool_loader_token_budget.py
