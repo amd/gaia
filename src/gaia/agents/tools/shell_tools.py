@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -1435,8 +1436,6 @@ def _run_step(
         exec_cmd = (step.shell_text or step.text) if os.name == "nt" else step.text
         cmd_base = segments[0][0].lower()
         if cmd_base in _UNIX_TO_WIN:
-            import shutil
-
             if not shutil.which(cmd_base):
                 win_cmd = _UNIX_TO_WIN[cmd_base]
                 logger.info(
@@ -2202,6 +2201,10 @@ class ShellToolsMixin:
                     "Use an allowed command, or tell the user what you would "
                     "have run and why it is blocked."
                 )
+            elif shutil.which(policy.binary) is None:
+                # Not installed is not "load the skill": reloading cannot fix it.
+                message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                hint = "Do not retry this command or reload the skill."
             else:
                 # Name the skill: "a skill that declares it" left models no route.
                 message = f"{decision.message} {_grant_route(binary, skill_manager)}"

@@ -238,12 +238,11 @@ def _tools_builder(question: BootstrapQuestion, answer: str) -> List[ProposedEnt
     """Build the work-scoped stack facts, plus a global mirror of the stack.
 
     The spec scopes the stack to ``context="work"`` with an ``entity`` link, and
-    emits a dedicated IDE fact alongside it. But a default chat runs in the
-    ``global`` context, and the prompt builder selects *only* global rows there
-    (``get_by_category_contexts``) — so work-scoped rows alone would never reach
-    the system prompt, and the user's stack would go quiet on day one. The
-    global ``profile`` mirror is what keeps it visible; the work rows are what
-    make it entity-linked and context-scoped.
+    emits a dedicated IDE fact alongside it. An agent scoped to another context
+    (email runs as ``email``) reads only its own rows plus global ones, so the
+    work rows alone would not reach its prompt. The global ``profile`` mirror
+    keeps the stack visible everywhere; the work rows are what make it
+    entity-linked and context-scoped.
 
     Args:
         question: The tools question.

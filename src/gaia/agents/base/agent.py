@@ -141,6 +141,26 @@ LOCAL_MAX_OUTPUT_TOKENS = 8192
 CLOUD_MAX_OUTPUT_TOKENS = 32768
 
 
+def _skill_prompt_body(agent, skill) -> str:
+    """*skill*'s effective body, plus a note for any declared command missing here.
+
+    Rendered every turn so the substitute stays in front of the model however
+    the skill was loaded (the ``load_skill`` tool or a manifest).
+    """
+    body = effective_skill_body(agent, skill)
+    parsed_permissions = getattr(skill, "parsed_permissions", None)
+    if not callable(parsed_permissions):
+        return body
+
+    from gaia.skills import unavailable_binaries
+
+    missing = unavailable_binaries(parsed_permissions())
+    if not missing:
+        return body
+    notes = " ".join(policy.unavailable_note() for policy in missing)
+    return f"{body}\n\nOn this machine: {notes}"
+
+
 def effective_skill_body(agent, skill) -> str:
     """*skill*'s authored body with *agent*'s approved learned changes applied.
 
@@ -753,6 +773,20 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 # One correction — a second disagreement is better than a loop, and the
 # verification footer states the truth either way.
 _MAX_TEST_CLAIM_CORRECTIONS = 1
+# A reply that ended on the output-token limit (finish_reason=length).
+_MAX_CUT_OFF_CONTINUATIONS = 2
+_CUT_OFF_CONTINUE_PROMPT = (
+    "Your last reply was cut off at the output-token limit before it finished, "
+    "so nothing in it was carried out. Continue from where you stopped: keep "
+    "your reasoning brief and make the next tool call, or give the final "
+    "answer if the task is complete."
+)
+_CUT_OFF_FAILURE_ANSWER = (
+    "I could not finish this task: my replies kept getting cut off at the "
+    "model's output-token limit, so the work they described was never carried "
+    "out. Retry with a higher output-token limit (max_tokens) or a model that "
+    "reasons more briefly."
+)
 
 # Unfinished-answer guard (#3887): a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
@@ -3199,7 +3233,7 @@ Do NOT wrap conversational replies in JSON.
             for skill in skills.values():
                 if not skill.body:
                     continue
-                body = effective_skill_body(self, skill)
+                body = _skill_prompt_body(self, skill)
                 sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             if not sections:
                 return ""
@@ -3211,7 +3245,7 @@ Do NOT wrap conversational replies in JSON.
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
-                    body = effective_skill_body(self, skill)
+                    body = _skill_prompt_body(self, skill)
                     body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             else:
                 menu_lines.append(
@@ -5647,7 +5681,50 @@ Do NOT wrap conversational replies in JSON.
                 shrunk_rest.append(shrunk)
             else:
                 shrunk_rest.append(m)
-        return [first] + shrunk_rest
+        return self._with_overflow_note([first] + shrunk_rest)
+
+    def _with_overflow_note(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Restate a mixin's ``overflow_recovery_note`` on the last user message.
+
+        Stubbing old tool results drops what they taught this turn (memory's
+        lessons). User messages are never stubbed, so the note survives.
+        """
+        hook = getattr(self, "overflow_recovery_note", None)
+        try:
+            note = hook() if callable(hook) else ""
+        except Exception as exc:
+            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
+            logger.debug("Could not build the overflow recovery note: %s", exc)
+            return messages
+        if not note:
+            return messages
+
+        def _text(content: Any) -> str:
+            if isinstance(content, list):
+                return "\n".join(
+                    str(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict)
+                )
+            return str(content or "")
+
+        if any(note in _text(m.get("content")) for m in messages):
+            return messages
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            content = message.get("content")
+            if message.get("role") != "user":
+                continue
+            if isinstance(content, str):
+                content = f"{content}\n\n{note}"
+            elif isinstance(content, list):
+                content = [*content, {"type": "text", "text": note}]
+            else:
+                continue
+            return messages[:i] + [{**message, "content": content}] + messages[i + 1 :]
+        return messages
 
     def _create_tool_message(
         self,
@@ -6386,6 +6463,7 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         verify_after_change_reprompted = False
         test_claim_corrections = 0
+        cut_off_continuations = 0
         completion_corrections = 0
         completion_gaps = []
         # Issue #1023: track the latest outcome of any capability tool
@@ -6858,6 +6936,7 @@ Do NOT wrap conversational replies in JSON.
             # Handle streaming or non-streaming LLM response
             # Initialize response_stats so it's always in scope
             response_stats = None
+            response_finish_reason = None
 
             if self.streaming:
                 # Streaming mode - raw response will be streamed
@@ -6908,6 +6987,9 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
+                                response_finish_reason = getattr(
+                                    chunk_response, "finish_reason", None
+                                )
                                 # Non-empty complete chunk = tool_calls sentinel from
                                 # native tool-calling path (no streaming for tool calls)
                                 if chunk_response.text:
@@ -7067,6 +7149,9 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
+                        response_finish_reason = getattr(
+                            chat_response, "finish_reason", None
+                        )
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
@@ -7207,6 +7292,43 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(f"LLM response: {response[:200]}...")
             if self.show_prompts:
                 self.console.print_response(response, "LLM Response")
+
+            # A reply the output-token limit cut off is unfinished whatever it
+            # says; parsing it would turn half a thought into the answer.
+            if response_finish_reason == "length" and not response.startswith(
+                '{"__tool_calls__":'
+            ):
+                self.error_history.append(
+                    {
+                        "step": steps_taken,
+                        "error": "reply cut off at the output-token limit",
+                        "type": "output_truncated",
+                    }
+                )
+                if (
+                    cut_off_continuations >= _MAX_CUT_OFF_CONTINUATIONS
+                    or steps_taken >= steps_limit
+                ):
+                    logger.warning(
+                        "[WORKFLOW] Reply cut off at the output-token limit "
+                        "%d time(s) this turn; stopping (step %d/%d)",
+                        cut_off_continuations + 1,
+                        steps_taken,
+                        steps_limit,
+                    )
+                    final_answer = _CUT_OFF_FAILURE_ANSWER
+                    break
+                cut_off_continuations += 1
+                logger.info(
+                    "[WORKFLOW] Reply cut off at the output-token limit; "
+                    "asking the model to continue (%d/%d)",
+                    cut_off_continuations,
+                    _MAX_CUT_OFF_CONTINUATIONS,
+                )
+                if response:
+                    messages.append({"role": "assistant", "content": response})
+                messages.append({"role": "user", "content": _CUT_OFF_CONTINUE_PROMPT})
+                continue
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed
             # tool_calls JSON — concatenated enum values, unterminated strings,

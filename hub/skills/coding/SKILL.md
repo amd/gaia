@@ -2,7 +2,7 @@
 name: coding
 description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository. Covers finding the right file, editing safely, and proving the change works before reporting it.
 license: MIT
-version: 0.2.0
+version: 0.2.1
 metadata:
   gaia:
     security_tier: community
@@ -68,10 +68,10 @@ fixed the problem or merely changed the symptom.
 **A test you did not run is not a test that passed.** Tracing the logic in your
 head is not verification — it is the same reasoning that produced the bug.
 
-This skill grants `pytest` and `python`, so run the suite directly with
-`run_shell_command`. Prefer the `python -m` spelling — it puts the project's own
-directory on `sys.path`, so it works on a checkout that was never installed,
-where bare `pytest` fails to import the project:
+This skill grants `pytest` and `python` **when they are installed on PATH**, so
+run the suite directly with `run_shell_command`. Prefer the `python -m` spelling
+— it puts the project's own directory on `sys.path`, so it works on a checkout
+that was never installed, where bare `pytest` fails to import the project:
 
 ```
 python -m pytest -q tests/
@@ -88,6 +88,16 @@ PYTHONPATH=src python -m pytest -q tests/
 ```
 
 Where only `python3` exists, `python3 -m pytest` works the same way.
+
+pytest often lives only in the project's virtualenv, so it is not on PATH. The
+skill still loads, but without the `pytest` grant — and `python -m pytest` is
+judged as `pytest`, so that spelling is refused too. Run the suite with
+`execute_python_file` instead, which works wherever pytest is importable:
+
+```python
+import sys, pytest
+sys.exit(pytest.main(["-q", "tests/"]))
+```
 
 Loading this skill grants `pytest` and `python <script.py>` execution without
 another prompt. Tests and scripts are trusted project code: they can write
