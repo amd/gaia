@@ -672,8 +672,11 @@ def _plan_installer_leftovers(plan: UninstallPlan, home: Optional[Path]) -> None
         plan.tiered_paths.append(("--purge", host))
         plan.stop_daemon = True
     elif host.exists():
+        cause = (
+            "GAIA_DAEMON_HOME" if os.environ.get("GAIA_DAEMON_HOME") else "GAIA_HOME"
+        )
         plan.notes.append(
-            f"Daemon state at {host} is outside the GAIA home (GAIA_DAEMON_HOME), "
+            f"Daemon state at {host} is outside the GAIA home ({cause}), "
             "so it is left alone. Run `gaia daemon stop`, then delete it yourself."
         )
 
@@ -1403,12 +1406,12 @@ def run(
             _print("Aborted. Nothing was removed.", printer=printer)
             return EXIT_ABORTED
 
-    # Windows data-loss guard: gaia.log is held open by a FileHandler
-    # attached by gaia.logger. Detach + close it before rmtree walks into
-    # ~/.gaia so the file can actually be removed.
     if plan.stop_daemon and not _stop_daemon(printer=printer):
         return EXIT_ABORTED
 
+    # Windows data-loss guard: gaia.log is held open by a FileHandler
+    # attached by gaia.logger. Detach + close it before rmtree walks into
+    # ~/.gaia so the file can actually be removed.
     if purge:
         _close_gaia_log_handlers(home=home)
 

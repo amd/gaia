@@ -1757,7 +1757,7 @@ class TestUnreadablePathEditDoesNotBlockThePurge:
     @staticmethod
     def _unreadable_profile(fake_home: Path) -> Path:
         rc = fake_home / ".profile"
-        rc.write_text("export PATH=\"$PATH:/usr/local/bin\"\n")
+        rc.write_text('export PATH="$PATH:/usr/local/bin"\n')
         return rc
 
     def test_the_unreadable_file_is_reported_not_raised(self, fake_home, monkeypatch):
