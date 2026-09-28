@@ -32,7 +32,7 @@ _SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout", "preflight")
 # Every model call re-sends the schema of every offered tool, so this text is
 # billed on each step of each turn. Enforced by `python util/lint.py
 # --tool-descriptions`; measure with `python util/tool_schema_tokens.py`.
-MAX_TOOL_DESCRIPTION_CHARS = 400
+MAX_TOOL_DESCRIPTION_CHARS = 500
 MAX_TOOL_PARAM_DESCRIPTION_CHARS = 160
 
 # Named exceptions to MAX_TOOL_DESCRIPTION_CHARS, not a general escape hatch.
