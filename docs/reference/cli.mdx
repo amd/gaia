@@ -2016,6 +2016,19 @@ gaia eval tasks gateway --port 8788                # One model gateway for a who
 | `--meter` | none | `fireworks`: read real cost from the provider's billing meter |
 | `--therock-url` | `https://github.com/ROCm/TheRock` | Source for the `therock` suite |
 
+**SWE-bench Verified.** The `swebench` suite builds its tasks from real upstream issues, and grading runs the official harness in Docker. `run` grades as it goes; pass `--no-grade` to capture the predictions now and grade them later on a machine that has Docker:
+
+```bash
+gaia eval tasks run --suite swebench --instances psf__requests-1921,pallets__flask-5014
+gaia eval tasks run --suite swebench --no-grade --out eval/results/eval-tasks-swebench
+gaia eval tasks swebench eval/results/eval-tasks-swebench   # Grade those predictions in Docker
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--instances` | the five-instance pilot | Comma-separated SWE-bench Verified instance ids; only with `--suite swebench` |
+| `--no-grade` | off | Capture predictions without grading them in Docker |
+
 [→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks) · [→ Comparing harnesses and models](/reference/eval#comparing-harnesses-and-models)
 
 ---

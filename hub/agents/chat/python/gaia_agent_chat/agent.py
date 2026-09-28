@@ -1729,7 +1729,8 @@ No documents are currently indexed.
                 files. Report numbers from its output — do not work them
                 out in your head.
 
-                No access to your tools: `from gaia import <tool>` fails.
+                No access to your tools: `from gaia import <tool>` fails —
+                call it directly as a tool instead.
 
                 Args:
                     code: Python source to run; print() whatever you need back.
