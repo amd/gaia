@@ -66,7 +66,10 @@ jobs:
   unit-tests:
     name: Unit Tests (Linux, py3.12)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 40, not 30: the suite measures ~22 min locally and the lane came back
+    # `cancelled` at 30m19s — the wall, with zero failing steps. A budget a
+    # green suite can cross reads as a test failure to everyone who sees it.
+    timeout-minutes: 40
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7
