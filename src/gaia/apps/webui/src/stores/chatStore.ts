@@ -7,6 +7,7 @@ import { create } from 'zustand';
 import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData } from '../types';
 import { applyTheme } from '../utils/theme';
 import { log } from '../utils/logger';
+import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 
 /**
  * Read a UI preference, saying so when the store is unreadable.
@@ -163,8 +164,20 @@ interface ChatState {
 export const useChatStore = create<ChatState>((set, get) => ({
     // Agents
     agents: [],
-    activeAgentId: readPref('gaia-active-agent-id', 'chat'),
-    setAgents: (agents) => set({ agents }),
+    activeAgentId: readPref('gaia-active-agent-id', FLAGSHIP_AGENT_ID),
+    // Re-point a stored selection that the backend no longer offers (a retired
+    // agent, an uninstalled one) so the picker is never highlighting nothing.
+    // An empty list means discovery is still in flight — keep the selection.
+    setAgents: (agents) => {
+        const { activeAgentId } = get();
+        if (!agents.length || agents.some((a) => a.id === activeAgentId)) {
+            set({ agents });
+            return;
+        }
+        const next = agents.find((a) => a.id === FLAGSHIP_AGENT_ID) ?? agents[0];
+        writePref('gaia-active-agent-id', next.id);
+        set({ agents, activeAgentId: next.id });
+    },
     setActiveAgentId: (id) => {
         writePref('gaia-active-agent-id', id);
         set({ activeAgentId: id });

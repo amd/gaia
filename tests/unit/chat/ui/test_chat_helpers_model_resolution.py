@@ -18,8 +18,6 @@ import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from gaia.ui.database import SESSION_DEFAULT_MODEL as _DB_DEFAULT
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -494,29 +492,43 @@ class TestDeviceModelOverride:
         assert captured["kwargs"].get("model_id") == "UserPicked-GGUF"
 
 
-class TestBuiltinChatAgentUnchanged:
-    """Pin AC4: built-in ChatAgent (agent_type='chat') behavior is unchanged."""
+class TestChatAgentGoesThroughTheRegistry:
+    """`chat` lost its hardcoded direct-import branch on this path: it is an
+    in-process agent like any other, so dispatch consults the registry.
 
-    def test_chat_agent_type_bypasses_registry(self):
-        """agent_type='chat' must not go through registry.create_agent."""
+    This is the seam that makes hiding the id mean something — a hidden
+    registration only changes what runs if dispatch reads the registry at all.
+    """
+
+    def test_chat_agent_type_is_created_through_the_registry(self):
         registry, captured = _make_registry()
         db = _make_db(custom_model=None)
         session = _make_session(model=_DB_DEFAULT, agent_type="chat")
 
-        fake_agent = MagicMock()
-        fake_agent.process_query.return_value = "ok"
-        fake_agent.conversation_history = []
-        fake_agent.indexed_files = set()
-        fake_agent.rag = None
-
-        pytest.importorskip("gaia_agent_chat")
         with (
             patch("gaia.ui._chat_helpers._agent_registry", registry),
             patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
-            patch("gaia_agent_chat.agent.ChatAgent", return_value=fake_agent),
-            patch("gaia_agent_chat.agent.ChatAgentConfig"),
         ):
             _call_non_streaming(session, db, agent_type_override=None)
 
-        # registry.create_agent must NOT have been called for the chat path
+        registry.create_agent.assert_called_once()
+        assert registry.create_agent.call_args.args[0] == "chat"
+
+    def test_a_missing_chat_registration_is_not_silently_substituted(self):
+        """No direct `from gaia_agent_chat.agent import ChatAgent` left to fall
+        back on: an unregistered `chat` surfaces the install hint instead."""
+        registry, _ = _make_registry()
+        registry.get.return_value = None
+        registry.get_load_error.return_value = None
+        db = _make_db(custom_model=None)
+        session = _make_session(model=_DB_DEFAULT, agent_type="chat")
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+            patch("gaia.ui._chat_helpers.importlib.util.find_spec", return_value=None),
+        ):
+            result = _call_non_streaming(session, db, agent_type_override=None)
+
         registry.create_agent.assert_not_called()
+        assert "gaia-agent-chat" in str(result)

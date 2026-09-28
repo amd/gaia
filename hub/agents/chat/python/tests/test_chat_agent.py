@@ -3,8 +3,10 @@
 """Smoke tests for the standalone gaia-agent-chat package.
 
 ChatAgent ships under three prompt-profile ids — ``chat``/``doc``/``file`` —
-each registered via its own ``gaia.agent`` entry point (#1102). These tests
-assert the registration shape, lazy re-exports, and registry discovery without
+each registered via its own ``gaia.agent`` entry point (#1102). All three are
+``hidden`` — retired as user-facing choices now the flagship supersedes them,
+but still resolvable by id for stored sessions and evals. These tests assert
+the registration shape, lazy re-exports, and registry discovery without
 constructing a full agent (which would need a live RAG/LLM backend).
 """
 
@@ -15,6 +17,9 @@ def test_build_chat_registration_shape():
     reg = m.build_chat()
     assert reg.id == "chat"
     assert reg.source == "installed"
+    # Retired as a user-facing choice — absent from the picker and the Hub
+    # listing, but still resolvable by id.
+    assert reg.hidden is True
     # The chat profile loads MCP servers dynamically, so the registration must
     # advertise that to the connectors activation panel (#1005).
     assert reg.consumes_mcp_servers is True
@@ -28,6 +33,9 @@ def test_build_doc_registration_shape():
     reg = m.build_doc()
     assert reg.id == "doc"
     assert reg.source == "installed"
+    # Retired as a user-facing choice — absent from the picker and the Hub
+    # listing, but still resolvable by id.
+    assert reg.hidden is True
     tier_names = [t.name for t in reg.model_tiers]
     assert tier_names == ["full", "lite"]
 
@@ -38,6 +46,9 @@ def test_build_file_registration_shape():
     reg = m.build_file()
     assert reg.id == "file"
     assert reg.source == "installed"
+    # Retired as a user-facing choice — absent from the picker and the Hub
+    # listing, but still resolvable by id.
+    assert reg.hidden is True
     tier_names = [t.name for t in reg.model_tiers]
     assert tier_names == ["full", "lite"]
 
