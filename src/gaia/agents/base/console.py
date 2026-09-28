@@ -90,7 +90,8 @@ def auto_approve_env_enabled() -> bool:
     Reads the environment as it was at startup, before any ``.env`` was merged
     in (``gaia.pre_dotenv_env``): a project-local file must not be able to switch
     off every confirmation prompt. A library host that wants unattended approval
-    passes ``auto_approve_gated_tools=True`` to its console instead.
+    passes ``auto_approve_gated_tools=True`` to its console instead. Neither
+    widens the shell: see ``OutputHandler.auto_approve_gated_tools``.
     """
     import gaia  # deferred: gaia/__init__ imports this module
 
@@ -213,17 +214,24 @@ class OutputHandler(ABC):
     Never default-on. A host sets this (or the operator sets
     ``GAIA_AUTO_APPROVE_TOOLS=1``) when it has already obtained consent or is a
     trusted unattended harness. Every approval taken this way is logged.
+
+    It answers prompts; it does not widen the shell. A command outside
+    ``run_shell_command``'s no-prompt list is still refused under it, exactly
+    as under the environment variable. Only :attr:`full_access` runs those.
     """
 
-    bypass_permissions: bool = False
-    """Session-wide trust granted by ``--bypass-permissions`` / TUI ``/bypass``.
+    full_access: bool = False
+    """A person turned on full access for this session, and can see that it is on.
 
     Strictly narrower in origin than ``auto_approve_gated_tools`` and wider in
-    effect. Only ``PermissionState`` sets it — an unattended harness that merely
-    pre-approves prompts must not also get an unguarded shell — and in exchange
-    it lifts the shell guardrails too: the operator block, the read-only binary
-    policy (replaced by ``DEVELOPER_COMMANDS``) and the rate limit. See
-    ``gaia.agents.tools.shell_tools.ShellToolsMixin.bypass_gates_active``.
+    effect. Only ``PermissionState`` sets it, from the TUI's ``/full-access``
+    (or the retired ``--bypass-permissions`` spelling) — an unattended harness
+    that merely pre-approves prompts must not also get an unguarded shell. In
+    exchange it lifts the shell guardrails too: the operator block, the
+    read-only binary policy (replaced by ``DEVELOPER_COMMANDS``) and the rate
+    limit, and it runs commands outside ``run_shell_command``'s no-prompt list
+    without asking. See
+    ``gaia.agents.tools.shell_tools.ShellToolsMixin.full_access_active``.
 
     Mutable for the life of the session: the host can toggle it mid-run over the
     control channel, and the next gated call sees the new value.

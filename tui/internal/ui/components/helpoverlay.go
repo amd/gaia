@@ -270,6 +270,10 @@ func helpScrollIndicator(scroll, maxScroll int) string {
 // scrolls whatever does not fit (see fitHelpLines) — but every line still has
 // to fit helpBoxMaxWidth-4 columns, or it soft-wraps and throws off the row
 // count the box was told to draw.
+//
+// /cost has its own row because the Commands block is pinned to two lines
+// (see renderCommandsSection) and the eleven command names no longer fit
+// across them — its row documents the /cost help sub-form too.
 const chatHelpText = `  GAIA Chat
   ──────────────────
   Enter       Send — mid-answer it reaches the turn
@@ -280,8 +284,9 @@ const chatHelpText = `  GAIA Chat
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
-  Commands    /help /clear /bypass /cost /slack /setup
+  Commands    /help /clear /full-access /slack /setup
               /memory /model /provider /gateway /agents
+  /cost       Session spend · /cost help for rates
   /           On an empty line, browse commands —
               hover/click or ↑/↓ to pick, Enter or
               click to run, Esc or click out to close

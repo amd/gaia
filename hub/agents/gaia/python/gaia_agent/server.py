@@ -742,7 +742,7 @@ async def query(request: QueryRequest):
     # remote code execution rather than a relaxed permission model. There is no
     # request field that could ask for it — this pins that, so adding one
     # without also revisiting the reasoning fails a test instead of shipping.
-    handler.bypass_permissions = False
+    handler.full_access = False
     session = None
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
@@ -1178,7 +1178,7 @@ async def set_bypass(session_id: str, body: BypassRequest):
                 "server."
             ),
         )
-    session.permissions.set_bypass(body.enabled)
+    session.permissions.set_full_access(body.enabled)
     return BypassResponse(session_id=session_id, enabled=body.enabled)
 
 

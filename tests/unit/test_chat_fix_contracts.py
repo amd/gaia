@@ -41,6 +41,7 @@ pytest.importorskip("gaia_agent_chat")
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
+from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 from tests.unit.test_profilespec_characterization import (  # noqa: E402
     build_agent_for_row,
     chat_agent_build_context,
@@ -379,7 +380,9 @@ def test_allowed_paths_default_none_stays_consistent(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     expected_cwd = Path.cwd()
 
+    # A file tool leaked into the global registry would add a scratch-dir root.
     with (
+        patch.dict(_TOOL_REGISTRY, clear=True),
         patch("gaia_agent_chat.agent.RAGSDK"),
         patch("gaia_agent_chat.agent.RAGConfig") as rag_config_cls,
         patch("gaia_agent_chat.agent.SessionManager"),
@@ -401,6 +404,7 @@ def test_allowed_paths_explicit_stays_consistent(tmp_path, monkeypatch):
     explicit_dir.mkdir()
 
     with (
+        patch.dict(_TOOL_REGISTRY, clear=True),
         patch("gaia_agent_chat.agent.RAGSDK"),
         patch("gaia_agent_chat.agent.RAGConfig") as rag_config_cls,
         patch("gaia_agent_chat.agent.SessionManager"),

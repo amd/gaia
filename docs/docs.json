@@ -355,6 +355,7 @@
                 ]
               },
               "reference/session-analytics",
+              "reference/agent-benchmarks",
               "reference/dependency-management",
               "reference/contributing-docs"
             ]
