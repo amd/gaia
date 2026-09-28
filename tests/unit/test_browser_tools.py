@@ -724,7 +724,32 @@ class TestBrowserToolsMixin:
         )
         self.agent._web_client.extract_text.assert_called_once()
         call_kwargs = self.agent._web_client.extract_text.call_args
-        assert call_kwargs[1]["max_length"] == 20000
+        assert call_kwargs[1]["max_length"] is None
+        assert len(result) < 20000
+
+    def test_nested_html_is_archived_before_text_extraction_cap(self):
+        import json
+
+        from gaia.agents.base.artifacts import store_for
+        from gaia.web.client import WebClient
+
+        self.agent._web_client = WebClient()
+        response = MagicMock()
+        response.headers = {"Content-Type": "text/html"}
+        response.text = (
+            "<blockquote><p>"
+            + "x" * 10000
+            + "</p></blockquote><p>REQUIRED-LAST-PARAGRAPH</p>"
+        )
+        self.agent._web_client.get = MagicMock(return_value=response)
+        output = self.registered_tools["fetch_page"](
+            "https://example.com", max_length=1000
+        )
+        excerpt = json.loads(output[output.index("{") :])
+        page = store_for(self.agent).read(
+            excerpt["artifact"], excerpt["original_chars"] - 23, 23
+        )
+        assert page["content"].endswith("REQUIRED-LAST-PARAGRAPH")
 
     def test_search_web_clamps_num_results(self):
         """search_web clamps num_results to valid range."""

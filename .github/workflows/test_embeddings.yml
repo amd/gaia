@@ -13,6 +13,8 @@ on:
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
+      - 'tests/integration/test_lemonade_health_schema.py'
+      - 'tests/conftest.py'
       - 'setup.py'
       - '.github/workflows/test_embeddings.yml'
   pull_request:
@@ -24,6 +26,8 @@ on:
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
+      - 'tests/integration/test_lemonade_health_schema.py'
+      - 'tests/conftest.py'
       - 'setup.py'
       - '.github/workflows/test_embeddings.yml'
   merge_group:
@@ -98,10 +102,21 @@ jobs:
                 throw "Embedding model setup/verify via LemonadeClient failed"
             }
 
+            # Request-shape checks against the live server. A mocked unit test
+            # cannot catch a payload the server rejects -- that is how
+            # install_backend shipped sending {"spec": ...} and 400ing.
+            Write-Host "`n=== Verifying Lemonade request contracts ==="
+            pytest tests/integration/test_lemonade_backend_contract.py -v -rs --tb=short
+            if ($LASTEXITCODE -ne 0) { throw "Lemonade contract tests failed" }
+
             Write-Host "`n=== Running Embedding Tests ==="
             # Use --tb=long for full traceback, -rA for all test output summary
             pytest tests/test_lemonade_embeddings.py -v -s --tb=long -rA --log-cli-level=DEBUG
             if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
+
+            Write-Host "`n=== Checking live Lemonade health schema ==="
+            pytest tests/integration/test_lemonade_health_schema.py -v --tb=long -rA
+            if ($LASTEXITCODE -ne 0) { throw "Health schema tests failed with exit code $LASTEXITCODE" }
         } finally {
             if ($env:LEMONADE_PROCESS_ID) {
                 Write-Host "`n=== Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID) ==="

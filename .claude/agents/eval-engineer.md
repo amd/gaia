@@ -53,8 +53,8 @@ See `docs/reference/eval.mdx` for the user-facing reference.
 ## Standard eval recipe
 
 1. **Define the task** — inputs, expected outputs, grading function
-2. **Run the agent eval** — `gaia eval agent --category <category> --agent-type <type>` (prints the run dir + `scorecard.json`)
-3. **Compare to baseline** — `gaia eval agent --compare tests/fixtures/eval_baselines/<model>/scorecard_<category>.json <run-dir>/scorecard.json`. `--compare` only *diffs* two scorecards; it never runs an eval. Pick the baseline matching your model by name — don't `ls -t`, a fresh clone stamps every baseline with the checkout time
+2. **Run the agent eval** — `gaia eval agent --category <category>` (prints the run dir + `scorecard.json`). Every scenario scores the flagship `gaia` agent; `--agent-type` overrides that but its scorecard is then comparable only to other runs of the same agent
+3. **Compare to baseline** — `gaia eval agent --compare tests/fixtures/eval_baselines/gaia-flagship/scorecard_<category>.json <run-dir>/scorecard.json`. `--compare` only *diffs* two scorecards; it never runs an eval. No flagship baseline is committed yet, so `--compare` has nothing to diff against; report the scores you measured and say the run had no baseline. Never hand-author or copy forward a number to fill the gap.
 4. **Report** — `gaia report` to render results
 5. **Visualize performance** — `gaia perf-vis`
 

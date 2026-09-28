@@ -57,22 +57,40 @@ print(response)
 
 ## Cloud Providers
 
+Use `create_client(use_claude=True)` for the Claude provider. Local and on-prem
+models use `create_client("lemonade", base_url=..., model=...)`.
+
+## Gateway migration
+
+The `openai` and `litellm` provider adapters have been removed because they
+silently discarded tool calls. The `litellm` install extra is also removed.
+The OpenAI Python package remains a dependency of the Lemonade client.
+
+`use_openai=True`, `use_chatgpt=True`, and `--use-chatgpt` are retained only as
+migration-error shims: they fail before starting inference. They never switch
+your request to another provider. Remove these options after configuring a
+model in Lemonade. `--use-chatgpt` is no longer advertised in CLI help.
+
+Configure the upstream endpoint and credentials in your Lemonade server first,
+then select the model ID exposed by its catalog. `base_url` below is the
+**Lemonade server URL**, not the upstream OpenAI-compatible endpoint:
+
 ```python
 from gaia.llm import create_client
 
-# Claude API
-llm_claude = create_client(use_claude=True)
-
-# OpenAI API
-llm_openai = create_client(use_openai=True)
-
-# LiteLLM gateway — 100+ providers (Bedrock, Vertex AI, Groq, Azure, ...)
-# Requires: pip install 'gaia[litellm]'
-llm_litellm = create_client("litellm", model="anthropic/claude-sonnet-4-6")
-
-# Use same interface
-response = llm_claude.generate("Explain Python decorators")
+client = create_client(
+    "lemonade",
+    base_url="http://localhost:13305/api/v1",
+    model="amd.Gemma-4-31B",  # use the ID in your configured server's catalog
+)
+response = client.chat([{"role": "user", "content": "Hello"}])
 ```
+
+In the TUI, select your configured local, Fireworks, or AMD gateway model in
+Providers. The shared Lemonade adapter preserves native tool calls. A generic
+OpenAI-compatible server is not a drop-in replacement for Lemonade's lifecycle
+and catalog API. Credentials belong in the server/provider configuration, not
+in prompts or model IDs.
 
 ---
 

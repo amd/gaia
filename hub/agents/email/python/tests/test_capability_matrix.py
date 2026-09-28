@@ -63,6 +63,7 @@ _spec.loader.exec_module(capability_matrix)
 
 # 16 mixins in gaia_agent_email/tools/, keyed by module stem, 64 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
+    "framework_output": 1,
     # #2900: check_suspicious_mail added alongside pre_scan_inbox.
     "read_tools": 9,
     # #2745: resolve_needs_you_reference (positional card reference -> message).
@@ -91,7 +92,7 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     # #2581: list_waiting_on_you (inbound mail awaiting the user's reply).
     "waiting_on_you_tools": 1,
 }
-_EXPECTED_TOOLS_TOTAL = 66
+_EXPECTED_TOOLS_TOTAL = 67
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4

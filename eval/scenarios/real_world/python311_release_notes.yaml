@@ -1,7 +1,6 @@
 id: python311_release_notes
 name: "Python 3.11 Release Notes Lookup"
 category: real_world
-agent_type: doc
 severity: medium
 description: |
   Agent must retrieve facts from the Python 3.11 What's New document.

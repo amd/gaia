@@ -62,8 +62,25 @@ def write_source(root: Path, name: str, text: str) -> Path:
     return directory
 
 
-# The worked OpenClaw example from docs/plans/skill-format.mdx.
-OPENCLAW_GIT_STATUS = """---
+# The worked OpenClaw example from docs/plans/skill-format.mdx, pointed at a
+# binary GAIA ships NO policy for — which is the property these tests are
+# about. It used to say `git`; git is policed now, so `git` would migrate.
+OPENCLAW_UNPOLICED_BIN = """---
+name: docker-ps
+description: Summarize the running containers.
+version: 0.3.0
+metadata:
+  openclaw:
+    requires:
+      bins: [docker]
+---
+
+# Docker PS
+Summarize it.
+"""
+
+# The same shape for a binary GAIA DOES police, which must migrate cleanly.
+OPENCLAW_POLICED_BIN = """---
 name: git-status
 description: Summarize the working tree status.
 version: 0.3.0
@@ -247,7 +264,7 @@ def test_migrated_skill_is_experimental_with_no_claim(tmp_path):
 
 def test_requires_bins_is_reported_unmigratable_not_downgraded(tmp_path):
     """A skill that shells out to an unpoliced binary is refused, not downgraded."""
-    source = write_source(tmp_path / "src", "git-status", OPENCLAW_GIT_STATUS)
+    source = write_source(tmp_path / "src", "docker-ps", OPENCLAW_UNPOLICED_BIN)
     outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
 
     assert not outcome.migrated
@@ -256,28 +273,41 @@ def test_requires_bins_is_reported_unmigratable_not_downgraded(tmp_path):
     blocker = outcome.blockers[0]
 
     # The mapping still happened and is reported...
-    assert any("shell:execute:git" in line for line in outcome.mapped)
+    assert any("shell:execute:docker" in line for line in outcome.mapped)
     # ...and the refusal names the binary and why it cannot be granted: GAIA
-    # ships no command policy for 'git', so nothing could gate it.
-    assert "shell:execute:git" in blocker
+    # ships no command policy for 'docker', so nothing could gate it.
+    assert "shell:execute:docker" in blocker
     assert "no command policy" in blocker
     assert "BINARY_POLICIES" in blocker
 
 
+def test_a_policed_binary_migrates_instead_of_being_refused(tmp_path):
+    """The other half of the rule, and the reason the fixture above moved off
+    `git`: `requires.bins` is refused because nothing could GATE the binary,
+    not because it names a binary. Once BINARY_POLICIES covers one, the same
+    skill migrates to a real grant."""
+    source = write_source(tmp_path / "src", "git-status", OPENCLAW_POLICED_BIN)
+    outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
+
+    assert outcome.migrated, outcome.blockers
+    assert not outcome.blockers
+    assert any("shell:execute:git" in line for line in outcome.mapped)
+
+
 def test_refused_skill_cannot_be_installed(tmp_path):
     """The refusal is enforced at the install boundary too, not just reported."""
-    source = write_source(tmp_path / "src", "git-status", OPENCLAW_GIT_STATUS)
+    source = write_source(tmp_path / "src", "docker-ps", OPENCLAW_UNPOLICED_BIN)
     outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
 
     with pytest.raises(SkillValidationError, match="was not migrated"):
         install_migrated(outcome, tmp_path / "dest")
-    assert not (tmp_path / "dest" / "git-status").exists()
+    assert not (tmp_path / "dest" / "docker-ps").exists()
 
 
 @pytest.mark.parametrize(
     "requires, expected",
     [
-        ("bins: [git]", "shell:execute:git"),
+        ("bins: [docker]", "shell:execute:docker"),
         ("anyBins: [rg, grep]", "shell:execute:rg"),
         ("config: ['~/.netrc']", "filesystem:read:~/.netrc"),
     ],
@@ -630,7 +660,7 @@ def test_cli_migrate_installs_and_reports(run_cli, tmp_path):
 def test_cli_migrate_exits_4_when_a_skill_is_refused(run_cli, tmp_path):
     """A refused skill is a non-zero exit so scripts can branch on it."""
     sources = tmp_path / "src"
-    write_source(sources, "git-status", OPENCLAW_GIT_STATUS)
+    write_source(sources, "docker-ps", OPENCLAW_UNPOLICED_BIN)
     write_source(sources, "release-notes", OPENCLAW_INSTRUCTION_ONLY)
 
     rc, out, err = run_cli(str(sources), "--from", "openclaw")
@@ -641,7 +671,7 @@ def test_cli_migrate_exits_4_when_a_skill_is_refused(run_cli, tmp_path):
     assert "refused rather than silently stripped" in err
     # The good one still installed; one refusal does not block the batch.
     assert (tmp_path / "gaia-home" / "skills" / "release-notes").is_dir()
-    assert not (tmp_path / "gaia-home" / "skills" / "git-status").exists()
+    assert not (tmp_path / "gaia-home" / "skills" / "docker-ps").exists()
 
 
 def test_cli_migrate_dry_run_writes_nothing(run_cli, tmp_path):
@@ -658,7 +688,7 @@ def test_cli_migrate_json_report(run_cli, tmp_path):
     import json
 
     sources = tmp_path / "src"
-    write_source(sources, "git-status", OPENCLAW_GIT_STATUS)
+    write_source(sources, "docker-ps", OPENCLAW_UNPOLICED_BIN)
     write_source(sources, "release-notes", OPENCLAW_INSTRUCTION_ONLY)
 
     rc, out, _ = run_cli(str(sources), "--from", "openclaw", "--json")
@@ -670,8 +700,8 @@ def test_cli_migrate_json_report(run_cli, tmp_path):
     assert payload["unmigratable"] == 1
     by_name = {entry["name"]: entry for entry in payload["skills"]}
     assert by_name["release-notes"]["security_tier"] == "experimental"
-    assert by_name["git-status"]["migrated"] is False
-    assert by_name["git-status"]["blockers"]
+    assert by_name["docker-ps"]["migrated"] is False
+    assert by_name["docker-ps"]["blockers"]
 
 
 def test_cli_migrate_reports_a_collision_without_hiding_the_batch(run_cli, tmp_path):
@@ -1107,7 +1137,7 @@ def test_cli_migrate_batch_survives_every_kind_of_bad_skill(run_cli, tmp_path):
         'on: push\nmetadata:\n  openclaw:\n    emoji: "x"\n---\n\n# Odd Keys\n',
     )
     # Bad, one of each kind.
-    write_source(sources, "git-status", OPENCLAW_GIT_STATUS)  # refused permission
+    write_source(sources, "docker-ps", OPENCLAW_UNPOLICED_BIN)  # refused permission
     write_source(sources, "bare", "# No frontmatter at all\n")
     write_source(sources, "broken", "---\nname: x\n\tdescription: tab\n---\n\n# B\n")
     write_source(
@@ -1133,7 +1163,7 @@ def test_cli_migrate_batch_survives_every_kind_of_bad_skill(run_cli, tmp_path):
     assert (skills_root / "pdf-extract").is_dir()
     assert (skills_root / "odd-keys").is_dir()
     # The bad ones are not, and each is named in the report.
-    for name in ("git-status", "bare", "broken", "plain", "latin1"):
+    for name in ("docker-ps", "bare", "broken", "plain", "latin1"):
         assert not (skills_root / name).exists()
         assert name in out, f"{name} was not reported"
     assert "could not be migrated" in err

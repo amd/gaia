@@ -246,19 +246,21 @@ def test_resolve_caller_dev_src_dir_rejects_repo_root_naming_corrected_path(tmp_
     from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir
 
     repo_root = tmp_path / "gaia"
-    repo_root.mkdir()
+    expected_corrected = repo_root / "hub" / "agents" / "email" / "python"
+    expected_corrected.mkdir(parents=True)
 
     with pytest.raises(DevSrcDirResolutionError) as excinfo:
         resolve_caller_dev_src_dir("email", explicit=str(repo_root), cwd=tmp_path)
 
     message = str(excinfo.value)
     assert "restart remedy" not in message
-    expected_corrected = repo_root.resolve() / "hub" / "agents" / "email" / "python"
-    assert str(expected_corrected) in message
+    assert str(expected_corrected.resolve()) in message
     assert str(repo_root.resolve()) in message
 
 
 def test_resolve_caller_dev_src_dir_rejects_unrelated_shape(tmp_path):
+    """issue #3852: a path that isn't a checkout root must not be "corrected"
+    into a joined path that doesn't exist -- state the expected shape instead."""
     from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
     from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir
 
@@ -268,7 +270,49 @@ def test_resolve_caller_dev_src_dir_rejects_unrelated_shape(tmp_path):
     with pytest.raises(DevSrcDirResolutionError) as excinfo:
         resolve_caller_dev_src_dir("email", explicit=str(unrelated), cwd=tmp_path)
 
-    assert "restart remedy" not in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "restart remedy" not in message
+    fabricated = unrelated.resolve() / "hub" / "agents" / "email" / "python"
+    assert str(fabricated) not in message
+    assert "hub/agents/email/python" in message
+    assert "typo" in message
+    assert str(unrelated.resolve()) in message
+
+
+def test_resolve_caller_dev_src_dir_names_other_agent_source_dir(tmp_path):
+    """issue #3852: pointing at ANOTHER agent's dev-src dir is a wrong-agent
+    error, not a checkout-root one, and must never suggest nesting it in itself."""
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir
+
+    other = tmp_path / "gaia" / "hub" / "agents" / "chat" / "python"
+    other.mkdir(parents=True)
+
+    with pytest.raises(DevSrcDirResolutionError) as excinfo:
+        resolve_caller_dev_src_dir("email", explicit=str(other), cwd=tmp_path)
+
+    message = str(excinfo.value)
+    assert "'chat' agent's source directory" in message
+    assert "gaia daemon start-agent chat" in message
+    nested = other.resolve() / "hub" / "agents" / "email" / "python"
+    assert str(nested) not in message
+
+
+def test_resolve_caller_dev_src_dir_other_agent_names_existing_sibling(tmp_path):
+    """The requested agent's sibling dir is named only when it exists."""
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir
+
+    agents = tmp_path / "gaia" / "hub" / "agents"
+    other = agents / "chat" / "python"
+    other.mkdir(parents=True)
+    sibling = agents / "email" / "python"
+    sibling.mkdir(parents=True)
+
+    with pytest.raises(DevSrcDirResolutionError) as excinfo:
+        resolve_caller_dev_src_dir("email", explicit=str(other), cwd=tmp_path)
+
+    assert str(sibling.resolve()) in str(excinfo.value)
 
 
 def test_resolve_caller_dev_src_dir_git_toplevel_joins_agent_dev_src_dir(

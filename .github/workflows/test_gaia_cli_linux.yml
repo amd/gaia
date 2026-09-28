@@ -55,11 +55,46 @@ jobs:
       - name: Install Lemonade Server (PPA)
         run: |
           echo "=== Installing Lemonade Server from the Launchpad PPA ==="
-          # Byte-identical to LemonadeInstaller._install_via_ppa()
+          # Mirrors LemonadeInstaller._install_via_ppa()
           # (src/gaia/installer/lemonade_installer.py) -- GAIA's real Linux
           # install path. lemonade-sdk was removed from PyPI.
-          sudo add-apt-repository -y ppa:lemonade-team/stable
-          sudo apt-get update
+          # pipefail so `| tee` cannot swallow add-apt-repository's exit code.
+          # Its status is deferred, not discarded: the diagnosis below turns a
+          # Launchpad outage into a named error first, and the raw failure is
+          # re-raised after it if the cause was anything else.
+          set -o pipefail
+          add_apt_rc=0
+          sudo add-apt-repository -y ppa:lemonade-team/stable 2>&1 | tee add-apt.log || add_apt_rc=$?
+          sudo apt-get update 2>&1 | tee apt-update.log \
+            || echo "::warning::apt-get update exited non-zero (see log above)"
+
+          # Both commands exit 0 when Launchpad 503s on the PPA, so without this
+          # the job dies at apt-get install with "Unable to locate package" and
+          # reads as a bad package name rather than an upstream outage.
+          # Shares the installer's detection so CI and `gaia init` agree.
+          python - <<'PY'
+          import sys
+          from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+          logs = ""
+          for name in ("add-apt.log", "apt-update.log"):
+              with open(name, encoding="utf-8", errors="replace") as handle:
+                  logs += handle.read()
+
+          outage = diagnose_launchpad_outage(logs)
+          if outage:
+              print(outage)
+              # %0A: a literal newline would truncate the annotation at line 1.
+              print(f"::error title=Launchpad PPA outage::{outage.replace(chr(10), '%0A')}")
+              sys.exit(1)
+          print("Lemonade PPA index resolved")
+          PY
+
+          if [ "$add_apt_rc" -ne 0 ]; then
+            echo "::error::add-apt-repository failed (exit $add_apt_rc) for a reason other than a Launchpad outage -- see add-apt.log above"
+            exit "$add_apt_rc"
+          fi
+
           sudo apt-get install -y lemonade-server
 
           echo "=== Verifying Lemonade Installation ==="

@@ -33,8 +33,9 @@ func key(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-func keyEnter() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyEnter} }
-func keyEsc() tea.KeyMsg   { return tea.KeyMsg{Type: tea.KeyEscape} }
+func keyEnter() tea.KeyMsg     { return tea.KeyMsg{Type: tea.KeyEnter} }
+func keyEsc() tea.KeyMsg       { return tea.KeyMsg{Type: tea.KeyEscape} }
+func keyBackspace() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyBackspace} }
 
 // Frame zero is what a user sees before anything has been probed. It has to
 // name the product — a launch that opens on a blank terminal while a Python
@@ -120,7 +121,7 @@ func TestChatModelWelcome(t *testing.T) {
 // message nothing consumes would leave the user in an alt screen with no way
 // out — so Esc must neither quit nor dispatch anything.
 func TestEscOnAnIdleChatIsSafe(t *testing.T) {
-	m := chat.NewChatModelForFlagship(nil, "gaia", "GAIA", false, true)
+	m := chat.NewChatModelForFlagship(nil, "gaia", "GAIA", "", false, true)
 
 	updated, _ := m.Update(windowSize(120, 40))
 	m = updated.(chat.ChatModel)

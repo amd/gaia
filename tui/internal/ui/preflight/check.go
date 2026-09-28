@@ -230,6 +230,7 @@ type agentsBody struct {
 	Agents []struct {
 		AgentID      string  `json:"agent_id"`
 		State        string  `json:"state"`
+		Mode         *string `json:"mode"`
 		PID          *int    `json:"pid"`
 		AgentVersion *string `json:"agent_version"`
 		APIVersion   *string `json:"api_version"`
@@ -278,6 +279,10 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 			continue
 		}
 		if a.State == "running" {
+			if conflict, conflicts := modeConflictRow(cfg, a.Mode); conflicts {
+				conflict.Raw = row.Raw
+				return conflict.commit(rep)
+			}
 			live := probeSidecarAnswers(ctx, t, cfg)
 			row.Raw = strings.TrimSpace(row.Raw + "\n\n" + live.trace)
 			if !live.answered {
@@ -317,6 +322,43 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 		Where:   daemonLog(),
 	}
 	return row.commit(rep)
+}
+
+// modeConflictRow answers the question the launch is about to ask the daemon:
+// this sidecar is running, but in which mode, and did the caller ask for the
+// other one? Only an EXPLICIT preference conflicts — with no
+// GAIA_<AGENT>_AGENT_MODE set the ensure request carries no mode at all and the
+// daemon attaches to whatever is up.
+//
+// Answering here rather than at the first query is the point: the daemon's 409
+// used to arrive after this gate had passed and the chat header had rendered.
+func modeConflictRow(cfg Config, running *string) (Row, bool) {
+	want, explicit := daemon.CallerMode(cfg.AgentID)
+	if !explicit || running == nil || *running == "" || *running == want {
+		return Row{}, false
+	}
+
+	envVar := daemon.ModeEnvVar(cfg.AgentID)
+	row := Row{Key: KeySidecar}
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = fmt.Sprintf("running in %s mode, %s requested", *running, want)
+	row.Detail = fmt.Sprintf(
+		"The %s agent is already running in %s mode, and %s=%s asks for %s. "+
+			"One process serves both, so the mode cannot change under it.",
+		cfg.AgentName, *running, envVar, want, want)
+	// Stopping a sidecar this machine is running is the user's call, but it is
+	// reversible and scoped to one agent — so it gets the key, and the remedy
+	// names the alternative that needs no restart at all.
+	row.Fix = FixRestartSidecar
+	row.Remedy = Remedy{
+		Action: fmt.Sprintf(
+			"Press f to stop it and start it again in %s mode. To use the one "+
+				"already running instead, unset %s and relaunch.", want, envVar),
+		Command: "gaia daemon stop-agent " + cfg.AgentID,
+		Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
+	}
+	return row, true
 }
 
 func describeSidecar(version *string, pid *int) string {
@@ -473,7 +515,71 @@ func (b initBody) hint() string {
 	return *b.Hint
 }
 
+// checkInit answers the Local AI and AI model rows, starting the local model
+// server first if it is down.
+//
+// GAIA ships with a model server and manages it, so "Lemonade is not running"
+// is not a question to put to the user — it is a thing to fix. The start is
+// asked of the DAEMON (see Transport.StartLemonade): this process never spawns
+// a server and never shells out to the Python CLI, and routing every front-end
+// through the one custody process is what stops two launches racing into two
+// servers fighting over the port.
+//
+// It is attempted exactly once. A second attempt after a genuine failure would
+// re-wait the full start budget to reach the same answer, and every failure the
+// starter reports (not installed, port held by a stranger, the server died) is
+// one that a retry cannot change.
 func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State {
+	state, startable := probeInit(ctx, t, cfg, rep)
+	if !startable {
+		return state
+	}
+	if !autoStartLemonade(ctx, t, cfg, rep) {
+		return StateFailed
+	}
+	state, _ = probeInit(ctx, t, cfg, rep)
+	return state
+}
+
+// autoStartLemonade asks the daemon to start the server and reports whether a
+// re-probe is worth doing. On failure it leaves the Local AI row saying that
+// GAIA tried, why it could not, and what the user can still do.
+func autoStartLemonade(ctx context.Context, t Transport, cfg Config, rep *Report) bool {
+	err := t.StartLemonade(ctx)
+	if err == nil {
+		return true
+	}
+
+	row := Row{Key: KeyLemonade, State: StateFailed, Disposition: status.DispositionHalt}
+	row.Line = "not running — GAIA could not start it"
+	row.Raw = err.Error()
+	row.Fix = FixNone
+
+	var refused *LemonadeStartRefused
+	switch {
+	case !errors.As(err, &refused):
+		// The POST never reached the daemon, so the daemon is the subject — not
+		// Lemonade. Diagnosing this as "start Lemonade" would name the wrong fix.
+		d := Ladder{AgentID: cfg.AgentID}.Error("ask the background service to start the local AI", err)
+		row.Line = "cannot be started"
+		row.Detail = d.Cause
+		row.Remedy = d.AsRemedy()
+	case refused.TooOldToStartLemonade():
+		row.Detail = "The installed GAIA core is older than this app and cannot start the " +
+			"local model server for you. Upgrading it makes every launch do this automatically."
+		row.Remedy = lemonadeStartRemedy()
+	default:
+		row.Detail = "GAIA tried to start the local model server and could not."
+		row.Remedy = lemonadeAutoStartFailedRemedy(refused.Detail)
+	}
+	setRow(rep, row)
+	return false
+}
+
+// probeInit runs GET /v1/<agent>/init and fills both rows from the answer. The
+// second return is true only for the one failure GAIA can repair itself: a
+// local model server that is not running.
+func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State, bool) {
 	l := Ladder{AgentID: cfg.AgentID}
 	lemonade := Row{Key: KeyLemonade}
 	model := Row{Key: KeyModel}
@@ -489,7 +595,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 			StateFailed, "cannot be checked", d.Cause, d.AsRemedy(), err.Error()
 		lemonade.Disposition = status.DispositionHalt
 		setRow(rep, lemonade)
-		return StateFailed
+		return StateFailed, false
 	}
 	raw := string(resp.Body)
 	lemonade.Raw, model.Raw = raw, raw
@@ -502,7 +608,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 			StateFailed, "cannot be checked", d.Cause, d.AsRemedy()
 		lemonade.Disposition = status.DispositionHalt
 		setRow(rep, lemonade)
-		return StateFailed
+		return StateFailed, false
 	}
 
 	// Whatever happens below, the model row keeps the body it was probed with —
@@ -528,7 +634,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 			StateFailed, "cannot be checked", d.Cause, d.AsRemedy()
 		lemonade.Disposition = status.DispositionHalt
 		setRow(rep, lemonade)
-		return StateFailed
+		return StateFailed, false
 	}
 
 	// --- Local AI ---------------------------------------------------------
@@ -540,9 +646,13 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		lemonade.Line = "not running at " + body.Lemonade.BaseURL
 		lemonade.Detail = "GAIA needs a local model server. It runs on your machine; no message text ever leaves it."
 		lemonade.Remedy = d.AsRemedy()
+		// Nothing on this row is a one-KEY fix: the caller starts the server
+		// automatically before the user ever sees it, and once that has failed
+		// pressing f would only repeat it.
+		lemonade.Fix = FixNone
 		if !isLoopback(body.Lemonade.BaseURL) {
-			// The agent is pointed at another machine, so a launcher resolved
-			// against THIS one starts a server nothing will talk to.
+			// The agent is pointed at another machine, so a server started here
+			// is one nothing would talk to. Not startable — by us or the daemon.
 			lemonade.Detail = fmt.Sprintf(
 				"The %s agent is configured to use a model server on another machine (%s), "+
 					"so it has to be started there — starting one here would not be used.",
@@ -553,12 +663,14 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 				Command: "gaia init",
 				Where:   lemonadeDocs,
 			}
+			setRow(rep, lemonade)
+			return StateFailed, false
 		}
-		// The sidecar cannot install or launch Lemonade — that is a host
-		// prerequisite — so there is no honest one-key fix here.
-		lemonade.Fix = FixNone
+		// A LOCAL server that is simply down — the one failure GAIA repairs
+		// itself. The row is filled in anyway: if the daemon cannot start it,
+		// this manually-resolved remedy is what the user falls back to.
 		setRow(rep, lemonade)
-		return StateFailed
+		return StateFailed, true
 
 	case modelListUnreadable(body):
 		// Reachable, but its model list could not be read: `present:false` here
@@ -572,7 +684,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		lemonade.Detail = body.hint()
 		lemonade.Remedy = lemonadeRestartRemedy()
 		setRow(rep, lemonade)
-		return StateFailed
+		return StateFailed, false
 
 	case body.Lemonade.Compatible != nil && !*body.Lemonade.Compatible:
 		lemonade.State = StateFailed
@@ -588,7 +700,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 			Where:   "https://lemonade-server.ai",
 		}
 		setRow(rep, lemonade)
-		return StateFailed
+		return StateFailed, false
 
 	case body.Lemonade.Compatible == nil:
 		// Reachable, but it did not say which version it is. Indeterminate is
@@ -634,7 +746,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 			Where:   "https://amd-gaia.ai/docs/guides/install",
 		}
 		setRow(rep, model)
-		return StateFailed
+		return StateFailed, false
 	}
 
 	model.State = StateOK
@@ -651,7 +763,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		model.Line += fmt.Sprintf(" · %s context", humanCtx(*body.Model.CtxSize))
 	}
 	setRow(rep, model)
-	return model.State
+	return model.State, false
 }
 
 // markCtxShortfall reports a model loaded into a smaller context window than this
@@ -822,8 +934,9 @@ var connectScopes = map[string][]string{
 		"https://www.googleapis.com/auth/calendar.readonly",
 	},
 	"microsoft": {
-		// catalog/microsoft.py default_scopes
-		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+		// catalog/microsoft.py default_scopes — no `openid`: an Entra tenant can
+		// reject the whole authorization request over it (AADSTS65002, #4079).
+		"offline_access", "https://graph.microsoft.com/User.Read",
 		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES (OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES)
 		"https://graph.microsoft.com/Mail.ReadWrite",
 		"https://graph.microsoft.com/Mail.Send",
@@ -831,7 +944,7 @@ var connectScopes = map[string][]string{
 	},
 	"microsoft_work": {
 		// catalog/microsoft.py default_scopes (work tenant — same Graph app registration shape)
-		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+		"offline_access", "https://graph.microsoft.com/User.Read",
 		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES — identical to personal Outlook;
 		// only the connector id (token/grant/keyring slot) differs.
 		"https://graph.microsoft.com/Mail.ReadWrite",

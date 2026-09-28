@@ -8,10 +8,16 @@ from .base_client import LLMClient
 
 _PROVIDERS: dict[str, str] = {
     "lemonade": "gaia.llm.providers.lemonade.LemonadeProvider",
-    "openai": "gaia.llm.providers.openai_provider.OpenAIProvider",
     "claude": "gaia.llm.providers.claude.ClaudeProvider",
-    "litellm": "gaia.llm.providers.litellm.LiteLLMProvider",
 }
+
+
+REMOVED_PROVIDER_MESSAGE = (
+    "The openai/litellm providers and use_openai/use_chatgpt options were removed "
+    "because they discarded tool calls. Configure your local or on-prem model "
+    "in Lemonade and select provider='lemonade' with its base_url and model ID. "
+    "See https://amd-gaia.ai/docs/sdk/sdks/llm#gateway-migration."
+)
 
 
 def create_client(
@@ -20,41 +26,15 @@ def create_client(
     use_openai: bool = False,
     **kwargs,
 ) -> LLMClient:
+    """Create a Lemonade or Claude client.
+
+    ``use_openai`` is retained only to reject legacy callers with migration
+    guidance; it cannot select a backend, even with an explicit provider.
     """
-    Create an LLM client, auto-detecting provider from parameters.
-
-    Args:
-        provider: Explicit provider name ("lemonade", "openai", "claude", or "litellm").
-                  If not specified, auto-detected from use_claude/use_openai flags.
-        use_claude: If True, use Claude provider (ignored if provider is specified)
-        use_openai: If True, use OpenAI provider (ignored if provider is specified)
-        **kwargs: Provider-specific arguments (base_url, model, api_key, etc.)
-
-    Note:
-        The design using these flags maintains backward compatibility
-        while allowing explicit provider selection. If both use_claude and
-        use_openai are False and provider is not specified, the default
-        provider "lemonade" is used. This was deemed better than updating all
-        existing callers with conditional logic and multiple `create_client` calls.
-
-    Returns:
-        LLMClient instance for the specified or detected provider
-
-    Raises:
-        ValueError: If provider is not recognized or both use_claude and use_openai are True
-    """
-    # Auto-detect provider from flags if not explicitly specified
+    if use_openai or (provider and provider.lower() in {"openai", "litellm"}):
+        raise ValueError(REMOVED_PROVIDER_MESSAGE)
     if provider is None:
-        if use_claude and use_openai:
-            raise ValueError(
-                "Cannot specify both use_claude and use_openai. Please choose one."
-            )
-        elif use_claude:
-            provider = "claude"
-        elif use_openai:
-            provider = "openai"
-        else:
-            provider = "lemonade"
+        provider = "claude" if use_claude else "lemonade"
 
     provider_lower = provider.lower()
 

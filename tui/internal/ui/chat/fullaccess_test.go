@@ -1,0 +1,559 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+package chat
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/ui/components"
+)
+
+// permissionClient is a transport that CAN answer a live permission prompt and
+// toggle full access — what the flagship agent's stdio control channel provides.
+type permissionClient struct {
+	nullClient
+	decisions        []client.PermissionDecision
+	confirmIDs       []string
+	fullAccessCalls  []bool
+	launchFullAccess bool
+	err              error
+}
+
+func (c *permissionClient) RespondToolPermission(confirmID string, d client.PermissionDecision) error {
+	if c.err != nil {
+		return c.err
+	}
+	c.decisions = append(c.decisions, d)
+	c.confirmIDs = append(c.confirmIDs, confirmID)
+	return nil
+}
+
+func (c *permissionClient) SetFullAccess(enabled bool) error {
+	if c.err != nil {
+		return c.err
+	}
+	c.fullAccessCalls = append(c.fullAccessCalls, enabled)
+	return nil
+}
+
+func (c *permissionClient) FullAccessAtLaunch() bool { return c.launchFullAccess }
+
+func liveModel(t *testing.T) (ChatModel, *permissionClient) {
+	t.Helper()
+	c := &permissionClient{}
+	m := NewChatModel(c, "gaia", "", false)
+	m.width, m.height = 100, 30
+	return m, c
+}
+
+func gatedShellCall() event.CanonicalNeedsConfirmationEvent {
+	return event.CanonicalNeedsConfirmationEvent{
+		Type: "needs_confirmation", RunID: "run-1", Action: "run_shell_command",
+		Summary: `Run 'run_shell_command' with command="pwd"?`, ConfirmID: "cid-1",
+		AlwaysScope: "pwd",
+	}
+}
+
+// --- the modal, end to end -------------------------------------------------
+
+// The original defect in one test: the prompt named only the tool, and nothing
+// on screen told the user they could answer it.
+func TestGatedCallShowsTheCommandAndAllThreeChoices(t *testing.T) {
+	m, _ := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+
+	view := m.View()
+	for _, want := range []string{
+		`command="pwd"`,
+		"y run once",
+		"a allow `pwd` this session",
+		"n/esc deny",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the modal does not offer %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestEachDecisionReachesTheAgent(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want client.PermissionDecision
+	}{
+		{"y", client.PermissionAllow},
+		{"a", client.PermissionAlways},
+		{"n", client.PermissionDeny},
+	} {
+		t.Run(string(tc.want), func(t *testing.T) {
+			m, c := liveModel(t)
+			m.streaming = true
+			m = feed(t, m, gatedShellCall())
+
+			updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
+			m = updated.(ChatModel)
+			if cmd == nil {
+				t.Fatalf("%q produced no decision", tc.key)
+			}
+			decided := cmd().(components.ConfirmationDecidedMsg)
+			updated2, deliver := m.Update(decided)
+			m = updated2.(ChatModel)
+			if deliver == nil {
+				t.Fatal("a live decision must be delivered, not just recorded")
+			}
+			deliver()
+
+			if len(c.decisions) != 1 || c.decisions[0] != tc.want {
+				t.Errorf("delivered %v, want [%v]", c.decisions, tc.want)
+			}
+			if len(c.confirmIDs) != 1 || c.confirmIDs[0] != "cid-1" {
+				t.Errorf("the prompt id was lost: %v", c.confirmIDs)
+			}
+			if m.confirmation != nil {
+				t.Error("a resolved confirmation must clear")
+			}
+		})
+	}
+}
+
+// Esc still means deny here, and the denial is actually sent — the agent is
+// blocked waiting for it, so "recorded locally" would hang the run.
+func TestEscDeniesAndTellsTheAgent(t *testing.T) {
+	m, c := liveModel(t)
+	m.streaming = true
+	m.cancelFn = func() { t.Error("Esc on a pending confirmation must not cancel the turn") }
+	m = feed(t, m, gatedShellCall())
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+	decided := cmd().(components.ConfirmationDecidedMsg)
+	if decided.Approved {
+		t.Fatal("Esc must never approve")
+	}
+	_, deliver := m.Update(decided)
+	deliver()
+	if len(c.decisions) != 1 || c.decisions[0] != client.PermissionDeny {
+		t.Errorf("Esc did not deliver a denial: %v", c.decisions)
+	}
+}
+
+// A live prompt is bounded, but on a clock long enough that reading it is not
+// a way to lose the call.
+//
+// Two regressions meet here and pull in opposite directions. A 30s auto-deny
+// made every gated tool unusable — the user paused to read, and the call was
+// refused on their behalf. Removing the bound entirely turned a prompt the
+// user never saw into a turn that could not end: 442s of spinner and no
+// visible question, ended only by Esc. So the tick must fire, must deny rather
+// than approve, and must be far enough out that no real decision reaches it.
+func TestALivePromptIsBoundedButNotRushed(t *testing.T) {
+	if components.DeliverableConfirmationTimeout < 5*time.Minute {
+		t.Errorf("a live prompt gets only %v to be answered — too short to read and decide",
+			components.DeliverableConfirmationTimeout)
+	}
+
+	m, _ := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+
+	updated, cmd := m.Update(components.ConfirmationTimeoutMsg{RunID: "run-1"})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("the tick must resolve the prompt — an unbounded turn can never end")
+	}
+	decided := cmd().(components.ConfirmationDecidedMsg)
+	if decided.Approved {
+		t.Fatal("expiry must never approve")
+	}
+	if !decided.TimedOut {
+		t.Error("the decision must be marked an expiry, so the user is told why")
+	}
+}
+
+// A failed delivery strands the agent, so it is surfaced rather than swallowed.
+func TestAFailedDecisionDeliveryIsSurfaced(t *testing.T) {
+	m, c := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+	c.err = errPermissionChannelGone
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(ChatModel)
+	decided := cmd().(components.ConfirmationDecidedMsg)
+	_, deliver := m.Update(decided)
+	result := deliver()
+
+	updated2, _ := m.Update(result)
+	m = updated2.(ChatModel)
+	last := m.messages[len(m.messages)-1]
+	if last.Role != RoleError || !strings.Contains(last.Content, "channel is gone") {
+		t.Errorf("a delivery failure was not surfaced: %+v", last)
+	}
+}
+
+// --- full access mode -----------------------------------------------------------
+
+func TestFullAccessIsOffOnAFreshModel(t *testing.T) {
+	m, _ := liveModel(t)
+	if m.fullAccess {
+		t.Fatal("full access must be off on a fresh launch")
+	}
+	if strings.Contains(m.View(), "FULL ACCESS") {
+		t.Error("no banner may show when full access is off")
+	}
+}
+
+// Turning it ON takes two deliberate steps; the first one only explains.
+func TestTurningFullAccessOnIsDeliberate(t *testing.T) {
+	m, c := liveModel(t)
+
+	updated, _ := m.submit("/full-access")
+	m = updated.(ChatModel)
+	if m.fullAccess {
+		t.Fatal("/full-access alone must not enable anything")
+	}
+	if len(c.fullAccessCalls) != 0 {
+		t.Errorf("nothing should have reached the agent yet: %v", c.fullAccessCalls)
+	}
+	explained := m.messages[len(m.messages)-1].Content
+	for _, want := range []string{"every tool", "/full-access confirm"} {
+		if !strings.Contains(explained, want) {
+			t.Errorf("the warning must contain %q, got: %q", want, explained)
+		}
+	}
+
+	updated, _ = m.submit("/full-access confirm")
+	m = updated.(ChatModel)
+	if !m.fullAccess {
+		t.Fatal("/full-access confirm must enable full access")
+	}
+	if len(c.fullAccessCalls) != 1 || !c.fullAccessCalls[0] {
+		t.Errorf("the agent was not told to turn on full access: %v", c.fullAccessCalls)
+	}
+}
+
+// Confirming out of the blue must not work — the warning is the point.
+func TestFullAccessConfirmWithoutTheWarningDoesNothing(t *testing.T) {
+	m, c := liveModel(t)
+	updated, _ := m.submit("/full-access confirm")
+	m = updated.(ChatModel)
+	if m.fullAccess || len(c.fullAccessCalls) != 0 {
+		t.Error("an unprompted /full-access confirm must not enable full access")
+	}
+}
+
+// While it is on, every frame says so — and the banner lives outside the
+// viewport, so scrolling cannot take it away.
+func TestFullAccessBannerIsOnEveryFrame(t *testing.T) {
+	m, _ := liveModel(t)
+	updated, _ := m.submit("/full-access")
+	m = updated.(ChatModel)
+	updated, _ = m.submit("/full-access confirm")
+	m = updated.(ChatModel)
+
+	view := m.View()
+	if !strings.Contains(view, "FULL ACCESS") {
+		t.Fatalf("no full-access banner:\n%s", view)
+	}
+	if !strings.Contains(view, "/full-access off") {
+		t.Errorf("the banner must say how to stop:\n%s", view)
+	}
+
+	// Scrolled away from the tail, the banner is still there.
+	m.followTail = false
+	m.viewport.GotoTop()
+	if !strings.Contains(m.View(), "FULL ACCESS") {
+		t.Error("the banner must not be scrollable out of view")
+	}
+
+	// And the always-drawn status row carries it too.
+	if !strings.Contains(fitHints(m.statusHints(), m.hintBudget()), "/full-access off") {
+		t.Error("the status bar must carry the way out of full access")
+	}
+}
+
+func TestTurningFullAccessOffIsOneStep(t *testing.T) {
+	m, c := liveModel(t)
+	m.fullAccess = true
+
+	updated, _ := m.submit("/full-access")
+	m = updated.(ChatModel)
+	if m.fullAccess {
+		t.Fatal("/full-access while on must turn it off immediately")
+	}
+	if len(c.fullAccessCalls) != 1 || c.fullAccessCalls[0] {
+		t.Errorf("the agent was not told to stop bypassing: %v", c.fullAccessCalls)
+	}
+	if strings.Contains(m.View(), "FULL ACCESS —") {
+		t.Error("the banner must go the instant full access is off")
+	}
+}
+
+// A transport that cannot carry the toggle must not leave a banner claiming an
+// autonomy the agent is not actually in.
+func TestFullAccessIsNotClaimedWhenTheAgentCannotBeTold(t *testing.T) {
+	m, c := liveModel(t)
+	c.err = errPermissionChannelGone
+
+	updated, _ := m.submit("/full-access")
+	m = updated.(ChatModel)
+	updated, _ = m.submit("/full-access confirm")
+	m = updated.(ChatModel)
+
+	if m.fullAccess {
+		t.Fatal("full access must not be claimed locally when the agent was never told")
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.Role != RoleError {
+		t.Errorf("the failure must be surfaced: %+v", last)
+	}
+}
+
+// A transport with no control channel at all says so rather than pretending.
+func TestFullAccessOnATransportWithoutAChannel(t *testing.T) {
+	m, _ := newTestModel(t)
+	updated, _ := m.submit("/full-access")
+	m = updated.(ChatModel)
+	updated, _ = m.submit("/full-access confirm")
+	m = updated.(ChatModel)
+
+	if m.fullAccess {
+		t.Fatal("a transport with no control channel cannot enter full access")
+	}
+}
+
+// The launch flag shows the banner from the first frame, not only after a
+// manual toggle.
+func TestLaunchFlagShowsTheBannerImmediately(t *testing.T) {
+	c := &permissionClient{launchFullAccess: true}
+	m := NewChatModel(c, "gaia", "", false)
+	m.width, m.height = 100, 30
+
+	if !m.fullAccess {
+		t.Fatal("--full-access must be reflected at launch")
+	}
+	if !strings.Contains(m.View(), "FULL ACCESS") {
+		t.Error("the banner must be up from the very first frame")
+	}
+}
+
+// The full-access forms never reach the agent as a question — in either the
+// current spelling or the retired /bypass one, which gets a rename notice.
+func TestFullAccessCommandsAreNeverSentAsQueries(t *testing.T) {
+	for _, cmd := range []string{
+		"/full-access", "/full-access on", "/full-access off", "/full-access confirm",
+		"/full-access always", "/full-access never",
+		"/bypass", "/bypass on", "/bypass off", "/bypass confirm",
+	} {
+		if !isFullAccessCommand(cmd) {
+			t.Errorf("%q must be recognised as a local command", cmd)
+		}
+	}
+	if isFullAccessCommand("what does /full-access do") {
+		t.Error("a question about full access is still a question")
+	}
+}
+
+// A call the agent would not scope offers only y/n in the live chat view. This
+// is the guard against one keypress on a single `gh` command handing over the
+// shell for the session: the agent decides what is grantable, and a bare
+// `bash -c ...` is not.
+func TestChatDoesNotOfferAlwaysWithoutAScope(t *testing.T) {
+	m, c := liveModel(t)
+	m.streaming = true
+	evt := gatedShellCall()
+	evt.AlwaysScope = ""
+	m = feed(t, m, evt)
+
+	if strings.Contains(m.View(), " a allow ") {
+		t.Errorf("always offered for an unscopable call:\n%s", m.View())
+	}
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(ChatModel)
+	if cmd != nil {
+		t.Error("'a' must not resolve a confirmation the agent would not scope")
+	}
+	if m.confirmation == nil || !m.confirmation.Pending() {
+		t.Fatal("the prompt must still be waiting")
+	}
+	if len(c.decisions) != 0 {
+		t.Errorf("nothing should have been delivered: %v", c.decisions)
+	}
+}
+
+// The transcript records the SCOPE that was granted, not the tool - so reading
+// back the session says what was actually handed over.
+func TestTranscriptRecordsTheGrantedScope(t *testing.T) {
+	m, _ := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(ChatModel)
+	decided := cmd().(components.ConfirmationDecidedMsg)
+	updated2, _ := m.Update(decided)
+	m = updated2.(ChatModel)
+
+	last := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(last, "'pwd'") {
+		t.Errorf("the record must name the granted scope, got: %q", last)
+	}
+	if strings.Contains(last, "run_shell_command' will not ask") {
+		t.Errorf("the record must not read as a tool-wide grant: %q", last)
+	}
+}
+
+// errPermissionChannelGone stands in for a dead control channel.
+var errPermissionChannelGone = errTest("the permission channel is gone")
+
+type errTest string
+
+func (e errTest) Error() string { return string(e) }
+
+// ---------------------------------------------------------------------------
+// The persisted preference: /full-access always | never
+// ---------------------------------------------------------------------------
+
+func configAt(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("GAIA_CONFIG_FILE", path)
+	return path
+}
+
+func savedFullAccess(t *testing.T, path string) bool {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no config written: %v", err)
+	}
+	var doc struct {
+		FullAccess bool `json:"full_access"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("config is not valid JSON: %v", err)
+	}
+	return doc.FullAccess
+}
+
+// Saving the preference must not be a back door around being told what the
+// mode does — it still arms, and still needs the explicit confirm.
+func TestAlwaysSavesButStillAsksBeforeTurningOn(t *testing.T) {
+	path := configAt(t)
+	c := &permissionClient{}
+	m := NewChatModel(c, "gaia", "", false)
+
+	updated, _ := m.submit("/full-access always")
+	m = updated.(ChatModel)
+
+	if !savedFullAccess(t, path) {
+		t.Error("the preference must be saved")
+	}
+	if m.fullAccess {
+		t.Error("saving a preference must not skip the confirmation step")
+	}
+	if len(c.fullAccessCalls) != 0 {
+		t.Errorf("nothing should have reached the agent yet: %v", c.fullAccessCalls)
+	}
+
+	updated, _ = m.submit("/full-access confirm")
+	if !updated.(ChatModel).fullAccess {
+		t.Error("confirm after always must turn it on")
+	}
+}
+
+func TestNeverClearsThePreference(t *testing.T) {
+	path := configAt(t)
+	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+
+	updated, _ := m.submit("/full-access always")
+	_, _ = updated.(ChatModel).submit("/full-access never")
+
+	if savedFullAccess(t, path) {
+		t.Error("never must clear the saved preference")
+	}
+}
+
+// "never" is about future launches; "off" is about this one. One command must
+// not quietly do the other's job.
+func TestNeverLeavesTheCurrentSessionAloneAndSaysSo(t *testing.T) {
+	configAt(t)
+	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+
+	updated, _ := m.submit("/full-access")
+	updated, _ = updated.(ChatModel).submit("/full-access confirm")
+	m = updated.(ChatModel)
+	if !m.fullAccess {
+		t.Fatal("precondition: full access should be on")
+	}
+
+	updated, _ = m.submit("/full-access never")
+	m = updated.(ChatModel)
+
+	if !m.fullAccess {
+		t.Error("never must not turn the running session off")
+	}
+	last := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(last, "/full-access off") {
+		t.Errorf("it must say how to stop it NOW, got: %q", last)
+	}
+}
+
+// A save that cannot happen must be reported, never assumed.
+func TestAFailedSaveIsReported(t *testing.T) {
+	dir := t.TempDir()
+	// A directory where the config file should be: writing there always fails.
+	t.Setenv("GAIA_CONFIG_FILE", dir)
+
+	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	updated, _ := m.submit("/full-access always")
+	m = updated.(ChatModel)
+
+	last := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(last, "Could not save") {
+		t.Errorf("a failed save must say so, got: %q", last)
+	}
+}
+
+func TestTheTurnOnPromptMentionsMakingItPermanent(t *testing.T) {
+	configAt(t)
+	m := NewChatModel(&permissionClient{}, "gaia", "", false)
+	updated, _ := m.submit("/full-access")
+
+	explained := updated.(ChatModel).messages[len(updated.(ChatModel).messages)-1].Content
+	if !strings.Contains(explained, "/full-access always") {
+		t.Errorf("the prompt is where you learn it can be permanent, got: %q", explained)
+	}
+}
+
+func TestTheRetiredBypassCommandPointsAtTheNewName(t *testing.T) {
+	c := &permissionClient{}
+	m := NewChatModel(c, "gaia", "", false)
+	for _, cmd := range []string{"/bypass", "/bypass on", "/bypass confirm", "/bypass off"} {
+		updated, _ := m.submit(cmd)
+		got := updated.(ChatModel)
+		if got.fullAccess || len(c.fullAccessCalls) != 0 {
+			t.Fatalf("%q must not change the mode", cmd)
+		}
+		if last := got.messages[len(got.messages)-1].Content; !strings.Contains(last, "/full-access") {
+			t.Errorf("%q must name the new command, got %q", cmd, last)
+		}
+	}
+}
+
+func TestASavedPreferenceNoticeReachesTheTranscript(t *testing.T) {
+	m := NewChatModel(&permissionClient{}, "gaia", "", false).WithNotice("[!] prompts are ON")
+	if last := m.messages[len(m.messages)-1].Content; last != "[!] prompts are ON" {
+		t.Errorf("notice not shown: %q", last)
+	}
+}

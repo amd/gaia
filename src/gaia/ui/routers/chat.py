@@ -171,7 +171,10 @@ async def send_message(
         else:
             try:
                 db.add_message(request.session_id, "user", request.message)
-                response_text = await srv._get_chat_response(db, session, request)
+                model_messages = []
+                response_text = await srv._get_chat_response(
+                    db, session, request, model_messages=model_messages
+                )
                 # Clean LLM output artifacts (same pipeline as streaming path)
                 if response_text:
                     response_text = _clean_answer_json(response_text)
@@ -180,7 +183,12 @@ async def send_message(
                     response_text = _RAG_RESULT_JSON_SUB_RE.sub("", response_text)
                     response_text = _fix_double_escaped(response_text)
                     response_text = response_text.strip()
-                msg_id = db.add_message(request.session_id, "assistant", response_text)
+                msg_id = db.add_message(
+                    request.session_id,
+                    "assistant",
+                    response_text,
+                    model_messages=model_messages or None,
+                )
                 # Notify AgentLoop after the non-streaming response completes
                 _notify_loop(request.session_id)
 
@@ -247,6 +255,53 @@ async def confirm_tool(request: ToolConfirmRequest):
         )
     handler.resolve_tool_confirmation(request.approved)
     return {"status": "ok", "approved": request.approved}
+
+
+class UserInputRequest(BaseModel):
+    """Request body for answering a mid-run ``needs_input`` question."""
+
+    session_id: str
+    request_id: str
+    value: str
+
+
+@router.post("/api/chat/user-input")
+async def user_input(request: UserInputRequest):
+    """Answer a mid-run ``needs_input`` question from the agent (#2595).
+
+    Two run shapes can be waiting on this: an in-process agent blocked in
+    ``SSEOutputHandler.request_user_input_blocking()`` (resolved via
+    ``resolve_user_input``), or an email-relay run blocked on the sidecar's
+    own ``/query`` loop (resolved via ``resolve_relay_input``, which posts to
+    the sidecar). Tried in that order; a session with neither pending is a
+    404, never a silent no-op accept.
+    """
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    from .._chat_helpers import _active_sse_handlers
+
+    handler = _active_sse_handlers.get(request.session_id)
+    if not handler:
+        raise HTTPException(
+            status_code=404,
+            detail="No active chat session found for this session ID",
+        )
+    delivered = handler.resolve_user_input(request.request_id, request.value)
+    if not delivered:
+        try:
+            delivered = handler.resolve_relay_input(request.request_id, request.value)
+        except SidecarError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Could not deliver the answer: {exc}",
+            ) from exc
+    if not delivered:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending question for this session (it may have already "
+            "timed out or been answered).",
+        )
+    return {"status": "ok", "request_id": request.request_id}
 
 
 class CancelStreamRequest(BaseModel):

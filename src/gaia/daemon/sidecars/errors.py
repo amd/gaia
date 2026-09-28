@@ -65,12 +65,19 @@ class SidecarHTTPError(SidecarError):
     into a generic ``HTTPError``.
     """
 
-    def __init__(self, status_code: int, detail: str, *, path: str = ""):
+    def __init__(
+        self, status_code: int, detail: str, *, path: str = "", agent_id: str = ""
+    ):
         self.status_code = status_code
         self.detail = detail
         self.path = path
+        self.agent_id = agent_id
         where = f" from {path}" if path else ""
-        super().__init__(f"email sidecar returned HTTP {status_code}{where}: {detail}")
+        # Defaults to the bare noun rather than "email": since #4161 more than
+        # one agent raises this, and a flagship failure that says "email
+        # sidecar" sends the reader to the wrong log.
+        who = f"{agent_id} sidecar" if agent_id else "sidecar"
+        super().__init__(f"{who} returned HTTP {status_code}{where}: {detail}")
 
 
 class VersionMismatchError(SidecarError):

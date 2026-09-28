@@ -763,6 +763,8 @@ async def query(request: AgentQueryRequest) -> StreamingResponse:
         session.agent.console = handler
 
         def _run_agent() -> None:
+            answer = ""
+            error_message: Optional[str] = None
             try:
                 if memory_note:
                     handler._emit(
@@ -771,16 +773,21 @@ async def query(request: AgentQueryRequest) -> StreamingResponse:
                 result = session.agent.process_query(request.message)
                 answer = _extract_answer(result)
                 session.history.append((request.message, answer))
-                handler._emit({"type": "run_complete", "answer": answer})
             except Exception as exc:  # surface loudly into the stream
                 logger.exception(
                     "email agent run failed for session %s", session.session_id
                 )
-                handler._emit({"type": "error", "message": str(exc)})
-                handler._emit({"type": "run_complete", "answer": ""})
+                error_message = str(exc)
             finally:
+                # Release BEFORE signalling done (#2919): the client can see
+                # ``run_complete`` and immediately resend on this session —
+                # the lock must already be free by then, or that resend gets
+                # a spurious 409.
                 session.handler = None
                 session.run_lock.release()
+            if error_message is not None:
+                handler._emit({"type": "error", "message": error_message})
+            handler._emit({"type": "run_complete", "answer": answer})
 
         thread = threading.Thread(target=_run_agent, daemon=True)
         thread.start()

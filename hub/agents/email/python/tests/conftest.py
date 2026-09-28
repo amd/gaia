@@ -113,3 +113,28 @@ def _reset_model_select_cache_between_tests():
     _reset_model_select_cache()
     yield
     _reset_model_select_cache()
+
+
+@pytest.fixture(autouse=True)
+def _stop_test_owned_email_schedulers(monkeypatch):
+    """Join real scheduler threads before pytest tears down capture and temp DBs.
+
+    Agent construction starts a polling scheduler by default. Tests which only
+    exercise preferences or memory still own that worker; letting it outlive
+    the test races interpreter shutdown while it logs a fresh DB connection.
+    Keep the real scheduler behavior and explicitly release every instance.
+    """
+    from gaia_agent_email.scheduler import EmailJobScheduler
+
+    schedulers = []
+    original_init = EmailJobScheduler.__init__
+    original_stop = EmailJobScheduler.stop
+
+    def tracked_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        schedulers.append(self)
+
+    monkeypatch.setattr(EmailJobScheduler, "__init__", tracked_init)
+    yield
+    for scheduler in reversed(schedulers):
+        original_stop(scheduler)

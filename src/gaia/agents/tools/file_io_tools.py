@@ -11,17 +11,61 @@ inherited by agents that need file manipulation capabilities.
 import ast
 import difflib
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
 from gaia.agents.base.tools import tool
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
-    record_read,
-    record_write,
+    file_read_record,
+    read_first_preflight,
+    stamp_of,
 )
 from gaia.logger import get_logger
+from gaia.security import BackupError
 
 logger = get_logger(__name__)
+
+
+def _resolve_target(file_path: str, project_dir: Optional[str] = None) -> Path:
+    """Where write_file / edit_file act: ``file_path``, under ``project_dir``."""
+    path = Path(file_path)
+    if project_dir and not path.is_absolute():
+        path = Path(project_dir).resolve() / path
+    return path.resolve()
+
+
+def _project_target(args: Dict[str, Any]) -> Path:
+    return _resolve_target(args["file_path"], args.get("project_dir"))
+
+
+def _file_path_target(args: Dict[str, Any]) -> str:
+    return args["file_path"]
+
+
+def _gaia_md_target(args: Dict[str, Any]) -> str:
+    return os.path.join(args.get("project_root", "."), "GAIA.md")
+
+
+def _directory_path_error(file_path: str) -> Dict[str, Any]:
+    """Error payload for a tool that expects a file but was given a directory.
+
+    ``os.path.exists`` is true for a directory, so the existing-path guard lets
+    it through to ``open()``, which raises ``IsADirectoryError`` into the
+    generic exception handler as a raw errno string (#3890). The message here
+    stays tool-agnostic rather than naming a specific listing tool, since
+    ``browse_directory`` isn't registered for every agent that composes this
+    mixin.
+    """
+    return {
+        "status": "error",
+        "error": (
+            f"'{file_path}' is a directory, not a file. List its contents "
+            "first, then use this tool on a file inside it."
+        ),
+    }
 
 
 def _show_after_write(console: Any, show: Callable[[Any], None]) -> Optional[str]:
@@ -157,19 +201,46 @@ def _function_span(node, lines: list) -> tuple:
     return start, node.end_lineno
 
 
+_PATH_VALIDATOR_HINT = "Set self.path_validator = <PathValidator instance>."
+_PATH_VALIDATOR_DOC_ANCHOR = "docs/spec/file-io-tools-mixin.mdx#host-agent-contract"
+
+
+def _require_path_validator(host: Any) -> Any:
+    """Read ``host.path_validator``, raising loudly if never bound."""
+    return require_host_attr(
+        host,
+        "path_validator",
+        "FileIOToolsMixin",
+        _PATH_VALIDATOR_HINT,
+        _PATH_VALIDATOR_DOC_ANCHOR,
+    )
+
+
+def _missing_path_validator_write_error(host: Any) -> Dict[str, Any]:
+    """Structured error for a write tool whose host never bound path_validator.
+
+    Write tools report this instead of raising so a caller mid-loop gets a
+    normal tool result to react to, using the same message shape as every
+    other reporting path in this module.
+    """
+    return {
+        "status": "error",
+        "error": missing_host_attr_message(
+            host,
+            "path_validator",
+            "FileIOToolsMixin",
+            _PATH_VALIDATOR_HINT,
+            _PATH_VALIDATOR_DOC_ANCHOR,
+        ),
+    }
+
+
 class FileIOToolsMixin:
     """Mixin class providing file I/O tools for code agents.
 
     This class provides a collection of file I/O operations as tools that can be
     registered and used by agents. It includes reading, writing, editing, searching,
     and diffing capabilities for Python files.
-
-    Attributes (provided by CodeAgent via ValidationAndParsingMixin):
-        _validate_python_syntax: Method to validate Python syntax
-        _parse_python_code: Method to parse Python code and extract structure
-
-    NOTE: This mixin expects the agent to also have ValidationAndParsingMixin
-    for _validate_python_syntax() and _parse_python_code() methods.
     """
 
     def get_file_editing_system_prompt(self) -> str:
@@ -186,23 +257,38 @@ class FileIOToolsMixin:
         preferred about half the time (#3600) — but the omission was not
         deliberate and this is the largest single lever measured.
         """
+        registry = getattr(self, "_tools_registry", {})
+        # edit_file alone, not both: ChatAgent pops edit_python_file out of
+        # every profile that registers this mixin, so requiring the pair would
+        # silence the fragment everywhere it is supposed to apply.
+        if "edit_file" not in registry:
+            return ""
+        python_clause = (
+            ", or edit_python_file for .py when you want the edit syntax-checked"
+            if "edit_python_file" in registry
+            else ""
+        )
         return (
             "==== CHANGING A FILE ====\n"
             "To change a file, call edit_file with the exact existing text as "
-            "old_content, or edit_python_file for .py when you want the edit "
-            "syntax-checked. Both work on any text file — source, documentation, "
-            "configuration.\n"
+            f"old_content{python_clause}. It works on any text file — source, "
+            "documentation, configuration.\n"
             "Do not shell out to sed, awk, python or a heredoc to rewrite a file: "
             "the edit tools validate the path, keep a backup and report what "
             "changed, and a shell rewrite does none of that.\n"
-            "Do not re-read a file whose content you already hold — edit it directly."
+            "Read a file with read_file before you change it. The edit tools "
+            "refuse a file you have not read this way — content you already "
+            "hold from a search hit or a shell command does not count, and the "
+            "file may have changed since."
         )
 
     def register_file_io_tools(self) -> None:
         """Register all file I/O tools."""
 
         @tool
-        def read_file(file_path: str) -> Dict[str, Any]:
+        def read_file(
+            file_path: str, offset: int = 0, limit: Optional[int] = None
+        ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
             Automatically detects file type and provides appropriate analysis:
@@ -212,19 +298,36 @@ class FileIOToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for a bounded text page.
+                limit: Page size (1..8000 characters); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
             """
+            path_validator = _require_path_validator(self)
             try:
                 # Scope *and* secrets: being in an allowed directory never made
                 # a private key safe to read into the conversation.
-                is_allowed, reason = self.path_validator.validate_read(file_path)
+                is_allowed, reason = path_validator.validate_read(file_path)
                 if not is_allowed:
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
+
+                reads = file_read_record(self)
+                seen = stamp_of(file_path)
+
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    page = read_text_page(
+                        file_path, offset, 8000 if limit is None else limit
+                    )
+                    reads.note(file_path, seen)
+                    return {"status": "success", "file_path": file_path, **page}
 
                 # Read file content
                 try:
@@ -234,6 +337,8 @@ class FileIOToolsMixin:
                     # Binary file
                     with open(file_path, "rb") as f:
                         content_bytes = f.read()
+                    # Recorded too: this is all a read can show of it.
+                    reads.note(file_path, seen)
                     return {
                         "status": "success",
                         "file_path": file_path,
@@ -243,8 +348,7 @@ class FileIOToolsMixin:
                         "size_bytes": len(content_bytes),
                     }
 
-                # Anchor later edits to what the agent actually saw.
-                record_read(file_path, content)
+                reads.note(file_path, seen)
 
                 # Detect file type by extension
                 ext = os.path.splitext(file_path)[1].lower()
@@ -264,63 +368,40 @@ class FileIOToolsMixin:
 
                     result["file_type"] = "python"
 
-                    # Validate syntax — use mixin method if available (CodeAgent),
-                    # otherwise fall back to stdlib ast (graceful degradation for ChatAgent)
-                    if hasattr(self, "_validate_python_syntax"):
-                        validation = self._validate_python_syntax(content)
-                        result["is_valid"] = validation["is_valid"]
-                        result["errors"] = validation.get("errors", [])
-                        is_valid = validation["is_valid"]
-                    else:
-                        try:
-                            ast.parse(content)
-                            result["is_valid"] = True
-                            result["errors"] = []
-                            is_valid = True
-                        except SyntaxError as e:
-                            result["is_valid"] = False
-                            result["errors"] = [str(e)]
-                            is_valid = False
+                    try:
+                        ast.parse(content)
+                        result["is_valid"] = True
+                        result["errors"] = []
+                        is_valid = True
+                    except SyntaxError as e:
+                        result["is_valid"] = False
+                        result["errors"] = [str(e)]
+                        is_valid = False
 
                     # Extract symbols
                     if is_valid:
-                        if hasattr(self, "_parse_python_code"):
-                            parsed = self._parse_python_code(content)
-                            # Handle both ParsedCode object and dict (for backward compat)
-                            if hasattr(parsed, "symbols"):
-                                result["symbols"] = [
-                                    {"name": s.name, "type": s.type, "line": s.line}
-                                    for s in parsed.symbols
-                                ]
-                            elif hasattr(parsed, "ast_tree"):
-                                tree = parsed.ast_tree
-                            else:
-                                tree = None
-                        else:
-                            tree = ast.parse(content)
-
-                        if "symbols" not in result:
-                            symbols = []
-                            for node in ast.walk(tree):
-                                if isinstance(
-                                    node, (ast.FunctionDef, ast.AsyncFunctionDef)
-                                ):
-                                    symbols.append(
-                                        {
-                                            "name": node.name,
-                                            "type": "function",
-                                            "line": node.lineno,
-                                        }
-                                    )
-                                elif isinstance(node, ast.ClassDef):
-                                    symbols.append(
-                                        {
-                                            "name": node.name,
-                                            "type": "class",
-                                            "line": node.lineno,
-                                        }
-                                    )
-                            result["symbols"] = symbols
+                        tree = ast.parse(content)
+                        symbols = []
+                        for node in ast.walk(tree):
+                            if isinstance(
+                                node, (ast.FunctionDef, ast.AsyncFunctionDef)
+                            ):
+                                symbols.append(
+                                    {
+                                        "name": node.name,
+                                        "type": "function",
+                                        "line": node.lineno,
+                                    }
+                                )
+                            elif isinstance(node, ast.ClassDef):
+                                symbols.append(
+                                    {
+                                        "name": node.name,
+                                        "type": "class",
+                                        "line": node.lineno,
+                                    }
+                                )
+                        result["symbols"] = symbols
 
                 # Markdown file - extract structure
                 elif ext == ".md":
@@ -353,7 +434,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
         def write_python_file(
             file_path: str,
             content: str,
@@ -361,6 +442,8 @@ class FileIOToolsMixin:
             create_dirs: bool = True,
         ) -> Dict[str, Any]:
             """Write Python code to a file.
+
+            Overwriting an existing file requires reading it with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -375,16 +458,13 @@ class FileIOToolsMixin:
                 Dictionary with write operation results
             """
             try:
-                # Validate syntax if requested (graceful degradation: stdlib ast if no mixin)
+                # Validate syntax if requested
                 if validate:
-                    if hasattr(self, "_validate_python_syntax"):
-                        validation = self._validate_python_syntax(content)
-                    else:
-                        try:
-                            ast.parse(content)
-                            validation = {"is_valid": True, "errors": []}
-                        except SyntaxError as e:
-                            validation = {"is_valid": False, "errors": [str(e)]}
+                    try:
+                        ast.parse(content)
+                        validation = {"is_valid": True, "errors": []}
+                    except SyntaxError as e:
+                        validation = {"is_valid": False, "errors": [str(e)]}
                     if not validation["is_valid"]:
                         return {
                             "status": "error",
@@ -394,22 +474,37 @@ class FileIOToolsMixin:
 
                 content_size = len(content.encode("utf-8"))
 
-                # Security: validate write access (path, blocklist, size)
+                # Security: validate write access (path, blocklist, size).
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
-                if path_validator is not None:
-                    is_allowed, reason = path_validator.validate_write(
-                        str(file_path), content_size=content_size
-                    )
-                    if not is_allowed:
-                        path_validator.audit_write(
-                            "write", str(file_path), content_size, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                if path_validator is None:
+                    return _missing_path_validator_write_error(self)
 
-                    # Backup existing file before overwrite
-                    backup_path = None
-                    if os.path.exists(file_path):
-                        backup_path = path_validator.create_backup(str(file_path))
+                is_allowed, reason = path_validator.validate_write(
+                    str(file_path), content_size=content_size
+                )
+                if not is_allowed:
+                    path_validator.audit_write(
+                        "write", str(file_path), content_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path, "overwriting")
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        str(file_path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
+
+                # Backup existing file before overwrite
+                backup_path = None
+                if os.path.exists(file_path):
+                    backup_path = path_validator.create_backup(str(file_path))
 
                 # Create parent directories if needed
                 if create_dirs and os.path.dirname(file_path):
@@ -418,14 +513,13 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                record_write(str(file_path), content)
+                reads.note(file_path)
 
                 # Audit successful write
-                if path_validator is not None:
-                    detail = f"backup={backup_path}" if backup_path else ""
-                    path_validator.audit_write(
-                        "write", str(file_path), content_size, "success", detail
-                    )
+                detail = f"backup={backup_path}" if backup_path else ""
+                path_validator.audit_write(
+                    "write", str(file_path), content_size, "success", detail
+                )
 
                 result = {
                     "status": "success",
@@ -433,16 +527,27 @@ class FileIOToolsMixin:
                     "bytes_written": content_size,
                     "line_count": len(content.splitlines()),
                 }
-                if path_validator is not None and backup_path:
+                if backup_path:
                     result["backup_path"] = backup_path
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target))
         def edit_python_file(
             file_path: str,
             old_content: str,
@@ -451,6 +556,8 @@ class FileIOToolsMixin:
             dry_run: bool = False,
         ) -> Dict[str, Any]:
             """Edit a Python file by replacing content.
+
+            The file must have been read with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -470,44 +577,57 @@ class FileIOToolsMixin:
                 Dictionary with edit operation results
             """
             try:
-                # Security: validate write access
+                # Security: validate write access.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
-                if path_validator is not None:
-                    # Check blocklist
-                    is_blocked, reason = path_validator.is_write_blocked(str(file_path))
-                    if is_blocked:
-                        path_validator.audit_write(
-                            "edit", str(file_path), 0, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                if path_validator is None:
+                    return _missing_path_validator_write_error(self)
 
-                    # Check allowlist
-                    if not path_validator.is_path_allowed(str(file_path)):
-                        reason = f"Access denied: {file_path} is not in allowed paths"
-                        path_validator.audit_write(
-                            "edit", str(file_path), 0, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                # Check blocklist
+                is_blocked, reason = path_validator.is_write_blocked(str(file_path))
+                if is_blocked:
+                    path_validator.audit_write(
+                        "edit", str(file_path), 0, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                    # Enforce size limit on replacement content
-                    new_size = len(new_content.encode("utf-8"))
-                    from gaia.security import MAX_WRITE_SIZE_BYTES
+                # Check allowlist
+                if not path_validator.is_path_allowed(str(file_path)):
+                    reason = (
+                        f"Access denied: {file_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(file_path))}"
+                    )
+                    path_validator.audit_write(
+                        "edit", str(file_path), 0, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                    if new_size > MAX_WRITE_SIZE_BYTES:
-                        reason = (
-                            f"Edit blocked: replacement content "
-                            f"({new_size / (1024 * 1024):.1f} MB) exceeds "
-                            f"maximum allowed size "
-                            f"({MAX_WRITE_SIZE_BYTES / (1024 * 1024):.0f} MB)"
-                        )
-                        path_validator.audit_write(
-                            "edit", str(file_path), new_size, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                # Enforce size limit on replacement content
+                new_size = len(new_content.encode("utf-8"))
+                from gaia.security import MAX_WRITE_SIZE_BYTES
+
+                if new_size > MAX_WRITE_SIZE_BYTES:
+                    reason = (
+                        f"Edit blocked: replacement content "
+                        f"({new_size / (1024 * 1024):.1f} MB) exceeds "
+                        f"maximum allowed size "
+                        f"({MAX_WRITE_SIZE_BYTES / (1024 * 1024):.0f} MB)"
+                    )
+                    path_validator.audit_write(
+                        "edit", str(file_path), new_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Read current content
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path)
+                if refusal is not None:
+                    return refusal
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     current_content = f.read()
@@ -522,15 +642,12 @@ class FileIOToolsMixin:
                         )
                     return edit_error
 
-                # Validate new content (graceful degradation: stdlib ast if no mixin)
-                if hasattr(self, "_validate_python_syntax"):
-                    validation = self._validate_python_syntax(modified_content)
-                else:
-                    try:
-                        ast.parse(modified_content)
-                        validation = {"is_valid": True, "errors": []}
-                    except SyntaxError as e:
-                        validation = {"is_valid": False, "errors": [str(e)]}
+                # Validate new content
+                try:
+                    ast.parse(modified_content)
+                    validation = {"is_valid": True, "errors": []}
+                except SyntaxError as e:
+                    validation = {"is_valid": False, "errors": [str(e)]}
                 if not validation["is_valid"]:
                     return {
                         "status": "error",
@@ -556,43 +673,48 @@ class FileIOToolsMixin:
                         "would_change": current_content != modified_content,
                     }
 
-                # Create backup via path_validator if available, else manual
+                # Create backup via path_validator
                 backup_path = None
                 if backup:
-                    if path_validator is not None:
-                        backup_path = path_validator.create_backup(str(file_path))
-                    else:
-                        backup_path = f"{file_path}.bak"
-                        with open(backup_path, "w", encoding="utf-8") as f:
-                            f.write(current_content)
+                    backup_path = path_validator.create_backup(str(file_path))
 
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
-                record_write(str(file_path), modified_content)
+                reads.note(file_path)
 
                 # Audit successful edit
-                if path_validator is not None:
-                    detail = (
-                        f"replaced {len(old_content)} chars with "
-                        f"{len(new_content)} chars"
-                    )
-                    if backup_path:
-                        detail += f", backup={backup_path}"
-                    path_validator.audit_write(
-                        "edit",
-                        str(file_path),
-                        len(modified_content),
-                        "success",
-                        detail,
-                    )
+                detail = (
+                    f"replaced {len(old_content)} chars with "
+                    f"{len(new_content)} chars"
+                )
+                if backup_path:
+                    detail += f", backup={backup_path}"
+                path_validator.audit_write(
+                    "edit",
+                    str(file_path),
+                    len(modified_content),
+                    "success",
+                    detail,
+                )
 
                 return {
                     "status": "success",
                     "file_path": file_path,
                     "diff": diff,
-                    "backup_created": backup,
+                    "backup_created": backup_path is not None,
                     "backup_path": backup_path,
+                }
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
                 }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
@@ -618,12 +740,15 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with search results
             """
+            path_validator = _require_path_validator(self)
             try:
                 # Security check
-                if not self.path_validator.is_path_allowed(directory):
+                if not path_validator.is_path_allowed(directory):
                     return {
+                        **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Access denied: {directory} is not in allowed paths",
+                        "error": f"Access denied: {directory} is not in allowed paths."
+                        f"{path_validator.scratch_hint(directory)}",
                     }
 
                 results = []
@@ -638,7 +763,7 @@ class FileIOToolsMixin:
                         file_path = os.path.join(root, file)
                         # A directory-wide grep must not be the way a secret gets
                         # read back that read_file would have refused outright.
-                        blocked, _ = self.path_validator.is_read_blocked(file_path)
+                        blocked, _ = path_validator.is_read_blocked(file_path)
                         if blocked:
                             continue
                         files_searched += 1
@@ -668,7 +793,8 @@ class FileIOToolsMixin:
 
                                 if len(results) >= max_results:
                                     break
-                        except Exception:
+                        except (OSError, UnicodeDecodeError) as e:
+                            logger.warning("search_code skipped %s: %s", file_path, e)
                             continue
 
                     if len(results) >= max_results:
@@ -699,11 +825,12 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with diff information
             """
+            path_validator = _require_path_validator(self)
             try:
                 # A diff prints the original file, so it is a read.
-                is_allowed, reason = self.path_validator.validate_read(file_path)
+                is_allowed, reason = path_validator.validate_read(file_path)
                 if not is_allowed:
-                    return {"status": "error", "error": reason}
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 # Read original content
                 if os.path.exists(file_path):
@@ -746,11 +873,13 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target, "overwriting"))
         def write_markdown_file(
             file_path: str, content: str, create_dirs: bool = True
         ) -> Dict[str, Any]:
             """Write content to a markdown file.
+
+            Overwriting an existing file requires reading it with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -766,22 +895,37 @@ class FileIOToolsMixin:
             try:
                 content_size = len(content.encode("utf-8"))
 
-                # Security: validate write access (path, blocklist, size)
+                # Security: validate write access (path, blocklist, size).
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
-                if path_validator is not None:
-                    is_allowed, reason = path_validator.validate_write(
-                        str(file_path), content_size=content_size
-                    )
-                    if not is_allowed:
-                        path_validator.audit_write(
-                            "write", str(file_path), content_size, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                if path_validator is None:
+                    return _missing_path_validator_write_error(self)
 
-                    # Backup existing file before overwrite
-                    backup_path = None
-                    if os.path.exists(file_path):
-                        backup_path = path_validator.create_backup(str(file_path))
+                is_allowed, reason = path_validator.validate_write(
+                    str(file_path), content_size=content_size
+                )
+                if not is_allowed:
+                    path_validator.audit_write(
+                        "write", str(file_path), content_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path, "overwriting")
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        str(file_path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
+
+                # Backup existing file before overwrite
+                backup_path = None
+                if os.path.exists(file_path):
+                    backup_path = path_validator.create_backup(str(file_path))
 
                 # Create parent directories if needed
                 if create_dirs:
@@ -792,14 +936,13 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                record_write(str(file_path), content)
+                reads.note(file_path)
 
                 # Audit successful write
-                if path_validator is not None:
-                    detail = f"backup={backup_path}" if backup_path else ""
-                    path_validator.audit_write(
-                        "write", str(file_path), content_size, "success", detail
-                    )
+                detail = f"backup={backup_path}" if backup_path else ""
+                path_validator.audit_write(
+                    "write", str(file_path), content_size, "success", detail
+                )
 
                 result = {
                     "status": "success",
@@ -807,16 +950,27 @@ class FileIOToolsMixin:
                     "bytes_written": content_size,
                     "line_count": len(content.splitlines()),
                 }
-                if path_validator is not None and backup_path:
+                if backup_path:
                     result["backup_path"] = backup_path
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _project_target, "overwriting"))
         def write_file(
             file_path: str,
             content: str,
@@ -825,53 +979,55 @@ class FileIOToolsMixin:
         ) -> Dict[str, Any]:
             """Create a text file, or replace one wholesale, without validation.
 
-            Any text file: documentation (.md, .mdx), source (.py, .go, .ts,
-            .js), configuration (.yml, .json, .toml), plain text.
-
-            Prefer edit_file when changing PART of a file that already exists —
-            this replaces the whole thing. Use write_python_file instead only
-            when you want the write REFUSED if the content is not valid Python.
-
-            Includes security guardrails: path validation, blocked directory
-            enforcement, sensitive file protection, size limits, backup
-            creation, and audit logging.
+            Any text file — .md, .py, .yml, .go, .json. Prefer edit_file to
+            change PART of an existing file; this replaces the whole thing.
+            write_python_file is the variant that refuses invalid Python.
+            Overwriting an existing file requires reading it with read_file first.
 
             Args:
-                file_path: Path where to write the file
-                content: Content to write to the file
-                create_dirs: Whether to create parent directories if they don't exist
-                project_dir: Project root directory for resolving relative paths
+                file_path: Path where to write the file.
+                content: Content to write to the file.
+                create_dirs: Create missing parent directories.
+                project_dir: Project root for resolving a relative file_path.
 
             Returns:
-                dict: Status and file information
+                Status, the resolved path, size, and any backup made.
             """
             try:
-                from pathlib import Path
-
-                path = Path(file_path)
-                if project_dir:
-                    base = Path(project_dir).resolve()
-                    if not path.is_absolute():
-                        path = base / path
-                path = path.resolve()
+                path = _resolve_target(file_path, project_dir)
                 content_size = len(content.encode("utf-8"))
 
-                # Security: validate write access
+                # Security: validate write access.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
-                if path_validator is not None:
-                    is_allowed, reason = path_validator.validate_write(
-                        str(path), content_size=content_size
-                    )
-                    if not is_allowed:
-                        path_validator.audit_write(
-                            "write", str(path), content_size, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                if path_validator is None:
+                    return _missing_path_validator_write_error(self)
 
-                    # Backup existing file before overwrite
-                    backup_path = None
-                    if path.exists():
-                        backup_path = path_validator.create_backup(str(path))
+                is_allowed, reason = path_validator.validate_write(
+                    str(path), content_size=content_size
+                )
+                if not is_allowed:
+                    path_validator.audit_write(
+                        "write", str(path), content_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(path, "overwriting")
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        str(path),
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
+
+                # Backup existing file before overwrite
+                backup_path = None
+                if path.exists():
+                    backup_path = path_validator.create_backup(str(path))
 
                 # Create parent directories if requested
                 if create_dirs and not path.parent.exists():
@@ -879,7 +1035,7 @@ class FileIOToolsMixin:
 
                 # Write content to file
                 path.write_text(content, encoding="utf-8")
-                record_write(str(path), content)
+                reads.note(path)
 
                 console = getattr(self, "console", None)
                 if content.strip():
@@ -898,13 +1054,12 @@ class FileIOToolsMixin:
                     )
 
                 # Audit successful write
-                if path_validator is not None:
-                    detail = ""
-                    if backup_path:
-                        detail = f"backup={backup_path}"
-                    path_validator.audit_write(
-                        "write", str(path), content_size, "success", detail
-                    )
+                detail = ""
+                if backup_path:
+                    detail = f"backup={backup_path}"
+                path_validator.audit_write(
+                    "write", str(path), content_size, "success", detail
+                )
 
                 result = {
                     "status": "success",
@@ -912,18 +1067,29 @@ class FileIOToolsMixin:
                     "size_bytes": content_size,
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
                 }
-                if path_validator is not None and backup_path:
+                if backup_path:
                     result["backup_path"] = backup_path
                 if display_error:
                     result["display_error"] = display_error
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("write", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _project_target))
         def edit_file(
             file_path: str,
             old_content: str,
@@ -932,82 +1098,69 @@ class FileIOToolsMixin:
         ) -> Dict[str, Any]:
             """Change part of a text file in place, without rewriting the rest.
 
-            The default way to edit anything: documentation (.md, .mdx, .rst),
-            source (.py, .go, .ts, .js, .rs, .cpp), configuration (.yml, .json,
-            .toml), plain text. Prefer it over rewriting a file with write_file,
-            and over shelling out to sed or a here-doc.
-
-            Use edit_python_file instead only when you want the edit REFUSED if
-            it would break Python syntax.
-
-            Includes security guardrails: path validation, blocked directory
-            enforcement, sensitive file protection, backup creation, and audit
-            logging.
-
-            old_content must match exactly one location. Zero or several matches
-            are errors that carry the file's current content, so a retry does not
-            need a separate read.
+            The default way to edit any text file — .md, .py, .yml, .go, .json
+            — ahead of rewriting it with write_file or shelling out to sed.
+            Requires a prior read_file. edit_python_file refuses a
+            syntax-breaking edit. old_content must match exactly one
+            location; zero or several matches return the current content,
+            so a retry needs no re-read.
 
             Args:
-                file_path: Path to the file to edit
-                old_content: Exact content to find and replace; must be unique
-                    in the file
-                new_content: New content to replace with
-                project_dir: Project root directory for resolving relative paths
-
-            Returns:
-                dict: Status and edit information
+                file_path: Path to the file to edit.
+                old_content: Exact text to replace; must be unique in the file.
+                new_content: Text to put in its place.
+                project_dir: Project root for resolving a relative file_path.
             """
             try:
-                from pathlib import Path
+                path = _resolve_target(file_path, project_dir)
 
-                path = Path(file_path)
-                if project_dir:
-                    base = Path(project_dir).resolve()
-                    if not path.is_absolute():
-                        path = base / path
-                path = path.resolve()
-
-                # Security: validate write access
+                # Security: validate write access.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
-                if path_validator is not None:
-                    # Check blocklist (no overwrite prompt needed for edit)
-                    is_blocked, reason = path_validator.is_write_blocked(str(path))
-                    if is_blocked:
-                        path_validator.audit_write(
-                            "edit", str(path), 0, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                if path_validator is None:
+                    return _missing_path_validator_write_error(self)
 
-                    # Check allowlist
-                    if not path_validator.is_path_allowed(str(path)):
-                        reason = f"Access denied: {path} is not in allowed paths"
-                        path_validator.audit_write(
-                            "edit", str(path), 0, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                # Check blocklist (no overwrite prompt needed for edit)
+                is_blocked, reason = path_validator.is_write_blocked(str(path))
+                if is_blocked:
+                    path_validator.audit_write("edit", str(path), 0, "denied", reason)
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                    # Enforce MAX_WRITE_SIZE_BYTES on the replacement content.
-                    # Previously this path only ran is_path_allowed + is_write_blocked,
-                    # so a model could push a 50 MB `new_content` via edit_file even
-                    # though the same payload via write_file is blocked.
-                    new_size = len(new_content.encode("utf-8"))
-                    from gaia.security import MAX_WRITE_SIZE_BYTES
+                # Check allowlist
+                if not path_validator.is_path_allowed(str(path)):
+                    reason = (
+                        f"Access denied: {path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(path))}"
+                    )
+                    path_validator.audit_write("edit", str(path), 0, "denied", reason)
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                    if new_size > MAX_WRITE_SIZE_BYTES:
-                        reason = (
-                            f"Edit blocked: replacement content "
-                            f"({new_size / (1024 * 1024):.1f} MB) exceeds "
-                            f"maximum allowed size "
-                            f"({MAX_WRITE_SIZE_BYTES / (1024 * 1024):.0f} MB)"
-                        )
-                        path_validator.audit_write(
-                            "edit", str(path), new_size, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                # Enforce MAX_WRITE_SIZE_BYTES on the replacement content.
+                # Previously this path only ran is_path_allowed + is_write_blocked,
+                # so a model could push a 50 MB `new_content` via edit_file even
+                # though the same payload via write_file is blocked.
+                new_size = len(new_content.encode("utf-8"))
+                from gaia.security import MAX_WRITE_SIZE_BYTES
+
+                if new_size > MAX_WRITE_SIZE_BYTES:
+                    reason = (
+                        f"Edit blocked: replacement content "
+                        f"({new_size / (1024 * 1024):.1f} MB) exceeds "
+                        f"maximum allowed size "
+                        f"({MAX_WRITE_SIZE_BYTES / (1024 * 1024):.0f} MB)"
+                    )
+                    path_validator.audit_write(
+                        "edit", str(path), new_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not path.exists():
                     return {"status": "error", "error": f"File not found: {file_path}"}
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(path)
+                if refusal is not None:
+                    return refusal
 
                 # Read current content
                 current_content = path.read_text(encoding="utf-8")
@@ -1023,9 +1176,7 @@ class FileIOToolsMixin:
                     return edit_error
 
                 # Backup before editing
-                backup_path = None
-                if path_validator is not None:
-                    backup_path = path_validator.create_backup(str(path))
+                backup_path = path_validator.create_backup(str(path))
 
                 # Generate diff before writing
                 diff = "\n".join(
@@ -1040,7 +1191,7 @@ class FileIOToolsMixin:
 
                 # Write updated content
                 path.write_text(updated_content, encoding="utf-8")
-                record_write(str(path), updated_content)
+                reads.note(path)
 
                 console = getattr(self, "console", None)
                 if diff.strip():
@@ -1057,17 +1208,18 @@ class FileIOToolsMixin:
                     )
 
                 # Audit successful edit
-                if path_validator is not None:
-                    detail = f"replaced {len(old_content)} chars with {len(new_content)} chars"
-                    if backup_path:
-                        detail += f", backup={backup_path}"
-                    path_validator.audit_write(
-                        "edit",
-                        str(path),
-                        len(updated_content),
-                        "success",
-                        detail,
-                    )
+                detail = (
+                    f"replaced {len(old_content)} chars with {len(new_content)} chars"
+                )
+                if backup_path:
+                    detail += f", backup={backup_path}"
+                path_validator.audit_write(
+                    "edit",
+                    str(path),
+                    len(updated_content),
+                    "success",
+                    detail,
+                )
 
                 result = {
                     "status": "success",
@@ -1082,13 +1234,24 @@ class FileIOToolsMixin:
                 if display_error:
                     result["display_error"] = display_error
                 return result
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _gaia_md_target, "overwriting"))
         def update_gaia_md(
             project_root: str = ".",
             project_name: str = None,
@@ -1097,6 +1260,8 @@ class FileIOToolsMixin:
             instructions: str = None,
         ) -> Dict[str, Any]:
             """Create or update GAIA.md file for project context.
+
+            Updating an existing GAIA.md requires reading it with read_file first.
 
             Args:
                 project_root: Root directory of the project
@@ -1108,21 +1273,36 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with update results
             """
+            path_validator = _require_path_validator(self)
             try:
                 from datetime import datetime
 
                 gaia_path = os.path.join(project_root, "GAIA.md")
 
                 # Security check
-                if not self.path_validator.is_path_allowed(gaia_path):
+                if not path_validator.is_path_allowed(gaia_path):
                     return {
+                        **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Access denied: {gaia_path} is not in allowed paths",
+                        "error": f"Access denied: {gaia_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(gaia_path)}",
                     }
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(gaia_path, "overwriting")
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        gaia_path,
+                        0,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
 
                 # Start building content
                 content = "# GAIA.md\n\n"
-                content += "This file provides guidance to GAIA Code Agent when working with code in this project.\n\n"
+                content += "This file provides guidance to the GAIA agent when working with code in this project.\n\n"
 
                 if project_name:
                     content += f"## Project: {project_name}\n\n"
@@ -1170,6 +1350,7 @@ class FileIOToolsMixin:
                 # Write the file
                 with open(gaia_path, "w", encoding="utf-8") as f:
                     f.write(content)
+                reads.note(gaia_path)
 
                 return {
                     "status": "success",
@@ -1180,7 +1361,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        @tool(preflight=read_first_preflight(self, _file_path_target))
         def replace_function(
             file_path: str,
             function_name: str,
@@ -1190,7 +1371,7 @@ class FileIOToolsMixin:
             """Replace one function definition in a Python file.
 
             Replaces the definition and its decorators, leaving the code around
-            it untouched.
+            it untouched. The file must have been read with read_file first.
 
             Includes security guardrails: path validation, blocked directory enforcement,
             sensitive file protection, size limits, backup creation, and audit logging.
@@ -1206,43 +1387,63 @@ class FileIOToolsMixin:
                 Dictionary with replacement result
             """
             try:
-                # Security: validate write access
+                # Security: validate write access.
+                # Report missing setup instead of writing without a check.
                 path_validator = getattr(self, "path_validator", None)
-                if path_validator is not None:
-                    # Check blocklist
-                    is_blocked, reason = path_validator.is_write_blocked(str(file_path))
-                    if is_blocked:
-                        path_validator.audit_write(
-                            "edit", str(file_path), 0, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                if path_validator is None:
+                    return _missing_path_validator_write_error(self)
 
-                    # Check allowlist
-                    if not path_validator.is_path_allowed(str(file_path)):
-                        reason = f"Access denied: {file_path} is not in allowed paths"
-                        path_validator.audit_write(
-                            "edit", str(file_path), 0, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                # Check blocklist
+                is_blocked, reason = path_validator.is_write_blocked(str(file_path))
+                if is_blocked:
+                    path_validator.audit_write(
+                        "edit", str(file_path), 0, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                    # Enforce size limit on replacement content
-                    new_size = len(new_implementation.encode("utf-8"))
-                    from gaia.security import MAX_WRITE_SIZE_BYTES
+                # Check allowlist
+                if not path_validator.is_path_allowed(str(file_path)):
+                    reason = (
+                        f"Access denied: {file_path} is not in allowed paths."
+                        f"{path_validator.scratch_hint(str(file_path))}"
+                    )
+                    path_validator.audit_write(
+                        "edit", str(file_path), 0, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                    if new_size > MAX_WRITE_SIZE_BYTES:
-                        reason = (
-                            f"Edit blocked: replacement content "
-                            f"({new_size / (1024 * 1024):.1f} MB) exceeds "
-                            f"maximum allowed size "
-                            f"({MAX_WRITE_SIZE_BYTES / (1024 * 1024):.0f} MB)"
-                        )
-                        path_validator.audit_write(
-                            "edit", str(file_path), new_size, "denied", reason
-                        )
-                        return {"status": "error", "error": reason}
+                # Enforce size limit on replacement content
+                new_size = len(new_implementation.encode("utf-8"))
+                from gaia.security import MAX_WRITE_SIZE_BYTES
+
+                if new_size > MAX_WRITE_SIZE_BYTES:
+                    reason = (
+                        f"Edit blocked: replacement content "
+                        f"({new_size / (1024 * 1024):.1f} MB) exceeds "
+                        f"maximum allowed size "
+                        f"({MAX_WRITE_SIZE_BYTES / (1024 * 1024):.0f} MB)"
+                    )
+                    path_validator.audit_write(
+                        "edit", str(file_path), new_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
+                if os.path.isdir(file_path):
+                    return _directory_path_error(file_path)
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(file_path)
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "edit",
+                        str(file_path),
+                        new_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -1261,15 +1462,10 @@ class FileIOToolsMixin:
                 lines = content.splitlines(keepends=True)
                 start_line, end_line = _function_span(function_node, lines)
 
-                # Create backup via path_validator if available, else manual
+                # Create backup via path_validator
                 backup_path = None
                 if backup:
-                    if path_validator is not None:
-                        backup_path = path_validator.create_backup(str(file_path))
-                    else:
-                        backup_path = f"{file_path}.bak"
-                        with open(backup_path, "w", encoding="utf-8") as f:
-                            f.write(content)
+                    backup_path = path_validator.create_backup(str(file_path))
 
                 # Replace the function
                 new_lines = (
@@ -1279,15 +1475,12 @@ class FileIOToolsMixin:
                 )
                 modified_content = "".join(new_lines)
 
-                # Validate new content (graceful degradation: stdlib ast if no mixin)
-                if hasattr(self, "_validate_python_syntax"):
-                    validation = self._validate_python_syntax(modified_content)
-                else:
-                    try:
-                        ast.parse(modified_content)
-                        validation = {"is_valid": True, "errors": []}
-                    except SyntaxError as e:
-                        validation = {"is_valid": False, "errors": [str(e)]}
+                # Validate new content
+                try:
+                    ast.parse(modified_content)
+                    validation = {"is_valid": True, "errors": []}
+                except SyntaxError as e:
+                    validation = {"is_valid": False, "errors": [str(e)]}
                 if not validation["is_valid"]:
                     return {
                         "status": "error",
@@ -1311,6 +1504,7 @@ class FileIOToolsMixin:
                 # Write the modified content
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(modified_content)
+                reads.note(file_path)
 
                 # Generate diff
                 diff = "\n".join(
@@ -1323,17 +1517,16 @@ class FileIOToolsMixin:
                 )
 
                 # Audit successful edit
-                if path_validator is not None:
-                    detail = f"replaced function '{function_name}'"
-                    if backup_path:
-                        detail += f", backup={backup_path}"
-                    path_validator.audit_write(
-                        "edit",
-                        str(file_path),
-                        len(modified_content),
-                        "success",
-                        detail,
-                    )
+                detail = f"replaced function '{function_name}'"
+                if backup_path:
+                    detail += f", backup={backup_path}"
+                path_validator.audit_write(
+                    "edit",
+                    str(file_path),
+                    len(modified_content),
+                    "success",
+                    detail,
+                )
 
                 return {
                     "status": "success",
@@ -1341,6 +1534,17 @@ class FileIOToolsMixin:
                     "function_replaced": function_name,
                     "backup_path": backup_path if backup else None,
                     "diff": diff,
+                }
+            except BackupError as e:
+                # Nothing was written, so this must not enter the agent's
+                # memory as a durable 'writing here fails' lesson.
+                path_validator = getattr(self, "path_validator", None)
+                if path_validator is not None:
+                    path_validator.audit_write("edit", file_path, 0, "denied", str(e))
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
                 }
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)

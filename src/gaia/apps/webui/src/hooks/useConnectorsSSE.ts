@@ -9,7 +9,11 @@
  * ``src/gaia/ui/routers/connectors.py:_connector_events``):
  *
  *   - ``connector.configured``        ({connector_id, account_id})
- *   - ``connector.disconnected``      ({connector_id})
+ *   - ``connector.disconnected``      ({connector_id, revoke_supported,
+ *                                       revoked_remotely, revoke_error} — the
+ *                                       last three are the honest provider-
+ *                                       side revoke outcome from #2591, not
+ *                                       just "local credential cleared")
  *   - ``connector.tested``            ({connector_id, ok, detail})
  *   - ``connector.enabled``           ({connector_id})
  *   - ``connector.disabled``          ({connector_id})

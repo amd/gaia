@@ -414,3 +414,479 @@ class TestTheIndexScopeUsesTheSameRoots:
         named = root / "tui"
 
         assert _scope_roots(str(named), agent) == [named.resolve()]
+
+
+# ============================================================================
+# 6. Full access: the permission boundary is not the search scope
+# ============================================================================
+
+
+_FS_ROOT = Path("/").resolve()  # "C:\\" on Windows
+
+
+def _search_file_tool(validator):
+    mixin = FileSearchToolsMixin()
+    mixin.path_validator = validator
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        mixin.register_file_search_tools()
+        fn = _TOOL_REGISTRY["search_file"]["function"]
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    return fn
+
+
+@pytest.fixture
+def full_access_project(tmp_path, monkeypatch):
+    """A small project as the cwd, with ``/`` as the only allowed path.
+
+    What the TUI's full-access mode and the benchmark harness set up.
+    """
+    root = (tmp_path / "proj").resolve()
+    (root / "src").mkdir(parents=True)
+    (root / "CHANGELOG.md").write_text("# changes\n")
+    (root / "src" / "load_config.py").write_text("def load_config(): ...\n")
+    monkeypatch.chdir(root)
+    return root
+
+
+@pytest.fixture
+def listed_dirs(tmp_path, monkeypatch):
+    """Record every directory listed, and keep the walk off the real disk.
+
+    Directories outside ``tmp_path`` list as empty, so a regression shows up as
+    a wrong depth or a missing result — not as a multi-minute crawl of ``/``.
+    """
+    top = tmp_path.resolve()
+    real_iterdir = Path.iterdir
+    listed = []
+
+    def bounded_iterdir(self):
+        listed.append(self)
+        resolved = self.resolve()
+        if resolved == top or top in resolved.parents:
+            return real_iterdir(self)
+        return iter(())
+
+    monkeypatch.setattr(Path, "iterdir", bounded_iterdir)
+    return listed
+
+
+@pytest.fixture
+def root_depths(monkeypatch):
+    """The depth ``search_file`` gave each workspace root, in walk order."""
+    import gaia.agents.tools.file_tools as file_tools_module
+
+    depths = {}
+    real_depth = file_tools_module.root_depth
+
+    def recording_depth(root, roots):
+        depths[Path(root)] = real_depth(root, roots)
+        return depths[Path(root)]
+
+    monkeypatch.setattr(file_tools_module, "root_depth", recording_depth)
+    return depths
+
+
+class TestFullAccessSearchesTheWorkspace:
+    def test_an_undirected_search_finds_the_project_file(
+        self, full_access_project, listed_dirs
+    ):
+        search_file = _search_file_tool(_Sandbox(_FS_ROOT))
+
+        result = search_file("CHANGELOG.md")
+
+        assert result["status"] == "success", result
+        assert result["files"][0] == str(full_access_project / "CHANGELOG.md")
+
+    def test_only_the_project_is_walked_deeply(
+        self, full_access_project, listed_dirs, root_depths
+    ):
+        from gaia.agents.tools.search_scope import DEEP_ROOT_DEPTH, SHALLOW_ROOT_DEPTH
+
+        search_file = _search_file_tool(_Sandbox(_FS_ROOT))
+
+        result = search_file("load_config")
+
+        assert [Path(f).name for f in result["files"]] == ["load_config.py"]
+        assert list(root_depths) == [full_access_project, _FS_ROOT]
+        assert root_depths[full_access_project] == DEEP_ROOT_DEPTH
+        assert root_depths[_FS_ROOT] == SHALLOW_ROOT_DEPTH
+
+    def test_the_filesystem_root_alone_is_never_walked_exhaustively(
+        self, tmp_path, monkeypatch, listed_dirs, root_depths
+    ):
+        """No workspace to prefer (cwd is home): ``/`` is still capped."""
+        from gaia.agents.tools.search_scope import SHALLOW_ROOT_DEPTH
+
+        home = (tmp_path / "home").resolve()
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.chdir(home)
+        search_file = _search_file_tool(_Sandbox(_FS_ROOT))
+
+        search_file("anything")
+
+        assert root_depths == {_FS_ROOT: SHALLOW_ROOT_DEPTH}
+
+    def test_deep_search_still_sweeps_the_drive_when_asked(
+        self, full_access_project, listed_dirs, monkeypatch
+    ):
+        """``deep_search`` is the explicit request for a whole-disk walk."""
+        import gaia.agents.tools.file_tools as file_tools_module
+
+        monkeypatch.setattr(file_tools_module.platform, "system", lambda: "Linux")
+        search_file = _search_file_tool(_Sandbox(_FS_ROOT))
+
+        search_file("no-such-file-anywhere", deep_search=True)
+
+        assert listed_dirs[0] == full_access_project
+        # The capped workspace pass, then the explicit sweep.
+        assert [p.resolve() for p in listed_dirs].count(_FS_ROOT) == 2
+
+
+class TestAHomeSandboxIsCappedToo:
+    """The flagship's default sandbox is ``~`` — also not a project."""
+
+    @pytest.fixture
+    def home_with_project(self, tmp_path, monkeypatch):
+        home = (tmp_path / "home").resolve()
+        project = home / "work" / "proj"
+        deep_in_project = project / "a" / "b" / "c" / "d" / "e" / "f"
+        deep_in_project.mkdir(parents=True)
+        (deep_in_project / "target_notes.md").write_text("x\n")
+        deep_elsewhere = home / "g" / "h" / "i" / "j" / "k" / "l" / "m" / "n"
+        deep_elsewhere.mkdir(parents=True)
+        (deep_elsewhere / "target_other.md").write_text("x\n")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.chdir(project)
+        return home, project
+
+    def test_the_workspace_goes_first_and_home_is_shallow(self, home_with_project):
+        from gaia.agents.tools.search_scope import (
+            DEEP_ROOT_DEPTH,
+            SHALLOW_ROOT_DEPTH,
+            root_depth,
+            search_roots,
+        )
+
+        home, project = home_with_project
+
+        class Host:
+            path_validator = _Sandbox(home)
+
+        roots = search_roots(Host())
+
+        assert roots == [project, home]
+        assert root_depth(project, roots) == DEEP_ROOT_DEPTH
+        assert root_depth(home, roots) == SHALLOW_ROOT_DEPTH
+
+    def test_search_file_finds_deep_project_files_but_does_not_crawl_home(
+        self, home_with_project
+    ):
+        home, _ = home_with_project
+        search_file = _search_file_tool(_Sandbox(home))
+
+        result = search_file("target")
+
+        assert [Path(f).name for f in result["files"]] == ["target_notes.md"]
+
+    def test_find_files_does_not_crawl_home_either(self, home_with_project):
+        home, _ = home_with_project
+        _, tools = _filesystem_agent(home)
+
+        for scope in ("cwd", "smart"):
+            out = tools["find_files"]("target_*", scope=scope)
+            assert "target_notes.md" in out, (scope, out)
+            assert "target_other.md" not in out, (scope, out)
+
+    def test_an_explicit_home_scope_is_not_capped(self, home_with_project):
+        """The user asked for home by name, so the depth is not a guess."""
+        home, _ = home_with_project
+        _, tools = _filesystem_agent(home)
+
+        assert "target_other.md" in tools["find_files"]("target_*", scope="home")
+
+
+class TestBothToolsAgreeOnTheProject:
+    """The two search tools must not answer the same question differently.
+
+    ``search_scope`` exists so the depth rule has one home. A copy of it inside
+    ``find_files`` capped the project at ten levels while ``search_file`` walked
+    it to ``DEEP_ROOT_DEPTH``, so whether a file was findable depended on which
+    tool the model happened to pick.
+    """
+
+    @pytest.fixture
+    def deep_project(self, tmp_path, monkeypatch):
+        root = (tmp_path / "proj").resolve()
+        buried = root.joinpath(*(f"lvl{i}" for i in range(12)))
+        buried.mkdir(parents=True)
+        (buried / "buried_config.py").write_text("BURIED = 1\n")
+        monkeypatch.chdir(root)
+        return root
+
+    def test_find_files_reaches_a_file_below_the_old_ten_level_cap(self, deep_project):
+        _, tools = _filesystem_agent(deep_project)
+
+        for scope in ("cwd", "smart"):
+            assert "buried_config.py" in tools["find_files"](
+                "buried_*", scope=scope
+            ), scope
+
+    def test_search_file_reaches_it_too(self, deep_project):
+        mixin = FileSearchToolsMixin()
+        mixin.path_validator = _Sandbox(deep_project)
+        saved = dict(_TOOL_REGISTRY)
+        try:
+            mixin.register_file_search_tools()
+            fn = _TOOL_REGISTRY["search_file"]["function"]
+            fn.mixin = mixin
+            result = fn("buried_config.py")
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(saved)
+
+        assert [Path(f).name for f in result["files"]] == ["buried_config.py"]
+
+    def test_a_broad_root_is_still_capped_on_the_content_path(self, tmp_path):
+        """Deferring to the shared policy must not lift the full-access cap.
+
+        Content search has its own ceiling of 8; the shallow cap is lower, and
+        taking the larger of the two would crawl ``/`` two levels further than
+        before this module existed.
+        """
+        from gaia.agents.tools.search_scope import SHALLOW_ROOT_DEPTH, root_depth
+
+        assert root_depth(_FS_ROOT, [_FS_ROOT]) == SHALLOW_ROOT_DEPTH
+        assert min(8, root_depth(_FS_ROOT, [_FS_ROOT])) == SHALLOW_ROOT_DEPTH
+
+
+class TestProjectSandboxesAreUnchanged:
+    def test_a_cwd_inside_a_project_root_does_not_reorder_roots(
+        self, tmp_path, monkeypatch
+    ):
+        from gaia.agents.tools.search_scope import search_roots
+
+        outer = (tmp_path / "outer").resolve()
+        inner = outer / "inner"
+        (inner / "sub").mkdir(parents=True)
+        monkeypatch.chdir(inner / "sub")
+
+        class Host:
+            path_validator = _Sandbox(outer, inner)
+
+        assert search_roots(Host()) == [inner, outer]
+
+    def test_a_cwd_outside_the_sandbox_is_not_added(self, tmp_path, monkeypatch):
+        from gaia.agents.tools.search_scope import search_roots
+
+        allowed = (tmp_path / "allowed").resolve()
+        allowed.mkdir()
+        outside = (tmp_path / "outside").resolve()
+        outside.mkdir()
+        monkeypatch.chdir(outside)
+
+        class Host:
+            path_validator = _Sandbox(allowed)
+
+        assert search_roots(Host()) == [allowed]
+
+    def test_a_recorded_project_root_wins_over_the_cwd(self, tmp_path, monkeypatch):
+        """A sidecar's cwd is its package dir; the agent records the real project."""
+        from gaia.agents.tools.search_scope import search_roots
+
+        project = (tmp_path / "proj").resolve()
+        project.mkdir()
+        elsewhere = (tmp_path / "pkg").resolve()
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        class Host:
+            path_validator = _Sandbox(_FS_ROOT)
+
+            def _project_map_root(self):
+                return str(project)
+
+        assert search_roots(Host()) == [project, _FS_ROOT]
+
+
+# ============================================================================
+# 7. A walk is bounded, so a huge root cannot hang the call (#3889)
+# ============================================================================
+
+
+def _register_search_file(sandbox):
+    mixin = FileSearchToolsMixin()
+    mixin.path_validator = sandbox
+    mixin.register_file_search_tools()
+    return _TOOL_REGISTRY["search_file"]["function"]
+
+
+@pytest.fixture
+def registry():
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        yield
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
+@pytest.fixture
+def big_home(tmp_path):
+    """A home-sized sandbox: many folders, and a cwd elsewhere."""
+    home = tmp_path / "home"
+    for d in range(40):
+        folder = home / f"folder{d}" / "sub"
+        folder.mkdir(parents=True)
+        for f in range(25):
+            (folder / f"notes{f}.txt").write_text("x\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    prev = Path.cwd()
+    os.chdir(elsewhere)
+    try:
+        yield home
+    finally:
+        os.chdir(prev)
+
+
+class TestTheWalkIsBounded:
+    def test_an_exhausted_entry_budget_returns_what_it_found_marked_truncated(
+        self, big_home, registry, monkeypatch
+    ):
+        import time
+
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 30)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        started = time.monotonic()
+        result = search_file("notes")
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 5, elapsed
+        assert result["status"] == "success"
+        assert result["truncated"] is True
+        assert result["count"] > 0, result
+        assert "pass `directory`" in result["hint"]
+
+    def test_a_truncated_miss_does_not_read_as_an_honest_zero(
+        self, big_home, registry, monkeypatch
+    ):
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 30)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        result = search_file("pyproject.toml")
+
+        assert result["count"] == 0
+        assert result["truncated"] is True
+        assert "NOT a complete zero" in result["suggestion"]
+        assert "No files matching" not in result["display_message"]
+
+    def test_an_exhausted_time_budget_stops_the_walk(
+        self, big_home, registry, monkeypatch
+    ):
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_TIME_BUDGET_S", 0.0)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        result = search_file("notes")
+
+        assert result["truncated"] is True
+        assert result["count"] == 0
+
+    def test_a_named_directory_is_bounded_too(self, big_home, registry, monkeypatch):
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 30)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        result = search_file("pyproject.toml", directory=str(big_home))
+
+        assert result["truncated"] is True
+        assert "narrower `directory`" in result["hint"]
+
+    def test_a_search_within_budget_is_not_marked_truncated(self, search_file, project):
+        result = search_file("*.go")
+        assert "truncated" not in result
+
+
+class TestANarrowSandboxKeepsItsDepth:
+    """The #3889 demotion must not cost coverage in a project-sized sandbox.
+
+    Gating it on ``$HOME`` was the fix: with ``allowed_paths=[project]`` and a
+    cwd in one of its subdirectories, demoting the project to
+    :data:`SHALLOW_ROOT_DEPTH` put its own deeply-nested files out of reach —
+    and the miss came back as a plain zero, so nothing signalled the loss.
+    """
+
+    @pytest.fixture
+    def project_with_subdir(self, tmp_path, monkeypatch):
+        home = (tmp_path / "home").resolve()
+        project = home / "work" / "gaia"
+        buried = project / "a" / "b" / "c" / "d" / "e" / "f" / "g"
+        buried.mkdir(parents=True)
+        (buried / "buried_in_project.py").write_text("x = 1\n")
+        subdir = project / "tui"
+        subdir.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.chdir(subdir)
+        return project, subdir
+
+    def test_a_deeply_nested_file_is_still_found(self, project_with_subdir, registry):
+        project, _ = project_with_subdir
+        search_file = _register_search_file(_Sandbox(project))
+
+        result = search_file("buried_in_project")
+
+        assert [Path(f).name for f in result["files"]] == ["buried_in_project.py"]
+
+
+class TestTruncationNamesTheBudgetThatTripped:
+    def test_an_entry_budget_says_so(self, big_home, registry, monkeypatch):
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 30)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        result = search_file("pyproject.toml")
+
+        assert "files and folders" in result["hint"], result["hint"]
+        assert " s \u2014" not in result["hint"]
+
+    def test_a_time_budget_says_so(self, big_home, registry, monkeypatch):
+        from gaia.agents.tools import search_scope
+
+        monkeypatch.setattr(search_scope, "SEARCH_TIME_BUDGET_S", 0.0)
+        search_file = _register_search_file(_Sandbox(big_home))
+
+        result = search_file("pyproject.toml")
+
+        assert "files and folders" not in result["hint"], result["hint"]
+        assert " s \u2014" in result["hint"]
+
+
+class TestCommonFoldersAreMatchedByPathNotPrefix:
+    def test_a_root_whose_name_prefixes_a_common_folder_does_not_hide_it(
+        self, tmp_path, monkeypatch, registry
+    ):
+        home = (tmp_path / "home").resolve()
+        (home / "Doc").mkdir(parents=True)
+        (home / "Documents").mkdir()
+        (home / "Documents" / "quarterly_report.txt").write_text("x\n")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.chdir(tmp_path)
+        search_file = _register_search_file(_Sandbox(home / "Doc"))
+
+        result = search_file("quarterly_report")
+
+        assert [Path(f).name for f in result["files"]] == ["quarterly_report.txt"]

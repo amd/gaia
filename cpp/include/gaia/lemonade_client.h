@@ -152,7 +152,6 @@ public:
     json getSystemInfo(bool verbose = false);
 
     /// Set server-side parameters.
-    /// Mirrors Python set_params().
     json setParams(const json& params);
 
     /// Load (or reload) a model on the server.

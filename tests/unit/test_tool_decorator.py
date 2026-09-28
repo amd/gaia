@@ -74,7 +74,10 @@ class TestToolDecorator:
     def test_supported_kwargs_are_registered_unchanged(self):
         """All supported decorator kwargs retain their registry values."""
 
-        @tool(atomic=True, display_label="Run report", timeout=42.5)
+        def check(args):
+            return None
+
+        @tool(atomic=True, display_label="Run report", timeout=42.5, preflight=check)
         def configured_tool() -> str:
             """A configured tool."""
             return "result"
@@ -83,6 +86,7 @@ class TestToolDecorator:
         assert metadata["atomic"] is True
         assert metadata["display_label"] == "Run report"
         assert metadata["timeout"] == 42.5
+        assert metadata["preflight"] is check
 
     def test_multiple_tools_mixed_atomic(self):
         """Test that multiple tools can have different atomic values."""
@@ -255,6 +259,6 @@ class TestToolDecorator:
 
         assert str(exc_info.value) == (
             f"@tool(...) got unexpected keyword argument '{unexpected}' for tool "
-            "'demo_tool'. Accepted: atomic, display_label, timeout."
+            "'demo_tool'. Accepted: atomic, display_label, timeout, preflight."
         )
         assert "demo_tool" not in _TOOL_REGISTRY

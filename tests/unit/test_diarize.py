@@ -145,6 +145,17 @@ class TestArchiveSafety:
         with tarfile.open(archive, "w") as tar:
             tar.add(payload, arcname="../escaped.txt")
 
-        with tarfile.open(archive) as tar:
-            with pytest.raises(DiarizationError, match="outside"):
-                diarize._safe_extract(tar, tmp_path / "models")
+        with pytest.raises(DiarizationError, match="escapes the destination"):
+            diarize._unpack_models(archive, tmp_path / "models")
+        assert not (tmp_path / "escaped.txt").exists()
+
+    def test_refuses_a_special_file_member(self, tmp_path):
+        """A device or FIFO member is refused rather than silently skipped."""
+        archive = tmp_path / "evil.tar"
+        with tarfile.open(archive, "w") as tar:
+            node = tarfile.TarInfo("models/fifo")
+            node.type = tarfile.FIFOTYPE
+            tar.addfile(node)
+
+        with pytest.raises(DiarizationError, match="device or special file"):
+            diarize._unpack_models(archive, tmp_path / "models")

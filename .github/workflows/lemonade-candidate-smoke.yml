@@ -1,0 +1,182 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Finds out that the NEXT Lemonade release breaks GAIA before it is the current one.
+#
+# Lemonade v2026.39.1 started publishing candidate builds as GitHub prereleases
+# tagged candidate-v<version>, roughly a week ahead of the matching stable release.
+# That release also changed the version format to CalVer, which silently disabled
+# GAIA's version gates — caught by hand, after the fact, only because someone read
+# the release notes. candidate-v2026.39.1 existed seven days earlier.
+#
+# This job installs the current candidate's embeddable build (a ~6 MB archive that
+# runs as a plain subprocess — no installer, no machine-wide state) and checks the
+# contract GAIA actually depends on. It REPORTS, it does not gate: it runs on its
+# own schedule, never on a pull request, and a break files a rolling issue rather
+# than turning anything red.
+#
+# It deliberately does NOT touch what GAIA pins. lemonade-version-bump.yml tracks
+# releases/latest and must keep ignoring prereleases.
+name: Lemonade Candidate Smoke
+
+on:
+  schedule:
+    # Lemonade's release cutoff is Wednesday 16:00 UTC, so a candidate is up by
+    # Thursday. Check Friday: early enough to matter, late enough that the assets
+    # have finished uploading. Off the hour to dodge the fleet-wide cron spike.
+    - cron: "37 14 * * 5"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Test a specific tag (e.g. candidate-v2026.40.0). Blank = newest candidate."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write   # file/update the rolling issue when the contract breaks
+
+concurrency:
+  group: lemonade-candidate-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install GAIA
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv pip install --system -e .
+
+      - name: Resolve the candidate build
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCED_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${FORCED_TAG:-}" ]; then
+            release_json=$(gh api "repos/lemonade-sdk/lemonade/releases/tags/${FORCED_TAG}")
+          else
+            # Newest prerelease tagged candidate-v*. releases/latest excludes
+            # prereleases, so the list endpoint is the only way to see these.
+            #
+            # --slurp collects every page into ONE array before jq runs. Without it,
+            # gh applies --jq per page and "| first" yields one object PER PAGE, so
+            # the shell ends up holding several concatenated objects: tag goes
+            # multi-line, the asset name is malformed, and the run silently takes
+            # the "no asset yet" branch — green, and nothing smoked.
+            release_json=$(gh api repos/lemonade-sdk/lemonade/releases --paginate --slurp \
+              | jq -c '[.[][] | select(.prerelease and (.tag_name | startswith("candidate-v")))] | first')
+          fi
+
+          if [ -z "$release_json" ] || [ "$release_json" = "null" ]; then
+            echo "::notice::No candidate prerelease published right now — nothing to smoke."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag=$(echo "$release_json" | jq -r '.tag_name')
+          version=${tag#candidate-v}
+          asset="lemonade-embeddable-${version}-ubuntu-x64.tar.gz"
+          url=$(echo "$release_json" | jq -r --arg a "$asset" '.assets[] | select(.name == $a) | .browser_download_url')
+
+          if [ -z "$url" ]; then
+            # A prerelease can exist before every artifact finishes uploading. That is
+            # a normal race, not a GAIA problem, so say so and stop without failing.
+            echo "::notice::$tag has no $asset yet — skipping this run."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Smoking Lemonade candidate $tag"
+          { echo "found=true"; echo "tag=$tag"; echo "version=$version"; echo "url=$url"; } >> "$GITHUB_OUTPUT"
+
+      - name: Start the candidate server
+        if: steps.pick.outputs.found == 'true'
+        id: serve
+        run: |
+          set -euo pipefail
+          mkdir -p candidate/{dist,cache,config}
+          curl -sSL -o candidate/embeddable.tar.gz "${{ steps.pick.outputs.url }}"
+          tar -xzf candidate/embeddable.tar.gz -C candidate/dist
+          lemond=$(find candidate/dist -name lemond -type f | head -1)
+          [ -n "$lemond" ] || { echo "::error::no lemond binary inside the archive"; exit 1; }
+          chmod +x "$lemond"
+
+          # Mirror how gaia.llm.lemonade_embedded launches it: cache dir, config dir,
+          # a private port, and the key handed over in the environment.
+          key=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+          echo "::add-mask::$key"
+          echo "LEMONADE_API_KEY=$key" >> "$GITHUB_ENV"
+          printf '{"config_version": 2, "host": "localhost", "broadcast": false}\n' > candidate/config/config.json
+
+          LEMONADE_API_KEY="$key" "$lemond" candidate/cache candidate/config --port 8123 \
+            > candidate/lemond.log 2>&1 &
+          echo "pid=$!" >> "$GITHUB_OUTPUT"
+
+          for _ in $(seq 1 60); do
+            if curl -fsS -H "Authorization: Bearer $key" http://localhost:8123/api/v1/health >/dev/null 2>&1; then
+              echo "Candidate server is up."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::candidate server did not become healthy within 120s"
+          exit 1
+
+      - name: Check GAIA's contract against it
+        id: contract
+        if: steps.pick.outputs.found == 'true'
+        run: python util/check_lemonade_contract.py http://localhost:8123/api/v1
+
+      - name: Server log
+        if: failure() && steps.pick.outputs.found == 'true'
+        run: tail -100 candidate/lemond.log || true
+
+      - name: Stop the candidate server
+        if: always() && steps.serve.outputs.pid != ''
+        run: kill "${{ steps.serve.outputs.pid }}" 2>/dev/null || true
+
+      # Fail loudly, but in a channel nobody has to be watching: one rolling issue,
+      # commented rather than duplicated, so a break that persists for weeks is one
+      # thread instead of one issue per Friday.
+      # Scoped to the contract step: a download failure or a server that never
+      # started is an infrastructure problem, not Lemonade breaking GAIA, and
+      # filing it as one would cry wolf in a thread people are meant to trust.
+      - name: Report a broken contract
+        if: failure() && steps.contract.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          RUN_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          BODY="The Lemonade candidate **${TAG}** does not match the contract GAIA depends on.
+
+          This is a *candidate*, so nothing is broken for users yet — that is the point of catching it here. It usually becomes the stable release about a week later, and \`lemonade-version-bump.yml\` will then propose pinning it.
+
+          What to do: read the failing step for which check tripped — the version string no longer parsing through GAIA's gates, or \`/health\` dropping a field GAIA reads — and decide whether GAIA adapts or the change should be raised upstream first.
+
+          - Failing run: $RUN_URL
+          - Checker: \`util/check_lemonade_contract.py\`
+
+          cc @kovtcharov-amd"
+
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search 'in:title "Lemonade candidate contract"' --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "⚠️ Lemonade candidate contract check failed (${TAG})" \
+              --body "$BODY" --label bug --label devops --assignee kovtcharov-amd
+          fi

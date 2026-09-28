@@ -23,7 +23,7 @@ import (
 // an app tracks the mouse if you hold Shift (Option in iTerm2), and Ctrl+T
 // hands the mouse back outright for the ones that do not — that is SELECT
 // MODE, and because it silently stops the wheel from scrolling it says so in
-// a band that cannot be scrolled away, the rule the bypass banner follows.
+// a band that cannot be scrolled away, the rule the full access banner follows.
 const (
 	selectBannerText = "SELECT MODE — drag to select text, but the wheel no " +
 		"longer scrolls and links are not clickable. Ctrl+T or Esc to go back."

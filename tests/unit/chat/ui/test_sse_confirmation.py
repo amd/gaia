@@ -383,3 +383,51 @@ class TestSSEPathUnaffectedByDenyByDefault:
         assert denied[0]["reason"] == "unattended"
         assert "cannot run" in denied[0]["message"]
         assert handler.confirmation_denied_reason("send_now") == denied[0]["message"]
+
+
+# ===========================================================================
+# resolve_relay_input — delivering a needs_input answer (#2595)
+# ===========================================================================
+
+
+class _FakeRespondProxy:
+    """Fake EmailSidecarProxy exposing only respond_query, for handler tests."""
+
+    def __init__(self, *, raises=None):
+        self.calls = []
+        self._raises = raises
+
+    def respond_query(self, run_id, request_id, value):
+        self.calls.append((run_id, request_id, value))
+        if self._raises is not None:
+            raise self._raises
+        return {"run_id": run_id, "request_id": request_id, "accepted": True}
+
+
+class TestResolveRelayInput:
+    def test_no_active_relay_run_returns_false(self, handler):
+        """Nothing pending (no relay run in flight) -- caller should 404, not
+        report a fake accepted answer."""
+        assert handler.active_relay_proxy is None
+        assert handler.active_relay_run_id is None
+        assert handler.resolve_relay_input("req-1", "gmail") is False
+
+    def test_delivers_to_the_active_relay_proxy_and_returns_true(self, handler):
+        proxy = _FakeRespondProxy()
+        handler.active_relay_proxy = proxy
+        handler.active_relay_run_id = "rid-1"
+
+        assert handler.resolve_relay_input("req-1", "gmail") is True
+        assert proxy.calls == [("rid-1", "req-1", "gmail")]
+
+    def test_sidecar_rejection_propagates_uncaught(self, handler):
+        """A stale/already-answered question (409) must reach the caller as
+        an error -- never be swallowed into a silent no-op."""
+        from gaia.ui.email_sidecar.errors import SidecarHTTPError
+
+        proxy = _FakeRespondProxy(raises=SidecarHTTPError(409, "no longer pending"))
+        handler.active_relay_proxy = proxy
+        handler.active_relay_run_id = "rid-1"
+
+        with pytest.raises(SidecarHTTPError):
+            handler.resolve_relay_input("req-1", "gmail")

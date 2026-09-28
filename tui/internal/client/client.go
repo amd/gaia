@@ -29,6 +29,33 @@ type AgentResponder interface {
 	Respond(ctx context.Context, requestID, value string) error
 }
 
+// FollowUpSender is implemented by transports that can hand a RUNNING turn
+// something the user typed after it started.
+//
+// Distinct from Send, which starts a new turn and is refused while one is in
+// flight (the sidecar serialises turns per session on a run_lock), and from
+// AgentResponder, which answers a question the run is parked on. This one
+// interrupts nothing: the agent folds the text into the turn already running at
+// its next agent-loop step boundary, so a second thought during a five-minute
+// turn is answered in that turn instead of waiting it out.
+//
+// A transport that cannot do this simply does not implement it, and the UI
+// holds the message locally until the turn ends — today's behaviour — rather
+// than pretending it was delivered.
+type FollowUpSender interface {
+	// SendFollowUp delivers text to whatever run is currently streaming. It
+	// returns an actionable error if there is no live run to take it, or the
+	// request could not be delivered; the caller must then hold the message
+	// rather than drop it.
+	SendFollowUp(ctx context.Context, text string) error
+
+	// FollowUpSupported reports whether the PEER on the other end accepts
+	// follow-ups. Implementing the interface only says this transport speaks
+	// the call; an older sidecar has no endpoint for it, and the UI needs to
+	// know that before it tells the user the message is on its way.
+	FollowUpSupported() bool
+}
+
 // TranscriptResetter is implemented by transports that own the conversation
 // transcript host-side and push it back to a stateless agent on every turn.
 // Clearing the visible history must also clear what gets pushed.
@@ -112,11 +139,43 @@ type ToolPermissionResponder interface {
 	RespondToolPermission(confirmID string, decision PermissionDecision) error
 }
 
-// PermissionBypasser is implemented by transports that can put the agent into
-// (or take it out of) bypass-permissions mode, where gated tools run without
+// LivePermissionReporter is implemented by a transport whose ability to answer
+// a live permission prompt, or toggle full access, depends on the peer it
+// reached. Implementing ToolPermissionResponder is a static fact about the Go
+// type; this is the runtime answer. A transport without it is taken as always
+// able.
+type LivePermissionReporter interface {
+	SupportsLivePermissions() bool
+}
+
+// FullAccessSetter is implemented by transports that can put the agent into
+// (or take it out of) full-access mode, where gated tools run without
 // asking.
-type PermissionBypasser interface {
-	// SetBypassPermissions turns unattended approval on or off. It takes
+type FullAccessSetter interface {
+	// SetFullAccess turns unattended approval on or off. It takes
 	// effect on the next gated tool, including one in a turn already running.
-	SetBypassPermissions(enabled bool) error
+	SetFullAccess(enabled bool) error
+}
+
+// Capability names one optional thing a session can do, so the UI can offer
+// or refuse a command without hard-coding transport type switches.
+type Capability string
+
+// CapabilityMemory gates the /memory command: whether this session can fetch
+// the agent's stored memory dump.
+const CapabilityMemory Capability = "memory"
+
+// CapabilityReporter is implemented by transports that can answer, WITHOUT
+// blocking or probing, which optional commands this session supports right
+// now. Both return values matter: supported is the answer, known is whether
+// the answer is trustworthy yet.
+//
+// A daemon-relayed transport only learns the peer's contract from an async
+// probe (negotiate.go), which the UI cannot wait on from a synchronous,
+// per-keystroke call site (paletteFiltered, syncPalette). known == false
+// means "the probe hasn't resolved" -- callers must treat that as "do not
+// hide the command yet", never as "unsupported", or a command flickers away
+// on every keystroke until the probe lands.
+type CapabilityReporter interface {
+	Supports(c Capability) (supported, known bool)
 }

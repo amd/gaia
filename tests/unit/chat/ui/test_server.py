@@ -116,52 +116,13 @@ class TestSystemStatus:
         data = resp.json()
         assert data["disk_space_gb"] >= 0
 
-    def test_system_status_device_supported_fields_present(self, client):
-        """device_supported and processor_name fields must be present."""
-        resp = client.get("/api/system/status")
+    def test_system_status_names_the_processor_without_a_support_verdict(self, client):
+        """No machine is flagged unsupported: Settings shows the CPU for info only."""
+        with patch("gaia.device.get_processor_name", return_value="Apple M3 Max"):
+            resp = client.get("/api/system/status")
         data = resp.json()
-        assert "device_supported" in data
-        assert isinstance(data["device_supported"], bool)
-        # processor_name is optional (may be None)
-        assert "processor_name" in data
-
-    def test_system_status_skip_device_check_env_forces_supported(self, client):
-        """GAIA_SKIP_DEVICE_CHECK=1 makes device_supported always true."""
-        with patch.dict(os.environ, {"GAIA_SKIP_DEVICE_CHECK": "1"}):
-            with patch(
-                "gaia.device.check_device_supported", return_value=(False, "linux")
-            ):
-                resp = client.get("/api/system/status")
-        data = resp.json()
-        assert data["device_supported"] is True
-
-    def test_system_status_remote_lemonade_url_skips_device_check(self, client):
-        """Non-localhost LEMONADE_BASE_URL means device_supported is always true."""
-        with patch.dict(
-            os.environ, {"LEMONADE_BASE_URL": "https://remote-server:13305/api/v1"}
-        ):
-            with patch(
-                "gaia.device.check_device_supported",
-                return_value=(False, "AMD Ryzen 7 5800X"),
-            ):
-                resp = client.get("/api/system/status")
-        data = resp.json()
-        assert data["device_supported"] is True
-
-    def test_system_status_localhost_lemonade_url_still_checks_device(self, client):
-        """localhost LEMONADE_BASE_URL still runs the device check normally."""
-        with patch.dict(
-            os.environ,
-            {"LEMONADE_BASE_URL": "http://localhost:13305/api/v1"},
-            clear=False,
-        ):
-            with patch(
-                "gaia.device.check_device_supported",
-                return_value=(False, "AMD Ryzen 7 5800X"),
-            ):
-                resp = client.get("/api/system/status")
-        data = resp.json()
-        assert data["device_supported"] is False
+        assert data["processor_name"] == "Apple M3 Max"
+        assert "device_supported" not in data
 
     @patch("httpx.AsyncClient")
     def test_system_status_llm_health_fields_have_safe_defaults(
@@ -303,6 +264,69 @@ class TestSystemStatus:
         assert data["lemonade_running"] is True
         assert data["model_context_size"] == 32768
         assert data["context_size_sufficient"] is True
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_ctx_size_clamped_to_model_ceiling(
+        self, mock_httpx_cls, client
+    ):
+        """recipe_options.ctx_size is Lemonade's config echo of what was
+        REQUESTED, not a measurement — it can report the request even after
+        silently capping the real window lower (#2992). The reported
+        model_context_size must be clamped to max_context_window, matching
+        the CLI's LemonadeManager clamp, so the UI never shows a different
+        (higher, wrong) context than the CLI for the same running server."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "Gemma-4-E4B-it-GGUF",
+            "version": "9.2.0",
+            "all_models_loaded": [
+                {
+                    "model_name": "Gemma-4-E4B-it-GGUF",
+                    "type": "llm",
+                    "device": "amd_npu",
+                    # Requested 65536 (echoed back as "sufficient"), but the
+                    # model's real trained ceiling is 16384 — below GAIA's
+                    # 32768 minimum.
+                    "recipe_options": {"ctx_size": 65536},
+                    "max_context_window": 16384,
+                }
+            ],
+        }
+        models_data = {"data": [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]}
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/stats" in url:
+                return make_response(404, {})
+            if "/system-info" in url:
+                return make_response(404, {})
+            return make_response(200, models_data)
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        resp = client.get("/api/system/status")
+        data = resp.json()
+        assert data["lemonade_running"] is True
+        assert data["model_context_size"] == 16384, (
+            "Must report the real ceiling, not the raw recipe_options echo "
+            "that merely repeats the 65536 that was requested."
+        )
+        assert data["context_size_sufficient"] is False, (
+            "The echo alone (65536) would read as sufficient — only the "
+            "clamped real ceiling (16384 < 32768) reveals it is not."
+        )
 
     @patch("httpx.AsyncClient")
     def test_system_status_model_not_downloaded(self, mock_httpx_cls, client):
@@ -947,6 +971,79 @@ class TestSessionEndpoints:
     def test_create_session_invalid_mail_provider_rejected(self, client):
         resp = client.post("/api/sessions", json={"mail_provider": "yahoo"})
         assert resp.status_code == 422  # pattern validation fails loudly
+
+    @pytest.fixture
+    def gaia_only_registry(self):
+        from gaia.agents.registry import AgentRegistration, AgentRegistry
+
+        registry = AgentRegistry()
+        registry._register(
+            AgentRegistration(
+                id="gaia",
+                name="GAIA",
+                description="flagship",
+                source="installed",
+                conversation_starters=[],
+                factory=MagicMock(),
+                agent_dir=None,
+                models=[],
+            )
+        )
+        with patch("gaia.ui._chat_helpers._agent_registry", registry):
+            yield registry
+
+    def test_create_session_unknown_agent_type_rejected(
+        self, client, gaia_only_registry
+    ):
+        # #3883: a session for a removed agent could never answer a turn.
+        resp = client.post("/api/sessions", json={"agent_type": "data"})
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "'data'" in detail
+        assert "chat, email, gaia" in detail
+        assert client.get("/api/sessions").json()["total"] == 0
+
+    def test_create_session_registered_agent_type_accepted(
+        self, client, gaia_only_registry
+    ):
+        resp = client.post("/api/sessions", json={"agent_type": "gaia"})
+        assert resp.status_code == 200
+        assert resp.json()["agent_type"] == "gaia"
+
+    def test_update_session_unknown_agent_type_rejected(
+        self, client, gaia_only_registry
+    ):
+        sid = client.post("/api/sessions", json={"agent_type": "gaia"}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"agent_type": "data"})
+        assert resp.status_code == 422
+        assert client.get(f"/api/sessions/{sid}").json()["agent_type"] == "gaia"
+
+    def test_rejection_names_why_an_installed_agent_failed_to_load(
+        self, client, gaia_only_registry
+    ):
+        """An agent that is installed but broke on import must not be told to
+        install itself; the recorded reason is what the user can act on."""
+        gaia_only_registry._record_load_error(
+            "my-bot", "ImportError: No module named 'pandas'"
+        )
+        resp = client.post("/api/sessions", json={"agent_type": "my-bot"})
+        assert resp.status_code == 422
+        assert "It failed to load: ImportError: No module named 'pandas'." in (
+            resp.json()["detail"]
+        )
+
+    def test_the_listed_ids_include_every_accepted_one(
+        self, client, gaia_only_registry
+    ):
+        """A sidecar id is accepted without a registry entry, so it is listed."""
+        assert (
+            client.post("/api/sessions", json={"agent_type": "email"}).status_code
+            == 200
+        )
+        detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
+            "detail"
+        ]
+        assert "Registered agent ids: chat, email, gaia." in detail
 
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
@@ -1895,7 +1992,7 @@ class TestLemonadeApiKeyInjection:
 
     @patch("httpx.AsyncClient")
     def test_system_status_omits_authorization_header_when_no_key(
-        self, mock_httpx_cls, client
+        self, mock_httpx_cls, client, tmp_path
     ):
         captured_headers = []
 
@@ -1917,6 +2014,9 @@ class TestLemonadeApiKeyInjection:
         mock_httpx_cls.return_value = mock_client
 
         env_no_key = {k: v for k, v in os.environ.items() if k != "LEMONADE_API_KEY"}
+        # Empty GAIA_HOME: otherwise a developer running GAIA's own Lemonade
+        # supplies that server's key and "no key" never happens.
+        env_no_key["GAIA_HOME"] = str(tmp_path)
         with patch.dict(os.environ, env_no_key, clear=True):
             resp = client.get("/api/system/status")
         assert resp.status_code == 200

@@ -34,11 +34,11 @@ from gaia.connectors.registry import REGISTRY
 from gaia.connectors.spec import ConfigField, ConnectorSpec
 
 # Shared Graph scope tuples — referenced by BOTH specs so the two connectors'
-# scope sets cannot silently drift apart (#2628). openid + offline_access are
-# mandatory for the shared OAuth flow (id_token + refresh_token); User.Read
-# gives a basic profile for the success page.
+# scope sets cannot silently drift apart (#2628). offline_access is mandatory
+# for the shared OAuth flow (refresh_token); User.Read resolves the account
+# email via Graph /me. `openid` is deliberately absent — an Entra tenant can
+# reject the whole request over it (AADSTS65002, #4079).
 _DEFAULT_SCOPES = (
-    "openid",
     "offline_access",
     "https://graph.microsoft.com/User.Read",
 )

@@ -1,7 +1,6 @@
 id: list_windows
 name: "List Windows Tool"
 category: web_system
-agent_type: chat
 severity: low
 description: |
   Tests that list_windows tool is registered and returns window/process info.

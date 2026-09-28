@@ -239,8 +239,9 @@ class _InternalErrorFakeAgent:
     """
 
     ANSWER = (
-        "Local Lemonade Server is not reachable at http://localhost:13305 — "
-        "start it with `lemonade-server serve` (or run `gaia init`), then retry."
+        "Local Lemonade Server is not reachable at http://localhost:13305. "
+        "GAIA starts it automatically — run `gaia daemon start` if the "
+        "background service is not running."
     )
 
     def __init__(self):
@@ -470,8 +471,11 @@ def _assert_actionable_lemonade_detail(detail: str) -> None:
     where to look."""
     lower = detail.lower()
     assert "lemonade server is not reachable" in lower  # what failed
-    # what to do — start it (either remediation is acceptable copy).
-    assert "lemonade-server serve" in lower or "gaia init" in lower
+    # What to do. Asserted as "names SOME real remedy" rather than one exact
+    # command: the manual fallback is resolved per machine (CLAUDE.md — never
+    # hardcode how Lemonade is started), so pinning a literal here is how a
+    # command that exists on no modern install stayed asserted-as-real.
+    assert any(c in lower for c in ("gaia daemon start", "gaia init"))
     assert "amd-gaia.ai/docs/guides/email" in lower  # where to look
 
 
@@ -770,9 +774,7 @@ def test_thread_start_failure_releases_the_lock_and_deregisters_the_run(
             super().start()
 
     monkeypatch.setattr(query_routes.threading, "Thread", _FailingThread)
-    resp = app_client.post(
-        "/v1/email/query", json=_req(session_id="s1", run_id=run_id)
-    )
+    resp = app_client.post("/v1/email/query", json=_req(session_id="s1", run_id=run_id))
     assert resp.status_code == 500
 
     registry, _built = session_registry
@@ -825,6 +827,56 @@ def test_context_replaces_conversation_history_not_appends(
     assert agent.seen_history == ctx
 
 
+def test_run_lock_is_released_before_the_done_sentinel(
+    app_client, session_registry, monkeypatch
+):
+    """Regression pin (#2919): a client that observes the done-sentinel
+    (``signal_done()``) must never race a still-held ``run_lock`` -- a resend
+    on the same session right after seeing completion must not get a
+    spurious 409. Pins the ORDER (release, then signal_done), not merely
+    that both eventually happen, so a future reorder fails loudly."""
+    import gaia.ui.sse_handler as sse_mod
+
+    registry, _built = session_registry
+    session = registry.get_or_create("s1")
+
+    order: list = []
+
+    class _TrackedLock:
+        """Wraps the real lock -- a bare ``threading.Lock`` instance has no
+        ``__dict__`` and rejects attribute assignment, so the release call
+        can't be monkeypatched directly."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def acquire(self, *a, **k):
+            return self._inner.acquire(*a, **k)
+
+        def release(self):
+            order.append("release")
+            return self._inner.release()
+
+        def locked(self):
+            return self._inner.locked()
+
+    session.run_lock = _TrackedLock(session.run_lock)
+
+    real_signal_done = sse_mod.SSEOutputHandler.signal_done
+
+    def _tracked_signal_done(self):
+        order.append("signal_done")
+        return real_signal_done(self)
+
+    monkeypatch.setattr(sse_mod.SSEOutputHandler, "signal_done", _tracked_signal_done)
+
+    resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    assert resp.status_code == 200
+    _parse_sse(resp.text)  # drains the stream, so the worker thread has finished
+
+    assert order == ["release", "signal_done"], order
+
+
 def test_unknown_session_with_prior_context_gets_continuity_notice(
     app_client, session_registry
 ):
@@ -852,9 +904,7 @@ def test_brand_new_session_with_empty_context_gets_no_notice(
 ):
     """First turn of a genuinely new conversation is NOT a continuity loss --
     no session was ever expected to exist yet."""
-    resp = app_client.post(
-        "/v1/email/query", json=_req(session_id="s-new", context=[])
-    )
+    resp = app_client.post("/v1/email/query", json=_req(session_id="s-new", context=[]))
     assert resp.status_code == 200
     events = _parse_sse(resp.text)
     statuses = [e.get("message", "") for e in events if e["type"] == "status"]

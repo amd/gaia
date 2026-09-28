@@ -27,11 +27,7 @@ Before using Agent Memory, make sure you have the following in place:
 
 - **Extras required:** `[dev,rag]` — `[rag]` provides the FAISS index used for memory recall; `[dev]` adds the developer toolchain
 
-- **Lemonade server** must be running before you start:
-
-  ```bash
-  lemonade-server serve
-  ```
+- **Model server:** nothing to start — `gaia daemon` resolves and supervises it. If Lemonade isn't installed yet, run `gaia init`
 
 - **Example files** referenced in this guide are inside the cloned repo under `examples/`
 
@@ -40,7 +36,7 @@ Before using Agent Memory, make sure you have the following in place:
 </Note>
 
 <Note>
-  **Memory is opt-in (beta) and disabled by default.** This feature is still under active development -- every new GAIA install ships with memory off, so you'll see standard chat behavior until you turn it on. See [Enable Memory](#enable-memory) below before trying any examples on this page.
+  **Memory is opt-in (beta) and disabled by default.** This feature is still under active development -- every new GAIA install ships with memory off, so you'll see standard chat behavior until you turn it on. With memory disabled, prompt construction and session reset do no memory work. The SDK `memory_store` accessor returns `None` for a disabled session; callers can use `memory_unavailable_message()` to explain why. See [Enable Memory](#enable-memory) below before trying any examples on this page.
 </Note>
 
 ---
@@ -107,7 +103,7 @@ The agent remembered across sessions -- no copy-paste, no notes app. Run `gaia c
 Agent memory operates on four principles:
 
 1. **Store automatically once enabled** -- conversations, tool calls, errors, and preferences are captured without manual effort
-2. **Recall naturally** -- hybrid semantic+keyword search finds memories by meaning, not just exact words. The LLM decides when to search using its own tools (no forced pre-query step).
+2. **Recall naturally** -- each turn, the few stored memories most relevant to your message are added to the agent's context automatically, each with the date it was learned. For anything more, the LLM searches with its own tools: hybrid semantic+keyword search finds memories by meaning, not just exact words.
 3. **Learn continuously** -- LLM extraction from every conversation, not just regex patterns. The agent sees what it already knows and decides what's new, what's changed, and what's contradicted -- like intelligent memory management.
 4. **Be temporally aware** -- the agent knows the current time, what is coming up, what is overdue, and proactively surfaces time-sensitive items
 
@@ -304,18 +300,14 @@ Different areas of your life produce different knowledge. Without scoping, the a
 | `personal` | Personal assistant mode | Appointments, health goals, personal contacts |
 | Custom (e.g., `project-x`) | User-defined per project | Project-specific facts, skills, errors |
 
-The agent's system prompt always includes `global` items plus items from the active context. You can switch contexts mid-session:
+In a default session the active context is `global`, and the system prompt includes memories from every context. An agent that sets a specific context sees that context plus `global`, and new memories are stored under the active context:
 
-```
-You: "Switch to my personal context"
-Agent: "Switched to your personal context."
-
-You: "Remember that my dentist appointment is Thursday at 2pm"
-Agent: "Done -- dentist appointment Thursday at 2pm, stored in your personal context."
+```python
+agent.set_memory_context("personal")   # or init_memory(context="personal")
 ```
 
 <Tip>
-  When you use `gaia chat`, the default context is `global`. You can start with a specific context by telling the agent, or programmatically via `init_memory(context="work")` in the SDK.
+  `gaia chat` runs in the default `global` context. The model can't choose a context when it stores a memory, so a memory can't be filed somewhere no later session reads it.
 </Tip>
 
 ---
@@ -387,12 +379,16 @@ The same mechanism powers **accountability** -- commit to something ("I'll exerc
 
 ## Intelligent Extraction
 
-After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory alongside the new conversation and decides whether to **ADD** new knowledge, **UPDATE** a changed fact (old version preserved with lineage), or **DELETE** something you've contradicted.
+After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory, the new conversation, and what the tools returned during the turn, and decides whether to **ADD** new knowledge, **UPDATE** a changed fact (old version preserved with lineage), or **DELETE** something you've contradicted.
 
-It extracts information useful in future conversations -- facts, preferences, project details, people, deadlines -- and skips greetings, confirmations, and ephemeral details. For example, "we standardized on Python 3.12 and I'm using a Ryzen 9 9950X" stores two facts but ignores subjective asides like "it's much faster."
+This happens *after* your answer is on screen, in the background, so it never adds to how long you wait for a reply. A fact you state may take a few more seconds to appear in the Memory Dashboard than the answer itself did.
+
+It extracts information useful in future conversations -- facts, preferences, project details, people, deadlines -- and skips greetings, confirmations, ephemeral details, and narration of the current session (where you're working, what was just changed). For example, "we standardized on Python 3.12 and I'm using a Ryzen 9 9950X" stores two facts but ignores subjective asides like "it's much faster."
+
+Only what you said or what a tool showed is stored. A claim that appears only in the agent's own answer is not, because the answer can be wrong, and a permission refusal is not, because permissions change.
 
 <Tip>
-  Intelligent extraction kicks in for messages of 20+ words. Short messages like "yes" or "thanks" are skipped. The LLM's explicit memory tools (`remember`, `update_memory`, `forget`) still handle anything the auto-extraction misses.
+  Intelligent extraction kicks in for messages of 5+ words. Short messages like "yes" or "thanks" are skipped. The LLM's explicit memory tools (`remember`, `update_memory`, `forget`) still handle anything the auto-extraction misses.
 </Tip>
 
 ---
@@ -444,6 +440,14 @@ actual rows instead of asking the agent to summarize its own memory (which can
 omit or misremember what it stored). It only reads; editing, deleting, and
 adding are still Agent UI features.
 
+`/memory` works the same way regardless of how the flagship agent got onto your
+machine -- installed standalone, or hub-installed via `gaia init` and run as a
+daemon-supervised sidecar. The one thing that can still block it is an
+out-of-date sidecar: a peer built before this contract has no memory route at
+all, and `/memory` says so and names the fix rather than failing silently --
+`gaia hub uninstall gaia` then `gaia hub install gaia` picks up a build that has
+it.
+
 ---
 
 ## How Memory Improves Over Time
@@ -453,7 +457,8 @@ These mechanisms run automatically -- you don't need to manage them.
 - **Confidence scoring** -- every entry has a 0.0--1.0 confidence. Newly created entries start lower for auto-captured items (LLM-extracted and discovery at **0.4**; tool-stored, error, and consolidation at **0.5**) and higher for user-created dashboard entries (**0.8**). Each recall adds +0.02, so frequently-used memories rank higher in the system prompt.
 - **Confidence decay** -- entries not accessed for 30+ days are multiplied by 0.9 once per session start, so stale knowledge fades in favor of what you actively use.
 - **Fact lineage** -- when a fact changes, the old version is kept with a `superseded_by` link and its original timestamp, so you can answer "what framework were we using in March?" The dashboard's superseded view shows the full chain.
-- **Automatic error learning** -- a failed tool call is stored as an error pattern; the next session's system prompt includes a "Known errors to avoid" list so the agent doesn't repeat it.
+- **Automatic error learning** -- a tool call that ran and failed is stored as an error pattern; the next session's system prompt includes a "Known errors to avoid" list so the agent doesn't repeat it. Calls the permission layer refused — including ones you declined at the confirmation prompt — are not stored (they describe your current permissions, which can change) and never clear what is already stored; an error is dropped as soon as the same operation (the same program or path) actually runs and succeeds.
+- **Lessons from fixes** -- when a call fails and a changed call of the same kind then works in the same turn (for example `pytest` fails until the agent adds `env TOYBOX_CLOCK=frozen`), GAIA keeps both calls as a lesson for that project. Later sessions anywhere in the same project see it in their system prompt with the date it was learned; another project never does. Scope is the project root -- the repository you are working in, or `GAIA_PROJECT_ROOT` when you set it -- so approving a file elsewhere mid-session doesn't move your lessons. It gains confidence each session the fix works again, is dropped if the fix itself fails, and a newer fix for the same operation replaces the older one rather than piling up variants.
 - **Session consolidation** -- conversations older than 14 days are distilled into durable notes (extracted facts live indefinitely; raw conversations are pruned at 90 days, but only once their whole session has been distilled), so old context is never lost.
 - **Background reconciliation** -- on startup the agent resolves contradictory facts across sessions, superseding the older item and boosting the newer (and reinforcing) one's confidence.
 

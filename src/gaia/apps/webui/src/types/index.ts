@@ -20,7 +20,7 @@ export interface Session {
     /** Device used for this session (cpu / gpu / npu). */
     device?: string;
     /** Mail provider for email-triage sessions ("google" | "microsoft"). */
-    mail_provider?: string;
+    mail_provider?: string | null;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */
@@ -42,6 +42,18 @@ export interface ModelTier {
     default?: boolean;
 }
 
+/**
+ * An agent as the backend describes it.
+ *
+ * Every field here must be emitted by a real backend response — either
+ * ``GET /api/agents`` (``gaia.ui.models.AgentInfo``) or
+ * ``GET /api/agents/catalog`` (``gaia.hub.catalog.merge_with_registry``).
+ * Declaring one that nothing sends costs nothing at compile time and reads as
+ * ``undefined`` forever at runtime (#2970, #3842), so
+ * ``tests/unit/test_webui_agent_info_contract.py`` fails the build on any field
+ * no emitter produces. The one deliberate exception is ``version``, normalized
+ * client-side and listed in that test's allowlist.
+ */
 export interface AgentInfo {
     id: string;
     name: string;
@@ -117,8 +129,6 @@ export interface AgentInfo {
     installed_version?: string;
     /** Latest version offered by the catalog — set when newer than ``version``. */
     latest_version?: string;
-    /** Per-agent compatibility verdict from the backend's system check. */
-    compatibility?: AgentCompatibility;
     /** Download size of the agent package in bytes (Available cards). */
     download_size_bytes?: number;
     /**
@@ -141,14 +151,18 @@ export interface AgentInfo {
      * Hub shows a "Trust & Install" confirmation before sending ``trust_native``.
      */
     requires_trust?: boolean;
-    /** Optional remote avatar image URL from the catalog. */
-    avatar_url?: string;
     /** True when the publisher has deprecated this agent. */
     deprecated?: boolean;
     /** Public URL of the eval scorecard markdown; absent when none was published. */
     eval_scorecard_url?: string;
     /** Aggregate eval score (0–100) from the latest published scorecard; absent when none. */
     eval_score?: number;
+    /**
+     * Agent version the scorecard was actually measured at (#2965) — the
+     * scorecard is only regenerated on a fresh eval, not on every release, so
+     * this is often behind `version`. Absent when none published/parseable.
+     */
+    eval_score_version?: string;
 }
 
 /** Derived card state for the Agent Hub (issue #1097). */
@@ -157,19 +171,6 @@ export type AgentCardState =
     | 'available'
     | 'update_available'
     | 'installing';
-
-/**
- * Per-agent compatibility verdict (issue #1096/#1097).
- *
- * ``level`` drives the green/yellow/red indicator: ``compatible`` (green),
- * ``warning`` (yellow — runnable but a requirement is marginal), and
- * ``incompatible`` (red — Install is disabled). ``reasons`` explains any
- * non-green verdict for the tooltip.
- */
-export interface AgentCompatibility {
-    level: 'compatible' | 'warning' | 'incompatible';
-    reasons?: string[];
-}
 
 /**
  * Wire-level install state machine from the backend (issue #1096), distinct
@@ -422,6 +423,8 @@ export interface Settings {
     dynamic_tools: boolean;
     /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */
     dynamic_tools_locked: boolean;
+    /** Background agent behaviour; a legacy stored "autonomous" is reported as "goal_driven". */
+    agent_mode: 'manual' | 'goal_driven';
 }
 
 /** Status of the GAIA Agent UI MCP server (exposes UI tools to Claude Code etc.). */
@@ -478,20 +481,18 @@ export interface SystemStatus {
     gpu_vram_gb: number | null;
     tokens_per_second: number | null;
     time_to_first_token: number | null;
-    // Device compatibility check
     processor_name: string | null;
-    device_supported: boolean;
     // LLM configuration health
     context_size_sufficient: boolean;
     model_downloaded: boolean | null;
-    default_model_name: string | null;
+    default_model_name: string;
     /**
      * Catalog-reported size of ``default_model_name`` (GB). Used by the
      * "model not downloaded" banner so the size hint stays in sync with
      * the actual default — replaces the previously hard-coded "~25 GB".
      */
     default_model_size_gb: number | null;
-    lemonade_url: string | null;
+    lemonade_url: string;
     expected_model_loaded: boolean;
     /** Live progress while a model pull is in flight. ``null`` otherwise. */
     download_progress: DownloadProgress | null;
@@ -500,6 +501,8 @@ export interface SystemStatus {
     init_tasks?: Array<{ name: string; status: string }>;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
     detected_devices?: string[];
+    /** Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu"). */
+    active_profile: string;
 }
 
 /**
@@ -544,8 +547,8 @@ export interface FileEntry {
     path: string;
     type: 'file' | 'folder';
     size: number;
-    extension: string;
-    modified: string;
+    extension: string | null;
+    modified: string | null;
 }
 
 /** A quick-access link (Desktop, Documents, Downloads, etc.). */
@@ -604,6 +607,8 @@ export interface Schedule {
     run_count: number;
     error_count: number;
     session_id: string | null;
+    /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
+    schedule_config: string | null;
 }
 
 /** A single execution result for a scheduled task. */
@@ -721,11 +726,11 @@ export type StreamEventType =
     | 'tool_end'     // Tool execution completed
     | 'tool_result'  // Tool result summary
     | 'tool_args'    // Tool arguments detail
-    | 'tool_confirm' // Tool requires user confirmation (blocking)
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
     | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
+    | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
@@ -766,10 +771,20 @@ export interface StreamEvent {
     };
     /** Agent ID of the newly created agent (for agent_created events). */
     agent_id?: string;
-    /** Confirmation ID (for tool_confirm events). */
+    /** Confirmation ID (for permission_request events). */
     confirm_id?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
     action?: string;
+    /** Question id to echo back on POST /chat/user-input (for needs_input events). */
+    request_id?: string;
+    /** The question text (for needs_input events). */
+    question?: string;
+    /** 2-4 mutually-exclusive answer options (for needs_input events). */
+    options?: Array<{ value: string; label: string; description: string }>;
+    /** Whether a free-text answer is also accepted (for needs_input events). */
+    allow_free_text?: boolean;
+    /** Whether the answer must never be echoed into visible history (for needs_input events). */
+    sensitive?: boolean;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */

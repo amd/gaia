@@ -793,7 +793,7 @@ async def test_connector(connector_id: str) -> Dict[str, Any]:
 async def disconnect_connector(connector_id: str) -> Response:
     """Disconnect a connector — removes credentials and (for MCP) removes from mcp_servers.json."""
     try:
-        await disconnect(connector_id)
+        revoke_result = await disconnect(connector_id)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"Unknown connector: {connector_id!r}"
@@ -801,7 +801,14 @@ async def disconnect_connector(connector_id: str) -> Response:
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
 
-    await _emitter.emit("connector.disconnected", {"connector_id": connector_id})
+    # #2591: carry the provider-side revoke outcome on the SSE event (never
+    # present a bare "disconnected" that reads as a full revoke when only
+    # the local credential was cleared). ``revoke_result`` is ``None`` for
+    # handler types with no remote-revoke concept (e.g. MCP servers).
+    await _emitter.emit(
+        "connector.disconnected",
+        {"connector_id": connector_id, **(revoke_result or {})},
+    )
     return Response(status_code=204)
 
 
@@ -1177,12 +1184,17 @@ async def revoke_forwarded_connection(provider: str) -> Response:
     from gaia.connectors.store import clear_provider_credentials
     from gaia.connectors.tokens import _cache as _token_cache
 
-    connections.revoke_connection(provider)
+    # #2591: call the async core directly — this handler is already on the
+    # event loop, and ``revoke_connection``'s sync wrapper would raise
+    # rather than let a nested loop deadlock.
+    revoke_result = await connections.revoke_connection_async(provider)
     clear_provider_credentials(provider)
     revoke_all_grants_for(provider)
     _provider_registry.pop(provider, None)
     for key in [k for k in _token_cache if k[0] == provider]:
         _token_cache.pop(key, None)
 
-    await _emitter.emit("connector.disconnected", {"connector_id": provider})
+    await _emitter.emit(
+        "connector.disconnected", {"connector_id": provider, **revoke_result}
+    )
     return Response(status_code=204)

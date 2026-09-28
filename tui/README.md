@@ -124,11 +124,27 @@ gaia-tui status             # is the background service running, and what do I h
 gaia-tui version
 ```
 
-`--bypass-permissions` is available only for agents launched as subprocesses.
+`--full-access` is available only for agents launched as subprocesses.
 Daemon-backed agents, including a Hub-installed flagship, reject it before
-readiness checks; omit the flag to run with confirmation prompts enabled.
+readiness checks; a saved `full_access` preference leaves prompts on there
+instead, and says so in the chat.
 
 Full command reference: <https://amd-gaia.ai/docs/reference/cli>
+
+## Running on gateway-hosted models
+
+Type `/gateway` in chat to connect the AMD LLM gateway — larger on-prem
+models and frontier models, running through the same Lemonade your local models
+use. The screen walks you through the gateway URL, your token, and which models
+to enable; the active one becomes the default for new chats.
+
+The TUI masks the token field and never writes the token to a file of its own —
+it hands it to Lemonade, then asks GAIA's background service to keep a copy in
+your OS credential store, so the next launch does not ask again. Only your
+base URL and model selection go to `~/.gaia/gateway.json`. Needs Lemonade
+11.8.0+.
+
+Details: <https://amd-gaia.ai/docs/guides/llm-gateway>
 
 ---
 
@@ -159,9 +175,13 @@ fine.
 Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
 **Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
 the masked field; it stays in Lemonade memory until the server restarts. Provider
-settings are shared with other clients of that server. Fireworks suggests
-`fireworks.gemma-4-31b-it` when your account exposes it. AMD Gateway accepts your
-organization's HTTPS endpoint and authentication header.
+settings are shared with other clients of that server. For Fireworks, the models
+that scored best on GAIA's agent benchmark are listed first, ranked and labelled
+with why (`fireworks.glm-5p3-flash` — best overall, cheapest;
+`fireworks.deepseek-v4p1-flash` — fastest;
+`fireworks.deepseek-v4-pro-0813` — most truthful) whenever your account exposes
+them. AMD Gateway accepts your organization's HTTPS endpoint and authentication
+header.
 
 Type to search discovered models, then press Enter to select. The header shows
 the active provider; remote chat sends conversation history to that provider.
@@ -282,6 +302,16 @@ HOME="$TMPHOME" gaia daemon start
 HOME="$TMPHOME" gaia daemon stop
 rm -rf "$TMPHOME"
 ```
+
+## Clearing a conversation
+
+`/clear` clears the conversation context as well as the visible transcript. The
+flagship keeps its running process, selected model, loaded skills, and permission
+settings. If the agent cannot acknowledge the reset, the transcript remains visible
+with an error. Stored long-term memories are unaffected.
+Legacy `--subprocess` and `--mock` connections clear the view with a visible note
+that their agent-side context is unchanged, because their protocol has no reset.
+
 
 ## The `tui` prefix
 

@@ -255,8 +255,7 @@ class TestUnsupportedPlatformDoesNotFailTheRun:
     def _cmd(self):
         from gaia.installer.init_command import InitCommand
 
-        with patch("gaia.installer.init_command.LemonadeInstaller"):
-            return InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True)
+        return InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True)
 
     def _run_with_install_error(self, exc):
         from gaia.hub import installer as hub_installer
@@ -316,8 +315,7 @@ class TestFlagshipCompletionMessage:
     def _completion(self, available):
         from gaia.installer.init_command import InitCommand
 
-        with patch("gaia.installer.init_command.LemonadeInstaller"):
-            cmd = InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True)
+        cmd = InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True)
         cmd._is_hub_agent_available = lambda _id: available
         printed = []
         cmd._print = lambda msg, end="\n": printed.append(msg)

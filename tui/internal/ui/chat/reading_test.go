@@ -15,7 +15,9 @@ import (
 )
 
 // "GAIA │ GAIA" over "Welcome to GAIA / Connected to: GAIA" is the product name
-// four times before the user has typed anything.
+// four times before the user has typed anything. The agent identity chip
+// names the agent id instead ("agent gaia"), which is a different string from
+// the product literal even for the flagship.
 func TestTheProductNameIsNotRepeatedBackAtTheUser(t *testing.T) {
 	m := NewChatModel(&nullClient{}, "GAIA", "", false)
 	m.width, m.height = 100, 30
@@ -30,14 +32,15 @@ func TestTheProductNameIsNotRepeatedBackAtTheUser(t *testing.T) {
 		t.Errorf("welcome repeats the product name as an agent name:\n%s", welcome)
 	}
 
-	// A DIFFERENT agent still gets named — that line carries information.
+	// A DIFFERENT agent still gets named — that line carries information. The
+	// identity chip always lowercases the id, so "Email" reads as "email".
 	other := NewChatModel(&nullClient{}, "Email", "", false)
 	other.width, other.height = 100, 30
 	other.resize()
-	if h := ansi.Strip(other.renderHeader()); !strings.Contains(h, "Email") {
+	if h := ansi.Strip(other.renderHeader()); !strings.Contains(h, "email") {
 		t.Errorf("a non-flagship agent lost its name from the header: %q", h)
 	}
-	if w := ansi.Strip(other.renderWelcome()); !strings.Contains(w, "Email") {
+	if w := ansi.Strip(other.renderWelcome()); !strings.Contains(w, "email") {
 		t.Errorf("a non-flagship agent lost its name from the welcome:\n%s", w)
 	}
 }
@@ -118,12 +121,18 @@ func TestSendingAQuestionReturnsToTheNewestContent(t *testing.T) {
 
 // Tokens land in the transcript as they arrive — a 90s turn that shows nothing
 // until the final event is indistinguishable from a hang.
+//
+// Through the repaint tick, not straight off the token: tokens arrive faster
+// than a screen refreshes, so the model coalesces them (markDirty) and the
+// spinner tick — ten a second for the whole turn — is what puts them up. That
+// is the pipeline a user watches, so it is the one this asserts against.
 func TestStreamedTokensAppearBeforeTheFinalEvent(t *testing.T) {
 	m := newTestChat(t)
 	m = feed(t, m,
 		event.CanonicalTokenEvent{Type: "token", Delta: "The github-triage skill "},
 		event.CanonicalTokenEvent{Type: "token", Delta: "clusters open issues."},
 	)
+	m = repaint(t, m)
 
 	if out := ansi.Strip(m.viewport.View()); !strings.Contains(out, "clusters open issues.") {
 		t.Errorf("streamed tokens are not on screen before `final`:\n%s", out)

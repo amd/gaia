@@ -1,7 +1,6 @@
 id: topic_switch
 name: "Rapid Topic Switch"
 category: adversarial
-agent_type: doc
 severity: medium
 description: |
   User rapidly switches topics between two different documents across four turns.

@@ -1,7 +1,6 @@
 id: us_labor_statistics_xlsx
 name: "US Labor Statistics 2024 Spreadsheet Multi-Sheet Analysis"
 category: real_world
-agent_type: data
 severity: high
 description: |
   Agent must analyze a two-sheet Excel spreadsheet (Monthly Unemployment + Industry Breakdown)

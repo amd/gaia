@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <gtest/gtest.h>
+#include <gaia/agent.h>
 #include <gaia/session.h>
 #include <gaia/types.h>
 
@@ -10,6 +11,8 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
+
+#include "support/mock_llm_server.h"
 
 using json = nlohmann::json;
 
@@ -321,4 +324,107 @@ TEST_F(SessionStoreTest, EmptyHistory) {
 
     auto loaded = store->load("empty-session");
     EXPECT_TRUE(loaded.empty());
+}
+
+TEST_F(SessionStoreTest, MultimodalHistorySurvivesRepeatedSaveLoad) {
+    const std::vector<std::vector<ContentPart>> examples = {
+        {ContentPart::makeText("text only")},
+        {ContentPart::makeImageUrl("data:image/png;base64,aGVsbG8=")},
+        {ContentPart::makeText("first"),
+         ContentPart::makeImageUrl("https://example.test/image.png"),
+         ContentPart::makeText("second"),
+         ContentPart::makeImageUrl("data:image/jpeg;base64,d29ybGQ=")},
+        {}
+    };
+    for (const auto& parts : examples) {
+        Message original;
+        original.role = MessageRole::USER;
+        original.parts = parts;
+        store->save("vision", {original});
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            auto loaded = store->load("vision");
+            ASSERT_EQ(loaded.size(), 1u);
+            ASSERT_TRUE(loaded[0].parts.has_value());
+            EXPECT_EQ(loaded[0].toJson(), original.toJson());
+            store->save("vision", loaded);
+        }
+    }
+}
+
+TEST_F(SessionStoreTest, LegacyTextAndNativeToolHistoryRemainCompatible) {
+    const json messages = json::array({
+        {{"role", "user"}, {"content", "hello"}},
+        {{"role", "assistant"}, {"content", nullptr}, {"tool_calls", json::array({
+            {{"id", "call_1"}, {"type", "function"},
+             {"function", {{"name", "read_file"}, {"arguments", "{}"}}}}
+        })}},
+        {{"role", "tool"}, {"content", "contents"},
+         {"name", "read_file"}, {"tool_call_id", "call_1"}}
+    });
+    fs::create_directories(storeDir);
+    {
+        // Old session envelopes need no version to remain readable.
+        std::ofstream file(storeDir / "legacy.json");
+        file << json{{"messages", messages}}.dump();
+    }
+    auto loaded = store->load("legacy");
+    ASSERT_EQ(loaded.size(), messages.size());
+    for (size_t i = 0; i < loaded.size(); ++i) {
+        EXPECT_FALSE(loaded[i].parts.has_value());
+        EXPECT_EQ(loaded[i].toJson(), messages[i]);
+    }
+}
+
+TEST_F(SessionStoreTest, ResumedVisionHistoryReachesCompletionRequest) {
+    Message original;
+    original.role = MessageRole::USER;
+    original.parts = std::vector<ContentPart>{
+        ContentPart::makeText("first"),
+        ContentPart::makeImageUrl("data:image/png;base64,aGVsbG8="),
+        ContentPart::makeText("second")
+    };
+    store->save("resume-vision", {original});
+    auto loaded = store->load("resume-vision");
+    ASSERT_EQ(loaded.size(), 1u);
+    EXPECT_EQ(loaded[0].content, "first\nsecond");
+
+    bench::MockLlmServer server;
+    server.pushResponse(R"({"choices":[{"message":{"content":"{\"thought\":\"t\",\"goal\":\"g\",\"answer\":\"done\"}"}}]})");
+    AgentConfig config;
+    config.baseUrl = server.baseUrl();
+    config.modelId = "";
+    config.silentMode = true;
+    class Bare : public Agent { public: using Agent::Agent; };
+    Bare agent(config);
+    agent.setHistory(std::move(loaded));
+    EXPECT_EQ(agent.processQuery("What was in that image?")["result"], "done");
+
+    ASSERT_FALSE(server.receivedBodies().empty());
+    const auto request = json::parse(server.receivedBodies().back());
+    bool found = false;
+    for (const auto& message : request["messages"]) {
+        if (message == original.toJson()) found = true;
+    }
+    EXPECT_TRUE(found) << request.dump();
+}
+
+TEST_F(SessionStoreTest, RejectMalformedContentParts) {
+    const std::vector<json> invalid = {
+        nullptr, "text", json::object(), {{"type", 1}},
+        {{"type", "text"}}, {{"type", "text"}, {"text", 7}},
+        {{"type", "image_url"}}, {{"type", "image_url"}, {"image_url", "url"}},
+        {{"type", "image_url"}, {"image_url", {{"url", 7}}}},
+        {{"type", "audio"}, {"audio", "unsupported"}}
+    };
+    fs::create_directories(storeDir);
+    for (const auto& part : invalid) {
+        const json session = {{"messages", json::array({{
+            {"role", "user"}, {"content", json::array({part})}
+        }})}};
+        {
+            std::ofstream file(storeDir / "malformed.json");
+            file << session.dump();
+        }
+        EXPECT_THROW(store->load("malformed"), std::runtime_error) << part.dump();
+    }
 }

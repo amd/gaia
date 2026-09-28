@@ -65,6 +65,11 @@ class OAuthProvider(Protocol):
     client_id: str
     client_id_hash: str
     default_scopes: Sequence[str]
+    # Public per-app revoke endpoint, or None when the provider has none
+    # (Microsoft today). Required, never optional: ``flow.revoke_provider_token``
+    # reads it directly, so a provider that omits it raises instead of silently
+    # reporting "revoke not supported" for a grant that is still live (#2591).
+    revoke_url: str | None
 
     def authorization_url(
         self,

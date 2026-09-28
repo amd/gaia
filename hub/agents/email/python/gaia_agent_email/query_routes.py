@@ -72,6 +72,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from gaia.agents.base.readiness import start_advice
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -436,8 +437,8 @@ def _terminal_error_detail(exc: BaseException) -> str:
     raw = str(exc) or type(exc).__name__
     return (
         f"Local Lemonade Server is not reachable at {target}. The email agent "
-        "runs local inference, so it needs Lemonade Server running. Start it "
-        "with `lemonade-server serve` (or run `gaia init`), then retry. "
+        "runs local inference, so it needs Lemonade Server running. "
+        f"{start_advice()} "
         f"Docs: {_LEMONADE_DOCS_URL}"
         f"\n\nTechnical details: {raw}"
     )
@@ -636,6 +637,7 @@ async def query(request: QueryRequest) -> StreamingResponse:
         user_query = request.query
 
         def _run_agent() -> None:
+            error_detail: Optional[str] = None
             try:
                 if max_steps is not None:
                     run.result = agent.process_query(user_query, max_steps=max_steps)
@@ -646,13 +648,17 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 # Lemonade-down is the most common failure; emit actionable
                 # copy (never the raw urllib3/requests repr) while leaving
                 # genuinely unexpected errors verbatim (#2139).
-                handler._emit(
-                    {"type": "agent_error", "content": _terminal_error_detail(exc)}
-                )
+                error_detail = _terminal_error_detail(exc)
             finally:
-                handler.signal_done()
+                # Release BEFORE signalling done (#2919): the client can see
+                # the done-sentinel and immediately resend on this session —
+                # the lock must already be free by then, or that resend gets
+                # a spurious 409.
                 if session is not None:
                     session.run_lock.release()
+            if error_detail is not None:
+                handler._emit({"type": "agent_error", "content": error_detail})
+            handler.signal_done()
 
         thread = threading.Thread(target=_run_agent, daemon=True)
         thread.start()

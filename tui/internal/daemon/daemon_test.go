@@ -500,11 +500,66 @@ func TestEnsureAgentNeverReturnsTheSidecarToken(t *testing.T) {
 	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
 		t.Fatalf("decode ensure request body: %v", err)
 	}
+	if _, ok := body["mode"]; ok {
+		t.Fatalf("a caller with no mode preference must not request one, got %q", body["mode"])
+	}
+	if _, ok := body["dev_src_dir"]; ok {
+		t.Fatal("a preference-free ensure request must not contain dev_src_dir")
+	}
+}
+
+// A launch that expresses no preference must not ask for one. The daemon only
+// conflicts on an EXPLICIT, differing mode, so sending "user" on everyone's
+// behalf 409s against a sidecar someone already started in dev.
+func TestEnsureAgentOmitsModeWithoutAPreference(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
+
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+
+	if got := strings.TrimSpace(string(f.lastEnsureBody())); got != "{}" {
+		t.Fatalf("ensure request body = %s, want {}", got)
+	}
+}
+
+// The other half of the contract: an explicit preference is still sent, so a
+// user who asked for a mode still gets the daemon's loud conflict.
+func TestEnsureAgentSendsAnExplicitUserMode(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "user")
+
+	if _, err := testClient(t, nil).EnsureAgent(context.Background(), "email"); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(f.lastEnsureBody(), &body); err != nil {
+		t.Fatalf("decode ensure request body: %v", err)
+	}
 	if body["mode"] != "user" {
 		t.Fatalf("ensure request mode = %q, want user", body["mode"])
 	}
 	if _, ok := body["dev_src_dir"]; ok {
 		t.Fatal("user-mode ensure request must not contain dev_src_dir")
+	}
+}
+
+func TestCallerModeReportsWhetherThePreferenceIsExplicit(t *testing.T) {
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
+	if mode, explicit := CallerMode("email"); explicit {
+		t.Fatalf("an unset variable is no preference, got %q explicit=%v", mode, explicit)
+	}
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+	if mode, explicit := CallerMode("email"); !explicit || mode != "dev" {
+		t.Fatalf("CallerMode = %q, %v; want dev, true", mode, explicit)
+	}
+	// An agent with no mode variable at all can never express a preference.
+	if mode, explicit := CallerMode("word-count"); explicit {
+		t.Fatalf("an agent with no mode switch must report no preference, got %q", mode)
 	}
 }
 
@@ -575,6 +630,24 @@ func TestHelperProcess(t *testing.T) {
 	}
 	defer os.Exit(0)
 
+	// Like the real `gaia daemon start`, take the start lock without waiting on
+	// the caller: a caller still holding it would deadlock a real launcher.
+	if os.Getenv("GAIA_TUI_TEST_TAKE_LOCK") == "1" {
+		path, err := LockPath()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "helper: %v\n", err)
+			os.Exit(2)
+		}
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "helper: %v\n", err)
+			os.Exit(2)
+		}
+		if ok, err := tryLock(f); err != nil || !ok {
+			fmt.Fprintf(os.Stderr, "helper: start lock is held by the caller (%v)\n", err)
+			os.Exit(1)
+		}
+	}
 	if payload := os.Getenv("GAIA_TUI_TEST_INSTANCE"); payload != "" {
 		path := filepath.Join(os.Getenv(EnvHome), "instance.json")
 		if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
@@ -625,6 +698,32 @@ func TestStartOrAttachSpawnsWhenNothingIsRegistered(t *testing.T) {
 	}
 	if got.Port != f.port() {
 		t.Errorf("attached to port %d, want %d", got.Port, f.port())
+	}
+}
+
+func TestStartOrAttachReleasesTheStartLockBeforeSpawning(t *testing.T) {
+	f := newFakeDaemon(t)
+	inst := &Instance{
+		PID: os.Getpid(), Port: f.port(), Token: "token-A",
+		Host: DefaultHost, APIVersion: "1.1", Service: ServiceID,
+	}
+	payload, err := json.Marshal(inst)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := testClient(t, func(o *Options) {
+		start := launcher(t, f.dir, string(payload), "")
+		o.StartCommand = func(ctx context.Context) (*exec.Cmd, error) {
+			cmd, err := start(ctx)
+			if err == nil {
+				cmd.Env = append(cmd.Env, "GAIA_TUI_TEST_TAKE_LOCK=1")
+			}
+			return cmd, err
+		}
+	})
+	if _, err := c.StartOrAttach(context.Background()); err != nil {
+		t.Fatalf("a launcher that takes the start lock itself must be able to start the daemon: %v", err)
 	}
 }
 

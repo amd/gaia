@@ -828,6 +828,24 @@ class TestReadFile:
         assert "1.0 KB" in result or "1024" in result  # mentions the cap
         assert "preview" in result.lower()  # suggests recovery path
 
+    def test_bounded_pages_recover_oversized_file_middle(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
+        path = tmp_path / "huge.txt"
+        path.write_text("x" * 4096 + "EXACT-TAIL", encoding="utf-8")
+        page = json.loads(self.read(str(path), offset=4096, limit=10))
+        assert page["content"] == "EXACT-TAIL"
+        assert page["next_offset"] is None
+
+    def test_non_utf8_page_matches_normal_read(self, tmp_path):
+        path = tmp_path / "legacy.txt"
+        text = "café résumé\n" * 103
+        path.write_bytes(text.encode("cp1252"))
+        normal = self.read(str(path), lines=2)
+        assert "café" in normal
+        page = json.loads(self.read(str(path), offset=24, limit=12))
+        assert page["content"] == text[24:36]
+        assert page["encoding"] != "utf-8"
+
     def test_read_file_preview_still_works_on_oversized(self, tmp_path, monkeypatch):
         """mode='preview' bypasses the total-size check and streams lines."""
         monkeypatch.setattr("gaia.agents.tools.filesystem_tools.MAX_READ_BYTES", 1024)
@@ -973,6 +991,33 @@ class TestReadFile:
         f.write_bytes(non_text * 100)
         result = self.read(file_path=str(f))
         assert "Binary file" in result or "Hex preview" in result
+
+    def test_read_file_whose_size_a_read_does_not_deliver(self, tmp_path):
+        """A non-zero stat size with an empty read must not divide by zero.
+
+        Pseudo-files and a truncation racing the read both land here. The
+        binary sniff should fall through to reading it as text, not surface
+        "Error reading file: division by zero".
+        """
+        f = tmp_path / "shrinks.txt"
+        f.write_bytes(b"x" * 64)
+
+        real_open = open
+
+        def _open_returning_nothing(path, mode="r", *args, **kwargs):
+            if "b" in mode and str(path) == str(f):
+                handle = MagicMock()
+                handle.__enter__ = lambda _s: handle
+                handle.__exit__ = lambda *_a: False
+                handle.read = lambda *_a: b""
+                return handle
+            return real_open(path, mode, *args, **kwargs)
+
+        with patch("builtins.open", _open_returning_nothing):
+            result = self.read(file_path=str(f))
+
+        assert "division by zero" not in result
+        assert "Error reading file" not in result
 
     def test_read_empty_text_file(self, tmp_path):
         """Reading an empty text file works without error."""

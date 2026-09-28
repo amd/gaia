@@ -1,7 +1,6 @@
 id: fetch_webpage
 name: "Fetch Webpage Tool"
 category: web_system
-agent_type: chat
 severity: low
 description: |
   Tests that fetch_webpage tool can retrieve content from a public URL.

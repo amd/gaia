@@ -9,6 +9,50 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A conflict check that could only see the calendar's first page no longer
+  reports a busy slot as free (#3610).** `detect_calendar_conflicts` scanned
+  the provider's first page (25 events) and said nothing about the rest, so a
+  meeting sitting past that page came back as `has_conflict: false`. The tool
+  now returns `truncated`, derived from the provider's own continuation token;
+  when it is true the "no conflict" answer is explicitly unverified, and the
+  agent is instructed to say the slot could not be checked rather than call it
+  free. Fully-scanned windows are unchanged (`truncated: false`).
+
+- **The agent finds GAIA's own Lemonade Server.** The default base URL, the
+  readiness probe and the model pull now go through core's resolver, and the
+  `/health` probe sends the API key, so GAIA's embedded server no longer reads
+  as unreachable or version-unknown.
+- **The readiness check no longer goes blind on a Lemonade development build.**
+  `GET /v1/email/init` compares the running server's version against the agent's
+  minimum. Lemonade v2026.39.1 changed that version to a date-based format whose
+  development builds look like `2026.39.0~12.abc1234`, which the parser could not
+  read — so it reported "cannot tell" and the compatibility check silently stopped
+  running, rather than passing or failing. It now parses the new format, and a
+  version with stray leading whitespace parses again as it did before.
+
+- **`gaia hub install email` no longer refuses Intel Macs (#4218).**
+  `requirements.platforms` now includes `darwin-x64`, matching the Intel binary
+  every release already builds and `binaries.lock.json` already lists.
+- **Received-invite grounding now recognizes Google events with omitted
+  organizer flags (#2787).** Calendar tools preserve the provider's explicit
+  organizer signal and treat the authenticated attendee as externally invited
+  when Google omits its default-false `organizer.self` and attendee organizer
+  fields. Mixed sent/received claims remain guarded, so self-organized events
+  cannot be mistaken for received invites.
+- **A content question ("who signed this?", "what date was agreed?") no
+  longer comes back unanswerable when the answer is sitting in the mailbox
+  (#3773).** `search_messages` used to fetch full bodies only when the model
+  explicitly passed `include_bodies=True` — a 4B-class local model didn't
+  reliably do that, so most content questions got a metadata-only answer or a
+  refusal. The default now auto-decides from the search query itself: a pure
+  filter (`from:`/`is:`/`label:`/date operators) still returns metadata only,
+  while a query carrying an actual search term escalates to full bodies
+  automatically, capped to a small already-narrowed result set so a broad
+  content-shaped query still can't overflow the context window the way #2763
+  fixed. `pre_scan_inbox` still never reads a message body on any surface —
+  its docstring now says so explicitly and points at `get_message`/
+  `search_messages` for content (wiring an actual body-reading path into
+  pre-scan is tracked separately as #2968).
 - **Asking to put a message back in your inbox now actually works (#2626).**
   `move_to_label` and `move_to_label_batch` with `INBOX` as the target used to
   add the inbox label and then archive the message in the same call, undoing
@@ -117,6 +161,15 @@ contract version is tracked separately as
   anywhere in the query with no notion of quoting, so a colon word inside a
   quoted value was mistaken for an operator. It now only matches outside a
   quoted span; a real unsupported operator that follows one still raises.
+- **A triage summary no longer reads as complete when one mailbox failed
+  during the scan (#3768).** When a provider outage skipped a connected
+  mailbox, the pre-scan envelope recorded it (`degraded`, `mailbox_errors`)
+  but the grounded fallback sentence quoted its counts unqualified — so an
+  urgent message in the skipped mailbox vanished behind a confident
+  all-covered answer. That sentence now carries the same "Outlook couldn't be
+  scanned (token expired); results below are from the rest of your mailboxes
+  only" caveat the suspicious-mail summary already used. A scan where every
+  mailbox answered reads exactly as before.
 
 ### Changed
 
@@ -179,6 +232,15 @@ contract version is tracked separately as
   actionable not-connected error for `microsoft_work` instead of being
   served from `microsoft`. Bare `microsoft`/`outlook`/`outlook.com`/
   `hotmail`/`live` are unaffected.
+- **"Start Lemonade yourself" is gone from every message this agent emits.**
+  GAIA's daemon now starts and supervises the local model server, so a user who
+  reaches the agent before the backend is up is pointed at the background
+  service — not handed `lemonade-server serve`, a command Lemonade removed in
+  10.7 that fails with "command not found" on every modern install. The manual
+  fallback is resolved against the machine it will be typed into rather than
+  hardcoded. Affects `/v1/email/init`, `/v1/email/query`, the playground's
+  diagnostics, `README.md`, `SKILL.md`, and `SCORECARD.md`.
+
 - **Agent Skills ship disabled for this agent, pending eval evidence (#2695
   follow-up).** The `skill_sets:` and `default_skill_set: personal` blocks in
   `gaia-agent.yaml` are commented out, so `parse_manifest(...).skill_sets` is

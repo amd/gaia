@@ -13,9 +13,23 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .._chat_helpers import evict_session_agent, resolve_device_model
-from ..database import SESSION_DEFAULT_MODEL, ChatDatabase, is_placeholder_title
+from gaia.config import GaiaConfigError
+
+from .._chat_helpers import (
+    _SIDECAR_AGENT_TYPES,
+    _agent_type_unknown,
+    evict_session_agent,
+    get_agent_registry,
+    resolve_device_model,
+)
+from ..database import (
+    SESSION_DEFAULT_MODEL,
+    ChatDatabase,
+    is_placeholder_title,
+    resolved_default_model,
+)
 from ..dependencies import get_db
+from ..email_sidecar.profiles import profile_for
 from ..models import (
     AttachDocumentRequest,
     CreateSessionRequest,
@@ -24,11 +38,41 @@ from ..models import (
     SessionResponse,
     UpdateSessionRequest,
 )
+from ..run_manager import run_manager
 from ..utils import message_to_response, session_to_response
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sessions"])
+
+
+def _reject_if_turn_running(http_request: Request, session_id: str) -> None:
+    """409 when a turn is using the session's cached agent, which eviction would break."""
+    lock = http_request.app.state.session_locks.get(session_id)
+    if (lock is not None and lock.locked()) or run_manager.is_running(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A chat request is in progress for this session. "
+            "Wait for it to finish (or stop it), then try again.",
+        )
+
+
+def _is_gaia_config_error(exc: Exception) -> bool:
+    """True if exc is a GaiaConfigError.
+
+    Checked by isinstance first; falls back to matching the exception
+    class's qualified name so this still works if gaia.config ever ends up
+    imported under two different module identities (seen once in CI, not
+    yet root-caused) — a plain isinstance/except-clause match silently
+    took the generic branch instead of this one.
+    """
+    if isinstance(exc, GaiaConfigError):
+        return True
+    exc_type = type(exc)
+    return (
+        f"{exc_type.__module__}.{exc_type.__qualname__}"
+        == "gaia.config.GaiaConfigError"
+    )
 
 
 class _SystemSseEmitter:
@@ -67,6 +111,39 @@ _system_emitter = _SystemSseEmitter()
 # ── Session CRUD ─────────────────────────────────────────────────────────────
 
 
+def _reject_unknown_agent_type(agent_type: str | None) -> None:
+    """Raise HTTP 422 when *agent_type* names no registered agent.
+
+    A session bound to an unknown id can never answer — every turn would get
+    the canned "couldn't load the agent" reply — so refuse it up front and
+    name the ids that do resolve. Legacy aliases (``doc-lite``) still pass.
+    """
+    if not agent_type:
+        return
+    registry = get_agent_registry()
+    if not _agent_type_unknown(agent_type, registry):
+        return
+    # Every id _agent_type_unknown accepts, legacy aliases aside. Only the
+    # ALWAYS-relay sidecars are added unconditionally: since #4161 the others
+    # must resolve in the registry like any agent, so listing every sidecar id
+    # here told the user 'gaia' was both unknown and registered.
+    valid_ids = sorted(
+        {reg.id for reg in registry.list()}
+        | {"chat"}
+        | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
+    )
+    load_error = registry.get_load_error(agent_type)
+    reason = f" It failed to load: {load_error}." if load_error else ""
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
+            f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
+            "from the Agent Hub (`gaia hub`) and restart the server."
+        ),
+    )
+
+
 @router.get("/api/sessions", response_model=SessionListResponse)
 async def list_sessions(
     limit: int = 50, offset: int = 0, db: ChatDatabase = Depends(get_db)
@@ -87,6 +164,7 @@ async def create_session(
     request: CreateSessionRequest, db: ChatDatabase = Depends(get_db)
 ):
     """Create a new chat session."""
+    _reject_unknown_agent_type(request.agent_type)
     try:
         session = db.create_session(
             title=request.title,
@@ -103,7 +181,11 @@ async def create_session(
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail="Failed to create session. Check server logs for details.",
+            detail=(
+                str(e)
+                if _is_gaia_config_error(e)
+                else "Failed to create session. Check server logs for details."
+            ),
         )
 
 
@@ -159,22 +241,29 @@ async def get_session(session_id: str, db: ChatDatabase = Depends(get_db)):
 async def update_session(
     session_id: str,
     request: UpdateSessionRequest,
+    http_request: Request,
     db: ChatDatabase = Depends(get_db),
 ):
     """Update session title, system prompt, or linked documents."""
+    _reject_unknown_agent_type(request.agent_type)
     if (
         request.agent_type is not None
         or request.device is not None
         or request.mail_provider is not None
     ):
+        _reject_if_turn_running(http_request, session_id)
         evict_session_agent(session_id)
 
     # On a device switch, rewrite the session's model to that device's
     # registered model so the agent rebuilt after eviction loads the right
     # model and the model dropdown reflects reality. Only rewrite when the
-    # device model differs and the session isn't pinned to a non-default model
-    # on the default GPU device — mirrors the runtime guard in ``_chat_helpers``
-    # so an agent's own model isn't clobbered.
+    # device model differs and the session isn't pinned to a non-default
+    # model on the default GPU device. This "not pinned" test deliberately
+    # differs from _build_create_kwargs's own default check in
+    # _chat_helpers: a configured default_model counts as "not pinned" here
+    # (so it still follows a device switch) but as "session-explicit" there
+    # (so it still reaches the agent as model_id) — the two guards answer
+    # different questions about the same value on purpose.
     device_model = None
     if request.device is not None:
         existing = db.get_session(session_id)
@@ -182,7 +271,17 @@ async def update_session(
         resolved, _ = resolve_device_model(agent_type, request.device)
         if resolved:
             current_model = (existing or {}).get("model")
-            is_default_model = current_model in (None, SESSION_DEFAULT_MODEL)
+            try:
+                configured_default = resolved_default_model()
+            except Exception as e:
+                if not _is_gaia_config_error(e):
+                    raise
+                raise HTTPException(status_code=500, detail=str(e))
+            is_default_model = current_model in (
+                None,
+                SESSION_DEFAULT_MODEL,
+                configured_default,
+            )
             device_is_explicit = request.device != "gpu"
             if resolved != current_model and (is_default_model or device_is_explicit):
                 device_model = resolved
@@ -218,20 +317,22 @@ async def delete_session(
     http_request: Request,
     db: ChatDatabase = Depends(get_db),
 ):
-    """Delete a session and its messages."""
-    if not db.delete_session(session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
-    # Cancel any background run for this session before tearing it down —
-    # runs now outlive the SSE connection (#1580), so a run left going would
-    # try to persist its answer to a session that no longer exists.
-    from ..run_manager import run_manager
+    """Delete a session and its messages.
 
+    A turn still running on the session is stopped first, and the delete waits
+    for it to finish: the turn is still using the session's agent and will
+    persist its answer to the session row.
+    """
+    if db.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
     run_manager.cancel(session_id)
-    # Remove the per-session lock to prevent memory leaks
-    http_request.app.state.session_locks.pop(session_id, None)
-    # Evict the cached ChatAgent for this session so a fresh one is created
-    # if the session is ever recreated with the same ID.
-    evict_session_agent(session_id)
+    session_locks = http_request.app.state.session_locks
+    # Every turn and goal tick holds this lock for its whole run.
+    async with session_locks.setdefault(session_id, asyncio.Lock()):
+        if not db.delete_session(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        session_locks.pop(session_id, None)
+        evict_session_agent(session_id)
     return {"deleted": True}
 
 
@@ -369,9 +470,13 @@ async def attach_document(
 
 @router.delete("/api/sessions/{session_id}/documents/{doc_id}")
 async def detach_document(
-    session_id: str, doc_id: str, db: ChatDatabase = Depends(get_db)
+    session_id: str,
+    doc_id: str,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
 ):
     """Detach a document from a session."""
+    _reject_if_turn_running(http_request, session_id)
     db.detach_document(session_id, doc_id)
     evict_session_agent(session_id)
     return {"detached": True}

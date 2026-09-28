@@ -321,13 +321,26 @@ def _render_command(argv: List[str], env: Dict[str, str]) -> str:
     return rendered
 
 
+def render_command(spec: StartSpec) -> str:
+    """Render a :class:`StartSpec` as the line a user would actually have to run.
+
+    The env matters as much as the argv and is easy to lose: a modern install
+    carries the context window in ``LEMONADE_CTX_SIZE``, so a bare
+    ``" ".join(argv)`` produces a command that starts a server at the WRONG
+    window — health-green, and failing every long request. Windows quoting is
+    handled too, so the line is copy-pasteable in the shell it names.
+    """
+    return _render_command(spec.argv, spec.env)
+
+
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     """Describe how to start Lemonade Server on THIS machine.
 
     The single source of user-facing "here's how to start it" advice. It
     never names a command that does not exist on the host: on platforms
     started from a GUI (Windows tray, macOS app) it returns prose with
-    ``command=None`` rather than guessing a shell command, and the legacy
+    ``command=None`` rather than guessing a shell command. Service-managed
+    context changes also return manual configuration steps. The legacy
     ``lemonade-server serve`` CLI is only ever named when a legacy install
     was actually resolved.
     """
@@ -346,6 +359,15 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
                 )
             )
         spec = build_start_command(tooling, ctx_size)
+        if spec.argv[0] == "systemctl" and ctx_size is not None:
+            return StartHint(
+                instruction=(
+                    "If Lemonade is stopped, run `systemctl --user start lemond`. "
+                    f"In Lemonade's model settings, set the context size to {ctx_size} "
+                    "and reload the model. Starting an already running service "
+                    "does not change its context size."
+                )
+            )
         command = _render_command(spec.argv, spec.env)
         if system == "Darwin":
             # The app is the normal macOS path; the daemon is the CLI way.
