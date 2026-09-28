@@ -257,6 +257,10 @@ class _ExtractionJob:
     context: str
     queued_at: float
     tool_record: Optional[List[Dict]] = None
+    #: What the extraction's own lookup filters on. Distinct from ``context``,
+    #: which is what the resulting memories are filed under: a turn under
+    #: ``global`` writes to ``global`` but reads across every label.
+    read_scope: Optional[str] = None
 
 
 # ============================================================================
@@ -2619,7 +2623,6 @@ class MemoryMixin(ProceduralMemoryMixin):
     def _build_dynamic_memory_context(self) -> str:
         """Dynamic per-turn context: current time + upcoming/overdue items."""
         store = self._memory_store
-        ctx = self._memory_context
         lines = []
 
         # Current time
@@ -2630,11 +2633,16 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Upcoming/overdue items — only at session start or after a long pause,
         # and never one this session already raised.
         if self._reminder_window_open(time.time()):
-            upcoming = [
-                item
-                for item in store.get_upcoming(within_days=7, context=ctx)
-                if item["id"] not in self._reminders_surfaced
-            ][:10]
+            # Redacted like the other prompt sections: this text reaches the model.
+            upcoming = self._redact_credentials(
+                [
+                    item
+                    for item in store.get_upcoming(
+                        within_days=7, context=self._read_scope()
+                    )
+                    if item["id"] not in self._reminders_surfaced
+                ][:10]
+            )
         else:
             upcoming = []
 
@@ -2661,6 +2669,16 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         return "[GAIA Memory Context]\n" + "\n\n".join(lines)
 
+    def _read_scope(self) -> Optional[str]:
+        """The context automatic reads filter on, or None for every context.
+
+        ``global`` is the default and means no scoping is in use, so it reads
+        rows filed under any label (bootstrap writes ``work``, and models pick
+        labels too). An agent that set its own context keeps it plus global.
+        """
+        ctx = self._memory_context
+        return None if ctx == "global" else ctx
+
     def _get_context_items(
         self, category: str, context: str, limit: int = 10
     ) -> List[Dict]:
@@ -2669,8 +2687,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         Uses a single DB query (get_by_category_contexts) instead of two
         sequential get_by_category() calls, halving the DB round-trips.
         """
+        scope = context if context != "global" else None
         return self._redact_credentials(
-            self._memory_store.get_by_category_contexts(category, context, limit=limit)
+            self._memory_store.get_by_category_contexts(category, scope, limit=limit)
         )
 
     @classmethod
@@ -3135,6 +3154,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 queued_at=time.monotonic(),
                 # Frozen with the turn: a "tool" grounding is dropped without it.
                 tool_record=list(getattr(self, "_turn_tool_record", None) or []),
+                read_scope=self._read_scope(),
             )
         )
 
@@ -3215,7 +3235,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         )
         try:
             existing = self._hybrid_search(
-                job.user_input, context=job.context, top_k=10
+                job.user_input, context=job.read_scope, top_k=10
             )
             operations = self._extract_via_llm(
                 job.user_input, job.assistant_response, existing, job.tool_record
@@ -3298,7 +3318,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             category: str = "fact",
             domain: str = "",
             due_at: str = "",
-            context: str = "",
             sensitive: str = "false",
             entity: str = "",
         ) -> dict:
@@ -3382,7 +3401,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "message": "Invalid due_at. Use ISO 8601 format.",
                     }
 
-            ctx = context or mixin._memory_context
+            # The agent owns scoping. A label the model picks can file a
+            # memory where no later session reads it.
+            ctx = mixin._memory_context
             sens = sensitive.lower() == "true" if sensitive else False
 
             was_truncated = len(fact) > MAX_CONTENT_LENGTH
@@ -3607,7 +3628,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             domain: str = "",
             due_at: str = "",
             reminded_at: str = "",
-            context: str = "",
             sensitive: str = "",
             entity: str = "",
         ) -> dict:
@@ -3666,8 +3686,6 @@ class MemoryMixin(ProceduralMemoryMixin):
                             "status": "error",
                             "message": "Invalid reminded_at. Use ISO 8601 format or 'now'.",
                         }
-            if context:
-                kwargs["context"] = context
             if sensitive:
                 kwargs["sensitive"] = sensitive.lower() == "true"
             if entity:
