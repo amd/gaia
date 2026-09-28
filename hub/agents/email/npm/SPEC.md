@@ -35,7 +35,8 @@ cap inflight calls on your side rather than fanning out. The package does not
 supervise or restart a crashed sidecar — watch `sidecar.child` `exit` and
 re-`startSidecar` if you need resilience. It **does** auto-reap the sidecar when
 your process exits, crashes, or is interrupted (default `autoCleanup`); call
-`shutdown` for a graceful, awaited stop, or pass `autoCleanup: false` to manage
+`shutdown` for a graceful, awaited stop (it rejects, naming the pid, if the
+sidecar survives the forced kill), or pass `autoCleanup: false` to manage
 signals yourself.
 
 ## Authentication
@@ -541,7 +542,7 @@ exported individually:
 - `waitForHealth(baseUrl, { timeoutMs, signal })` → poll `/health`; throws `HealthTimeoutError` on timeout or when `signal` aborts (never assumes ready).
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
-- `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child.
+- `shutdown(sidecar, timeoutMs = 5000)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group `SIGTERM`, escalating to `SIGKILL` after `timeoutMs`, on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child. Resolves once the process exits. If it is still alive `timeoutMs` after the forced kill, rejects with an `Error` naming the pid, the manual kill command, and the still-bound port; the sidecar stays registered with the auto-reaper so process exit still gets a last try.
 - `connectSidecar({ baseUrl, authToken?, timeoutMs?, healthTimeoutMs?, verifyVersion?, expectedApiVersion?, signal? })` → **attach mode**: `waitForHealth` + (default) `checkVersion` against a server this package did **not** spawn, returning an `AttachedSidecar` (`{ host, port, baseUrl, client, authToken? }` — no `child`). Spawns nothing and owns no lifecycle, so there is nothing to `shutdown()`. Pass an `AbortSignal` as `signal` to cancel the health wait early (e.g. the server process you're waiting on died). This is the client half of the fast dev loop — pair it with the Python source server (`gaia-agent-email serve --reload`), which serves an identical contract to the frozen binary. See [Fast local iteration](#fast-local-iteration-dev-mode).
 
 ### Fast local iteration (dev mode)

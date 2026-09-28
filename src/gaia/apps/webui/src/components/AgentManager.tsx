@@ -20,6 +20,7 @@ export function AgentManager() {
     lastError,
     fetchManifest,
     refreshStatuses,
+    loadConfigs,
     startAgent,
     stopAgent,
     setLastError,
@@ -34,6 +35,7 @@ export function AgentManager() {
     log.system.info('[AgentManager] Initializing agent manager...');
     fetchManifest();
     refreshStatuses();
+    loadConfigs();
 
     // Poll statuses every 10s (skip when tab is hidden to save resources)
     const interval = setInterval(() => {
@@ -43,7 +45,7 @@ export function AgentManager() {
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [fetchManifest, refreshStatuses]);
+  }, [fetchManifest, refreshStatuses, loadConfigs]);
 
   // ── IPC listeners for real-time status changes ────────────────────────
   useEffect(() => {

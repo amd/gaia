@@ -1,0 +1,54 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Chronological shipping-cadence stream: version, date, and a `.g-badge`
+// ("Today" / "N days ago") for anything released in the last week. Older
+// releases get a plain date and no badge — a badge on every row would stop
+// meaning "recent." Dumb renderer: the page fetches, filters, sorts and
+// slices the release list before it reaches this component.
+
+import { daysSince, formatRelativeDate } from '../data/github';
+
+interface Props {
+  releases: { tag: string; publishedAt: string; htmlUrl: string }[];
+  class?: string;
+}
+
+const { releases, class: className = '' } = Astro.props;
+
+const RECENT_DAYS = 7;
+const dateFormatter = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+});
+
+const rows = releases.map((r) => {
+  const published = new Date(r.publishedAt);
+  return {
+    ...r,
+    date: dateFormatter.format(published),
+    badge: daysSince(published) <= RECENT_DAYS ? formatRelativeDate(published) : null,
+  };
+});
+---
+
+<ol class={`flex flex-col divide-y divide-g-border ${className}`}>
+  {rows.map((r) => (
+    <li>
+      <a
+        href={r.htmlUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="group flex items-center justify-between gap-4 py-3 text-[13.5px] transition-colors hover:text-g-gold-text"
+      >
+        <span class="mono flex items-center gap-3">
+          <span class="text-g-text group-hover:text-g-gold-text">{r.tag}</span>
+          {r.badge && <span class="g-badge">{r.badge}</span>}
+        </span>
+        <span class="text-g-faint">{r.date}</span>
+      </a>
+    </li>
+  ))}
+</ol>

@@ -329,9 +329,6 @@ private:
     /// Execute a single tool call.
     json executeTool(const std::string& toolName, const json& toolArgs);
 
-    /// Resolve plan parameter placeholders ($PREV.field, $STEP_N.field).
-    json resolvePlanParameters(const json& toolArgs, const std::vector<json>& stepResults);
-
     /// Compose the full system prompt from parts, using a live config snapshot.
     std::string composeSystemPrompt() const;
 

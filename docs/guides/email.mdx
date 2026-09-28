@@ -271,6 +271,8 @@ API** on that Cloud project as well as the Gmail API, or the first calendar call
 
 `gaia email` drives the retired hub agent — it is not how you use mail on the flagship.
 
+Email-body inference runs on your local Lemonade instance, which `gaia daemon` starts and supervises — you don't launch it yourself. If Lemonade isn't installed yet, `gaia init` installs it and pulls the model. The agent **rejects** any non-local LLM endpoint at startup — there is no path through configuration to route email content to a cloud LLM.
+
 <Tabs>
   <Tab title="Agent UI">
     Select **Email Triage** from the agent picker in the Agent UI and type your request in the chat input, for example:

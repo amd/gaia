@@ -437,6 +437,7 @@ class AgentServer:
             ModelInfo,
             ModelListResponse,
             UsageInfo,
+            message_text,
         )
 
         # App-wide, so a route mounted later (``/v1/<id>/init``) is guarded too.
@@ -455,9 +456,10 @@ class AgentServer:
             return len(text) // 4
 
         def _last_user_message(messages) -> Optional[str]:
-            return next(
-                (m.content for m in reversed(messages) if m.role == "user"), None
-            )
+            # Flattened, not read raw: ``content`` is a string OR a content-part
+            # array, and the array would otherwise reach process_query as a list.
+            last = next((m for m in reversed(messages) if m.role == "user"), None)
+            return message_text(last) if last is not None else None
 
         @app.get("/health")
         async def health_check():

@@ -304,8 +304,8 @@ _HTML = r"""<!doctype html>
 
       <div class="note" style="margin:16px 0 6px">Or run the steps yourself:</div>
       <div class="fix"><code class="cmd" id="c-npm">npm i @amd-gaia/agent-email</code><button class="copy" data-copy="c-npm">copy</button></div>
-      <div class="fix" style="margin-top:9px"><code class="cmd" id="c-lemon">lemonade-server serve</code><button class="copy" data-copy="c-lemon">copy</button>
-        <span class="muted">start the local LLM</span></div>
+      <div class="fix" style="margin-top:9px"><code class="cmd" id="c-lemon">gaia daemon start</code><button class="copy" data-copy="c-lemon">copy</button>
+        <span class="muted">starts and supervises the local LLM</span></div>
       <div class="fix" style="margin-top:9px"><code class="cmd" id="c-init">gaia init --profile email</code><button class="copy" data-copy="c-init">copy</button>
         <span class="muted">install Lemonade + download &amp; test the email model</span></div>
       <div class="note">Docs: <a href="https://amd-gaia.ai/docs/guides/email" target="_blank" rel="noopener">amd-gaia.ai/docs/guides/email</a></div>
@@ -358,11 +358,11 @@ async function postJSON(path, body){
 function diagnose(e){
   const b = String(e && (e.body || e.message) || "").toLowerCase();
   if(b.includes("not reachable") || b.includes("refused") || b.includes("connection"))
-    return { cause:"Lemonade not found / not running", cmd:"lemonade-server serve", hint:"start the local LLM (install via gaia init)" };
+    return { cause:"Lemonade not found / not running", cmd:"gaia daemon start", hint:"GAIA starts the local LLM (install it with gaia init)" };
   if(b.includes("model") || b.includes("not found") || b.includes("404") || b.includes("load") || b.includes("download"))
     return { cause:"Model not downloaded / unavailable", cmd:"gaia init", hint:"download + test the model" };
   if((e && e.status === 0) || b.includes("timed out") || b.includes("timeout"))
-    return { cause:"Lemonade not responding (timed out)", cmd:"lemonade-server serve", hint:"is it running on the expected port?" };
+    return { cause:"Lemonade not responding (timed out)", cmd:"gaia kill", hint:"clears a wedged server; GAIA restarts it on the next query" };
   return { cause:"LLM triage failed", cmd:"", hint:(e && (e.body || e.message)) || "unknown error" };
 }
 function probePayload(){
