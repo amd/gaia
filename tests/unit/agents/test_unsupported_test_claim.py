@@ -658,3 +658,22 @@ def test_no_step_left_returns_incomplete_without_the_claim(agent):
     assert FABRICATED not in result["result"]
     assert result["status"] == "incomplete"
     assert "unverified" in result["result"]
+
+
+def test_the_correction_asks_for_the_whole_answer_and_is_on_the_record(agent):
+    # GLM answered a code review, was corrected on one test claim, and its
+    # next message addressed only the claim — the review never reached the
+    # user, because the final answer replaces the earlier one.
+    sent = _stub_chat(agent, _answer(FABRICATED), _answer(HONEST))
+
+    result = agent.process_query("Fix the matrix lookup", max_steps=10)
+
+    correction = sent[1][-1]["content"]
+    assert "complete answer again" in correction
+    assert "replaces the one above" in correction
+    recorded = [
+        m
+        for m in result["conversation"]
+        if m.get("role") == "user" and m.get("content") == correction
+    ]
+    assert len(recorded) == 1, "the correction must be in the transcript"

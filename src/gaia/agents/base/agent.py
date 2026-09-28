@@ -8874,16 +8874,20 @@ Do NOT wrap conversational replies in JSON.
                             claim,
                             why,
                         )
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    f'Your answer says "{claim}", but {why}. '
-                                    "Either run the check now, or answer "
-                                    "without that claim."
-                                ),
-                            }
-                        )
+                        # The next answer replaces this one wholesale, so it
+                        # must carry the whole answer, not just the fixed claim.
+                        correction = {
+                            "role": "user",
+                            "content": (
+                                f'Your answer says "{claim}", but {why}. '
+                                "Either run the check now, or drop the claim. "
+                                "Then give your complete answer again: it "
+                                "replaces the one above, which the user will "
+                                "not see."
+                            ),
+                        }
+                        messages.append(correction)
+                        conversation.append(dict(correction))
                         continue
 
                 # A message that landed DURING this model call was never seen
