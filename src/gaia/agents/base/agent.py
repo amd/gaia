@@ -141,6 +141,26 @@ LOCAL_MAX_OUTPUT_TOKENS = 8192
 CLOUD_MAX_OUTPUT_TOKENS = 32768
 
 
+def _skill_prompt_body(agent, skill) -> str:
+    """*skill*'s effective body, plus a note for any declared command missing here.
+
+    Rendered every turn so the substitute stays in front of the model however
+    the skill was loaded (the ``load_skill`` tool or a manifest).
+    """
+    body = effective_skill_body(agent, skill)
+    parsed_permissions = getattr(skill, "parsed_permissions", None)
+    if not callable(parsed_permissions):
+        return body
+
+    from gaia.skills import unavailable_binaries
+
+    missing = unavailable_binaries(parsed_permissions())
+    if not missing:
+        return body
+    notes = " ".join(policy.unavailable_note() for policy in missing)
+    return f"{body}\n\nOn this machine: {notes}"
+
+
 def effective_skill_body(agent, skill) -> str:
     """*skill*'s authored body with *agent*'s approved learned changes applied.
 
@@ -3213,7 +3233,7 @@ Do NOT wrap conversational replies in JSON.
             for skill in skills.values():
                 if not skill.body:
                     continue
-                body = effective_skill_body(self, skill)
+                body = _skill_prompt_body(self, skill)
                 sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             if not sections:
                 return ""
@@ -3225,7 +3245,7 @@ Do NOT wrap conversational replies in JSON.
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
-                    body = effective_skill_body(self, skill)
+                    body = _skill_prompt_body(self, skill)
                     body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             else:
                 menu_lines.append(
@@ -5661,7 +5681,50 @@ Do NOT wrap conversational replies in JSON.
                 shrunk_rest.append(shrunk)
             else:
                 shrunk_rest.append(m)
-        return [first] + shrunk_rest
+        return self._with_overflow_note([first] + shrunk_rest)
+
+    def _with_overflow_note(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Restate a mixin's ``overflow_recovery_note`` on the last user message.
+
+        Stubbing old tool results drops what they taught this turn (memory's
+        lessons). User messages are never stubbed, so the note survives.
+        """
+        hook = getattr(self, "overflow_recovery_note", None)
+        try:
+            note = hook() if callable(hook) else ""
+        except Exception as exc:
+            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
+            logger.debug("Could not build the overflow recovery note: %s", exc)
+            return messages
+        if not note:
+            return messages
+
+        def _text(content: Any) -> str:
+            if isinstance(content, list):
+                return "\n".join(
+                    str(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict)
+                )
+            return str(content or "")
+
+        if any(note in _text(m.get("content")) for m in messages):
+            return messages
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            content = message.get("content")
+            if message.get("role") != "user":
+                continue
+            if isinstance(content, str):
+                content = f"{content}\n\n{note}"
+            elif isinstance(content, list):
+                content = [*content, {"type": "text", "text": note}]
+            else:
+                continue
+            return messages[:i] + [{**message, "content": content}] + messages[i + 1 :]
+        return messages
 
     def _create_tool_message(
         self,

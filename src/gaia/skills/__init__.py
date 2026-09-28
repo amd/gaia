@@ -42,6 +42,7 @@ from gaia.skills.binaries import (
     classify_invocation,
     normalize_binary,
     resolve_binary_policies,
+    unavailable_binaries,
     validate_invocation,
 )
 from gaia.skills.consume import (
@@ -206,6 +207,7 @@ __all__ = [
     "Subcommand",
     "normalize_binary",
     "resolve_binary_policies",
+    "unavailable_binaries",
     "validate_invocation",
     # Security tiers (#2467)
     "TIER_ORDER",
