@@ -673,10 +673,21 @@ class TestWaitForCondition:
         host = _Host()
 
         refusal = host.policy_refusal_for_call(
-            "wait_for_condition", {"command": "rm -rf /"}
+            "wait_for_condition", {"command": "gh auth token"}
         )
 
         assert refusal is not None and refusal["status"] == "error"
+
+    def test_a_confirmable_predicate_reaches_the_prompt(self):
+        # `rm -rf /` is shown to the user and runs only if approved, the same
+        # as through run_shell_command — refusing it here would be the dead end
+        # the confirm tier removes.
+        host = _Host()
+
+        assert (
+            host.policy_refusal_for_call("wait_for_condition", {"command": "rm -rf /"})
+            is None
+        )
 
 
 def test_a_blown_deadline_really_kills_the_process():

@@ -421,16 +421,16 @@ the HTTP surface above instead (§6.1).
 
 It emits the identical canonical event vocabulary, but its input channel accepts
 a JSON line carrying a `gaia_control` key: a back-channel that answers a
-confirmation prompt *while* a turn is in flight, toggles bypass, and stops a turn
-(`cancel`) without ending the process — so loaded skills, "always" grants,
-history and the bypass mode survive a cancel.
+confirmation prompt *while* a turn is in flight, toggles full access, and stops
+a turn (`cancel`) without ending the process — so loaded skills, "always"
+grants, history and full access survive a cancel.
 
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
-session — `/tool_decision`, `/sessions/{id}/bypass`, and `provider: "claude"`.
-What remains stdio-only is the *launch* form of those switches:
-`--bypass-permissions` starts a process with gating already off, and
-`--use-claude` / `--claude-model` pin the backend for the life of the process
-(embeddings stay on Lemonade either way).
+session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its
+original spelling), and `provider: "claude"`. What remains stdio-only is the
+*launch* form of those switches: `--full-access` starts a process with gating
+already off, and `--use-claude` / `--claude-model` pin the backend for the life
+of the process (embeddings stay on Lemonade either way).
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models;

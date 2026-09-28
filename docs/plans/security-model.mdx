@@ -280,7 +280,7 @@ transport, which is one local parent process on a private pipe. It is not
 reachable on the HTTP transport
 (`hub/agents/gaia/python/gaia_agent/server.py`): that is a bound socket, and an
 unguarded shell reachable over it is remote code execution rather than a relaxed
-permission model. The HTTP handler pins `bypass_permissions = False`, and the
+permission model. The HTTP handler pins `full_access = False`, and the
 request model forbids unknown fields so a client cannot ask for it.
 
 HTTP *does* have `POST /v1/gaia/sessions/{id}/bypass`, but it grants only the
@@ -303,7 +303,7 @@ a `$(...)` is not a segment and is not individually validated. It runs because
 the shell runs it.
 
 <Note>
-`bypass_permissions` is a **separate** handler attribute from
+`full_access` is a **separate** handler attribute from
 `auto_approve_gated_tools`, and only `PermissionState` sets both. An unattended
 harness that merely pre-approves prompts — `GAIA_AUTO_APPROVE_TOOLS=1`, or a
 library host passing `auto_approve_gated_tools=True` — does **not** inherit an

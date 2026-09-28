@@ -32,7 +32,7 @@ func TestMockKeysMatchTheSharedStdioFixture(t *testing.T) {
 	if queryKey != fixture.Stdin.QueryKey {
 		t.Errorf("queryKey = %q, fixture says %q", queryKey, fixture.Stdin.QueryKey)
 	}
-	for _, verb := range []string{"cancel", "bypass"} {
+	for _, verb := range []string{"cancel", "full_access"} {
 		if _, ok := fixture.Stdin.ControlVerbs[verb]; !ok {
 			t.Errorf("the mock handles %q, which the real agent does not know", verb)
 		}

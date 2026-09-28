@@ -80,7 +80,7 @@ func sampleMemoryDump() client.MemoryDump {
 // ---------------------------------------------------------------------------
 // /memory is dispatched as a command, never sent to the agent as a literal
 // question — the switch in submit() takes it before falling through to
-// sendQuery, mirroring how /clear and /bypass are tested.
+// sendQuery, mirroring how /clear and /full-access are tested.
 // ---------------------------------------------------------------------------
 
 func TestSlashMemoryIsDispatchedNotSentAsAQuestion(t *testing.T) {
