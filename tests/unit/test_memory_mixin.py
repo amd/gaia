@@ -5196,7 +5196,15 @@ class TestBackgroundExtraction:
     @staticmethod
     def _add_op(content: str) -> str:
         return json.dumps(
-            [{"op": "add", "category": "fact", "content": content, "confidence": 0.5}]
+            [
+                {
+                    "op": "add",
+                    "category": "fact",
+                    "content": content,
+                    "confidence": 0.5,
+                    "grounded": "user",
+                }
+            ]
         )
 
     def _blocking_chat(self, release, content="Priya deploys on Fridays"):
