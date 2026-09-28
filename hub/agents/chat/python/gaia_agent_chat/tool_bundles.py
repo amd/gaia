@@ -131,6 +131,14 @@ DOC_BUNDLES = [
         description="Run shell commands, wait on a condition, and query the system.",
     ),
     ToolBundle(
+        name="shell_session",
+        members=frozenset({"get_shell_state", "reset_shell_session"}),
+        description=(
+            "Read the directory earlier shell commands left the session in, "
+            "or return it to where the task started."
+        ),
+    ),
+    ToolBundle(
         name="cli_setup",
         members=frozenset(
             {
@@ -400,6 +408,14 @@ FULL_BUNDLES = [
         description=(
             "Run shell commands and Python scripts, wait on a condition, and "
             "query the system."
+        ),
+    ),
+    ToolBundle(
+        name="shell_session",
+        members=frozenset({"get_shell_state", "reset_shell_session"}),
+        description=(
+            "Read the directory earlier shell commands left the session in, "
+            "or return it to where the task started."
         ),
     ),
     ToolBundle(

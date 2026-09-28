@@ -69,6 +69,11 @@ the terminal UI meant building it from source.
   tools are confirmation-gated on every call and no skill grant pre-approves
   them; over `/v1/gaia/query` they are refused, like every other gated tool
   (§8). Registered tool count goes 83 → 86.
+- **A shell command's `cd` now survives to the next one.** Every
+  `run_shell_command` call used to start from scratch, so `cd build` in one
+  call was invisible to the next. `get_shell_state` reads the session's
+  current directory, and `reset_shell_session` returns it to where the task
+  started. Registered tool count goes 86 → 88.
 - **Say something while the agent is still working.** `POST
   /v1/gaia/query/{run_id}/followup` hands a live run a message the user typed
   after it started (contract **2.15**). The run is not interrupted and no

@@ -3,6 +3,7 @@
 
 """Unit tests for shell command guardrails in ShellToolsMixin._validate_command."""
 
+import shutil
 import time
 from types import SimpleNamespace
 
@@ -748,7 +749,12 @@ class TestOperatorsUnderBypass:
         result = check("pytest -q | tail -20", bypass=False)
         assert result is not None
         assert "Shell operators" not in result["error"]
-        assert "shell:execute:pytest" in result["error"]
+        assert "pytest" in result["error"]
+        # The grant id is only the refusal a machine with pytest on PATH gets;
+        # where it is absent the "not installed" refusal fires first. Either
+        # way the pipe is not the reason, which is what this test is about.
+        if shutil.which("pytest"):
+            assert "shell:execute:pytest" in result["error"]
 
 
 class TestPerSegmentWalkSurvivesBypass:
