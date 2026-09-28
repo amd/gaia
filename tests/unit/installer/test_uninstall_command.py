@@ -99,6 +99,13 @@ def _seed_models_cache(home: Path) -> Path:
     return models
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_gaia_env(monkeypatch):
+    """Tests opt in to GAIA_HOME / GAIA_DAEMON_HOME; the caller's must not leak."""
+    monkeypatch.delenv("GAIA_HOME", raising=False)
+    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
+
+
 @pytest.fixture
 def fake_home(fs, monkeypatch):
     """Return a fake ``~`` on ``pyfakefs`` and patch ``Path.home`` to use it."""
@@ -159,7 +166,11 @@ class TestBuildPlan:
             gaia / "gaia.log",
             gaia / "electron-install-state.json",
             gaia / "electron-install.log",
+            gaia / "bin",
+            gaia / "traces",
+            gaia / "host",
         ]
+        assert plan.stop_daemon
 
     def test_purge_models_populates_path(self, fake_home):
         plan = uc.build_plan(
@@ -1398,3 +1409,392 @@ class TestLinkDetectionFallback:
         assert exit_code == uc.EXIT_OK, captured.text
         assert not (gaia / "venv").exists()
         assert not (gaia / "chat").exists()
+
+
+# ---------------------------------------------------------------------------
+# One-line installer leftovers: bin/, host/, traces/, shell rc and user PATH
+# ---------------------------------------------------------------------------
+
+_RC_BEFORE = (
+    "# my zshrc\n"
+    "export EDITOR=vim\n"
+    "alias ll='ls -la'\n"
+    "# Added by GAIA installer - a lookalike comment the user wrote\n"
+)
+_RC_AFTER = "\n# trailing user line\nsource ~/.work.sh\n"
+
+
+def _installer_block(dirs: str) -> str:
+    """The exact text install.sh appends: a blank line, the marker, the export."""
+    return f'\n# Added by GAIA installer\nexport PATH="$PATH:{dirs}"\n'
+
+
+def _current_dirs(home: Path) -> str:
+    return f"{home}/.gaia/venv/bin:{home}/.gaia/bin"
+
+
+def _legacy_dirs(home: Path) -> str:
+    return f"{home}/.gaia/venv/bin"
+
+
+@pytest.fixture
+def installer_home(fake_home, monkeypatch):
+    """A fake home seeded the way the one-line installer + daemon leave it."""
+    monkeypatch.delenv("GAIA_HOME", raising=False)
+    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
+    _seed_gaia_tree(fake_home)
+    gaia = fake_home / ".gaia"
+    (gaia / "bin").mkdir()
+    (gaia / "bin" / "gaia-tui").write_text("tui")
+    (gaia / "bin" / "gaia-agent").write_text("agent")
+    host = gaia / "host"
+    host.mkdir()
+    (host / "instance.json").write_text('{"pid": 999999, "port": 1, "token": "t"}')
+    (host / "custody.db").write_text("custody")
+    (gaia / "traces").mkdir()
+    (gaia / "traces" / "run.jsonl").write_text("{}\n")
+    # No daemon is running unless a test says otherwise.
+    monkeypatch.setattr("gaia.daemon.instance.pid_alive", lambda pid: False)
+    return fake_home
+
+
+class TestInstallerLeftovers:
+    def test_purge_removes_bin_host_and_traces(self, installer_home):
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        gaia = installer_home / ".gaia"
+        assert not (gaia / "bin").exists()
+        assert not (gaia / "host").exists()
+        assert not (gaia / "traces").exists()
+        assert (gaia / "mcp_servers.json").exists()
+
+    def test_dry_run_lists_leftovers_and_changes_nothing(self, installer_home):
+        zshrc = installer_home / ".zshrc"
+        original = _RC_BEFORE + _installer_block(_current_dirs(installer_home))
+        zshrc.write_text(original)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, dry_run=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        for needle in (".gaia/bin", ".gaia/host", ".gaia/traces", ".zshrc"):
+            assert needle in captured.text, captured.text
+        assert (installer_home / ".gaia" / "host" / "instance.json").exists()
+        assert zshrc.read_text() == original
+
+    def test_rc_blocks_removed_and_other_lines_byte_identical(self, installer_home):
+        home = installer_home
+        zshrc = home / ".zshrc"
+        zshrc.write_bytes(
+            (_RC_BEFORE + _installer_block(_current_dirs(home)) + _RC_AFTER).encode()
+        )
+        # A pre-0.23 venv-only block, then the current block the 0.23 installer
+        # appended because the old one lacked ~/.gaia/bin.
+        bashrc = home / ".bashrc"
+        bashrc.write_bytes(
+            (
+                "export A=1\r\n"
+                + _installer_block(_legacy_dirs(home))
+                + "export B=2\n"
+                + _installer_block(_current_dirs(home))
+            ).encode()
+        )
+        profile = home / ".profile"
+        profile_bytes = b'export PATH="$PATH:/opt/bin"\n\xff not utf-8\n'
+        profile.write_bytes(profile_bytes)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert zshrc.read_bytes() == (_RC_BEFORE + _RC_AFTER).encode()
+        assert bashrc.read_bytes() == b"export A=1\r\nexport B=2\n"
+        assert profile.read_bytes() == profile_bytes
+
+    def test_rc_symlink_is_edited_through_not_replaced(self, installer_home, fs):
+        home = installer_home
+        dotfile = home / "dotfiles" / "zshrc"
+        fs.create_file(
+            dotfile, contents=_RC_BEFORE + _installer_block(_current_dirs(home))
+        )
+        (home / ".zshrc").symlink_to(dotfile)
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=_Capture())
+
+        assert exit_code == uc.EXIT_OK
+        assert (home / ".zshrc").is_symlink()
+        assert dotfile.read_text() == _RC_BEFORE
+
+    def test_hand_edited_block_is_kept_and_reported(self, installer_home):
+        home = installer_home
+        text = (
+            "# Added by GAIA installer\n"
+            f'export PATH="$PATH:{home}/.gaia/bin:/opt/mine"\n'
+        )
+        (home / ".zshrc").write_text(text)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert (home / ".zshrc").read_text() == text
+        assert ".zshrc" in captured.text and "by hand" in captured.text
+
+    def test_custom_gaia_home_leaves_installer_edits_alone(
+        self, installer_home, monkeypatch
+    ):
+        home = installer_home
+        alt = home / "alt-gaia"
+        alt.mkdir()
+        (alt / "config.json").write_text("{}")
+        monkeypatch.setenv("GAIA_HOME", str(alt))
+        text = _RC_BEFORE + _installer_block(_current_dirs(home))
+        (home / ".zshrc").write_text(text)
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=_Capture())
+
+        assert exit_code == uc.EXIT_OK
+        assert (home / ".zshrc").read_text() == text
+        assert (home / ".gaia" / "bin" / "gaia-tui").exists()
+        assert (home / ".gaia" / "host" / "instance.json").exists()
+
+    def test_daemon_home_outside_gaia_home_is_skipped(
+        self, installer_home, monkeypatch, fs
+    ):
+        outside = Path("/elsewhere/daemon")
+        fs.create_file(outside / "instance.json", contents="{}")
+        monkeypatch.setenv("GAIA_DAEMON_HOME", str(outside))
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert (outside / "instance.json").exists()
+        assert str(outside) in captured.text
+
+    def test_running_daemon_is_stopped_before_host_is_deleted(
+        self, installer_home, monkeypatch
+    ):
+        from gaia.daemon import client
+
+        host = installer_home / ".gaia" / "host"
+        state = {"alive": True, "host_present_at_shutdown": None}
+        monkeypatch.setattr(
+            "gaia.daemon.instance.pid_alive", lambda pid: state["alive"]
+        )
+
+        def _shutdown(inst, timeout=5.0):
+            state["host_present_at_shutdown"] = (host / "instance.json").exists()
+            state["alive"] = False
+            return True
+
+        monkeypatch.setattr(client, "request_shutdown", _shutdown)
+        monkeypatch.setattr(client, "wait_until_gone", lambda inst, timeout=10.0: True)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert state["host_present_at_shutdown"] is True
+        assert not host.exists()
+        assert "999999" in captured.text
+
+    def test_daemon_that_will_not_stop_aborts_before_deleting(
+        self, installer_home, monkeypatch
+    ):
+        from gaia.daemon import client
+
+        monkeypatch.setattr("gaia.daemon.instance.pid_alive", lambda pid: True)
+        monkeypatch.setattr(client, "request_shutdown", lambda inst, timeout=5.0: True)
+        monkeypatch.setattr(client, "wait_until_gone", lambda inst, timeout=10.0: False)
+        monkeypatch.setattr(
+            "gaia.daemon.instance.terminate_instance", lambda inst, timeout=5.0: None
+        )
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_ABORTED, captured.text
+        gaia = installer_home / ".gaia"
+        assert (gaia / "host" / "instance.json").exists()
+        assert (gaia / "chat" / "history.db").exists()
+        assert "gaia daemon stop" in captured.text
+
+    def test_daemon_state_unverifiable_without_psutil_aborts(
+        self, installer_home, monkeypatch
+    ):
+        def _no_psutil(pid):
+            raise ModuleNotFoundError("No module named 'psutil'")
+
+        monkeypatch.setattr("gaia.daemon.instance.pid_alive", _no_psutil)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_ABORTED, captured.text
+        assert (installer_home / ".gaia" / "host" / "instance.json").exists()
+        assert "psutil" in captured.text
+
+
+class _FakeWinreg:
+    """Just enough of ``winreg`` for HKCU\\Environment\\Path."""
+
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_READ = 1
+    KEY_SET_VALUE = 2
+    REG_SZ = 1
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, value, kind=REG_EXPAND_SZ):
+        self.values = {} if value is None else {"Path": (value, kind)}
+        self.writes = []
+
+    class _Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def OpenKey(self, root, sub, reserved=0, access=0):  # noqa: N802
+        assert (root, sub) == ("HKCU", "Environment")
+        return self._Key()
+
+    def QueryValueEx(self, key, name):  # noqa: N802
+        if name not in self.values:
+            raise FileNotFoundError(name)
+        return self.values[name]
+
+    def SetValueEx(self, key, name, reserved, kind, value):  # noqa: N802
+        self.writes.append((name, kind, value))
+        self.values[name] = (value, kind)
+
+
+class TestWindowsUserPath:
+    HOME = "C:\\Users\\me"
+
+    def test_strip_removes_only_installer_entries(self):
+        raw = (
+            "%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;"
+            "C:\\Users\\ME\\.gaia\\venv\\Scripts\\;"
+            '"C:\\Users\\me\\.gaia\\bin";'
+            "C:\\Users\\me\\.gaia\\binaries;"
+            "%LOCALAPPDATA%\\Programs\\GAIA"
+        )
+
+        new_raw, removed = uc._strip_user_path_entries(
+            raw, uc._installer_windows_path_dirs(self.HOME)
+        )
+
+        assert new_raw == (
+            "%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;"
+            "C:\\Users\\me\\.gaia\\binaries;"
+            "%LOCALAPPDATA%\\Programs\\GAIA"
+        )
+        assert len(removed) == 2
+
+    def test_purge_rewrites_registry_keeping_kind_and_vars(
+        self, installer_home, monkeypatch
+    ):
+        home = installer_home
+        raw = f"%USERPROFILE%\\bin;{home}\\.gaia\\venv\\Scripts;{home}\\.gaia\\bin"
+        fake = _FakeWinreg(raw)
+        monkeypatch.setitem(sys.modules, "winreg", fake)
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        broadcasts = []
+        monkeypatch.setattr(
+            uc, "_broadcast_environment_change", lambda: broadcasts.append(1) or True
+        )
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert fake.writes == [("Path", fake.REG_EXPAND_SZ, "%USERPROFILE%\\bin")]
+        assert broadcasts == [1]
+
+    def test_dry_run_does_not_write_registry(self, installer_home, monkeypatch):
+        home = installer_home
+        fake = _FakeWinreg(f"{home}\\.gaia\\bin")
+        monkeypatch.setitem(sys.modules, "winreg", fake)
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        captured = _Capture()
+
+        exit_code = uc.run(_ns(purge=True, dry_run=True), printer=captured)
+
+        assert exit_code == uc.EXIT_OK, captured.text
+        assert fake.writes == []
+        assert f"{home}\\.gaia\\bin" in captured.text
+
+    def test_no_user_path_value_is_a_noop(self, installer_home, monkeypatch):
+        fake = _FakeWinreg(None)
+        monkeypatch.setitem(sys.modules, "winreg", fake)
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+
+        exit_code = uc.run(_ns(purge=True, yes=True), printer=_Capture())
+
+        assert exit_code == uc.EXIT_OK
+        assert fake.writes == []
+
+
+# ---------------------------------------------------------------------------
+# An unreadable shell rc file must not strand the user's data
+# ---------------------------------------------------------------------------
+
+
+class TestUnreadablePathEditDoesNotBlockThePurge:
+    """Tidying up PATH is a side task of ``--purge``.
+
+    Failing to *read* one shell rc file used to abort the plan before a single
+    path was deleted, so a root-owned ``~/.profile`` kept ``~/.gaia/chat`` and
+    ``documents`` on disk — data the unreadable file has nothing to do with.
+    The write side already reported and carried on; the read side now matches.
+    """
+
+    @staticmethod
+    def _unreadable_profile(fake_home: Path) -> Path:
+        rc = fake_home / ".profile"
+        rc.write_text("export PATH=\"$PATH:/usr/local/bin\"\n")
+        return rc
+
+    def test_the_unreadable_file_is_reported_not_raised(self, fake_home, monkeypatch):
+        rc = self._unreadable_profile(fake_home)
+
+        def _explode(self, *_args, **_kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        # Patch the concrete class of the path object the function will build:
+        # under pyfakefs that is not this module's ``Path``.
+        monkeypatch.setattr(type(rc), "read_bytes", _explode)
+
+        to_edit, hand_edited, unreadable = uc._rc_edit_candidates(fake_home)
+
+        assert to_edit == []
+        assert hand_edited == []
+        assert len(unreadable) == 1
+        assert ".profile" in unreadable[0]
+        assert "by hand" in unreadable[0], "the message must say what to do"
+
+    def test_the_purge_still_deletes_and_still_exits_non_zero(
+        self, fake_home, monkeypatch
+    ):
+        _seed_gaia_tree(fake_home)
+        gaia = fake_home / ".gaia"
+
+        plan = uc.UninstallPlan()
+        plan.tiered_paths.append(("--purge", gaia / "chat"))
+        plan.tiered_paths.append(("--purge", gaia / "venv"))
+        plan.blocked_edits.append("could not read /home/u/.profile: denied")
+
+        captured = _Capture()
+        exit_code = uc.execute_plan(
+            plan, allowed_roots=uc._safe_roots(home=fake_home), printer=captured
+        )
+
+        assert exit_code == uc.EXIT_FS_ERROR, captured.text
+        assert "could not read" in captured.text
+        assert not (gaia / "chat").exists(), "the user's data must still go"
+        assert not (gaia / "venv").exists()
