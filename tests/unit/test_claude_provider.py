@@ -828,10 +828,15 @@ class _FakeLLMClient:
         self.calls.append({"prompt": prompt, "model": model, "stream": stream})
         return "ok"
 
+    accepts_reasoning_history = False
+
     def get_last_usage(self):
         return None
 
     def get_last_finish_reason(self):
+        return None
+
+    def get_last_reasoning(self):
         return None
 
     def get_performance_stats(self):
