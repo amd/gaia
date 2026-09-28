@@ -813,6 +813,7 @@ def _response_reasoning(response: Any) -> Optional[str]:
     value = getattr(response, "reasoning", None)
     return value if isinstance(value, str) and value else None
 
+
 # A reply that ended on the output-token limit (finish_reason=length).
 _MAX_CUT_OFF_CONTINUATIONS = 2
 _CUT_OFF_CONTINUE_PROMPT = (
