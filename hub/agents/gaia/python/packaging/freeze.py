@@ -80,7 +80,15 @@ COLLECT_SUBMODULES = [
 ]
 # FAISS backs the memory / RAG working-context index. faiss-cpu ships compiled
 # libs + swig submodules the static analyzer misses.
-COLLECT_ALL = ["faiss"]
+# sherpa-onnx must be BUNDLED, not installed at runtime. The lazy
+# pip-install path cannot work inside a frozen app: sys.executable is the
+# .exe itself, not an interpreter, and a frozen app does not import from the
+# system's site-packages either. Without this the shipped binary silently has
+# no speaker identification while a source checkout has it — verified on a
+# 46-minute meeting that produced zero speaker spans from the frozen build.
+# collect-all because the wheel carries native .dll/.pyd payloads that static
+# analysis cannot see. ~29 MB, Apache-2.0 (its vendored onnxruntime is MIT).
+COLLECT_ALL = ["faiss", "sherpa_onnx"]
 # importlib.metadata version probes + entry-point agent discovery.
 COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
 

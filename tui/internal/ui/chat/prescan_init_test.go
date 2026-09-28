@@ -102,7 +102,7 @@ func TestFetchPreScanSkippedWhenInitialQueryPresent(t *testing.T) {
 // entry does.
 func TestNoPreScanFetchViaDirectCLIConstruction(t *testing.T) {
 	c := &fakePreScanClient{data: json.RawMessage(samplePreScanJSON)}
-	m := NewChatModelForCatalogAgent(c, "email", "Email", false)
+	m := NewChatModelForCatalogAgent(c, "email", "Email", "", false)
 	m.width, m.height = 100, 30
 
 	cmd := m.Init()

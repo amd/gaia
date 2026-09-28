@@ -1,10 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Frozen-binary / dev-mode entrypoint for the GAIA flagship agent sidecar.
+"""Frozen-binary / dev-mode entrypoint for the GAIA flagship agent.
 
 A thin re-export of :mod:`gaia_agent.server`, which is the single source of
-truth for the app wiring. Kept as a separate top-level module because two
-launchers reach the sidecar by *module path* rather than by import:
+truth for the app wiring AND for the transport dispatch: running this module
+(so, running the frozen binary) serves HTTP on ``--serve``/``--host``/``--port``
+and the stdio JSONL wire on anything else. Kept as a separate top-level module
+because two launchers reach the sidecar by *module path* rather than by import:
 
 - the daemon's dev mode runs ``uvicorn server:app --app-dir <this dir>``
   (``AgentSidecarSpec.dev_app_dir`` / ``dev_module``),

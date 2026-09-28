@@ -110,7 +110,7 @@ def check_black(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[1/2] Fixing code formatting with Black...")
     else:
-        print("\n[1/11] Checking code formatting with Black...")
+        print("\n[1/12] Checking code formatting with Black...")
     print("-" * 40)
 
     if fix:
@@ -184,7 +184,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[2/2] Fixing import sorting with isort...")
     else:
-        print("\n[2/11] Checking import sorting with isort...")
+        print("\n[2/12] Checking import sorting with isort...")
     print("-" * 40)
 
     if fix:
@@ -241,7 +241,7 @@ def check_isort(fix: bool = False) -> CheckResult:
 
 def check_pylint() -> CheckResult:
     """Run Pylint (errors only)."""
-    print("\n[3/11] Running Pylint (errors only)...")
+    print("\n[3/12] Running Pylint (errors only)...")
     print("-" * 40)
 
     cmd = uvx(
@@ -266,7 +266,7 @@ def check_pylint() -> CheckResult:
 
 def check_flake8() -> CheckResult:
     """Run Flake8."""
-    print("\n[4/11] Running Flake8...")
+    print("\n[4/12] Running Flake8...")
     print("-" * 40)
 
     cmd = uvx(
@@ -299,7 +299,7 @@ def check_flake8() -> CheckResult:
 
 def check_mypy() -> CheckResult:
     """Run MyPy type checking (warning only)."""
-    print("\n[5/11] Running MyPy type checking (warning only)...")
+    print("\n[5/12] Running MyPy type checking (warning only)...")
     print("-" * 40)
 
     cmd = uvx("mypy", SRC_DIR, "--ignore-missing-imports")
@@ -339,7 +339,7 @@ def check_bandit() -> CheckResult:
     ``.bandit-baseline.json`` fails the check. MEDIUM/LOW findings are still
     reported (warning-only) so they stay visible without blocking the build.
     """
-    print("\n[6/11] Running security check with Bandit (HIGH = blocking)...")
+    print("\n[6/12] Running security check with Bandit (HIGH = blocking)...")
     print("-" * 40)
 
     from check_security_gates import (
@@ -390,7 +390,7 @@ def check_bandit() -> CheckResult:
 
 def check_security_suppressions() -> CheckResult:
     """Every '# noqa: S<n>' / '# nosec' must be reviewed in .security-suppressions.json."""
-    print("\n[7/11] Checking security suppressions are reviewed...")
+    print("\n[7/12] Checking security suppressions are reviewed...")
     print("-" * 40)
     gates = _import_security_gates()
     try:
@@ -407,7 +407,7 @@ def check_security_suppressions() -> CheckResult:
 
 def check_imports() -> CheckResult:
     """Test comprehensive SDK imports."""
-    print("\n[8/11] Testing comprehensive SDK imports...")
+    print("\n[8/12] Testing comprehensive SDK imports...")
     print("-" * 40)
 
     # Pre-check: verify gaia is installed
@@ -450,6 +450,7 @@ def check_imports() -> CheckResult:
         ("from", "gaia.agents.base", "tool", "Tool decorator", False),
         # Specialized Agents — optional so a framework-only env (no
         # gaia-agent-<id> installed) skips rather than fails.
+        ("from", "gaia_agent.agent", "GaiaAgent", "Flagship agent", True),
         ("from", "gaia_agent_chat", "ChatAgent", "Chat agent", True),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
@@ -513,7 +514,7 @@ def check_imports() -> CheckResult:
 
 def check_agents() -> CheckResult:
     """Check GAIA agent conventions — inheritance, tests, docs, registry wiring."""
-    print("\n[9/11] Checking agent conventions...")
+    print("\n[9/12] Checking agent conventions...")
     print("-" * 40)
 
     # Import lazily so the check is self-contained and testable standalone.
@@ -549,7 +550,7 @@ def check_agents() -> CheckResult:
 
 def check_dependabot() -> CheckResult:
     """Validate .github/dependabot.yml (no soft-disabled entries, npm groups present)."""
-    print("\n[10/11] Validating .github/dependabot.yml...")
+    print("\n[10/12] Validating .github/dependabot.yml...")
     print("-" * 40)
 
     try:
@@ -578,9 +579,146 @@ def check_dependabot() -> CheckResult:
     return CheckResult("Dependabot Config", True, False, 0, "")
 
 
+def check_workflow_triggers() -> CheckResult:
+    """Reject `on.pull_request.branches:` filters, which silence stacked PRs."""
+    print("\n[11/12] Validating workflow pull_request triggers...")
+    print("-" * 40)
+
+    try:
+        from check_workflow_triggers import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_workflow_triggers import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_workflow_triggers.py: {exc}")
+            return CheckResult("Workflow Triggers", False, False, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "Workflow Triggers",
+            False,
+            False,
+            1,
+            "See output above; drop the base-branch filter per #2767.",
+        )
+
+    return CheckResult("Workflow Triggers", True, False, 0, "")
+
+
+def check_workflow_ancestor_skip() -> CheckResult:
+    """Warn on job `if:` conditions vulnerable to GitHub Actions' ancestor-skip gotcha."""
+    print("\nChecking workflow job conditions for ancestor-skip risk...")
+    print("-" * 40)
+
+    try:
+        from check_workflow_ancestor_skip import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_workflow_ancestor_skip import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_workflow_ancestor_skip.py: {exc}")
+            return CheckResult("Workflow Ancestor-Skip", False, True, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "Workflow Ancestor-Skip",
+            False,
+            True,
+            1,
+            "See output above; each flagged job needs an explicit "
+            "!cancelled()/always() guard once triaged (#3929, #3922).",
+        )
+
+    return CheckResult("Workflow Ancestor-Skip", True, True, 0, "")
+
+
+def check_test_lanes() -> CheckResult:
+    """Reject test files that no CI lane runs and no allowlist entry explains."""
+    print("\nChecking every test file is run by a CI lane...")
+    print("-" * 40)
+
+    try:
+        from check_test_lane_coverage import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_test_lane_coverage import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_test_lane_coverage.py: {exc}")
+            return CheckResult("Test Lane Coverage", False, False, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "Test Lane Coverage",
+            False,
+            False,
+            1,
+            "See output above; name the file in a workflow's pytest step, or "
+            "add it to util/test_lane_allowlist.yml with a reason (#4205).",
+        )
+
+    return CheckResult("Test Lane Coverage", True, False, 0, "")
+
+
+def check_tool_descriptions() -> CheckResult:
+    """Hold every flagship tool description to the per-call token budget."""
+    print("\nChecking tool description budget...")
+    print("-" * 40)
+
+    try:
+        from check_tool_descriptions import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_tool_descriptions import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_tool_descriptions.py: {exc}")
+            return CheckResult("Tool Descriptions", False, False, 1, str(exc))
+
+    # run_check() imports gaia at call time; without the package that would
+    # escape main() and skip every remaining check.
+    try:
+        exit_code = run_check()
+    except ImportError as exc:
+        print(f"[!] Could not import GAIA to read the tool schemas: {exc}")
+        print(f"    Python: {sys.executable}")
+        print()
+        print("    To fix, run: uv pip install -e .")
+        print("    Or run lint via: uv run python util/lint.py --all")
+        return CheckResult("Tool Descriptions", False, False, 1, "GAIA not installed")
+
+    if exit_code != 0:
+        return CheckResult(
+            "Tool Descriptions",
+            False,
+            False,
+            1,
+            "See output above; trim the docstring to the budget in "
+            "src/gaia/agents/base/tools.py.",
+        )
+
+    return CheckResult("Tool Descriptions", True, False, 0, "")
+
+
 def check_doc_versions() -> CheckResult:
     """Check documentation version consistency."""
-    print("\n[11/11] Checking documentation version consistency...")
+    print("\n[12/12] Checking documentation version consistency...")
     print("-" * 40)
 
     # Import and run the check
@@ -759,6 +897,26 @@ def main():
         help="Validate .github/dependabot.yml (no soft-disabled entries, npm groups present)",
     )
     parser.add_argument(
+        "--workflow-triggers",
+        action="store_true",
+        help="Reject on.pull_request.branches filters, which silence stacked PRs",
+    )
+    parser.add_argument(
+        "--workflow-ancestor-skip",
+        action="store_true",
+        help="Warn on job if: conditions vulnerable to GitHub Actions' ancestor-skip gotcha",
+    )
+    parser.add_argument(
+        "--test-lanes",
+        action="store_true",
+        help="Reject test files that no CI lane runs (see util/test_lane_allowlist.yml)",
+    )
+    parser.add_argument(
+        "--tool-descriptions",
+        action="store_true",
+        help="Check flagship tool descriptions against the per-call token budget",
+    )
+    parser.add_argument(
         "--doc-versions",
         action="store_true",
         help="Check doc version consistency",
@@ -782,6 +940,10 @@ def main():
             args.imports,
             args.agents,
             args.dependabot,
+            args.workflow_triggers,
+            args.workflow_ancestor_skip,
+            args.test_lanes,
+            args.tool_descriptions,
             args.doc_versions,
             args.all,
         ]
@@ -836,6 +998,18 @@ def main():
 
     if args.dependabot or run_all:
         results.append(check_dependabot())
+
+    if args.workflow_triggers or run_all:
+        results.append(check_workflow_triggers())
+
+    if args.workflow_ancestor_skip or run_all:
+        results.append(check_workflow_ancestor_skip())
+
+    if args.test_lanes or run_all:
+        results.append(check_test_lanes())
+
+    if args.tool_descriptions or run_all:
+        results.append(check_tool_descriptions())
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())

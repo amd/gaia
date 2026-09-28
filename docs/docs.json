@@ -79,21 +79,26 @@
                     "group": "Setup & Hardware",
                     "pages": [
                       "guides/hardware-advisor",
-                      "guides/npu"
+                      "guides/npu",
+                      "guides/llm-gateway"
                     ]
                   },
                   {
                     "group": "Core Agents",
                     "pages": [
                       "guides/gaia",
+                      "guides/document-extraction",
+                      "guides/ai-providers",
                       "guides/chat",
-                      "guides/talk"
+                      "guides/talk",
+                      "guides/transcription"
                     ]
                   },
                   {
                     "group": "Developer Tools",
                     "pages": [
-                      "guides/code-index"
+                      "guides/code-index",
+                      "guides/project-map"
                     ]
                   },
                   {
@@ -101,6 +106,7 @@
                     "pages": [
                       "guides/email",
                       "guides/email-integration",
+                      "guides/slack",
                       "guides/telegram-adapter"
                     ]
                   },
@@ -303,6 +309,12 @@
             ]
           },
           {
+            "group": "Design",
+            "pages": [
+              "spec/gaia-design-language"
+            ]
+          },
+          {
             "group": "Packaging",
             "pages": [
               "spec/electron-integration"
@@ -342,6 +354,8 @@
                   "eval"
                 ]
               },
+              "reference/session-analytics",
+              "reference/agent-benchmarks",
               "reference/dependency-management",
               "reference/contributing-docs"
             ]
@@ -372,6 +386,7 @@
           {
             "group": "Packaging & Distribution",
             "pages": [
+              "deployment/shareable-build",
               "deployment/ui",
               "deployment/testing-electron",
               "deployment/code-signing"
@@ -392,12 +407,16 @@
             "group": "Agent UI",
             "pages": [
               "plans/agent-ui",
+              "plans/gaia-ui-redesign",
               "plans/setup-wizard",
               "plans/security-model",
               "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
+              "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
+              "plans/slack-tui-integration",
+              "plans/daemon-convergence",
               "plans/autonomy-engine"
             ]
           },
@@ -409,11 +428,13 @@
               "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
               "plans/flagship-installer",
+              "plans/embedded-onboarding",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",
               "plans/adaptive-skills",
+              "plans/adaptive-memory",
               "plans/oem-bundling"
             ]
           },
@@ -425,7 +446,8 @@
               "plans/mcp-docs",
               "plans/desktop-installer",
               "plans/tool-loader",
-              "plans/code-index-review"
+              "plans/code-index-review",
+              "plans/nightly-benchmarks"
             ]
           },
           {
@@ -444,7 +466,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
-              "releases/v0.23.1",
+              "releases/v0.24.1",
               "releases/v0.23.0",
               "releases/v0.22.0",
               "releases/v0.21.2",
@@ -505,7 +527,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.23.0 \u00b7 Lemonade 11.5.0",
+        "label": "v0.24.1 \u00b7 Lemonade 2026.39.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

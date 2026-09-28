@@ -505,7 +505,9 @@ and is **Gmail-only** (a request resolving to an Outlook mailbox is rejected
 - `GET /v1/email/calendar/events` → `CalendarEventsResponse` (read-only view;
   `CalendarEvent` flattens provider start/end strings). `time_min`/`time_max`
   are optional; omitting both defaults to a forward window (now → +30 days) so
-  recurring series don't surface their oldest instances (#2162).
+  recurring series don't surface their oldest instances (#2162). The response
+  includes `count` for the returned page and `truncated: true` when the
+  provider reports another page; a truncated response is not a complete window.
 - `POST /v1/email/calendar/events/preview` → `CalendarEventPreviewResponse` mints
   a confirmation token bound to the event.
 - `POST /v1/email/calendar/events` (`CalendarCreateEventRequest`) creates the

@@ -355,14 +355,18 @@ def _generate_search_keys(self, query: str) -> List[str]:
     [project]
     name = "doc-qa-agent"
     version = "1.0.0"
-    # gaia-agent-chat provides ChatAgent and depends on amd-gaia
-    dependencies = ["gaia-agent-chat"]
+    # ChatAgent is installed from source while PyPI publishing is paused.
+    dependencies = [
+        "amd-gaia[rag]",
+        "gaia-agent-chat @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/chat/python",
+    ]
 
     [project.scripts]
     doc-qa = "my_agent.cli:main"
     ```
 
-    Install with: `uv pip install -e .`
+    Install with: `uv pip install -e .` (requires Git). The direct source dependency
+    supplies `ChatAgent`; the core `rag` extra supplies document-processing dependencies.
   </Tab>
 
   <Tab title="Usage">
@@ -389,10 +393,11 @@ def _generate_search_keys(self, query: str) -> List[str]:
     **Symptom:** Agent responds with "No documents indexed"
 
     **Debugging:**
-    ```python
-    # Verify RAG dependencies
-    uv pip install -e ".[rag]"
+    ```bash
+    uv pip install "amd-gaia[rag]"
+    ```
 
+    ```python
     # Check document exists
     import os
     print(os.path.exists("./manual.pdf"))  # Should be True
@@ -403,7 +408,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     ```
 
     **Common causes:**
-    - Missing RAG dependencies (`uv pip install -e ".[rag]"`)
+    - Missing RAG dependencies (`uv pip install "amd-gaia[rag]"`)
     - Incorrect file path
     - File not readable
   </Accordion>
@@ -509,7 +514,9 @@ def _generate_search_keys(self, query: str) -> List[str]:
   </Card>
 
   <Card title="Security" icon="lock">
-    Set `allowed_paths` in production. Prevents path traversal and unauthorized access.
+    Set `allowed_paths` in production, and list the **files** a session needs rather than
+    the folders holding them. It is a scope, not a safety guarantee — secrets and
+    login-execution files are refused separately.
   </Card>
 
   <Card title="Incremental Development" icon="vial">

@@ -48,8 +48,8 @@ def agent():
 def test_loop_break_on_repeated_error_does_not_claim_success(agent):
     summary = agent._build_loop_break_summary(
         tool_name="mcp_tool_mcp",
-        consecutive_count=4,
-        step_results=[
+        executed_count=4,
+        recent_results=[
             {"status": "error", "error": "Tool 'mcp_tool_mcp' not found"},
         ],
     )
@@ -60,8 +60,8 @@ def test_loop_break_on_repeated_error_does_not_claim_success(agent):
 def test_loop_break_on_error_surfaces_underlying_message(agent):
     summary = agent._build_loop_break_summary(
         tool_name="some_tool",
-        consecutive_count=4,
-        step_results=[
+        executed_count=4,
+        recent_results=[
             {"status": "error", "error": "Connection refused"},
         ],
     )
@@ -72,8 +72,8 @@ def test_loop_break_on_error_with_empty_message_falls_back(agent):
     """Missing/empty ``error`` field doesn't break the helper."""
     summary = agent._build_loop_break_summary(
         tool_name="some_tool",
-        consecutive_count=4,
-        step_results=[{"status": "error"}],
+        executed_count=4,
+        recent_results=[{"status": "error"}],
     )
     assert "kept failing" in summary
     assert "the tool returned an error" in summary
@@ -84,15 +84,15 @@ def test_loop_break_on_other_error_shapes(agent):
     # success=False shape
     s1 = agent._build_loop_break_summary(
         tool_name="x",
-        consecutive_count=4,
-        step_results=[{"success": False, "error": "boom"}],
+        executed_count=4,
+        recent_results=[{"success": False, "error": "boom"}],
     )
     assert "Task completed" not in s1
     # has_errors shape
     s2 = agent._build_loop_break_summary(
         tool_name="x",
-        consecutive_count=4,
-        step_results=[{"has_errors": True, "error": "boom"}],
+        executed_count=4,
+        recent_results=[{"has_errors": True, "error": "boom"}],
     )
     assert "Task completed" not in s2
 
@@ -102,25 +102,26 @@ def test_loop_break_on_other_error_shapes(agent):
 # ---------------------------------------------------------------------------
 
 
-def test_loop_break_on_success_returns_task_completed_message(agent):
-    """Loop-on-success (e.g. model keeps re-calling a working tool) should
-    still produce the existing "Task completed" wording — no behaviour
-    change on the happy path."""
+def test_loop_break_on_repeated_success_does_not_claim_completion(agent):
+    """Re-calling a working tool until the guard fires is a stall, not a
+    finish — observed as a model that could not reach ``edit_file`` calling
+    ``create_table`` four times and being told the task was done (#3750)."""
     summary = agent._build_loop_break_summary(
         tool_name="query_documents",
-        consecutive_count=4,
-        step_results=[{"status": "success", "result": "found 3 docs"}],
+        executed_count=4,
+        recent_results=[{"status": "success", "result": "found 3 docs"}],
     )
-    assert summary.startswith("Task completed with query_documents")
+    assert "Task completed" not in summary
+    assert "query_documents" in summary and "4" in summary
+    assert "can't confirm" in summary
 
 
-def test_loop_break_with_empty_step_results_returns_task_completed(agent):
-    """Edge case: no recorded results yet. Default to the success
-    message (the loop wouldn't fire without prior calls in practice)."""
+def test_loop_break_with_empty_recent_results_does_not_claim_completion(agent):
+    """Edge case: no recorded results yet. Still a loop break, still not done."""
     summary = agent._build_loop_break_summary(
-        tool_name="x", consecutive_count=4, step_results=[]
+        tool_name="x", executed_count=4, recent_results=[]
     )
-    assert "Task completed" in summary
+    assert "Task completed" not in summary
 
 
 # Native-path call-site contract: callers must pass UNWRAPPED result dicts
@@ -132,7 +133,7 @@ def test_helper_handles_native_path_unwrapped_results(agent):
 
         recent_results = [o.get("result") for o in previous_outputs]
         final_answer = self._build_loop_break_summary(
-            tool_name, consecutive_count, recent_results
+            tool_name, consecutive_count - 2, recent_results
         )
 
     Assert the helper correctly identifies a loop-of-errors when fed
@@ -150,8 +151,8 @@ def test_helper_handles_native_path_unwrapped_results(agent):
     ]
     summary = agent._build_loop_break_summary(
         tool_name="mcp_tool_bad_tool",
-        consecutive_count=4,
-        step_results=recent_results,
+        executed_count=4,
+        recent_results=recent_results,
     )
     # CRITICAL: must NOT claim success on loop-of-errors. This is the
     # exact bug found in eval-20260519-192836/tool_perf_normal_verbatim:
@@ -164,17 +165,13 @@ def test_helper_handles_native_path_unwrapped_results(agent):
     assert "Unknown tool name" in summary
 
 
-def test_wrapped_dicts_fall_through_to_success_illustrating_required_unwrap():
-    """**Trap test — documents the WRONG behaviour to pin the contract.**
-
-    When wrapped ``previous_outputs`` entries (``{"tool", "args",
-    "result"}``) are passed straight in, the top-level dict has no
-    ``status`` key, so the helper takes the success branch and emits a
-    "Task completed" lie. That's exactly the bug the native call site
-    used to ship. The fix lives at the CALLER (unwrap via
-    ``o["result"]`` before passing); this assertion exists to make
-    that contract observable and to fail loudly if a future refactor
-    moves the unwrap into the helper without updating callers.
+def test_wrapped_dicts_cannot_produce_a_false_success():
+    """Wrapped ``previous_outputs`` entries (``{"tool", "args", "result"}``)
+    have no top-level ``status``, so they miss the error branch. That used to
+    mean a "Task completed" lie; no branch claims completion any more (#3750),
+    so the worst a wrapped input can do now is lose the underlying error text.
+    Callers must still unwrap via ``o["result"]`` for that text to reach the
+    user.
     """
     with patch("gaia.agents.base.agent.AgentSDK"):
         a = _DummyAgent(silent_mode=True, skip_lemonade=True)
@@ -182,7 +179,8 @@ def test_wrapped_dicts_fall_through_to_success_illustrating_required_unwrap():
         {"tool": "x", "args": {}, "result": {"status": "error", "error": "boom"}},
     ]
     summary = a._build_loop_break_summary(
-        tool_name="x", consecutive_count=4, step_results=wrapped
+        tool_name="x", executed_count=4, recent_results=wrapped
     )
-    # Documents the trap: wrapped input → false-success message.
-    assert "Task completed" in summary
+    assert "Task completed" not in summary
+    # Unwrapping is still the caller's job: the error text is not recovered.
+    assert "boom" not in summary

@@ -5,11 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
 // dev is developer mode: rich in-TUI output (per-turn timings, step and turn
@@ -23,13 +27,20 @@ import (
 // (see init) — old scripts and docs keep working, help lists one flag.
 var dev bool
 
-// bypassPermissions starts agents with confirmation prompts off: every gated
-// tool — shell commands, file writes — runs without asking.
+// fullAccessFlag backs --full-access: the agent runs every gated tool — shell
+// commands, file writes — without asking, and the shell's own guardrails come
+// off with them (redirection and the other shell-only operators parse, the
+// read-only binary allowlist is replaced by a developer set, the rate limit is
+// lifted).
 //
-// Off unless passed, and only for this launch. Nothing persists it, so there
-// is no way to land in this mode without having typed it, and the TUI carries
-// an unmissable banner for as long as it is on.
-var bypassPermissions bool
+// Off unless passed, or saved as the default with /full-access always or
+// `gaia config set full_access true` (see preflight.ReadFullAccess). Either
+// way the TUI carries an unmissable banner for as long as it is on.
+var fullAccessFlag bool
+
+// retiredBypassFlag exists only so --bypass-permissions fails naming
+// --full-access, rather than with cobra's bare "unknown flag".
+var retiredBypassFlag bool
 
 // useClaude routes the spawned agent's inference to Anthropic's Claude API
 // instead of the local Lemonade backend. A real privacy change from GAIA's
@@ -82,6 +93,67 @@ func binaryName(argv0 string) string {
 // point that honours it reads the same variable.
 var mockAgent string
 
+// tracePath is --trace's raw value: "" (off), traceAutoPath (bare --trace), or
+// the path the user gave. Resolved by openTrace.
+var tracePath string
+
+// traceAutoPath is what bare --trace parses to: cobra needs a NoOptDefVal for
+// the flag to be legal without a value, and "" already means "off".
+//
+// A WORD, not an unprintable sentinel — pflag prints NoOptDefVal verbatim in
+// --help, so a control character lands in the flag listing. As a side effect
+// `--trace=auto` is the same as bare `--trace`, which is what it reads like.
+// A file genuinely named "auto" is still reachable as `--trace=./auto`.
+const traceAutoPath = "auto"
+
+// traceArgAdvice explains a stray positional that is really a spaced --trace
+// path, and returns nil when --trace does not explain it.
+//
+// want is how many positionals the command legitimately takes. pflag refuses to
+// attach a spaced value to a flag that is legal without one, so
+// `… --trace out.jsonl` leaves out.jsonl as an argument and records to the
+// DEFAULT path — the exact "recording somewhere you did not ask for" this flag
+// exists to remove. Every command that accepts --trace has to say so, not just
+// the root one.
+func traceArgAdvice(args []string, want int) error {
+	if tracePath != traceAutoPath || len(args) <= want {
+		return nil
+	}
+	stray := args[want]
+	return fmt.Errorf(
+		"--trace takes its path attached, not spaced: write --trace=%s "+
+			"(as written, %q was read as an argument, and the trace would have gone "+
+			"to the default path instead)", stray, stray)
+}
+
+// openTrace turns --trace into a writer, or nil when the flag was not passed.
+// agentID names the run in the default filename, so a trace can be told apart
+// from another agent's without opening it.
+//
+// It returns an error rather than warning and continuing: a trace that is not
+// being written is indistinguishable from an agent that did nothing, which is
+// the exact confusion the flag exists to remove.
+func openTrace(agentID string) (*event.TraceWriter, error) {
+	if tracePath == "" {
+		return nil, nil
+	}
+	path := tracePath
+	if path == traceAutoPath {
+		auto, err := event.DefaultTracePath(agentID, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		path = auto
+	}
+	w, err := event.NewTraceWriter(path)
+	if err != nil {
+		return nil, err
+	}
+	// A recorder the user cannot find is a recorder that does not exist.
+	fmt.Fprintf(os.Stderr, "trace → %s\n", w.Path())
+	return w, nil
+}
+
 var rootCmd = &cobra.Command{
 	Use:   defaultBinaryName,
 	Short: "GAIA in your terminal",
@@ -95,8 +167,29 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return ui.RunFlagship(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg())
+		trace, err := openTrace(catalog.FlagshipID)
+		if err != nil {
+			return err
+		}
+		defer closeTrace(trace)
+		// The saved preference is the default; an explicit --full-access
+		// overrides it in either direction, which is what makes
+		// --full-access=false a one-launch opt-out.
+		saved := preflight.ReadFullAccess().Enabled
+		fullAccess, fromSaved := saved, saved
+		if cmd.Flags().Changed("full-access") {
+			fullAccess, fromSaved = fullAccessFlag, false
+		}
+		return ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace)
 	},
+}
+
+// closeTrace flushes and closes the trace, reporting a recording that stopped
+// early. Silence here would let a truncated trace read as a complete one.
+func closeTrace(w *event.TraceWriter) {
+	if err := w.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "trace: %v\n", err)
+	}
 }
 
 func init() {
@@ -110,7 +203,8 @@ func init() {
 
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
 		"developer mode: show per-turn timings, steps, and tool arguments and output "+
-			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/)")
+			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/). "+
+			"This is what is on SCREEN; --trace writes the same events to a file")
 	// Same variable as --dev, hidden: the previous name for this mode. Kept so
 	// existing scripts and docs do not break, out of --help so the two spellings
 	// never read as two features.
@@ -118,10 +212,17 @@ func init() {
 	if err := rootCmd.PersistentFlags().MarkHidden("debug"); err != nil {
 		panic(err) // only fails on a flag name that was never registered
 	}
-	rootCmd.PersistentFlags().BoolVar(&bypassPermissions, "bypass-permissions", false,
-		"run every tool without asking for confirmation — the agent acts fully "+
-			"autonomously. Off by default; the TUI shows a persistent warning "+
-			"while it is on, and /bypass off turns it off mid-session")
+	rootCmd.PersistentFlags().BoolVar(&fullAccessFlag, "full-access", false,
+		"subprocess agents only: run every tool without asking for confirmation, "+
+			"with the shell guardrails off — the agent acts fully autonomously "+
+			"and can execute arbitrary code. Off by default; the TUI shows a "+
+			"persistent warning "+
+			"while it is on, and /full-access off turns it off mid-session")
+	// Retired name: registered only so passing it fails naming the new one.
+	rootCmd.PersistentFlags().BoolVar(&retiredBypassFlag, "bypass-permissions", false, "")
+	if err := rootCmd.PersistentFlags().MarkHidden("bypass-permissions"); err != nil {
+		panic(err) // only fails on a flag name that was never registered
+	}
 	rootCmd.PersistentFlags().BoolVar(&useClaude, "use-claude", false,
 		"run the agent against Anthropic's Claude API instead of the local Lemonade "+
 			"backend — your conversation is sent to Anthropic, not processed on this "+
@@ -136,6 +237,9 @@ func init() {
 	// that will not do what it says must fail as a command-line error, not as
 	// something the user has to notice inside a running TUI.
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if rootCmd.PersistentFlags().Changed("bypass-permissions") {
+			return fmt.Errorf("--bypass-permissions was renamed to --full-access")
+		}
 		if rootCmd.PersistentFlags().Changed("claude-model") && !useClaude {
 			return fmt.Errorf(
 				"--claude-model only applies with --use-claude: the local Lemonade " +
@@ -158,6 +262,44 @@ func init() {
 	// substituted a stand-in.
 	rootCmd.PersistentFlags().StringVar(&mockAgent, "mock", "",
 		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
+	rootCmd.PersistentFlags().StringVar(&tracePath, "trace", "",
+		"record every agent event — tool calls WITH their arguments, results, errors "+
+			"and timings — to a JSONL file, one event per line, for later inspection. "+
+			"Bare --trace writes ~/.gaia/traces/<timestamp>-<agent>.jsonl; --trace=<path> "+
+			"picks the file (the path must be attached with =, not spaced). Independent "+
+			"of --dev, which shows the same events on screen instead. The file holds "+
+			"whatever the agent read — file contents, shell output, email — so review "+
+			"it before sharing. Does NOT capture prompt size or token accounting — "+
+			"those live only in the agent's own recorder (GAIA_TURN_LOG)")
+	// Without this, bare --trace is a parse error ("flag needs an argument").
+	rootCmd.PersistentFlags().Lookup("trace").NoOptDefVal = traceAutoPath
+	// pflag will not attach a spaced value to a NoOptDefVal flag, so
+	// `--trace out.jsonl` leaves out.jsonl as a positional and would otherwise
+	// be reported as an unknown command — with the real fix nowhere in sight.
+	//
+	// Cobra's own unknown-command path defaults this lazily; the exported
+	// SuggestionsFor does not, and a zero distance matches nothing.
+	rootCmd.SuggestionsMinimumDistance = 2
+	rootCmd.Args = func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return nil
+		}
+		// Cobra's own legacyArgs message, suggestions included — this hook
+		// replaced it, so it owes the same help for an ordinary typo.
+		near := cmd.SuggestionsFor(args[0])
+		// A near-miss is a misspelled COMMAND, not a misplaced path: with
+		// --trace on, `gaia-tui --trace chatt` still has to suggest `chat`.
+		if len(near) == 0 {
+			if err := traceArgAdvice(args, 0); err != nil {
+				return err
+			}
+		}
+		msg := fmt.Sprintf("unknown command %q for %q", args[0], cmd.CommandPath())
+		if len(near) > 0 {
+			msg += "\n\nDid you mean this?\n\t" + strings.Join(near, "\n\t")
+		}
+		return fmt.Errorf("%s", msg)
+	}
 }
 
 // Execute runs the CLI.

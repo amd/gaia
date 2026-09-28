@@ -18,9 +18,16 @@ import stat
 import string
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator, Optional, Tuple
+from typing import Generator, List, Optional, Sequence, Tuple
 
 from fastapi import HTTPException
+
+from gaia.config import (
+    GAIA_HOME_IS_FS_ROOT,
+    UnsafeGaiaHomeError,
+    unsafe_gaia_home_reason,
+)
+from gaia.llm.lemonade_embedded import gaia_home
 
 from .models import (
     DocumentResponse,
@@ -388,19 +395,135 @@ def validate_file_path(filepath: Path) -> None:
         )
 
 
+# Extra directories the operator declares as readable document roots, on top of
+# the user's home. os.pathsep-separated absolute paths. Exists because a service
+# account's home (e.g. a Windows CI runner's systemprofile) is not where its
+# documents live; the containment check still applies, just against roots that
+# were declared rather than inferred.
+DOCUMENT_ROOTS_ENV = "GAIA_DOCUMENT_ROOTS"
+
+
+def _ui_gaia_home() -> Path:
+    """Return the GAIA home, refusing one GAIA must not own files under.
+
+    The server deletes files under ``<GAIA_HOME>/documents`` as its own, and
+    with ``GAIA_HOME=$HOME`` that is the real Documents folder on Windows and
+    macOS (case-insensitive filesystems).
+
+    Raises:
+        UnsafeGaiaHomeError: ``GAIA_HOME`` is a filesystem root, the user's
+            home directory, or an ancestor of it. Not an ``HTTPException``:
+            ``uploads_dir()`` is called from ``create_app()``, where one would
+            surface as a raw traceback rather than something a user can act on.
+    """
+    home = gaia_home()
+    resolved = home.resolve()
+    user_home = Path.home().resolve()
+
+    reason = unsafe_gaia_home_reason(resolved, user_home)
+    if reason is None:
+        return home
+
+    problem = (
+        "is the filesystem root"
+        if reason == GAIA_HOME_IS_FS_ROOT
+        else "is your home directory or contains it"
+    )
+    raise UnsafeGaiaHomeError(
+        f"The Agent UI cannot start: GAIA_HOME resolves to {resolved}, which "
+        f"{problem}, so GAIA would treat {resolved / 'documents'} as its own "
+        f"storage and delete from it. Point GAIA_HOME at a dedicated directory "
+        f"(the default is {user_home / '.gaia'}) and restart the Agent UI."
+    )
+
+
+def managed_documents_dir() -> Path:
+    """Where the Agent UI stores documents it owns (``<GAIA_HOME>/documents``)."""
+    return _ui_gaia_home() / "documents"
+
+
+def uploads_dir() -> Path:
+    """Where chat attachments are stored (``<GAIA_HOME>/chat/uploads``)."""
+    return _ui_gaia_home() / "chat" / "uploads"
+
+
+def document_roots() -> List[Path]:
+    """Return the directories documents may be read from.
+
+    Always includes the user's home directory, plus GAIA's own managed
+    documents folder when ``GAIA_HOME`` moves it outside every other root.
+    Each entry of ``GAIA_DOCUMENT_ROOTS`` adds another root; a relative or
+    non-existent entry is a server misconfiguration and raises HTTP 500 rather than being
+    skipped, so a typo can never silently narrow access back to home.
+
+    A root whose own path runs through a symlink (``/var`` on macOS) is
+    returned in both forms, so callers can containment-check a lexical path
+    and a realpath against the same list.
+    """
+    declared = [Path.home()]
+    for entry in os.environ.get(DOCUMENT_ROOTS_ENV, "").split(os.pathsep):
+        entry = entry.strip()
+        if not entry:
+            continue
+        candidate = Path(entry)
+        if not candidate.is_absolute():
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"{DOCUMENT_ROOTS_ENV} entry '{entry}' is not an absolute path. "
+                    f"Set {DOCUMENT_ROOTS_ENV} to existing absolute directories "
+                    f"separated by '{os.pathsep}', or unset it to allow only the "
+                    f"home directory."
+                ),
+            )
+        if not candidate.is_dir():
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"{DOCUMENT_ROOTS_ENV} entry '{entry}' is not an existing "
+                    f"directory. Point it at a directory that exists on this "
+                    f"machine, or unset it to allow only the home directory."
+                ),
+            )
+        declared.append(candidate)
+
+    managed = managed_documents_dir().resolve()
+    if not any(managed.is_relative_to(root.resolve()) for root in declared):
+        declared.append(managed)
+
+    roots: List[Path] = []
+    for candidate in declared:
+        for form in (Path(os.path.abspath(str(candidate))), candidate.resolve()):
+            if form not in roots:
+                roots.append(form)
+    return roots
+
+
+def _describe_roots(roots: Sequence[Path]) -> str:
+    """Render allowed roots for an error message, one entry per directory.
+
+    ``document_roots`` carries each root in both lexical and realpath form so
+    the two containment steps can share one list; rendering that verbatim
+    would show ``/tmp/x, /private/tmp/x`` as two separate grants.
+    """
+    by_real = {}
+    for root in roots:
+        by_real.setdefault(os.path.realpath(str(root)), str(root))
+    return ", ".join(by_real.values())
+
+
 def ensure_within_home(resolved: Path) -> None:
-    """Raise HTTP 403 if *resolved* is not inside the user's home directory.
+    """Raise HTTP 403 if *resolved* is not inside an allowed document root.
 
     This helper is used by file-browsing, preview, and search endpoints to
-    prevent access to arbitrary filesystem locations.
+    prevent access to arbitrary filesystem locations. The allowed roots are
+    the user's home plus anything declared in ``GAIA_DOCUMENT_ROOTS``.
     """
-    home = Path.home()
-    try:
-        resolved.relative_to(home)
-    except ValueError:
+    roots = document_roots()
+    if not any(resolved.is_relative_to(root) for root in roots):
         raise HTTPException(
             status_code=403,
-            detail="Access restricted to files under user home directory",
+            detail=f"Access restricted to files under: {_describe_roots(roots)}",
         )
 
 
@@ -453,8 +576,9 @@ def safe_open_document(
 
     Validates that the path:
     - Is not a symlink (400 if symlink — checked before resolving)
-    - Is within the user home directory, both lexically and after resolving
-      every symlinked component (403 if not)
+    - Is within an allowed document root (the user home plus anything declared
+      in ``GAIA_DOCUMENT_ROOTS``), both lexically and after resolving every
+      symlinked component (403 if not)
     - Has an allowed extension (400 if not)
     - Exists and is a regular file (404 / 400 if not)
 
@@ -468,31 +592,23 @@ def safe_open_document(
         raise HTTPException(status_code=400, detail="Invalid file path")
 
     raw = Path(path)
-    home = Path.home().resolve()
+    roots = document_roots()
+    denied = f"Access denied: path must be within one of: {_describe_roots(roots)}"
 
-    # 1. Must be within home directory — check before lstat so that
-    # non-existent paths outside home return 403 (not 404).
+    # 1. Must be within an allowed root — check before lstat so that
+    # non-existent paths outside them return 403 (not 404).
     # Use os.path.abspath (doesn't follow symlinks) for this check.
     abs_raw = Path(os.path.abspath(str(raw)))
-    try:
-        abs_raw.relative_to(home)
-    except ValueError:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Access denied: path must be within home directory ({home})",
-        )
+    if not any(abs_raw.is_relative_to(root) for root in roots):
+        raise HTTPException(status_code=403, detail=denied)
 
     # 2. Physical containment: the lexical check above can be defeated by an
-    # intermediate symlinked directory inside home that points outside
+    # intermediate symlinked directory inside a root that points outside
     # (O_NOFOLLOW below only guards the FINAL path component). realpath
-    # resolves every component; require the result to stay under home.
+    # resolves every component; require the result to stay under a root.
     real = os.path.realpath(str(raw))
-    home_prefix = str(home).rstrip(os.sep) + os.sep
-    if not real.startswith(home_prefix):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Access denied: path must be within home directory ({home})",
-        )
+    if not any(real.startswith(str(root).rstrip(os.sep) + os.sep) for root in roots):
+        raise HTTPException(status_code=403, detail=denied)
 
     # 3. Reject symlinks before resolving — lstat doesn't follow symlinks
     try:

@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import LOCAL_MAX_OUTPUT_TOKENS, Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.llm.lemonade_client import (
     AGENT_PROFILES,
@@ -67,6 +67,9 @@ def _make_bare_agent(model_id=None):
     # _response_format_template is used by _compose_system_prompt; set a
     # sentinel so tests can assert its presence / absence in composed output.
     obj._response_format_template = Agent._PLANNING_FORMAT
+    # An explicit cap so _max_output_tokens() answers from the attribute; the
+    # unset branch reads self.chat, which __new__ never built.
+    obj.max_output_tokens = LOCAL_MAX_OUTPUT_TOKENS
     return obj
 
 
@@ -723,6 +726,46 @@ def test_build_schema_type_mapping(clear_tool_registry):
     assert props["text"]["type"] == "string"
     assert props["count"]["type"] == "integer"
     assert props["flag"]["type"] == "boolean"
+
+
+def test_build_schema_preserves_decorator_types(clear_tool_registry):
+    """The registry's own JSON type names survive the mapping (#3581).
+
+    ``@tool`` stores "integer"/"array"/"object"; the mapping previously only
+    knew Python names, so everything but ``str`` collapsed to "string".
+    """
+    from typing import List, Optional
+
+    @tool
+    def typed_tool(
+        count: int,
+        ratio: float,
+        flag: bool,
+        starters: Optional[List[str]] = None,
+        meta: dict = None,
+    ) -> dict:
+        """Tool with non-string parameter types.
+
+        Args:
+            count: How many.
+            ratio: A fraction.
+            flag: A toggle.
+            starters: Suggestion chips.
+            meta: Extra data.
+        """
+        return {}
+
+    agent = _make_bare_agent(model_id="Gemma-4-E4B-it-GGUF")
+    props = agent._build_openai_tool_schemas()[0]["function"]["parameters"][
+        "properties"
+    ]
+
+    assert props["count"]["type"] == "integer"
+    assert props["ratio"]["type"] == "number"
+    assert props["flag"]["type"] == "boolean"
+    assert props["starters"]["type"] == "array"
+    assert props["meta"]["type"] == "object"
+    assert props["count"]["description"] == "How many."
 
 
 def test_build_schema_required_params(clear_tool_registry):

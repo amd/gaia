@@ -163,7 +163,7 @@ def test_init_not_ready_503_body_passthrough(monkeypatch):
         "ready": False,
         "lemonade": {"reachable": False, "base_url": "http://127.0.0.1:9999/api/v1"},
         "model": {"id": "Gemma-4-E4B-it-GGUF", "present": False},
-        "hint": "Lemonade Server not reachable — start it with `lemonade-server serve`",
+        "hint": "Lemonade Server not reachable — install and start it with `gaia init`",
     }
     client = _client(
         _AcquireRecorder(lambda: _FakeHandle(init_result=(503, not_ready_body))),

@@ -783,6 +783,7 @@ def test_first_boot_is_skipped_when_a_profile_already_exists(monkeypatch, tmp_pa
     store = MemoryStore(db_path=tmp_path / "memory.db")
     try:
         store.store(
+            allow_privileged=True,
             category="profile",
             content="User is a software engineer",
             context="global",
@@ -850,3 +851,20 @@ def test_cli_default_bootstrap_skips_discovery_when_the_chat_is_cancelled(monkey
     )
 
     assert discovered == []
+
+
+def test_onboarding_writes_a_profile_row(tmp_path):
+    """Onboarding is a privileged writer: an approved answer lands as profile."""
+    from gaia.agents.base.bootstrap import ProposedEntry, _store_entry
+
+    store = MemoryStore(db_path=tmp_path / "memory.db")
+    try:
+        kid = _store_entry(
+            store, ProposedEntry(content="User is a nurse", category="profile"), None
+        )
+        row = store._conn.execute(
+            "SELECT category, content FROM knowledge WHERE id = ?", (kid,)
+        ).fetchone()
+        assert tuple(row) == ("profile", "User is a nurse")
+    finally:
+        store.close()

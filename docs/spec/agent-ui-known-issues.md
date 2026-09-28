@@ -40,24 +40,7 @@ abort at the next checkpoint.
 
 ---
 
-## 3. `@tool` Decorator Ignores `description` / `parameters` kwargs
-
-**File:** `src/gaia/agents/base/tools.py`
-
-The `@tool` decorator accepts `description` and `parameters` keyword
-arguments, but the current implementation extracts tool metadata from the
-function's docstring and type hints instead.  Explicitly passed kwargs are
-silently ignored.
-
-**Impact:** Tool descriptions shown to the LLM may be inaccurate if a
-developer passes explicit kwargs expecting them to override the docstring.
-
-**Suggested fix:** Check for explicit kwargs first and prefer them over
-auto-extracted metadata.
-
----
-
-## 4. Blocking I/O in Async File Router Endpoints
+## 3. Blocking I/O in Async File Router Endpoints
 
 **File:** `src/gaia/ui/routers/files.py`
 
@@ -80,7 +63,7 @@ pattern as `search_files`.
 
 ---
 
-## 5. Store Files Using `console.*` Instead of Logger
+## 4. Store Files Using `console.*` Instead of Logger
 
 **Files:** `src/gaia/apps/webui/src/stores/agentStore.ts`,
 `auditStore.ts`, `agentChatStore.ts`, `systemStore.ts`, `notificationStore.ts`

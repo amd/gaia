@@ -10,8 +10,9 @@ refused — wrong platform, not enough disk for the download) from *warnings*
 detected).  ``compatible`` is true exactly when there are no blockers.
 
 The checker is the single place the install lifecycle (``installer.install``)
-and the catalog endpoint (``GET /api/agents/catalog``) consult, so the UI and
-the backend agree on what "compatible" means.
+and the onboarding preflight (``gaia.ui.routers.onboarding``) consult, so both
+agree on what "compatible" means. ``GET /api/agents/catalog`` does *not* — it
+reports no per-agent verdict, and the Agent Hub cards render none (#3842).
 
 Detection is best-effort but never silent: anything we cannot probe (GPU/NPU
 presence) becomes a *warning* that names what we could not verify — it never

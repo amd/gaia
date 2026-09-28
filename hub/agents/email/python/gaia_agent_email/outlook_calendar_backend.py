@@ -19,14 +19,16 @@ interchangeably, without a single tool change.
 Translation summary (Graph -> Google shape):
 
 - ``event`` -> ``{id, summary(=subject), start, end, location(=location.
-  displayName), organizer:{email}, htmlLink(=webLink)}``.
+  displayName), organizer:{email, self}, htmlLink(=webLink)}``; Graph's
+  ``isOrganizer`` is carried as the provider-neutral ``organizer.self``.
 - Graph ``start``/``end`` are ``dateTimeTimeZone`` objects
   (``{dateTime, timeZone}``). Google uses ``{dateTime}`` for timed events and
   ``{date}`` for all-day. ``isAllDay==true`` -> ``{date: <YYYY-MM-DD>}``; else
   ``{dateTime: <graph dateTime>}`` (the tools read the value verbatim for
   display, so the wall-clock string passes through unchanged).
-- A list response is wrapped as ``{"items": [...]}`` so the calendar tool's
-  ``data.get("items", [])`` reads it exactly as a Google response.
+- A list response is wrapped as ``{"items": [...]}`` (plus a provider-neutral
+  ``nextPageToken`` when Graph returns ``@odata.nextLink``) so the calendar
+  tool reads it exactly as a Google response and can report truncation.
 
 Calendar verbs (Google -> Graph):
 
@@ -119,14 +121,17 @@ def graph_event_to_google(event: Dict[str, Any]) -> Dict[str, Any]:
     ``events.get`` / ``events.list`` item shape.
 
     Only the fields the email agent's calendar tools read are reconstructed
-    (``id``/``summary``/``start``/``end``/``location``/``organizer.email``);
-    ``htmlLink`` is carried for informational parity with Google.
+    (``id``/``summary``/``start``/``end``/``location``/``organizer.email`` /
+    ``organizer.self``); ``htmlLink`` is carried for informational parity with
+    Google.
     """
     all_day = bool(event.get("isAllDay"))
     organizer_addr = ((event.get("organizer") or {}).get("emailAddress") or {}).get(
         "address"
     ) or ""
-    organizer = {"email": organizer_addr} if organizer_addr else {}
+    organizer: Dict[str, Any] = {"email": organizer_addr} if organizer_addr else {}
+    if "isOrganizer" in event:
+        organizer["self"] = event["isOrganizer"]
     location = (event.get("location") or {}).get("displayName") or None
     return {
         "id": event.get("id"),
@@ -264,8 +269,9 @@ class LiveOutlookCalendarBackend:
             data = self._get("/me/events", params=params)
         items = [graph_event_to_google(e) for e in data.get("value", [])]
         # Wrap in the Google ``items`` envelope so the calendar tool reads it
-        # exactly as a Google list response.
-        return {"items": items}
+        # exactly as a Google list response. Preserve Graph's continuation
+        # link under the provider-neutral name consumed by calendar_tools.
+        return {"items": items, "nextPageToken": data.get("@odata.nextLink")}
 
     def get_event(  # pylint: disable=unused-argument
         self, *, calendar_id: str = "primary", event_id: str

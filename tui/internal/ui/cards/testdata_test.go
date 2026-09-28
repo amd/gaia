@@ -64,7 +64,8 @@ const capsHitPreScan = `{
   ],
   "needs_you_total": 40,
   "bulk": {"count": 1, "filter_tests": ["no_direct_question"]},
-  "preferences_applied": null
+  "preferences_applied": null,
+  "totals": {"urgent": 30, "actionable": 8, "informational": 4, "suggested_archives": 0, "needs_review": 2}
 }`
 
 // emptyPreScan: the "nothing needs you" state — only bulk.count is set.

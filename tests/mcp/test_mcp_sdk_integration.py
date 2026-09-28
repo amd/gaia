@@ -1,157 +1,103 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""SDK Integration tests for MCPClientManager.
+"""MCPClientManager against a real stdio MCP server — no mocks.
 
-Tests MCPClientManager against real MCP servers - mocks nothing.
-
-Run:
-    uv run pytest tests/mcp/test_mcp_sdk_integration.py -xvs -m integration
+The server is the local fixture in ``tests/mcp/fixtures/`` (built on the
+official MCP Python SDK), so these tests speak real JSON-RPC over stdio
+without fetching anything at test time.
 """
+
+import json
 
 import pytest
 
 from gaia.mcp import MCPClientManager
 from gaia.mcp.client.config import MCPConfig
 
-# MCP server configs (Anthropic format - no API keys required)
-MCP_SERVERS = {
-    "memory": {
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-memory"],
-    },
-    "sequential-thinking": {
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-    },
-    "time": {
-        "command": "uvx",
-        "args": ["mcp-server-time"],
-    },
-}
+FIXTURE_TOOLS = {"echo", "add", "read_env"}
 
-# Tool to call for each server (simple tools that verify server works)
-MCP_TEST_TOOLS = {
-    "memory": (
-        "create_entities",
-        {
-            "entities": [
+
+@pytest.fixture
+def manager(tmp_path):
+    mgr = MCPClientManager(config=MCPConfig(str(tmp_path / "mcp_servers.json")))
+    yield mgr
+    mgr.disconnect_all()
+
+
+def _write_config(path, servers):
+    path.write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
+
+
+class TestMCPClientManagerAgainstRealServer:
+    def test_add_server_connects_and_lists_tool_schemas(
+        self, manager, fixture_server_config
+    ):
+        client = manager.add_server("fixture", fixture_server_config)
+
+        assert client.is_connected()
+        assert manager.list_servers() == ["fixture"]
+
+        tools = {t.name: t for t in client.list_tools()}
+        assert set(tools) == FIXTURE_TOOLS
+        assert tools["add"].description == "Add two integers."
+        assert set(tools["add"].input_schema["properties"]) == {"a", "b"}
+        assert tools["add"].input_schema["required"] == ["a", "b"]
+
+    def test_call_tool_returns_server_result(self, manager, fixture_server_config):
+        client = manager.add_server("fixture", fixture_server_config)
+
+        result = client.call_tool("add", {"a": 2, "b": 3})
+
+        assert not result.get("isError")
+        assert result["content"][0]["text"] == "5"
+
+    def test_tool_failure_is_reported_not_swallowed(
+        self, manager, fixture_server_config
+    ):
+        client = manager.add_server("fixture", fixture_server_config)
+
+        result = client.call_tool("read_env", {"name": "GAIA_FIXTURE_UNSET_VAR"})
+
+        assert result["isError"] is True
+        assert "read_env" in result["content"][0]["text"]
+
+    def test_env_from_config_reaches_server(self, manager, fixture_server_config):
+        config = {**fixture_server_config, "env": {"GAIA_FIXTURE_VAR": "from-config"}}
+        client = manager.add_server("fixture", config)
+
+        result = client.call_tool("read_env", {"name": "GAIA_FIXTURE_VAR"})
+
+        assert result["content"][0]["text"] == "from-config"
+
+    def test_add_server_raises_when_server_cannot_start(self, manager, tmp_path):
+        missing = {"command": str(tmp_path / "no-such-server")}
+
+        with pytest.raises(RuntimeError, match="broken"):
+            manager.add_server("broken", missing)
+        assert manager.list_servers() == []
+
+    def test_load_from_config_and_reload_follow_the_file(
+        self, tmp_path, fixture_server_config
+    ):
+        config_path = tmp_path / "mcp_servers.json"
+        _write_config(config_path, {"first": fixture_server_config})
+        mgr = MCPClientManager(config=MCPConfig(str(config_path)))
+        try:
+            mgr.load_from_config()
+            assert mgr.list_servers() == ["first"]
+            assert mgr.get_client("first").is_connected()
+
+            _write_config(
+                config_path,
                 {
-                    "name": "TestEntity",
-                    "entityType": "test",
-                    "observations": ["Integration test"],
-                }
-            ]
-        },
-    ),
-    "sequential-thinking": (
-        "sequentialthinking",
-        {
-            "thought": "Integration test thought",
-            "nextThoughtNeeded": False,
-            "thoughtNumber": 1,
-            "totalThoughts": 1,
-        },
-    ),
-    "time": ("get_current_time", {"timezone": "UTC"}),
-}
+                    "first": {**fixture_server_config, "disabled": True},
+                    "second": fixture_server_config,
+                },
+            )
+            mgr.reload()
 
-
-class TestMCPSDKIntegration:
-    """Integration tests using real MCP servers via npx."""
-
-    @pytest.mark.integration
-    def test_sdk_connect_all_three_servers(self, npx_available, temp_config_file):
-        """Connect to all three MCP servers and verify they're connected."""
-        config = MCPConfig(temp_config_file)
-        manager = MCPClientManager(config=config)
-        connected = []
-
-        try:
-            for name, server_config in MCP_SERVERS.items():
-                client = manager.add_server(name, server_config)
-                assert client is not None, f"Failed to create client for {name}"
-                assert client.is_connected(), f"{name} not connected"
-                connected.append(name)
-
-            assert len(connected) == 3
-            assert set(manager.list_servers()) == set(MCP_SERVERS.keys())
-
+            assert mgr.list_servers() == ["second"]
+            tools = {t.name for t in mgr.get_client("second").list_tools()}
+            assert tools == FIXTURE_TOOLS
         finally:
-            manager.disconnect_all()
-
-    @pytest.mark.integration
-    def test_sdk_call_tool_from_each_server(self, npx_available, temp_config_file):
-        """Call one tool from each server and verify response."""
-        config = MCPConfig(temp_config_file)
-        manager = MCPClientManager(config=config)
-        results = {}
-
-        try:
-            for name, server_config in MCP_SERVERS.items():
-                manager.add_server(name, server_config)
-
-            for name, (tool_name, tool_args) in MCP_TEST_TOOLS.items():
-                client = manager.get_client(name)
-                result = client.call_tool(tool_name, tool_args)
-                results[name] = result
-
-                assert result is not None, f"No result from {name}.{tool_name}"
-                assert "error" not in result or result.get("isError") is not True
-
-            assert len(results) == 3
-
-        finally:
-            manager.disconnect_all()
-
-    @pytest.mark.integration
-    def test_sdk_list_tools_from_each_server(self, npx_available, temp_config_file):
-        """List tools from each server and verify structure."""
-        config = MCPConfig(temp_config_file)
-        manager = MCPClientManager(config=config)
-
-        try:
-            for name, server_config in MCP_SERVERS.items():
-                client = manager.add_server(name, server_config)
-                tools = client.list_tools()
-
-                assert len(tools) > 0, f"No tools from {name}"
-
-                for tool in tools:
-                    assert hasattr(tool, "name")
-                    assert hasattr(tool, "description")
-                    assert hasattr(tool, "input_schema")
-
-        finally:
-            manager.disconnect_all()
-
-    @pytest.mark.integration
-    def test_sdk_load_from_config_reconnects(self, npx_available, temp_config_file):
-        """Save config, reload, verify reconnection works."""
-        config = MCPConfig(temp_config_file)
-        manager = MCPClientManager(config=config)
-
-        try:
-            # Add all servers (config auto-saves on add)
-            for name, server_config in MCP_SERVERS.items():
-                manager.add_server(name, server_config)
-
-            manager.disconnect_all()
-
-            # Create new manager from saved config and load servers
-            config2 = MCPConfig(temp_config_file)
-            manager2 = MCPClientManager(config=config2)
-            manager2.load_from_config()
-
-            # Verify all servers reconnected
-            for name in MCP_SERVERS.keys():
-                client = manager2.get_client(name)
-                assert client is not None, f"Failed to load {name} from config"
-                assert client.is_connected(), f"{name} not reconnected"
-
-                tools = client.list_tools()
-                assert len(tools) > 0, f"No tools from {name} after reconnect"
-
-        finally:
-            manager.disconnect_all()
-            if "manager2" in locals():
-                manager2.disconnect_all()
+            mgr.disconnect_all()

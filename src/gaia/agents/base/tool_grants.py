@@ -17,7 +17,7 @@ A tool with no scope rule returns ``None``, which means **"always" is not
 offered at all** for that call. That is the safe default and it is honest: the
 key is either narrow enough to describe in the prompt, or the user answers
 y/n each time. Blanket session-wide trust has one home, and it is
-bypass-permissions mode — explicit, indicated on every frame, and opted into
+full-access mode — explicit, indicated on every frame, and opted into
 deliberately.
 
 This replaces an earlier blanket ban on "always" for the shell tools. The ban's
@@ -84,11 +84,14 @@ _UNBOUNDED_BINARIES = frozenset(
 #: ``git remote add``) and stops well short of the arguments.
 _MAX_SHELL_SCOPE_WORDS = 2
 
-_SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command"})
+#: ``wait_for_condition`` belongs here because its ``command`` is a shell
+#: command like any other — scoping the grant to it keeps "always" from becoming
+#: "any command, as long as you poll with it".
+_SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
 
 #: Tools whose blast radius is one path. The grant is that exact path — not its
 #: directory: the prompt named a file, so the grant covers a file.
-_PATH_TOOLS = frozenset(
+PATH_TOOLS = frozenset(
     {
         "write_file",
         "write_python_file",
@@ -97,6 +100,7 @@ _PATH_TOOLS = frozenset(
         "edit_python_file",
         "replace_function",
         "update_gaia_md",
+        "save_extracted_items",
     }
 )
 
@@ -104,7 +108,17 @@ _PATH_ARG_NAMES = ("file_path", "path", "filename", "file", "target_file")
 _COMMAND_ARG_NAMES = ("command", "cmd", "script", "command_line")
 _SKILL_ARG_NAMES = ("skill", "skill_name", "skill_id", "name")
 
+# Each takes the skill as its first argument, so an "always" answer scopes to
+# that one skill rather than to the tool at large.
 _SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
+
+#: `capture_skill` is deliberately NOT grantable — every capture prompts.
+#: These scopes key on the skill NAME, but for capture the operative argument
+#: is `source`: an "always allow capture_skill notes" would silently approve any
+#: future source under that name, and the label would not describe what was
+#: granted. Keying on `source` would not fix it either — a URL is not a stable
+#: identity, since the bytes behind it can change between captures.
+_UNGRANTABLE_TOOLS = frozenset({"capture_skill"})
 
 
 @dataclass(frozen=True)
@@ -126,9 +140,11 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     ``None`` means the UI must not offer "always" for this call.
     """
     args = tool_args if isinstance(tool_args, dict) else {}
+    if tool_name in _UNGRANTABLE_TOOLS:
+        return None
     if tool_name in _SHELL_TOOLS:
         return _shell_scope(tool_name, args)
-    if tool_name in _PATH_TOOLS:
+    if tool_name in PATH_TOOLS:
         return _path_scope(tool_name, args)
     if tool_name in _SKILL_TOOLS:
         return _named_scope(tool_name, args, _SKILL_ARG_NAMES)

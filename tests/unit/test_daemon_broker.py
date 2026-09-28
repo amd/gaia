@@ -284,6 +284,66 @@ def test_default_ttl_is_generous():
     assert DEFAULT_LEASE_TTL_S >= 300.0
 
 
+@pytest.mark.parametrize("timeout", [None, 10.0])
+def test_queued_waiter_wakes_at_lease_expiry_without_a_release(timeout):
+    broker = ModelSlotBroker(lease_ttl_s=0.05)
+    held = broker.acquire("model-a", holder="crashed-holder")
+    granted = threading.Event()
+    result = []
+
+    def acquire_next():
+        result.append(broker.acquire("model-b", timeout=timeout))
+        granted.set()
+
+    waiter = threading.Thread(target=acquire_next, daemon=True)
+    waiter.start()
+    try:
+        assert granted.wait(1.0), "a queued request slept past the lease expiry"
+        assert result[0].model == "model-b"
+    finally:
+        active = broker.snapshot()["active"]
+        if active is not None:
+            broker.release(active["lease_id"])
+        waiter.join(1.0)
+    with pytest.raises(LeaseNotHeldError):
+        broker.release(held.lease_id)
+
+
+@pytest.mark.parametrize("timeout,expected_wait", [(None, 30.0), (10.0, 10.0)])
+def test_wait_uses_the_earlier_of_lease_expiry_and_request_deadline(
+    monkeypatch, timeout, expected_wait
+):
+    clock = [1000.0]
+    broker = ModelSlotBroker(lease_ttl_s=30.0, time_fn=lambda: clock[0])
+    broker.acquire("model-a")
+    waits = []
+
+    def advance_to_wakeup(duration=None):
+        waits.append(duration)
+        assert duration == expected_wait
+        clock[0] += duration
+
+    monkeypatch.setattr(broker._cv, "wait", advance_to_wakeup)
+    if timeout is None:
+        assert broker.acquire("model-b").model == "model-b"
+    else:
+        with pytest.raises(LeaseTimeoutError):
+            broker.acquire("model-b", timeout=timeout)
+    assert waits == [expected_wait]
+
+
+def test_infinite_lease_waits_for_explicit_release(monkeypatch):
+    broker = ModelSlotBroker(lease_ttl_s=float("inf"))
+    held = broker.acquire("model-a")
+
+    def release_on_wait(duration=None):
+        assert duration is None
+        broker.release(held.lease_id)
+
+    monkeypatch.setattr(broker._cv, "wait", release_on_wait)
+    assert broker.acquire("model-b").model == "model-b"
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------

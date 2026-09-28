@@ -93,7 +93,7 @@ class TestControlLinesAreNotQueries:
         assert parse_control(line) is None
 
     def test_control_key_is_the_discriminator(self):
-        parsed = parse_control('{"gaia_control":"bypass","enabled":true}')
+        parsed = parse_control('{"gaia_control":"full_access","enabled":true}')
         assert parsed is not None and parsed["enabled"] is True
 
 
@@ -195,13 +195,32 @@ class TestYesNoAlways:
         assert "decision=False" in final_answer(second)
 
 
-class TestBypassMode:
+class TestFullAccessMode:
     def test_off_by_default(self):
-        assert PermissionState().bypass is False
+        assert PermissionState().full_access is False
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_the_handler_is_told_it_is_full_access_not_just_auto_approve(self, enabled):
+        """The shell widens only on ``full_access``; auto-approve alone is the
+        unattended opt-in and must not run commands off the read-only list."""
+
+        class _Handler:
+            def session_grants(self):
+                return set()
+
+        state = PermissionState(full_access=enabled)
+        handler = _Handler()
+        state.attach(handler)
+        assert handler.full_access is enabled
+        assert handler.auto_approve_gated_tools is enabled
+
+        state.set_full_access(not enabled)
+        assert handler.full_access is (not enabled)
+        assert handler.auto_approve_gated_tools is (not enabled)
 
     def test_on_runs_gated_tools_without_asking(self):
         state = PermissionState()
-        state.set_bypass(True)
+        state.set_full_access(True)
         events = drive(state, [])
         assert not events_of(events, "needs_confirmation")
         assert "decision=True" in final_answer(events)
@@ -209,22 +228,24 @@ class TestBypassMode:
     def test_on_still_says_what_it_ran(self):
         """Silent autonomy is the thing being avoided, not the goal."""
         state = PermissionState()
-        state.set_bypass(True)
+        state.set_full_access(True)
         events = drive(state, [])
         warnings = [
-            e for e in events_of(events, "status") if "Bypass" in str(e.get("message"))
+            e
+            for e in events_of(events, "status")
+            if "Full access" in str(e.get("message"))
         ]
         assert warnings and "run_shell_command" in warnings[0]["message"]
 
     def test_off_restores_prompting_immediately(self):
-        state = PermissionState(bypass=True)
-        state.set_bypass(False)
+        state = PermissionState(full_access=True)
+        state.set_full_access(False)
         events = drive(state, ["deny"])
         assert events_of(events, "needs_confirmation")
         assert "decision=False" in final_answer(events)
 
     def test_launch_flag_is_honoured(self):
-        assert PermissionState(bypass=True).bypass is True
+        assert PermissionState(full_access=True).full_access is True
 
 
 class TestFailClosed:
@@ -275,7 +296,7 @@ class TestFailClosed:
     def test_an_unknown_verb_is_ignored(self):
         state = PermissionState()
         apply_control({"gaia_control": "reboot_the_planet"}, state)
-        assert state.bypass is False
+        assert state.full_access is False
 
     def test_a_turn_with_no_control_channel_cannot_be_approved(self, monkeypatch):
         """No state means no responder, so the gate must not open by default."""
@@ -317,20 +338,34 @@ class TestGrantsSurviveTheTurnBoundary:
         # And it is still only that call.
         assert not nxt.call_is_granted("write_file", {"file_path": "/tmp/other"})
 
-    def test_attach_hands_over_an_unbounded_wait(self):
-        """A modal on screen must not expire under the person reading it."""
+    def test_attach_hands_over_a_long_wait_the_client_wins(self):
+        """A modal on screen must not expire under the person reading it — but
+        it must expire eventually.
+
+        This used to hand over ``None`` (wait forever), which is right up until
+        the client cannot answer: an agent parked on a question nobody can see
+        never ends its turn. The backstop must sit clear of the TUI's own
+        10-minute bound so a real answer is never pre-empted by it.
+        """
+        from gaia_agent.stdio import ORPHANED_CONFIRM_TIMEOUT_SECONDS
+
         from gaia.ui.sse_handler import SSEOutputHandler
 
         handler = SSEOutputHandler()
-        assert handler.confirm_timeout_seconds is not None
         PermissionState().attach(handler)
-        assert handler.confirm_timeout_seconds is None
+
+        assert handler.confirm_timeout_seconds == ORPHANED_CONFIRM_TIMEOUT_SECONDS
+        assert ORPHANED_CONFIRM_TIMEOUT_SECONDS > 10 * 60, (
+            "the backstop must outlast the TUI's own bound, or it steals the "
+            "decision the user was making"
+        )
 
 
 class TestStdinClosingEndsAParkedTurn:
-    """A confirmation waits for a person, so nothing else bounds it.
+    """A confirmation waits for a person, so only the orphan backstop bounds it.
 
-    That makes stdin closing the only other way the wait can end. The sentinel
+    Fifteen minutes of a held model slot is far too long to make a host that has
+    already exited pay, so stdin closing must end the wait too. The sentinel
     the pump queues on EOF sits BEHIND the running turn, so on its own it never
     reaches a turn parked on a prompt: the child outlived its parent, kept the
     model slot, and only a kill ended it.
@@ -390,6 +425,61 @@ class TestStdinClosingEndsAParkedTurn:
         state.attach(handler)
         assert state.cancel_active() is True
         assert handler.cancelled.is_set()
+
+    def test_the_cancel_verb_ends_the_turn_and_keeps_session_state(self):
+        """The host's Esc stops the turn in-process instead of killing the agent.
+
+        Killing it lost the loaded skills, "always" grants, history and full
+        access; a cooperative cancel has to end the turn through its one
+        terminal event and leave all of that where it was.
+        """
+
+        class SlowAgent:
+            def __init__(self):
+                self.console = None
+                self.started = threading.Event()
+                self.stopped_early = False
+
+            def process_query(self, query):
+                self.started.set()
+                deadline = time.monotonic() + 10.0
+                while time.monotonic() < deadline:
+                    if self.console.cancelled.is_set():
+                        self.stopped_early = True
+                        return {"status": "cancelled", "result": ""}
+                    time.sleep(0.02)
+                return {"status": "success", "result": "finished"}
+
+        state = PermissionState(full_access=True)
+        agent = SlowAgent()
+        out = io.StringIO()
+
+        def cancel_once_running():
+            assert agent.started.wait(5.0), "the turn never started"
+            apply_control({"gaia_control": "cancel"}, state)
+
+        canceller = threading.Thread(target=cancel_once_running, daemon=True)
+        canceller.start()
+        began = time.monotonic()
+        run_turn(agent, "clean up the build dir", out, state=state)
+        canceller.join(timeout=5.0)
+
+        events = [
+            json.loads(line) for line in out.getvalue().splitlines() if line.strip()
+        ]
+        terminals = [e for e in events if e.get("type") in ("final", "error")]
+        assert agent.stopped_early, "the agent never saw the cancel"
+        assert time.monotonic() - began < 5.0, "the turn ran on after the cancel"
+        assert (
+            len(terminals) == 1
+        ), "a cancelled turn still ends with ONE terminal event"
+        assert (
+            state.full_access is True
+        ), "cancelling must not touch the permission mode"
+
+    def test_cancel_with_no_turn_running_is_ignored(self):
+        # A cancel that loses the race with the turn's own end is ordinary.
+        apply_control({"gaia_control": "cancel"}, PermissionState())
 
 
 class TestTheHandoffIsAtomic:

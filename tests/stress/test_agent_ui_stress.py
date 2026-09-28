@@ -1356,7 +1356,9 @@ async def main():
     report = StressReport()
     report.start_time = time.time()
 
-    async with httpx.AsyncClient() as client:
+    # The backend refuses mutating /api requests without this header
+    # (gaia/ui/security.py) — session create, chat send and delete all need it.
+    async with httpx.AsyncClient(headers={"X-Gaia-UI": "1"}) as client:
         # ── Phase 1: Infrastructure Tests ──
         print("\n--- Phase 1: Infrastructure ---")
         await test_health_check(client, report)

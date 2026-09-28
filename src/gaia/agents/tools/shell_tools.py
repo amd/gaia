@@ -10,16 +10,87 @@ import logging
 import os
 import re
 import shlex
+import shutil
+import signal
 import subprocess
+import tempfile
+import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
+
+from gaia.agents.base.checks import attach_check, check_from_command
+from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
+from gaia.agents.tools.command_timeouts import (
+    MAX_COMMAND_TIMEOUT,
+    TIMEOUT_CLASSES,
+    resolve_timeout,
+    terminate_process_tree,
+)
+from gaia.agents.tools.shell_session import ShellSession
+from gaia.tool_cancellation import tool_cancelled
 
 logger = logging.getLogger(__name__)
 
-# Security: WHITELIST approach - only allow explicitly safe commands
-# This is much safer than a blacklist which always misses dangerous commands
+#: Shell control flow. Commands run directly rather than through a shell, so
+#: these are not binaries that could be allowed — they cannot run at all, and
+#: exec reports them as a missing file, which sends the agent looking for a path
+#: problem that does not exist.
+SHELL_KEYWORDS = frozenset(
+    {
+        "for",
+        "while",
+        "until",
+        "do",
+        "done",
+        "if",
+        "then",
+        "elif",
+        "else",
+        "fi",
+        "case",
+        "esac",
+        "select",
+        "function",
+        "coproc",
+        "{",
+        "}",
+        "[[",
+    }
+)
+
+#: ``wait_for_condition`` bounds. The maximum wait is a ceiling, not a default:
+#: a wait that could run unbounded is the spinning the primitive replaces.
+WAIT_DEFAULT_TIMEOUT = 120
+WAIT_MAX_TIMEOUT = 600
+WAIT_DEFAULT_POLL_INTERVAL = 5
+#: Poll floor. At 5s the probe rate stays near the 10-commands-per-minute shell
+#: rate limit the wait is exempt from (it counts as one command, not one per poll).
+WAIT_MIN_POLL_INTERVAL = 5
+WAIT_MAX_POLL_INTERVAL = 60
+#: A predicate is a quick check, not the work. Each probe is capped here, and by
+#: whatever is left of the deadline.
+WAIT_PROBE_TIMEOUT = 30
+
+#: How often a running command is checked against the cancel signal. Short
+#: enough that Stop feels immediate, long enough to cost nothing over 30 minutes.
+CANCEL_POLL_SECONDS = 0.5
+
+# The no-prompt list: what a blanket pre-approval may run — not the set of
+# commands that exist.
+#
+# ``run_shell_command`` is confirmation-gated, so interactively every call is
+# shown to the user. A command that is not on this list is not refused; it is
+# shown the same way and runs if approved (``TIER_CONFIRM``). Membership buys
+# one thing: running under ``GAIA_AUTO_APPROVE_TOOLS`` or
+# ``auto_approve_gated_tools``, which refuse everything else. An allowlist used
+# as a refusal list makes the agent unable to do ordinary work its user is
+# sitting right there to approve.
+#
+# So the bar for adding an entry is "safe to run unattended, every time, with
+# arguments nobody reviewed", which in practice still means read-only.
 ALLOWED_COMMANDS = {
     # File listing and navigation (READ-ONLY)
     "ls",
@@ -83,8 +154,10 @@ ALLOWED_COMMANDS = {
     "ps",
     "top",
     "jobs",
-    # Git commands (mostly safe, read-only operations)
-    "git",  # Individual git subcommands checked separately
+    # `git` is deliberately NOT here. It has a full three-tier policy in
+    # gaia.skills.binaries instead, and that policy carries its own
+    # ungranted read-only floor (`BinaryPolicy.ungranted`) — the same
+    # subcommands this list used to allow. One table describes the binary.
 }
 
 # Actions/predicates that turn otherwise read-only commands into a write,
@@ -107,20 +180,198 @@ DANGEROUS_FIND_ACTIONS = {
     "-fls",
 }
 
-# Safe read-only git subcommands
-SAFE_GIT_COMMANDS = {
-    "status",
-    "log",
-    "show",
-    "diff",
-    "branch",
-    "remote",
-    "ls-files",
-    "ls-tree",
-    "describe",
-    "rev-parse",
-    "help",
+# How a blocked command is blocked. Mirrors the three tiers in
+# ``gaia.skills.binaries`` (ALLOW / CONFIRM / REFUSE), spelled locally so this
+# module keeps its light import.
+#
+# REFUSE is for escalations a single yes/no prompt cannot honestly describe:
+# base64-encoded PowerShell, a git option that runs a script behind a
+# ``status``-looking subcommand, a granted CLI's credential-printing action.
+# Asking about those trains a user to click yes on something the prompt text
+# misrepresents.
+#
+# CONFIRM is everything else that is not a read: `git commit`, `npm test`,
+# `rm file`. The user is shown the exact command and answers y / n / always.
+# These MUST NOT be refused here — refusing a command that would run on
+# approval is the dead end this tier exists to remove.
+#
+# Only an explicit TIER_CONFIRM reaches the prompt. A block with no tier is
+# refused, so a guard that forgets to say which tier it is fails closed.
+TIER_CONFIRM = "confirm"
+TIER_REFUSE = "refuse"
+
+
+def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
+    """True when *error* is a block the user may approve at the prompt."""
+    return error is not None and error.get("tier") == TIER_CONFIRM
+
+
+# The binaries a developer session needs and a read-only session must not have
+# (#3374). Active ONLY under full access; ALLOWED_COMMANDS above is
+# untouched so the read-only tier keeps claiming exactly what it claims, and
+# #2768's sweep of it never has to reason about these entries.
+#
+# This set permits ARBITRARY CODE EXECUTION — node, make and the interpreters
+# each run whatever the working tree tells them to. That is why it is reachable
+# only from the mode the user turned on deliberately.
+#
+# python/python3/pytest and gh are listed for CONSOLIDATION, not new reach: all
+# four already have a path today (``execute_python_file`` for the
+# generic_file_ops profiles, a ``shell:execute:`` skill grant for pytest and
+# gh). Naming them here means bypass has one answer to "may this binary run"
+# instead of three. The per-skill grant path is unchanged and still works with
+# bypass off.
+#
+# `git` is here for the same reason, and its policy's outright refusals (push,
+# reset, rebase) do not survive bypass. That is not a boundary being dropped:
+# `python` and `make` above already reach git by shelling out, so refusing it
+# here would only be a tripwire — and one that made bypass STRICTER than the
+# default tier, where the read-only floor still runs `git status`.
+DEVELOPER_COMMANDS = frozenset(
+    {
+        # Interpreters and test runners
+        "python",
+        "python3",
+        "pytest",
+        "node",
+        # Build and package tooling
+        "npm",
+        "make",
+        "cmake",
+        "go",
+        "cargo",
+        # Forge
+        "gh",
+        "git",
+        # Text processing that writes
+        "sed",
+        "awk",
+        # Network
+        "curl",
+        # Process control
+        "sleep",
+        "timeout",
+        "export",
+        # File shuffling. `cp` and `mv` are in; `rm` is deliberately NOT — see
+        # docs/plans/security-model.mdx. Not a boundary (anything above can
+        # delete a file), just a tripwire against an accidental recursive
+        # delete.
+        "cp",
+        "mv",
+    }
+)
+
+# Global git options that sit BEFORE the subcommand. They have to be stepped
+# over to find what the command actually is, and each one is classified here —
+# an unlisted option is refused rather than skipped, so a future git release
+# cannot slip a value-taking flag past the walk and shift the subcommand index
+# (CWE-184).
+
+# Take a value, either as `--opt=value` or as the following token.
+GIT_GLOBAL_FLAGS_WITH_VALUE = {
+    "-C",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
 }
+
+
+# Standalone switches that change nothing about what gets run.
+GIT_GLOBAL_FLAGS_NO_VALUE = {
+    "-P",
+    "--no-pager",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+}
+
+# Options that ARE the whole command — there is no subcommand after them.
+GIT_TERMINAL_FLAGS = {
+    "--version",
+    "--help",
+    "-h",
+    "--html-path",
+    "--man-path",
+    "--info-path",
+}
+
+# Global options that hand git arbitrary code or configuration, so they stay
+# refused no matter how read-only the subcommand behind them looks.
+GIT_FORBIDDEN_GLOBAL_FLAGS = {
+    "-c": "it sets arbitrary git config for the run (e.g. core.pager, alias.*), which can execute a command",
+    "--config-env": "it sets arbitrary git config from the environment, which can execute a command",
+    "--exec-path": "it changes where git looks for its subcommands, which can execute an arbitrary binary",
+}
+
+
+def _unrecognized_git_option_error(name: str) -> str:
+    """Why *name* stopped the walk, phrased so the caller can act on it.
+
+    Git lets a short option carry its value attached (``-C/tmp``), but the walk
+    matches whole tokens, so the plain "not recognized" text named a flag the
+    caller never wrote and left nothing to change. The attached form stays
+    refused — teaching the `-C` sandbox check a second way to split a token is
+    how that sandbox springs a leak.
+    """
+    prefix = name[:2]
+    if prefix in GIT_FORBIDDEN_GLOBAL_FLAGS:
+        return (
+            f"Git global option '{prefix}' is not allowed: "
+            f"{GIT_FORBIDDEN_GLOBAL_FLAGS[prefix]}."
+        )
+    if prefix in GIT_GLOBAL_FLAGS_WITH_VALUE:
+        return (
+            f"Git global option '{prefix}' needs its value as a separate word: "
+            f"write '{prefix} {name[2:]}', not '{name}'."
+        )
+    return (
+        f"Git global option '{name}' is not recognized, so the subcommand "
+        "behind it cannot be identified."
+    )
+
+
+def _git_policy_argv(cmd_parts: list) -> tuple:
+    """``git -C <path> branch`` as the policy table judges it: ``git branch``.
+
+    Git's global options sit before the subcommand, so a table reading
+    ``cmd_parts[1]`` sees ``-C`` and refuses a plain read. Each option is
+    classified rather than skipped — an unlisted one is refused, so a future
+    git release cannot slip a value-taking flag past the walk and shift the
+    subcommand index (CWE-184).
+
+    Returns:
+        ``(argv, error_message)`` — exactly one is non-None. The paths those
+        options name are sandbox-checked separately by ``_git_path_refusal``.
+    """
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            break
+
+        name = token.split("=", 1)[0]
+        if name in GIT_TERMINAL_FLAGS:
+            break
+        if name in GIT_FORBIDDEN_GLOBAL_FLAGS:
+            return None, (
+                f"Git global option '{name}' is not allowed: "
+                f"{GIT_FORBIDDEN_GLOBAL_FLAGS[name]}."
+            )
+        if name in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            # `--opt=value` carries its value; `--opt value` consumes the next token.
+            index += 1 if "=" in token else 2
+            continue
+        if name in GIT_GLOBAL_FLAGS_NO_VALUE:
+            index += 1
+            continue
+        return None, _unrecognized_git_option_error(name)
+
+    return [cmd_parts[0], *cmd_parts[index:]], None
+
 
 # Safe PowerShell cmdlet prefixes (read-only operations)
 SAFE_PS_CMDLET_PREFIXES = (
@@ -180,23 +431,260 @@ DANGEROUS_PS_PATTERNS = (
     '& "',
 )
 
-# Shell operators that could be used for command chaining or redirection
-# Pipe (|) is allowed but validated separately
-# SECURITY: Block command chaining and redirection operators.
-# - && and & are command separators (Windows cmd.exe / bash)
+# Shell operators that change what a command IS, rather than which commands run.
+# Chaining (&&, ||, ;) and pipes are split off first and validated segment by
+# segment, and the two stderr redirections that write nothing are taken out
+# before the scan (_take_stderr_redirections); what is left here has no such
+# reading.
 # - > >> are output redirection, < is input redirection
-# - || is OR chaining, ; is command separator
 # - ` and $() are command substitution
-# Note: bare & is matched as word-boundary to avoid false positives
-# inside quoted PowerShell strings (e.g. @{N='...'}).
-DANGEROUS_SHELL_OPERATORS = re.compile(
-    r"(?:&&|&(?=\s|$)|>>|>(?:[^&>]|$)|<(?:[^<]|$)|\|\||;|`|\$\()"
+# - & backgrounds a command, and cmd.exe runs `dir . &where cmd` as two of them
+#   — every `&` counts, spaced or not, so a lone one is never read as the `&&`
+#   the splitter has already taken out.
+# - a newline is a command separator to cmd.exe, and to every shell
+DANGEROUS_SHELL_OPERATORS = re.compile(r"(?:&|>|<|`|\$\(|[\r\n])")
+
+#: A leading ``NAME=value`` token, the way a shell reads one. The value may be
+#: empty, and may hold anything shlex produced — it is handed to the subprocess
+#: as an environment entry, never to a shell, so a metacharacter in it is data.
+_ENV_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
+
+#: Variables that change what executes rather than how it behaves: the dynamic
+#: linkers, the shells, and the hook/option variables of the binaries this tool
+#: can actually run (git, gh, pytest, less, powershell). Families are denied
+#: whole — a per-name list goes stale the moment one of those tools adds a hook.
+DENIED_ENV_PREFIXES = (
+    "LD_",  # ELF loader: LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT
+    "DYLD_",  # macOS loader: DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH
+    "GCONV_",  # glibc loads a conversion module by path
+    "BASH_",  # BASH_ENV sources a file before the shell runs
+    "GIT_",  # GIT_SSH_COMMAND, GIT_EXTERNAL_DIFF, GIT_CONFIG_* inject commands
+    "GH_",  # GH_PAGER, GH_EDITOR, GH_BROWSER run a command of their own
+    "PYTEST_",  # PYTEST_ADDOPTS/PYTEST_PLUGINS re-inject flags and plugins
+    "PERL",  # PERL5OPT/PERL5LIB, and PERL5DB
+    "NODE_",  # NODE_OPTIONS carries --require
+    "RUBY",  # RUBYOPT/RUBYLIB
+    "LESS",  # LESSOPEN is an input filter, i.e. a command
+    "JAVA",  # JAVA_TOOL_OPTIONS
+    "_JAVA",  # _JAVA_OPTIONS
+    "JDK_",  # JDK_JAVA_OPTIONS
+    "PS",  # PSModulePath, PSExecutionPolicyPreference
 )
+
+#: The same rule for variables with no family to deny.
+DENIED_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "SHELL",
+        "ENV",
+        "IFS",
+        "PAGER",
+        "EDITOR",
+        "VISUAL",
+        "BROWSER",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
+        "PYTHONEXECUTABLE",
+        "PYTHONBREAKPOINT",
+        "PYTHONUSERBASE",
+        "PYTHONINSPECT",
+        "GREP_OPTIONS",
+        "LOCPATH",
+        "NLSPATH",
+        "TERMINFO",
+    }
+)
+
+
+#: ``PYTHONPATH`` is deliberately absent: it is the case this exists for, and
+#: its containment is the path check every value goes through in
+#: ``_path_traversal_refusal`` rather than a name rule.
+
+
+def _denied_env_name(name: str) -> bool:
+    """True when *name* is a loader or hook variable.
+
+    Case-insensitive, because Windows matches environment names that way: a
+    lowercase ``path=`` overrides ``PATH`` there.
+    """
+    upper = name.upper()
+    return upper in DENIED_ENV_NAMES or upper.startswith(DENIED_ENV_PREFIXES)
+
+
+def _take_env_assignments(segment: list) -> tuple:
+    """A segment's leading ``NAME=value`` tokens, and the argv left after them.
+
+    Leading only, so ``grep a=b file`` is still a pattern. What is left is what
+    the allowlist sees, which is why ``PYTHONPATH=. rm -rf /`` is refused
+    exactly as ``rm -rf /`` is.
+    """
+    env: Dict[str, str] = {}
+    index = 0
+    for token in segment:
+        match = _ENV_ASSIGNMENT.fullmatch(token)
+        if match is None:
+            break
+        env[match[1]] = match[2]
+        index += 1
+    return env, segment[index:]
+
+
+#: PowerShell execution flags that bypass cmdlet filtering outright.
+BLOCKED_PS_FLAGS = frozenset(
+    {
+        "-encodedcommand",
+        "-enc",
+        # powershell.exe's own switch table carries these short aliases
+        # alongside the prefix rule, so neither is reachable by prefix alone.
+        "-ec",
+        "-ea",
+        "-file",
+        "-f",
+        "-executionpolicy",
+        "-ex",
+        "-ep",
+        "-noprofile",
+        "-nop",
+        "-windowstyle",
+        "-w",
+        "-noninteractive",
+        "-noni",
+    }
+)
+
+#: PowerShell resolves a parameter from any unambiguous prefix of its name, so
+#: an exact-match blocklist leaves ``-e``, ``-ec``, ``-fi``, ``-exec`` open onto
+#: the very parameters it names.
+PREFIX_BLOCKED_PS_PARAMS = (
+    "encodedcommand",
+    "encodedarguments",
+    "file",
+    "executionpolicy",
+)
+
+_SAFE_PS_LEADING_SWITCHES = frozenset({"nologo", "sta", "mta"})
+
+#: Ways a ``-Command`` body reaches code the cmdlet allowlist never sees. The
+#: outer operator scan skips this body by design (``_operator_check_text``), so
+#: every escape it would have caught has to be caught here instead.
+_PS_BODY_ESCAPES = (
+    (re.compile(r"::"), "static .NET member access ([Type]::Member)"),
+    (re.compile(r"\.\s*[a-z_][a-z0-9_]*\s*\("), "method invocation (.Method(...))"),
+    (re.compile(r"(?:^|\|)\s*\.\s+"), "dot-sourcing (. script.ps1)"),
+    # The two below fire in command position only — start of the body or just
+    # after a pipe — so a path OPERAND (Get-Content C:/log.txt) is still a read.
+    (
+        re.compile(r"(?:^|\|)\s*(?:[.\\/]|[a-z]:)"),
+        "running a file by path instead of a cmdlet",
+    ),
+    (
+        re.compile(r"(?:^|\|)\s*\S*\.(?:ps1|psm1|exe|bat|cmd|vbs|js)\b"),
+        "running a script or executable instead of a cmdlet",
+    ),
+    (re.compile(r"&"), "the call operator (& command)"),
+    (re.compile(r"\$"), "variables and subexpressions ($var, $(...))"),
+    (re.compile(r"[<>]"), "redirection (>, >>, <)"),
+    (re.compile(r"[;\r\n]"), "statement separators (; or newline)"),
+)
+
+#: Long-flag names that make a command write a file. Matched on any prefix
+#: because GNU-style long options accept unambiguous abbreviations.
+_FILE_WRITE_FLAG_NAMES = ("output", "append")
+
+
+def _is_blocked_ps_flag(token: str) -> bool:
+    """True when *token* spells a PowerShell parameter that defeats the filter."""
+    if not token or token[0] not in "-/":
+        return False
+    name = token[1:].split(":", 1)[0].split("=", 1)[0].lower()
+    if not name:
+        return False
+    if f"-{name}" in BLOCKED_PS_FLAGS:
+        return True
+    return any(param.startswith(name) for param in PREFIX_BLOCKED_PS_PARAMS)
+
+
+def _powershell_body_escape(ps_cmd: str) -> Optional[str]:
+    """What *ps_cmd* uses to run code the cmdlet allowlist cannot see, or None."""
+    for pattern, description in _PS_BODY_ESCAPES:
+        if pattern.search(ps_cmd):
+            return description
+    return None
+
+
+def _is_file_write_flag(token: str) -> bool:
+    """True when *token* is a write-to-a-file flag in any of its spellings.
+
+    Long and Windows-style names match on any prefix (``--o``, ``/out:``);
+    the single-dash form matches only a cluster starting in ``o``, so
+    ``git branch -a`` is not mistaken for ``--append``.
+    """
+    lowered = token.lower()
+    head = lowered.split("=", 1)[0].split(":", 1)[0]
+    if head.startswith("--") or head.startswith("/"):
+        name = head.lstrip("-/")
+        return bool(name) and any(
+            full.startswith(name) for full in _FILE_WRITE_FLAG_NAMES
+        )
+    if head.startswith("-") and head != "-":
+        return head[1] == "o"
+    return False
+
+
+#: Binaries an agent reaches for when it means "change this file". None are on
+#: ALLOWED_COMMANDS, so they are refused either way — but the generic refusal
+#: says "only read-only commands are allowed" and lists read-only examples,
+#: which leaves no route to the thing the agent was trying to do. Naming these
+#: lets the refusal point at edit_file instead of dead-ending (#3600).
+
+
+FILE_REWRITE_BINARIES = frozenset(
+    {"sed", "awk", "perl", "tee", "patch", "dd", "truncate", "ex", "ed"}
+)
+
+#: In-place flags for the binaries that can also be used read-only. ``sed -n
+#: '10,20p' f`` prints a range and ``awk '{print $1}' f`` filters a stream;
+#: neither is an edit, and answering them with "use edit_file" would push the
+#: agent toward a write tool when it was trying to read.
+_IN_PLACE_FLAGS = ("-i", "--in-place")
+
+#: These write by definition — there is no read-only invocation to protect.
+_ALWAYS_WRITES = frozenset({"tee", "patch", "dd", "truncate", "ed"})
+
+
+def _rewrites_in_place(cmd_base: str, cmd_parts: list) -> bool:
+    """Would this invocation change a file, as opposed to reading one?"""
+    if cmd_base in _ALWAYS_WRITES:
+        return True
+    return any(
+        part == flag
+        or part.startswith(flag + "=")
+        or (flag == "-i" and part.startswith("-i") and not part.startswith("--"))
+        for part in cmd_parts[1:]
+        for flag in _IN_PLACE_FLAGS
+    )
 
 
 #: The one tool whose executor enforces the read-only binary policy, and so the
 #: only one a ``shell:execute`` grant may exempt from confirmation.
 _POLICY_GATED_SHELL_TOOL = "run_shell_command"
+
+#: Runs its predicate through ``run_shell_command``, so the same guardrails
+#: apply and a refused predicate is refused before anyone is prompted. It is
+#: NOT grant-exempt: consent for a binary is not consent to poll with it.
+_WAIT_TOOL = "wait_for_condition"
+
+
+#: Output past this many characters is cut before it reaches the model.
+MAX_OUTPUT_CHARS = 10_000
+
+
+def _truncate(text: Optional[str], stream: str) -> str:
+    """*text* capped at ``MAX_OUTPUT_CHARS``, saying so when it was cut."""
+    text = text or ""
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text
+    return text[:MAX_OUTPUT_CHARS] + f"\n...output truncated ({stream})..."
 
 
 def skill_granted_binaries(host: Any) -> frozenset:
@@ -220,6 +708,182 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
     return normalize_binary(token) in granted
 
 
+#: Another name for a program the rules below already cover.
+_PROGRAM_ALIASES = {"pwsh": "powershell"}
+
+
+def _program_behind(token: str) -> Optional[str]:
+    """The bare program *token* names when it spells one another way, else None.
+
+    ``/usr/bin/git``, ``git.exe`` and ``pwsh`` run the programs the rules below
+    call ``git`` and ``powershell``, so they earn the same refusals. They never
+    earn the no-prompt pass: that list names bare programs only.
+    """
+    if token in ALLOWED_COMMANDS:
+        return None
+    name = re.split(r"[\\/]", token)[-1]
+    if name.endswith(".exe"):
+        name = name[: -len(".exe")]
+    name = _PROGRAM_ALIASES.get(name, name)
+    return name if name and name != token else None
+
+
+def _is_granted_segment(segment: list, granted: frozenset) -> bool:
+    """True when *segment* runs a CLI this agent's skills granted."""
+    if not granted:
+        return False
+    from gaia.skills.binaries import normalize_binary, policy_argv
+
+    return normalize_binary(policy_argv(segment)[0]) in granted
+
+
+def _outside_double_quotes(text: str) -> str:
+    """The spans of *text* the shell reads as syntax rather than as data.
+
+    Both ``cmd.exe`` and ``sh`` honour double quotes and treat ``&``, ``|``,
+    ``<`` and ``>`` between them as literals, so scanning a quoted argument for
+    operators refuses reads like ``gh api "issues?a=1&b=2"``. An odd quote count
+    means the quoting is broken, so nothing is stripped and the whole string is
+    scanned.
+    """
+    if text.count('"') % 2:
+        return text
+    return " ".join(text.split('"')[::2])
+
+
+#: The two stderr redirections that create nothing: one merges the stream into
+#: stdout, the other discards it. Exact spellings only — ``2>`` to any other
+#: path writes a file, and stays refused with every other redirection.
+_MERGE_STDERR = "2>&1"
+_DROP_STDERR = "2>/dev/null"
+
+#: cmd.exe's null device. ``2>/dev/null`` there would write ``\dev\null``.
+_WINDOWS_NULL = "2>nul"
+
+#: A standalone token, whitespace or an end on either side, so ``2>&1x`` and
+#: ``2>/dev/null.bak`` are not one of these.
+_STDERR_REDIRECTION = re.compile(r"(?<![^\s])(?:2>&1|2>/dev/null)(?![^\s])")
+
+#: A pipe the way ``_split_pipeline`` reads one: its own token, never ``a|b``.
+_BARE_PIPE = re.compile(r"(?<![^\s])\|(?![^\s])")
+
+
+def _double_quoted(text: str) -> list:
+    """Per character: is it inside a double-quoted span, or a quote itself?"""
+    inside = False
+    mask = []
+    for char in text:
+        if char == '"':
+            inside = not inside
+            mask.append(True)
+        else:
+            mask.append(inside)
+    return mask
+
+
+def _stderr_redirections(text: str) -> list:
+    """Every standalone stderr redirection in *text*, in order.
+
+    Double quotes protect an operand here exactly as they do in
+    ``_outside_double_quotes``, odd-count caveat included: broken quoting
+    takes nothing out, which leaves the operator scan to refuse it. Single
+    quotes do not protect, for the reason ``_split_connectors`` gives — but a
+    ``'2>&1'`` glued to one is not a standalone token either way.
+    """
+    if text.count('"') % 2:
+        return []
+    quoted = _double_quoted(text)
+    return [m for m in _STDERR_REDIRECTION.finditer(text) if not quoted[m.start()]]
+
+
+def _take_stderr_redirections(text: str) -> tuple:
+    """*text* without its stderr redirections, and the one each segment asked for.
+
+    Neither form creates, truncates, or runs anything — they only say where
+    that segment's stderr goes — so they are lifted out here rather than
+    refused by the operator scan. Segments are counted the way
+    ``_split_pipeline`` counts them, so a redirection lands on the command
+    that wrote it. Only the surrounding whitespace survives a removal: a
+    newline elsewhere on the line must still reach the operator scan.
+    """
+    matches = _stderr_redirections(text)
+    if not matches:
+        return text, {}
+    quoted = _double_quoted(text)
+    pipes = [m.start() for m in _BARE_PIPE.finditer(text) if not quoted[m.start()]]
+    modes: Dict[int, str] = {}
+    kept = []
+    end = 0
+    for match in matches:
+        # sh's rule: a second redirection on one segment replaces the first.
+        modes[sum(1 for pipe in pipes if pipe < match.start())] = match.group(0)
+        kept.append(text[end : match.start()])
+        end = match.end()
+    kept.append(text[end:])
+    return "".join(kept), modes
+
+
+def _as_cmd_redirections(text: str) -> str:
+    """*text* with its stderr redirections spelled the way cmd.exe spells them.
+
+    A Windows step runs as a string through cmd.exe, which applies the
+    redirection per segment itself — the one thing this process cannot do for
+    a pipeline it does not own.
+    """
+    out = []
+    end = 0
+    for match in _stderr_redirections(text):
+        out.append(text[end : match.start()])
+        out.append(_MERGE_STDERR if match.group(0) == _MERGE_STDERR else _WINDOWS_NULL)
+        end = match.end()
+    out.append(text[end:])
+    return "".join(out)
+
+
+def _skips_path_scan(token: str, granted: frozenset) -> bool:
+    """True when this segment's operands are remote ids, so there is no path.
+
+    Narrower than :func:`_is_granted_binary` on purpose, and the difference is
+    the point: granting a LOCAL cli must not switch off the path check.
+    ``gh issue view 42`` names an issue; ``git diff --no-index /etc/passwd``
+    and ``python ../../x.py`` name files, and both are granted CLIs.
+    """
+    if not _is_granted_binary(token, granted):
+        return False
+    from gaia.skills.binaries import BINARY_POLICIES, normalize_binary
+
+    policy = BINARY_POLICIES.get(normalize_binary(token))
+    return policy is not None and policy.remote_operands
+
+
+def _grant_route(binary: str, skill_manager: Any) -> str:
+    """How to actually get *binary* granted, naming the skill where one exists.
+
+    "Load a skill that declares it" left models no route to follow.
+    """
+    from gaia.agents.base.skill_catalog import skills_granting
+
+    granting = (
+        skills_granting(skill_manager.discover(), binary)
+        if skill_manager is not None
+        else []
+    )
+    if granting:
+        return (
+            f"Call load_skill with {' or '.join(repr(n) for n in granting)}, "
+            "then run the command again."
+        )
+    if skill_manager is not None:
+        return (
+            f"No installed skill declares 'shell:execute:{binary}'; "
+            "search_skill_hub can find one."
+        )
+    return (
+        f"No skill that grants 'shell:execute:{binary}' could be looked up here; "
+        "list_skills or search_skill_hub can find one."
+    )
+
+
 def _operator_check_text(command: str) -> str:
     """The part of *command* the operator blocklist applies to.
 
@@ -228,7 +892,7 @@ def _operator_check_text(command: str) -> str:
     prefix allowlist). Scanning it here would refuse legitimate cmdlets.
     """
     if not command.strip().lower().startswith(("powershell ", "powershell.exe ")):
-        return command
+        return _outside_double_quotes(command)
     try:
         parts = shlex.split(command)
     except ValueError:
@@ -246,12 +910,94 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
+#: Tokens that end one command and begin the next. Only ``|`` can appear
+#: outside bypass mode — ``DANGEROUS_SHELL_OPERATORS`` refuses the rest before
+#: tokenisation — so extending the set leaves default behaviour untouched.
+_SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
+
+#: Characters shlex is asked to lex as punctuation under full access. A newline is
+#: one of them because the shell that ultimately runs the string treats it as a
+#: command separator, so the segment walk has to as well.
+_BYPASS_PUNCTUATION = ";&|<>\n"
+
+
+def _tokenize(command: str, bypass_gates: bool = False) -> list:
+    """Split *command* into argv tokens.
+
+    Default mode uses ``shlex.split``, unchanged. Bypass mode asks shlex to
+    treat ``;&|<>`` and the newline as punctuation instead, so ``cd build &&
+    make`` yields a standalone ``&&`` for ``_split_pipeline`` to break on.
+    Parentheses stay out of the punctuation set: making them tokens would
+    mangle ordinary operands like ``find . -name "(draft)*"``.
+
+    The newline is dropped from ``whitespace`` so it survives as a token rather
+    than being eaten as a space. Inside quotes it is still ordinary data, so
+    ``echo "a<newline>b"`` remains one operand.
+    """
+    if not bypass_gates:
+        return shlex.split(command)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_BYPASS_PUNCTUATION)
+    lexer.whitespace_split = True
+    lexer.commenters = ""  # same as shlex.split: '#' is data, not a comment
+    lexer.whitespace = " \t\r"
+    return list(lexer)
+
+
+def _is_segment_separator(token: str) -> bool:
+    """Whether *token* ends one command and begins the next.
+
+    shlex emits a *run* of adjacent punctuation as a single token, so a newline
+    reaches here fused to whatever preceded it — ``;\\n``, ``&&\\n``, ``\\n|\\n``.
+    Any all-punctuation run containing a newline therefore separates, which is
+    what stops ``ls\\nrm -rf /tmp/x`` from being walked as one ``ls`` segment.
+    """
+    if token in _SEGMENT_SEPARATORS:
+        return True
+    return (
+        bool(token)
+        and "\n" in token
+        and all(char in _BYPASS_PUNCTUATION for char in token)
+    )
+
+
+def _is_lone_granted_segment(segments: list, granted: frozenset) -> bool:
+    """Whether the whole command is a single invocation of a skill-granted CLI.
+
+    That is the one path that runs argv-only instead of through a shell, so the
+    pre-flight and the executor have to decide it the same way or one of them
+    refuses a command the other would have run differently.
+    """
+    return (
+        len(segments) == 1
+        and bool(granted)
+        and _is_granted_segment(segments[0], granted)
+    )
+
+
+def _redirects(command: str) -> bool:
+    """Whether *command* redirects, reading ``<``/``>`` the way a shell would.
+
+    Quoting decides it: tokenisation has already dropped the quotes, so by then
+    a redirect and a literal ``">"`` operand look identical.
+    """
+    return any(char in _outside_double_quotes(command) for char in "<>")
+
+
+_ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
 def _split_pipeline(cmd_parts: list) -> list:
-    """Split a shlex-split command on ``|`` into its non-empty segments."""
+    """Split tokenised *cmd_parts* on shell separators into non-empty segments.
+
+    Every segment is validated and audited on its own, which is what keeps a
+    refused binary in ``a && b`` from riding in on an allowed one — and what
+    keeps the audit record honest under bypass mode, where the separators
+    actually reach a shell.
+    """
     segments: list = []
     current: list = []
     for part in cmd_parts:
-        if part == "|":
+        if _is_segment_separator(part):
             if current:
                 segments.append(current)
             current = []
@@ -262,16 +1008,617 @@ def _split_pipeline(cmd_parts: list) -> list:
     return segments
 
 
+#: Git global options whose value is a filesystem path git will operate in.
+_GIT_PATH_FLAGS = ("-C", "--git-dir", "--work-tree")
+
+
+def _git_path_flag_values(cmd_parts: list, cwd: str) -> list:
+    """``(flag, resolved_path)`` for every path-taking git global option.
+
+    Resolved the way git does: ``-C`` is relative to the directory before it,
+    and ``--git-dir``/``--work-tree`` are relative to the last ``-C``. Without
+    this check ``-C`` would be a way around the ``working_directory`` sandbox.
+    """
+    values: list = []
+    base = Path(cwd)
+    index = 1
+    while index < len(cmd_parts):
+        token = cmd_parts[index]
+        if not token.startswith("-"):
+            break
+        name, has_inline, inline = token.partition("=")
+        if name not in GIT_GLOBAL_FLAGS_WITH_VALUE:
+            index += 1
+            continue
+        if has_inline:
+            value = inline
+            index += 1
+        elif index + 1 < len(cmd_parts):
+            value = cmd_parts[index + 1]
+            index += 2
+        else:
+            break
+        if name in _GIT_PATH_FLAGS:
+            resolved = base.joinpath(value).resolve()
+            values.append((name, str(resolved)))
+            if name == "-C":
+                base = resolved
+    return values
+
+
+#: The connectors that chain one line's pipelines. Longest first, so ``||`` is
+#: never read as a pipe.
+_CONNECTORS = ("&&", "||", ";")
+
+#: A missing executable, the way a shell reports one.
+_COMMAND_NOT_FOUND = 127
+
+
+def _split_connectors(command: str) -> list:
+    """``a && b; c`` as ``[("a", ""), (" b", "&&"), (" c", ";")]``.
+
+    Each connector travels with the pipeline it gates, so the first is always
+    "". A double-quoted span does not split — it is data to sh and to cmd.exe
+    alike. That is the quote model ``_outside_double_quotes`` uses, odd-count
+    caveat included: the splitter and the operator blocklist have to agree on
+    where a segment ends or one of them is scanning the wrong text.
+
+    Single quotes deliberately do not protect an operator, because cmd.exe does
+    not honour them: ``grep 'a||b' f`` splits here and dies on the unbalanced
+    quote, rather than reaching cmd.exe as two commands one of them never saw.
+    """
+    honour_quotes = command.count('"') % 2 == 0
+    parts: list = []
+    start = 0
+    connector = ""
+    quoted = False
+    index = 0
+    while index < len(command):
+        if honour_quotes and command[index] == '"':
+            quoted = not quoted
+        elif not quoted:
+            found = next((c for c in _CONNECTORS if command.startswith(c, index)), None)
+            if found:
+                parts.append((command[start:index], connector))
+                connector = found
+                index += len(found)
+                start = index
+                continue
+        index += 1
+    parts.append((command[start:], connector))
+    return parts
+
+
+@dataclass(frozen=True)
+class _Step:
+    """One pipeline of a command line, with the connector that gates it.
+
+    ``text`` and ``segments`` have had the stderr redirections and the leading
+    environment assignments lifted out; ``stderr_modes`` and ``envs`` hold what
+    each segment asked for, and ``shell_text`` is the line cmd.exe gets, which
+    keeps both — so it is only ever used for a step with no assignment.
+    """
+
+    text: str
+    segments: list
+    connector: str
+    stderr_modes: tuple = ()
+    shell_text: str = ""
+    envs: tuple = ()
+
+    @property
+    def is_cd(self) -> bool:
+        return len(self.segments) == 1 and self.segments[0][0].lower() == "cd"
+
+
+def _connector_runs(connector: str, previous_code: int) -> bool:
+    """sh's rule: ``&&`` needs the last status 0, ``||`` needs it non-zero.
+
+    A skipped step leaves ``previous_code`` untouched, which is what makes
+    ``false && a || b`` run ``b``.
+    """
+    if connector == "&&":
+        return previous_code == 0
+    if connector == "||":
+        return previous_code != 0
+    return True
+
+
+def _cd_shape_refusal(step: _Step) -> Optional[Dict[str, Any]]:
+    """``cd`` may move this line's later commands, and do nothing else.
+
+    It is the one command whose effect outlives its own process, so its form is
+    pinned here: a bare ``cd <dir>``, never a pipeline stage, never a flag.
+    """
+    if not any(segment[0].lower() == "cd" for segment in step.segments):
+        return None
+    if len(step.segments) > 1:
+        return {
+            "status": "error",
+            "error": "cd cannot be part of a pipeline; it must stand alone.",
+            "has_errors": True,
+            "hint": "Write 'cd <dir> && <command>' instead.",
+        }
+    segment = step.segments[0]
+    if len(segment) != 2 or segment[1].startswith("-"):
+        return {
+            "status": "error",
+            "error": "cd takes exactly one directory and no flags.",
+            "has_errors": True,
+            "hint": "Write 'cd <dir> && <command>', or pass working_directory.",
+        }
+    if step.envs and step.envs[0]:
+        return {
+            "status": "error",
+            "error": "cd takes no environment assignment: it starts no process.",
+            "has_errors": True,
+            "hint": "Put it on the command that needs it: 'cd <dir> && VAR=x <cmd>'.",
+        }
+    return None
+
+
+def _env_refusal(name: str) -> Dict[str, Any]:
+    """Why a loader or hook variable is refused, and what is not."""
+    return {
+        "status": "error",
+        "error": (
+            f"Setting '{name}' is not allowed: it changes which binary runs, or "
+            "what code one loads, so it would carry the command back outside "
+            "the allowlist that just cleared it."
+        ),
+        "has_errors": True,
+        "hint": (
+            "The loader and hook variables (PATH, LD_*, DYLD_*, GIT_*, GH_*, "
+            "PYTEST_*, BASH_*, SHELL, PAGER, EDITOR, ...) are the only ones "
+            "refused. Any other 'NAME=value' in front of a command is fine: "
+            "'PYTHONPATH=. pytest -q'."
+        ),
+    }
+
+
+def _no_command_refusal(segment: list) -> Dict[str, Any]:
+    """An assignment with nothing after it sets a variable and runs nothing."""
+    return {
+        "status": "error",
+        "error": f"'{' '.join(segment)}' sets a variable and runs nothing.",
+        "has_errors": True,
+        "hint": "Put the command after it: 'PYTHONPATH=. pytest -q'.",
+    }
+
+
+def _take_segment_envs(segments: list) -> tuple:
+    """``(envs, segments, error)`` — each segment's assignments, split off it.
+
+    One tuple entry per segment, so the count never changes: a segment that is
+    nothing but assignments is a refusal, not a segment that disappears.
+    """
+    envs: list = []
+    stripped: list = []
+    for segment in segments:
+        env, argv = _take_env_assignments(segment)
+        denied = next((name for name in env if _denied_env_name(name)), None)
+        if denied is not None:
+            return (), [], _env_refusal(denied)
+        if not argv:
+            return (), [], _no_command_refusal(segment)
+        envs.append(env)
+        stripped.append(argv)
+    return tuple(envs), stripped, None
+
+
+def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
+    """*command* as steps, or the refusal its text alone earns.
+
+    Shape only — operators, quoting, pipes, and ``cd``'s form. What each
+    command may DO is the caller's question, so the refusal path and the
+    skill-grant check share one answer to what a segment IS before they
+    disagree about anything else.
+
+    Bypass mode drops the operator blocklist — a redirect and a background ``&``
+    are what it exists to allow — and lexes the rest as punctuation so the
+    segment walk still sees every command on the line. Nothing else relaxes:
+    each segment is still validated on its own.
+    """
+    steps: list = []
+    parts = _split_connectors(command)
+    for raw_text, connector in parts:
+        text, modes = _take_stderr_redirections(raw_text)
+        if not bypass_gates and DANGEROUS_SHELL_OPERATORS.search(
+            _operator_check_text(text)
+        ):
+            return [], {
+                "status": "error",
+                "error": (
+                    "Shell operators (&, >, >>, <, `, $(), newline) are not "
+                    "allowed for security reasons. The only redirections "
+                    "allowed are 2>&1 and 2>/dev/null, which write nothing."
+                ),
+                "has_errors": True,
+                "hint": (
+                    "Pipes (|) and chaining (&&, ||, ;) are allowed. To keep "
+                    "stderr, write '2>&1'; to drop it, write '2>/dev/null'. "
+                    "To write a file, use write_file or edit_file."
+                ),
+            }
+        try:
+            cmd_parts = _tokenize(text, bypass_gates=bypass_gates)
+        except ValueError as exc:
+            return [], {
+                "status": "error",
+                "error": f"Invalid command syntax: {exc}",
+                "has_errors": True,
+            }
+        segments = _split_pipeline(cmd_parts)
+        if not segments:
+            missing = f"after '{connector}'" if connector else "before an operator"
+            return [], {
+                "status": "error",
+                "error": (
+                    "Empty command" if len(parts) == 1 else f"Empty command {missing}"
+                ),
+                "has_errors": True,
+            }
+        if any(index >= len(segments) for index in modes):
+            return [], {
+                "status": "error",
+                "error": "A stderr redirection here is not attached to a command.",
+                "has_errors": True,
+                "hint": "Write it after the command it belongs to: 'cmd 2>&1 | tail'.",
+            }
+        envs, segments, error = _take_segment_envs(segments)
+        if error is not None:
+            return [], error
+        step = _Step(
+            text=text.strip(),
+            segments=segments,
+            connector=connector,
+            stderr_modes=tuple(modes.get(i, "") for i in range(len(segments))),
+            shell_text=_as_cmd_redirections(raw_text).strip(),
+            envs=envs,
+        )
+        error = _cd_shape_refusal(step)
+        if error:
+            return [], error
+        steps.append(step)
+    return steps, None
+
+
+def _captured_stderr(mode: str, default: Any) -> Any:
+    """Where *mode* sends this command's stderr; *default* when it asked for nothing.
+
+    Both are destinations for a stream this process already captures — nothing
+    is opened by name, so neither can create or truncate a file.
+    """
+    if mode == _MERGE_STDERR:
+        return subprocess.STDOUT
+    if mode == _DROP_STDERR:
+        return subprocess.DEVNULL
+    return default
+
+
+def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
+    """This process's environment plus one segment's assignments.
+
+    A copy every time: ``os.environ`` itself is never touched, so nothing a
+    command sets outlives it or reaches the agent.
+    """
+    return {**os.environ, **assignments}
+
+
+class _CommandCancelled(Exception):
+    """Stop landed while the step was running; it was killed part-way.
+
+    Carries what the command had printed before the kill, so the caller can
+    report the partial work rather than an empty result.
+    """
+
+    def __init__(self, stdout: str = "", stderr: str = ""):
+        super().__init__("command cancelled")
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _wait_plain(process: "subprocess.Popen", timeout: float) -> Tuple[Any, Any, bool]:
+    """Wait the whole deadline in one call, for callers with no cancel channel."""
+    stdout, stderr = process.communicate(timeout=timeout)
+    return stdout, stderr, False
+
+
+def _run_pipeline(
+    segments: list,
+    modes: tuple,
+    envs: tuple,
+    cwd: str,
+    timeout: float,
+    waiter: Optional[Callable] = None,
+) -> subprocess.CompletedProcess:
+    """Run validated ``a | b | c`` segments as chained processes, no shell.
+
+    ``returncode`` is the rightmost failing stage (pipefail), so ``pytest |
+    tail`` cannot turn a failing suite into a passing check. An upstream stage
+    killed by SIGPIPE is not a failure: that is how ``| head`` ends a pipeline.
+
+    *modes* is each segment's stderr redirection, if it asked for one. A merged
+    segment writes stderr down its own stdout pipe, which is what puts it in
+    front of the next stage's ``grep``; neither mode touches a return code.
+
+    *envs* is each segment's own environment assignments, applied to that
+    segment's process and to nothing else.
+    """
+    deadline = time.monotonic() + timeout
+    procs: list = []
+    errs: list = []
+    upstream = None
+    try:
+        for index, argv in enumerate(segments):
+            mode = modes[index] if index < len(modes) else ""
+            err_target = _captured_stderr(mode, None)
+            if err_target is None:
+                errs.append(
+                    tempfile.TemporaryFile()  # pylint: disable=consider-using-with
+                )
+                err_target = errs[-1]
+            procs.append(
+                subprocess.Popen(  # pylint: disable=consider-using-with
+                    argv,
+                    cwd=cwd,
+                    stdin=subprocess.DEVNULL if upstream is None else upstream,
+                    stdout=subprocess.PIPE,
+                    stderr=err_target,
+                    env=_segment_env(envs[index] if index < len(envs) else {}),
+                    # Its own process group, so a kill reaches descendants and
+                    # never the agent's own group.
+                    start_new_session=os.name != "nt",
+                )
+            )
+            if upstream is not None:
+                # Only the child may hold the read end, or an early-exiting
+                # reader never delivers SIGPIPE to the writer.
+                upstream.close()
+            upstream = procs[-1].stdout
+        try:
+            out, _, cancelled = (waiter or _wait_plain)(
+                procs[-1], max(deadline - time.monotonic(), 0)
+            )
+            if cancelled:
+                # The last stage is already dead; the handler below takes the
+                # rest of the chain with it.
+                raise _CommandCancelled(_as_text(out), _read_all(errs))
+            for proc in procs[:-1]:
+                proc.wait(timeout=max(deadline - time.monotonic(), 0))
+        except subprocess.TimeoutExpired as exc:
+            for proc in procs:
+                proc.kill()
+            for proc in procs:
+                proc.wait()
+            raise subprocess.TimeoutExpired(
+                exc.cmd, timeout, output=exc.output, stderr=_read_all(errs)
+            ) from exc
+    except BaseException:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if proc.stdout and not proc.stdout.closed:
+                proc.stdout.close()
+        raise
+    finally:
+        stderr = _read_all(errs)
+        for err in errs:
+            err.close()
+
+    sigpipe = -getattr(signal, "SIGPIPE", 0)
+    codes = [proc.returncode for proc in procs]
+    failed = [
+        code
+        for i, code in enumerate(codes)
+        if code != 0 and not (i < len(codes) - 1 and sigpipe and code == sigpipe)
+    ]
+    return subprocess.CompletedProcess(
+        args=segments,
+        returncode=failed[-1] if failed else 0,
+        stdout=(out or b"").decode("utf-8", errors="replace"),
+        stderr=stderr,
+    )
+
+
+#: Unix commands cmd.exe spells differently, used only when Git-for-Windows
+#: has not put the Unix one on PATH.
+_UNIX_TO_WIN = {
+    "ls": "dir",
+    "pwd": "cd",
+    "cat": "type",
+    "which": "where",
+    "cp": "copy",
+    "mv": "move",
+}
+
+
+def _run_step(
+    step: _Step,
+    cwd: str,
+    timeout: float,
+    granted: frozenset,
+    waiter: Optional[Callable] = None,
+    bypass: bool = False,
+) -> subprocess.CompletedProcess:
+    """Run one validated pipeline in *cwd*, and return what it produced.
+
+    Raises ``subprocess.TimeoutExpired`` with whatever it had produced by then,
+    or ``_CommandCancelled`` if *waiter* reports a Stop while it was running.
+
+    On Windows a step goes through cmd.exe as its own string — never the whole
+    line, whose connectors cmd.exe would act on without any of the per-segment
+    validation the line has been through here.
+    """
+    segments = step.segments
+
+    # On Windows, many commands are shell built-ins (dir, cd, type, echo) and
+    # Unix commands (ls, pwd, cat) don't exist as .exe files. Since the command
+    # has already been validated against the whitelist, we use shell=True on
+    # Windows so cmd.exe can resolve both built-ins and commands on PATH
+    # (including those from Git for Windows which provides ls, cat, grep, etc.).
+    #
+    # A skill-granted CLI is the exception, and must stay one. It is a real
+    # executable — it needs no built-in resolution — and it is the one path that
+    # can run without a confirmation prompt, on arguments built from untrusted
+    # remote text (an issue body the model just read). Handing cmd.exe the raw
+    # STRING there would let that text act: `--search "x|whoami"` is one argv
+    # token to every check above and two commands to cmd.exe, and `%VAR%`
+    # expands into a value the approval prompt never showed. argv goes to the
+    # process verbatim, so neither is possible.
+    # One segment only: the `|` tokens are already dropped, so an argv run of a
+    # pipeline would concatenate its commands. Off Windows, _run_pipeline
+    # chains the segments.
+    lone_granted_segment = _is_lone_granted_segment(segments, granted)
+    # An environment assignment is scoped to its own segment, and cmd.exe owns
+    # the whole string it is handed — so a step carrying one runs as argv here
+    # too, and gives up cmd.exe's built-in resolution to keep that scope.
+    #
+    # Bypass mode needs a shell off Windows too: the operators it unblocks ARE
+    # the shell. A redirect is a token to the walk above and a file write to sh,
+    # so an argv run would pass '>' to the program as an operand.
+    use_shell = (
+        (os.name == "nt" or bypass)
+        and not lone_granted_segment
+        and not any(step.envs or ())
+    )
+
+    exec_cmd = [part for segment in segments for part in segment]
+    if use_shell:
+        # The step's own text, to preserve quoting (critical for PowerShell).
+        # On Windows it keeps the stderr redirections, spelled cmd.exe's way:
+        # cmd.exe owns the pipeline here, so only it can route a middle
+        # segment's stderr. sh must not be handed that spelling — '2>NUL'
+        # there creates a file called NUL — so it gets the lifted text and the
+        # redirection is applied below.
+        exec_cmd = (step.shell_text or step.text) if os.name == "nt" else step.text
+        cmd_base = segments[0][0].lower()
+        if cmd_base in _UNIX_TO_WIN:
+            if not shutil.which(cmd_base):
+                win_cmd = _UNIX_TO_WIN[cmd_base]
+                logger.info(
+                    "Mapping Unix command '%s' -> Windows '%s'", cmd_base, win_cmd
+                )
+                exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
+
+    if len(segments) > 1 and not use_shell:
+        return _run_pipeline(
+            segments, step.stderr_modes, step.envs, cwd, timeout, waiter
+        )
+
+    # cmd.exe was handed the redirection in its string; sh was not, and a
+    # pipeline it owns routes per-segment stderr this process cannot reach.
+    shell_owns_redirection = use_shell and (os.name == "nt" or len(segments) > 1)
+    mode = (
+        "" if shell_owns_redirection or not step.stderr_modes else step.stderr_modes[0]
+    )
+
+    # encoding/errors are explicit, and load-bearing. Bare ``text=True``
+    # decodes with the locale codec — cp1252 on a default Windows box — and
+    # subprocess does that decode inside its pipe reader THREAD. A byte that
+    # codec cannot map raises UnicodeDecodeError in that thread, which dies,
+    # and subprocess.run then returns returncode 0 with EMPTY stdout. The
+    # command succeeded and its output was silently discarded.
+    #
+    # That is not an edge case: `gh issue list` on amd/gaia returns an issue
+    # title containing "⚠️", so GitHub triage got back nothing and the model
+    # reported an empty backlog it had never actually read. Any tool emitting
+    # UTF-8 (git, gh, npm, docker) hits it. errors="replace" keeps a stray
+    # undecodable byte from costing the whole output.
+    #
+    # Popen rather than subprocess.run for two reasons: run() blocks for the
+    # whole deadline, so a Stop during a 30-minute build would be honoured 30
+    # minutes late; and on expiry it kills only the process it launched, then
+    # re-enters communicate() with NO timeout, so a surviving grandchild holding
+    # the pipes hangs the call for as long as it lives. terminate_process_tree
+    # below kills the whole tree first, so the deadline means what it says.
+    process = subprocess.Popen(  # pylint: disable=consider-using-with
+        exec_cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=_captured_stderr(mode, subprocess.PIPE),
+        # stdin is DEVNULL, never inherited. Capturing redirects
+        # stdout/stderr but leaves stdin alone, and this process's stdin is the
+        # agent transport's pipe — held open by the TUI and never written to. A
+        # child that reads it (directly, or by probing whether it is
+        # interactive) blocks forever on input that cannot arrive, because
+        # there is no human on that pipe.
+        #
+        # The hang was not theoretical: `gh` spawned from the agent never
+        # exited, while the identical command took 0.07s from a shell. Worse,
+        # subprocess.run's own timeout does not save it — on expiry it kills
+        # the cmd.exe it launched, then calls communicate() again with NO
+        # timeout, which waits on pipes the surviving grandchild still holds.
+        # That is the 180s tool timeout and the orphaned gh.exe left behind by
+        # every attempt.
+        #
+        # DEVNULL gives an immediate EOF, which is the honest answer here: an
+        # agent's shell command is non-interactive by construction.
+        stdin=subprocess.DEVNULL,
+        encoding="utf-8",
+        errors="replace",
+        env=_segment_env(step.envs[0] if step.envs else {}),
+        # POSIX: its own session, so the kill reaches every descendant — and
+        # never the agent's own process group. Windows gets that reach from
+        # taskkill /T instead.
+        start_new_session=os.name != "nt",
+        shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
+    )
+    try:
+        stdout, stderr, cancelled = (waiter or _wait_plain)(process, timeout)
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = terminate_process_tree(process)
+        raise subprocess.TimeoutExpired(
+            exc.cmd, timeout, output=stdout, stderr=stderr
+        ) from exc
+    except BaseException:
+        # Ctrl-C, or anything the waiter itself threw: the child must not
+        # outlive the call that started it.
+        terminate_process_tree(process)
+        raise
+    if cancelled:
+        raise _CommandCancelled(_as_text(stdout), _as_text(stderr))
+    return subprocess.CompletedProcess(
+        args=exec_cmd,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def _as_text(raw: Any) -> str:
+    """Partial output from a timeout, whichever way the runner captured it."""
+    if not raw:
+        return ""
+    return raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+
+
+def _read_all(files: list) -> str:
+    """Every stage's captured stderr, in pipeline order."""
+    chunks = []
+    for handle in files:
+        if handle.closed:
+            continue
+        handle.seek(0)
+        chunks.append(handle.read())
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
 class ShellToolsMixin:
     """
     Mixin providing shell command execution tools with rate limiting.
 
     Tools provided:
     - run_shell_command: Execute terminal commands with timeout and safety checks
+    - wait_for_condition: Poll a command until it succeeds, or hit a deadline
 
     Rate Limiting:
     - Max 10 commands per minute to prevent DOS
     - Max 3 commands per 10 seconds for burst prevention
+    - A wait_for_condition call is one command; its probes are not metered again
+    - A command over either limit waits for the window (up to
+      ``max_rate_limit_wait_seconds``) instead of being refused
     """
 
     def __init__(self, *args, **kwargs):
@@ -283,94 +1630,237 @@ class ShellToolsMixin:
         self.max_commands_per_minute = 10
         self.max_commands_per_10_seconds = 3
 
+        # Created on first use: an agent that never runs a command should not
+        # pay for tracking a session it never needed.
+        self._shell_session: Optional[ShellSession] = None
+
+    def _session_cwd_guard(self) -> Callable[[str], bool]:
+        """The predicate the session asks before checkpointing a ``cd``.
+
+        Without it, persistence would be a way around the path policy: ``cd`` to
+        a forbidden directory, then read a file by bare name, and the per-argument
+        check never sees a path to reject. Reuses ``_path_allowed`` -- the same
+        check ``working_directory`` and every step's own path already go
+        through, so a directory the session remembers and one a fresh call
+        would accept can never disagree.
+        """
+        return self._path_allowed
+
+    @property
+    def shell_session(self) -> ShellSession:
+        """This agent's shell session, created on first use."""
+        session = getattr(self, "_shell_session", None)
+        if session is None or session.closed:
+            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            self._shell_session = session
+        return session
+
+    def reset_shell_session(self) -> ShellSession:
+        """Replace the session with a clean one and return it."""
+        previous = getattr(self, "_shell_session", None)
+        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        if previous is not None:
+            previous.close()
+        return self._shell_session
+
+    def close_shell_session(self) -> None:
+        """Tear the session down at task end. Safe to call more than once."""
+        session = getattr(self, "_shell_session", None)
+        if session is not None:
+            session.close()
+            self._shell_session = None
+
     def _validate_shell_command(self, command: str) -> tuple:
-        """Every refusal ``command`` earns on its text alone, plus its segments.
+        """Every refusal ``command`` earns on its text alone, plus its steps.
+
+        Each refusal is stamped ``executed: False`` — nothing here has launched
+        anything, and downstream cannot tell a refused command from a failed one
+        by the shape of the error alone (#3677).
+        """
+        error, steps = self._shell_command_refusal(command)
+        if error is not None:
+            error = {**error, **NOT_EXECUTED}
+        return error, steps
+
+    def _shell_command_refusal(self, command: str) -> tuple:
+        """Every refusal ``command`` earns on its text alone, plus its steps.
 
         Pure and side-effect free, so it can run twice: once as a pre-flight
         before the confirmation prompt, once on the real execution path. Sharing
         one implementation is what keeps those two from ever disagreeing.
 
+        A chained line is refused whole: one REFUSE-tier segment anywhere means
+        no part of it runs, so the model cannot learn to smuggle a refused
+        command in behind a permitted one.
+
         Returns:
-            ``(error, segments)`` — ``error`` is None when nothing here refuses
+            ``(error, steps)`` — ``error`` is None when nothing here refuses
             the command. Refusals that need runtime context (rate limit, working
             directory, path traversal) stay with the caller, so a command this
             clears may still be refused later; one it rejects never runs.
         """
-        if DANGEROUS_SHELL_OPERATORS.search(_operator_check_text(command)):
-            return (
-                {
-                    "status": "error",
-                    "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
-                    "has_errors": True,
-                    "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
-                },
-                [],
-            )
-
-        try:
-            cmd_parts = shlex.split(command)
-        except ValueError as exc:
-            return (
-                {
-                    "status": "error",
-                    "error": f"Invalid command syntax: {exc}",
-                    "has_errors": True,
-                },
-                [],
-            )
-
-        segments = _split_pipeline(cmd_parts)
-        if not segments:
-            return (
-                {"status": "error", "error": "Empty command", "has_errors": True},
-                [],
-            )
+        bypass = self.full_access_active()
+        steps, error = _parse_line(command, bypass_gates=bypass)
+        if error is not None:
+            # A shape the runner cannot execute is never approvable.
+            return {"tier": TIER_REFUSE, **error}, []
 
         granted = skill_granted_binaries(self)
-        for segment in segments:
-            error = self._validate_command(
-                segment[0].lower(),
-                segment,
-                command if len(segments) == 1 else " ".join(segment),
-                granted_binaries=granted,
-            )
-            if error:
-                return error, segments
 
-        return None, segments
+        # A granted CLI is handed argv, never a shell, so a redirect would reach
+        # it as a literal argument. Refuse instead of answering wrongly.
+        segments = [seg for step in steps for seg in step.segments]
+        if _is_lone_granted_segment(segments, granted) and _redirects(steps[0].text):
+            return (
+                {
+                    "status": "error",
+                    "error": (
+                        f"Redirection is not supported for '{segments[0][0]}': a "
+                        "skill-granted CLI receives its arguments directly rather "
+                        "than through a shell, so '>' would be passed to it as text."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Re-run the command without the redirect and use the output "
+                        "it returns, or write that output to a file with the file "
+                        "tools."
+                    ),
+                },
+                [],
+            )
+
+        for step in steps:
+            for segment in step.segments:
+                error = self._validate_command(
+                    segment[0].lower(),
+                    segment,
+                    step.text if len(step.segments) == 1 else " ".join(segment),
+                    granted_binaries=granted,
+                    skill_manager=getattr(self, "skill_manager", None),
+                    bypass_gates=bypass,
+                )
+                if error:
+                    # Steps travel with the block: a TIER_CONFIRM one still has
+                    # to run once approved, and it can only run what was parsed.
+                    return error, steps
+
+        return None, steps
+
+    def full_access_active(self) -> bool:
+        """Whether this session is running under full access (#3373).
+
+        One source of truth, read live: the session's output handler carries
+        ``full_access``, set only by the sidecar's ``PermissionState``
+        from ``--full-access`` or the TUI's ``/full-access``. Every gate reads
+        this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
+        executor — so they cannot hold different opinions about whether a
+        command is legal.
+
+        Read live rather than resolved once because full access is toggleable
+        mid-session over the control channel; caching it would leave
+        `/full-access off` half-applied. Each ``run_shell_command`` reads it
+        once and threads
+        that value through its own pre-flight and execution, so a toggle landing
+        mid-call cannot split the two.
+
+        Answers False for any host that never set it — a plain console, the
+        HTTP transport, a library embedding — which is what keeps the shipped
+        default byte-identical.
+        """
+        return bool(getattr(getattr(self, "console", None), "full_access", False))
 
     def policy_refusal_for_call(
         self, tool_name: str, tool_args: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """The refusal this call has already earned, before anyone is asked.
 
-        Read by ``Agent._policy_refusal``. A command the guardrails will refuse
-        must never raise a confirmation prompt: asking someone to approve
-        ``gh auth token`` when the answer is already no trains them to click
-        through, and frames a blocked action as merely risky. Refuse it first
-        and say why.
+        Read by ``Agent._policy_refusal``, which runs *before* the confirmation
+        prompt. ``TIER_REFUSE`` always stops here: an escalation a yes/no cannot
+        honestly describe (``gh auth token``, base64 PowerShell, ``git -c``
+        behind ``status``), or a shape the runner cannot execute at all.
 
-        The mirror of that rule is what makes writes work: a command that WOULD
-        run on approval must not be refused here. ``_validate_shell_command``
-        returns None for a granted binary's confirmable write, so it falls
-        through to the prompt instead of dying in front of it.
+        ``TIER_CONFIRM`` (``git commit``, ``npm test``, ``rm notes.txt``) falls
+        through to the prompt: refusing a command that would run on approval is
+        the dead end this tier removes. The exception is a run where only a
+        blanket pre-approval would answer the prompt; see
+        :meth:`_approval_is_blanket_only`.
 
-        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
-        if tool_name != _POLICY_GATED_SHELL_TOOL:
+        if tool_name not in (_POLICY_GATED_SHELL_TOOL, _WAIT_TOOL):
             return None
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
             return None
         error, _ = self._validate_shell_command(command)
-        if error is not None:
-            logger.info(
-                "Refusing %r before the confirmation prompt: %s",
-                command,
-                error.get("error"),
-            )
+        if error is None:
+            return None
+        if _reaches_the_prompt(error):
+            if not self._approval_is_blanket_only():
+                return None
+            error = self._blanket_approval_refusal(error)
+        logger.info(
+            "Refusing %r before the confirmation prompt: %s",
+            command,
+            error.get("error"),
+        )
         return error
+
+    def _approval_is_blanket_only(self) -> bool:
+        """True when no prompt a person answers stands behind this call.
+
+        ``GAIA_AUTO_APPROVE_TOOLS`` and ``auto_approve_gated_tools=True`` both
+        pre-approve for unattended runs. They were granted when commands outside
+        the no-prompt list could not be approved at all, so neither widens what
+        such a run executes. Only the console's ``full_access`` (the TUI's
+        ``/full-access``, on screen for the whole session) runs them unasked.
+        """
+        console = getattr(self, "console", None)
+        if getattr(console, "full_access", False) is True:
+            return False
+        if console is None:
+            return False
+        if getattr(console, "auto_approve_gated_tools", False):
+            return True
+        # Deferred: the console module imports the package root.
+        from gaia.agents.base import console as console_mod
+
+        return console_mod.auto_approve_env_enabled()
+
+    def _nothing_could_have_confirmed(self) -> bool:
+        """True when this call reached execution without anyone approving it.
+
+        The execution-path counterpart of :meth:`_approval_is_blanket_only`: it
+        also covers a host with no console, which the pre-flight leaves alone so
+        the confirmation gate can deny it itself (#2210). Reaching a direct tool
+        call on such a host means that gate was never consulted.
+        """
+        if getattr(self, "console", None) is None:
+            return True
+        return self._approval_is_blanket_only()
+
+    def _blanket_approval_refusal(self, error: Dict[str, Any]) -> Dict[str, Any]:
+        """A confirmable command's block, re-explained for an unasked run."""
+        if getattr(self, "console", None) is None:
+            why = (
+                "This run has no console, so nothing could show the confirmation "
+                "prompt this command needs."
+            )
+        else:
+            why = (
+                "This run approves prompts automatically (GAIA_AUTO_APPROVE_TOOLS "
+                "or auto_approve_gated_tools), which does not extend to commands "
+                "outside the no-prompt list."
+            )
+        return {
+            **error,
+            "tier": TIER_REFUSE,
+            "hint": (
+                f"{why} Run it interactively to approve it, or turn on full "
+                "access in the TUI."
+            ),
+        }
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -384,10 +1874,12 @@ class ShellToolsMixin:
         five to ten ``gh`` reads, so it is five to ten modals attended and a
         100% failure rate unattended.
 
-        Deliberately narrow. It answers False unless **every** segment of the
-        command is a granted binary running a read-only subcommand, so
-        ``gh issue list | head`` still prompts even though ``head`` is
-        whitelisted: consent was given for ``gh``, not for a pipeline.
+        Deliberately narrow. It answers False unless **every** segment of every
+        pipeline on the line is a granted binary running a read-only
+        subcommand, so ``gh issue list | head`` still prompts even though
+        ``head`` is whitelisted: consent was given for ``gh``, not for a
+        pipeline. ``gh issue list && gh issue view 1`` is covered — two reads
+        of the granted CLI are what the grant is for, chained or not.
 
         **The ALLOW tier only.** A confirmable write (``gh issue comment``)
         answers False here on purpose: the grant declares which writes MAY be
@@ -404,28 +1896,35 @@ class ShellToolsMixin:
             # anything else would skip the modal without enforcing the policy.
             return False
 
+        bypass = self.full_access_active()
+        if bypass:
+            # Every gated tool is pre-approved under full access; saying so here
+            # keeps this answer aligned with the console's, rather than leaving
+            # two predicates to disagree about whether the call was consented to.
+            return True
+
         granted = skill_granted_binaries(self)
         if not granted:
             return False
 
         command = (tool_args or {}).get("command")
-        if not isinstance(command, str) or DANGEROUS_SHELL_OPERATORS.search(command):
+        if not isinstance(command, str):
             return False
 
-        try:
-            segments = _split_pipeline(shlex.split(command))
-        except ValueError:
-            return False
-        if not segments:
+        # The same parse as the refusal path, or the two tiers disagree about
+        # what a segment is.
+        steps, error = _parse_line(command)
+        if error is not None or not steps:
             return False
 
         from gaia.skills.binaries import (
             BINARY_POLICIES,
             normalize_binary,
+            policy_argv,
             validate_invocation,
         )
 
-        for segment in segments:
+        for segment in map(policy_argv, (s for step in steps for s in step.segments)):
             binary = normalize_binary(segment[0])
             if binary not in granted:
                 return False
@@ -442,6 +1941,165 @@ class ShellToolsMixin:
         )
         return True
 
+    #: Slice length for the pacing wait. Short enough that a Stop lands
+    #: promptly, long enough not to spin.
+    _PACE_POLL_SECONDS = 0.25
+
+    def _pace_rate_limit(self) -> tuple:
+        """Wait out the rate limit rather than refuse, up to a cap.
+
+        A refusal only makes the model send the same command again after the
+        same wait, at the cost of a step. Returns ``(allowed, reason,
+        wait_time, waited)``; a wait past ``max_rate_limit_wait_seconds`` is
+        still refused.
+        """
+        cap = getattr(self, "max_rate_limit_wait_seconds", 60.0)
+        waited = 0.0
+        while True:
+            allowed, reason, wait_time = self._check_rate_limit()
+            if allowed or waited + wait_time > cap:
+                return allowed, reason, wait_time, waited
+            # Sliced, not one long sleep: this runs inside _call_tool_bounded's
+            # window, so a wait that ignored the flag would keep the worker
+            # alive past a Stop and past its own timeout (#2600).
+            remaining = wait_time
+            while remaining > 0:
+                if tool_cancelled():
+                    return False, "Rate limit wait cancelled", remaining, waited
+                slice_s = min(self._PACE_POLL_SECONDS, remaining)
+                time.sleep(slice_s)
+                remaining -= slice_s
+                waited += slice_s
+
+    def _path_allowed(self, path: str) -> bool:
+        """Whether *path* is inside this agent's allowed paths.
+
+        A host with neither validator is unconstrained, which is what a bare
+        mixin and every pre-validator agent already were.
+        """
+        if hasattr(self, "path_validator"):
+            return bool(self.path_validator.is_path_allowed(path))
+        if hasattr(self, "_is_path_allowed"):
+            return bool(self._is_path_allowed(path))
+        return True
+
+    def _resolve_cd_target(self, target: str, cwd: str) -> tuple:
+        """``(directory, None)`` for ``cd <target>``, or ``(cwd, refusal)``.
+
+        Held to the same bar as ``working_directory``: it is the same thing,
+        chosen mid-line instead of up front.
+        """
+        try:
+            resolved = str(Path(cwd).joinpath(target).resolve())
+        except (OSError, ValueError) as exc:
+            return cwd, {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"cd {target}: could not resolve the directory ({exc})",
+                "has_errors": True,
+            }
+        if not os.path.isdir(resolved):
+            return cwd, {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"Directory not found: {target}",
+                "has_errors": True,
+                "hint": f"Nothing on this line ran. '{target}' is relative to {cwd}.",
+            }
+        if not self._path_allowed(resolved):
+            return cwd, {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"Access denied: {resolved} is not in allowed paths",
+                "has_errors": True,
+            }
+        return resolved, None
+
+    def _path_traversal_refusal(
+        self, step: _Step, cwd: str, granted: frozenset
+    ) -> Optional[Dict[str, Any]]:
+        """Refuse an argument that resolves outside the allowed paths.
+
+        This prevents "cat ../secret.txt" even if "cat" is allowed. Exempt per
+        SEGMENT, never per line: a granted CLI's operands are remote ids, but
+        'gh … | cat ../secret' must still be checked. And only for a CLI whose
+        operands really are remote — a granted 'git'/'python' still gets
+        scanned.
+
+        An environment assignment's value is held to the same rule on EVERY
+        segment, granted or not — it is never a remote id, and a value like
+        ``PYTHONPATH`` decides which code the command imports.
+        """
+        if not hasattr(self, "path_validator"):
+            return None
+
+        from gaia.skills.binaries import policy_argv
+
+        segments = step.segments
+        scanned = [
+            seg
+            for seg in segments
+            if not _skips_path_scan(policy_argv(seg)[0], granted)
+        ]
+        candidates = [("Argument", a) for seg in scanned for a in seg[1:]]
+        candidates += [
+            (f"'{name}='", entry)
+            for env in step.envs or ()
+            for name, value in env.items()
+            for entry in value.split(os.pathsep)
+            if entry
+        ]
+        for label, arg in candidates:
+            candidate_path = arg
+            if arg.startswith("-"):
+                if "=" in arg:
+                    _, candidate_path = arg.split("=", 1)
+                else:
+                    if os.sep not in arg and "/" not in arg:
+                        continue
+
+            # On Windows, skip flags starting with / (e.g., /i, /n, /c:)
+            # These are Windows command switches, not Unix paths
+            if os.name == "nt" and candidate_path.startswith("/"):
+                # Only treat as a real path if it has multiple segments
+                # (e.g., /proc/cpuinfo) not single flags (/i, /format:list)
+                if "/" not in candidate_path[1:]:
+                    continue
+
+            # Check if it looks like a path
+            if (
+                os.sep in candidate_path
+                or "/" in candidate_path
+                or ".." in candidate_path
+            ):
+                # Ignore URLs
+                if candidate_path.startswith(
+                    ("http://", "https://", "git://", "ssh://")
+                ):
+                    continue
+
+                # Resolve path relative to CWD
+                try:
+                    resolved_path = str(Path(cwd).joinpath(candidate_path).resolve())
+
+                    if not self.path_validator.is_path_allowed(resolved_path):
+                        return {
+                            **NOT_EXECUTED,
+                            "status": "error",
+                            "error": f"Access denied: {label} '{arg}' resolves to forbidden path '{resolved_path}'",
+                            "has_errors": True,
+                        }
+                except (OSError, ValueError) as exc:
+                    # Unresolvable is not a verdict — say so rather than
+                    # letting the argument through unnoticed.
+                    logger.warning(
+                        "Could not resolve '%s' against the allowed "
+                        "paths (%s); it was not path-checked.",
+                        arg,
+                        exc,
+                    )
+        return None
+
     def _check_rate_limit(self) -> tuple:
         """
         Check if rate limit allows another command.
@@ -454,6 +2112,12 @@ class ShellToolsMixin:
             self.shell_command_times = deque(maxlen=100)
             self.max_commands_per_minute = 10
             self.max_commands_per_10_seconds = 3
+
+        # A wait's probes are one command's worth of budget, charged once when
+        # the wait starts. Metering each poll separately would trip the burst
+        # limit on the second probe and turn the primitive into an error.
+        if getattr(self, "_shell_polling", False):
+            return True, "", 0.0
 
         current_time = time.time()
 
@@ -495,9 +2159,111 @@ class ShellToolsMixin:
 
         return True, "", 0.0
 
+    def _wait_interrupt_signal(self) -> threading.Event:
+        """The event the shell tools sleep on while something is running.
+
+        Waiting on the agent's cancel signal rather than sleeping blind is what
+        makes Stop take effect during a wait or a long command; without it the
+        user's click is honoured only once the deadline runs out — up to half an
+        hour later for a build. Falls back to a never-set event for consumers
+        that have no cancel channel (plain CLI runs), where the deadline is the
+        only exit.
+        """
+        for source in (
+            getattr(self, "_cancel_event", None),
+            getattr(getattr(self, "console", None), "cancelled", None),
+        ):
+            if isinstance(source, threading.Event):
+                return source
+        return threading.Event()
+
+    def _cancel_requested(self) -> bool:
+        """True once either cancel channel has fired.
+
+        Two of them: the user's Stop (``_wait_interrupt_signal``) and the agent
+        loop giving up on this tool call (``tool_cancelled``). Either one
+        means nobody is waiting for the output any more.
+        """
+        return self._wait_interrupt_signal().is_set() or tool_cancelled()
+
+    def _sleep_unless_cancelled(self, seconds: float) -> bool:
+        """Sleep up to *seconds*; True if a cancel landed instead.
+
+        Both channels are watched, not just the user's Stop: a wait the agent
+        loop has already abandoned would otherwise keep sleeping out a full
+        poll interval — a minute at the top of the range — before noticing.
+        """
+        interrupt = self._wait_interrupt_signal()
+        deadline = time.monotonic() + seconds
+        while not self._cancel_requested():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            interrupt.wait(min(CANCEL_POLL_SECONDS, remaining))
+        return True
+
+    def _communicate_or_cancel(
+        self, process: "subprocess.Popen", timeout: int
+    ) -> Tuple[str, str, bool]:
+        """Wait for *process*, checking for Stop while it runs.
+
+        ``communicate(timeout=...)`` blocks for the whole class default, so a
+        Stop during a 30-minute build would be honoured 30 minutes late. Waiting
+        in short slices costs nothing (the call still blocks in select/reader
+        threads) and lets the kill fire while the command is still running.
+
+        Returns:
+            ``(stdout, stderr, cancelled)``.
+
+        Raises:
+            subprocess.TimeoutExpired: the deadline passed; the caller kills the
+                tree and reports the timeout.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if self._cancel_requested():
+                stdout, stderr = terminate_process_tree(process)
+                return stdout, stderr, True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=min(CANCEL_POLL_SECONDS, remaining)
+                )
+                return stdout, stderr, False
+            except subprocess.TimeoutExpired:
+                continue  # slice expired, not the command's own deadline
+
     def _record_command_execution(self):
         """Record command execution timestamp for rate limiting."""
+        if getattr(self, "_shell_polling", False):
+            return  # already charged once, when the wait started
         self.shell_command_times.append(time.time())
+
+    def _git_path_refusal(self, segments: list, cwd: str) -> Optional[Dict[str, Any]]:
+        """Refuse a git ``-C``/``--git-dir``/``--work-tree`` outside allowed paths.
+
+        The same allowed-paths check ``working_directory`` gets.
+        """
+        for segment in segments:
+            if segment[0].lower() != "git":
+                continue
+            for flag, path in _git_path_flag_values(segment, cwd):
+                if hasattr(self, "path_validator"):
+                    allowed = self.path_validator.is_path_allowed(path)
+                elif hasattr(self, "_is_path_allowed"):
+                    allowed = self._is_path_allowed(path)
+                else:
+                    continue
+                if not allowed:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": f"Access denied: git {flag} {path} is not in allowed paths",
+                        "has_errors": True,
+                    }
+        return None
 
     @staticmethod
     def _validate_command(
@@ -505,6 +2271,8 @@ class ShellToolsMixin:
         cmd_parts: list,
         command: str,
         granted_binaries: frozenset = frozenset(),
+        skill_manager: Any = None,
+        bypass_gates: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -513,9 +2281,15 @@ class ShellToolsMixin:
             cmd_base: The lowercased command name.
             cmd_parts: The shlex-split command.
             command: The raw command string.
+            skill_manager: The host's skill manager, so refusing an ungranted CLI
+                can name the installed skill that grants it. Optional.
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
+            bypass_gates: This session's ``--bypass-permissions`` state. When
+                True the read-only policy is replaced wholesale by
+                ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
+                exactly as it was.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -526,65 +2300,135 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
+        if bypass_gates:
+            return ShellToolsMixin._validate_bypass_command(cmd_base)
+
+        program = _program_behind(cmd_base)
+        if program is not None:
+            # A refusal follows the program, not its spelling; what it would
+            # merely ask about still asks, as the unlisted spelling below.
+            behind = ShellToolsMixin._validate_command(
+                program, [program, *cmd_parts[1:]], command
+            )
+            if behind is not None and not _reaches_the_prompt(behind):
+                return behind
+
+        # Git's global options sit before the subcommand, so every check below
+        # has to read the call with them stepped over. The options that hand git
+        # arbitrary code are refused here rather than stepped over.
+        if cmd_base == "git" and len(cmd_parts) > 1:
+            cmd_parts, resolve_error = _git_policy_argv(cmd_parts)
+            if resolve_error is not None:
+                return {
+                    "status": "error",
+                    "tier": TIER_REFUSE,
+                    "error": resolve_error,
+                    "has_errors": True,
+                }
+
+        # A read subcommand still writes a caller-chosen path when it is handed
+        # an output flag, and no policy table judges the destination. Checked
+        # ahead of the grant so the widest git grant cannot reopen it.
+        if cmd_base == "git" and len(cmd_parts) > 1:
+            for part in cmd_parts[1:]:
+                if cmd_parts[1].lower() == "ls-files" and part == "-o":
+                    continue
+                if _is_file_write_flag(part):
+                    return {
+                        "status": "error",
+                        "tier": TIER_REFUSE,
+                        "error": (
+                            f"git '{part}' writes to a file, which is not allowed "
+                            "under the read-only command policy."
+                        ),
+                        "has_errors": True,
+                        "hint": "Drop the output flag and read git's result from stdout.",
+                    }
+
         # Skill-granted CLIs are gated by their own policy table instead of
-        # ALLOWED_COMMANDS; anything ungranted is still refused.
+        # ALLOWED_COMMANDS; an ungranted one that only lacks the grant is
+        # confirmable, and everything else here is refused outright.
         # Imported here — gaia.skills pulls in the connector stack.
         from gaia.skills.binaries import (
             BINARY_POLICIES,
             REFUSE,
             classify_invocation,
+            classify_ungranted_invocation,
             normalize_binary,
+            policy_argv,
         )
 
-        binary = normalize_binary(cmd_base)
+        policy_parts = policy_argv(cmd_parts)
+        binary = normalize_binary(policy_parts[0])
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
-            if binary not in granted_binaries:
-                return {
-                    "status": "error",
-                    "error": (
-                        f"Command '{binary}' is not available to this agent. It is "
-                        "granted only to a skill that declares "
-                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
-                        "first."
-                    ),
-                    "has_errors": True,
-                    "hint": f"{policy.summary} {policy.install_hint}",
-                }
-            decision = classify_invocation(policy, cmd_parts)
-            if decision.outcome == REFUSE:
-                return {
-                    "status": "error",
-                    "error": decision.message,
-                    "has_errors": True,
-                    "hint": (
-                        f"This one is refused outright, not gated — the '{binary}' "
-                        "grant will not run it even with the user's approval. "
-                        "Use an allowed command, or tell the user what you would "
-                        "have run and why it is blocked."
-                    ),
-                }
-            return None
+            granted = binary in granted_binaries
+            # Classified against the GRANTED policy as well, whoever is asking:
+            # a refusal that survives a grant is refused on what the invocation
+            # does, and no yes/no prompt can honestly describe it.
+            granted_decision = classify_invocation(policy, policy_parts)
+            decision = (
+                granted_decision
+                if granted
+                else classify_ungranted_invocation(policy, policy_parts)
+            )
+            if decision.outcome != REFUSE:
+                return None
+            tier = TIER_REFUSE
+            if granted:
+                message = decision.message
+                hint = (
+                    f"This one is refused outright, not gated — the '{binary}' "
+                    "grant will not run it even with the user's approval. "
+                    "Use an allowed command, or tell the user what you would "
+                    "have run and why it is blocked."
+                )
+            elif shutil.which(policy.binary) is None:
+                # Not installed is not "load the skill": reloading cannot fix it.
+                message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                hint = "Do not retry this command or reload the skill."
+            else:
+                # Name the skill: "a skill that declares it" left models no route.
+                message = f"{decision.message} {_grant_route(binary, skill_manager)}"
+                # Only the missing grant is in the way when the same invocation
+                # would run with one — that is a question the user can answer.
+                if granted_decision.outcome != REFUSE:
+                    tier = TIER_CONFIRM
+                hint = (
+                    f"{policy.summary} To go beyond that, load a skill "
+                    f"declaring 'shell:execute:{binary}' — the grant is what "
+                    "widens this, not a different spelling of the command. If "
+                    f"{binary} itself is missing: {policy.install_hint}"
+                )
+            return {
+                "status": "error",
+                "tier": tier,
+                "error": message,
+                "has_errors": True,
+                "hint": hint,
+            }
 
-        # Special handling for git - only allow read-only operations
-        if cmd_base == "git":
-            if len(cmd_parts) > 1:
-                git_subcmd = cmd_parts[1].lower()
-                if git_subcmd not in SAFE_GIT_COMMANDS:
+        # Special handling for wmic - only allow read-only queries
+        if cmd_base == "wmic":
+            for part in cmd_parts[1:]:
+                if _is_file_write_flag(part):
                     return {
                         "status": "error",
-                        "error": f"Git command '{git_subcmd}' is not allowed. Only read-only git operations are permitted.",
+                        "tier": TIER_REFUSE,
+                        "error": (
+                            f"wmic '{part}' writes to a file, which is not allowed "
+                            "under the read-only command policy."
+                        ),
                         "has_errors": True,
-                        "allowed_git_commands": list(SAFE_GIT_COMMANDS),
+                        "hint": "Drop /output: and /append: and read the query result from stdout.",
                     }
-        # Special handling for wmic - only allow read-only queries
-        elif cmd_base == "wmic":
             cmd_lower = command.lower()
             dangerous_wmic_ops = {"call", "create", "delete", "set"}
             cmd_words = set(cmd_lower.split())
             if cmd_words & dangerous_wmic_ops:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only wmic queries are allowed (get, list). Modifying operations (call, create, delete, set) are blocked.",
                     "has_errors": True,
                     "hint": "Use 'wmic <alias> get <properties>' for safe queries",
@@ -592,43 +2436,66 @@ class ShellToolsMixin:
                 }
         # Special handling for powershell - only allow read-only cmdlets
         elif cmd_base in ("powershell", "powershell.exe"):
-            # Block dangerous execution flags that can bypass cmdlet filtering
-            _BLOCKED_PS_FLAGS = {
-                "-encodedcommand",
-                "-enc",
-                "-file",
-                "-f",
-                "-executionpolicy",
-                "-ex",
-                "-ep",
-                "-noprofile",
-                "-nop",
-                "-windowstyle",
-                "-w",
-                "-noninteractive",
-                "-noni",
-            }
-            if any(part.lower() in _BLOCKED_PS_FLAGS for part in cmd_parts[1:]):
+            if any(_is_blocked_ps_flag(part) for part in cmd_parts[1:]):
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
                     "has_errors": True,
                     "hint": "Use -Command to pass a readable cmdlet string",
                     "examples": 'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"',
                 }
-            # Extract the PowerShell command text
-            ps_cmd = ""
-            for i, part in enumerate(cmd_parts):
-                if part.lower() in ("-command", "-c"):
-                    ps_cmd = " ".join(cmd_parts[i + 1 :]).lower()
+            body_start = 1
+            while body_start < len(cmd_parts):
+                part = cmd_parts[body_start]
+                if not part.startswith(("-", "/")):
                     break
+                name = part[1:].lower()
+                if name and "command".startswith(name):
+                    body_start += 1
+                    break
+                if name not in _SAFE_PS_LEADING_SWITCHES:
+                    return {
+                        "status": "error",
+                        "tier": TIER_REFUSE,
+                        "error": f"PowerShell switch '{part}' has not been reviewed and is not allowed.",
+                        "has_errors": True,
+                        "hint": "Use -Command with plain read-only cmdlets.",
+                    }
+                body_start += 1
+            ps_cmd = " ".join(cmd_parts[body_start:]).lower()
             if not ps_cmd:
-                # Inline: powershell "Get-Process"
-                ps_cmd = " ".join(cmd_parts[1:]).lower()
+                return {
+                    "status": "error",
+                    "tier": TIER_REFUSE,
+                    "error": "PowerShell requires an explicit read-only command.",
+                    "has_errors": True,
+                }
+
+            escape = _powershell_body_escape(ps_cmd)
+            if escape is not None:
+                return {
+                    "status": "error",
+                    "tier": TIER_REFUSE,
+                    "error": (
+                        f"PowerShell {escape} is not allowed: it runs code the "
+                        "read-only cmdlet allowlist cannot inspect."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Use plain Get-* cmdlets and parameters only — no $variables, "
+                        "no [Type]::Member, no .Method(), no &, no redirection, no ';'."
+                    ),
+                    "examples": (
+                        'powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name", '
+                        'powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, WS"'
+                    ),
+                }
 
             if any(pat in ps_cmd for pat in DANGEROUS_PS_PATTERNS):
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only PowerShell cmdlets are allowed (Get-*, Select-Object, Format-*, Where-Object, etc.).",
                     "has_errors": True,
                     "hint": "Use Get-* cmdlets for safe queries",
@@ -639,6 +2506,16 @@ class ShellToolsMixin:
                 }
 
             # Verify each cmdlet is safe
+            for segment in ps_cmd.split("|"):
+                head = re.match(r"\s*([a-z]+-[a-z]+)\b", segment)
+                if not head or not head[1].startswith(SAFE_PS_CMDLET_PREFIXES):
+                    return {
+                        "status": "error",
+                        # A segment that is not a cmdlet at all runs a file.
+                        "tier": TIER_CONFIRM if head else TIER_REFUSE,
+                        "error": "Each PowerShell pipeline command must be a read-only cmdlet.",
+                        "has_errors": True,
+                    }
             cmdlets = re.findall(r"[a-z]+-[a-z]+", ps_cmd)
             for cmdlet in cmdlets:
                 if not any(
@@ -646,6 +2523,7 @@ class ShellToolsMixin:
                 ):
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": f"PowerShell cmdlet '{cmdlet}' is not allowed. Only read-only cmdlets are permitted.",
                         "has_errors": True,
                         "hint": "Allowed: Get-*, Select-Object, Format-List, Format-Table, Where-Object, Sort-Object",
@@ -658,6 +2536,7 @@ class ShellToolsMixin:
                 if part.lower() in DANGEROUS_FIND_ACTIONS:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": (
                             f"find action '{part}' is not allowed: it can run "
                             "arbitrary commands, delete, or write files, "
@@ -690,6 +2569,7 @@ class ShellToolsMixin:
                 if is_output:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
                         "has_errors": True,
                         "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
@@ -722,20 +2602,135 @@ class ShellToolsMixin:
             if len(operands) >= 2:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "uniq with an output file is not allowed: it writes to disk, violating the read-only command policy.",
                     "has_errors": True,
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
                 }
-        elif cmd_base not in ALLOWED_COMMANDS:
+        elif cmd_base in SHELL_KEYWORDS:
             return {
                 "status": "error",
+                "error": (
+                    f"'{cmd_base}' is shell control flow, and commands run "
+                    "directly rather than through a shell, so it cannot run."
+                ),
+                "has_errors": True,
+                "hint": (
+                    "Use run_python for a loop or a condition, or issue the "
+                    "commands one per call and decide between them yourself."
+                ),
+            }
+        elif cmd_base not in ALLOWED_COMMANDS:
+            # Refusing a file rewrite with "only read-only commands are allowed"
+            # is a dead end: the agent wanted to change a file and the message
+            # names nothing that can. Point at the tool that does the job.
+            #
+            # Only when the invocation actually writes. `sed -n '10,20p' f`
+            # prints a line range; answering that with "use edit_file" sends the
+            # agent to a write tool when it was trying to read.
+            if cmd_base in FILE_REWRITE_BINARIES and _rewrites_in_place(
+                cmd_base, cmd_parts
+            ):
+                return {
+                    "status": "error",
+                    "error": (
+                        f"'{cmd_base}' rewrites files and is not available. Use the "
+                        f"edit tools instead — they are not blocked."
+                    ),
+                    "has_errors": True,
+                    "hint": (
+                        "Call edit_file with the exact existing text as old_content, "
+                        "or edit_python_file for .py to have the edit syntax-checked. "
+                        "Use write_file to create a file that does not exist yet."
+                    ),
+                    "examples": "edit_file(file_path=..., old_content=..., new_content=...)",
+                }
+            if _ENV_ASSIGNMENT_RE.match(cmd_parts[0]):
+                return {
+                    "status": "error",
+                    "error": (
+                        f"'{cmd_parts[0]}' sets an environment variable for the "
+                        "command, and inline assignments (VAR=value command) "
+                        "are not supported."
+                    ),
+                    "has_errors": True,
+                    "hint": "Run the command without the assignment.",
+                }
+            return {
+                "status": "error",
+                "tier": TIER_CONFIRM,
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
-                "hint": "Only read-only, informational commands are allowed",
-                "examples": "ls, cat, grep, find, git status, systeminfo, powershell -Command 'Get-WmiObject ...'",
+                "hint": (
+                    "Commands outside the no-prompt list run once the user "
+                    "approves them; they are not refused."
+                ),
+                "examples": "ls, cat, grep, find, systeminfo, powershell -Command 'Get-WmiObject ...'",
             }
 
         return None  # Command is allowed
+
+    @staticmethod
+    def _validate_bypass_command(cmd_base: str) -> Optional[Dict[str, Any]]:
+        """The whole binary policy under full access.
+
+        Membership in ``ALLOWED_COMMANDS | DEVELOPER_COMMANDS`` and nothing
+        else: the read-only sub-guards (git subcommands, PowerShell cmdlets,
+        ``find -exec``, ``sort -o``, ``uniq`` output) and the binary policies'
+        own refusals all encode "this binary may not write", which is precisely
+        the assumption full access drops.
+
+        Still a set, not an open door — ``rm`` and anything unrecognised are
+        refused, and every segment lands in the audit record either way.
+        """
+        from gaia.skills.binaries import normalize_binary
+
+        # A keyword is not a binary that happens to be missing from the set —
+        # it cannot run in any mode, so it is named the same way here.
+        if cmd_base in SHELL_KEYWORDS:
+            return {
+                "status": "error",
+                "tier": TIER_REFUSE,
+                "error": (
+                    f"'{cmd_base}' is shell control flow, and commands run "
+                    "directly rather than through a shell, so it cannot run."
+                ),
+                "has_errors": True,
+                "hint": (
+                    "Use run_python for a loop or a condition, or issue the "
+                    "commands one per call and decide between them yourself."
+                ),
+            }
+
+        candidates = {cmd_base, normalize_binary(cmd_base)}
+        if candidates & (ALLOWED_COMMANDS | DEVELOPER_COMMANDS):
+            return None
+        return {
+            "status": "error",
+            "tier": TIER_REFUSE,
+            "error": (
+                f"Command '{cmd_base}' is not in the developer command set, "
+                "even with full access active."
+            ),
+            "has_errors": True,
+            "hint": (
+                "Full access swaps the read-only allowlist for a developer set "
+                "(python, python3, pytest, node, npm, make, cmake, go, cargo, "
+                "gh, git, sed, awk, curl, sleep, timeout, export, cp, mv). "
+                "'rm' is deliberately excluded."
+            ),
+        }
+
+    def _audit_shell_execution(self, command: str, cwd: str, segments: list) -> None:
+        """Record a command run under bypass mode, arguments and all.
+
+        Skipping the confirmation *prompt* must not mean skipping the *record*:
+        consent was granted in advance, which is exactly when the audit trail is
+        the only evidence of what the agent did.
+        """
+        from gaia.security import audit_shell_command
+
+        audit_shell_command(command=command, cwd=cwd, segments=segments, mode="bypass")
 
     def register_shell_tools(self) -> None:
         """Register shell command execution tools."""
@@ -743,52 +2738,64 @@ class ShellToolsMixin:
 
         @tool(
             atomic=True,
-            name="run_shell_command",
-            description=(
-                "Execute a shell/terminal command. Useful for listing directories (ls/dir), "
-                "checking files (cat, stat), finding files (find), text processing (grep, head, tail), "
-                "navigation (pwd), and system information. "
-                'On Windows use: systeminfo, powershell -Command "Get-WmiObject Win32_Processor", '
-                'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name,DriverVersion,AdapterRAM". '
-                "On Linux use: lscpu, lspci, free -h. Pipes (|) are supported."
-            ),
-            parameters={
-                "command": {
-                    "type": "str",
-                    "description": "The shell command to execute (e.g., 'ls -la', 'pwd', 'cat file.txt')",
-                    "required": True,
-                },
-                "working_directory": {
-                    "type": "str",
-                    "description": "Directory to run the command in (defaults to current directory)",
-                    "required": False,
-                },
-                "timeout": {
-                    "type": "int",
-                    "description": "Timeout in seconds (default: 30)",
-                    "required": False,
-                },
-            },
+            # The agent-level guard must outlast the longest command class, or a
+            # build would be abandoned by the loop while the subprocess is still
+            # inside its own (correct) timeout.
+            timeout=MAX_COMMAND_TIMEOUT + 60,
         )
+        # The class table leads the docstring because the prompt renders a tool
+        # by its FIRST LINE; anything below is seen only by models using native
+        # tool calls. ``test_the_docstring_states_every_class`` keeps that line
+        # honest when the table changes.
         def run_shell_command(
-            command: str, working_directory: Optional[str] = None, timeout: int = 30
+            command: str,
+            working_directory: Optional[str] = None,
+            # Annotated int, not Optional[int]: the registry infers the JSON
+            # schema type from this annotation and renders anything it cannot
+            # read as a string, so Optional[int] would tell a tool-calling model
+            # to send "60". None still means "use the class default".
+            timeout: int = None,
         ) -> Dict[str, Any]:
-            """
-            Execute a shell command and return the output.
+            """Execute a shell command. Leave timeout unset — it defaults by class: 900s test runners, 1800s builds and installs, 300s git/network, 30s everything else.
+
+            Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
+            'cd <dir> && b'. One approval covers the line; every part is
+            allowlist-checked. '2>&1' keeps stderr, '2>/dev/null' drops it,
+            'VAR=x cmd' scopes a variable. Other redirections and
+            ` $() & newline are refused.
 
             Args:
                 command: Shell command to execute
                 working_directory: Directory to run command in
-                timeout: Maximum execution time in seconds
+                timeout: Maximum execution time in seconds, for the whole
+                    line. Omit it for the class default above. Above the 3600s
+                    ceiling it is refused, not clamped.
 
             Returns:
-                Dictionary with status, output, and error information
+                status, output, the last exit code, 'steps' (each with its own
+                code), the applied 'timeout' and 'timeout_class'; one killed at
+                the limit carries 'timed_out'.
             """
             try:
+                bypass = self.full_access_active()
+                try:
+                    timeout, timeout_class = resolve_timeout(command, timeout)
+                except ValueError as exc:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": str(exc),
+                        "command": command,
+                        "has_errors": True,
+                    }
+
                 # Check rate limits first to prevent DOS
-                allowed, reason, wait_time = self._check_rate_limit()
+                allowed, reason, wait_time, waited = (
+                    (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
+                )
                 if not allowed:
                     return {
+                        **NOT_EXECUTED,
                         "status": "error",
                         "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
                         "has_errors": True,
@@ -801,6 +2808,7 @@ class ShellToolsMixin:
                 if working_directory:
                     if not os.path.exists(working_directory):
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": f"Working directory not found: {working_directory}",
                             "has_errors": True,
@@ -808,295 +2816,519 @@ class ShellToolsMixin:
 
                     if not os.path.isdir(working_directory):
                         return {
+                            **NOT_EXECUTED,
                             "status": "error",
                             "error": f"Path is not a directory: {working_directory}",
                             "has_errors": True,
                         }
 
-                    # Validate path is allowed
-                    if hasattr(self, "path_validator"):
-                        if not self.path_validator.is_path_allowed(working_directory):
-                            return {
-                                "status": "error",
-                                "error": f"Access denied: {working_directory} is not in allowed paths",
-                                "has_errors": True,
-                            }
-                    elif hasattr(self, "_is_path_allowed"):
-                        if not self._is_path_allowed(working_directory):
-                            return {
-                                "status": "error",
-                                "error": f"Access denied: {working_directory} is not in allowed paths",
-                                "has_errors": True,
-                            }
+                    if not self._path_allowed(working_directory):
+                        hint = (
+                            self.path_validator.scratch_hint(working_directory)
+                            if hasattr(self, "path_validator")
+                            else ""
+                        )
+                        return {
+                            **NOT_EXECUTED,
+                            "status": "error",
+                            "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
+                            "has_errors": True,
+                        }
 
                     cwd = str(Path(working_directory).resolve())
+                    session_scoped = False
                 else:
-                    cwd = str(Path.cwd())
+                    # An explicit working_directory is a one-shot override that
+                    # never touches the session; with none, resume where the
+                    # last call's cd left off.
+                    cwd = self.shell_session.cwd
+                    session_scoped = True
 
-                # Operators, syntax, and the per-command whitelist. Shared with
-                # the pre-flight that runs before the confirmation prompt, so a
+                # Operators, syntax, and the per-command whitelist, for every
+                # segment of every pipeline on the line. Shared with the
+                # pre-flight that runs before the confirmation prompt, so a
                 # command refused there is refused here for the same reason.
-                error, segments = self._validate_shell_command(command)
-                if error:
+                #
+                # A CONFIRM-tier command has already been through
+                # ``Agent._execute_tool``'s gate, so it runs here unless the
+                # only approval was a blanket pre-approval.
+                unconfirmed = self._nothing_could_have_confirmed()
+                error, steps = self._validate_shell_command(command)
+                if error and not _reaches_the_prompt(error):
                     return error
+                if error and unconfirmed:
+                    return self._blanket_approval_refusal(error)
 
                 granted = skill_granted_binaries(self)
-                cmd_parts = [part for segment in segments for part in segment]
 
-                # Validate arguments for path traversal
-                # This prevents "cat ../secret.txt" even if "cat" is allowed.
-                # Exempt per SEGMENT, never per line: a granted CLI's operands are
-                # remote ids, but 'gh … | cat ../secret' must still be checked.
-                scanned = [
-                    seg for seg in segments if not _is_granted_binary(seg[0], granted)
-                ]
-                if hasattr(self, "path_validator"):
-                    for arg in [a for seg in scanned for a in seg[1:]]:
-                        candidate_path = arg
-                        if arg.startswith("-"):
-                            if "=" in arg:
-                                _, candidate_path = arg.split("=", 1)
-                            else:
-                                if os.sep not in arg and "/" not in arg:
-                                    continue
+                # A `cd` step moves the steps after it, so each step's directory
+                # — and what its arguments resolve against — is settled here,
+                # before anything runs.
+                step_cwds: list = []
+                walk_cwd = cwd
+                for step in steps:
+                    step_cwds.append(walk_cwd)
+                    if step.is_cd:
+                        walk_cwd, error = self._resolve_cd_target(
+                            step.segments[0][1], walk_cwd
+                        )
+                        if error:
+                            return error
 
-                        # On Windows, skip flags starting with / (e.g., /i, /n, /c:)
-                        # These are Windows command switches, not Unix paths
-                        if os.name == "nt" and candidate_path.startswith("/"):
-                            # Only treat as a real path if it has multiple segments
-                            # (e.g., /proc/cpuinfo) not single flags (/i, /format:list)
-                            if "/" not in candidate_path[1:]:
-                                continue
-
-                        # Check if it looks like a path
-                        if (
-                            os.sep in candidate_path
-                            or "/" in candidate_path
-                            or ".." in candidate_path
-                        ):
-                            # Ignore URLs
-                            if candidate_path.startswith(
-                                ("http://", "https://", "git://", "ssh://")
-                            ):
-                                continue
-
-                            # Resolve path relative to CWD
-                            try:
-                                clean_path = candidate_path
-                                resolved_path = str(
-                                    Path(cwd).joinpath(clean_path).resolve()
-                                )
-
-                                if not self.path_validator.is_path_allowed(
-                                    resolved_path
-                                ):
-                                    return {
-                                        "status": "error",
-                                        "error": f"Access denied: Argument '{arg}' resolves to forbidden path '{resolved_path}'",
-                                        "has_errors": True,
-                                    }
-                            except (OSError, ValueError) as exc:
-                                # Unresolvable is not a verdict — say so rather
-                                # than letting the argument through unnoticed.
-                                logger.warning(
-                                    "Could not resolve '%s' against the allowed "
-                                    "paths (%s); it was not path-checked.",
-                                    arg,
-                                    exc,
-                                )
-
-                cmd_base = cmd_parts[0].lower()
-
-                # Validate every command in the pipeline, not just the first.
-                for seg in segments:
-                    error = self._validate_command(
-                        seg[0].lower(),
-                        seg,
-                        command if len(segments) == 1 else " ".join(seg),
-                        granted_binaries=granted,
-                    )
+                for step, step_cwd in zip(steps, step_cwds):
+                    error = self._path_traversal_refusal(step, step_cwd, granted)
                     if error:
                         return error
+                    error = self._git_path_refusal(step.segments, step_cwd)
+                    if error:
+                        return error
+
+                if bypass:
+                    self._audit_shell_execution(
+                        command, cwd, [seg for st in steps for seg in st.segments]
+                    )
 
                 # Log command execution (debug mode)
                 if hasattr(self, "debug") and self.debug:
                     logger.info(f"Executing command: {command} in {cwd}")
 
-                # On Windows, many commands are shell built-ins (dir, cd, type,
-                # echo) and Unix commands (ls, pwd, cat) don't exist as .exe
-                # files.  Since we have already validated the command against the
-                # whitelist, we use shell=True on Windows so cmd.exe can resolve
-                # both built-ins and commands on PATH (including those from Git
-                # for Windows which provides ls, cat, grep, etc.).
-                #
-                # A skill-granted CLI is the exception, and must stay one. It is
-                # a real executable — it needs no built-in resolution — and it
-                # is the one path that can run without a confirmation prompt, on
-                # arguments built from untrusted remote text (an issue body the
-                # model just read). Handing cmd.exe the raw STRING there would
-                # let that text act: `--search "x|whoami"` is one argv token to
-                # every check above and two commands to cmd.exe, and `%VAR%`
-                # expands into a value the approval prompt never showed. argv
-                # goes to the process verbatim, so neither is possible.
-                # One segment only: a pipeline needs a shell to be a pipeline,
-                # and `cmd_parts` has already dropped the `|` tokens, so an argv
-                # run of one would silently concatenate the two commands.
-                lone_granted_segment = (
-                    len(segments) == 1
-                    and bool(granted)
-                    and _is_granted_binary(segments[0][0], granted)
-                )
-                use_shell = os.name == "nt" and not lone_granted_segment
-
-                # Build the command string for execution
-                # On Windows with shell=True, use the ORIGINAL command string
-                # to preserve quoting (critical for PowerShell pipe commands)
-                exec_cmd = cmd_parts  # Default: list for subprocess
-
-                if use_shell:
-                    # Start with original command to preserve quoting
-                    exec_cmd = command
-
-                    # Map common Unix commands to Windows equivalents
-                    # when Git-for-Windows tools aren't on PATH
-                    _UNIX_TO_WIN = {
-                        "ls": "dir",
-                        "pwd": "cd",
-                        "cat": "type",
-                        "which": "where",
-                        "cp": "copy",
-                        "mv": "move",
-                    }
-                    if cmd_base in _UNIX_TO_WIN:
-                        import shutil
-
-                        if not shutil.which(cmd_base):
-                            win_cmd = _UNIX_TO_WIN[cmd_base]
-                            logger.info(
-                                f"Mapping Unix command '{cmd_base}' -> Windows '{win_cmd}'"
-                            )
-                            # Replace just the command name in the original string
-                            exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
-
-                # Execute command
-                #
-                # encoding/errors are explicit, and load-bearing. Bare
-                # ``text=True`` decodes with the locale codec — cp1252 on a
-                # default Windows box — and subprocess does that decode inside
-                # its pipe reader THREAD. A byte that codec cannot map raises
-                # UnicodeDecodeError in that thread, which dies, and
-                # subprocess.run then returns returncode 0 with EMPTY stdout.
-                # The command succeeded and its output was silently discarded.
-                #
-                # That is not an edge case: `gh issue list` on amd/gaia returns
-                # an issue title containing "⚠️", so GitHub triage got back
-                # nothing and the model reported an empty backlog it had never
-                # actually read. Any tool emitting UTF-8 (git, gh, npm, docker)
-                # hits it. errors="replace" keeps a stray undecodable byte from
-                # costing the whole output.
-                start_time = time.monotonic()
-                try:
-                    result = subprocess.run(
-                        exec_cmd,
-                        cwd=cwd,
-                        capture_output=True,
-                        # stdin is DEVNULL, never inherited. capture_output
-                        # redirects stdout/stderr but leaves stdin alone, and
-                        # this process's stdin is the agent transport's pipe —
-                        # held open by the TUI and never written to. A child
-                        # that reads it (directly, or by probing whether it is
-                        # interactive) blocks forever on input that cannot
-                        # arrive, because there is no human on that pipe.
-                        #
-                        # The hang was not theoretical: `gh` spawned from the
-                        # agent never exited, while the identical command took
-                        # 0.07s from a shell. Worse, subprocess.run's own
-                        # timeout does not save it — on expiry it kills the
-                        # cmd.exe it launched, then calls communicate() again
-                        # with NO timeout, which waits on pipes the surviving
-                        # grandchild still holds. That is the 180s tool timeout
-                        # and the orphaned gh.exe left behind by every attempt.
-                        #
-                        # DEVNULL gives an immediate EOF, which is the honest
-                        # answer here: an agent's shell command is
-                        # non-interactive by construction.
-                        stdin=subprocess.DEVNULL,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=timeout,
-                        check=False,
-                        env=os.environ.copy(),
-                        shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
-                    )
-                    duration = time.monotonic() - start_time
-
-                    # Record successful command execution for rate limiting
-                    self._record_command_execution()
-                except subprocess.TimeoutExpired as exc:
-                    duration = time.monotonic() - start_time
-
-                    # Handle timeout gracefully
-                    stdout_str = ""
-                    stderr_str = ""
-                    if exc.stdout:
-                        stdout_str = (
-                            exc.stdout
-                            if isinstance(exc.stdout, str)
-                            else exc.stdout.decode("utf-8", errors="replace")
-                        )
-                    if exc.stderr:
-                        stderr_str = (
-                            exc.stderr
-                            if isinstance(exc.stderr, str)
-                            else exc.stderr.decode("utf-8", errors="replace")
-                        )
-
+                # Stop can land before anything is spawned, and a command
+                # that never ran must say so rather than report an empty run.
+                if self._cancel_requested():
                     return {
+                        **NOT_EXECUTED,
                         "status": "error",
-                        "error": f"Command timed out after {timeout} seconds",
+                        "error": (
+                            f"Stopped before running, so nothing was changed: {command}"
+                        ),
                         "command": command,
-                        "stdout": stdout_str,
-                        "stderr": stderr_str,
                         "has_errors": True,
-                        "timed_out": True,
-                        "timeout": timeout,
-                        "duration_seconds": duration,
+                        "cancelled": True,
                         "cwd": cwd,
                     }
 
-                # Capture and truncate output if too long
-                stdout = result.stdout or ""
-                stderr = result.stderr or ""
-                truncated = False
-                max_output = 10_000
+                start_time = time.monotonic()
+                deadline = start_time + timeout
+                stdout_parts: list = []
+                stderr_parts: list = []
+                ran: list = []
+                last_code = 0
+                unhandled_failure = False
+                spawned = False
+                ran_cwd = cwd
 
-                if len(stdout) > max_output:
-                    stdout = stdout[:max_output] + "\n...output truncated (stdout)..."
-                    truncated = True
+                for index, (step, step_cwd) in enumerate(zip(steps, step_cwds)):
+                    if not _connector_runs(step.connector, last_code):
+                        continue
+                    # `||` is the line saying it expects the failure before it;
+                    # anything else leaves it standing, so `pytest -q; ls`
+                    # cannot report a failing suite as a passing check.
+                    if step.connector == "||":
+                        unhandled_failure = False
+                    if step.is_cd:
+                        # Its whole effect is the directory the walk above
+                        # already applied to the steps that follow it.
+                        last_code = 0
+                        ran.append({"command": step.text, "return_code": 0})
+                        # Only a cd that actually ran moves the session.
+                        ran_cwd = (
+                            step_cwds[index + 1]
+                            if index + 1 < len(step_cwds)
+                            else walk_cwd
+                        )
+                        continue
+                    try:
+                        result = _run_step(
+                            step,
+                            step_cwd,
+                            max(deadline - time.monotonic(), 0),
+                            granted,
+                            # Waiting in short slices is what lets a Stop kill
+                            # the command while it is still running, rather
+                            # than half an hour later when its budget expires.
+                            self._communicate_or_cancel,
+                            bypass,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        # Truncated here too: a command killed at 30 minutes has
+                        # printed far more than one killed at 30 seconds, and
+                        # all of it would otherwise go into the model's context.
+                        stdout_parts.append(_as_text(exc.stdout))
+                        stderr_parts.append(_as_text(exc.stderr))
+                        stdout = _truncate("".join(stdout_parts), "stdout")
+                        stderr = _truncate("".join(stderr_parts), "stderr")
+                        return attach_check(
+                            {
+                                "status": "error",
+                                "error": (
+                                    f"Command timed out after {timeout} seconds and "
+                                    f"was killed, so its work is incomplete: {command}"
+                                ),
+                                "command": command,
+                                "stdout": stdout,
+                                "stderr": stderr,
+                                "has_errors": True,
+                                "timed_out": True,
+                                "timeout": timeout,
+                                "timeout_class": timeout_class,
+                                "duration_seconds": time.monotonic() - start_time,
+                                "cwd": cwd,
+                                "steps": ran,
+                                "hint": (
+                                    f"It ran as a '{timeout_class}' command "
+                                    f"({TIMEOUT_CLASSES[timeout_class].summary}, "
+                                    f"{TIMEOUT_CLASSES[timeout_class].seconds}s by "
+                                    "default). Whatever it printed before the kill is "
+                                    "in 'stdout'/'stderr' above. Either narrow the "
+                                    "command (one test file rather than the whole "
+                                    "suite) or re-run it with a larger timeout, up to "
+                                    f"{MAX_COMMAND_TIMEOUT}s."
+                                ),
+                            },
+                            check_from_command(
+                                command,
+                                [seg for st in steps for seg in st.segments],
+                                None,
+                                stdout,
+                                stderr,
+                            ),
+                        )
+                    except _CommandCancelled as exc:
+                        stdout_parts.append(exc.stdout)
+                        stderr_parts.append(exc.stderr)
+                        duration = time.monotonic() - start_time
+                        self._record_command_execution()
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"Command was stopped after {duration:.1f}s and "
+                                f"killed, so its work is incomplete: {command}"
+                            ),
+                            "command": command,
+                            "stdout": _truncate("".join(stdout_parts), "stdout"),
+                            "stderr": _truncate("".join(stderr_parts), "stderr"),
+                            "has_errors": True,
+                            "cancelled": True,
+                            "timeout": timeout,
+                            "timeout_class": timeout_class,
+                            "duration_seconds": duration,
+                            "cwd": cwd,
+                            "steps": ran,
+                        }
+                    except FileNotFoundError as exc:
+                        # Mid-line, the outer handler's "nothing ran" answer
+                        # would disown the commands that did; report it the way
+                        # a shell does and let the connectors decide the rest.
+                        if not spawned:
+                            raise
+                        logger.error("Command executable not found: %s", exc)
+                        stderr_parts.append(f"{step.text}: {exc.strerror or exc}\n")
+                        last_code = _COMMAND_NOT_FOUND
+                        unhandled_failure = True
+                        ran.append({"command": step.text, "return_code": last_code})
+                        continue
 
-                if len(stderr) > max_output:
-                    stderr = stderr[:max_output] + "\n...output truncated (stderr)..."
-                    truncated = True
+                    spawned = True
+                    stdout_parts.append(result.stdout or "")
+                    stderr_parts.append(result.stderr or "")
+                    last_code = result.returncode
+                    unhandled_failure = unhandled_failure or last_code != 0
+                    ran.append({"command": step.text, "return_code": last_code})
+
+                duration = time.monotonic() - start_time
+
+                # Checkpoint where the cd's that actually ran left off, so the
+                # NEXT separate call starts there. The pre-flight walk applies
+                # every cd on the line unconditionally, so it is not the answer
+                # here: a cd that `&&`/`||` skipped, or that a timeout cut the
+                # line before, never happened and must not move the session.
+                # A one-shot working_directory never touches it either way.
+                if session_scoped:
+                    self.shell_session.set_cwd(ran_cwd)
+
+                # One line is one model step, so it costs one slot however many
+                # commands it chains. Skipped under bypass, where the limit is
+                # lifted and the deque _check_rate_limit creates never existed.
+                if not bypass:
+                    self._record_command_execution()
+
+                stdout = "".join(stdout_parts)
+                stderr = "".join(stderr_parts)
+                max_output = MAX_OUTPUT_CHARS
+
+                from gaia.agents.base.artifacts import retain_excerpt
+
+                truncated = len(stdout) > max_output or len(stderr) > max_output
+                stdout = retain_excerpt(self, stdout, max_output)
+                stderr = retain_excerpt(self, stderr, max_output)
 
                 # Debug logging
                 if hasattr(self, "debug") and self.debug:
                     logger.info(
-                        f"Command completed in {duration:.2f}s with return code {result.returncode}"
+                        f"Command completed in {duration:.2f}s with return code {last_code}"
                     )
 
-                return {
+                outcome = {
                     "status": "success",
                     "command": command,
                     "stdout": stdout,
                     "stderr": stderr,
-                    "return_code": result.returncode,
-                    "has_errors": result.returncode != 0,
+                    "return_code": last_code,
+                    "has_errors": last_code != 0 or unhandled_failure,
                     "duration_seconds": duration,
                     "timeout": timeout,
+                    "timeout_class": timeout_class,
                     "cwd": cwd,
                     "output_truncated": truncated,
+                    "steps": ran,
                 }
+                if waited:
+                    outcome["waited_seconds"] = round(waited, 1)
+                check = check_from_command(
+                    command,
+                    [seg for st in steps for seg in st.segments],
+                    last_code,
+                    "".join(stdout_parts),
+                    "".join(stderr_parts),
+                )
+                return attach_check(outcome, check)
 
+            except FileNotFoundError as exc:
+                # The executable is not there, so nothing started. Said out loud
+                # or the footer reports a missing pytest as a failing one.
+                logger.error(f"Command executable not found: {exc}")
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(exc),
+                    "has_errors": True,
+                }
             except Exception as exc:
                 logger.error(f"Error executing shell command: {exc}")
                 return {"status": "error", "error": str(exc), "has_errors": True}
+
+        @tool(
+            atomic=True,
+            # Outlast the longest wait the tool itself permits, so the agent
+            # loop never abandons a wait that is still inside its deadline.
+            timeout=WAIT_MAX_TIMEOUT + 60,
+        )
+        def wait_for_condition(
+            command: str,
+            working_directory: Optional[str] = None,
+            timeout: int = WAIT_DEFAULT_TIMEOUT,
+            poll_interval: int = WAIT_DEFAULT_POLL_INTERVAL,
+        ) -> Dict[str, Any]:
+            """Wait until a shell command succeeds instead of sleeping and re-checking: give it a command that exits 0 once the thing is ready, and it polls every 5s, giving up at 120s by default, 600s at most.
+
+            One agent step covers the whole wait — don't re-poll in the loop.
+
+            Args:
+                command: The predicate — exits 0 once the condition holds,
+                    non-zero until then. Same allowlist as run_shell_command.
+                working_directory: Directory to run the predicate in
+                timeout: Give up after this many seconds (max 600)
+                poll_interval: Seconds between checks (5-60)
+
+            Returns:
+                'condition_met', the probe count, and the last probe's output.
+                Deadline expiry is an error, not a quiet False.
+            """
+            try:
+                timeout = int(timeout)
+                poll_interval = int(poll_interval)
+            except (TypeError, ValueError):
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"timeout and poll_interval must be whole seconds, got "
+                        f"timeout={timeout!r}, poll_interval={poll_interval!r}."
+                    ),
+                    "has_errors": True,
+                }
+
+            if not 0 < timeout <= WAIT_MAX_TIMEOUT:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"timeout must be between 1 and {WAIT_MAX_TIMEOUT} seconds, "
+                        f"got {timeout}. A longer wait than {WAIT_MAX_TIMEOUT}s is the "
+                        f"agent hanging, not waiting — report progress to the user and "
+                        f"wait again if the condition is still worth waiting for."
+                    ),
+                    "has_errors": True,
+                }
+            if not WAIT_MIN_POLL_INTERVAL <= poll_interval <= WAIT_MAX_POLL_INTERVAL:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"poll_interval must be between {WAIT_MIN_POLL_INTERVAL} and "
+                        f"{WAIT_MAX_POLL_INTERVAL} seconds, got {poll_interval}. The "
+                        f"floor keeps a wait from hammering the machine with probes."
+                    ),
+                    "has_errors": True,
+                }
+
+            # The wait is charged as one command up front; its probes are then
+            # exempt (see _check_rate_limit) rather than each tripping the limit.
+            allowed, reason, wait_time = self._check_rate_limit()
+            if not allowed:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
+                    "has_errors": True,
+                    "rate_limited": True,
+                    "wait_time_seconds": wait_time,
+                }
+            self._record_command_execution()
+
+            start = time.monotonic()
+            deadline = start + timeout
+            polls = 0
+            last: Dict[str, Any] = {}
+
+            def _cancelled(probes: int) -> Dict[str, Any]:
+                """The one shape a stopped wait returns, wherever Stop landed.
+
+                ``executed: False`` is claimed only when no probe ever reached a
+                process — a Stop that landed before the first spawn. Once one
+                has run, saying the predicate never executed is the same false
+                statement as calling an unrun check passed (#3677). Reaching a
+                second probe proves the first one ran; a single probe says so
+                itself.
+                """
+                ran = probes > 1 or bool(last.get(EXECUTED_KEY, True))
+                result = {
+                    "status": "error",
+                    "error": (
+                        f"Wait for '{command}' was stopped after {probes} "
+                        f"check(s); the condition was never met."
+                    ),
+                    "condition_met": False,
+                    "cancelled": True,
+                    "command": command,
+                    "polls": probes,
+                    "timeout": timeout,
+                    "elapsed_seconds": time.monotonic() - start,
+                    "has_errors": True,
+                }
+                return result if ran else {**NOT_EXECUTED, **result}
+
+            while True:
+                remaining = deadline - time.monotonic()
+                probe_timeout = max(1, min(int(remaining), WAIT_PROBE_TIMEOUT))
+                self._shell_polling = True
+                try:
+                    last = run_shell_command(command, working_directory, probe_timeout)
+                finally:
+                    self._shell_polling = False
+                polls += 1
+
+                # Stop landed while the probe itself was running.
+                if last.get("cancelled"):
+                    return _cancelled(polls)
+
+                # No return_code means the predicate never ran — refused by the
+                # guardrails, bad working directory, unparseable. Polling a
+                # command that cannot run just burns the deadline, so stop now
+                # and hand back the reason it was refused.
+                if "return_code" not in last and not last.get("timed_out"):
+                    return {
+                        **last,
+                        "condition_met": False,
+                        "command": command,
+                        "polls": polls,
+                        "hint": (
+                            "The predicate itself could not run, so the wait stopped "
+                            "immediately. Fix the command above, then wait again."
+                        ),
+                    }
+
+                if last.get("return_code") == 0:
+                    elapsed = time.monotonic() - start
+                    return {
+                        "status": "success",
+                        "condition_met": True,
+                        "command": command,
+                        "elapsed_seconds": elapsed,
+                        "polls": polls,
+                        "poll_interval_seconds": poll_interval,
+                        "timeout": timeout,
+                        "stdout": last.get("stdout", ""),
+                        "stderr": last.get("stderr", ""),
+                        "cwd": last.get("cwd"),
+                        "has_errors": False,
+                    }
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if self._sleep_unless_cancelled(min(poll_interval, remaining)):
+                    return _cancelled(polls)
+
+            elapsed = time.monotonic() - start
+            return {
+                "status": "error",
+                "error": (
+                    f"Condition '{command}' was still not true {elapsed:.0f}s later "
+                    f"(deadline {timeout}s, checked {polls} time(s) every "
+                    f"{poll_interval}s). Last exit code: {last.get('return_code')}."
+                ),
+                "condition_met": False,
+                "timed_out": True,
+                "has_errors": True,
+                "command": command,
+                "elapsed_seconds": elapsed,
+                "polls": polls,
+                "poll_interval_seconds": poll_interval,
+                "timeout": timeout,
+                "last_return_code": last.get("return_code"),
+                "stdout": last.get("stdout", ""),
+                "stderr": last.get("stderr", ""),
+                "cwd": last.get("cwd"),
+                "hint": (
+                    "The last check's output is above — read it before waiting again. "
+                    "Whatever you are waiting for is slow, stuck, or never going to "
+                    f"happen; tell the user which. A single wait is capped at "
+                    f"{WAIT_MAX_TIMEOUT}s."
+                ),
+            }
+
+        @tool(
+            atomic=True,
+            display_label="Shell state",
+        )
+        def get_shell_state() -> Dict[str, Any]:
+            """Report the shell session's current working directory.
+
+            Shell commands share one session, so a `cd` from an earlier command
+            (when it was not a one-shot `working_directory` override) is still
+            in effect. Call this to read that directory instead of guessing it.
+            """
+            return {
+                "status": "success",
+                "cwd": self.shell_session.cwd,
+                "has_errors": False,
+            }
+
+        @tool(
+            atomic=True,
+            display_label="Reset shell",
+        )
+        def reset_shell_session() -> Dict[str, Any]:
+            """Return the shell session to the directory it started in.
+
+            Use this when the session is in the wrong directory, or as a clean
+            slate at the start of an unrelated task.
+            """
+            session = self.reset_shell_session()
+            return {
+                "status": "success",
+                "message": "Shell session reset.",
+                "cwd": session.cwd,
+                "has_errors": False,
+            }

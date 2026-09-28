@@ -112,17 +112,29 @@ def _load_api_key() -> Optional[str]:
     module doesn't pull in ``keyring``; if ``keyring`` isn't installed at all
     (it lives in the ``[ui]`` extras), the connector can't have been configured,
     so we treat that as "not configured" rather than crashing.
+
+    A CONFIGURED connector the calling agent has no grant for is a different
+    thing entirely and raises ``AuthRequiredError`` naming the missing scope —
+    the user has to grant it, and quietly downgrading to DuckDuckGo would hide
+    that. Outside an agent turn (``gaia knowledge``) there is no identity to
+    check and the key resolves as before.
     """
     try:
+        from gaia.connectors import current_agent_id
         from gaia.connectors.handler import get_credential_sync
         from gaia.connectors.mcp_server import is_mcp_server_configured
+        from gaia.connectors.spec import MCP_SERVER_SCOPES
     except ImportError as e:
         log.info("Connector subsystem unavailable (%s); using DuckDuckGo.", e)
         return None
 
     if not is_mcp_server_configured(_CONNECTOR_ID):
         return None
-    cred = get_credential_sync(_CONNECTOR_ID)
+    cred = get_credential_sync(
+        _CONNECTOR_ID,
+        agent_id=current_agent_id(),
+        required_scopes=list(MCP_SERVER_SCOPES),
+    )
     return cred["env"][_API_KEY_ENV]
 
 
@@ -134,15 +146,21 @@ async def _load_api_key_async() -> Optional[str]:
     async client uses this so its constructor never blocks the loop.
     """
     try:
+        from gaia.connectors import current_agent_id
         from gaia.connectors.handler import get_credential
         from gaia.connectors.mcp_server import is_mcp_server_configured
+        from gaia.connectors.spec import MCP_SERVER_SCOPES
     except ImportError as e:
         log.info("Connector subsystem unavailable (%s); using DuckDuckGo.", e)
         return None
 
     if not is_mcp_server_configured(_CONNECTOR_ID):
         return None
-    cred = await get_credential(_CONNECTOR_ID)
+    cred = await get_credential(
+        _CONNECTOR_ID,
+        agent_id=current_agent_id(),
+        required_scopes=list(MCP_SERVER_SCOPES),
+    )
     return cred["env"][_API_KEY_ENV]
 
 

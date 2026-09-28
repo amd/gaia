@@ -40,7 +40,7 @@ def _make_session(model=_DB_DEFAULT, agent_type="bot"):
 
 def _make_db(custom_model=None):
     db = MagicMock()
-    db.get_messages.return_value = []
+    db.get_recent_messages.return_value = []
     db.get_setting.return_value = custom_model
     db.list_documents.return_value = []
     db.update_session.return_value = None
@@ -66,6 +66,10 @@ def _make_registry(resolve_model_return=None, setdefault_model="SetdefaultChose-
         fake = MagicMock()
         fake.model_id = kwargs.get("model_id", setdefault_model)
         fake.process_query.return_value = "ok"
+        fake.device = None
+        fake.system_prompt = "Test prompt"
+        fake._openai_tools = []
+        fake.chat.config.max_tokens = 8192
         fake.conversation_history = []
         fake.indexed_files = set()
         return fake
@@ -315,7 +319,7 @@ class TestDynamicToolsContractShape:
     @staticmethod
     def _db_with_settings(settings: dict):
         db = MagicMock()
-        db.get_messages.return_value = []
+        db.get_recent_messages.return_value = []
         db.list_documents.return_value = []
         db.update_session.return_value = None
         db.get_session.return_value = {}

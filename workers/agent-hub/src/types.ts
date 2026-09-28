@@ -397,6 +397,13 @@ export interface IndexEntry {
   /** Aggregate eval score (0–100) parsed from the latest version's scorecard front matter; absent when none was published or parseable. */
   eval_score?: number;
   /**
+   * The agent version the scorecard was actually MEASURED at (`agent.version`
+   * in its front matter, #2965) — often behind `latest_version`, since the
+   * scorecard is only regenerated when a fresh eval runs, not on every
+   * release. Absent when no scorecard was published or it's unparseable.
+   */
+  eval_score_version?: string;
+  /**
    * Whole-package download: a single zip (all platform binaries + client + docs)
    * plus its file listing. Present only when a `package_files` manifest was
    * published for the latest version.

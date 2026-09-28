@@ -22,6 +22,7 @@ import asyncio
 import logging
 import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
+import sys
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -34,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.config import UnsafeGaiaHomeError
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
 # Tests use @patch("gaia.ui.server._get_chat_response") etc., so we must
@@ -66,11 +68,13 @@ from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
+from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
 from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
 from .utils import sanitize_static_path as _sanitize_static_path
+from .utils import uploads_dir
 from .utils import validate_file_path as _validate_file_path  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -210,7 +214,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage startup/shutdown lifecycle for background services."""
+        # Eval provider opt-in (GAIA_EVAL_AGENT_PROVIDER): validate at startup
+        # so a bad value fails in seconds, not minutes into an eval run.
+        from gaia.ui._chat_helpers import _eval_provider_kwargs
         from gaia.ui.dispatch import DispatchQueue
+
+        _eval_provider_kwargs()
 
         # ── Boot-time initialization via DispatchQueue ──────────────────
         # Replaces the previous fire-and-forget asyncio.create_task() calls
@@ -267,10 +276,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             at module level, which calls LemonadeManager.ensure_ready() and can
             trigger a model switch.
             """
-            # pylint: disable=unused-import
-            import sys
-
-            import faiss  # noqa: F401
+            import faiss  # noqa: F401  # pylint: disable=unused-import
 
             # sentence-transformers is NOT pre-imported: RAG embeds via Lemonade,
             # and the memory cross-encoder reranker imports it lazily with graceful
@@ -314,7 +320,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             from gaia.ui._chat_helpers import model_load_lock
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-            _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
@@ -545,7 +551,14 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS - allow local origins and tunnel URLs for mobile access
+    # CORS - first-party dev origins only.
+    #
+    # No tunnel origin is listed: the mobile flow serves the SPA *from*
+    # the tunnel, so those requests are same-origin and CORS never
+    # applies. A wildcard over a shared self-service namespace
+    # (*.ngrok-free.app, *.use.devtunnels.ms) would hand every tenant of
+    # those namespaces an approved preflight -- including for the
+    # X-Gaia-UI header the CSRF guard depends on.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -556,7 +569,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             "http://localhost:5173",
             "http://127.0.0.1:5173",
         ],
-        allow_origin_regex=r"https://[a-zA-Z0-9-]+\.(ngrok-free\.app|use\.devtunnels\.ms)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -566,6 +578,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # the ngrok tunnel is active.  Must be added *after* CORSMiddleware so
     # that CORS preflight (OPTIONS) responses are handled first.
     app.add_middleware(TunnelAuthMiddleware)
+
+    # Host / Origin / X-Gaia-UI guard. Added last so it is the OUTERMOST
+    # middleware: it runs before tunnel auth (which passes everything
+    # through while the tunnel is off) and its rejections carry no CORS
+    # headers, so a cross-site page cannot read why it failed.
+    app.add_middleware(UIRequestGuardMiddleware)
 
     # Store shared state on app.state so routers can access via Depends
     app.state.db = db
@@ -646,7 +664,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
-    _uploads_dir = Path.home() / ".gaia" / "chat" / "uploads"
+    _uploads_dir = uploads_dir()
     _uploads_dir.mkdir(parents=True, exist_ok=True)
     app.mount(
         "/api/files/uploads",
@@ -889,7 +907,13 @@ def main():
 
     log_level = "debug" if args.debug else "info"
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
-    server_app = create_app(webui_dist=args.ui_dist)
+    try:
+        server_app = create_app(webui_dist=args.ui_dist)
+    except UnsafeGaiaHomeError as exc:
+        # A misconfigured GAIA_HOME is the user's to fix, so print the remedy
+        # rather than a traceback. 64 is EX_USAGE, as gaia uninstall uses.
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(64) from exc
     uvicorn.run(
         server_app,
         host=args.host,
@@ -915,7 +939,5 @@ if __name__ == "__main__":
     # gaia.ui.server.  Register it under its canonical name so that
     # sys.modules["gaia.ui.server"] lookups (used by router modules for
     # test-patchable function resolution) succeed.
-    import sys as _sys
-
-    _sys.modules.setdefault("gaia.ui.server", _sys.modules[__name__])
+    sys.modules.setdefault("gaia.ui.server", sys.modules[__name__])
     main()

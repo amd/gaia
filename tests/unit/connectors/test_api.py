@@ -54,7 +54,7 @@ def seeded(google_provider):
         provider="google",
         account_email="alice@example.com",
         refresh_token="seed-rt",
-        scopes=["gmail.readonly"],
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         client_id_hash=google_provider.client_id_hash,
     )
     return google_provider
@@ -71,10 +71,12 @@ class TestGetAccessTokenAgentResolution:
     @respx.mock
     async def test_explicit_agent_id_kwarg_used_directly(self, seeded):
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.readonly"]
+        )
         token = await get_access_token(
             provider="google",
-            scopes=["gmail.readonly"],
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
             agent_id="builtin:chat",
         )
         assert token == "ACCESS-1"
@@ -82,9 +84,14 @@ class TestGetAccessTokenAgentResolution:
     @respx.mock
     async def test_agent_id_resolved_from_contextvar(self, seeded):
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.readonly"]
+        )
         with _agent_context("builtin:chat"):
-            token = await get_access_token(provider="google", scopes=["gmail.readonly"])
+            token = await get_access_token(
+                provider="google",
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            )
         assert token == "ACCESS-1"
 
     @respx.mock
@@ -94,7 +101,9 @@ class TestGetAccessTokenAgentResolution:
         # it's documented and tested.
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
         token = await get_access_token(
-            provider="google", scopes=["gmail.readonly"], agent_id=None
+            provider="google",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            agent_id=None,
         )
         assert token == "ACCESS-1"
 
@@ -106,7 +115,7 @@ class TestGrantEnforcement:
         with pytest.raises(AuthRequiredError) as exc:
             await get_access_token(
                 provider="google",
-                scopes=["gmail.readonly"],
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                 agent_id="builtin:chat",
             )
         assert exc.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
@@ -117,11 +126,13 @@ class TestGrantEnforcement:
     async def test_partial_grant_raises_agent_not_granted(self, seeded):
         # Agent granted only readonly; tool requests send too.
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.readonly"]
+        )
         with pytest.raises(AuthRequiredError) as exc:
             await get_access_token(
                 provider="google",
-                scopes=["gmail.send"],
+                scopes=["https://www.googleapis.com/auth/gmail.send"],
                 agent_id="builtin:chat",
             )
         assert exc.value.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
@@ -135,37 +146,47 @@ class TestScopeCoverage:
             provider="google",
             account_email="a@example.com",
             refresh_token="rt",
-            scopes=["gmail.readonly"],
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
             client_id_hash=google_provider.client_id_hash,
         )
         # Agent IS granted gmail.send, but the OAuth connection is not.
-        grant_agent("google", "builtin:chat", ["gmail.send"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.send"]
+        )
 
         respx.post("https://oauth2.googleapis.com/token").mock(return_value=_ok_token())
         with pytest.raises(AuthRequiredError) as exc:
             await get_access_token(
                 provider="google",
-                scopes=["gmail.send"],
+                scopes=["https://www.googleapis.com/auth/gmail.send"],
                 agent_id="builtin:chat",
             )
         assert exc.value.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES
-        assert "gmail.send" in exc.value.missing_scopes
+        assert "https://www.googleapis.com/auth/gmail.send" in exc.value.missing_scopes
         # #2730 D0/AC-9a: the remedy command must be the connection's real
         # current scopes UNIONED with what's missing — never just the
         # missing subset (--scopes replaces rather than adds) and never a
         # <scope> placeholder.
-        assert set(exc.value.full_scopes) == {"gmail.readonly", "gmail.send"}
+        assert set(exc.value.full_scopes) == {
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+        }
         assert "<scope" not in str(exc.value)
 
 
 class TestPublicSurface:
     def test_grant_round_trip_via_public_api(self, google_provider):
-        grant_agent("google", "builtin:chat", ["gmail.readonly"])
+        # Full scope URLs: grant_agent enforces google's catalog ceiling
+        # (#915), so the short "https://www.googleapis.com/auth/gmail.readonly" shorthand is not grantable.
+        scope = "https://www.googleapis.com/auth/gmail.readonly"
+        grant_agent("google", "builtin:chat", [scope])
         listing = list_agent_grants("google")
-        assert listing["builtin:chat"] == ["gmail.readonly"]
+        assert listing["builtin:chat"] == [scope]
 
     def test_revoke_agent_grant_via_public_api(self, google_provider):
-        grant_agent("google", "builtin:chat", ["s"])
+        grant_agent(
+            "google", "builtin:chat", ["https://www.googleapis.com/auth/gmail.send"]
+        )
         revoke_agent_grant("google", "builtin:chat")
         assert list_agent_grants("google") == {}
 
@@ -178,9 +199,63 @@ class TestPublicSurface:
         assert "refresh_token" not in google_row
         assert google_row["account_email"] == "alice@example.com"
 
+    @respx.mock
     def test_revoke_connection_via_public_api(self, seeded):
-        revoke_connection("google")
+        revoke_route = respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(200)
+        )
+        result = revoke_connection("google")
         assert list_connections() == []
+        # #2591: the public API must actually call Google's revoke endpoint,
+        # not just clear the local keyring entry.
+        assert revoke_route.called
+        assert result == {
+            "revoke_supported": True,
+            "revoked_remotely": True,
+            "revoke_error": None,
+        }
+
+    @respx.mock
+    def test_revoke_connection_reports_remote_failure_honestly(self, seeded):
+        # #2591: a failed provider-side revoke must never be reported as a
+        # full success — the connection is still cleared locally, but the
+        # caller must be told the remote grant may still be live.
+        respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(500, text="server error")
+        )
+        result = revoke_connection("google")
+        assert list_connections() == []
+        assert result["revoke_supported"] is True
+        assert result["revoked_remotely"] is False
+        assert result["revoke_error"]
+
+    @respx.mock
+    def test_revoke_connection_skips_remote_revoke_for_forwarded(self, google_provider):
+        # #2591 review's critical finding: a connection forwarded by a host
+        # app (import_forwarded_connection) shares that app's OAuth grant.
+        # revoke_connection must clear GAIA's local copy but MUST NOT call
+        # Google's revoke endpoint — doing so would sign the host app
+        # itself out of the user's account, recoverable only by the user
+        # re-consenting through that other app.
+        revoke_route = respx.post("https://oauth2.googleapis.com/revoke").mock(
+            return_value=httpx.Response(200)
+        )
+        save_connection(
+            provider="google",
+            account_email="alice@example.com",
+            refresh_token="host-app-rt",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            client_id_hash=google_provider.client_id_hash,
+            forwarded=True,
+        )
+        result = revoke_connection("google")
+        # Local state is still cleared — disconnect intent is honored.
+        assert list_connections() == []
+        # But the provider was never called.
+        assert not revoke_route.called
+        assert result["revoke_supported"] is False
+        assert result["revoked_remotely"] is False
+        assert "forwarded" in result["revoke_error"]
 
     def test_microsoft_connection_visible_to_generic_api(self, monkeypatch, tmp_path):
         # Root-cause fix (#1603): a stored Microsoft connection with no google
@@ -198,7 +273,7 @@ class TestPublicSurface:
             provider="microsoft",
             account_email="user@outlook.com",
             refresh_token="ms-rt",
-            scopes=["Mail.ReadWrite"],
+            scopes=["https://graph.microsoft.com/Mail.ReadWrite"],
             client_id_hash=ms.client_id_hash,
         )
 
@@ -221,7 +296,7 @@ class TestPublicSurface:
             provider="microsoft",
             account_email="user@outlook.com",
             refresh_token="ms-rt",
-            scopes=["Mail.ReadWrite"],
+            scopes=["https://graph.microsoft.com/Mail.ReadWrite"],
             client_id_hash=ms.client_id_hash,
         )
         providers = {row["provider"] for row in list_connections()}
@@ -244,7 +319,7 @@ class TestTenantMismatchThreading:
             provider="microsoft",
             account_email="user@outlook.com",
             refresh_token="ms-rt",
-            scopes=["Mail.ReadWrite"],
+            scopes=["https://graph.microsoft.com/Mail.ReadWrite"],
             client_id_hash=ms.client_id_hash,
             tenant=tenant,
         )
@@ -255,9 +330,16 @@ class TestTenantMismatchThreading:
             monkeypatch, tmp_path, "organizations"
         )
         with _agent_context("installed:email"):
-            grant_agent("microsoft", "installed:email", ["Mail.ReadWrite"])
+            grant_agent(
+                "microsoft",
+                "installed:email",
+                ["https://graph.microsoft.com/Mail.ReadWrite"],
+            )
             with pytest.raises(AuthRequiredError) as exc:
-                await get_access_token(provider="microsoft", scopes=["Mail.ReadWrite"])
+                await get_access_token(
+                    provider="microsoft",
+                    scopes=["https://graph.microsoft.com/Mail.ReadWrite"],
+                )
         assert exc.value.reason is AuthRequiredError.Reason.TENANT_MISMATCH
 
     def test_authorize_access_itself_raises_eagerly(self, monkeypatch, tmp_path):
@@ -273,7 +355,7 @@ class TestTenantMismatchThreading:
         with pytest.raises(AuthRequiredError) as exc:
             _authorize_access(
                 provider="microsoft",
-                scopes=["Mail.ReadWrite"],
+                scopes=["https://graph.microsoft.com/Mail.ReadWrite"],
                 agent_id=None,
                 account_email="default",
             )

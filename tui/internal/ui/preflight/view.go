@@ -166,6 +166,9 @@ func (m Model) footer(w int) string {
 	if fix := m.focusedFix(); fix != FixNone && !m.Busy() {
 		keys = append(keys, [2]string{"f", fix.Label()})
 	}
+	if m.cfg.AgentID == "gaia" && !m.Busy() {
+		keys = append(keys, [2]string{"p", "AI provider"})
+	}
 	keys = append(keys, [2]string{"r", "re-check"})
 	keys = append(keys, [2]string{"d", "details"})
 	// `enter` is offered whenever pressing it would actually do something:

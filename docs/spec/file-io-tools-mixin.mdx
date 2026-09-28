@@ -27,13 +27,79 @@ FileIOToolsMixin provides comprehensive file I/O operations with intelligent fil
 - Generic file operations without validation
 - Security through path validation
 
+### Concurrent file changes
+
+`write_file`, `write_python_file`, `write_markdown_file`, `update_gaia_md`,
+`replace_function`, `edit_file`, and `edit_python_file` refuse a file whose
+mtime or size changed since the agent read it, and refuse one it has never read
+at all. Rejection leaves the file and its backups untouched. A successful write
+records the file again, so the agent's own change does not block its next edit.
+Creating a new file needs no read.
+
+See [Read before edit](#read-before-edit) for what counts as a read, the exact
+refusal shape, and how the rule interacts with confirmation prompts.
+
+### No backup, no write
+
+Every tool that modifies an existing file backs it up first. If that backup
+cannot be made — a full disk, an unwritable cache directory — `write_file`,
+`write_python_file`, `write_markdown_file`, `replace_function`, `edit_file`, and
+`edit_python_file` refuse the change and leave the file untouched. The error
+names the cause and the directory to free or make writable.
+
+The refusal carries `executed: False`, because nothing ran. A tool result
+without it is treated as having executed and failed, which is how a one-off
+full disk would otherwise be stored as a durable "writing this file is broken"
+lesson and replayed into later prompts long after the disk was freed.
+
+---
+
+## Host Agent Contract
+
+`FileIOToolsMixin` is a mixin, not a base class — it reads `self.path_validator`
+off the host, which nothing sets for it. A class mixing it in must set
+`self.path_validator` to a `PathValidator` instance before `_register_tools()`
+runs.
+
+| Attribute | Type | Notes |
+|---|---|---|
+| `self.path_validator` | `PathValidator` | Enforces the allowlist/blocklist/size limits every write and read tool checks. |
+
+`ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
+sets it before calling `super().__init__()`, because `_register_tools()` runs
+inside that call. The Builder's scaffolding (`gaia.agents.builder.template`)
+does the same for any generated agent that includes the `file_io` tool.
+
+A host that forgets is told what's missing instead of the tool silently
+skipping its own check, or crashing with a bare, unhelpful `AttributeError`:
+
+- **Write-capable tools** (`write_python_file`, `edit_python_file`,
+  `write_markdown_file`, `write_file`, `edit_file`, `replace_function`)
+  report the missing setup and don't touch the target file, instead of
+  writing without running the check that would otherwise have applied.
+- **The remaining tools** (`read_file`, `search_code`, `generate_diff`,
+  `update_gaia_md`) raise a `MissingHostAttributeError` naming the host
+  class, the missing attribute, and this section.
+
+<Warning>
+  `update_gaia_md` writes `GAIA.md` despite sitting in the second group. It
+  checks the allowlist and nothing else — no blocked-directory check, size
+  limit, backup, or audit entry, all of which the six write-capable tools
+  apply. Tracked in [#4006](https://github.com/amd/gaia/issues/4006).
+</Warning>
+
+`self.path_validator` has no legitimate `None` value — unlike `RAGToolsMixin`'s
+`self.rag`, there is no "intentionally disabled" state here.
+
 ---
 
 ## Tool Specifications
 
 ### 1. read_file
 
-Read any file and intelligently analyze based on file type.
+Read any file and intelligently analyze based on file type. A successful read,
+a paged one included, is what lets the write and edit tools change the file —
+see [Read before edit](#read-before-edit).
 
 **Parameters:**
 - `file_path` (str, required): Path to the file to read
@@ -89,9 +155,15 @@ Edit a Python file by replacing content with validation.
 
 **Parameters:**
 - `file_path` (str, required): Path to the file
-- `old_content` (str, required): Content to find and replace
+- `old_content` (str, required): Content to find and replace. Must match
+  exactly one location — see [Edit semantics](#edit-semantics).
 - `new_content` (str, required): New content to insert
-- `backup` (bool, optional): Create backup (default: True)
+- `backup` (bool, optional): Create backup (default: True). The copy goes to
+  `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
+  beside the file, with or without a `PathValidator`. The backups directory is
+  owner-only, and the five newest backups of each file are kept. If the
+  backup cannot be made (a full disk, an unwritable cache), the edit is
+  refused and the file is left unchanged.
 - `dry_run` (bool, optional): Only simulate (default: False)
 
 **Returns:**
@@ -181,7 +253,8 @@ Edit any file by replacing content without validation.
 
 **Parameters:**
 - `file_path` (str, required): Path to file
-- `old_content` (str, required): Exact content to find and replace
+- `old_content` (str, required): Exact content to find and replace. Must match
+  exactly one location — see [Edit semantics](#edit-semantics).
 - `new_content` (str, required): New content to replace with
 - `project_dir` (str, optional): Project root for resolving paths
 
@@ -197,15 +270,100 @@ Edit any file by replacing content without validation.
 }
 ```
 
+### Read before edit
+
+Every tool here that changes an existing file — `edit_file`, `edit_python_file`,
+`replace_function`, and `write_file`, `write_python_file`, `write_markdown_file`
+and `update_gaia_md` when the target already exists — refuses the file unless
+the agent has read it. An edit made from a grep snippet or a guess is made
+blind; this makes the agent look at what it is about to change.
+
+- **What counts as a read:** `read_file` returning the file, a paged
+  (`offset`/`limit`) read included. So does the agent creating the file, or
+  editing it successfully. A shell `cat` does not.
+- **`filesystem_tools`' `read_file` unlocks only its text views** — the plain,
+  paged, CSV and JSON ones. Its PDF, image, binary and `metadata` views show a
+  summary rather than the file, so they unlock nothing. The `file_io` and
+  `file_search` reads have no such split.
+- **Changed on disk since the read** — a different mtime or size, a bare
+  `touch` included — is refused too, until the agent reads the file again.
+- **Creating a file needs no read.**
+- **The record belongs to one agent instance** and lasts as long as it does.
+  Another agent's reads unlock nothing.
+
+The refusal happens before anything is written, and before the confirmation
+prompt, so nobody is asked to approve an edit that is already going to be
+refused. It applies with confirmations bypassed too, because it is about the
+edit being correct, not permitted. A path outside the allowed paths gets the
+usual scope refusal instead, so the check never reveals whether a file exists
+there.
+
+**Refusal shape:**
+```python
+{
+    "status": "error",
+    "error": str,           # names the file and says to read it
+    "error_type": "not_read" | "changed_since_read",
+    "file_path": str,
+    "executed": False       # stopped before it ran
+}
+```
+
+### Edit semantics
+
+`edit_file` and `edit_python_file` share one match-and-replace implementation,
+[`gaia.agents.tools.file_edit`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_edit.py),
+so the two cannot drift apart. Two rules:
+
+**`old_content` must match exactly one location.** Matching several is an
+error, not a first-match replacement — picking one edits a region the caller
+never named while reporting success, and the resulting diff looks plausible.
+Extend `old_content` with surrounding lines until it is unique.
+
+**A rejection carries the file's current content**, so the retry does not need
+a separate read.
+
+**Rejection shape:**
+```python
+{
+    "status": "error",
+    "error": str,           # names the cause and the fix
+    "match_count": int,     # 0 = not found, >1 = ambiguous
+    "match_lines": [int],   # ambiguous only
+    "matches": [dict],      # ambiguous only: line + surrounding context
+    "current_content": str, # excerpt around the target region
+    "current_content_start_line": int,
+    "current_content_end_line": int,
+    "current_content_total_lines": int
+}
+```
+
+The C++ `file_edit` tool (`cpp/src/file_tools.cpp`) follows both rules and
+rejects a stale write, but still lets an agent edit a file it never read.
+
 ### 8. replace_function
 
-Replace a specific function in a Python file.
+Replace one function definition in a Python file. The replaced span is the
+definition and its decorators, taken from the AST — nothing between it and the
+next definition is touched.
+
+The edit is refused unless the function still resolves at the same qualified name
+afterwards, so a de-indented replacement cannot silently relocate a method to
+module level, and the tool never renames or moves a definition.
 
 **Parameters:**
 - `file_path` (str, required): Path to Python file
-- `function_name` (str, required): Name of function to replace
-- `new_implementation` (str, required): New function implementation
-- `backup` (bool, optional): Create backup (default: True)
+- `function_name` (str, required): A module-level function name, or a qualified
+  `Class.method` / `outer.inner` name. A bare name that exists only as a method
+  is an error naming the qualified alternatives, not a guess.
+- `new_implementation` (str, required): The complete new definition, including
+  any decorator it should keep and the indentation of the definition it replaces
+- `backup` (bool, optional): Create backup (default: True). The copy goes to
+  `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
+  beside the file, with or without a `PathValidator`. The backups directory is
+  owner-only, and the five newest backups of each file are kept. If the
+  backup cannot be made (a full disk, an unwritable cache), the edit is
+  refused and the file is left unchanged.
 
 **Returns:**
 ```python
@@ -360,32 +518,53 @@ result = agent.edit_file(
 
 ### Path Validation
 
-All file operations check paths against allowed directories:
+The allowlist answers "is this in scope". It does **not** answer "is this safe",
+so reads and writes each add a denylist on top of it.
+
+Reads go through `validate_read`, which refuses secrets that happen to sit inside
+an allowed directory — `.env`, `id_rsa`, `credentials.json`, `.netrc`, `.pem`/`.key`
+files, and anything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`:
 
 ```python
-if not self.path_validator.is_path_allowed(file_path):
-    return {
-        "status": "error",
-        "error": f"Access denied: {file_path} is not in allowed paths"
-    }
+is_allowed, reason = self.path_validator.validate_read(file_path)
+if not is_allowed:
+    return {"status": "error", "error": reason}
 ```
 
+Writes go through `validate_write`, which additionally refuses
+[`BLOCKED_DIRECTORIES`](#allowed-paths-configuration) and any file that executes
+on its own — shell rc files, PowerShell profiles, `~/.config/autostart/*`,
+systemd user units, `LaunchAgents`, and anything inside a repo's `.git/`.
+
+`search_in_files` applies the read denylist per file as it walks, so a directory
+grep cannot return what `read_file` would have refused.
+
 ### Allowed Paths Configuration
+
+An allowed path may be a **directory or a single file**. Prefer files when the
+scope is derived from something a user attached — granting the folder a document
+happens to sit in grants everything else in it too.
 
 ```python
 # Typically configured when the agent is constructed
 path_validator = PathValidator(
     allowed_paths=[
         "/path/to/workspace",
-        "/path/to/project"
-    ],
-    blocked_paths=[
-        "/etc",
-        "/var",
-        "~/.ssh"
+        "/path/to/report.pdf",
     ]
 )
 ```
+
+`allowed_paths` has three distinct states:
+
+| Value | Meaning |
+|-------|---------|
+| `None` | No scope supplied — defaults to the CWD plus paths the interactive CLI persisted via `[a]lways` |
+| `[...]` | Exactly this scope. Machine-global persisted grants are **not** unioned in, and `[a]lways` during this session does not write to them |
+| `[]` | A scope of nothing — every path is refused, rather than silently widening to the CWD |
+
+The blocked directories (`/etc`, `~/.ssh`, `~/.gaia`, Windows system dirs, …) are
+computed at import time in `gaia.security`; they are not a constructor argument.
 
 ---
 
@@ -433,7 +612,9 @@ from gaia.agents.base.tools import tool
 
 ## Testing Requirements
 
-**File:** `tests/agents/code/test_file_io.py`
+Coverage for this mixin lives under `tests/unit/` (e.g.
+`test_file_editing_prompt.py`, `test_file_access_scope.py`,
+`test_file_write_guardrails.py`), not a single dedicated file:
 
 ```python
 def test_read_python_file(tmp_path):

@@ -26,10 +26,10 @@ without notice. Only the names re-exported here are stable.
 
 from __future__ import annotations
 
-# Read-only contextvar accessor — public by design; agents and tools may
+# Read-only contextvar accessors — public by design; agents and tools may
 # read the current agent identity but cannot set it. The setter
 # (``_agent_context``) is intentionally NOT re-exported.
-from gaia.connectors.context import current_agent_id
+from gaia.connectors.context import agent_runtime_active, current_agent_id
 
 # Error types — caught by router/CLI/SDK consumers.
 from gaia.connectors.errors import (
@@ -85,6 +85,7 @@ _API_NAMES: frozenset[str] = frozenset(
         "poll_device_flow",
         "revoke_agent_grant",
         "revoke_connection",
+        "revoke_connection_async",
         "start_authorization",
         "start_device_flow",
         "tripwire_check",
@@ -125,6 +126,7 @@ __all__ = [
     # because they are provided lazily via __getattr__ and Pylint's static
     # analysis would flag them as undefined-all-variable (E0603).
     "current_agent_id",
+    "agent_runtime_active",
     # Event-emitter Protocol (router wires its impl)
     "EventEmitter",
     "set_emitter",

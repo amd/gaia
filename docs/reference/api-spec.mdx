@@ -325,14 +325,17 @@ All errors follow OpenAI's error format.
 </Warning>
 
 **Current Implementation:**
-- ❌ No authentication
+- ⚠️ Optional API key: set `GAIA_API_KEY` and every chat completion must send
+  `Authorization: Bearer <key>` (401 otherwise). Unset, loopback callers are
+  allowed with a startup warning, and binding beyond loopback is refused. See
+  [Authentication](/sdk/infrastructure/api-server#authentication).
+- ✅ CORS limited to loopback origins; add others with `GAIA_API_CORS_ORIGINS`.
+  Browser requests from any other origin are refused with 403.
 - ❌ No rate limiting
-- ✅ CORS enabled (all origins)
 
 **For Production Deployment:**
-- Implement API key authentication
+- Set `GAIA_API_KEY`
 - Add rate limiting middleware
-- Configure CORS restrictions
 - Use HTTPS with valid certificates
 
 ---

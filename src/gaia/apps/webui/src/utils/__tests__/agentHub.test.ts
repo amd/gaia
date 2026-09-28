@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
     formatBytes,
     isInstalling,
-    compatLevel,
+    displayVersion,
     mergeCatalogStatus,
     splitAvailable,
     countUpdates,
@@ -59,20 +59,60 @@ describe('isInstalling', () => {
     });
 });
 
-describe('compatLevel', () => {
-    it('defaults to compatible when no verdict', () => {
-        expect(compatLevel(agent({ id: 'x' }))).toBe('compatible');
+describe('displayVersion', () => {
+    // Fixtures use only the fields GET /api/agents/catalog actually sends.
+    it('prefers the installed version straight off the wire', () => {
+        expect(displayVersion(agent({
+            id: 'email', installed_version: '0.6.0', latest_version: '0.7.0',
+        }))).toBe('0.6.0');
     });
 
-    it('reads the catalog verdict', () => {
-        expect(compatLevel(agent({ id: 'x', compatibility: { level: 'incompatible' } }))).toBe('incompatible');
+    it('falls back to the merged display version', () => {
+        expect(displayVersion(agent({ id: 'email', version: '0.6.0' }))).toBe('0.6.0');
+    });
+
+    it('falls back to the offered version for a not-yet-installed agent', () => {
+        expect(displayVersion(agent({ id: 'email', latest_version: '0.6.0' }))).toBe('0.6.0');
+    });
+
+    it('is undefined when the catalog sent no version at all', () => {
+        expect(displayVersion(agent({ id: 'local-only' }))).toBeUndefined();
+    });
+
+    // Registry / entry-point / editable dev installs report no
+    // installed_version (gaia.hub.catalog). Badging those with the catalog's
+    // latest_version would show a version the user does not actually have.
+    it('shows no version for an installed agent whose version is unknown', () => {
+        expect(displayVersion(agent({
+            id: 'dev-install', status: 'installed', latest_version: '0.7.0',
+        }))).toBeUndefined();
+    });
+
+    it('shows no version for an update_available agent whose version is unknown', () => {
+        expect(displayVersion(agent({
+            id: 'dev-install', status: 'update_available', latest_version: '0.7.0',
+        }))).toBeUndefined();
+    });
+
+    it('still offers latest_version on a not-yet-installed catalog entry', () => {
+        expect(displayVersion(agent({
+            id: 'new', status: 'available', latest_version: '0.7.0',
+        }))).toBe('0.7.0');
     });
 });
 
 describe('mergeCatalogStatus', () => {
+    // Regression test for #2970/#3784: GET /api/agents/catalog (see
+    // gaia.hub.catalog.merge_with_registry) never sends a "version" key — only
+    // "installed_version" and "latest_version". These fixtures deliberately
+    // mirror that real wire shape (no `.version` set on the catalog side) so
+    // this test fails loudly if the mapping is ever dropped again, instead of
+    // passing against a hand-built shape the backend never produces.
     it('marks installed agents with a newer catalog version as update_available', () => {
         const installed = [agent({ id: 'chat', version: '0.1.0' })];
-        const catalog = [agent({ id: 'chat', status: 'update_available', version: '0.1.0', latest_version: '0.2.0' })];
+        const catalog = [
+            agent({ id: 'chat', status: 'update_available', installed_version: '0.1.0', latest_version: '0.2.0' }),
+        ];
         const merged = mergeCatalogStatus(installed, catalog);
         expect(merged[0].status).toBe('update_available');
         expect(merged[0].latest_version).toBe('0.2.0');
@@ -80,10 +120,24 @@ describe('mergeCatalogStatus', () => {
 
     it('marks matched-version agents as installed', () => {
         const installed = [agent({ id: 'chat' })];
-        const catalog = [agent({ id: 'chat', status: 'installed', version: '0.2.0', latest_version: '0.2.0' })];
+        const catalog = [
+            agent({ id: 'chat', status: 'installed', installed_version: '0.2.0', latest_version: '0.2.0' }),
+        ];
         const merged = mergeCatalogStatus(installed, catalog);
         expect(merged[0].status).toBe('installed');
         expect(merged[0].version).toBe('0.2.0');
+    });
+
+    it('wires the real installed_version wire field onto the display version', () => {
+        // No `.version` anywhere in this fixture — only the real wire fields.
+        // If mergeCatalogStatus ever goes back to reading `cat.version`, this
+        // assertion fails instead of silently passing.
+        const installed = [agent({ id: 'email' })];
+        const catalog = [
+            agent({ id: 'email', status: 'installed', installed_version: '0.6.0', latest_version: '0.6.0' }),
+        ];
+        const merged = mergeCatalogStatus(installed, catalog);
+        expect(merged[0].version).toBe('0.6.0');
     });
 
     it('leaves agents absent from the catalog untouched', () => {

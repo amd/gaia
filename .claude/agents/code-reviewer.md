@@ -21,7 +21,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 - Architectural / cross-layer reviews → `architecture-reviewer`
 - SDK API design reviews → `sdk-architect`
-- Security-sensitive findings → **flag privately to `@kovtcharov-amd`** per `CLAUDE.md` security protocol; do not post exploit details publicly. This is the *reactive* (per-PR) counterpart to the *proactive* weekly audit (`.github/workflows/claude-weekly-audit.yml`); both use the same rule — security detail goes to the run log / a private channel, never a public issue.
+- Security-sensitive findings → **flag privately to `@kovtcharov-amd`** per `CLAUDE.md` security protocol; do not post exploit details publicly. This is the *reactive* (per-PR) counterpart to the *proactive* weekly audit (`.github/workflows/claude-nightly-audit.yml`); both use the same rule — security detail goes to the run log / a private channel, never a public issue.
 - Test-suite completeness reviews → `test-engineer`
 
 ## Review workflow

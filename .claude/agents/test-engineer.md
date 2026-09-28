@@ -37,7 +37,7 @@ tests/
 ├── electron/             # Jest tests for Electron apps
 ├── fixtures/             # Shared data/PDFs/etc.
 └── test_*.py             # Top-level feature tests (test_sdk.py, test_api.py, test_rag.py, test_chat_agent.py, …)
-                          #   (code-agent tests live in the hub package: hub/agents/code/python/tests/)
+                          #   (hub-agent tests live in their own package: hub/agents/<id>/python/tests/)
 ```
 
 ## Canonical fixtures

@@ -24,6 +24,10 @@
       {
         "command": "gaia.manage",
         "title": "GAIA: Manage API Server"
+      },
+      {
+        "command": "gaia.setApiKey",
+        "title": "GAIA: Set API Key"
       }
     ]
   },
@@ -32,7 +36,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "test": "node ./out/test/runTest.js",
+    "test": "node --test test/*.test.cjs",
     "package": "vsce package",
     "publish": "vsce publish"
   },

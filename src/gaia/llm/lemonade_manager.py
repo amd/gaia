@@ -7,7 +7,6 @@ Provides singleton initialization shared by CLI and SDK flows.
 Operates at the LLM level (not agent level) for flexibility with community agents.
 """
 
-import os
 import sys
 import threading
 import time
@@ -15,13 +14,30 @@ from enum import Enum
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 from gaia.llm.lemonade_client import (
+    CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
     LemonadeClient,
     LemonadeClientError,
+    LemonadeStatus,
+    configured_lemonade_url,
+    is_llm_model_entry,
+    resolve_ctx_size,
+    resolve_effective_ctx_size,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
+
+
+def _is_cloud_entry(entry: dict) -> bool:
+    """True when a ``loaded_models`` entry is gateway-routed rather than local.
+
+    Checked on both the recipe and the labels because the two Lemonade
+    surfaces that populate this list do not agree on which one they set.
+    """
+    return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
+
 
 # Allow-list mapping from detected device -> Lemonade recipe
 # TODO: Confirm full recipe vocabulary with the Lemonade specialist
@@ -238,9 +254,6 @@ class HardwareRequirementError(Exception):
 # ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
 # in ``gaia.llm.lemonade_client``.
 __all__ = ["DEFAULT_CONTEXT_SIZE", "LemonadeManager", "MessageType"]
-# Lemonade v10.1.0+ default port (was 8000 in v10.0.x). PR #865 bumped the
-# minimum supported version, so 13305 is the right default everywhere.
-DEFAULT_LEMONADE_URL = "http://localhost:13305"
 
 
 class MessageType(Enum):
@@ -274,7 +287,20 @@ class LemonadeManager:
     _initialized = False
     _base_url: Optional[str] = None
     _context_size: int = 0
+    # The loaded model's trained-context ceiling (``max_context_window``),
+    # once discovered (#2992). Lets the recheck fast-path recognize
+    # "already at the model's real max" and stop retrying a reload that
+    # would just hit the same wall every time.
+    _context_ceiling: Optional[int] = None
+    # The model id ``_context_ceiling`` was measured against. A long-lived
+    # process (e.g. ``gaia.ui.server``) can switch to a roomier model after
+    # caching a small model's ceiling — without this, the fast path would
+    # keep reporting the old model's cap forever (#2992).
+    _context_ceiling_model: Optional[str] = None
     _lock = threading.Lock()
+    # Set while an idle-server preload runs with ``_lock`` released; other
+    # callers wait on it instead of sending a second /load.
+    _preload_in_flight: Optional[threading.Event] = None
     _log = get_logger(__name__)
 
     # Rate-limit the per-turn context re-check that fires when context_size==0.
@@ -295,6 +321,35 @@ class LemonadeManager:
         """Check if Lemonade server is installed."""
         client = LemonadeClient(verbose=False)
         return client.get_lemonade_version() is not None
+
+    @classmethod
+    def start_embedded_if_stopped(cls) -> bool:
+        """Have the daemon start GAIA's embedded Lemonade when it is stopped.
+
+        Does nothing when ``LEMONADE_BASE_URL`` names another server, when GAIA's
+        own server is not installed (``gaia init`` installs it), or when it is
+        already running -- so only a machine that set GAIA up ever talks to the
+        daemon here.
+
+        Returns:
+            True if the daemon started the server.
+
+        Raises:
+            DaemonError: The daemon could not start it; the message names why.
+        """
+        if configured_lemonade_url():
+            return False
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+        embedded = EmbeddedLemonade()
+        if not embedded.is_installed() or embedded.status().running:
+            return False
+        from gaia.daemon.client import ensure_lemonade
+
+        cls._log.info(
+            "GAIA's Lemonade Server is stopped; asking the daemon to start it"
+        )
+        return bool(ensure_lemonade().get("started"))
 
     @classmethod
     def print_server_error(cls, min_context_size: int = DEFAULT_CONTEXT_SIZE):
@@ -342,7 +397,7 @@ class LemonadeManager:
                     file=sys.stderr,
                 )
                 print("", file=sys.stderr)
-            base_url = os.getenv("LEMONADE_BASE_URL", f"{DEFAULT_LEMONADE_URL}/api/v1")
+            base_url = resolve_lemonade_base_url()
             print(
                 f"The server should be accessible at {base_url}/health",
                 file=sys.stderr,
@@ -386,6 +441,68 @@ class LemonadeManager:
             file=sys.stderr,
         )
         print("", file=sys.stderr)
+
+    @classmethod
+    def print_ceiling_message(cls, current_size: int, requested_size: int):
+        """Print the message for a model already at its trained-context ceiling.
+
+        Distinct from :meth:`print_context_message` (#2992): that message's
+        remediation — stop the server, restart with a bigger ctx_size — does
+        nothing here, because the shortfall is a property of the *model*
+        (its GGUF's ``n_ctx_train``), not the server configuration. No
+        restart, flag, or `gaia init` raises a model's trained context.
+        """
+        print("", file=sys.stderr)
+        print(
+            f"⚠️  This model's trained context is {current_size} tokens "
+            f"(requested {requested_size}); that is the maximum available "
+            f"regardless of configuration.",
+            file=sys.stderr,
+        )
+        print(
+            "   Use a model with a larger trained context if you need more.",
+            file=sys.stderr,
+        )
+        print("", file=sys.stderr)
+
+    @classmethod
+    def warn_no_llm_loaded(
+        cls,
+        loaded_models: list,
+        base_url: str,
+        min_context_size: int,
+        quiet: bool = False,
+    ) -> None:
+        """Report a Lemonade server that has no LLM loaded.
+
+        A server running only an embedding/image/transcription model reports no
+        context size at all, which must never be read as "context is fine".
+
+        Args:
+            loaded_models: ``LemonadeStatus.loaded_models`` entries.
+            base_url: Server URL to name in the message.
+            min_context_size: Context size GAIA requires.
+            quiet: Log only; skip the stderr message.
+        """
+        others = ", ".join(
+            m.get("model_name") or m.get("id") or "?" for m in loaded_models
+        )
+        loaded_desc = f"only non-LLM models loaded: {others}" if others else "no models"
+        message = (
+            f"Lemonade Server at {base_url} has no LLM loaded ({loaded_desc}), so "
+            f"GAIA cannot confirm the {min_context_size}-token context it needs and "
+            f"has no model to answer with.\n"
+            f"To fix: run `gaia init` to install and load {DEFAULT_MODEL_NAME}, or "
+            f"load an LLM yourself "
+            f"({describe_start_hint(min_context_size).instruction}).\n"
+            f"See the Lemonade server log for details "
+            f"(typical path: ~/.cache/lemonade/server.log)."
+        )
+        cls._log.warning(message)
+        if not quiet:
+            print("", file=sys.stderr)
+            print(f"⚠️  {message}", file=sys.stderr)
+            print("", file=sys.stderr)
 
     @classmethod
     def _validate_device_requirement(cls, client, required_min_device, device):
@@ -510,7 +627,7 @@ class LemonadeManager:
     @classmethod
     def ensure_ready(
         cls,
-        min_context_size: int = DEFAULT_CONTEXT_SIZE,
+        min_context_size: Optional[int] = None,
         quiet: bool = True,
         base_url: Optional[str] = None,
         host: Optional[str] = None,
@@ -526,7 +643,7 @@ class LemonadeManager:
         unset config value) means "the default floor", never a crash.
 
         Args:
-            min_context_size: Minimum context size required (default: 32768).
+            min_context_size: Minimum context size; unset resolves the configured device and override.
             quiet: Suppress output (default: True for SDK, set False for CLI)
             base_url: Full base URL (e.g., "http://localhost:13305/api/v1").
                      If provided, host and port are parsed from it.
@@ -556,7 +673,7 @@ class LemonadeManager:
         # Callers thread config values through verbatim — an unset (None)
         # floor means the default, never a TypeError at the ctx comparison.
         if min_context_size is None:
-            min_context_size = DEFAULT_CONTEXT_SIZE
+            min_context_size = resolve_ctx_size(device=device)
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
@@ -571,6 +688,16 @@ class LemonadeManager:
             if port is None:
                 port = parsed.port
         with cls._lock:
+            # A preload in flight will change what the server reports, so wait
+            # for it and read the state it leaves behind.
+            while cls._preload_in_flight is not None:
+                preload_done = cls._preload_in_flight
+                cls._lock.release()
+                try:
+                    preload_done.wait()
+                finally:
+                    cls._lock.acquire()
+
             # Validate the requested device first — runs on every call (not just
             # first init) so a UI device switch after the manager is warm is
             # still checked. Memoised per tier, so this is at most one probe per
@@ -582,7 +709,29 @@ class LemonadeManager:
 
             # If already initialized, just verify context size
             if cls._initialized:
-                if cls._context_size >= min_context_size:
+                # Already at the model's real ceiling (#2992): further
+                # reload attempts would just hit the same wall, so accept
+                # the capped reality instead of retrying every recheck.
+                at_known_ceiling = (
+                    cls._context_ceiling is not None
+                    and cls._context_size >= cls._context_ceiling
+                )
+                # A cached ceiling is only trustworthy for the model it was
+                # measured against — a long-lived process (e.g.
+                # gaia.ui.server) can switch to a roomier model between
+                # calls (#2992). There's no live model id here without a
+                # status call, so require one periodically rather than
+                # trusting the cached ceiling forever; the fall-through
+                # below is itself rate-limited by _RECHECK_INTERVAL, so this
+                # doesn't add an unconditional get_status() to every call.
+                now = time.monotonic()
+                ceiling_needs_reconfirm = (
+                    at_known_ceiling
+                    and now - cls._last_recheck_time >= cls._RECHECK_INTERVAL
+                )
+                if cls._context_size >= min_context_size or (
+                    at_known_ceiling and not ceiling_needs_reconfirm
+                ):
                     cls._log.debug(
                         "Lemonade already initialized with sufficient context"
                     )
@@ -593,7 +742,6 @@ class LemonadeManager:
                     # every single chat message triggers 2 HTTP calls (/health +
                     # /models) just to re-validate context size, adding 40-200 ms of
                     # blocking overhead even for trivial replies like "cool".
-                    now = time.monotonic()
                     if now - cls._last_recheck_time < cls._RECHECK_INTERVAL:
                         cls._log.debug(
                             "Skipping context re-check (%.1fs ago, interval=%.1fs)",
@@ -619,36 +767,75 @@ class LemonadeManager:
                                 verbose=not quiet,
                             )
                         status = client.get_status()
-                        # Update cached context size
-                        cls._context_size = status.context_size or 0
-
-                        # Only warn if LLM models are loaded AND context is insufficient
-                        # SD models don't have context size, only LLM models do
-                        llm_models_loaded = any(
-                            "image" not in model.get("labels", [])
-                            for model in status.loaded_models
+                        # Defensive normalisation: some Lemonade versions can
+                        # return `loaded_models: null`, which would crash the
+                        # `any(...)` and `_find_loaded_llm_id` calls below.
+                        if status.loaded_models is None:
+                            status.loaded_models = []
+                        # Update cached context size — clamped against the
+                        # loaded model's real ceiling, never a bare echo of
+                        # what the server reports back (#2992).
+                        _raw_ctx = status.context_size or 0
+                        cls._context_size = (
+                            cls._honest_context_size(client, status, _raw_ctx)
+                            if _raw_ctx
+                            else 0
                         )
 
-                        # If models are loaded but the server doesn't report context_size
-                        # (returns 0 — common with Lemonade 10+), treat it as sufficient
-                        # so the fast path is taken on subsequent calls.
-                        if cls._context_size == 0 and llm_models_loaded:
+                        # Only LLM entries carry a meaningful ctx_size; an
+                        # embedding, image, or transcription model says nothing
+                        # about chat capacity — and neither does a gateway
+                        # model, which is resident nowhere local.
+                        llm_models_loaded = any(
+                            is_llm_model_entry(model) and not _is_cloud_entry(model)
+                            for model in (status.loaded_models or [])
+                        )
+
+                        if not llm_models_loaded:
+                            # No chat model at all — say so rather than letting
+                            # ctx_size==0 read as "context is fine".
+                            cls.warn_no_llm_loaded(
+                                status.loaded_models or [],
+                                client.base_url,
+                                min_context_size,
+                                quiet,
+                            )
+                        elif cls._context_size == 0:
+                            # LLM loaded but the server doesn't report ctx_size
+                            # (Lemonade 10+): treat it as sufficient so the fast
+                            # path is taken on subsequent calls.
                             cls._log.debug(
                                 "LLM models loaded but context_size not reported by server; "
                                 "assuming context is sufficient (min=%d)",
                                 min_context_size,
                             )
                             cls._context_size = min_context_size
+                        elif cls._context_size < min_context_size:
+                            # Same wasted-reload trap as the init block below
+                            # (#2992): already at the model's known ceiling,
+                            # so a reload would just redo the identical load.
+                            if (
+                                cls._context_ceiling is not None
+                                and cls._context_size >= cls._context_ceiling
+                            ):
+                                cls._report_capped_at_ceiling(min_context_size, quiet)
+                                return True
 
-                        # Only warn if context_size is non-zero (0 means no model loaded or still loading)
-                        if (
-                            cls._context_size > 0
-                            and cls._context_size < min_context_size
-                            and llm_models_loaded
-                        ):
                             if cls._try_reload_with_ctx(
                                 client, status, min_context_size, quiet, cls._lock
                             ):
+                                return True
+                            # The reload can have failed because it just
+                            # discovered the model's real ceiling (#2992) —
+                            # in that case "restart with a bigger ctx_size"
+                            # is wrong advice, so report the cap instead.
+                            if (
+                                cls._context_ceiling is not None
+                                and cls._context_size >= cls._context_ceiling
+                            ):
+                                cls._report_capped_at_ceiling(
+                                    min_context_size, quiet, already_announced=True
+                                )
                                 return True
                             cls._log.warning(
                                 f"Lemonade running with {cls._context_size} tokens, "
@@ -667,6 +854,20 @@ class LemonadeManager:
                     return True
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
+
+            if base_url is None and host is None and port is None:
+                from gaia.daemon.errors import DaemonError
+
+                try:
+                    cls.start_embedded_if_stopped()
+                except DaemonError as e:
+                    cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
+                    if not quiet:
+                        print(
+                            f"❌ Could not start GAIA's Lemonade Server: {e}",
+                            file=sys.stderr,
+                        )
+                    return False
 
             try:
                 # When base_url is provided, pass it directly to LemonadeClient
@@ -690,10 +891,18 @@ class LemonadeManager:
                 status = client.get_status()
 
                 if not status.running:
-                    cls._log.warning("Lemonade server is not running")
-                    if not quiet:
-                        cls.print_server_error(min_context_size)
-                    return False
+                    # GAIA manages Lemonade — a stopped server is something to
+                    # start, not something to tell the user about.
+                    if not cls._autostart(client, min_context_size, quiet, cls._lock):
+                        return False
+                    status = client.get_status()
+                    if not status.running:
+                        cls._log.warning(
+                            "Lemonade server still not running after auto-start"
+                        )
+                        if not quiet:
+                            cls.print_server_error(min_context_size)
+                        return False
 
                 # Defensive normalisation: some Lemonade versions can return
                 # `loaded_models: null` in their JSON, which would crash the
@@ -702,20 +911,23 @@ class LemonadeManager:
                     status.loaded_models = []
 
                 # Snapshot context size — we may overwrite it below if the
-                # preload helper successfully seeds the server.
-                context_size_value = status.context_size or 0
+                # preload helper successfully seeds the server. Clamped
+                # against the loaded model's real ceiling (#2992): a model
+                # already resident from an earlier process life can report a
+                # ctx_size echo that Lemonade silently capped lower, and that
+                # must not be trusted just because it's already "sufficient".
+                _raw_ctx = status.context_size or 0
+                context_size_value = (
+                    cls._honest_context_size(client, status, _raw_ctx)
+                    if _raw_ctx
+                    else 0
+                )
 
                 # Detect LLM-loaded state once for the branch decisions below.
                 llm_models_loaded = any(
-                    # Health-format ``type=="llm"`` is the precise check;
-                    # the label fallback covers any legacy code path that
-                    # populated ``status.loaded_models`` from the catalog.
-                    model.get("type") == "llm"
-                    or (
-                        model.get("type") is None
-                        and "image" not in model.get("labels", [])
-                        and "embeddings" not in model.get("labels", [])
-                    )
+                    # A gateway model is resident nowhere local, so it must
+                    # not count as "an LLM is loaded" for context-size decisions.
+                    is_llm_model_entry(model) and not _is_cloud_entry(model)
                     for model in status.loaded_models
                 )
 
@@ -726,18 +938,19 @@ class LemonadeManager:
                 # (issue #839).  We run this BEFORE setting cls._initialized
                 # so a failed preload leaves the singleton retryable instead
                 # of poisoned with (initialized=True, ctx=0).
+                just_preloaded = False
                 if context_size_value == 0 and not llm_models_loaded:
-                    cls._try_preload_with_ctx(
+                    context_size_value, status = cls._try_preload_with_ctx(
                         client, min_context_size, quiet, cls._lock
                     )
-                    context_size_value = min_context_size
-                    # Re-fetch model list so the small-ctx reload branch below
-                    # sees the freshly-loaded model.
-                    status = client.get_status()
+                    just_preloaded = True
+                    # ``_try_preload_with_ctx`` already re-fetched status
+                    # post-load (needed for its own honest reporting) — reuse
+                    # it here instead of a second get_status() round trip.
                     if status.loaded_models is None:
                         status.loaded_models = []
                     llm_models_loaded = any(
-                        "image" not in model.get("labels", [])
+                        is_llm_model_entry(model) and not _is_cloud_entry(model)
                         for model in status.loaded_models
                     )
 
@@ -758,18 +971,60 @@ class LemonadeManager:
                 # ``_maybe_validate_device`` (runs on every call, before this
                 # init block), so there is nothing to re-check here.
 
+                # A just-completed preload already clamped ctx_size to the
+                # model's real ceiling and reported honestly (#2992) —
+                # retrying via ``_try_reload_with_ctx`` below would just hit
+                # the same ceiling again with a wasted reload.
+                if (
+                    just_preloaded
+                    and cls._context_size > 0
+                    and cls._context_size < min_context_size
+                    and llm_models_loaded
+                ):
+                    cls._report_capped_at_ceiling(min_context_size, quiet)
+                    return True
+
                 # Only warn if:
                 # 1. Context size is non-zero (0 means no model loaded or model still loading)
                 # 2. Context size is less than required
                 # 3. LLM models are loaded (SD models don't have context size)
                 if (
-                    cls._context_size > 0
+                    not just_preloaded
+                    and cls._context_size > 0
                     and cls._context_size < min_context_size
                     and llm_models_loaded
                 ):
+                    # ``_honest_context_size`` above already resolved this
+                    # model's ceiling against the same ``status`` a reload
+                    # attempt would use — if we're already sitting at it, a
+                    # reload can't raise the effective context. Skip the
+                    # (real, blocking) model reload entirely rather than
+                    # doing one that is guaranteed to reproduce the exact
+                    # same result (#2992): every ``gaia <cmd>`` invocation is
+                    # a fresh process, so an unconditional reload here would
+                    # fire on every single command, not just once.
+                    at_known_ceiling = (
+                        cls._context_ceiling is not None
+                        and cls._context_size >= cls._context_ceiling
+                    )
+                    if at_known_ceiling:
+                        cls._report_capped_at_ceiling(min_context_size, quiet)
+                        return True
+
                     if cls._try_reload_with_ctx(
                         client, status, min_context_size, quiet, cls._lock
                     ):
+                        return True
+                    # As above (#2992): a reload that failed because it just
+                    # discovered the model's real ceiling should report the
+                    # cap, not tell the user to restart the server.
+                    if (
+                        cls._context_ceiling is not None
+                        and cls._context_size >= cls._context_ceiling
+                    ):
+                        cls._report_capped_at_ceiling(
+                            min_context_size, quiet, already_announced=True
+                        )
                         return True
                     cls._log.warning(
                         f"Context size {cls._context_size} is less than "
@@ -793,6 +1048,149 @@ class LemonadeManager:
                     cls.print_server_error(min_context_size)
                 return False
 
+    @staticmethod
+    def _find_loaded_llm_id(status: "LemonadeStatus") -> Optional[str]:
+        """The model id of the LLM currently loaded, or None.
+
+        ``type=="llm"`` is the precise check on health-format entries; the
+        label fallback covers legacy code paths that populate
+        ``loaded_models`` from the catalog (which lacks ``type``). Embedding
+        and image models are excluded — reloading/clamping them with an LLM
+        ctx_size makes no sense and (pre-#1030 follow-up) used to pick the
+        wrong model entirely because the embedder can sort before ``Gemma-…``.
+        """
+        llm_models = [
+            m
+            for m in status.loaded_models
+            if m.get("type") == "llm"
+            or (
+                m.get("type") is None
+                and "image" not in m.get("labels", [])
+                and "embeddings" not in m.get("labels", [])
+            )
+        ]
+        if not llm_models:
+            return None
+        return llm_models[0].get("model_name") or llm_models[0].get("id") or None
+
+    @classmethod
+    def _honest_context_size(
+        cls, client: "LemonadeClient", status: "LemonadeStatus", reported_ctx: int
+    ) -> int:
+        """Clamp `reported_ctx` (a `/health` config echo) against the loaded
+        model's real `max_context_window` ceiling, if discoverable (#2992).
+
+        Lemonade can report a model loaded with the ctx_size that was
+        *requested* even when it silently capped the actual window lower —
+        this closes that gap for every code path that reads
+        ``status.context_size`` and is tempted to trust it outright,
+        including the "already sufficient, no reload needed" fast paths that
+        a reload-triggered clamp alone would never reach.
+        """
+        model_id = cls._find_loaded_llm_id(status)
+        if not model_id:
+            return reported_ctx
+        ceiling = client.get_model_max_context_window(model_id, status=status)
+        if ceiling:
+            cls._context_ceiling = ceiling
+            cls._context_ceiling_model = model_id
+        honest_ctx = resolve_effective_ctx_size(reported_ctx, ceiling)
+        if honest_ctx < reported_ctx:
+            cls._log.warning(
+                "%s reports ctx_size=%d, but its trained context ceiling is "
+                "%d tokens; using the real value.",
+                model_id,
+                reported_ctx,
+                ceiling,
+            )
+        return honest_ctx
+
+    @classmethod
+    def _report_capped_at_ceiling(
+        cls,
+        min_context_size: int,
+        quiet: bool,
+        already_announced: bool = False,
+    ) -> None:
+        """Tell the truth once about a model already at its real ceiling.
+
+        Shared by every call site that finds ``cls._context_size`` pinned at
+        ``cls._context_ceiling`` below ``min_context_size`` (#2992) — a
+        reload can't raise a value already at the model's trained-context
+        ceiling, so none of these call sites should attempt one.
+
+        Args:
+            already_announced: True when the caller already printed the
+                ceiling message itself (e.g. ``_try_reload_with_ctx`` on the
+                reload attempt that just discovered the ceiling) — skips the
+                user-facing print to avoid showing it twice, but still logs.
+        """
+        cls._log.warning(
+            f"Lemonade running with {cls._context_size} tokens, capped by "
+            f"the model's trained context (requested {min_context_size})."
+        )
+        if not quiet and not already_announced:
+            cls.print_ceiling_message(cls._context_size, min_context_size)
+
+    @classmethod
+    def _autostart(
+        cls,
+        client: "LemonadeClient",
+        min_context_size: int,
+        quiet: bool,
+        lock: "threading.Lock",
+    ) -> bool:
+        """Start Lemonade Server for a caller who found it down.
+
+        The work belongs to the daemon, which owns the process — this asks it
+        (:func:`gaia.llm.lemonade_service.ensure_lemonade_running`) rather than
+        spawning anything, so a CLI and a UI starting at the same moment cannot
+        produce two servers.
+
+        Returns True when a server is answering afterwards. Returns False after
+        printing and logging the actionable reason it could not be started —
+        ``ensure_ready``'s contract is a bool, so the failure is surfaced in
+        full rather than raised past callers that cannot handle it.
+
+        Releases *lock* for the duration: a cold start takes tens of seconds and
+        must not stall status pollers or concurrent ``ensure_ready`` callers.
+        Mirrors the lock discipline of :meth:`_try_preload_with_ctx`.
+        """
+        from gaia.llm.lemonade_service import (
+            LemonadeStartError,
+            ensure_lemonade_running,
+        )
+
+        cls._log.info(
+            "Lemonade server is not running at %s — starting it", client.base_url
+        )
+        if not quiet:
+            print(
+                "\n⏳ Lemonade Server is not running — starting it...",
+                flush=True,
+            )
+
+        lock.release()
+        try:
+            result = ensure_lemonade_running(
+                ctx_size=min_context_size, base_url=client.base_url
+            )
+        except LemonadeStartError as e:
+            cls._log.error("Could not start the local model server: %s", e)
+            if not quiet:
+                print(f"\n❌ {e}", file=sys.stderr, flush=True)
+            return False
+        finally:
+            lock.acquire()
+
+        if not quiet and result.started:
+            print(
+                f"✅ Lemonade Server is up at {result.base_url} "
+                f"({result.waited_seconds:.0f}s).",
+                flush=True,
+            )
+        return True
+
     @classmethod
     def _try_preload_with_ctx(
         cls,
@@ -800,7 +1198,7 @@ class LemonadeManager:
         min_context_size: int,
         quiet: bool,
         lock: "threading.Lock",
-    ) -> None:
+    ) -> Tuple[int, "LemonadeStatus"]:
         """Load the default LLM with the required ctx_size on an idle server.
 
         Closes the gap left by `_try_reload_with_ctx`, which only handles the
@@ -812,8 +1210,18 @@ class LemonadeManager:
         Releases `lock` for the duration of the blocking `load_model` call —
         important because `auto_download=True` means a first-run user pays a
         full model-download window (potentially minutes), and we must not
-        block other threads (status pollers, parallel `ensure_ready` callers)
-        for that long.  Mirrors the lock discipline of `_try_reload_with_ctx`.
+        block other threads (status pollers) for that long.  Parallel
+        `ensure_ready` callers wait on `_preload_in_flight` rather than
+        sending a second /load.  Mirrors the lock discipline of
+        `_try_reload_with_ctx`.
+
+        Returns:
+            A ``(ctx_size, status)`` pair: the ctx_size actually in force
+            after the load (#2992) — `min_context_size` clamped to the
+            model's Lemonade-reported `max_context_window` ceiling when
+            known, so callers cache and report the real window instead of
+            echoing back the request — and the post-load status, so the
+            caller doesn't pay for a second `get_status()` round trip.
 
         Raises:
             LemonadeClientError: if `load_model` fails. Carries an actionable
@@ -821,14 +1229,39 @@ class LemonadeManager:
                 command) so the user can recover manually if the auto-preload
                 cannot.
         """
+        # Proactive clamp (#2992): a model already downloaded from a prior
+        # run has its ceiling in the catalog before we ever call /load, so
+        # request the real value up front instead of relying on Lemonade's
+        # own internal cap (which loads fine but keeps echoing the
+        # over-large request back in status).
+        ceiling = client.get_model_max_context_window(DEFAULT_MODEL_NAME)
+        requested_ctx = resolve_effective_ctx_size(min_context_size, ceiling)
+        if ceiling is None:
+            cls._log.warning(
+                "Lemonade reported no max_context_window for %s (metadata "
+                "not yet resolved); proceeding with ctx_size=%d — the "
+                "effective window may be capped lower once loaded.",
+                DEFAULT_MODEL_NAME,
+                min_context_size,
+            )
+        elif requested_ctx < min_context_size:
+            cls._log.warning(
+                "%s's trained context caps at %d tokens; requested %d, "
+                "loading at %d instead.",
+                DEFAULT_MODEL_NAME,
+                ceiling,
+                min_context_size,
+                requested_ctx,
+            )
+
         cls._log.info(
             "Preloading '%s' with ctx_size=%d on idle Lemonade server",
             DEFAULT_MODEL_NAME,
-            min_context_size,
+            requested_ctx,
         )
         if not quiet:
             print(
-                f"\n⏳ Loading {DEFAULT_MODEL_NAME} with ctx_size={min_context_size} "
+                f"\n⏳ Loading {DEFAULT_MODEL_NAME} with ctx_size={requested_ctx} "
                 f"tokens. This may take a moment (first run downloads the model)...",
                 flush=True,
             )
@@ -837,33 +1270,60 @@ class LemonadeManager:
         # concurrent callers and status-pollers are not stalled.  The
         # `finally` block re-acquires before any exception propagates back
         # up to the surrounding `with cls._lock:` context manager.
+        preload_done = threading.Event()
+        cls._preload_in_flight = preload_done
         lock.release()
         try:
             client.load_model(
                 DEFAULT_MODEL_NAME,
-                ctx_size=min_context_size,
+                ctx_size=requested_ctx,
                 prompt=False,
                 auto_download=True,
             )
         except Exception as e:
             raise LemonadeClientError(
                 f"Failed to preload Lemonade model {DEFAULT_MODEL_NAME!r} with "
-                f"ctx_size={min_context_size} on idle server at "
+                f"ctx_size={requested_ctx} on idle server at "
                 f"{client.base_url}.\n"
                 f"To recover manually: stop the running server, then restart it "
-                f"({describe_start_hint(min_context_size).instruction}) and "
+                f"({describe_start_hint(requested_ctx).instruction}) and "
                 f"re-run your GAIA command.\n"
                 f"See the Lemonade server log for details "
                 f"(typical path: ~/.cache/lemonade/server.log)."
             ) from e
         finally:
             lock.acquire()
+            cls._preload_in_flight = None
+            preload_done.set()
+
+        # Honest post-load report (#2992): loading resolves the model's
+        # metadata, so a ceiling unknown before download (the common
+        # first-run case) may now be known — re-check rather than trust the
+        # pre-load guess.
+        final_status = client.get_status()
+        final_ceiling = (
+            client.get_model_max_context_window(DEFAULT_MODEL_NAME, status=final_status)
+            or ceiling
+        )
+        effective_ctx = resolve_effective_ctx_size(requested_ctx, final_ceiling)
+        if final_ceiling:
+            cls._context_ceiling = final_ceiling
+            cls._context_ceiling_model = DEFAULT_MODEL_NAME
 
         if not quiet:
-            print(
-                f"✅ Loaded {DEFAULT_MODEL_NAME} with ctx_size={min_context_size}.",
-                flush=True,
-            )
+            if effective_ctx < min_context_size:
+                print(
+                    f"⚠️  Loaded {DEFAULT_MODEL_NAME} with ctx_size={effective_ctx} "
+                    f"tokens (requested {min_context_size}; the model's trained "
+                    f"context caps it at {effective_ctx}).",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"✅ Loaded {DEFAULT_MODEL_NAME} with ctx_size={effective_ctx}.",
+                    flush=True,
+                )
+        return effective_ctx, final_status
 
     @classmethod
     def _try_reload_with_ctx(
@@ -881,22 +1341,15 @@ class LemonadeManager:
 
         Returns True if reload succeeded and context is now sufficient.
         """
-        # Filter to the LLM(s) actually loaded. ``type=="llm"`` is the
-        # precise check on health-format entries; the label fallback
-        # covers legacy code paths that populate ``loaded_models`` from
-        # the catalog (which lacks ``type``). Embedding and image models
-        # are excluded — reloading them with an LLM ctx_size makes no
-        # sense and (pre-#1030 follow-up) used to load the wrong model
-        # entirely because the embedder can sort before ``Gemma-…``.
+        # Same predicate get_status() uses for context_size — one source of
+        # truth. A gateway-routed model has no local weights and no context to
+        # pin — its window is whatever the gateway serves. Reloading one is a
+        # no-op that reports back the default 4096 and then tells the user to
+        # restart Lemonade over a size it does not control.
         llm_models = [
             m
             for m in status.loaded_models
-            if m.get("type") == "llm"
-            or (
-                m.get("type") is None
-                and "image" not in m.get("labels", [])
-                and "embeddings" not in m.get("labels", [])
-            )
+            if is_llm_model_entry(m) and not _is_cloud_entry(m)
         ]
         if not llm_models:
             return False
@@ -905,13 +1358,37 @@ class LemonadeManager:
         if not model_id:
             return False
 
+        # Proactive clamp (#2992): the model is already loaded, so its
+        # catalog entry (and often ``status`` itself) already carries its
+        # real ceiling — request that instead of relying on Lemonade's
+        # internal cap-and-echo.
+        ceiling = client.get_model_max_context_window(model_id, status=status)
+        requested_ctx = resolve_effective_ctx_size(min_context_size, ceiling)
+        if ceiling is None:
+            cls._log.warning(
+                "Lemonade reported no max_context_window for %s (metadata "
+                "not yet resolved); proceeding with ctx_size=%d — the "
+                "effective window may be capped lower once reloaded.",
+                model_id,
+                min_context_size,
+            )
+        elif requested_ctx < min_context_size:
+            cls._log.warning(
+                "%s's trained context caps at %d tokens; requested %d, "
+                "reloading at %d instead.",
+                model_id,
+                ceiling,
+                min_context_size,
+                requested_ctx,
+            )
+
         cls._log.info(
-            f"Auto-reloading '{model_id}' with ctx_size={min_context_size} "
+            f"Auto-reloading '{model_id}' with ctx_size={requested_ctx} "
             f"(was {cls._context_size})"
         )
         if not quiet:
             print(
-                f"\n⏳ Reloading model with ctx_size={min_context_size} tokens "
+                f"\n⏳ Reloading model with ctx_size={requested_ctx} tokens "
                 f"(was {cls._context_size}). This may take a moment...",
                 flush=True,
             )
@@ -920,39 +1397,65 @@ class LemonadeManager:
         # other threads (e.g. status polling) are not stalled.
         lock.release()
         try:
-            client.load_model(model_id, ctx_size=min_context_size, prompt=False)
-            # Check if the server now reports the new context size.
-            # Some Lemonade versions do not expose ctx_size in their status
-            # (they return 0), and some may not honor the ctx_size parameter
-            # at all (always reporting the default, e.g. 4096).
-            #
-            # Regardless of what the server reports, update cls._context_size
-            # to min_context_size so we don't trigger an infinite reload loop
-            # on every request.  If the reload didn't actually change the
-            # model's context window the agent will still run — responses may
-            # be degraded — but at least the UI won't be stuck in a reload
-            # cycle on every message.
+            client.load_model(model_id, ctx_size=requested_ctx, prompt=False)
+            # Re-check what the server actually has in force. ``context_size``
+            # is a config echo of the request (``recipe_options.ctx_size``),
+            # not a measurement — clamp it against the model's real ceiling
+            # (now resolvable, since loading forces Lemonade to read the
+            # GGUF metadata) so the cached/reported value is honest (#2992).
             new_status = client.get_status()
             reported_ctx = new_status.context_size or 0
-            actual_ctx = (
-                reported_ctx if reported_ctx >= min_context_size else min_context_size
+            new_ceiling = (
+                client.get_model_max_context_window(model_id, status=new_status)
+                or ceiling
             )
-            success = reported_ctx >= min_context_size
+            effective_ctx = resolve_effective_ctx_size(
+                reported_ctx or requested_ctx, new_ceiling
+            )
+            if new_ceiling:
+                cls._context_ceiling = new_ceiling
+                cls._context_ceiling_model = model_id
+            success = effective_ctx >= min_context_size
             if success:
                 cls._log.info(
-                    f"Model reloaded successfully with ctx_size={reported_ctx}"
+                    f"Model reloaded successfully with ctx_size={effective_ctx}"
                 )
                 if not quiet:
-                    print(f"✅ Context size updated to {reported_ctx} tokens.")
+                    print(f"✅ Context size updated to {effective_ctx} tokens.")
+            elif new_ceiling:
+                cls._log.warning(
+                    "ctx_size after reload: effective=%d (need %d), capped by "
+                    "%s's trained context ceiling of %d.",
+                    effective_ctx,
+                    min_context_size,
+                    model_id,
+                    new_ceiling,
+                )
+                if not quiet:
+                    print(
+                        f"⚠️  Context size updated to {effective_ctx} tokens "
+                        f"(requested {min_context_size}; capped by the model's "
+                        f"trained context of {new_ceiling})."
+                    )
             else:
+                # No known ceiling explains the shortfall — an old Lemonade
+                # that doesn't honor/expose ctx_size at all, not a real
+                # per-model cap. Unlike the known-ceiling branch above,
+                # ``_context_ceiling`` stays unset here, so nothing would
+                # stop `ensure_ready` retrying this reload every recheck
+                # interval forever. Preserve the pre-#2992 behaviour: assume
+                # success and cache ``min_context_size`` to break the loop.
                 cls._log.warning(
                     "ctx_size after reload: reported=%d (need %d). "
                     "Assuming reload succeeded to prevent reload loop.",
                     reported_ctx,
                     min_context_size,
                 )
-            # Always update the cached context size to break the reload loop.
-            cls._context_size = actual_ctx
+                effective_ctx = min_context_size
+            # Always update the cached context size to the value determined
+            # above (honest when a real ceiling was found; the legacy
+            # loop-breaking assumption otherwise).
+            cls._context_size = effective_ctx
             return success
         except Exception as e:
             cls._log.warning(f"Auto-reload failed: {e}")
@@ -986,6 +1489,13 @@ class LemonadeManager:
             cls._initialized = False
             cls._base_url = None
             cls._context_size = 0
+            cls._context_ceiling = None
+            cls._context_ceiling_model = None
             cls._last_recheck_time = 0.0
             cls._validated_min_devices = set()
+            # Signal before dropping it: waiters hold their own reference, and
+            # the preload that would have set it is gone.
+            if cls._preload_in_flight is not None:
+                cls._preload_in_flight.set()
+                cls._preload_in_flight = None
             cls._log.debug("LemonadeManager state reset")

@@ -19,8 +19,10 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
+	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -62,6 +64,23 @@ type channelReadyMsg struct{ ch <-chan interface{} }
 // run's own channel does that.
 type cancelRequestFailedMsg struct{ err error }
 
+// queuedSendTimeout bounds how long a follow-up drained from the queue (#2917)
+// may run before this surfaces an actionable nudge. It sits below the SSE
+// client's absolute 300s read-idle watchdog (sse.go's defaultReadTimeout) —
+// a normal local turn takes 60-120s (see
+// TestTheComposerAcceptsTypingWhileTheAgentWorks) — so this fires only once a
+// queued follow-up is clearly running long, while leaving the same Esc/
+// Ctrl+C escape hatch every other turn already has.
+const queuedSendTimeout = 180 * time.Second
+
+// queuedSendStalledMsg fires when a follow-up drained from the queue has been
+// running, as its own turn, for queuedSendTimeout with no terminal signal.
+// Unlike a turn the user just pressed Enter to start and is watching, a
+// queued follow-up fired itself while the user had moved on — a hang here is
+// easy to miss until it has been silent a while, so this names it instead of
+// leaving the spinner to run out the general 300s watchdog with no word.
+type queuedSendStalledMsg struct{ turnSeq int }
+
 // preScanFetchedMsg / preScanFetchFailedMsg / preScanDegradedMsg deliver the
 // result of the on-open inbox pre-scan fetch (#2743, replacing the #2582
 // attention fetch) — a side-channel read, never a chat turn, so it carries
@@ -78,6 +97,9 @@ type preScanDegradedMsg struct{ notice string }
 
 // ToggleHelpMsg signals the root model to toggle help overlay.
 type ToggleHelpMsg struct{}
+
+// OpenGatewayMsg signals the root model to open the AMD LLM gateway screen.
+type OpenGatewayMsg struct{}
 
 var (
 	headerStyle = lipgloss.NewStyle().
@@ -126,6 +148,18 @@ var (
 )
 
 type ChatModel struct {
+	providerPanel *providers.Model
+	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
+	// lists and selects (agents.SelectedMsg's own doc comment); switching to
+	// the picked agent is the root model's job, so a SelectedMsg is left to
+	// propagate past this package rather than handled here.
+	agentsPanel *agents.Model
+	// hubClient feeds agentsPanel — injected by the host rather than built
+	// here, so a test can stub which agents "/agents" sees without a real
+	// daemon. Nil only in a ChatModel nothing ever called WithHubClient on;
+	// the /agents case below refuses with an actionable message instead of
+	// silently doing nothing.
+	hubClient agents.HubAgentLister
 	messages  []Message
 	activity  []ActivityItem
 	streaming bool
@@ -156,6 +190,30 @@ type ChatModel struct {
 	// and the single slot discarded the first two without saying so.
 	queued []string
 
+	// sending holds follow-ups POSTed to the RUNNING turn but not yet
+	// acknowledged, in the order they were sent. A message lives here for one
+	// loopback round-trip and then becomes either a transcript line (delivered)
+	// or a m.queued entry (refused) — never both, and never neither. It exists
+	// so the composer can be emptied the instant Enter is pressed without the
+	// UI claiming a delivery that has not happened yet.
+	sending []string
+
+	// followUpNoted is true once this session has explained what a mid-turn
+	// send actually does. The explanation is worth one line the first time and
+	// is noise on every message after it.
+	followUpNoted bool
+
+	// viewDirty means streamed text has landed since the last render. Token
+	// events set it instead of re-rendering: rebuilding the whole transcript
+	// per token starves the very keystrokes this screen promises to accept
+	// (Bubble Tea runs Update on one goroutine, so a render and a keypress are
+	// the same queue). Flushed by the spinner tick, which runs ten times a
+	// second for the whole turn — see markDirty.
+	viewDirty bool
+	// lastRender is when the viewport content was last rebuilt, used to hold
+	// streaming repaints to renderInterval.
+	lastRender time.Time
+
 	input    textarea.Model
 	viewport viewport.Model
 	spinner  spinner.Model
@@ -165,7 +223,11 @@ type ChatModel struct {
 	cancelFn  context.CancelFunc
 	agentName string
 	agentID   string
-	dev       bool
+	// agentVersion is the synchronous value known at construction time (the
+	// catalog's installed version) — see renderIdentityChip for the live
+	// refinement once the peer's own version has been probed.
+	agentVersion string
+	dev          bool
 
 	width  int
 	height int
@@ -186,25 +248,31 @@ type ChatModel struct {
 	questionViewLines int
 	questionViewWidth int
 
+	// confirmRows is how many rows View() may spend on the pinned confirmation,
+	// set by syncViewportHeight out of the same budget as the transcript. It is
+	// the modal's full height in every normal terminal, and less only when the
+	// screen is too short for both — see the clip in View().
+	confirmRows int
+
 	// confirmation is the pending needs_confirmation modal, if any. Non-nil
 	// means a destructive/external tool call is asking for approval — every
 	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
 	// not "cancel the turn" — see handleKey).
 	confirmation *components.ConfirmationModel
 
-	// bypassPermissions is true while the agent runs every gated tool without
+	// fullAccess is true while the agent runs every gated tool without
 	// asking. OFF on a fresh launch, always, and never restored from anywhere:
 	// the zero value is the safe value, so there is no code path that can turn
 	// it on without someone having asked for it in this session (or passed
-	// --bypass-permissions on this launch).
+	// --full-access on this launch).
 	//
 	// While it is true the UI owes the user an unmissable, unscrollable
-	// statement of that fact — see renderBypassBanner.
-	bypassPermissions bool
-	// bypassArmed is set by /bypass and cleared by the next key. Turning
+	// statement of that fact — see renderFullAccessBanner.
+	fullAccess bool
+	// fullAccessArmed is set by /full-access and cleared by the next key. Turning
 	// autonomy ON is a two-step confirmation; turning it OFF is one key, and
 	// never gated.
-	bypassArmed bool
+	fullAccessArmed bool
 
 	// claudeMode is true while the agent's inference runs on Anthropic's
 	// Claude API instead of the local Lemonade backend (--use-claude). Set
@@ -222,23 +290,32 @@ type ChatModel struct {
 
 	// mouseCaptured is true while the APP holds the mouse, for either of the
 	// two independent reasons documented on overlayOpen (mousecapture.go):
-	// the user turned on wheel scrolling, or an overlay is open and needs
-	// clicks. False by default, so the terminal owns drag-select and the
-	// platform's own copy/paste — see selectmode.go.
+	// the transcript wants the wheel and clicked links, or an overlay is open
+	// and needs clicks — see selectmode.go.
 	mouseCaptured bool
-	// mouseWheelOn is true only while the USER has wheel mode on (Ctrl+T) —
-	// independent of mouseCaptured, which an overlay can also set. This is
-	// what the banner and the Esc "give selection back first" behaviour key
-	// off, so an overlay opening or closing never touches it, and it is not
-	// silently turned off just because an overlay happened to be open when
-	// it was toggled on.
-	mouseWheelOn bool
+	// mouseSelectMode is true only while the USER has handed the mouse back to
+	// the terminal (Ctrl+T) for native drag-select — independent of
+	// mouseCaptured, which an overlay can still set. Zero value false is the
+	// default, so the wheel scrolls and links are clickable out of the box.
+	mouseSelectMode bool
 	// mouseCaptureAllMotion records which mouse-tracking mode is currently
 	// active (All-Motion for an open overlay's hover, Cell-Motion for plain
 	// wheel scrolling) so applyMouseCapture can tell "already captured, but
 	// in the wrong mode" from "no change needed" and re-issue the right
 	// escape sequence instead of assuming the mode never needs to switch.
 	mouseCaptureAllMotion bool
+	// lastClickRow / lastClickAt are the previous left click's screen row and
+	// when it landed — the whole state a double click needs (mouseclick.go).
+	// A row rather than a point: a reader double-clicking a message is aiming
+	// at the message, and demanding the same column would make copying it a
+	// test of mouse steadiness.
+	lastClickRow int
+	lastClickAt  time.Time
+	// msgSpans maps content rows to the message drawn there, recorded by
+	// updateViewport as it lays the transcript out. Double-click-to-copy reads
+	// it; nothing else may, since it is only valid for the layout that
+	// produced it.
+	msgSpans []msgSpan
 
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
@@ -282,22 +359,24 @@ type ChatModel struct {
 	// this session itself started. A model-state ping that disagrees with
 	// modelID while this is true is the expected confirmation of THAT
 	// switch — no warning. One that disagrees while this is false means the
-	// agent process was replaced without anyone here asking for it (a
-	// cancelled turn respawns the child from its ORIGINAL launch flags,
-	// silently reverting any live switch — see subprocess.go's discard/
+	// agent process was replaced without anyone here asking for it (a hard
+	// stop — Esc pressed twice — respawns the child from its ORIGINAL model
+	// flags, reverting any live switch — see subprocess.go's discard/
 	// respawn) — see handleCanonicalEvent. Cleared on the turn's own
 	// terminal event, whichever way that turn ended, so a failed switch
 	// (Lemonade down, bad credential — no ping ever arrives) never leaves
 	// this stuck true.
 	awaitingModelSwitch bool
 
-	connected    bool
-	totalSteps   int
+	connected  bool
+	totalSteps int
+	// cost accumulates what each turn spent, for /cost and the control API.
+	// Summed from what the backend reported and never estimated — see
+	// sessioncost.go.
+	cost         sessionCost
 	initialQuery string
 	err          error
 	queryStart   time.Time // tracks when the current query started
-	firstToken   bool      // whether the first real inference token has arrived this turn (not just any SSE frame)
-	ttft         time.Duration
 
 	// logPeakRows is the tallest the work log has been THIS turn. The region's
 	// height is held there (see liveRegionView) so it never shrinks mid-turn and
@@ -334,6 +413,15 @@ type ChatModel struct {
 	// auto-started because the first-boot check said not ready, or started on
 	// demand by /setup.
 	setupRunning bool
+	// slackSetup is the in-flight Slack setup, if any — which question the
+	// panel is on and what it has collected. Non-nil only between /slack setup
+	// and the flow finishing or being cancelled.
+	slackSetup *slackSetupState
+	// slackOffered records that the one-time Slack offer has already been shown
+	// this session, so a second launch-time probe cannot repeat it. The durable
+	// answer lives in `gaia slack decline`; this only stops a duplicate inside
+	// one run.
+	slackOffered bool
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc
@@ -359,6 +447,10 @@ type ChatModel struct {
 	// memoryLoading is true from /memory until its fetch resolves (or times
 	// out) — drives the spinner and lets Esc cancel a stuck fetch.
 	memoryLoading bool
+	// memoryColdStart records that the agent was not yet running when the
+	// fetch began, so the wait can say the agent is starting rather than
+	// implying the read itself is slow.
+	memoryColdStart bool
 	// memoryCancelFn cancels an in-flight /memory fetch. nil when none is running.
 	memoryCancelFn context.CancelFunc
 }
@@ -389,10 +481,17 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		viewport:     vp,
 		connected:    true,
 		followTail:   true,
+		// Optimistically reconciled: Init issues the matching escape sequence
+		// once, so applyMouseCapture has nothing left to do on the first
+		// Update. Recording it here instead of letting that Update discover it
+		// is what keeps every turn's command stream free of a one-off mouse
+		// command nobody is expecting.
+		mouseCaptured: true,
+		lastClickRow:  -1,
 	}
-	// Reads the transport, never a saved preference: bypass and Claude mode
+	// Reads the transport, never a saved preference: full access and Claude mode
 	// are off on a fresh launch unless THIS launch asked on the command line.
-	return m.applyLaunchBypass().applyLaunchClaude()
+	return m.applyLaunchFullAccess().applyLaunchClaude()
 }
 
 // NewChatModelForFlagship creates the ChatModel the TUI boots into.
@@ -400,9 +499,10 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 // setupVerified says the readiness gate in front of this launch already ran
 // `gaia init --check` and it passed, so the first-boot gate must not ask again
 // — see ChatModel.setupVerified.
-func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, dev, setupVerified bool) ChatModel {
+func NewChatModelForFlagship(c client.AgentClient, agentID, agentName, agentVersion string, dev, setupVerified bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
+	m.agentVersion = agentVersion
 	m.setupVerified = setupVerified
 	return m.applyFirstBootGate()
 }
@@ -410,10 +510,58 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, de
 // NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
 // CanReturnToHub) for a real catalog agent, so agentID is the catalog id
 // rather than NewChatModel's default of the display name.
-func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
+func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName, agentVersion string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
+	m.agentVersion = agentVersion
 	return m.applyFirstBootGate()
+}
+
+// WithHubClient wires the "/agents" panel's data source into this model. The
+// host injects it (root.FlagshipModel does, via its own lazily-built
+// catalog.HubClient) rather than this package constructing one itself, so a
+// test can hand it a stub HubAgentLister.
+func (m ChatModel) WithHubClient(hc agents.HubAgentLister) ChatModel {
+	m.hubClient = hc
+	return m
+}
+
+// Messages returns the transcript as it stands. Exported for the agent-switch
+// path (root.FlagshipModel): the replacement ChatModel a switch builds must
+// carry the outgoing one's transcript forward rather than silently discard
+// it, and root cannot reach the unexported field itself.
+func (m ChatModel) Messages() []Message {
+	return m.messages
+}
+
+// WithMessages prepends msgs to whatever transcript this model already
+// starts with (typically none, on a fresh launch). Used only by the
+// agent-switch path, which is the sole caller that has a transcript to carry
+// over — a fresh launch never calls it.
+func (m ChatModel) WithMessages(msgs []Message) ChatModel {
+	m.messages = append(append([]Message(nil), msgs...), m.messages...)
+	return m
+}
+
+// AppendStatus appends a status-role line the app itself needs to say — not
+// something that arrived from the agent — straight to the transcript. Used
+// by the agent-switch path to report an outcome (already running that agent,
+// or the switch was cancelled) without discarding what came before it.
+func (m *ChatModel) AppendStatus(text string) {
+	m.messages = append(m.messages, Message{Role: RoleStatus, Content: text})
+	m.updateViewport()
+}
+
+// CloseAgentsPanel dismisses the "/agents" panel, if one is open.
+//
+// agents.SelectedMsg is deliberately not a case update() handles for
+// agentsPanel (see its own doc comment) — picking an agent is the root
+// model's job. This is the other half of that split: the root calls it the
+// moment it acts on the pick, before writing anything to this transcript.
+// View() draws agentsPanel first when it is set, so leaving it open would
+// hide every status line the switch (or its refusal) writes underneath it.
+func (m *ChatModel) CloseAgentsPanel() {
+	m.agentsPanel = nil
 }
 
 // preScanAgentID is the one agent this on-open fetch applies to today.
@@ -432,13 +580,30 @@ func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		textarea.Blink,
+		// The transcript owns the mouse from the first frame: the wheel is the
+		// only way to scroll an alt-screen app, which has no terminal
+		// scrollback behind it. Ctrl+T hands it back — see selectmode.go.
+		tea.EnableMouseCellMotion,
+		// Warms up capability gating (availableCommandSet) for a daemon-relay
+		// session, whose Supports answer is otherwise "unknown" until a query
+		// or /memory has already run negotiate once — see
+		// probeCapabilitiesCmd.
+		m.probeCapabilitiesCmd(),
+	}
+	if m.agentID == setupAgentID && m.initialQuery == "" {
+		// The one-time Slack offer. Gated on an empty initial query so a user
+		// who launched with a question gets their answer, not an ad; and run
+		// only for the flagship, which is the agent a Slack message drives.
+		// Whether it actually shows is `gaia slack status`'s decision, not
+		// ours -- this only asks.
+		cmds = append(cmds, querySlackCmd(true /* offer */))
 	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
 		// hold the initial query, if any, until the check -- and the setup
 		// run it may trigger -- resolves (setupCheckResultMsg / setupEvent
 		// handlers call releaseAfterSetupGate to send it then).
-		cmds = append(cmds, checkSetupCmd(m.claudeMode))
+		cmds = append(cmds, checkSetupCmd(m.skipLocalChatSetup()))
 	} else if m.initialQuery != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
@@ -575,7 +740,15 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if len(next.queued) == 0 || next.streaming ||
-		next.setupChecking || next.setupRunning {
+		next.setupChecking || next.setupRunning ||
+		next.providerPanel != nil || next.agentsPanel != nil {
+		return next, cmd
+	}
+	// A mid-turn message still in flight settles within one loopback
+	// round-trip, into either the transcript or this same queue. Starting a
+	// turn before it lands would reorder the conversation against the order
+	// the user typed it in.
+	if len(next.sending) > 0 {
 		return next, cmd
 	}
 	// A question or confirmation still on screen owns the conversation; the
@@ -590,10 +763,75 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	query := next.queued[0]
 	next.queued = append([]string(nil), next.queued[1:]...)
 	sent, sendCmd := next.submit(query)
+
+	// Only a real turn gets the watchdog — a queued slash command (submit's
+	// other branches) never sets streaming and settles synchronously, so
+	// there is nothing here that could stall.
+	if sentModel, ok := sent.(ChatModel); ok && sentModel.streaming {
+		sendCmd = tea.Batch(sendCmd, queuedSendWatchdog(sentModel.turnSeq))
+	}
 	return sent, tea.Batch(cmd, sendCmd)
 }
 
+// queuedSendWatchdog schedules queuedSendStalledMsg for the turn identified by
+// turnSeq. Delivered late (the turn already settled, or a newer one started),
+// it is a no-op — see the queuedSendStalledMsg handling in update().
+func queuedSendWatchdog(turnSeq int) tea.Cmd {
+	return tea.Tick(queuedSendTimeout, func(time.Time) tea.Msg {
+		return queuedSendStalledMsg{turnSeq: turnSeq}
+	})
+}
+
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.providerPanel != nil {
+		switch v := msg.(type) {
+		case providers.ClosedMsg:
+			m.providerPanel = nil
+			return m, nil
+		case providers.SelectedMsg:
+			m.providerPanel = nil
+			if c, ok := m.client.(interface{ SetModelBeforeStart(string) bool }); ok && c.SetModelBeforeStart(v.ID) {
+				m.claudeMode = false
+				m.modelRemote = false
+				m = m.applyLaunchClaude()
+			}
+			return m.submit("/model " + v.ID)
+		default:
+			if size, ok := msg.(tea.WindowSizeMsg); ok {
+				m.width = size.Width
+				m.height = size.Height
+				m.resize()
+			}
+			updated, cmd := m.providerPanel.Update(msg)
+			panel := updated.(providers.Model)
+			m.providerPanel = &panel
+			return m, cmd
+		}
+	}
+
+	if m.agentsPanel != nil {
+		switch msg.(type) {
+		case agents.ClosedMsg:
+			m.agentsPanel = nil
+			return m, nil
+		default:
+			// agents.SelectedMsg is deliberately NOT a case here: the root
+			// model intercepts it before this Update ever runs again, because
+			// picking an agent replaces this whole ChatModel — there is
+			// nothing for the panel field to clean up. This default only
+			// forwards keys/resizes to the still-open panel.
+			if size, ok := msg.(tea.WindowSizeMsg); ok {
+				m.width = size.Width
+				m.height = size.Height
+				m.resize()
+			}
+			updated, cmd := m.agentsPanel.Update(msg)
+			panel := updated.(agents.Model)
+			m.agentsPanel = &panel
+			return m, cmd
+		}
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -606,6 +844,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 
+	case conversationClearedMsg:
+		return m.handleConversationCleared(msg)
+
 	case sendQueryMsg:
 		return m.sendQuery(msg.query)
 
@@ -615,6 +856,18 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case setupCheckResultMsg:
 		return m.handleSetupCheckResult(msg)
+
+	case slackStatusMsg:
+		return m.handleSlackStatus(msg)
+
+	case slackDeclinedMsg:
+		return m.handleSlackDeclined(msg)
+
+	case slackURLMsg:
+		return m.handleSlackURL(msg)
+
+	case slackConnectedMsg:
+		return m.handleSlackConnected(msg)
 
 	case setupStreamMsg:
 		if m.supersededSetup(msg.ch) {
@@ -673,6 +926,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case memoryDumpMsg:
 		return m.handleMemoryDump(msg)
 
+	case followUpSentMsg:
+		return m.handleFollowUpSent(msg)
+
+	case followUpFailedMsg:
+		return m.handleFollowUpFailed(msg)
+
 	case eventMsg:
 		if m.supersededTurn(msg.ch) {
 			return m, nil
@@ -730,12 +989,36 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case queuedSendStalledMsg:
+		if msg.turnSeq != m.turnSeq || !m.streaming {
+			// Already resolved, or superseded by a newer turn — nothing to say.
+			return m, nil
+		}
+		m.messages = append(m.messages, Message{
+			Role: RoleStatus,
+			Content: fmt.Sprintf(
+				"[!] the queued follow-up has been running for over %s with no "+
+					"response. Press Esc (or Ctrl+C) to stop waiting, or check "+
+					"`gaia daemon status` if this keeps happening.",
+				queuedSendTimeout),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case components.QuestionAnsweredMsg:
 		q := m.question
 		if q == nil || q.RequestID() != msg.RequestID {
 			// A late answer for a question that is no longer up — dropping it is
 			// correct, but never silently: the agent moved on.
 			return m, nil
+		}
+		if isSlackSetupQuestion(msg.RequestID) {
+			// A local panel's question, not one the agent is parked on. Posting
+			// it to the agent would answer a question nobody asked — and for
+			// the token steps it would put a secret in the transcript.
+			m.question = nil
+			m.updateViewport()
+			return m.handleSlackSetupAnswer(msg.RequestID, msg.Value)
 		}
 		m.messages = append(m.messages, Message{
 			Role:    RoleUser,
@@ -792,6 +1075,17 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case urlOpenResultMsg:
+		if msg.err == nil {
+			return m, nil
+		}
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: openURLHint(msg.url, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case clipboardResultMsg:
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
@@ -836,10 +1130,16 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case capabilitiesProbedMsg:
+		if msg.err != nil && m.dev {
+			fmt.Fprintf(os.Stderr, "[DEBUG] capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state\n", msg.err)
+		}
+		return m, nil
+
 	case ToggleHelpMsg:
 		// Only ever seen when nothing wrapped this model: root consumes this
 		// message itself and never forwards it.
-		m.help.Toggle(components.HelpContextChat)
+		m.help.Toggle(components.HelpContextChat, m.availableCommandNames())
 		return m, nil
 
 	case tea.MouseMsg:
@@ -850,15 +1150,25 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// alt-screen app the terminal's own scrollback does not exist, so
 		// this and the arrow keys are the only way back to what already
 		// happened.
+		// The help panel is drawn OVER the whole window, so the transcript
+		// under it is not what the reader is pointing at: a click there must
+		// not open a link or copy a message they cannot see. The wheel scrolls
+		// the panel itself, for the same reason.
+		if m.help.Open {
+			if isWheelEvent(msg) {
+				m.help.HandleWheel(
+					tea.MouseEvent(msg).Button == tea.MouseButtonWheelUp,
+					m.width, m.height)
+			}
+			return m, nil
+		}
 		if m.palette.open {
 			return m.handlePaletteMouse(msg)
 		}
 		if m.question != nil {
 			return m.handleQuestionMouse(msg)
 		}
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m.afterScroll(), cmd
+		return m.handleTranscriptMouse(msg)
 
 	case spinner.TickMsg:
 		if m.streaming || m.memoryLoading {
@@ -979,15 +1289,14 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEsc:
-		// Hand the mouse back first: while WHEEL MODE is on, selection is
-		// dead, so "never mind" most likely means "let me select text
-		// again". Leaving a turn running is fine — Esc pressed again cancels
-		// it. Keyed on mouseWheelOn, not mouseCaptured: an overlay can also
-		// hold the mouse (for its own clicks), and Esc there means cancel
-		// the question/turn (below) or close the palette (handled earlier,
-		// in the m.palette.open branch) — not silently let go of a capture
-		// the user never asked for.
-		if m.mouseWheelOn {
+		// Leave SELECT MODE first: while it is on the wheel does not scroll,
+		// so "never mind" most likely means "give me my scrolling back".
+		// Leaving a turn running is fine — Esc pressed again cancels it.
+		// Keyed on mouseSelectMode, not mouseCaptured: an overlay can also
+		// hold the mouse (for its own clicks), and Esc there means cancel the
+		// question/turn (below) or close the palette (handled earlier, in the
+		// m.palette.open branch).
+		if m.mouseSelectMode {
 			return m.toggleSelectMode()
 		}
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
@@ -1037,13 +1346,26 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.syncComposerHeight()
 
-		// The agent is still working: hold this one rather than dropping the
-		// keystroke on the floor. Update sends it the moment the turn settles.
-		// Slash commands queue too — /clear typed mid-turn should clear once
-		// the turn it belongs to is actually over, not silently do nothing.
+		// The agent is still working. Where this goes depends on what the
+		// agent on the other end can take:
+		//
+		//   - a peer that accepts mid-turn input gets it NOW, on the running
+		//     turn, and folds it in at its next step boundary. A follow-up
+		//     during a five-minute turn is answered in that turn.
+		//   - anything else holds it locally until the turn settles (below).
+		//
+		// Slash commands are never sent mid-turn either way — /clear means
+		// "clear once the turn it belongs to is over", and the agent has no
+		// idea what to do with the word "/clear" folded into its context.
+		//
 		// The first-boot gate (setupChecking) and a `gaia init` run
-		// (setupRunning) hold it the same way: there is nothing to send this
-		// to yet.
+		// (setupRunning) always hold: there is nothing running to send to.
+		if m.streaming && !m.setupChecking && !m.setupRunning &&
+			!isSlashCommand(query) && m.followUpSupported() {
+			m.sending = append(m.sending, query)
+			m.updateViewport()
+			return m, m.sendFollowUp(query)
+		}
 		if m.streaming || m.setupChecking || m.setupRunning {
 			m.queued = append(m.queued, query)
 			m.updateViewport()
@@ -1151,10 +1473,11 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // settleTurn() is the single place that clears cancelPending once the turn's
 // OWN signal — not this call — says it is over.
 //
-// A transport with no such server-side lock (e.g. a local subprocess) does
-// not implement AgentCanceler; for it, tearing down the local connection IS
-// the whole cancellation, so the old immediate cancelFn() behavior is exactly
-// right and unchanged below.
+// The local subprocess implements AgentCanceler too, for a different reason:
+// killing the child discards the session state it holds (skills, grants,
+// history, a /full-access toggle), so the first press asks it to stop and the
+// second (forceLocalAbort) kills its whole process tree. A transport that
+// implements neither tears its connection down immediately below.
 func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.cancelPending = true
 	m.activity = nil
@@ -1170,7 +1493,7 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.restoreQueuedToComposer()
 	m.messages = append(m.messages, Message{
 		Role:    RoleStatus,
-		Content: cancellingNotice + " (the agent stops at its next step — press again to stop waiting)",
+		Content: cancellingNotice + m.cancelHint(),
 	})
 	m.drainPendingPreScan()
 	m.updateViewport()
@@ -1191,6 +1514,15 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// cancelHint says what a second Esc will do: for an agent the TUI runs itself
+// it kills the process, for any other transport it only stops waiting here.
+func (m ChatModel) cancelHint() string {
+	if s, ok := m.client.(client.LocalAgentStopper); ok && s.AbortStopsAgent() {
+		return " (the agent stops at its next step — press again to stop it now)"
+	}
+	return " (the agent stops at its next step — press again to stop waiting)"
+}
+
 // forceLocalAbort is the escape hatch for a SECOND Esc/Ctrl+C pressed while a
 // cancel is already pending (#2912 review). Cooperative cancellation is only
 // checked at agent-loop step boundaries, so the pending window opened by
@@ -1202,6 +1534,17 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 // that the run may still be finishing server-side — a following Enter can
 // legitimately land on the actionable 409 the AgentCanceler branch above
 // already produces a clear message for.
+//
+// Unlike the first Esc/Ctrl+C (requestCancel), this abandons rather than
+// restores a queued follow-up (#2917). The first press means "stop, but I
+// still want to send this once it does" — restoring it to the composer fits
+// that. This second press means the user has given up waiting on this turn
+// entirely; auto-firing the follow-up into the same still-uncertain session
+// (the run may still be live server-side, per the message below) would be
+// the exact race requestCancel's doc comment describes, and silently
+// re-queuing it behind that uncertainty would just move the freeze one turn
+// later instead of resolving it. Named here rather than dropped silently, so
+// nothing typed vanishes without a word.
 func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	if m.cancelFn != nil {
 		m.cancelFn()
@@ -1213,14 +1556,19 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	m.question = nil
 	m.confirmation = nil
 	m.activity = nil
-	// Same reasoning as requestCancel: what was queued behind this turn was
-	// written expecting it to finish. Give it back rather than sending it.
-	m.restoreQueuedToComposer()
-	m.messages = append(m.messages, Message{
-		Role: RoleStatus,
-		Content: "gave up waiting locally — the run may still be finishing on the server; " +
-			"a retry may briefly answer \"already in progress\"",
-	})
+	abandoned := m.queued
+	m.queued = nil
+	content := "gave up waiting locally — the run may still be finishing on the server; " +
+		"a retry may briefly answer \"already in progress\""
+	if s, ok := m.client.(client.LocalAgentStopper); ok && s.AbortStopsAgent() {
+		content = "stopped the agent process — it restarts on your next message"
+	}
+	if len(abandoned) > 0 {
+		content += fmt.Sprintf("; abandoned %d queued follow-up(s) rather than "+
+			"fire them into that uncertainty — retype below to send again: %q",
+			len(abandoned), strings.Join(abandoned, " / "))
+	}
+	m.messages = append(m.messages, Message{Role: RoleStatus, Content: content})
 	m.updateViewport()
 	return m, nil
 }
@@ -1235,12 +1583,20 @@ func (m *ChatModel) restoreQueuedToComposer() {
 	if len(m.queued) == 0 {
 		return
 	}
-	if strings.TrimSpace(m.input.Value()) == "" {
-		m.input.SetValue(strings.Join(m.queued, "\n"))
-		m.input.CursorEnd()
-		m.syncComposerHeight()
-	}
+	m.restoreToComposer(strings.Join(m.queued, "\n"))
 	m.queued = nil
+}
+
+// restoreToComposer puts text back where it was typed, leaving anything
+// already half-typed alone — that is the newer thought, and overwriting it
+// would lose a sentence to recover one.
+func (m *ChatModel) restoreToComposer(text string) {
+	if strings.TrimSpace(m.input.Value()) != "" {
+		return
+	}
+	m.input.SetValue(text)
+	m.input.CursorEnd()
+	m.syncComposerHeight()
 }
 
 // submit routes one composed line: a slash command runs locally, anything else
@@ -1249,11 +1605,11 @@ func (m *ChatModel) restoreQueuedToComposer() {
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// `/model` takes a free-form argument (a model id), so it can't join the
-	// exact-match switch below like /bypass's fixed variants — it's dispatched
+	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
-			// Same shape as setBypass's capability check (bypass.go): refuse
+			// Same shape as setFullAccess's capability check (fullaccess.go): refuse
 			// visibly rather than let the literal text ship as a chat
 			// question the agent has no way to understand.
 			m.messages = append(m.messages, Message{
@@ -1280,63 +1636,132 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		// posts a user chat bubble; the agent's own confirmation (or
 		// refusal) is the only line that belongs in the transcript. Still
 		// rides the real query channel (startTurn/Send), not the
-		// fire-and-forget control one /bypass uses — see
+		// fire-and-forget control one /full-access uses — see
 		// gaia_agent.stdio.run_model_command for why.
 		m.awaitingModelSwitch = true
 		return m.startTurn(query)
 	}
 
 	switch query {
+	case "/provider":
+		if !m.supportsModelCommand() {
+			m.messages = append(m.messages, Message{Role: RoleError, Content: "Provider setup is available for the GAIA flagship agent."})
+			m.updateViewport()
+			return m, nil
+		}
+		panel := providers.New(m.lemonadeBaseURL, m.width, m.height)
+		m.providerPanel = &panel
+		m.palette.open = false
+		return m, panel.Init()
+
+	case "/agents":
+		if m.hubClient == nil {
+			m.messages = append(m.messages, Message{
+				Role: RoleError,
+				Content: "Agent list is unavailable — this session has no hub client wired in. " +
+					"Report this with `gaia diagnostics`.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		panel := agents.New(m.hubClient, m.width, m.height)
+		m.agentsPanel = &panel
+		m.palette.open = false
+		return m, panel.Init()
+
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
 
+	case "/gateway":
+		return m, func() tea.Msg { return OpenGatewayMsg{} }
+
 	case "/clear":
-		m.messages = nil
-		// Daemon-transport agents are stateless per turn: the host pushes the
-		// transcript back as `context`, so clearing the view must clear that
-		// too or the "cleared" history keeps being sent.
-		if r, ok := m.client.(client.TranscriptResetter); ok {
-			r.ResetTranscript()
-		}
-		m.updateViewport()
-		return m, nil
+		return m.clearConversation()
 
 	case "/memory":
 		return m.startMemoryFetch()
 
-	case "/bypass":
-		if m.bypassPermissions {
-			return m.setBypass(false)
-		}
-		return m.armBypass()
+	case "/cost":
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: m.cost.render(m.costModelName(), lookupPrice(m.modelID)),
+		})
+		m.updateViewport()
+		return m, nil
 
-	case "/bypass on":
-		if m.bypassPermissions {
-			return m.bypassNote("Bypass permissions is already ON."), nil
-		}
-		return m.armBypass()
+	case "/cost help":
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: costHelp(m.modelID),
+		})
+		m.updateViewport()
+		return m, nil
 
-	case "/bypass confirm":
-		if !m.bypassArmed {
-			return m.bypassNote("Nothing to confirm. Type /bypass first — it " +
+	case "/full-access":
+		if m.fullAccess {
+			return m.setFullAccess(false)
+		}
+		return m.armFullAccess()
+
+	case "/full-access on":
+		if m.fullAccess {
+			return m.fullAccessNote("Full access is already ON."), nil
+		}
+		return m.armFullAccess()
+
+	case "/full-access confirm":
+		if !m.fullAccessArmed {
+			return m.fullAccessNote("Nothing to confirm. Type /full-access first — it " +
 				"explains what you would be turning on."), nil
 		}
-		return m.setBypass(true)
+		return m.setFullAccess(true)
 
-	case "/bypass off":
-		if !m.bypassPermissions {
-			return m.bypassNote("Bypass permissions is already off."), nil
+	case "/full-access off":
+		if !m.fullAccess {
+			return m.fullAccessNote("Full access is already off."), nil
 		}
-		return m.setBypass(false)
+		return m.setFullAccess(false)
+
+	// The retired name, recognised only to point at the new one, so an old
+	// habit never turns into a question sent to the agent.
+	case "/bypass", "/bypass on", "/bypass off", "/bypass confirm":
+		return m.fullAccessNote("/bypass is now /full-access. Same commands, new name."), nil
+
+	case "/full-access always":
+		return m.setFullAccessDefault(true)
+
+	case "/full-access never":
+		return m.setFullAccessDefault(false)
 
 	case "/setup":
 		if m.agentID != setupAgentID {
-			return m.statusNote(m.agentName + " does not have a local setup step."), nil
+			m.messages = append(m.messages, Message{
+				Role: RoleError,
+				Content: m.agentName + " does not have a local setup step " +
+					"— only the gaia flagship agent runs `gaia init`.",
+			})
+			m.updateViewport()
+			return m, nil
 		}
 		if m.setupRunning {
 			return m.statusNote("Setup is already running. Esc cancels it."), nil
 		}
 		return m.startSetupRun(false /* firstBoot */)
+
+	case "/slack":
+		return m.startSlackCheck()
+
+	case "/slack setup":
+		if m.slackSetup != nil {
+			return m.statusNote("Slack setup is already open — answer it, or press Esc."), nil
+		}
+		return m.startSlackSetup()
+
+	case "/slack skip":
+		return m, declineSlackCmd(false)
+
+	case "/slack never":
+		return m, declineSlackCmd(true)
 	}
 
 	return m.sendQuery(query)
@@ -1366,8 +1791,6 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	// scroll happened to be left.
 	m.followTail = true
 	m.queryStart = time.Now()
-	m.firstToken = false
-	m.ttft = 0
 	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
 	// no usage.steps reported the PREVIOUS turn's count as its own.
 	m.totalSteps = 0
@@ -1487,11 +1910,6 @@ func (m *ChatModel) CancelActiveTurn() {
 }
 
 func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
-	// TTFT is anchored on the first real inference token (CanonicalTokenEvent
-	// / legacy ChunkEvent below), not on the first SSE frame of any kind — a
-	// turn-start status frame arrives in single-digit ms and would otherwise
-	// make ttft measure "server said hello", not "model produced text" (#2899).
-
 	// The daemon transport speaks the canonical seven-event contract; the
 	// subprocess transport speaks the legacy in-process vocabulary below.
 	if updated, cmd, handled := m.handleCanonicalEvent(evt); handled {
@@ -1586,13 +2004,18 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	case event.AnswerEvent:
 		m.flushBuffer()
 		duration := time.Since(m.queryStart)
-		rendered := components.RenderMarkdown(e.Content)
+		content := StripVerificationScope(e.Content)
+		rendered := components.RenderMarkdown(content)
+		// Off the event, not off m.ttft: nothing on this side measures these
+		// any more, so reading a model field here would print a zero forever.
 		m.messages = append(m.messages, Message{
 			Role:      RoleAssistant,
-			Content:   e.Content,
+			Content:   content,
 			Rendered:  rendered,
 			Duration:  duration,
-			TTFT:      m.ttft,
+			TTFT:      time.Duration(e.TTFT * float64(time.Second)),
+			TokPerS:   e.TokPerS,
+			Tokens:    e.Tokens,
 			Steps:     e.Steps,
 			ToolsUsed: e.ToolsUsed,
 		})
@@ -1604,11 +2027,11 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case event.ChunkEvent:
-		if !m.firstToken {
-			m.firstToken = true
-			m.ttft = time.Since(m.queryStart)
-		}
 		m.buffer += e.Content
+		// The legacy transport's token, throttled for the same reason as the
+		// canonical one — see markDirty.
+		m.markDirty()
+		return m, waitForEvent(m.events)
 
 	case event.AgentErrorEvent:
 		m.messages = append(m.messages, Message{
@@ -1702,10 +2125,6 @@ func (m *ChatModel) resize() {
 	inputH := m.composerRows() + 2
 	padding := 2
 
-	vpHeight := m.height - headerH - statusH - inputH - padding
-	if vpHeight < 1 {
-		vpHeight = 1
-	}
 	vpWidth := m.width
 	if vpWidth < 10 {
 		vpWidth = 10
@@ -1721,8 +2140,13 @@ func (m *ChatModel) resize() {
 		m.logPeakRows = 0
 	}
 	m.viewport.Width = vpWidth
-	m.viewport.Height = vpHeight
 	m.input.SetWidth(vpWidth - 2)
+	// Width first: the modal's height depends on how its summary wraps, and one
+	// measured at the wrong width reserves the wrong number of rows.
+	if m.confirmation != nil {
+		m.confirmation.SetWidth(m.cardWidthFor(vpWidth))
+	}
+	m.syncViewportHeight(headerH + statusH + inputH + padding)
 
 	// Markdown wraps to the same measure the answer is laid out at, or glamour
 	// hard-wraps at a different column than the panel and the block develops a
@@ -1731,9 +2155,8 @@ func (m *ChatModel) resize() {
 	if m.question != nil {
 		m.question.SetWidth(m.cardWidth())
 	}
-	if m.confirmation != nil {
-		m.confirmation.SetWidth(m.cardWidth())
-	}
+	// The confirmation was already sized above — its width had to be settled
+	// before its height could be reserved.
 	m.updateViewport()
 }
 
@@ -1745,8 +2168,95 @@ func (m ChatModel) afterScroll() ChatModel {
 	return m
 }
 
+// renderInterval is the fastest the transcript is rebuilt while an answer
+// streams. 50ms is twenty repaints a second — past the eye's limit for text
+// arriving, and far under the rate a local model emits tokens at.
+//
+// The number that matters is not this one but the work it bounds:
+// updateViewport re-wraps every message in the transcript and re-lays-out the
+// whole answer buffer, so at one render per token a long answer costs O(n²) on
+// the SAME goroutine Bubble Tea delivers keystrokes on. That is the mechanism
+// behind "I cannot type while it is printing".
+const renderInterval = 50 * time.Millisecond
+
+// markDirty records that streamed text changed and repaints only if the last
+// repaint is older than renderInterval.
+//
+// Nothing is ever left unrendered: while a turn runs the spinner ticks ten
+// times a second and its handler repaints unconditionally, and every terminal
+// path (final/error/done) calls updateViewport directly. So a skip here delays
+// a token by at most one tick, never drops it.
+func (m *ChatModel) markDirty() {
+	if time.Since(m.lastRender) < renderInterval {
+		m.viewDirty = true
+		return
+	}
+	m.updateViewport()
+}
+
+// chatChromeRows is everything View() draws outside the transcript and the
+// pinned confirmation: header, status bar, the composer with its border, and
+// the two dividers.
+func (m ChatModel) chatChromeRows() int {
+	const headerH, statusH, padding = 1, 1, 2
+	return headerH + statusH + m.composerRows() + 2 + padding
+}
+
+// syncViewportHeight splits the rows left after *chrome* between the transcript
+// and the pinned confirmation.
+//
+// Called from updateViewport, not only from resize, so it is self-correcting:
+// every path that puts a confirmation up or takes one down redraws the
+// transcript, and none of them has to remember to give the rows back. The
+// version that only ran in resize() left the transcript permanently short
+// after the user answered a prompt.
+func (m *ChatModel) syncViewportHeight(chrome int) {
+	budget := m.height - chrome
+	if budget < 1 {
+		budget = 1
+	}
+
+	m.confirmRows = 0
+	if m.confirmation != nil {
+		m.confirmRows = lipgloss.Height(m.confirmation.View())
+		// The transcript keeps at least one row. Past that the modal is
+		// clipped rather than allowed to push the composer and status bar off
+		// the bottom — losing the row that says a decision is pending would
+		// recreate the very defect the pinning fixes.
+		if max := budget - 1; m.confirmRows > max {
+			m.confirmRows = max
+		}
+		if m.confirmRows < 0 {
+			m.confirmRows = 0
+		}
+	}
+
+	vpHeight := budget - m.confirmRows
+	if vpHeight < 1 {
+		vpHeight = 1
+	}
+	m.viewport.Height = vpHeight
+}
+
+// msgSpan is the half-open content-row range [start, end) one message occupies
+// in the laid-out transcript, and which message that is.
+type msgSpan struct {
+	start int
+	end   int
+	index int
+}
+
 func (m *ChatModel) updateViewport() {
+	m.viewDirty = false
+	m.lastRender = time.Now()
+	m.syncViewportHeight(m.chatChromeRows())
+
 	var sb strings.Builder
+	// A fresh slice, not m.msgSpans[:0]: ChatModel is copied by value on every
+	// Update, so truncate-and-refill would rewrite the spans under any copy
+	// still holding the same backing array. One allocation on a path that
+	// already builds the whole transcript.
+	m.msgSpans = make([]msgSpan, 0, len(m.messages))
 
 	// Show welcome message if no messages yet
 	if len(m.messages) == 0 && !m.streaming && !m.memoryLoading && m.memoryView == nil {
@@ -1760,6 +2270,14 @@ func (m *ChatModel) updateViewport() {
 	// repeat an id an earlier turn's card already rendered (still urgent on
 	// the next scan is not a duplicate), so dedup must not span turns.
 	seen := make(map[string]bool)
+	// Counted as the transcript is written rather than measured afterwards:
+	// re-scanning the buffer per message is quadratic in a long session, and
+	// this runs on every spinner tick of a streaming turn.
+	line := strings.Count(sb.String(), "\n")
+	write := func(chunk string) {
+		sb.WriteString(chunk)
+		line += strings.Count(chunk, "\n")
+	}
 	for i := range m.messages {
 		if m.messages[i].Role == RoleUser {
 			seen = make(map[string]bool)
@@ -1767,14 +2285,16 @@ func (m *ChatModel) updateViewport() {
 			// transcript is one unbroken block and the eye has nothing to
 			// anchor on when scrolling back for "where did I ask that?".
 			if sb.Len() > 0 {
-				sb.WriteString("\n")
+				write("\n")
 			}
 		}
+		start := line
 		// By index, not by value: rendering a card memoizes onto the message.
-		sb.WriteString(m.renderMessage(&m.messages[i], seen))
-		sb.WriteString("\n")
+		write(m.renderMessage(&m.messages[i], seen))
+		write("\n")
+		m.msgSpans = append(m.msgSpans, msgSpan{start: start, end: line, index: i})
 		if spacedAfter(m.messages[i].Role) {
-			sb.WriteString("\n")
+			write("\n")
 		}
 	}
 
@@ -1786,10 +2306,17 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	if m.confirmation != nil {
-		sb.WriteString(m.confirmation.View())
-		sb.WriteString("\n")
-	}
+	// The confirmation modal is deliberately NOT written here. It is pinned
+	// outside the viewport by View(), for the same reason as the full access
+	// banner: it must be in every frame and unscrollable.
+	//
+	// It used to live in this content, and the turn it blocks made that
+	// unrecoverable. A pending modal owns the keyboard (handleKey), so `end`,
+	// PgUp and the arrows all go to the modal instead of the viewport — once
+	// the transcript was long enough to push the modal below the fold, the
+	// user could neither see the question nor scroll to it. Measured from the
+	// user's seat: 442s of `● GAIA streaming` and no visible prompt,
+	// indistinguishable from a hang, ended only by Esc.
 
 	if m.question != nil {
 		// Recorded before writing it: questionRowAt (questionmouse.go) needs
@@ -1806,7 +2333,11 @@ func (m *ChatModel) updateViewport() {
 	}
 
 	if m.memoryLoading {
-		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render("Loading memory…"))
+		note := "Loading memory…"
+		if m.memoryColdStart {
+			note = "Starting the agent, then loading memory… (first run takes a moment)"
+		}
+		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render(note))
 		sb.WriteString("\n")
 	}
 	if m.memoryView != nil {
@@ -1822,7 +2353,7 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	m.viewport.SetContent(sb.String())
+	m.viewport.SetContent(linkify(sb.String(), m.viewport.Width))
 	if m.followTail {
 		m.viewport.GotoBottom()
 	}
@@ -1836,14 +2367,12 @@ func (m ChatModel) renderWelcome() string {
 
 	hint := activityStyle.Render("Ask a question, or type /help for what else this can do.")
 
-	// "Connected to: GAIA" under "Welcome to GAIA" is the same word twice; the
-	// line only earns its place when a DIFFERENT agent is on the other end.
-	if isBrandName(m.agentName) {
-		return title + "\n\n" + hint
-	}
+	// Named even for the flagship: "Welcome to GAIA" is the product, this line
+	// is which agent picked up the conversation — the same distinction the
+	// header draws.
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
-		Render("Connected to: " + m.agentName)
+		Render("Connected to: " + m.agentIdentity())
 	return title + "\n" + agent + "\n\n" + hint
 }
 
@@ -1852,9 +2381,18 @@ func (m ChatModel) renderWelcome() string {
 // width wraps and the borders shear. It never exceeds the viewport itself —
 // a card wider than the window it lives in is the same shear by another route.
 func (m ChatModel) cardWidth() int {
+	return m.cardWidthFor(m.viewport.Width)
+}
+
+// cardWidthFor is cardWidth against a viewport width that is not on the model
+// yet. resize() has to measure the confirmation modal BEFORE it assigns
+// viewport.Width — the modal's height is what it is reserving room for — and
+// measuring at a different width than the frame renders at reserves the wrong
+// number of rows.
+func (m ChatModel) cardWidthFor(viewportWidth int) int {
 	w := m.width - 4
-	if w > m.viewport.Width && m.viewport.Width > 0 {
-		w = m.viewport.Width
+	if w > viewportWidth && viewportWidth > 0 {
+		w = viewportWidth
 	}
 	if w < 1 {
 		w = 1
@@ -1862,13 +2400,18 @@ func (m ChatModel) cardWidth() int {
 	return w
 }
 
-// answerMeasure caps how wide a line of prose gets. A 200-column terminal will
-// happily lay an answer out as 200-character lines, and the eye loses the start
+// answerMeasure caps how wide a line of prose gets. A 300-column terminal will
+// happily lay an answer out as 300-character lines, and the eye loses the start
 // of the next one on the way back — the reason newspapers set narrow columns.
-// Tables and cards are not prose and are not capped by this, and neither is the
-// work log: one-line content follows the terminal (see logWidth), because for a
-// single row more columns mean more of the line, not a longer read.
-const answerMeasure = 88
+//
+// It sits well above the ~90 a typographer would pick, because prose is not the
+// only thing on screen: the header, the divider, every table and card follow the
+// terminal, so prose that stops short of them does not read as a chosen measure,
+// it reads as text that failed to fill the window. At 120 a widened terminal
+// keeps filling until it is genuinely wider than anything worth reading across.
+// The work log is uncapped either way (see logWidth): for a single row more
+// columns mean more of the line, not a longer read.
+const answerMeasure = 120
 
 // answerWidth is the width an answer lays out to — the same for the streaming
 // copy and the finished one, so text never reflows when `final` lands.
@@ -1913,6 +2456,19 @@ func spacedAfter(role MessageRole) bool {
 	return false
 }
 
+// costModelName is what the cost view calls the model: the display name when
+// the agent has resolved one, the raw id otherwise, and a plain hyphen before
+// the first turn has told us anything.
+func (m ChatModel) costModelName() string {
+	if m.modelDisplay != "" {
+		return m.modelDisplay
+	}
+	if m.modelID != "" {
+		return m.modelID
+	}
+	return "-"
+}
+
 // answerStats is the footnote under a finished answer.
 //
 // By default it is one number: how long that took. Everything else —
@@ -1930,18 +2486,19 @@ func (m ChatModel) answerStats(msg *Message) string {
 		return stats[0]
 	}
 
+	// Every figure below is the inference backend's own measurement, passed
+	// through untouched. Zero means it reported none — a remote
+	// OpenAI-compatible endpoint reports neither latency nor rate — and the
+	// stat is omitted rather than derived from the turn's wall clock, which
+	// includes tool time and agent overhead.
 	if msg.TTFT > 0 {
 		stats = append(stats, fmt.Sprintf("ttft %.1fs", msg.TTFT.Seconds()))
 	}
-	// Real generated-token count (#2899) — no longer a char-count guess. Zero
-	// means the sidecar didn't report usage.tokens (the legacy transport, or an
-	// older agent); omit rather than fall back to the old estimate, which would
-	// silently reintroduce the exact bug that replaced.
 	if msg.Tokens > 0 {
 		stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
-		if rate, ok := tokensPerSecond(msg.Tokens, msg.Duration, msg.TTFT); ok {
-			stats = append(stats, fmt.Sprintf("%.1f tok/s", rate))
-		}
+	}
+	if msg.TokPerS > 0 {
+		stats = append(stats, fmt.Sprintf("%.1f tok/s", msg.TokPerS))
 	}
 	if msg.Steps > 0 {
 		stats = append(stats, fmt.Sprintf("%d steps", msg.Steps))
@@ -2000,6 +2557,14 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 			panelWidth = 20
 		}
 		return components.Panel(components.PanelError, "error", msg.Content, panelWidth)
+
+	case RoleToolError:
+		// Same wrap-don't-clip reasoning as RoleStatus, in the failure colour:
+		// visible enough to read, quiet enough that a retried call does not
+		// look like the turn ended badly.
+		// Continuation lines hang under the prefix so a multi-line remedy reads
+		// as one aside rather than as text that escaped it.
+		return failStyle.Render(m.wrapForPane("  [x] " + strings.ReplaceAll(msg.Content, "\n", "\n      ")))
 
 	case RoleStatus:
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
@@ -2541,7 +3106,8 @@ func clipTail(s string, limit int) string {
 // key is the part a user can find elsewhere.
 const queuedEchoFloor = 24
 
-// renderQueuedRow shows a follow-up that is waiting for the running turn.
+// renderQueuedRow shows the follow-up the composer is currently holding — in
+// flight to the running turn, or waiting for it to end.
 //
 // The hint names the whole consequence. Esc here does not just un-queue: it
 // runs the same cancel every other Esc runs, so the turn being waited on stops
@@ -2552,6 +3118,15 @@ const queuedEchoFloor = 24
 // and hint appended afterwards, so a long queued line ran past the last column
 // and wrapped onto a second row, shearing the status bar below it.
 func (m ChatModel) renderQueuedRow() string {
+	// In flight wins the row: it is the newer state and the one that is about
+	// to change on its own.
+	if len(m.sending) > 0 {
+		prefix := "⏎ sending · "
+		if n := len(m.sending); n > 1 {
+			prefix = fmt.Sprintf("⏎ %d sending · ", n)
+		}
+		return m.echoRow(prefix, m.sending[0], "")
+	}
 	if len(m.queued) == 0 {
 		return ""
 	}
@@ -2561,21 +3136,44 @@ func (m ChatModel) renderQueuedRow() string {
 	if n := len(m.queued); n > 1 {
 		prefix = fmt.Sprintf("⏎ %d queued · ", n)
 	}
-	hint := "  Esc stops the turn and puts this back"
-	if len(m.queued) > 1 {
-		hint = "  Esc stops the turn and puts these back"
+	// Once a cancel is already pending, the NEXT Esc/Ctrl+C is forceLocalAbort
+	// (#2917), which abandons a queued follow-up rather than restoring it —
+	// see its doc comment for why. The row must say that, not the first
+	// press's promise, or a user pressing it a second time because nothing
+	// visibly happened loses their draft to a hint that was no longer true.
+	one, many := "  Esc stops the turn and puts this back", "  Esc stops the turn and puts these back"
+	if m.cancelPending {
+		one, many = "  Esc again abandons this", "  Esc again abandons these"
 	}
+	hint := one
+	if len(m.queued) > 1 {
+		hint = many
+	}
+	return m.echoRow(prefix, m.queued[0], hint)
+}
 
+// echoRow lays out "<prefix><echoed text><hint>" on one row, dropping the hint
+// before it lets the echo run past the last column.
+func (m ChatModel) echoRow(prefix, text, hint string) string {
 	suffix := hint
 	budget := m.width - lipgloss.Width(prefix) - lipgloss.Width(hint)
 	if budget < queuedEchoFloor {
 		suffix = ""
 		budget = m.width - lipgloss.Width(prefix)
 	}
-
 	return activityStyle.Render(prefix) +
-		statusMsgStyle.Render(truncateRunes(m.queued[0], budget)) +
+		statusMsgStyle.Render(truncateRunes(text, budget)) +
 		activityStyle.Render(suffix)
+}
+
+// midTurnEnterHint says what Enter will actually do right now. The two are
+// genuinely different outcomes — one reaches the agent within a step, the
+// other waits out the whole turn — so the row must not name them alike.
+func (m ChatModel) midTurnEnterHint() string {
+	if m.followUpSupported() && !isSlashCommand(m.input.Value()) {
+		return "⏎ sends to the running turn"
+	}
+	return "⏎ queues"
 }
 
 // contentHeaderRows is how many screen rows sit above the viewport in
@@ -2586,7 +3184,7 @@ func (m ChatModel) renderQueuedRow() string {
 // from it the day a row is added or removed there.
 func (m ChatModel) contentHeaderRows() int {
 	n := 1 // header
-	if m.renderBypassBanner() != "" {
+	if m.renderFullAccessBanner() != "" {
 		n++
 	}
 	if m.renderSelectBanner() != "" {
@@ -2597,6 +3195,12 @@ func (m ChatModel) contentHeaderRows() int {
 }
 
 func (m ChatModel) View() string {
+	if m.providerPanel != nil {
+		return m.providerPanel.View()
+	}
+	if m.agentsPanel != nil {
+		return m.agentsPanel.View()
+	}
 	if m.width == 0 {
 		return m.renderWelcome()
 	}
@@ -2614,12 +3218,13 @@ func (m ChatModel) View() string {
 		// owns that line; here only the user's own text has anything to add.
 		switch {
 		case strings.TrimSpace(m.input.Value()) != "":
-			inputView = m.input.View() + "  " + activityStyle.Render("⏎ queues")
-		case len(m.queued) > 0:
+			inputView = m.input.View() + "  " + activityStyle.Render(m.midTurnEnterHint())
+		case len(m.sending) > 0 || len(m.queued) > 0:
 			inputView = m.renderQueuedRow()
 		default:
-			// Mid-turn Enter queues rather than sends, so the idle prompt is
-			// untrue while the agent works — an empty composer says it better.
+			// The idle placeholder promises a plain send, which is only half
+			// true mid-turn whichever way Enter is wired — an empty composer
+			// says it better, and the hint beside the text says the rest.
 			m.input.Placeholder = ""
 			inputView = m.input.View()
 		}
@@ -2634,23 +3239,32 @@ func (m ChatModel) View() string {
 	// under --dev. Passing it kept a second renderer for one number alive, one
 	// that would print it in user mode the day the hint did come back empty.
 	statusBar := components.RenderStatusBar(components.StatusBarState{
-		AgentName: m.agentName,
-		Connected: m.connected,
-		Streaming: m.streaming,
-		Hint:      hint,
+		AgentName:        m.agentIdentity(),
+		Connected:        m.connected,
+		Streaming:        m.streaming,
+		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
+		Hint:             hint,
 	}, m.width)
 
-	// The bypass banner sits OUTSIDE the viewport, directly under the header,
-	// so it is in every frame and cannot be scrolled away. When bypass is off
+	// The full access banner sits OUTSIDE the viewport, directly under the header,
+	// so it is in every frame and cannot be scrolled away. When full access is off
 	// it renders to "" and JoinVertical drops it, costing no row.
 	rows := []string{header}
-	if banner := m.renderBypassBanner(); banner != "" {
+	if banner := m.renderFullAccessBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
 	if banner := m.renderSelectBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
-	rows = append(rows, divider, vpView, divider, inputView, statusBar)
+	rows = append(rows, divider, vpView)
+	// Pinned between the transcript and the composer: the agent is parked on
+	// this question, so it belongs in every frame, above the input the user
+	// would otherwise be typing into. syncViewportHeight already took these
+	// rows out of the transcript's budget, so it displaces no chrome.
+	if m.confirmation != nil && m.confirmRows > 0 {
+		rows = append(rows, clipConfirmation(m.confirmation.View(), m.confirmRows))
+	}
+	rows = append(rows, divider, inputView, statusBar)
 	base := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 	// The "/" palette draws over everything the same way the help panel does
@@ -2666,6 +3280,27 @@ func (m ChatModel) View() string {
 	// Composited last so it sits over everything. Returns the base untouched
 	// when the panel is closed, and when a root model is drawing it instead.
 	return m.help.Render(base, m.width, m.height)
+}
+
+// clipConfirmation trims the modal to *rows*, keeping the head and the last
+// line.
+//
+// Only reachable on a terminal too short for the modal and a transcript
+// together. What survives is chosen rather than truncated: the head carries the
+// badge and the command being approved, and the final line is the one that says
+// which keys answer it. Dropping the middle loses the risk sentence, which is
+// the least of the three to lose — a prompt whose keys are off-screen is
+// unanswerable, and one whose command is off-screen is unreadable.
+func clipConfirmation(view string, rows int) string {
+	lines := strings.Split(view, "\n")
+	if rows <= 0 || len(lines) <= rows {
+		return view
+	}
+	if rows == 1 {
+		return lines[0]
+	}
+	kept := append([]string{}, lines[:rows-1]...)
+	return strings.Join(append(kept, lines[len(lines)-1]), "\n")
 }
 
 // extractCommandFromArgs pulls the one argument worth showing out of a legacy
@@ -2696,25 +3331,36 @@ func extractCommandFromArgs(raw json.RawMessage) string {
 	return ""
 }
 
-// renderHeader draws the product name, and the agent's name only when it adds
-// something. The flagship agent is itself called GAIA, so the generic form
-// rendered "GAIA │ GAIA" — a divider separating a word from itself.
+// renderHeader draws the product name, then the running agent's identity —
+// its stable id, because --agent takes the id, not the display name — kept
+// distinct from "GAIA" even for the flagship: one names the product, the
+// other names which agent is answering, and a user cannot read that off a
+// bare "GAIA │ GAIA" repeating the same word.
 func (m ChatModel) renderHeader() string {
-	title := headerStyle.Render("GAIA")
-	if !isBrandName(m.agentName) {
-		title += lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentName)
-	}
+	prefix := headerStyle.Render("GAIA")
+	identity := m.renderIdentityChip()
+
 	// Developer mode is worth stating on every frame: it also redirects the
 	// agent's file logging to DEBUG, so someone reading a log full of detail —
 	// or an empty one — needs to be able to see which mode produced it.
-	if m.dev {
-		title += activityStyle.Render(" │ dev")
-	}
+	//
 	// Names the specific model in use (never a bare "claude") and colors it
 	// when inference is remote — worth stating on every frame so the user can
 	// always tell where inference runs and which model answered.
-	title += m.renderModelChip()
-	title += m.renderLemonadeChip()
+	var rest string
+	if m.dev {
+		rest += activityStyle.Render(" │ dev")
+	}
+	rest += m.renderModelChip()
+	rest += m.renderLemonadeChip()
+
+	title := prefix + identity + rest
+	if m.width > 0 && ansi.StringWidth(title) > m.width {
+		// Which agent is answering matters less than which model is: on a
+		// narrow terminal the identity chip is what gives way, never the model
+		// chip it would otherwise crowd out.
+		title = prefix + rest
+	}
 	if m.width > 0 {
 		// Never let the header wrap: contentHeaderRows budgets it as exactly
 		// one row, and a wrapped header shifts every mouse hit-test below it.
@@ -2723,8 +3369,31 @@ func (m ChatModel) renderHeader() string {
 	return title
 }
 
-// isBrandName reports whether an agent's display name is just the product name,
-// so callers can drop the duplicate rather than print it twice.
-func isBrandName(agent string) bool {
-	return strings.EqualFold(strings.TrimSpace(agent), "gaia")
+// agentIdentity is "agent <id>", optionally with a "v<version>" suffix — the
+// one string a user can read off the screen and pass straight back to
+// --agent. The id is always lowercased regardless of how the catalog
+// capitalizes the display name, so the header never disagrees with itself on
+// two different launches of the same agent.
+//
+// version prefers a live probe of the peer's own reported version over the
+// value known at construction time (the catalog's installed version), read
+// through an optional interface so this package never has to import the
+// client that implements it.
+func (m ChatModel) agentIdentity() string {
+	version := m.agentVersion
+	if v, ok := m.client.(interface{ AgentVersion() string }); ok {
+		if live := v.AgentVersion(); live != "" {
+			version = live
+		}
+	}
+	identity := "agent " + strings.ToLower(m.agentID)
+	if version != "" {
+		identity += " v" + version
+	}
+	return identity
+}
+
+// renderIdentityChip is agentIdentity styled as a header segment.
+func (m ChatModel) renderIdentityChip() string {
+	return lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentIdentity())
 }

@@ -15,7 +15,11 @@ import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 
-from gaia.ui.utils import compute_file_hash_from_fd, safe_open_document
+from gaia.ui.utils import (
+    DOCUMENT_ROOTS_ENV,
+    compute_file_hash_from_fd,
+    safe_open_document,
+)
 
 
 @pytest.fixture
@@ -48,32 +52,31 @@ class TestSafeOpenDocument:
             or "symbolic" in exc_info.value.detail.lower()
         )
 
-    def test_safe_open_rejects_symlinked_directory_escape(self, home_tmp_dir):
+    def test_safe_open_rejects_symlinked_directory_escape(self, tmp_path, monkeypatch):
         """An intermediate symlinked dir inside home must not open files outside.
 
-        The lexical (abspath) home check passes for
-        ``~/.gaia_test_toctou/esc/secret.txt`` while the physical path lives
-        outside home — the realpath containment check must reject it with 403.
-        O_NOFOLLOW alone cannot catch this: it only guards the final component.
+        The lexical (abspath) home check passes for ``<home>/esc/secret.txt``
+        while the physical path lives outside home — the realpath containment
+        check must reject it with 403. O_NOFOLLOW alone cannot catch this: it
+        only guards the final component.
         """
-        import tempfile
-
-        outside_dir = Path(tempfile.mkdtemp(prefix="gaia_toctou_outside_"))
+        # A private home: on Windows the system temp dir sits inside the real one.
+        home = tmp_path / "home"
+        outside_dir = tmp_path / "outside"
+        home.mkdir()
+        outside_dir.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv(DOCUMENT_ROOTS_ENV, raising=False)
+        (outside_dir / "secret.txt").write_text("outside-home content")
+        escape_link = home / "esc"
         try:
-            secret = outside_dir / "secret.txt"
-            secret.write_text("outside-home content")
-            escape_link = home_tmp_dir / "esc"
-            try:
-                escape_link.symlink_to(outside_dir, target_is_directory=True)
-            except OSError:
-                pytest.skip("Symlink creation requires elevated privileges on Windows")
-            attack_path = escape_link / "secret.txt"
-            with pytest.raises(HTTPException) as exc_info:
-                with safe_open_document(str(attack_path)):
-                    pass
-            assert exc_info.value.status_code == 403
-        finally:
-            shutil.rmtree(outside_dir, ignore_errors=True)
+            escape_link.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("Symlink creation requires elevated privileges on Windows")
+        with pytest.raises(HTTPException) as exc_info:
+            with safe_open_document(str(escape_link / "secret.txt")):
+                pass
+        assert exc_info.value.status_code == 403
 
     def test_safe_open_rejects_missing_file(self, home_tmp_dir):
         """Non-existent file must return 404."""
@@ -119,6 +122,72 @@ class TestSafeOpenDocument:
             assert data == content
             assert st.st_size == len(content)
             assert resolved == f.resolve()
+
+    def test_safe_open_allows_declared_root_outside_home(self, tmp_path, monkeypatch):
+        """A root declared via GAIA_DOCUMENT_ROOTS is readable (#3585).
+
+        This is the eval-corpus case: the checkout lives outside the service
+        account's home, so without a declared root every indexed document 403s.
+        """
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        doc = corpus / "acme_q3_report.md"
+        doc.write_bytes(b"Q3 revenue was $14.2 million.")
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, str(corpus))
+        with safe_open_document(str(doc)) as (fd, _st, resolved):
+            assert os.read(fd, 1024) == b"Q3 revenue was $14.2 million."
+            assert resolved == doc.resolve()
+
+    def test_declared_root_does_not_open_its_parent(self, tmp_path, monkeypatch):
+        """Declaring a root widens access to that root only, not above it."""
+        # Home is always a root, and on Windows the temp dir sits INSIDE the
+        # profile — so without pinning home elsewhere `outside` is allowed on
+        # home's account and this test passes without testing anything.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        outside = tmp_path / "secrets.txt"
+        outside.write_bytes(b"do not read")
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, str(corpus))
+        with pytest.raises(HTTPException) as exc_info:
+            with safe_open_document(str(outside)):
+                pass
+        assert exc_info.value.status_code == 403
+
+    def test_declared_root_still_rejects_symlink_escape(self, tmp_path, monkeypatch):
+        """realpath containment applies to declared roots too, not just home."""
+        # Pin home: on Windows tmp_path sits inside it, so `outside` would pass.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        secret = outside_dir / "secret.txt"
+        secret.write_text("outside-root content")
+        escape_link = corpus / "esc"
+        try:
+            escape_link.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            pytest.skip("Symlink creation requires elevated privileges on Windows")
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, str(corpus))
+        with pytest.raises(HTTPException) as exc_info:
+            with safe_open_document(str(escape_link / "secret.txt")):
+                pass
+        assert exc_info.value.status_code == 403
+
+    def test_misconfigured_root_fails_loudly(self, monkeypatch, home_tmp_dir):
+        """A bogus GAIA_DOCUMENT_ROOTS is a 500, never a silent home-only run."""
+        f = home_tmp_dir / "doc.txt"
+        f.write_bytes(b"content")
+        monkeypatch.setenv(DOCUMENT_ROOTS_ENV, "not/absolute")
+        with pytest.raises(HTTPException) as exc_info:
+            with safe_open_document(str(f)):
+                pass
+        assert exc_info.value.status_code == 500
 
 
 class TestComputeFileHashFromFd:

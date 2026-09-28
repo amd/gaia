@@ -49,6 +49,10 @@ def mcp_test_spec(monkeypatch):
             tier=1,
             type="mcp_server",
             description="Stub MCP server for api tests",
+            # Declared so grant_agent's ceiling (#915) accepts both scopes the
+            # auto-grant test asserts; a spec that declares none gets the
+            # implicit ("use",) default instead.
+            available_scopes=("use", "use:write"),
             mcp_command="true",
             mcp_args=(),
         )

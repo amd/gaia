@@ -5,6 +5,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 // ForAgentOptions configures the transport built by ForAgent.
@@ -24,10 +25,10 @@ type ForAgentOptions struct {
 	// leaves it false so an agent that needs an answer says so and stops,
 	// instead of parking until the question times out.
 	Interactive bool
-	// BypassPermissions starts the agent with confirmation prompts OFF: every
+	// FullAccess starts the agent with confirmation prompts OFF: every
 	// gated tool runs without asking. Off unless the launch explicitly asked
 	// for it, and the UI must say so on every frame while it is on.
-	BypassPermissions bool
+	FullAccess bool
 	// UseClaude routes the agent's inference to Anthropic's Claude API instead
 	// of the local Lemonade backend — the conversation leaves the machine.
 	// Subprocess transport only; the daemon transport refuses it.
@@ -35,12 +36,21 @@ type ForAgentOptions struct {
 	// ClaudeModel picks which Claude model UseClaude uses; empty lets the
 	// agent pick its default. Meaningless without UseClaude, and refused.
 	ClaudeModel string
+	// Trace records every event the transport receives to a JSONL file
+	// (the TUI's --trace). Nil means tracing is off. Honoured by BOTH
+	// transports: the flagship's is chosen by install state, so tracing only
+	// one of them would leave --trace silently recording nothing.
+	Trace *event.TraceWriter
 }
 
-// BypassPermissionsFlag is the argument that starts a subprocess agent with
+// FullAccessFlag is the argument that starts a subprocess agent with
 // prompts off. Must match the flag gaia_agent.stdio's parser declares, and
-// SubprocessClient.BypassAtLaunch scans argv for exactly this string.
-const BypassPermissionsFlag = "--bypass-permissions"
+// SubprocessClient.FullAccessAtLaunch scans argv for exactly this string.
+// Deliberately the same name as the TUI's own flag: an agent too old to know
+// it exits on the unrecognized argument instead of starting with prompts on
+// under a full-access banner, and a new agent refuses the retired
+// --bypass-permissions the same way.
+const FullAccessFlag = "--full-access"
 
 // UseClaudeFlag is the argument that points a subprocess agent at Anthropic's
 // Claude API instead of the local Lemonade backend. Must match the flag the
@@ -59,6 +69,9 @@ const ClaudeModelFlag = "--claude-model"
 // finding every launch site. It deliberately lives here rather than on a Bubble
 // Tea model — the headless CLI paths need it without a UI.
 func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
+	if err := CheckFullAccessSupported(agent, opts.FullAccess); err != nil {
+		return nil, err
+	}
 	// A model with no backend switch would be accepted and then change nothing.
 	if opts.ClaudeModel != "" && !opts.UseClaude {
 		return nil, fmt.Errorf(
@@ -80,6 +93,7 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			MaxSteps:    opts.MaxSteps,
 			Logf:        opts.Logf,
 			Interactive: opts.Interactive,
+			Trace:       opts.Trace,
 		}), nil
 
 	case catalog.TransportSubprocess:
@@ -101,8 +115,8 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		if opts.Dev && len(agent.DevArgs) > 0 {
 			args = append(append([]string{}, args...), agent.DevArgs...)
 		}
-		if opts.BypassPermissions {
-			args = append(append([]string{}, args...), BypassPermissionsFlag)
+		if opts.FullAccess {
+			args = append(append([]string{}, args...), FullAccessFlag)
 		}
 		if opts.UseClaude {
 			extra := []string{UseClaudeFlag}
@@ -111,14 +125,33 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			}
 			args = append(append([]string{}, args...), extra...)
 		}
-		if agent.CanonicalEvents {
-			return NewCanonicalSubprocessClient(bin, args, opts.Dev), nil
+		if opts.Model != "" {
+			if agent.ID != catalog.FlagshipID {
+				return nil, fmt.Errorf("model override is unsupported for subprocess agent %q", agent.ID)
+			}
+			args = append(append([]string{}, args...), "--model", opts.Model)
 		}
-		return NewSubprocessClient(bin, args, opts.Dev), nil
+		if agent.CanonicalEvents {
+			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
+		}
+		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
 
 	default:
 		return nil, fmt.Errorf(
 			"agent %q declares transport %d, which this build does not know how to reach — "+
 				"upgrade GAIA or fix the catalog entry", agent.ID, int(agent.Transport))
 	}
+}
+
+// FullAccessSupported reports whether this agent's transport can carry full access.
+func FullAccessSupported(agent catalog.Agent) bool {
+	return agent.Transport != catalog.TransportDaemon
+}
+
+// CheckFullAccessSupported validates launch options before readiness can connect.
+func CheckFullAccessSupported(agent catalog.Agent, enabled bool) error {
+	if enabled && !FullAccessSupported(agent) {
+		return fmt.Errorf("--full-access is not supported for agent %q over the daemon transport. Drop --full-access to keep confirmation prompts enabled", agent.ID)
+	}
+	return nil
 }

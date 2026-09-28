@@ -1,0 +1,7 @@
+{
+  "scenario_id": "tool_query",
+  "required_subsequence": ["status", "tool_call", "tool_result", "final"],
+  "terminal": "final",
+  "forbidden": ["error"],
+  "_comment": "Golden tool path for POST /v1/gaia/query: a request that requires a read tool (e.g. list files under home) must reach a status line, call a tool, return its result, and end in exactly one final with no error. The tool_call milestone is the anti-fabrication pin — a polished answer produced with zero working tools fails this baseline. Ordered-subsequence match, not an exact list (status/token counts are LLM-non-deterministic)."
+}

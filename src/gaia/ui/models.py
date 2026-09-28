@@ -63,8 +63,8 @@ class SystemStatus(BaseModel):
     # this machine has a modern daemon, a legacy CLI, or a tray app, and a
     # second copy of the answer is how `lemonade-server serve` survived in the
     # banner long after it stopped existing. ``start_command`` is None on hosts
-    # started from a GUI — there is no shell command to give, and inventing one
-    # is the bug.
+    # requiring GUI/manual configuration, including service context changes.
+    # In those cases start_instruction carries the necessary steps.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None
     # Extended Lemonade info (settings modal)
@@ -78,9 +78,8 @@ class SystemStatus(BaseModel):
     # Last inference stats
     tokens_per_second: Optional[float] = None
     time_to_first_token: Optional[float] = None
-    # Device compatibility check
+    # Display-only CPU name for the Settings panel; None when undetectable
     processor_name: Optional[str] = None
-    device_supported: bool = True
     # LLM configuration health
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
@@ -574,6 +573,7 @@ class FileSearchResponse(BaseModel):
     total: int
     query: str
     searched_locations: List[str] = Field(default_factory=list)
+    truncated: bool = False
 
 
 class OpenFileRequest(BaseModel):

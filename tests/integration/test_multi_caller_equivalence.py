@@ -30,6 +30,9 @@ from gaia.connectors.store import save_connection
 
 pytestmark = pytest.mark.integration
 
+# The Agent UI refuses mutating /api/* calls without it (gaia.ui.security).
+UI_HEADER = {"x-gaia-ui": "1"}
+
 
 @pytest.fixture
 def env(monkeypatch, tmp_path, in_memory_keyring):  # noqa: F811
@@ -51,7 +54,7 @@ def _seed_connection(google_provider):
         provider="google",
         account_email="multi-caller@example.com",
         refresh_token="multi-caller-refresh",
-        scopes=["gmail.readonly"],
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         client_id_hash=google_provider.client_id_hash,
     )
 
@@ -71,11 +74,17 @@ class TestSdkPath:
         _seed_connection(google)
 
         # SDK: grant_agent.
-        connections.grant_agent("google", "builtin:multi-test", ["gmail.readonly"])
+        connections.grant_agent(
+            "google",
+            "builtin:multi-test",
+            ["https://www.googleapis.com/auth/gmail.readonly"],
+        )
 
         # CLI sees the same grant.
         listing = connections.list_agent_grants("google")
-        assert listing == {"builtin:multi-test": ["gmail.readonly"]}
+        assert listing == {
+            "builtin:multi-test": ["https://www.googleapis.com/auth/gmail.readonly"]
+        }
 
         # UI sees the same connection metadata via the public API.
         rows = connections.list_connections()
@@ -85,7 +94,7 @@ class TestSdkPath:
         token = asyncio.run(
             connections.get_access_token(
                 provider="google",
-                scopes=["gmail.readonly"],
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                 agent_id="builtin:multi-test",
             )
         )
@@ -108,20 +117,22 @@ class TestCliPath:
                 "google",
                 "builtin:cli-test",
                 "--scopes",
-                "gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.readonly",
             ]
         )
         assert rc == 0
 
         # SDK sees the grant the CLI wrote.
         listing = connections.list_agent_grants("google")
-        assert listing == {"builtin:cli-test": ["gmail.readonly"]}
+        assert listing == {
+            "builtin:cli-test": ["https://www.googleapis.com/auth/gmail.readonly"]
+        }
 
         # SDK can fetch a token under that agent_id.
         token = asyncio.run(
             connections.get_access_token(
                 provider="google",
-                scopes=["gmail.readonly"],
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                 agent_id="builtin:cli-test",
             )
         )
@@ -139,19 +150,22 @@ class TestUiPath:
         # UI: PUT /api/connectors/google/grants/builtin:ui-test
         resp = ui_api_client.put(
             "/api/connectors/google/grants/builtin:ui-test",
-            json={"scopes": ["gmail.readonly"]},
+            json={"scopes": ["https://www.googleapis.com/auth/gmail.readonly"]},
+            headers=UI_HEADER,
         )
         assert resp.status_code == 200, resp.text
 
         # CLI sees the grant.
         listing = connections.list_agent_grants("google")
-        assert listing == {"builtin:ui-test": ["gmail.readonly"]}
+        assert listing == {
+            "builtin:ui-test": ["https://www.googleapis.com/auth/gmail.readonly"]
+        }
 
         # SDK can fetch a token under the same agent_id.
         token = asyncio.run(
             connections.get_access_token(
                 provider="google",
-                scopes=["gmail.readonly"],
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                 agent_id="builtin:ui-test",
             )
         )
@@ -159,7 +173,11 @@ class TestUiPath:
 
         # And the UI status endpoint reflects it.
         status = ui_api_client.get("/api/connectors/google/grants").json()
-        assert status == {"grants": {"builtin:ui-test": ["gmail.readonly"]}}
+        assert status == {
+            "grants": {
+                "builtin:ui-test": ["https://www.googleapis.com/auth/gmail.readonly"]
+            }
+        }
 
 
 class TestThreeCallersAgreeOnConnection:
@@ -178,14 +196,13 @@ class TestThreeCallersAgreeOnConnection:
         assert rc == 0
 
         # UI
-        ui_rows = ui_api_client.get("/api/connectors").json()["connections"]
-        assert any(r["provider"] == "google" for r in ui_rows)
+        ui_rows = ui_api_client.get("/api/connectors").json()["connectors"]
+        ui_google = next(r for r in ui_rows if r["id"] == "google")
+        assert ui_google["configured"] is True
 
         # Same email surfaces everywhere.
         sdk_email = next(r for r in sdk_rows if r["provider"] == "google")[
             "account_email"
         ]
-        ui_email = next(r for r in ui_rows if r["provider"] == "google")[
-            "account_email"
-        ]
+        ui_email = ui_google["account_id"]
         assert sdk_email == ui_email == "multi-caller@example.com"

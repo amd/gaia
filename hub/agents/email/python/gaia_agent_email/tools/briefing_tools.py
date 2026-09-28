@@ -69,12 +69,17 @@ class BriefingToolsMixin:
             just the count. If ``data.summary.needs_attention`` is false, say
             plainly that nothing needs attention. Name every entry in
             ``data.summary.preferences_applied`` (e.g. "using your low
-            priority: ..."), matching the pre-scan card's behavior. Never
-            assert an urgency conclusion that ``data.summary`` /
-            ``data.briefing`` did not itself compute.
+            priority: ..."), matching the pre-scan card's behavior. If
+            ``data.stale`` is true, repeat the age warning in
+            ``data.summary.headline`` before presenting the contents; never
+            present a stale briefing as current. Never assert an urgency
+            conclusion that ``data.summary`` / ``data.briefing`` did not
+            itself compute.
             """
             try:
                 from gaia_agent_email.briefing import (
+                    BRIEFING_STALE_AFTER_SECONDS,
+                    briefing_age_seconds,
                     load_latest_briefing,
                     persist_briefing,
                     summarize_briefing,
@@ -94,7 +99,15 @@ class BriefingToolsMixin:
                 # "summary" as current) so a briefing generated before #2525
                 # still gets the structured breakdown on read.
                 record = dict(record)
-                record["summary"] = summarize_briefing(record.get("briefing") or {})
+                age = briefing_age_seconds(record.get("generated_at"))
+                stale = age >= BRIEFING_STALE_AFTER_SECONDS
+                record["cache_age_seconds"] = age
+                record["stale"] = stale
+                record["summary"] = summarize_briefing(
+                    record.get("briefing") or {},
+                    cache_age_seconds=age,
+                    stale=stale,
+                )
                 return _envelope_ok(record)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

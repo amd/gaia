@@ -13,6 +13,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from gaia.agents.base.agent import Agent as _Agent
+
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "skills"
 
 
@@ -259,6 +261,69 @@ def make_key(tmp_path: Path, name: str = "publisher"):
     return generate_key(tmp_path, name=name)
 
 
+def make_marketplace(tmp_path: Path) -> "Marketplace":
+    """A cold marketplace: empty hub, empty skills root, empty trust store.
+
+    Publish and install run for real against :class:`FakeHub`, so a lock entry
+    produced here carries the same digests, signature, and enforced tier a real
+    install would write.
+    """
+    return Marketplace(tmp_path)
+
+
+class Marketplace:
+    """Bundles the fake hub with an isolated skills root and its helpers."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.tmp_path = Path(tmp_path)
+        self.hub = fake_hub(self.tmp_path)
+        self.skills_root = self.tmp_path / "gaia-home" / "skills"
+        self.manager = isolated_manager(
+            self.tmp_path, user_skills_root=self.skills_root
+        )
+        self.audit = write_audit_report(self.tmp_path)
+
+    def publish(self, source, **kwargs):
+        from gaia.skills.publish import publish_skill
+
+        kwargs.setdefault("keys_root", self.skills_root)
+        kwargs.setdefault("audit_report", self.audit)
+        return publish_skill(
+            source,
+            token="test-token",
+            hub_url=self.hub.BASE_URL,
+            uploader=self.hub.accept_publish,
+            **kwargs,
+        )
+
+    def install(self, reference, **kwargs):
+        from gaia.skills.install import install_skill
+
+        return install_skill(
+            reference,
+            manager=self.manager,
+            base_url=self.hub.BASE_URL,
+            fetcher=self.hub.fetcher,
+            **kwargs,
+        )
+
+    def trust(self, key, *, role="publisher", publisher="acme"):
+        import base64
+
+        from gaia.skills.signing import TrustStore
+
+        store = TrustStore.load(self.skills_root)
+        store.add(
+            public_key_b64=base64.b64encode(key.public_bytes).decode("ascii"),
+            publisher=publisher,
+            role=role,
+        )
+        store.save()
+
+    def keygen(self, name: str = "publisher"):
+        return make_key(self.skills_root, name=name)
+
+
 def isolated_manager(tmp_path: Path, **kwargs):
     """A :class:`SkillManager` whose roots are all inside ``tmp_path``.
 
@@ -274,3 +339,29 @@ def isolated_manager(tmp_path: Path, **kwargs):
         claude_skill_dirs=claude_dirs,
         **kwargs,
     )
+
+
+class LearnedOverlayStubMixin:
+    """Gives a hand-rolled ``Agent`` double the learned-overlay attributes.
+
+    ``Agent.get_skills_system_prompt`` resolves every skill body through the
+    adaptive-skills overlay (#2674), so a stub that borrows that method also
+    needs the handful of members it calls. Inherit this and they are inert: with
+    no memory store the resolver short-circuits and returns the authored body,
+    which is what a test not about learning expects.
+
+    It lives here rather than being copy-pasted into each stub because two test
+    files already needed the identical block, and the third would have been
+    debugged from an ``AttributeError`` rather than found.
+    """
+
+    _effective_skill_body = _Agent._effective_skill_body
+    learned_skills_enabled = _Agent.learned_skills_enabled
+    overlaid_skills = _Agent.overlaid_skills
+    learned_skill_scope = _Agent.learned_skill_scope
+
+    _memory_store = None
+    _incognito = False
+    _learned_skills_enabled = True
+    _effective_skill_cache = None
+    _overlaid_skills = None

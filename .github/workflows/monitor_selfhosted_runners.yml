@@ -78,8 +78,11 @@ jobs:
             age=$(( now - $(date -d "$ts" +%s) ))
             echo "  last heartbeat: $ts (${age}s ago)"
 
-            if [ "$age" -gt 691200 ]; then   # 8 days (weekly + 1 day buffer)
-              echo "  STALE — older than 8 days"
+            # 3 days: healthy is ~1 day (beat Sunday, check Monday), one missed
+            # beat is ~8 days. Must stay well under 8 — an 8-day limit decided
+            # that case by seconds and passed runners that were already dead.
+            if [ "$age" -gt 259200 ]; then
+              echo "  STALE — no heartbeat in over 3 days"
               missing="$missing $r"
             fi
           done

@@ -57,20 +57,16 @@ class ScratchpadToolsMixin:
             table_name: str,
             columns: str,
         ) -> str:
-            """Create a table in the scratchpad database for storing extracted data.
+            """Create a table in the scratchpad database for extracted data.
 
-            Use this to set up structured storage before processing documents.
-            Column definitions follow SQLite syntax.
-
-            Example usage:
-                create_table("transactions",
-                    "date TEXT, description TEXT, amount REAL, category TEXT, source_file TEXT")
-                create_table("research_papers",
-                    "title TEXT, authors TEXT, year INTEGER, journal TEXT, abstract TEXT, key_findings TEXT")
+            Set up the table before processing documents into it, then fill it
+            with insert_data.
 
             Args:
-                table_name: Name for the new table (alphanumeric and underscores only)
-                columns: Column definitions in SQLite syntax, e.g. "name TEXT, value REAL, count INTEGER"
+                table_name: Name for the new table (alphanumerics and
+                    underscores only)
+                columns: SQLite column definitions, e.g. "date TEXT,
+                    description TEXT, amount REAL, source_file TEXT"
             """
             if not _ensure_scratchpad():
                 return (
@@ -93,20 +89,12 @@ class ScratchpadToolsMixin:
         ) -> str:
             """Insert rows into a scratchpad table.
 
-            Data is a JSON array of objects matching the table columns.
-            Use this after extracting structured data from a document.
-
-            Example usage:
-                insert_data("transactions", '[
-                    {"date": "2026-01-05", "description": "NETFLIX", "amount": 15.99,
-                     "category": "subscription", "source_file": "jan-statement.pdf"},
-                    {"date": "2026-01-07", "description": "WHOLE FOODS", "amount": 87.32,
-                     "category": "groceries", "source_file": "jan-statement.pdf"}
-                ]')
+            Use after extracting structured data from a document.
 
             Args:
                 table_name: Name of the scratchpad table to insert into
-                data: JSON array of objects, each object is a row with column:value pairs
+                data: JSON array of row objects keyed by column name, e.g.
+                    '[{"date": "2026-01-05", "amount": 15.99}]'
             """
             if not _ensure_scratchpad():
                 return "Error: Scratchpad service not initialized."
@@ -170,21 +158,15 @@ class ScratchpadToolsMixin:
         def query_data(
             sql: str,
         ) -> str:
-            """Run a SQL query against the scratchpad database.
+            """Run a SQL SELECT against the scratchpad database.
 
-            Use SELECT queries to analyze accumulated data. Supports all SQLite
-            functions: SUM, AVG, COUNT, GROUP BY, ORDER BY, JOINs, subqueries, etc.
-
-            IMPORTANT: Table names in queries must use the 'scratch_' prefix.
-            For example, if you created a table called 'transactions', query it as 'scratch_transactions'.
-
-            Examples:
-                "SELECT category, SUM(amount) as total FROM scratch_transactions GROUP BY category ORDER BY total DESC"
-                "SELECT description, COUNT(*) as freq, SUM(amount) as total FROM scratch_transactions GROUP BY description HAVING freq > 1 ORDER BY freq DESC"
-                "SELECT strftime('%Y-%m', date) as month, SUM(amount) FROM scratch_transactions GROUP BY month"
+            Full SQLite: aggregates, GROUP BY, JOINs, subqueries. Table names
+            take a 'scratch_' prefix — a table created as 'transactions' is
+            queried as 'scratch_transactions'.
 
             Args:
-                sql: SQL SELECT query to execute against the scratchpad database
+                sql: SELECT query, e.g. "SELECT category, SUM(amount) AS total
+                    FROM scratch_transactions GROUP BY category"
             """
             if not _ensure_scratchpad():
                 return "Error: Scratchpad service not initialized."

@@ -289,7 +289,7 @@ This allows project-specific MCP server configurations while maintaining a globa
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
-        "GITHUB_TOKEN": "ghp_xxx"
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxx"
       }
     }
   }
@@ -317,7 +317,7 @@ This format is compatible with Claude Desktop and other Anthropic tools. The `mc
     agent.connect_mcp_server("github", {
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-github"],
-        "env": {"GITHUB_TOKEN": "ghp_your_token_here"}
+        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_your_token_here"}
     })
     ```
   </Tab>
@@ -420,8 +420,10 @@ you chose to install.
 </Warning>
 
 <Note>
-The Agent UI shows a permission modal, where **Always allow** stops the
-prompting for a specific tool. The CLI asks on the terminal and defaults to no.
+The Agent UI shows a permission modal, where **Allow this tool for the rest of
+this chat** stops the prompting for that tool in that chat until you reload or restart GAIA —
+the grant is never saved, and **Settings → Tools & Permissions** lists every
+active grant so you can revoke it. The CLI asks on the terminal and defaults to no.
 A run with no terminal to ask — piped, CI, or otherwise unattended — refuses the
 tool rather than approving it.
 </Note>

@@ -90,7 +90,8 @@ def auto_approve_env_enabled() -> bool:
     Reads the environment as it was at startup, before any ``.env`` was merged
     in (``gaia.pre_dotenv_env``): a project-local file must not be able to switch
     off every confirmation prompt. A library host that wants unattended approval
-    passes ``auto_approve_gated_tools=True`` to its console instead.
+    passes ``auto_approve_gated_tools=True`` to its console instead. Neither
+    widens the shell: see ``OutputHandler.auto_approve_gated_tools``.
     """
     import gaia  # deferred: gaia/__init__ imports this module
 
@@ -199,12 +200,41 @@ class OutputHandler(ABC):
     blocking_confirmation: bool = False
     """Whether ``confirm_tool_execution`` waits for an explicit user decision."""
 
+    supports_stdin_prompts: bool = False
+    """Whether the person driving this handler is on the *process's* stdin.
+
+    A server-side handler shares the process stdin with the operator but not
+    with the requester, so a blocking ``input()`` there hangs the request
+    forever while stealing the operator's keystrokes.
+    """
+
     auto_approve_gated_tools: bool = False
     """Explicit opt-in: approve confirmation-gated tools with no human present.
 
     Never default-on. A host sets this (or the operator sets
     ``GAIA_AUTO_APPROVE_TOOLS=1``) when it has already obtained consent or is a
     trusted unattended harness. Every approval taken this way is logged.
+
+    It answers prompts; it does not widen the shell. A command outside
+    ``run_shell_command``'s no-prompt list is still refused under it, exactly
+    as under the environment variable. Only :attr:`full_access` runs those.
+    """
+
+    full_access: bool = False
+    """A person turned on full access for this session, and can see that it is on.
+
+    Strictly narrower in origin than ``auto_approve_gated_tools`` and wider in
+    effect. Only ``PermissionState`` sets it, from the TUI's ``/full-access``
+    (or the retired ``--bypass-permissions`` spelling) — an unattended harness
+    that merely pre-approves prompts must not also get an unguarded shell. In
+    exchange it lifts the shell guardrails too: the operator block, the
+    read-only binary policy (replaced by ``DEVELOPER_COMMANDS``) and the rate
+    limit, and it runs commands outside ``run_shell_command``'s no-prompt list
+    without asking. See
+    ``gaia.agents.tools.shell_tools.ShellToolsMixin.full_access_active``.
+
+    Mutable for the life of the session: the host can toggle it mid-run over the
+    control channel, and the next gated call sees the new value.
     """
 
     _last_denial: Optional[Tuple[str, str]] = None
@@ -318,6 +348,9 @@ class OutputHandler(ABC):
         answer: str,
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
+        tok_per_s: Optional[float] = None,
+        input_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ):
         """Print final answer/result.
 
@@ -327,6 +360,9 @@ class OutputHandler(ABC):
         ttft_seconds: real time-to-first-token for the LLM call that produced
         this answer, if known (#2899 follow-up). None means no real value is
         available — never substitute an estimate.
+        tok_per_s: the backend's own generation rate for this turn, if it
+        reported one. None means unmeasured — never derive it from the turn's
+        wall clock, which includes tool time and agent overhead.
         """
         ...
 
@@ -389,6 +425,18 @@ class OutputHandler(ABC):
 
     def display_stats(self, stats: Dict[str, Any]):  # pylint: disable=unused-argument
         """Display performance statistics. Optional - default no-op."""
+        ...
+
+    def print_diff(  # pylint: disable=unused-argument
+        self, diff: str, filename: str
+    ) -> None:
+        """Show a unified diff for a file the agent changed. Optional no-op.
+
+        Declared here so no handler can be missing it: the write tools call it
+        AFTER the bytes are on disk, and an AttributeError there reported a
+        completed edit as a failure (#3676). The diff also rides in the tool
+        result, so a handler that renders nothing loses no information.
+        """
         ...
 
     def print_header(self, text: str):  # pylint: disable=unused-argument
@@ -684,6 +732,8 @@ class TerminalConfirmationMixin:
     Mix in alongside ``OutputHandler``, whose ``deny_tool_execution`` /
     ``auto_approve_confirmations_enabled`` / progress hooks this relies on.
     """
+
+    supports_stdin_prompts: bool = True
 
     CONFIRMATION_PROMPT = "Allow this? [y]es / [N]o / [a]lways for this tool: "
     CONFIRMATION_PROMPT_NO_ALWAYS = "Allow this? [y]es / [N]o: "
@@ -1602,6 +1652,9 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
         ttft_seconds: Optional[float] = None,  # pylint: disable=unused-argument
+        tok_per_s: Optional[float] = None,  # pylint: disable=unused-argument
+        input_tokens: Optional[int] = None,  # pylint: disable=unused-argument
+        cached_tokens: Optional[int] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer with appropriate styling.
@@ -1611,6 +1664,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             streaming: Not used (kept for compatibility)
             total_tokens: Not used here (CLI stats table is out of scope for #2899)
             ttft_seconds: Not used here (CLI stats table is out of scope for #2899)
+            tok_per_s: Not used here (CLI stats table is out of scope for #2899)
         """
         if self.rich_available:
             self.console.print()  # Add newline before
@@ -2562,6 +2616,9 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
         ttft_seconds: Optional[float] = None,  # pylint: disable=unused-argument
+        tok_per_s: Optional[float] = None,  # pylint: disable=unused-argument
+        input_tokens: Optional[int] = None,  # pylint: disable=unused-argument
+        cached_tokens: Optional[int] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer.
@@ -2572,6 +2629,7 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
             streaming: Not used (kept for compatibility)
             total_tokens: Not used here (JSON-only mode has its own stats path)
             ttft_seconds: Not used here (JSON-only mode has its own stats path)
+            tok_per_s: Not used here (JSON-only mode has its own stats path)
         """
         if self.silence_final_answer:
             return  # Completely silent

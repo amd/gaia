@@ -501,8 +501,17 @@ class WaitingOnYouToolsMixin:
             ask directly for a reply, decision, or meeting time, AND sit in
             a thread with genuine back-and-forth already in it — i.e. the
             user is in a real conversation and it's their turn to answer.
-            Use this when the user asks what they haven't gotten to, who's
-            waiting on them, or what needs a reply.
+
+            NOT the tool for a general "what needs me" / "what should I
+            look at" / "anything urgent" question (#2764) — ``pre_scan_inbox``
+            already runs this SAME scan at the SAME depth as part of its
+            ``needs_you`` worklist (#2743) and returns the fuller card;
+            prefer it by default. Call this tool directly only when the
+            question is unambiguously and ONLY about the inbound-reply-
+            needed slice on its own — e.g. re-running the scan at a
+            different ``min_age_hours``/depth after the card was already
+            shown, or a non-chat caller with no card to render. See
+            ``ROUTING.md`` for the full decision table.
 
             A bare question mark or a human-looking sender name is NOT
             enough to qualify a message here — marketing and cold-outreach

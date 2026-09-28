@@ -124,6 +124,7 @@ from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import iterate_in_threadpool
 
+from gaia.agents.base.readiness import start_advice
 from gaia.connectors.api import connected_mailbox_providers
 from gaia.connectors.errors import (
     AuthRequiredError,
@@ -275,10 +276,19 @@ def _probe_lemonade_health(
     """
     import requests
 
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     probe_base = _resolve_probe_base(base_url)
     try:
+        # GAIA's own server answers 401 without its key, hiding the version.
         resp = requests.get(
             f"{probe_base}/health",
+            headers=lemonade_auth_headers(
+                resolve_lemonade_api_key(base_url=probe_base)
+            ),
             timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
         )
     except requests.exceptions.RequestException:
@@ -357,7 +367,7 @@ def _pull_model(probe_base: str, model_id: str) -> None:
     resp = requests.post(
         f"{probe_base}/pull",
         json={"model_name": model_id},
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
         timeout=_LEMONADE_PULL_TIMEOUT,
     )
     resp.raise_for_status()
@@ -381,17 +391,20 @@ def _resolve_email_model_id(base_url: Optional[str] = None) -> str:
 def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     """Parse a dotted version string into a comparable int tuple.
 
-    Mirrors ``gaia.installer.init_command.InitCommand._parse_version`` (same
-    semantics: strip a leading ``v``, take the first three dotted parts as
-    ints). Kept LOCAL rather than imported because the frozen sidecar does not
-    bundle ``gaia.installer`` — importing it at runtime would ``ModuleNotFound``
-    in the binary this endpoint exists to serve. Returns ``None`` when the
-    string is missing or unparseable.
+    Same semantics as :func:`gaia.version.parse_version`: strip a leading ``v``,
+    take the first three dotted parts as ints, keeping each part's leading digits
+    so CalVer development builds (``2026.39.0~12.abc1234``) still compare.
+    Returns ``None`` when the string is missing or unparseable.
+
+    Vendored rather than imported: ``gaia.version`` does an
+    ``importlib.metadata`` lookup at import time that a frozen binary cannot
+    satisfy. ``tests/unit/test_lemonade_calver.py`` holds it equivalent.
     """
     if not version:
         return None
     try:
-        return tuple(int(p) for p in version.lstrip("v").split(".")[:3])
+        parts = str(version).strip().lstrip("v").split(".")[:3]
+        return tuple(int(re.match(r"\s*(\d+)", p).group(1)) for p in parts)
     except (ValueError, IndexError, AttributeError):
         return None
 
@@ -645,8 +658,7 @@ class EmailTriageService:
         except requests.exceptions.RequestException as exc:
             raise LLMTriageError(
                 f"Local Lemonade Server is not reachable at {probe_base} "
-                f"({type(exc).__name__}: {exc}). Start it with "
-                "`lemonade-server serve` (or run `gaia init`), then retry."
+                f"({type(exc).__name__}: {exc}). {start_advice()}"
             ) from exc
 
     def _assert_model_present(self, base_url: Optional[str]) -> None:
@@ -2323,6 +2335,17 @@ class EmailBriefingResponse(_Strict):
     generated_at: str = Field(
         ..., description="UTC ISO-8601 timestamp of the scheduled run."
     )
+    cache_age_seconds: float = Field(
+        ...,
+        description="Seconds since generated_at; measured when this response was read.",
+    )
+    stale: bool = Field(
+        ...,
+        description=(
+            "True when the briefing is at least 24 hours old; stale briefings "
+            "are labeled, not regenerated or refused."
+        ),
+    )
     briefing: EmailPreScanResult = Field(
         ..., description="The email_pre_scan envelope the scheduled run produced."
     )
@@ -2355,7 +2378,9 @@ async def get_briefing() -> EmailBriefingResponse:
     surface any host reads it from. 404 until a scheduled run has happened.
     """
     from gaia_agent_email.briefing import (
+        BRIEFING_STALE_AFTER_SECONDS,
         BriefingUnavailableError,
+        briefing_age_seconds,
         load_latest_briefing,
     )
 
@@ -2373,11 +2398,14 @@ async def get_briefing() -> EmailBriefingResponse:
             ),
         )
     try:
+        cache_age_seconds = briefing_age_seconds(record.get("generated_at"))
         return EmailBriefingResponse(
             generated_at=record["generated_at"],
+            cache_age_seconds=cache_age_seconds,
+            stale=cache_age_seconds >= BRIEFING_STALE_AFTER_SECONDS,
             briefing=EmailPreScanResult.model_validate(record["briefing"]),
         )
-    except (KeyError, ValueError) as e:
+    except (BriefingUnavailableError, KeyError, ValueError) as e:
         raise HTTPException(
             status_code=500,
             detail=(
@@ -3009,8 +3037,8 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
             lemonade=lemonade,
             model=InitModelStatus(id=model_id, present=False, loadable=None),
             hint=(
-                f"Local Lemonade Server is not reachable at {probe_base} — start "
-                "it with `lemonade-server serve` (or run `gaia init`), then retry."
+                f"Local Lemonade Server is not reachable at {probe_base}. "
+                f"{start_advice()}"
             ),
         )
 
@@ -3195,10 +3223,7 @@ async def email_provision() -> StreamingResponse:
         # Fail loudly BEFORE streaming so the status code is a truthful 503.
         def _unreachable() -> Iterator[str]:
             yield f"✗ Local Lemonade Server is not reachable at {probe_base}.\n"
-            yield (
-                "✗ Start it with `lemonade-server serve` (or run `gaia init`), "
-                "then POST /v1/email/init again.\n"
-            )
+            yield f"✗ {start_advice()} Then POST /v1/email/init again.\n"
             yield (
                 "✗ The sidecar can't install Lemonade itself — that's a host "
                 "prerequisite.\n"
@@ -3261,7 +3286,11 @@ async def list_calendar_events(
         )
         for e in data.get("events", [])
     ]
-    return CalendarEventsResponse(events=events)
+    return CalendarEventsResponse(
+        events=events,
+        count=len(events),
+        truncated=bool(data.get("truncated", False)),
+    )
 
 
 @router.post("/calendar/events/preview", response_model=CalendarEventPreviewResponse)

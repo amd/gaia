@@ -34,11 +34,10 @@
       "optional": ["https://graph.microsoft.com/Calendars.ReadWrite"]
     },
     "identity_scopes": {
-      "catalog": ["openid", "offline_access", "https://graph.microsoft.com/User.Read"],
-      "provider": ["openid", "offline_access", "https://graph.microsoft.com/User.Read"]
+      "catalog": ["offline_access", "https://graph.microsoft.com/User.Read"],
+      "provider": ["offline_access", "https://graph.microsoft.com/User.Read"]
     },
     "connect_union": [
-      "openid",
       "offline_access",
       "https://graph.microsoft.com/User.Read",
       "https://graph.microsoft.com/Mail.ReadWrite",
@@ -56,11 +55,10 @@
       "optional": ["https://graph.microsoft.com/Calendars.ReadWrite"]
     },
     "identity_scopes": {
-      "catalog": ["openid", "offline_access", "https://graph.microsoft.com/User.Read"],
-      "provider": ["openid", "offline_access", "https://graph.microsoft.com/User.Read"]
+      "catalog": ["offline_access", "https://graph.microsoft.com/User.Read"],
+      "provider": ["offline_access", "https://graph.microsoft.com/User.Read"]
     },
     "connect_union": [
-      "openid",
       "offline_access",
       "https://graph.microsoft.com/User.Read",
       "https://graph.microsoft.com/Mail.ReadWrite",

@@ -14,7 +14,7 @@ on:
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
   pull_request:
-    branches: ["main"]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/electron/**'
@@ -107,6 +107,12 @@ jobs:
         run: |
           cd src/gaia/apps/webui
           npm ci
+
+      # Also runs src/types/apiContract.ts, the hand-written vs generated API type drift guard.
+      - name: Type-check
+        run: |
+          cd src/gaia/apps/webui
+          npx tsc --noEmit
 
       - name: Run Vitest component tests
         run: |

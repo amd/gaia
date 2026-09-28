@@ -1106,7 +1106,11 @@ class TestUnsupportedPlatform:
             result = isolated_disc.scan_installed_apps()
 
         assert result == []
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert warnings, "map/branch drift must not return a quiet empty list"
         assert "drifted" in warnings[0].getMessage()
 
@@ -1143,7 +1147,11 @@ class TestColdEmptyHome:
             assert isolated_disc.scan_browser_history() == []
             assert isolated_disc.scan_email_accounts() == []
 
-        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        errors = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.ERROR and r.name == DISCOVERY_LOGGER
+        ]
         assert not errors, f"cold start logged errors on {platform}: {errors}"
 
     @pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
@@ -1234,7 +1242,11 @@ class TestKeychainContractShape:
         _, results = self._run_keychain(isolated_disc, returncode=44)
 
         assert results == []
-        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert not [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
 
     def test_empty_output_on_success_is_reported(self, isolated_disc, caplog):
         """Exit 0 with no attributes means the CLI output shape changed."""
@@ -1242,7 +1254,11 @@ class TestKeychainContractShape:
         _, results = self._run_keychain(isolated_disc, stdout="", returncode=0)
 
         assert results == []
-        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert warnings, "a shape mismatch must not be silent"
         assert "output format" in warnings[0].getMessage()
 
@@ -1256,7 +1272,11 @@ class TestKeychainContractShape:
             isolated_disc._scan_macos_keychain(set(), results)
 
         assert results == []
-        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert warnings and "security" in warnings[0].getMessage()
 
 
@@ -1292,7 +1312,11 @@ class TestPermissionDenials:
         assert history == []
         assert bookmarks, "a denial in one source must not abort the whole scan"
 
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert len(warnings) == 1, f"expected one actionable warning, got {warnings}"
         message = warnings[0].getMessage()
         assert "Safari history" in message
@@ -1322,7 +1346,11 @@ class TestPermissionDenials:
             os.chmod(tmp_path / "Library" / "Mail", 0o755)
 
         assert results == []
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert warnings, "an unreadable ~/Library/Mail must not be silent"
         assert "Full Disk Access" in warnings[0].getMessage()
 
@@ -1345,7 +1373,11 @@ class TestPermissionDenials:
             os.chmod(sources, 0o755)
 
         assert results == []
-        assert [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
 
     def test_bookmarks_denial_warns(self, isolated_disc, tmp_path, caplog):
         caplog.set_level(logging.INFO, logger=DISCOVERY_LOGGER)
@@ -1369,7 +1401,11 @@ class TestPermissionDenials:
             results = isolated_disc.scan_browser_bookmarks()
 
         assert results == []
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert len(warnings) == 1
         assert "Full Disk Access" in warnings[0].getMessage()
 
@@ -1437,7 +1473,11 @@ class TestCredentialManagerContractShape:
             isolated_disc._scan_credential_manager(set(), results)
 
         assert results == []
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert warnings, "a failed Credential Manager scan must not be silent"
         assert "Credential Manager" in warnings[0].getMessage()
 
@@ -1463,7 +1503,9 @@ class TestCredentialManagerContractShape:
 
         assert results == []
         messages = [
-            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
         ]
         assert any(label in m for m in messages), f"{label} failure was not reported"
 
@@ -1526,7 +1568,11 @@ class TestChromiumProfileDiscovery:
         domains = {r["content"].split()[2] for r in results}
         assert "stackoverflow.com" in domains, "one denial aborted the whole scan"
 
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert warnings, "an unreadable profile root must not be silent"
         assert "Chrome profiles" in warnings[0].getMessage()
 
@@ -1535,7 +1581,11 @@ class TestChromiumProfileDiscovery:
         caplog.set_level(logging.INFO, logger=DISCOVERY_LOGGER)
         with patch("sys.platform", "linux"):
             assert isolated_disc.scan_browser_bookmarks() == []
-        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert not [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
 
 
 class TestXdgDesktopDirs:
@@ -1594,7 +1644,11 @@ class TestXdgDesktopDirs:
             os.chmod(entry, 0o644)
 
         assert results == []
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == DISCOVERY_LOGGER
+        ]
         assert warnings, "an unreadable .desktop silently dropped an app"
 
 

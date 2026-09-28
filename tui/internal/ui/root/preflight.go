@@ -53,9 +53,12 @@ func (m FlagshipModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) 
 // will actually spawn, and whether this session runs on Claude.
 func (m FlagshipModel) localOptions(agent catalog.Agent) preflight.LocalOptions {
 	if m.pfLocal != nil {
-		return *m.pfLocal
+		opts := *m.pfLocal
+		opts.Model = m.model
+		opts.ClaudeMode = m.useClaude
+		return opts
 	}
-	return preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: m.useClaude}
+	return preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: m.useClaude, Model: m.model}
 }
 
 // preflightTransport builds the gate's transport on first use and keeps it for
@@ -139,12 +142,22 @@ func gateAskedAboutSetup(rep preflight.Report) bool {
 	return ok && row.State != preflight.StatePending
 }
 
-// cancelFromGate leaves. There is no screen behind the gate to go back to: the
-// splash is a frame, not a destination, and the one agent this TUI runs is the
-// one the user just declined to start.
+// cancelFromGate leaves — unless there is a live chat behind the gate,
+// meaning this gate was an /agents switch in progress rather than the
+// original launch. Backing out of a switch must not kill the session it was
+// about to replace: there IS a screen behind this gate, the one the user was
+// already on, and it goes back to that instead of quitting.
 func (m FlagshipModel) cancelFromGate() (tea.Model, tea.Cmd) {
 	rep := m.preflight.Report()
+	switching := m.chat != nil
 	m.closeGate()
+	m.pendingTranscript = nil
+
+	if switching {
+		m.activeView = viewChat
+		m.chat.AppendStatus(fmt.Sprintf("Switch cancelled — staying on %s.", m.agent.ID))
+		return m, nil
+	}
 
 	// Say which row it was on the way out — the one that refused the launch, or
 	// the one the user was being asked to fix. To stderr, because the alt screen

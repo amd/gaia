@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,9 +29,20 @@ import (
 // and SidecarRegistry.list_agents from src/gaia/daemon/sidecars/registry.py.
 
 const (
-	agentsRunning = `{"agents":[{"agent_id":"email","state":"running","mode":"frozen",` +
+	// "user" is what a real daemon reports here — AgentSidecarManager.mode
+	// validates against exactly "user" and "dev", and the listing carries
+	// resolved_mode verbatim.
+	agentsRunning = `{"agents":[{"agent_id":"email","state":"running","mode":"user",` +
 		`"pid":41999,"port":51234,"base_url":"http://127.0.0.1:51234","api_version":"2.3",` +
 		`"agent_version":"0.5.0","started_at":1750000000.0,"dev_src_dir":null}]}`
+
+	// The same listing for a sidecar someone started from a checkout. "dev" and
+	// "user" are the only modes SidecarRegistry records (AgentSidecarManager.mode
+	// validates against exactly those two).
+	agentsRunningDev = `{"agents":[{"agent_id":"email","state":"running","mode":"dev",` +
+		`"pid":41999,"port":51234,"base_url":"http://127.0.0.1:51234","api_version":"2.3",` +
+		`"agent_version":"0.5.0","started_at":1750000000.0,` +
+		`"dev_src_dir":"/home/u/gaia/hub/agents/email/python"}]}`
 
 	agentsStopped = `{"agents":[{"agent_id":"email","state":"stopped","mode":null,` +
 		`"pid":null,"port":null,"base_url":null,"api_version":null,"agent_version":null,` +
@@ -64,7 +76,8 @@ const (
 		`"base_url":"http://localhost:8000/api/v1","version":null,"min_version":"8.1.0",` +
 		`"compatible":null},"model":{"id":"Gemma-4-E4B-it-GGUF","present":false,"loadable":null,` +
 		`"ctx_size":null},"hint":"Local Lemonade Server is not reachable at ` +
-		"http://localhost:8000/api/v1 — start it with `lemonade-server serve` (or run `gaia init`), then retry.\"}"
+		"http://localhost:8000/api/v1. GAIA starts it automatically — run `gaia daemon start` " +
+		"if the background service is not running.\"}"
 
 	initTooOld = `{"ready":false,"lemonade":{"reachable":true,` +
 		`"base_url":"http://localhost:8000/api/v1","version":"8.0.1","min_version":"8.1.0",` +
@@ -239,6 +252,10 @@ type fakeTransport struct {
 	// the screen's context really reaches it.
 	ensureFn func(context.Context) error
 
+	// How the daemon answers "start the local model server".
+	startLemonadeErr error
+	startLemonadeFn  func(context.Context) error
+
 	calls []call
 }
 
@@ -281,6 +298,19 @@ func (f *fakeTransport) EnsureAgent(ctx context.Context, _ string) error {
 		return f.ensureFn(ctx)
 	}
 	return f.ensureErr
+}
+
+// StartLemonade defaults to succeeding WITHOUT changing the /init answer, which
+// is the realistic shape of "the daemon started a server and the agent still
+// cannot use it" — and keeps every pre-existing expectation about the down-row's
+// wording intact. A test that wants the repaired path sets startLemonadeFn to
+// rewrite the body the way a real start would.
+func (f *fakeTransport) StartLemonade(ctx context.Context) error {
+	f.calls = append(f.calls, call{http.MethodPost, daemon.APIPrefix + "/lemonade/start"})
+	if f.startLemonadeFn != nil {
+		return f.startLemonadeFn(ctx)
+	}
+	return f.startLemonadeErr
 }
 
 func (f *fakeTransport) Do(_ context.Context, method, path string, _ []byte) (Response, error) {
@@ -872,6 +902,9 @@ func TestCheck(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// The gate reads the caller's mode preference, so a developer with
+			// one exported would otherwise change what these cases assert.
+			t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
 			f := tt.build()
 			rep := Check(context.Background(), f, EmailConfig())
 
@@ -2540,5 +2573,77 @@ func TestTheShortfallRemedyPointsAtTheLoadMomentNotTheHardware(t *testing.T) {
 			t.Errorf("the remedy points at processes it cannot see and did not measure: %q",
 				row.Remedy.Action)
 		}
+	}
+}
+
+// --- the sidecar's running mode ---------------------------------------------
+//
+// #4077: the launch used to send mode=user on everyone's behalf, so the daemon
+// 409'd against a running dev sidecar AFTER this gate had passed and the chat
+// header had rendered. The gate now answers the question the launch will ask.
+
+func TestCheckAttachesToASidecarRunningInAnotherModeWithoutAPreference(t *testing.T) {
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "")
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsRunningDev)
+
+	rep := Check(context.Background(), f, EmailConfig())
+
+	row, ok := rep.Find(KeySidecar)
+	if !ok {
+		t.Fatalf("no sidecar row:\n%s", rep)
+	}
+	if row.State != StateOK {
+		t.Fatalf("a launch with no mode preference must attach to the running "+
+			"sidecar, got %s (%s)\n%s", row.State.Word(), row.Line, rep)
+	}
+}
+
+func TestCheckRefusesASidecarRunningInTheOtherRequestedMode(t *testing.T) {
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "user")
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsRunningDev)
+
+	rep := Check(context.Background(), f, EmailConfig())
+
+	row, ok := rep.Find(KeySidecar)
+	if !ok {
+		t.Fatalf("no sidecar row:\n%s", rep)
+	}
+	if row.State != StateFailed {
+		t.Fatalf("an EXPLICIT mode that differs must still conflict, got %s\n%s",
+			row.State.Word(), rep)
+	}
+	if row.Line != "running in dev mode, user requested" {
+		t.Errorf("row line = %q, want %q", row.Line, "running in dev mode, user requested")
+	}
+	if row.Fix != FixRestartSidecar {
+		t.Errorf("row fix = %v, want FixRestartSidecar", row.Fix)
+	}
+	blocker, has := rep.Blocker()
+	if !has || blocker.Key != KeySidecar {
+		t.Fatalf("the sidecar row must block the launch:\n%s", rep)
+	}
+	// The conflict is decided from the listing, so nothing below it is probed —
+	// and the chat composer is never reached with a guaranteed 409 behind it.
+	if f.called("GET", "/v1/email/init") {
+		t.Error("a mode conflict must stop the walk, not fall through to init")
+	}
+	said := row.Remedy.Action + " " + row.Remedy.Command + " " + row.Detail
+	for _, want := range []string{"gaia daemon stop-agent email", "GAIA_EMAIL_AGENT_MODE"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the remedy must name %q; got %q", want, said)
+		}
+	}
+}
+
+func TestCheckAcceptsASidecarRunningInTheRequestedMode(t *testing.T) {
+	t.Setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsRunningDev)
+
+	rep := Check(context.Background(), f, EmailConfig())
+
+	row, _ := rep.Find(KeySidecar)
+	if row.State != StateOK {
+		t.Fatalf("a matching explicit mode must pass, got %s (%s)\n%s",
+			row.State.Word(), row.Line, rep)
 	}
 }

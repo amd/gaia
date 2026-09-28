@@ -24,6 +24,7 @@ from gaia.ui._chat_helpers import (
     _compute_allowed_paths,
     _empty_answer_outcome,
     _find_last_tool_step,
+    _managed_documents_dir,
     _resolve_rag_paths,
     set_agent_registry,
 )
@@ -227,27 +228,47 @@ class TestResolveRagPaths:
 
 
 class TestComputeAllowedPaths:
-    """Tests for _compute_allowed_paths()."""
+    """Tests for _compute_allowed_paths().
+
+    The scope is the attached documents themselves. These tests used to assert
+    the opposite — that each document's *parent directory* was granted — which
+    pinned the bug: attaching one file from ``$HOME`` allowlisted the whole home
+    tree for a session that also holds ``write_file`` and shell tools.
+    """
 
     def test_empty_paths_returns_cwd(self):
         result = _compute_allowed_paths([])
-        assert len(result) == 1
-        assert result[0] == str(Path.cwd())
+        assert set(result) == {str(Path.cwd().resolve()), str(_managed_documents_dir())}
 
-    def test_single_file_returns_parent_dir(self):
-        result = _compute_allowed_paths(["/docs/project/report.pdf"])
-        assert len(result) == 1
-        assert Path(result[0]) == Path("/docs/project")
+    def test_single_file_grants_the_file_not_its_directory(self):
+        result = {Path(p) for p in _compute_allowed_paths(["/docs/project/report.pdf"])}
+        assert result == {
+            Path("/docs/project/report.pdf").resolve(),
+            _managed_documents_dir(),
+        }
 
-    def test_multiple_files_same_dir_deduped(self):
+    def test_siblings_of_an_attached_file_are_not_granted(self):
+        result = _compute_allowed_paths(["/docs/project/a.pdf"])
+        assert Path("/docs/project") not in {Path(p) for p in result}
+
+    def test_multiple_files_same_dir_each_granted(self):
         result = _compute_allowed_paths(
             [
                 "/docs/project/a.pdf",
                 "/docs/project/b.pdf",
             ]
         )
-        assert len(result) == 1
-        assert Path(result[0]) == Path("/docs/project")
+        assert {Path(p) for p in result} == {
+            Path("/docs/project/a.pdf").resolve(),
+            Path("/docs/project/b.pdf").resolve(),
+            _managed_documents_dir(),
+        }
+
+    def test_the_agent_keeps_a_place_to_write(self):
+        """Grant the files, not their folders — but not nowhere to save output."""
+        result = {Path(p) for p in _compute_allowed_paths(["/docs/project/a.pdf"])}
+
+        assert _managed_documents_dir() in result
 
     def test_multiple_files_different_dirs(self):
         result = _compute_allowed_paths(
@@ -257,8 +278,35 @@ class TestComputeAllowedPaths:
             ]
         )
         result_set = {Path(p) for p in result}
-        assert Path("/docs/project") in result_set
-        assert Path("/home/user/data") in result_set
+        assert Path("/docs/project/a.pdf").resolve() in result_set
+        assert Path("/home/user/data/b.csv").resolve() in result_set
+
+    def test_a_document_saved_in_home_does_not_allowlist_home(self):
+        """The exact shape of the bug: one attachment, whole home tree granted."""
+        attached = Path.home() / "notes.txt"
+
+        result = {Path(p) for p in _compute_allowed_paths([str(attached)])}
+
+        assert Path.home().resolve() not in result
+        assert attached.resolve() in result
+
+    def test_no_documents_and_an_unsafe_cwd_keeps_managed_documents(self, monkeypatch):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: Path.home()))
+
+        assert _compute_allowed_paths([]) == [str(_managed_documents_dir())]
+
+    def test_cwd_inside_a_protected_directory_is_not_granted(
+        self, tmp_path, monkeypatch
+    ):
+        protected = tmp_path / "protected"
+        child = protected / "service"
+        child.mkdir(parents=True)
+        monkeypatch.setattr(
+            "gaia.ui._chat_helpers.BLOCKED_DIRECTORIES", {str(protected)}
+        )
+        monkeypatch.chdir(child)
+
+        assert _compute_allowed_paths([]) == [str(_managed_documents_dir())]
 
     def test_returns_list_type(self):
         result = _compute_allowed_paths(["/some/path/file.txt"])
@@ -531,6 +579,23 @@ class TestSessionAgentKwargsShape:
         assert kwargs["rag_documents"] == paths
 
 
+class TestBuildCreateKwargsConfiguredDefault:
+    """A session on a *configured* default_model must still reach the agent
+    as an explicit model_id, not get silently omitted."""
+
+    def test_configured_default_model_forwarded_as_model_id(self):
+        from gaia.ui._chat_helpers import _build_create_kwargs
+
+        kwargs = _build_create_kwargs(custom_model=None, model_id="agents-a1-q4-k-m")
+        assert kwargs["model_id"] == "agents-a1-q4-k-m"
+
+    def test_raw_hard_coded_default_still_omits_model_id(self):
+        from gaia.ui._chat_helpers import _build_create_kwargs
+
+        kwargs = _build_create_kwargs(custom_model=None, model_id="Gemma-4-E4B-it-GGUF")
+        assert "model_id" not in kwargs
+
+
 class TestStreamingRegisteredAgentDoesNotDoubleIndex:
     """Source-shape regression: ensure the streaming registered-agent branch
     forwards ``rag_file_paths=[]`` into ``_session_agent_kwargs``.
@@ -748,7 +813,7 @@ class TestNonStreamingEmailFailsLoud:
         # Pinned exact string — a future rewording must update this test
         # deliberately, not slip through unnoticed.
         assert exc_info.value.detail == (
-            "Email chat requires streaming (stream=true); "
+            "The email agent requires streaming (stream=true); "
             "non-streaming email chat is not supported."
         )
 
@@ -765,6 +830,10 @@ class TestNonStreamingEmailFailsLoud:
         registry.resolve_model.return_value = None
         fake_agent = MagicMock()
         fake_agent.model_id = "SomeModel-GGUF"
+        fake_agent.device = None
+        fake_agent.system_prompt = "Test"
+        fake_agent._openai_tools = []
+        fake_agent.chat.config.max_tokens = 8192
         fake_agent.process_query.return_value = "ok"
         fake_agent.conversation_history = []
         fake_agent.indexed_files = set()
@@ -792,10 +861,10 @@ class TestNonStreamingEmailFailsLoud:
 
 
 class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
-    """Source-shape regression (#2109): the streaming email branch in
-    ``_run_agent`` (the second ``elif agent_type == "email":`` in this
+    """Source-shape regression (#2109): the streaming sidecar branch in
+    ``_run_agent`` (the second ``elif _should_relay_to_sidecar(...)`` in this
     module — the first is the non-streaming ``_do_chat()`` HTTPException
-    branch tested above) must relay via ``_dispatch_email_query`` and then
+    branch tested above) must relay via ``_dispatch_sidecar_query`` and then
     ``return`` immediately.
 
     It must never fall through into the shared agent trunk that follows the
@@ -814,10 +883,11 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
             _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
         ).read_text(encoding="utf-8")
 
-        matches = list(re.finditer(r'elif agent_type == "email":', src))
+        matches = list(re.finditer(r"elif _should_relay_to_sidecar\(agent_type, ", src))
         assert len(matches) == 2, (
-            'Expected exactly 2 occurrences of `elif agent_type == "email":` '
-            "in _chat_helpers.py (the non-streaming _do_chat HTTPException "
+            "Expected exactly 2 occurrences of "
+            "`elif _should_relay_to_sidecar(agent_type, ...)` in "
+            "_chat_helpers.py (the non-streaming _do_chat HTTPException "
             f"branch, and the streaming _run_agent dispatch branch). Found "
             f"{len(matches)} — did the source structure change? Update this "
             "test's assumptions."
@@ -835,9 +905,9 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
         )
         block = src[second_start : second_start + next_branch.start()]
 
-        assert "_dispatch_email_query(" in block, (
-            "Streaming email branch must call _dispatch_email_query(...) — "
-            'see the second `elif agent_type == "email":` in '
+        assert "_dispatch_sidecar_query(" in block, (
+            "Streaming sidecar branch must call _dispatch_sidecar_query(...) "
+            "— see the second `elif _should_relay_to_sidecar(...)` in "
             "src/gaia/ui/_chat_helpers.py (_run_agent)."
         )
 
@@ -847,8 +917,8 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
         # the whole if/elif chain and assumes a constructed in-process agent.
         lines = [ln for ln in block.splitlines() if ln.strip()]
         assert lines[-1].strip() == "return", (
-            "Streaming email branch must end with a bare `return` "
-            "immediately after _dispatch_email_query(...) — falling "
+            "Streaming sidecar branch must end with a bare `return` "
+            "immediately after _dispatch_sidecar_query(...) — falling "
             "through into the shared agent trunk would call "
             "agent.process_query on a non-existent in-process agent. "
             f"Last line was: {lines[-1]!r}"

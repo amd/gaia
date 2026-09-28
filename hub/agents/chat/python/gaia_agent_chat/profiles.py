@@ -59,6 +59,8 @@ TOOL_GROUP_REGISTRARS: Dict[str, Tuple[str, ...]] = {
     ),
     "web_browse": ("register_browser_tools",),
     "full_screenshot": ("register_screenshot_tools",),
+    "media_transcribe": ("register_audio_tools",),
+    "loop_wait": ("register_wait_tools",),
 }
 
 
@@ -158,6 +160,8 @@ PROFILE_SPECS: Dict[str, ProfileSpec] = {
             "data_scratch",
             "web_browse",
             "full_screenshot",
+            "media_transcribe",
+            "loop_wait",
         ),
         generic_file_ops=True,
         web_tools=True,

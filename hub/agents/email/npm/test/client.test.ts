@@ -235,7 +235,7 @@ describe("EmailClient", () => {
         compatible: null,
       },
       model: { id: "Gemma-4-E4B-it-GGUF", present: false, loadable: null },
-      hint: "Lemonade Server not reachable — run `lemonade-server serve`.",
+      hint: "Lemonade Server not reachable — run `gaia daemon start`.",
     };
     const fetchImpl = vi.fn(async () =>
       jsonResponse(notReady, 503),
@@ -244,7 +244,7 @@ describe("EmailClient", () => {
     const r = await client.init();
     expect(r.ready).toBe(false);
     expect(r.lemonade.reachable).toBe(false);
-    expect(r.hint).toMatch(/lemonade-server serve/);
+    expect(r.hint).toMatch(/gaia daemon start/);
   });
 
   it("init() still throws HttpError on a non-503 failure", async () => {
@@ -400,6 +400,8 @@ describe("EmailClient", () => {
   it("lists calendar events with optional query params (GET)", async () => {
     const calResponse: CalendarEventsResponse = {
       schema_version: "2.2",
+      count: 1,
+      truncated: false,
       events: [
         {
           id: "evt-1",

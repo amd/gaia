@@ -19,19 +19,26 @@ const (
 	// RoleCard is a typed `tool_result.render` card, drawn inline in the
 	// transcript at the point the tool returned so work and results stay in order.
 	RoleCard MessageRole = "card"
+	// RoleToolError is one tool's own failure text, drawn as an inline aside
+	// rather than RoleError's bordered panel: the agent frequently retries and
+	// still answers, and a panel per failed attempt reads as a failed turn.
+	RoleToolError MessageRole = "tool_error"
 )
 
 type Message struct {
-	Role      MessageRole
-	Content   string
-	Rendered  string
-	ToolName  string
-	Success   *bool
-	Duration  time.Duration // time from query to answer
-	TTFT      time.Duration // time to first inference token; never model-load or a tool/status event
-	Steps     int           // agent steps taken
-	ToolsUsed int           // tools invoked
-	Tokens    int           // real generated-token count; 0 => not reported, omit from display
+	Role         MessageRole
+	Content      string
+	Rendered     string
+	ToolName     string
+	Success      *bool
+	Duration     time.Duration // time from query to answer
+	TTFT         time.Duration // backend-measured time to first token; 0 => not reported, omit from display
+	TokPerS      float64       // backend-measured generation rate; 0 => not reported, omit from display
+	Steps        int           // agent steps taken
+	ToolsUsed    int           // tools invoked
+	Tokens       int           // real generated-token count; 0 => not reported, omit from display
+	InputTokens  int           // prompt tokens this turn sent; 0 => not reported
+	CachedTokens int           // prompt tokens served from the backend's cache
 
 	// Metrics is the agent's per-turn performance record. Nil unless the agent
 	// ran with GAIA_TURN_LOG set — every ordinary turn, and every turn from an

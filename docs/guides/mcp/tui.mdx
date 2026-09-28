@@ -53,8 +53,11 @@ back is the exact frame the renderer just drew.
 
 ### What `view` can be
 
-`gaia-tui` boots straight into one agent, so there is nothing to browse and no
-agent to pick. `tui_status` reports `view` as one of:
+`gaia-tui` boots straight into the flagship. Chat now has an in-session `/agents`
+command that lists installed agents and switches to one, but there is no
+dedicated control-API tool for it -- drive it the same way a human would, with
+`tui_send_text("/agents")` and `tui_send_keys`. `tui_status` reports `view` as
+one of:
 
 | `view` | What it is |
 |--------|------------|
@@ -73,7 +76,8 @@ agent to pick. `tui_status` reports `view` as one of:
 <Warning>
   There is no `tui_launch_agent`, `tui_install_agent` or `tui_uninstall_agent`.
   They drove the hub browser, which no longer exists. Launching **is** running
-  `gaia tui`; a different agent is `gaia tui chat --agent <id>`; and installing
+  `gaia tui`; switching agents inside a live session is chat's `/agents`, driven
+  through `tui_send_text`/`tui_send_keys` like any other command; and installing
   a hub agent is `gaia hub install <id>` in the Python CLI.
 </Warning>
 
@@ -111,7 +115,7 @@ lie. `tui_status` and `tui_screen` keep working, and `tui_status` reports
 
     The TUI prints the port it bound and writes `~/.gaia/tui/control.json`
     (mode `0600`) holding the pid, port, and bearer token. The token is never
-    printed. Add `--debug` to log every injected key, state transition, and
+    printed. Add `--dev` to log input counts, state transitions, and
     wait resolution to stderr.
 
     For a fixed port: `gaia tui --control-port 8770`.
@@ -242,8 +246,8 @@ Environment:
   <Accordion title="tui_wait_for keeps timing out">
     The timeout reports the screen it actually saw. Compare it with what you
     were matching on — styling is stripped in plain mode, so match on the text,
-    not on box-drawing characters. `gaia tui --control --debug` logs every
-    injected key and every wait resolution to stderr.
+    not on box-drawing characters. `gaia tui --control --dev` records input counts, state changes,
+    and waits in the TUI log. Input contents are never logged.
   </Accordion>
 </AccordionGroup>
 

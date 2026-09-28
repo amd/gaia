@@ -1,0 +1,46 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: VS Code Extension Tests
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/vscode/**'
+      - '.github/workflows/test_vscode.yml'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/vscode/**'
+      - '.github/workflows/test_vscode.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-vscode:
+    name: Build & Test VS Code extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    defaults:
+      run:
+        working-directory: src/vscode/gaia
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/vscode/gaia/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile and test
+        run: npm test

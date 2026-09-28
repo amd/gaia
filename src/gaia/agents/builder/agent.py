@@ -10,7 +10,6 @@ name, then calls the ``create_agent`` tool to write a Python agent file under
 
 import ast
 import json
-import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -25,6 +24,8 @@ from gaia.agents.registry import (
     get_lemonade_models,
     resolve_preferred_model,
 )
+from gaia.llm.lemonade_client import resolve_lemonade_base_url
+from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.llm.providers.lemonade import LemonadeError, LemonadeNetworkError
 from gaia.logger import get_logger
 
@@ -140,11 +141,11 @@ def _select_builder_model(base_url: str) -> str:
     selected = resolve_preferred_model(BUILDER_PREFERRED_MODELS, available)
     if selected is None:
         candidates = ", ".join(BUILDER_PREFERRED_MODELS)
+        pull = describe_client_hint("pull", BUILDER_PREFERRED_MODELS[-1]).instruction
         err = LemonadeError(
             user_message=(
                 "No usable model is installed for the agent builder. Install "
-                f"one of: {candidates} — for example "
-                f"`gaia download {BUILDER_PREFERRED_MODELS[-1]}` — or run "
+                f"one of: {candidates}. {pull.rstrip('.')}. Or run "
                 "`gaia init` to set up a profile, then try again."
             )
         )
@@ -196,7 +197,7 @@ class BuilderAgent(Agent):
         effective_base_url = (
             config.base_url
             if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+            else resolve_lemonade_base_url()
         )
         # An explicit model_id (session-resolved upstream, or pinned by a
         # caller) is never second-guessed by a live check. Only an omitted
@@ -303,7 +304,7 @@ class BuilderAgent(Agent):
 
         messages: list = []
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self.conversation_history)
+            messages.extend(self._history_for_request())
 
         messages.append({"role": "user", "content": user_input})
 
@@ -315,6 +316,10 @@ class BuilderAgent(Agent):
         # One-shot guard: nudge at most once if the model stalls with a
         # greeting/question when the request already named the agent.
         nudged_missing_tool = False
+        parse_errors = 0
+        # One-shot guard: a create_agent call that dropped a required argument
+        # gets exactly one corrective turn before the fail-loudly path.
+        retried_invalid_args = False
 
         while steps_taken < steps_limit and final_answer is None:
             steps_taken += 1
@@ -364,7 +369,36 @@ class BuilderAgent(Agent):
             messages.append({"role": "assistant", "content": response})
 
             # Reuse base-class parser: handles both plain text and JSON
-            parsed = self._parse_llm_response(response)
+            try:
+                parsed = self._parse_llm_response(response)
+            except ValueError as parse_exc:
+                logger.warning(
+                    "BuilderAgent tool-call parse failed (step %d): %s — "
+                    "recovering with retry prompt",
+                    steps_taken,
+                    parse_exc,
+                )
+                self.error_history.append(
+                    {
+                        "step": steps_taken,
+                        "error": str(parse_exc),
+                        "type": "tool_call_parse_error",
+                    }
+                )
+                parse_errors += 1
+                if parse_errors >= 3:
+                    final_answer = (
+                        "I couldn't read my own tool call after several "
+                        "attempts. Please try again with a clear agent name."
+                    )
+                    break
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": self._tool_call_retry_prompt(parse_exc),
+                    }
+                )
+                continue
 
             if "tool" in parsed and parsed["tool"]:
                 tool_name = parsed["tool"]
@@ -379,6 +413,32 @@ class BuilderAgent(Agent):
                     if isinstance(tool_result, dict)
                     else str(tool_result)
                 )
+                # A malformed call is not a failed creation: hand the error back
+                # once so the model can re-emit the tool call with the argument
+                # it dropped, then fall through to the fail-loudly path (#3581).
+                if (
+                    tool_name == "create_agent"
+                    and isinstance(tool_result, dict)
+                    and tool_result.get("error_type") == "invalid_arguments"
+                    and not retried_invalid_args
+                ):
+                    retried_invalid_args = True
+                    logger.warning(
+                        "BuilderAgent: malformed create_agent call (%s); retrying once",
+                        tool_result.get("error"),
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"The create_agent call was rejected: "
+                                f"{tool_result.get('error')}\n"
+                                "Re-emit ONLY the bare JSON tool call with every "
+                                "required argument filled in from the request above."
+                            ),
+                        }
+                    )
+                    continue
                 # Fail loudly: if create_agent returned an error, end immediately.
                 if tool_name == "create_agent" and (
                     (

@@ -203,7 +203,12 @@ class AgentServer:
                 json_type = _REGISTRY_TYPE_TO_JSON.get(
                     param_info.get("type", "string"), "string"
                 )
-                properties[param_name] = {"type": json_type}
+                prop: Dict[str, Any] = {"type": json_type}
+                # Argument text rides here, not in the tool description.
+                param_description = param_info.get("description", "")
+                if param_description:
+                    prop["description"] = param_description
+                properties[param_name] = prop
                 if param_info.get("required"):
                     required.append(param_name)
             definitions.append(
@@ -419,10 +424,11 @@ class AgentServer:
         """
         self._ensure_interface(INTERFACE_API)
 
-        from fastapi import FastAPI, HTTPException
+        from fastapi import Depends, FastAPI, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.responses import StreamingResponse
 
+        from gaia.api.local_http import build_caller_guard, cors_config
         from gaia.api.schemas import (
             ChatCompletionChoice,
             ChatCompletionRequest,
@@ -431,20 +437,18 @@ class AgentServer:
             ModelInfo,
             ModelListResponse,
             UsageInfo,
+            message_text,
         )
 
+        # App-wide, so a route mounted later (``/v1/<id>/init``) is guarded too.
+        caller_guard = build_caller_guard(self.api_surface)
         app = FastAPI(
             title=f"GAIA {self.name} API",
             description=f"OpenAI-compatible API for the {self.name} agent",
             version="1.0.0",
+            dependencies=[Depends(caller_guard)],
         )
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        app.add_middleware(CORSMiddleware, **cors_config())
 
         def _estimate_tokens(text: str) -> int:
             if isinstance(self.agent, ApiAgent):
@@ -452,9 +456,10 @@ class AgentServer:
             return len(text) // 4
 
         def _last_user_message(messages) -> Optional[str]:
-            return next(
-                (m.content for m in reversed(messages) if m.role == "user"), None
-            )
+            # Flattened, not read raw: ``content`` is a string OR a content-part
+            # array, and the array would otherwise reach process_query as a list.
+            last = next((m for m in reversed(messages) if m.role == "user"), None)
+            return message_text(last) if last is not None else None
 
         @app.get("/health")
         async def health_check():
@@ -638,6 +643,11 @@ class AgentServer:
                 status_code=200,
             )
 
+    @property
+    def api_surface(self) -> str:
+        """Human-readable name of this agent's REST surface, for logs/errors."""
+        return f"the {self.name} REST API (--api)"
+
     def _sse_stream(self, prompt: str):
         """Minimal OpenAI-compatible SSE: role chunk, content chunk, done."""
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -666,6 +676,9 @@ class AgentServer:
         self._ensure_interface(INTERFACE_API)
         import uvicorn
 
+        from gaia.api.local_http import assert_bind_is_authenticated
+
+        assert_bind_is_authenticated(host, self.api_surface)
         app = self.build_api_app()
         print(
             f"🚀 Serving {self.name} on http://{host}:{port} (model: {self.model_id})"

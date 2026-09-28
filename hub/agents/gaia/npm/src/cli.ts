@@ -14,7 +14,7 @@
  * "continue anyway" path.
  */
 
-import { readdirSync, realpathSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -265,13 +265,40 @@ export function pathWithoutOwnShim(
       : resolved === ownBinDir;
   };
   const entries = rawPath.split(sep).filter((d) => d !== "");
-  const kept = entries.filter((d) => !same(d));
-  if (kept.length === entries.length) return kept.join(sep);
-  // A dir holding nothing but our own shim (an npx temp dir, node_modules/.bin)
-  // costs nothing to drop. A SHARED bin dir must NOT be dropped — that is where
-  // python3 / lemonade-server / the real `gaia` live — so it moves to the end
-  // instead, letting any other `gaia` on PATH win while its siblings survive.
-  return (isExclusivelyOurs(ownBinDir, ownName) ? kept : [...kept, ownBinDir]).join(sep);
+  const ours = entries.filter((d) => same(d) || shimTargetsScript(d, argv1));
+  const kept = entries.filter((d) => !ours.includes(d));
+  const shared = ours.filter((d) => !isExclusivelyOurs(d, same(d) ? ownName : "gaia"));
+  return [...kept, ...shared].join(sep);
+}
+
+/** Match npm's symlink or generated cmd/PowerShell wrapper to this script. */
+function shimTargetsScript(dir: string, script: string): boolean {
+  const canonical = (file: string): string | undefined => {
+    try {
+      const resolved = realpathSync(file);
+      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    } catch {
+      return undefined; // no resolvable executable at this candidate
+    }
+  };
+  const expected = canonical(script);
+  if (!expected) return false;
+  for (const name of ["gaia", "gaia.cmd", "gaia.ps1"]) {
+    const shim = path.join(dir, name);
+    if (canonical(shim) === expected) return true;
+    if (!name.includes(".")) continue;
+    let contents: string;
+    try {
+      contents = readFileSync(shim, "utf8");
+    } catch {
+      continue; // this PATH directory does not contain a readable wrapper
+    }
+    for (const match of contents.matchAll(/["'](?:%dp0%|\$basedir)[\\/]([^"']+)["']/gi)) {
+      const target = path.resolve(dir, match[1]!.replace(/[\\/]/g, path.sep));
+      if (canonical(target) === expected) return true;
+    }
+  }
+  return false;
 }
 
 /** True when every file in `dir` is a shim for `name` (`gaia`, `gaia.cmd`, …). */
@@ -402,7 +429,7 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
     process.stdout.write(`    Health:     ${sidecar.baseUrl}/health\n`);
     process.stdout.write("    Lemonade must be running for live queries. Ctrl+C to stop.\n\n");
     let stop!: () => void;
-    const stopped = new Promise<void>((resolve) => {
+    const stopped = new Promise<Error | undefined>((resolve) => {
       let stopping = false;
       stop = (): void => {
         if (stopping) {
@@ -416,7 +443,10 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
         }
         stopping = true;
         process.stderr.write("\n[gaia] stopping the sidecar ...\n");
-        void shutdown(sidecar).catch(() => undefined).finally(resolve);
+        shutdown(sidecar).then(
+          () => resolve(undefined),
+          (e: unknown) => resolve(e instanceof Error ? e : new Error(String(e))),
+        );
       };
       // process.on, not once: a second Ctrl+C during the shutdown would
       // otherwise hit Node's default disposition and kill us mid-teardown,
@@ -424,12 +454,18 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
       // absorbs the repeats.
       for (const sig of SERVE_SIGNALS) process.on(sig, stop);
     });
+    let stopError: Error | undefined;
     try {
-      await stopped;
+      stopError = await stopped;
     } finally {
       // Left installed, they would swallow every later signal AND suppress
       // Node's default disposition, so Ctrl+C would stop working entirely.
       for (const sig of SERVE_SIGNALS) process.removeListener(sig, stop);
+    }
+    // A surviving sidecar keeps the port bound; its error names the pid to kill.
+    if (stopError) {
+      process.stderr.write(`[gaia] ${stopError.message}\n`);
+      return 1;
     }
     return 0;
   } catch (e) {

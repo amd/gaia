@@ -350,7 +350,7 @@ Agents accept many configuration parameters. Here's what each one does:
 agent = MyAgent(
     # === LLM Selection ===
     use_claude=False,              # Use Anthropic Claude API
-    use_chatgpt=False,             # Use OpenAI ChatGPT API
+    use_chatgpt=False,             # Removed; True raises migration guidance
     # If both are False, uses local Lemonade Server
 
     # === Local LLM Settings ===
@@ -359,7 +359,7 @@ agent = MyAgent(
 
     # === Cloud LLM Settings ===
     claude_model="claude-sonnet-4-20250514",  # Claude model version
-    # API keys are read from environment: ANTHROPIC_API_KEY, OPENAI_API_KEY
+    # API key is read from environment: ANTHROPIC_API_KEY
 
     # === Agent Behavior ===
     max_steps=20,                  # Max reasoning loop iterations
@@ -431,31 +431,14 @@ agent = MyAgent(
 **Best for:** Complex reasoning, production applications, code analysis.
 </Accordion>
 
-<Accordion title="Option 3: ChatGPT API - Wide Compatibility">
+<Accordion title="Gateway models through Lemonade">
 
-Uses OpenAI's GPT models:
+The direct OpenAI and LiteLLM adapters have been removed. Configure the upstream
+model in Lemonade and pass its server URL and catalog model ID to the agent.
+See [gateway migration](/sdk/sdks/llm#gateway-migration). Legacy
+`use_chatgpt=True` calls raise an actionable error rather than selecting another
+provider.
 
-```bash
-# Set your API key
-export OPENAI_API_KEY="your-key-here"
-```
-
-```python
-agent = MyAgent(
-    use_chatgpt=True
-)
-```
-
-**Pros:**
-- Wide tool support
-- Familiar API
-- Good general performance
-
-**Cons:**
-- API costs
-- Requires internet connection
-
-**Best for:** Integration with existing OpenAI workflows.
 </Accordion>
 
 ### Tuning Agent Behavior
@@ -467,6 +450,45 @@ agent = MyAgent(
 | `silent_mode` | `False` - See all output | `True` - Only get results | Visibility vs. clean output |
 
 ---
+
+## Large tool results
+
+Every tool result passes through one character budget before it reaches the
+model. A result at or below the threshold is sent unchanged. A larger one is
+archived whole and reaches the model as a chunk index:
+
+- `shown` — the parts kept verbatim, as `{offset, text}` segments.
+- `index` — one `{n, label, offset, length}` per part left out, numbered from 1
+  in document order. `read_tool_output(artifact, entry=n)` returns exactly that
+  part; the result's `fetch` field says so.
+- `artifact`, `continuation`, `total_chars`, `truncated`, `original_chars`,
+  `omitted_chars` — as before. `archived_field` names the field the archive
+  holds (`content`, `stdout`, `matches`); every other field is kept, including
+  `check_result`.
+
+Parts follow the result's own structure, never fixed windows:
+
+| Result | Split at |
+|--------|----------|
+| Python source (`read_file` on `.py`) | module header, each top-level `def`/`class`, each method; labels carry line range, signature and first docstring line |
+| Markdown | headings |
+| JSON | top-level keys; lists in groups of 20 records |
+| `search_file_content` | each file's first match, then the rest of its matches (archived as grep-style text) |
+| Test / shell output | pytest and section markers (`FAILURES`, `___ test ___`, `FAILED`, tracebacks); failing sections and the final summary are shown first |
+| Diffs | each file and hunk |
+| Other text | paragraphs, then lines |
+
+Shown holds the closing part when the result marks it a lead (a run's summary
+line), then the first part, then the other parts marked as leads or named by
+the call's arguments, then the rest in order, while they fit. Text with no structure
+at all (a single long line) keeps a `head`/`tail` excerpt, with the middle as
+its one index entry.
+
+Local thresholds/targets are 30,000/20,000 characters for NPU and 60,000/40,000
+for GPU/CPU. An omitted device follows the configured profile; FLM models retain
+the NPU budget. A cloud model reached through Lemonade gets the conservative
+30,000/20,000 without reading the local device profile. The Claude path uses its existing larger window. These are
+per-result character budgets, not measured remaining tokens.
 
 ## Common Pitfalls and Solutions
 
@@ -506,6 +528,8 @@ def search_codebase(query: str) -> str:
 **Symptom:** Agent keeps calling tools repeatedly without making progress.
 
 **Cause:** Usually means `max_steps` is too high, or tools return ambiguous results.
+
+**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
 
 **Solutions:**
 ```python
@@ -777,6 +801,30 @@ print(result["result"])
 
 ## Deep Dive: Under the Hood
 
+`process_query()` also returns `model_messages`: a deep-copied, model-facing trace
+of the current turn, including native tool calls and their results. It excludes
+prior conversation history and the system prompt. Hosts can persist it and use
+complete turns to populate `conversation_history` on later calls. Overflow retry
+trimming does not replace the retained evidence with stubs. Calls interrupted
+before a result was recorded receive an explicit incomplete-result message;
+this does not claim they executed successfully.
+
+The flagship TUI persists these traces in private SQLite files under
+`~/.gaia/tui/history/` (`GAIA_TUI_HOME/history/` when configured). Each launch
+starts a separate session. Set `GAIA_HISTORY_FILE=/path/session.sqlite3` to
+explicitly resume the same transcript, or pass `--history-file` to the stdio
+agent. This archive contains tool output, including local file contents.
+Delete the file to remove it. A host calling `conversation_history.clear()`
+erases both the visible history and its archived turns.
+
+The next prompt admits complete turns using the active model's context budget,
+reserving space for the system prompt, tool schemas, current question and answer.
+Older turns are evicted in blocks from the model view, never cut into invalid
+call/result pairs. The archive remains intact across context eviction and model
+switches. The terminal event is sent only after the completed trace is committed;
+a storage failure is reported as an error rather than a successful saved turn.
+
+
 <Accordion title="How process_query() Works Internally">
 
 When you call `agent.process_query(user_input)`, here's the detailed flow:
@@ -823,8 +871,13 @@ def process_query(self, user_input, max_steps=None):  # defaults to self.max_ste
             })
             return {"status": "success", "result": response, "steps_taken": step + 1}
 
-    # 9. Max steps reached
-    return {"status": "incomplete", "result": "I couldn't complete the task", "steps_taken": max_steps}
+    # 9. Max steps reached: one more call that may not use a tool, so the agent
+    #    says what it found, what it couldn't finish and why, and what to try next
+    answer = self.llm.generate(
+        prompt + STEP_LIMIT_INSTRUCTION, tools=self.tools, tool_choice="none"
+    )
+    return {"status": "incomplete", "result": answer, "steps_taken": max_steps + 1,
+            "max_steps_reached": True}
 ```
 
 **Key insight:** The conversation history grows with each tool call, giving the LLM more context for its next decision.
@@ -840,20 +893,23 @@ def tool(func):
     # 1. Extract the function signature
     sig = inspect.signature(func)
 
-    # 2. Build a minimal per-parameter map from type hints.
-    #    Each entry is just {type, required} — the whole docstring is stored
-    #    once as `description`; per-argument descriptions are NOT parsed out.
+    # 2. Build a per-parameter map from type hints + the docstring's Args: block.
+    #    Each argument carries its own line so the model reads it at the slot it
+    #    fills; the Args: block is then dropped from `description` (see below).
+    arg_descriptions = parse_arg_descriptions(func.__doc__)
     params = {}
     for name, param in sig.parameters.items():
         params[name] = {
-            "type": python_type_to_json_type(param.annotation),  # str→string, int→integer, …
+            "type": python_type_to_json_type(param.annotation),  # str→string, List[str]→array, …
             "required": param.default is inspect.Parameter.empty,
         }
+        if arg_descriptions.get(name):
+            params[name]["description"] = arg_descriptions[name]
 
     # 3. Register in the global _TOOL_REGISTRY under the function name.
     _TOOL_REGISTRY[func.__name__] = {
         "name": func.__name__,
-        "description": func.__doc__ or "",  # whole docstring, not per-arg
+        "description": schema_description(func.__doc__),  # docstring, minus Args:
         "parameters": params,
         "function": func,
         "atomic": False,
@@ -866,6 +922,123 @@ they matter so much. See the [Tools guide](./tools) for the authoritative
 walkthrough of the registry entry.
 
 </Accordion>
+
+---
+
+## Verification Scope
+
+Every answer the agent loop emits ends with one line saying whether the result
+was actually checked. Without it, "done" reads the same whether the agent ran
+the test suite or ran nothing at all, and the only rational response is to
+distrust every completion message.
+
+```text
+Fixed the off-by-one in the pagination helper.
+
+Verification: verified — pytest ran and passed.
+```
+
+Three states, derived from the tool calls that actually executed during the
+turn — no extra model call:
+
+| State | When |
+|-------|------|
+| `verified` | At least one test / lint / build ran, and every one passed. |
+| `partially verified` | Checks ran, but not all of them passed. |
+| `unverified` | No check ran. Names how many tools did run, if any. |
+
+The tool that ran the check says so. `run_shell_command`, `run_python`, and
+`execute_python_file` put a `check_result` on every result for a call that ran:
+a `CheckResult` (`label`, `target`, `kind`, `passed`, `summary`) when the program
+was a test, lint, typecheck, or build runner, and `null` when it was not. The
+footer reads that and nothing else. A shell run counts only when the program
+itself is the runner (`pytest -q`, `python -m pytest`, `uv run pytest`), so
+`cat pytest.ini` is not a test run; a failing summary line wins over a zero exit
+code, so `pytest | tail` that failed reads as failed.
+
+Results that carry no `check_result` — MCP tools, hub agents built before the
+field existed — are still classified from their text: a tool named `run_tests`,
+`run_lint`, `typecheck`, or `build`, a `command` argument naming a known runner,
+or a `run_python` / `execute_python_file` output with a test runner's summary
+(pytest, unittest, jest, vitest, mocha, `go test`, `cargo test`). Other
+unrecognized runners remain `unverified`.
+
+Before the answer goes out, the loop also checks it against the same record. An
+answer that reports a test outcome (`111 passed`, "all tests pass") when no test
+run passed after the last file edit gets one correction naming the gap. If the
+claim remains unsupported, or no correction step remains, the framework replaces
+it with an explicit incomplete result. Unsupported claims never become successful
+results merely because the correction budget ran out.
+
+A check that ran more than once in the turn is judged by its most recent run. A
+test that failed and then passed after a fix reads `verified`; one that passed
+and then failed after an edit reads `ran and did not pass`. Only a rerun of the
+same command replaces an earlier run: if `pytest tests/` failed and
+`pytest tests/test_cart.py` then passed, the line still reports the failure.
+
+### Saved output and cleanup evidence
+
+File completion is checked separately from the test/lint/build footer. A save
+claim must name an output backed by this turn's successful write to that path;
+a transcript or screenshot written elsewhere cannot satisfy it. A save request
+that names a file, folder or disk is checked even when the answer silently omits
+the save; a pathless "save it" is checked through the answer's own save claim.
+Negated instructions, how-to questions, idioms ("save me some time") and topics
+("write a guide to Node.js") do not create save obligations, and a reference to
+a save from an earlier session is not a claim about this turn. "Create",
+"make" or "generate" names an output through its direct object (`notes.md`, not
+"a Node.js app"); a file after "in" may be a source, so it is checked only
+through the answer's claim. An answer's save claim makes the turn
+incomplete when the user asked for a save, a file-writing tool ran, or "I" or
+"we" is the one saving. Any other save claim gets one correction and then
+stands, so "downloads are saved to ~/Downloads" stays an answer.
+
+Requested and claimed text outputs must be read back after their latest
+mutation; an ordinary edit the user did not ask to save does not need readback. A read before
+a rewrite, a file listing, a binary metadata summary, or only the last page is
+insufficient. `read_file` pages and archived `read_tool_output` continuations
+must cover the complete output. Source-code edits without a save instruction
+or claim retain the existing test-verification policy. Binary outputs require
+path-specific write evidence but are not forced through a text reader.
+
+For Python and shell executors, the loop compares file metadata before and after
+the call for requested and previously tracked targets, plus literal Python path
+candidates. These probes respect the read boundary and never read file contents.
+A successful executor call alone is not proof of a save; a failed call that
+changed an output invalidates earlier evidence. A file last modified during a
+successful executor call, such as `ls > listing.txt`, counts as written once it
+is read back; one touched by a failed call does not, and such a file proves only
+its own path, never a pathless "saved it to a file" claim. Cached transcripts are
+not new writes.
+Cleanup claims likewise need concrete paths observed disappearing during the
+turn; a general statement that everything was cleaned up is not proof. A claimed
+path that is absent and untouched already agrees with the claim, and removal from
+an index or list is not a file deletion.
+
+The loop offers one bounded correction for missing artifact evidence. If work or
+readback remains missing, the emitted answer names the gaps and `process_query`
+returns `status: "incomplete"` with `completion_gaps`. When the turn ended on an
+error, such as an unreachable server, the error message and `failed` status are
+kept and the gaps are listed beneath it. A blocked save cannot be
+reported as success on the last step or after a repeated unsupported answer.
+Readback establishes observed output; it does **not** measure semantic correctness
+or recall when extracting every item from a long document.
+
+The statement rides in the emitted answer, so it reaches every surface — the
+CLI console, the SSE `answer` event, and `process_query`'s return value — and
+it is capped at `VERIFICATION_SCOPE_MAX_CHARS` (200) so it cannot grow the
+prompt as conversation history accumulates.
+
+```python
+from gaia.agents.base.verification import strip_verification_scope
+
+answer_only = strip_verification_scope(result["result"])
+```
+
+<Note>
+A turn cancelled from the UI returns an empty result on purpose, and carries no
+statement — filling it in would make a cancelled turn look like a completed one.
+</Note>
 
 ---
 
@@ -992,3 +1165,125 @@ See pre-built agents for chat, code, Jira, Blender
 Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 </small>
+
+
+## Recovering large tool outputs
+
+When a result exceeds the model budget, it carries an `artifact` handle, a
+numbered `index` of the parts left out, and `continuation: read_tool_output`.
+Call `read_tool_output(artifact, entry=n)` to get entry `n` verbatim. The index
+names every omitted part, so paging through a whole output is almost never
+needed. A part longer than 8,000 characters comes back in pages: the page sets
+`remaining`, and `read_tool_output(artifact, offset=next_offset,
+limit=remaining)` continues it. Without an entry, `offset` and `limit` (default
+2,000) read any span. An entry number outside the index is an error that names
+the valid range. Unicode offsets count characters, not bytes.
+
+The archived text is the original string, the field named by
+`archived_field`, or JSON (one record per line) for a structured result. Small
+results remain unchanged. Structured excerpts retain whole records.
+
+Shell, Python execution and browser excerpts retain omitted output before
+applying their own display limits. File readers accept `offset` and `limit`
+for bounded text pages, including files too large for a full read. Their normal
+path permissions still apply; paging does not authorize a new path.
+
+Output handles belong to the producing agent process, expire after one hour,
+and share a 64 MiB archive quota. Unknown, expired, cross-session handles and
+quota exhaustion return explicit errors. Restarting an agent invalidates its
+output handles; rerun the source tool if the session has ended. A continuation
+reads captured output rather than re-executing a potentially state-changing tool.
+
+### Exhaustive document extraction
+
+For explicit requests to list every item in a text document, the agent offers
+`extract_document_items(file_path, fields=None)`. It reads a permission-checked
+snapshot and processes 4,000-character pages sequentially, each widened by up to
+600 characters of overlap on either side, with an additional omission check per
+page. Each call has isolated context and no tools. Requested fields, written in
+the request as `fields: name, reps, cue` or passed as the `fields` list, must
+appear on every extracted entry; missing source facts are marked as not stated.
+A `fields` list that differs from the request's is rejected rather than merged.
+
+The framework retains entries with exact source quotations and character spans,
+checks the source fingerprint again before completion, and appends the accumulated
+inventory to the final answer. A final model summary cannot drop retained entries.
+Ambiguous evidence keeps both entries and marks the possible repeat rather than
+dropping one. Reading every page without extracting an inventory is insufficient.
+
+`save_extracted_items(file_path)` exports the retained inventory as JSON, CSV, or
+readable text, using the existing write permission gate. JSON records carry each
+requested field under `fields`, and CSV gives each field its own column (prefixed
+`field:` if it collides with a built-in column; cells that would open as formulas
+are escaped). Before completion the framework reads each saved inventory back in
+full and requires an exact match with the retained entries, so the model need
+not page through it; hand edits to a file it wrote this turn are refused. Every requested source
+must finish; a failed page, cancellation, source change, or exceeded budget yields
+an incomplete result. Limits are 256,000 source characters, 512 entries, 40,000
+characters per extraction prompt, and 100,000 characters of retained item text and
+quotes, with a 30-minute extraction deadline (the enclosing tool timeout adds 60 seconds).
+These bounds fail visibly rather than silently dropping data.
+
+This verifies source coverage and preserves the extracted set; it does not prove
+semantic recall of every implicit item. Recall must be measured against known
+source items. General summaries, advice about extraction, negated enumeration
+requests, analysis of code files ("find all bugs in `main.py`"), binary documents
+such as PDFs, and agents without a file permission validator do not activate this
+path. Active extraction skills can activate it. Sources are existing files a
+request reads from; a path after "to" or "into" is an output, and a name that is
+not a file ("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are
+left to code tools.
+
+Existing memory hooks record extraction actions and compact provenance (source
+fingerprint, page coverage and item count), while conversation history retains the
+rendered inventory as one bounded record, bypassing the ordinary 4,000-character
+turn cap only for extraction answers (maximum 256,000 characters; a longer answer
+is not stored, and an error is logged). Follow-ups can retrieve those observations through existing
+conversation search. Private mode suppresses persistence. A remembered summary
+never substitutes for reading and validating the current source; no separate
+memory database or cloud sync is introduced.
+
+The default `gaia-voice` skill supplies a short routing rule; the detailed
+`document-extract` procedure is loaded for the task. The implementation uses
+schema-constrained page responses and an omission check per page. Overlap keeps
+source text visible and aligns pages to whole lines, sentences, or (for unpunctuated
+captions) words. Quotes are matched ignoring case and spacing (captions use
+non-breaking and doubled spaces), but only on whole words, and the stored quote is
+always the source's own text at its exact offsets.
+
+An item's identity value is a field named for a `name`, `id` or `title` (such
+as `exercise_name`), else the first requested field. When that value is copied
+from the quote, its source span locates the item; when the model composes a label
+instead ("Big circles (arms)"), the quote locates the item, and a label sharing no
+words with its quote is kept but marked "(label not in quote)". Descriptions may
+paraphrase; the verbatim quote is their evidence. An entry that states no field
+carries nothing and is ignored.
+
+Merging never fails a run and never drops an item. Two extractions are one item
+when they sit at the same place (the same name span, or quotes sharing at least
+half their text) and their names match or nest ("march" and "march in place" at
+one spot keep the fuller name). Different names are different items, and
+differing descriptions of one item are both kept, joined with ` / `. Items from
+one reply are never merged. A quote that names its item twice takes an occurrence
+no earlier item claimed and is never merged, so its values cannot land on the
+wrong item. Evidence too ambiguous to
+merge keeps both entries, and the rendered inventory marks the later one
+"(may repeat item N)" for review, including when its label shares words with an
+overlapping item's. Only an unusable reply (not JSON, a quote not
+in the page, an unfinished page) is retried once and then fails visibly.
+
+Each page call allows 16,384 output tokens. Cloud models are asked for low
+reasoning effort, and a page that still spends the whole budget reasoning is
+retried once with reasoning off; local models get no anti-repetition penalties,
+which work against verbatim copying.
+
+Run the explicit live regression with either backend:
+
+```bash
+python scripts/dev/validate_document_extraction.py MODEL /path/to/new-results-directory
+```
+
+It creates an approximately 80,000-character synthetic transcript with 40 known exercises,
+checks every name, repetition count and cue in both the inventory and saved JSON,
+and asks a follow-up through the existing conversation-memory search tool. It
+uses isolated test memory and real inference; no external judge is required.

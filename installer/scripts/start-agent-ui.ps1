@@ -27,7 +27,7 @@ Options:
   -NoDebug        Disable debug logging
   -Help           Show this help
 
-Prerequisite: Lemonade Server must be running (lemonade-server serve)
+Prerequisite: Lemonade Server must be running (`gaia init` installs and starts it)
 "@
     exit 0
 }

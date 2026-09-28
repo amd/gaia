@@ -6,13 +6,18 @@ Handles path validation, user prompting, persistent allow-lists,
 blocked path enforcement, write guardrails, and audit logging.
 """
 
+import contextlib
 import datetime
+import hashlib
 import json
 import logging
 import os
 import platform
+import re
 import shutil
+import stat
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, List, Optional, Set, Tuple
@@ -22,8 +27,67 @@ logger = logging.getLogger(__name__)
 # Audit logger — separate from main logger for file operation tracking
 audit_logger = logging.getLogger("gaia.security.audit")
 
+
+def ensure_audit_log_handler(cache_dir: Optional[Path] = None) -> None:
+    """Attach the rotating audit-log handler once, creating the file if needed.
+
+    Uses ``RotatingFileHandler`` (10 MB x 3 backups) so the audit log cannot
+    grow unbounded on a developer's machine over months of use. Total cap:
+    ~40 MB of audit history.
+    """
+    if audit_logger.handlers:
+        return
+
+    from logging.handlers import RotatingFileHandler
+
+    cache_dir = cache_dir or (Path.home() / ".gaia" / "cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        str(cache_dir / "file_audit.log"),
+        maxBytes=10 * 1024 * 1024,  # 10 MB per file
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    audit_logger.addHandler(handler)
+    audit_logger.setLevel(logging.INFO)
+
+
+def audit_shell_command(
+    command: str, cwd: str, segments: List[List[str]], mode: str
+) -> None:
+    """Record a shell command the agent executed, with its full arguments.
+
+    Called on the bypass path, where the confirmation prompt is skipped: consent
+    was granted in advance, which is exactly when this record is the only
+    evidence of what the agent actually ran. Every pipeline/sequence segment is
+    listed separately, so ``a && b`` is two auditable invocations rather than
+    one opaque string.
+
+    Arguments are recorded verbatim, so a secret passed on a command line lands
+    in ``~/.gaia/cache/file_audit.log``. That is the trade the audit trail
+    makes; treat the file as sensitive.
+    """
+    ensure_audit_log_handler()
+    audit_logger.info(
+        "SHELL | %s | cwd=%s | %s | segments=%s",
+        mode,
+        cwd,
+        command,
+        json.dumps(segments),
+    )
+
+
 # Maximum file size the agent is allowed to write (10 MB)
 MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
+
+# Backups kept per edited file; older ones are removed as new ones land.
+BACKUP_GENERATIONS = 5
+
+
+class BackupError(RuntimeError):
+    """A file that exists could not be backed up, so it must not be modified."""
+
 
 # Sensitive file names that should never be written to by the agent
 SENSITIVE_FILE_NAMES: Set[str] = {
@@ -64,6 +128,130 @@ SENSITIVE_EXTENSIONS: Set[str] = {
     ".jks",
     ".keystore",
 }
+
+# Files whose contents run automatically — on the next login, the next shell, or
+# the next git command. A write here is persistence, not a document edit, so it
+# is the cleanest prompt-injection-to-code-execution step there is.
+STARTUP_EXECUTION_FILE_NAMES: Set[str] = {
+    # POSIX shells
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".bash_aliases",
+    ".profile",
+    ".zshrc",
+    ".zshenv",
+    ".zprofile",
+    ".zlogin",
+    ".zlogout",
+    ".kshrc",
+    ".cshrc",
+    ".tcshrc",
+    ".login",
+    ".logout",
+    ".inputrc",
+    "config.fish",
+    # X11 / desktop session
+    ".xinitrc",
+    ".xprofile",
+    ".xsession",
+    ".xsessionrc",
+    # PowerShell
+    "profile.ps1",
+    "microsoft.powershell_profile.ps1",
+    "microsoft.vscode_profile.ps1",
+    # git — aliases and hook paths in a config are executed by ordinary commands
+    ".gitconfig",
+    "gitconfig",
+    # cron
+    "crontab",
+}
+
+# Directory shapes whose *contents* execute regardless of file name: a git hook
+# is `pre-commit` with no extension, an autostart entry is any `.desktop` file.
+# Each entry is an ordered run of lowercase path segments to find in the path.
+_STARTUP_EXECUTION_DIR_MARKERS: Tuple[Tuple[str, ...], ...] = (
+    # Covers hooks/ and config alike; no agent file tool has business in here.
+    (".git",),
+    (".config", "autostart"),
+    (".config", "systemd", "user"),
+    ("launchagents",),
+    ("launchdaemons",),
+    ("windowspowershell",),
+)
+
+
+def _secret_directories() -> Set[str]:
+    """Directories whose every file is a credential, whatever it is called.
+
+    Returns:
+        Normalized paths. Read-blocked wholesale — ``~/.ssh/config`` names hosts
+        and key files, ``~/.aws/credentials`` is the key itself, and neither has
+        a name the extension/name denylists would catch.
+    """
+    home = Path.home()
+    candidates = [
+        home / ".ssh",
+        home / ".gnupg",
+        home / ".aws",
+        home / ".azure",
+        home / ".kube",
+        home / ".docker",
+        home / ".config" / "gcloud",
+        home / "AppData" / "Roaming" / "gcloud",
+    ]
+    return {os.path.normpath(str(c)) for c in candidates}
+
+
+def _path_is_within(candidate: Path, parent: Path) -> bool:
+    """Whether *candidate* is *parent* or sits underneath it.
+
+    Args:
+        candidate: An already-resolved path.
+        parent: The directory to test containment against.
+
+    Returns:
+        True when candidate == parent or candidate is inside it.
+    """
+    is_windows = platform.system() == "Windows"
+    norm_candidate = os.path.normpath(_normalize_macos_symlinks(str(candidate)))
+    norm_parent = os.path.normpath(_normalize_macos_symlinks(str(parent)))
+    if is_windows:
+        norm_candidate, norm_parent = norm_candidate.lower(), norm_parent.lower()
+    return norm_candidate == norm_parent or norm_candidate.startswith(
+        norm_parent + os.sep
+    )
+
+
+def _startup_execution_reason(real_path: Path) -> Optional[str]:
+    """Why writing *real_path* would plant code that runs on its own.
+
+    Args:
+        real_path: A symlink-resolved path.
+
+    Returns:
+        A reason naming what would execute it, or ``None`` when the path is an
+        ordinary file.
+    """
+    if real_path.name.lower() in STARTUP_EXECUTION_FILE_NAMES:
+        return (
+            f"'{real_path.name}' is executed automatically when a shell, login "
+            f"session or git command starts"
+        )
+
+    segments = [part.lower() for part in real_path.parts]
+    for marker in _STARTUP_EXECUTION_DIR_MARKERS:
+        span = len(marker)
+        # The marker must appear as consecutive segments *above* the file itself.
+        for start in range(0, max(0, len(segments) - span)):
+            if tuple(segments[start : start + span]) == marker:
+                return (
+                    f"'{real_path}' is inside '{'/'.join(marker)}', whose contents "
+                    f"are executed automatically at login, on a git operation, or "
+                    f"by the session manager"
+                )
+    return None
 
 
 # Subdirectories of GAIA's state tree that hold user content rather than
@@ -192,6 +380,7 @@ def _get_blocked_directories() -> Set[str]:
 # Pre-compute once at module load
 BLOCKED_DIRECTORIES: Set[str] = _get_blocked_directories()
 GAIA_STATE_DIRECTORIES: Set[str] = _gaia_state_dirs()
+SECRET_DIRECTORIES: Set[str] = _secret_directories()
 
 
 def _normalize_macos_symlinks(path_str: str) -> str:
@@ -214,15 +403,56 @@ def _normalize_macos_symlinks(path_str: str) -> str:
     return path_str
 
 
+def stable_scratch_dir(anchor: str) -> Path:
+    """The agent's scratch directory for *anchor* (a project), the same every session.
+
+    A random name per process put a different path into every session's system
+    prompt, so a backend's cached prompt prefix never matched across sessions.
+    The name is derived from the user and the project instead. A predictable name
+    under a shared temp dir must not be an invitation: the directory is created
+    private, and one that already exists but is not a directory this user owns is
+    refused, loudly, in favour of a fresh private one.
+    """
+    owner = (
+        str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "")
+    )
+    digest = hashlib.sha1(
+        f"{owner}:{Path(anchor).resolve()}".encode("utf-8"), usedforsecurity=False
+    ).hexdigest()[:12]
+    path = Path(tempfile.gettempdir()) / f"gaia-scratch-{digest}"
+    try:
+        path.mkdir(mode=0o700, exist_ok=True)
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise OSError("not a directory")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise OSError("owned by another user")
+    except OSError as exc:
+        fallback = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
+        logger.warning(
+            "Scratch directory %s is unusable (%s); using %s for this session",
+            path,
+            exc,
+            fallback,
+        )
+        return fallback
+    return path
+
+
 class PathValidator:
     """
     Validates file paths against an allowed list, with user prompting for exceptions.
     Persists allowed paths to ~/.gaia/cache/allowed_paths.json.
 
+    An allowed path may be a directory *or* a single file — callers deriving a
+    scope from user-attached documents should grant the files, never the folders
+    they happen to sit in.
+
     Security features:
     - Allowlist-based path access control
     - Blocked directory enforcement for writes (system dirs, .ssh, etc.)
-    - Sensitive file protection (.env, credentials, keys)
+    - Sensitive file protection (.env, credentials, keys) on reads and writes
+    - Login/startup-execution file protection (shell rc, autostart, git hooks)
     - Write size limits
     - Overwrite confirmation prompting
     - Audit logging for all file mutations
@@ -234,25 +464,41 @@ class PathValidator:
         allowed_paths: Optional[List[str]] = None,
         on_prompt_start: Optional[Callable[[], None]] = None,
         on_prompt_end: Optional[Callable[[], None]] = None,
+        interactive_check: Optional[Callable[[], bool]] = None,
     ):
         """
         Initialize PathValidator.
 
         Args:
-            allowed_paths: Initial list of allowed paths. Defaults to [CWD].
+            allowed_paths: The scope for this validator. ``None`` means "no scope
+                supplied" and defaults to the CWD plus any paths the interactive
+                CLI previously persisted. An explicit list — including an empty
+                one — is the whole scope: a host that computes a per-session
+                allowlist gets exactly what it asked for, and an empty list
+                denies everything rather than silently widening to the CWD.
             on_prompt_start: Optional callback invoked before prompting the
                 user for input (e.g. to pause a progress spinner).
             on_prompt_end: Optional callback invoked after user input is
                 collected (e.g. to resume a progress spinner).
+            interactive_check: Optional predicate answering "is the *requester*
+                reachable on this process's stdin?". A TTY alone does not mean
+                yes — a server launched from a terminal has one, but its users
+                are on HTTP. Evaluated per prompt, so a host that swaps the
+                agent's console mid-session is honoured.
         """
         self.allowed_paths: Set[Path] = set()
+        self.scratch_dir: Optional[Path] = None
 
-        # Add default allowed paths
-        if allowed_paths:
+        # A host-supplied scope must not union with the machine-global grants the
+        # CLI's "[a]lways" writes — that turned one user's one-off approval into
+        # standing access for every later Agent UI session.
+        self._use_persisted_grants = allowed_paths is None
+
+        if allowed_paths is None:
+            self.allowed_paths.add(Path.cwd().resolve())
+        else:
             for p in allowed_paths:
                 self.allowed_paths.add(Path(p).resolve())
-        else:
-            self.allowed_paths.add(Path.cwd().resolve())
 
         # Setup cache directory
         self.cache_dir = Path.home() / ".gaia" / "cache"
@@ -266,35 +512,24 @@ class PathValidator:
         # indicators that would otherwise race with ``input()`` on stdout).
         self._on_prompt_start = on_prompt_start
         self._on_prompt_end = on_prompt_end
+        self._interactive_check = interactive_check
 
         # Load persisted paths
         self._load_persisted_paths()
 
     def _setup_audit_logging(self):
-        """Configure audit logging to file for write operations.
-
-        Uses ``RotatingFileHandler`` (10 MB x 3 backups) so the audit
-        log cannot grow unbounded on a developer's machine over months
-        of use.  Total cap: ~40 MB of audit history.
-        """
-        from logging.handlers import RotatingFileHandler
-
-        audit_log_file = self.cache_dir / "file_audit.log"
-        if not audit_logger.handlers:
-            handler = RotatingFileHandler(
-                str(audit_log_file),
-                maxBytes=10 * 1024 * 1024,  # 10 MB per file
-                backupCount=3,
-                encoding="utf-8",
-            )
-            handler.setFormatter(
-                logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-            )
-            audit_logger.addHandler(handler)
-            audit_logger.setLevel(logging.INFO)
+        """Configure audit logging to file for write operations."""
+        ensure_audit_log_handler(self.cache_dir)
 
     def _load_persisted_paths(self):
-        """Load allowed paths from cache file."""
+        """Load allowed paths from cache file, unless this scope was host-supplied."""
+        if not self._use_persisted_grants:
+            logger.debug(
+                "Skipping machine-global grants in %s: this validator was built "
+                "with an explicit allowlist.",
+                self.config_file,
+            )
+            return
         if self.config_file.exists():
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
@@ -312,7 +547,20 @@ class PathValidator:
                 )
 
     def _save_persisted_path(self, path: Path):
-        """Save a new allowed path to cache file."""
+        """Save a new allowed path to cache file.
+
+        A validator built from a host-supplied allowlist never writes here: its
+        scope is one session's, and promoting it to the machine-global file
+        would leak that session's access into every later one.
+        """
+        if not self._use_persisted_grants:
+            logger.info(
+                "Granting %s for this session only — a host-supplied allowlist "
+                "is not promoted to the machine-global grants in %s.",
+                path,
+                self.config_file,
+            )
+            return
         try:
             data = {"paths": []}
             if self.config_file.exists():
@@ -371,6 +619,58 @@ class PathValidator:
         """
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
+
+    def _can_prompt(self) -> bool:
+        """True when a blocking ``input()`` would actually reach the requester."""
+        if not _is_interactive():
+            return False
+        if self._interactive_check is None:
+            return True
+        return bool(self._interactive_check())
+
+    def set_scratch_dir(self, path: str) -> None:
+        """Grant the agent's own scratch directory, and only that directory.
+
+        The system temp dir stays out of scope; denials for paths inside it
+        name this directory instead (see :meth:`scratch_hint`).
+
+        Args:
+            path: An existing directory the agent owns for throwaway files.
+
+        Raises:
+            NotADirectoryError: If *path* is not an existing directory.
+        """
+        resolved = Path(path).resolve()
+        if not resolved.is_dir():
+            raise NotADirectoryError(
+                f"Scratch directory '{resolved}' does not exist. Create it "
+                f"(e.g. tempfile.mkdtemp()) before handing it to PathValidator."
+            )
+        self.scratch_dir = resolved
+        self.allowed_paths.add(resolved)
+        logger.debug("Scratch directory granted: %s", resolved)
+
+    def scratch_hint(self, path: str) -> str:
+        """Suffix for a denial of *path* that points at the scratch directory.
+
+        Args:
+            path: The path that was refused.
+
+        Returns:
+            A sentence naming the scratch directory when *path* is inside a
+            system temp directory and a scratch directory is set, else "".
+        """
+        if self.scratch_dir is None:
+            return ""
+        real_path = Path(os.path.realpath(path))
+        temp_roots = {tempfile.gettempdir(), "/tmp", "/var/tmp"}
+        for root in temp_roots:
+            if _path_is_within(real_path, Path(os.path.realpath(root))):
+                return (
+                    f" The system temp directory is off-limits; put temporary "
+                    f"files in your scratch directory instead: {self.scratch_dir}"
+                )
+        return ""
 
     def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """
@@ -442,10 +742,11 @@ class PathValidator:
         agent surfaces a clean "access denied" error instead of hanging.
         Interactive CLI usage (TTY) still prompts normally.
         """
-        if not _is_interactive():
+        if not self._can_prompt():
             logger.warning(
-                "Path %s outside allowlist; auto-denying (non-interactive "
-                "context — no TTY). Configure allowed_paths to grant access.",
+                "Path %s outside allowlist; auto-denying (no interactive "
+                "requester on this process's stdin). Configure allowed_paths "
+                "to grant access.",
                 path,
             )
             return False
@@ -484,6 +785,83 @@ class PathValidator:
 
                 print("Please answer 'y', 'n', or 'a'.")
 
+    # ── Read Guardrails ───────────────────────────────────────────────
+
+    def is_read_blocked(self, path: str) -> Tuple[bool, str]:
+        """Check whether a path holds secrets the agent must not read back.
+
+        The allowlist answers "is this in scope"; it cannot answer "is this a
+        private key". Being inside an allowed directory has never made
+        ``id_rsa`` or ``.env`` safe to read into a prompt that a model — and
+        whatever the model is told to do with it — then sees.
+
+        Args:
+            path: File path to check for read permission.
+
+        Returns:
+            Tuple of (is_blocked, reason). If blocked, reason explains why.
+        """
+        try:
+            real_path = Path(os.path.realpath(path))
+            file_name = real_path.name.lower()
+            file_ext = real_path.suffix.lower()
+
+            if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
+                return (
+                    True,
+                    f"Read blocked: '{real_path.name}' holds credentials, keys or "
+                    f"secrets. Open it yourself if you need its contents — the "
+                    f"agent is not allowed to read it into the conversation.",
+                )
+
+            if file_ext in SENSITIVE_EXTENSIONS:
+                return (
+                    True,
+                    f"Read blocked: files with extension '{file_ext}' are "
+                    f"certificates or private keys. The agent is not allowed to "
+                    f"read them into the conversation.",
+                )
+
+            for secret_dir in SECRET_DIRECTORIES:
+                if _path_is_within(real_path, Path(secret_dir)):
+                    return (
+                        True,
+                        f"Read blocked: '{real_path}' is inside '{secret_dir}', "
+                        f"which holds credentials. The agent is not allowed to "
+                        f"read from it.",
+                    )
+
+            return (False, "")
+
+        except Exception as e:
+            logger.error(f"Error checking read block for {path}: {e}")
+            # Fail-closed: refuse if we can't determine safety.
+            return (True, f"Read blocked: unable to validate path safety: {e}")
+
+    def validate_read(self, path: str, prompt_user: bool = True) -> Tuple[bool, str]:
+        """Allowlist + sensitive-file check for a read.
+
+        Args:
+            path: File path to validate for reading.
+            prompt_user: Whether to prompt the user when the path is out of scope.
+
+        Returns:
+            Tuple of (is_allowed, reason). If not allowed, reason explains why.
+        """
+        if not self.is_path_allowed(path, prompt_user=prompt_user):
+            return (
+                False,
+                f"Access denied: '{path}' is not in allowed paths. Attach the "
+                f"file to this session, or start the agent with an "
+                f"allowed_paths list that covers it.{self.scratch_hint(path)}",
+            )
+
+        is_blocked, reason = self.is_read_blocked(path)
+        if is_blocked:
+            return (False, reason)
+
+        return (True, "")
+
     # ── Write Guardrails ──────────────────────────────────────────────
 
     def is_write_blocked(self, path: str) -> Tuple[bool, str]:
@@ -493,6 +871,8 @@ class PathValidator:
         1. System/blocked directories (Windows, /etc, .ssh, ~/.gaia, etc.)
         2. Sensitive file names (.env, credentials, keys, etc.)
         3. Sensitive file extensions (.pem, .key, .crt, etc.)
+        4. Files that execute on their own (shell rc, PowerShell profile,
+           autostart entries, git hooks and config)
 
         Args:
             path: File path to check for write permission.
@@ -550,6 +930,15 @@ class PathValidator:
                     f"sensitive (certificates/keys). Writing is not allowed.",
                 )
 
+            startup_reason = _startup_execution_reason(real_path)
+            if startup_reason:
+                return (
+                    True,
+                    f"Write blocked: {startup_reason}. Writing to it would make "
+                    f"the agent's content run on your machine without you asking. "
+                    f"Edit it yourself if that is what you intended.",
+                )
+
             return (False, "")
 
         except Exception as e:
@@ -582,7 +971,11 @@ class PathValidator:
         """
         # 1. Check allowlist
         if not self.is_path_allowed(path, prompt_user=prompt_user):
-            return (False, f"Access denied: '{path}' is not in allowed paths")
+            return (
+                False,
+                f"Access denied: '{path}' is not in allowed paths."
+                f"{self.scratch_hint(path)}",
+            )
 
         # 2. Check blocked directories and sensitive files
         is_blocked, reason = self.is_write_blocked(path)
@@ -626,8 +1019,10 @@ class PathValidator:
         In non-interactive environments auto-approve the overwrite — the
         write already passed allowlist + blocklist + size checks, and a
         timestamped ``.bak`` backup is created separately in ``create_backup``,
-        so data loss is recoverable. Blocking on ``input()`` in a server
-        context would hang the request instead.
+        so data loss is recoverable. When no backup can be made,
+        ``create_backup`` raises :class:`BackupError` and the write is refused.
+        Blocking on ``input()`` in a server context would hang the request
+        instead.
 
         Args:
             path: Path to the existing file.
@@ -636,9 +1031,10 @@ class PathValidator:
         Returns:
             True if user approves overwrite (or non-interactive), False otherwise.
         """
-        if not _is_interactive():
+        if not self._can_prompt():
             logger.info(
-                "Auto-approving overwrite of %s (non-interactive context, "
+                "Auto-approving overwrite of %s (no interactive requester on "
+                "this process's stdin, "
                 "backup will be created)",
                 path,
             )
@@ -659,31 +1055,12 @@ class PathValidator:
                 print("Please answer 'y' or 'n'.")
 
     def create_backup(self, path: str) -> Optional[str]:
-        """Create a timestamped backup of a file before modification.
+        """Back up *path* under this validator's cache dir; see :func:`backup_file`.
 
-        Args:
-            path: Path to the file to back up.
-
-        Returns:
-            Backup file path if successful, None if file doesn't exist or backup failed.
+        Raises:
+            BackupError: *path* exists but could not be backed up.
         """
-        try:
-            real_path = Path(os.path.realpath(path)).resolve()
-            if not real_path.exists():
-                return None
-
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = real_path.with_name(
-                f"{real_path.stem}.{timestamp}.bak{real_path.suffix}"
-            )
-
-            shutil.copy2(str(real_path), str(backup_path))
-            audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")
-            logger.debug(f"Created backup: {backup_path}")
-            return str(backup_path)
-        except Exception as e:
-            logger.warning(f"Failed to create backup of {path}: {e}")
-            return None
+        return backup_file(path, self.cache_dir)
 
     def audit_write(
         self, operation: str, path: str, size: int, status: str, detail: str = ""
@@ -708,6 +1085,88 @@ class PathValidator:
             audit_logger.warning(msg)
         else:
             audit_logger.error(msg)
+
+
+def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
+    """Create a timestamped backup of a file before modification.
+
+    Backups live under ``<cache_dir>/backups``, at the original's absolute
+    path, so editing a repository never leaves files in it. The backups
+    directory and everything below it is owner-only, and only the newest
+    :data:`BACKUP_GENERATIONS` backups of each file are kept.
+
+    Args:
+        path: Path to the file to back up.
+        cache_dir: GAIA's cache directory; defaults to ``~/.gaia/cache``.
+
+    Returns:
+        Backup file path, or None if the file doesn't exist.
+
+    Raises:
+        BackupError: The file exists but could not be copied. Callers must
+            not modify it — the overwrite was approved on the promise of a
+            backup.
+    """
+    real_path = Path(os.path.realpath(path)).resolve()
+    if not real_path.exists():
+        return None
+
+    root = (cache_dir or Path.home() / ".gaia" / "cache") / "backups"
+    stamp_time = datetime.datetime.now()
+    # A drive or UNC share becomes one plain folder name under backups/.
+    drive = re.sub(r"[:\\/]+", "_", real_path.drive).strip("_")
+    parts = ([drive] if drive else []) + list(
+        real_path.parent.relative_to(real_path.anchor).parts
+    )
+    mirror = root.joinpath(*parts)
+
+    # ".bak" goes LAST. Keeping the original extension made a backup of
+    # tests/test_x.py land as test_x.<stamp>.bak.py, which pytest
+    # collects and cannot import, so editing a test file broke the whole
+    # suite (#3747). Nothing globs *.bak.
+    def _backup_at(moment: datetime.datetime) -> Path:
+        return mirror / f"{real_path.name}.{moment:%Y%m%d_%H%M%S_%f}.bak"
+
+    backup_path = _backup_at(stamp_time)
+
+    try:
+        root.parent.mkdir(parents=True, exist_ok=True)
+        # One level at a time: mkdir(parents=True) ignores mode for parents.
+        for depth in range(len(parts) + 1):
+            root.joinpath(*parts[:depth]).mkdir(mode=0o700, exist_ok=True)
+        # mkdir's mode does not narrow a directory that already exists.
+        root.chmod(0o700)
+        # Two edits on one clock tick must not share (and clobber) a backup.
+        while backup_path.exists():
+            stamp_time += datetime.timedelta(microseconds=1)
+            backup_path = _backup_at(stamp_time)
+        shutil.copy2(str(real_path), str(backup_path))
+    except OSError as e:
+        logger.error("Failed to back up %s to %s: %s", real_path, backup_path, e)
+        # A copy that died mid-stream leaves a truncated .bak that still counts
+        # as a generation, so it can evict a good backup from the rotation.
+        with contextlib.suppress(OSError):
+            backup_path.unlink(missing_ok=True)
+        raise BackupError(
+            f"Refused to modify {real_path}: backing it up to {backup_path} "
+            f"failed ({e}). Nothing was written. Free disk space or make "
+            f"{root} writable, then retry."
+        ) from e
+    audit_logger.info(f"BACKUP | {real_path} -> {backup_path}")
+    logger.debug(f"Created backup: {backup_path}")
+
+    # The optional microseconds keep pruning backups named before they existed.
+    stamped = re.compile(re.escape(real_path.name) + r"\.\d{8}_\d{6}(_\d{6})?\.bak")
+    try:
+        # The timestamp format sorts chronologically by name.
+        generations = sorted(p for p in mirror.iterdir() if stamped.fullmatch(p.name))
+        for stale in generations[:-BACKUP_GENERATIONS]:
+            stale.unlink()
+    except OSError as e:
+        logger.warning(
+            "Failed to prune old backups of %s in %s: %s", real_path, mirror, e
+        )
+    return str(backup_path)
 
 
 def _is_interactive() -> bool:

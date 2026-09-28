@@ -18,8 +18,9 @@ invariants that the later mail/calendar leads depend on:
   carry NO ``client_secret`` unless one is explicitly configured (Microsoft
   forbids secrets for public clients — unlike Google, which requires one).
 - ``default_scopes`` include ``offline_access`` (so the shared flow obtains a
-  refresh token) and ``openid`` (so the shared flow can decode the account
-  email from the id_token) — without these the shared ``flow.py`` would raise.
+  refresh token) — without it the shared ``flow.py`` would raise. They must
+  NOT include ``openid`` (#4079); that is pinned in
+  ``test_microsoft_no_openid.py``.
 - The catalog declares Mail.Read, Mail.Send, Calendars.ReadWrite so the grant
   ledger accepts those scopes for the future Outlook agents.
 
@@ -153,7 +154,8 @@ class TestRegistry:
 
 class TestRegistryWorkConnector:
     """microsoft_work mirrors microsoft's registry mechanics but with its
-    OWN env var prefix (D9) and NO authored console walkthrough (D10)."""
+    OWN env var prefix (D9) and its OWN authored console walkthrough
+    (MS_WORK, #4090 — it must never show the personal route's steps)."""
 
     def test_lazy_registration_uses_own_provider_id(self, monkeypatch):
         monkeypatch.setenv("GAIA_MICROSOFT_WORK_CLIENT_ID", "work-client-id")
@@ -174,24 +176,29 @@ class TestRegistryWorkConnector:
             "GAIA_MICROSOFT_WORK_CLIENT_ID", ""
         )
 
-    def test_console_steps_fall_back_to_generic_guidance(self, monkeypatch):
-        # D10: get_route("microsoft_work") is None (no authored walkthrough
-        # yet) — the not-configured error must NOT show microsoft's personal
-        # console steps, and must still be positively actionable (mentions
-        # Azure and where to find the client id), not a bare "no steps".
+    def test_console_steps_come_from_the_work_walkthrough(self, monkeypatch):
+        # #4090: microsoft_work now has its own authored route, so the
+        # not-configured error is DERIVED from it (the #2116 one-source-of-
+        # truth guard) — and must still never show microsoft's personal
+        # console steps, nor degrade to a bare "no steps".
         from gaia.connectors.errors import OAuthClientNotConfiguredError
-        from gaia.connectors.setup_routes import MS_PERSONAL, render_console_steps
+        from gaia.connectors.setup_routes import (
+            MS_PERSONAL,
+            MS_WORK,
+            render_console_steps,
+        )
 
         monkeypatch.delenv("GAIA_MICROSOFT_WORK_CLIENT_ID", raising=False)
         monkeypatch.delenv("GAIA_MICROSOFT_WORK_CLIENT_SECRET", raising=False)
         with pytest.raises(OAuthClientNotConfiguredError) as exc:
             providers.get("microsoft_work")
         steps = exc.value.console_steps
+        assert steps == render_console_steps(MS_WORK)
         assert steps != render_console_steps(MS_PERSONAL)
         # Asserted without a URL literal: a `"<url>" in <str>` check trips
         # CodeQL's incomplete-URL-sanitization rule, which is meant for
         # real host checks, not test assertions on generated help text.
-        assert "Register an app at" in steps
+        assert "register an app" in steps.lower()
         assert "Application (client) ID" in steps
 
     def test_example_block_uses_own_connector_id(self, monkeypatch):
@@ -305,14 +312,13 @@ class TestClientIdHash:
 
 
 class TestDefaultScopes:
-    def test_default_scopes_include_offline_access_and_openid(self, _ms_env):
-        # offline_access => refresh_token is returned by the token endpoint;
-        # openid => id_token is returned so the shared flow can decode the
-        # account email. The shared flow.py REQUIRES a refresh_token, so a
-        # Microsoft connect without offline_access would raise — pin it here.
+    def test_default_scopes_include_offline_access(self, _ms_env):
+        # offline_access => refresh_token is returned by the token endpoint.
+        # The shared flow.py REQUIRES a refresh_token, so a Microsoft connect
+        # without it would raise — pin it here. The exact scope tuple (and the
+        # absence of `openid`) is pinned in test_microsoft_no_openid.py.
         prov = providers.get("microsoft")
         assert "offline_access" in prov.default_scopes
-        assert "openid" in prov.default_scopes
 
 
 class TestAuthorizationUrl:
@@ -468,13 +474,13 @@ class TestCatalog:
             assert scope in MICROSOFT_SPEC.available_scopes, scope
 
     def test_catalog_default_scopes_enable_refresh_and_account(self):
-        # The shared flow requires a refresh_token and decodes the account
-        # email from the id_token; both depend on these two scopes being in
-        # the default set used by a first connect.
+        # The shared flow requires a refresh_token, and resolves the account
+        # email from Graph /me; both depend on these scopes being in the
+        # default set used by a first connect.
         from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
 
         assert "offline_access" in MICROSOFT_SPEC.default_scopes
-        assert "openid" in MICROSOFT_SPEC.default_scopes
+        assert "https://graph.microsoft.com/User.Read" in MICROSOFT_SPEC.default_scopes
 
     def test_catalog_is_oauth_pkce_pointing_at_microsoft_provider(self):
         from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC

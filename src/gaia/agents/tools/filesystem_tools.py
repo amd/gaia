@@ -16,6 +16,10 @@ import mimetypes
 import os
 import sys
 from pathlib import Path
+from typing import Any, Optional
+
+from gaia.agents.tools.file_edit import file_read_record, stamp_of
+from gaia.agents.tools.search_scope import root_depth, search_roots
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,47 @@ def _format_date(timestamp: float) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+#: Scopes that deliberately impose no ceiling: ``smart`` is documented to reach
+#: indexed directories outside the home folders, ``everywhere`` is the whole
+#: drive. Every other scope names one place the results must sit under.
+_UNBOUNDED_SCOPES = frozenset({"smart", "everywhere"})
+
+#: The index applies its LIMIT before the scope filter can run, so a narrowed
+#: search asks for more rows than it needs to still fill a page after filtering.
+_INDEX_SCOPE_OVERFETCH = 10
+
+
+def _scope_roots(scope: str, host: Any = None) -> list:
+    """Directories an index hit must sit under; empty when the scope is open.
+
+    ``host`` supplies the workspace for ``cwd``. Resolving that scope to
+    ``Path.cwd()`` filtered index hits against the directory the sidecar was
+    spawned in, which is not where the user's work is — the same mistake the
+    walk path makes without it, and the two must agree or a hit the walk found
+    gets filtered out again (#3576).
+    """
+    if scope in _UNBOUNDED_SCOPES:
+        return []
+    if scope == "cwd":
+        return [Path(root).expanduser().resolve() for root in search_roots(host)]
+    if scope == "home":
+        raw = Path.home()
+    else:
+        raw = Path(scope)
+    return [raw.expanduser().resolve()]
+
+
+def _path_in_roots(path: str, roots: list) -> bool:
+    """True when ``path`` is one of ``roots`` or lives beneath one."""
+    if not roots:
+        return True
+    try:
+        candidate = Path(path).expanduser().resolve()
+    except (OSError, ValueError):
+        return False
+    return any(candidate == root or root in candidate.parents for root in roots)
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -64,11 +109,15 @@ class FileSystemToolsMixin:
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
         resolved = Path(path).expanduser().resolve()
-        if self._path_validator and not self._path_validator.is_path_allowed(
-            str(resolved)
-        ):
-            raise ValueError(f"Access denied: {resolved}")
+        if self._path_validator:
+            allowed, reason = self._path_validator.validate_read(str(resolved))
+            if not allowed:
+                raise ValueError(f"Access denied: {reason}")
         return resolved
+
+    def workspace_roots(self) -> list:
+        """The agent's allowed paths — see ``search_scope`` (#3576)."""
+        return [str(root) for root in search_roots(self)]
 
     def _get_default_excludes(self) -> set:
         """Get platform-specific default directory exclusion patterns."""
@@ -591,23 +640,15 @@ class FileSystemToolsMixin:
         ) -> str:
             """Search for files by name, content, or metadata.
 
-            This is the primary file search tool. When the file system index is available,
-            searches the index first (instant). Falls back to filesystem glob when index
-            is unavailable.
-
-            Search types:
-            - auto: intelligently picks the best strategy based on query
-            - name: search by file/directory name pattern (glob)
-            - content: search inside file contents (grep-like)
-            - metadata: filter by size, date, type only
-
-            Scope 'smart' searches: current directory first, then home common locations,
-            then indexed directories. Use 'everywhere' for full drive search (slow).
+            The primary file search tool: hits the file system index when one
+            is available, else falls back to a filesystem glob.
 
             Args:
-                query: Search query - file name, pattern (e.g. '*.pdf'), or content text
-                search_type: auto, name, content, or metadata (default: auto)
-                scope: smart, home, cwd, everywhere, or a specific path (default: smart)
+                query: File name, pattern (e.g. '*.pdf'), or content text
+                search_type: auto (picks a strategy), name (glob), content
+                    (grep-like), or metadata (size/date/type only)
+                scope: smart (cwd, then home, then indexed dirs), home, cwd,
+                    everywhere (full drive, slow), or a specific path
                 file_types: Comma-separated extensions to filter, e.g. 'pdf,docx,txt'
                 size_range: Size filter, e.g. '>10MB', '<1KB', '1MB-100MB'
                 date_range: Date filter, e.g. 'today', 'this-week', '2026-01', '>2026-01-01'
@@ -653,12 +694,31 @@ class FileSystemToolsMixin:
                     else:
                         effective_type = "name"
 
+                # Validate a caller supplied scope before any search path can
+                # answer; named scopes fan out over folders that need not exist.
+                if scope not in ("smart", "home", "cwd", "everywhere"):
+                    scope_root = Path(scope).expanduser().resolve()
+                    if not scope_root.exists():
+                        return (
+                            f"Error: '{scope_root}' does not exist. Pass an existing "
+                            "folder as scope, or use 'smart', 'home', 'cwd', "
+                            "or 'everywhere'."
+                        )
+                    if not scope_root.is_dir():
+                        return (
+                            f"Error: '{scope_root}' is not a directory. Pass the "
+                            "folder to search as scope, not a file."
+                        )
+
                 # Try index first if available
                 if mixin._fs_index and effective_type in (
                     "name",
                     "auto",
                     "metadata",
                 ):
+                    # The index spans every indexed directory, so the caller's
+                    # scope has to be applied to its rows too.
+                    scope_roots = _scope_roots(scope, self)
                     try:
                         index_results = mixin._fs_index.query_files(
                             name=query if effective_type != "metadata" else None,
@@ -671,8 +731,18 @@ class FileSystemToolsMixin:
                             max_size=max_size,
                             modified_after=min_date,
                             modified_before=max_date,
-                            limit=max_results,
+                            limit=(
+                                max_results * _INDEX_SCOPE_OVERFETCH
+                                if scope_roots
+                                else max_results
+                            ),
                         )
+                        if scope_roots:
+                            index_results = [
+                                r
+                                for r in index_results
+                                if _path_in_roots(r.get("path", ""), scope_roots)
+                            ][:max_results]
                         if index_results:
                             lines = [
                                 f"Found {len(index_results)} result(s) from index:\n"
@@ -692,6 +762,7 @@ class FileSystemToolsMixin:
                 # Filesystem search
                 # Determine search roots based on scope
                 search_roots = _get_search_roots(scope)
+                resolved_roots = [Path(r).expanduser().resolve() for r in search_roots]
 
                 query_lower = query.lower()
                 is_glob = "*" in query or "?" in query
@@ -703,6 +774,15 @@ class FileSystemToolsMixin:
                     root = Path(root_path).expanduser().resolve()
                     if not root.exists() or not root.is_dir():
                         continue
+                    # A workspace scope takes its depth from the shared policy,
+                    # so this tool and ``search_file`` cannot disagree on how
+                    # deep the project is. An explicit scope was named by the
+                    # caller and keeps this tool's own defaults.
+                    scoped_depth = (
+                        root_depth(root, resolved_roots)
+                        if scope in ("cwd", "smart")
+                        else None
+                    )
 
                     if effective_type == "content":
                         # Content search (grep-like)
@@ -716,6 +796,12 @@ class FileSystemToolsMixin:
                             max_size,
                             min_date,
                             max_date,
+                            # Grep cost scales with file bytes, not directory
+                            # entries, so the project is not read to
+                            # DEEP_ROOT_DEPTH the way a name search walks it.
+                            max_depth=(
+                                min(8, scoped_depth) if scoped_depth is not None else 8
+                            ),
                         )
                     else:
                         # Name/metadata search
@@ -731,6 +817,9 @@ class FileSystemToolsMixin:
                             max_size,
                             min_date,
                             max_date,
+                            max_depth=(
+                                scoped_depth if scoped_depth is not None else 10
+                            ),
                         )
 
                 # Sort results
@@ -775,6 +864,8 @@ class FileSystemToolsMixin:
             lines: int = 100,
             encoding: str = "auto",
             mode: str = "full",
+            offset: int = 0,
+            limit: Optional[int] = None,
         ) -> str:
             """Read and display a file's contents with intelligent type-based analysis.
 
@@ -789,6 +880,8 @@ class FileSystemToolsMixin:
 
             Args:
                 file_path: Path to the file to read
+                offset: Zero-based character offset for paging.
+                limit: Text page size, 1..8000 characters.
                 lines: Number of lines to show, 0 for all (default: 100)
                 encoding: File encoding, 'auto' for auto-detect (default: auto)
                 mode: Reading mode - full, preview, or metadata (default: full)
@@ -809,6 +902,39 @@ class FileSystemToolsMixin:
                 if mode == "metadata":
                     return file_info(str(resolved))
 
+                # Views that show the file's text unlock it for the edit tools;
+                # PDF, image and binary summaries don't.
+                reads = file_read_record(mixin)
+                seen = stamp_of(resolved)
+
+                if offset or limit is not None:
+                    from gaia.agents.base.artifacts import read_text_page
+
+                    page_encoding = encoding
+                    if page_encoding == "auto":
+                        page_encoding = "utf-8"
+                        try:
+                            from charset_normalizer import from_bytes
+                        except ImportError:
+                            logger.debug(
+                                "charset_normalizer unavailable; text paging requires UTF-8 or explicit encoding"
+                            )
+                        else:
+                            with resolved.open("rb") as sample_file:
+                                match = from_bytes(sample_file.read(65536)).best()
+                            if match is not None:
+                                page_encoding = match.encoding
+                    page = read_text_page(
+                        resolved,
+                        offset,
+                        8000 if limit is None else limit,
+                        page_encoding,
+                    )
+                    reads.note(resolved, seen)
+                    return json.dumps(
+                        {**page, "encoding": page_encoding}, ensure_ascii=False
+                    )
+
                 # Size guard: refuse to load files bigger than MAX_READ_BYTES
                 # (50 MB) entirely. ``mode="preview"`` / ``mode="metadata"`` use
                 # streaming / metadata-only paths so they remain available for
@@ -820,18 +946,22 @@ class FileSystemToolsMixin:
                         f"Error: File too large to read in full ({_format_size(file_size)}). "
                         f"Maximum is {_format_size(MAX_READ_BYTES)}.\n"
                         f"Use mode='preview' for the first 20 lines, "
-                        f"or mode='metadata' for file info without reading content."
+                        f"or read_file(offset=0, limit=8000) for bounded text pages."
                     )
 
                 # Handle specific file types
 
                 # CSV/TSV
                 if ext in (".csv", ".tsv"):
-                    return _read_tabular(resolved, ext, lines, mode)
+                    shown = _read_tabular(resolved, ext, lines, mode)
+                    reads.note(resolved, seen)
+                    return shown
 
                 # JSON
                 if ext == ".json":
-                    return _read_json(resolved, lines, mode)
+                    shown = _read_json(resolved, lines, mode)
+                    reads.note(resolved, seen)
+                    return shown
 
                 # PDF
                 if ext == ".pdf":
@@ -861,7 +991,9 @@ class FileSystemToolsMixin:
                             {7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100))
                         )
                         nontext = sum(1 for byte in sample if byte not in text_chars)
-                        if nontext / len(sample) > 0.30:
+                        # stat can report a size a read does not deliver — a
+                        # pseudo-file, or a truncation between the two calls.
+                        if sample and nontext / len(sample) > 0.30:
                             mime, _ = mimetypes.guess_type(str(resolved))
                             hex_preview = sample[:64].hex(" ")
                             return (
@@ -869,8 +1001,13 @@ class FileSystemToolsMixin:
                                 f"MIME: {mime or 'unknown'}\n"
                                 f"Hex preview: {hex_preview}..."
                             )
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        logger.warning(
+                            "Could not sample %s for binary content (%s); "
+                            "reading it as text",
+                            resolved,
+                            e,
+                        )
 
                 # Text file reading
                 detected_encoding = encoding
@@ -947,9 +1084,12 @@ class FileSystemToolsMixin:
 
                 if truncated:
                     output_lines.append(
-                        f"\n  ... ({total_lines - len(display_lines)} more lines)"
+                        f"\n  ... (more lines/content available; call read_file with offset="
+                        f"{sum(len(line) for line in display_lines)}, limit=8000, "
+                        f"encoding='{detected_encoding}' to continue)"
                     )
 
+                reads.note(resolved, seen)
                 return "\n".join(output_lines)
 
             except ValueError as e:
@@ -1120,10 +1260,10 @@ class FileSystemToolsMixin:
         def _get_search_roots(scope: str) -> list:
             """Get search root directories based on scope."""
             home = str(Path.home())
-            cwd = str(Path.cwd())
+            workspace = self.workspace_roots()
 
             if scope == "cwd":
-                return [cwd]
+                return workspace
             elif scope == "home":
                 return [home]
             elif scope == "everywhere":
@@ -1137,7 +1277,7 @@ class FileSystemToolsMixin:
                     ]
                 return ["/"]
             elif scope == "smart":
-                roots = [cwd]
+                roots = list(workspace)
                 common = [
                     "Documents",
                     "Downloads",
@@ -1148,7 +1288,7 @@ class FileSystemToolsMixin:
                 ]
                 for folder in common:
                     p = Path(home) / folder
-                    if p.exists() and str(p) != cwd:
+                    if p.exists() and str(p) not in roots:
                         roots.append(str(p))
                 return roots
             else:
@@ -1167,6 +1307,7 @@ class FileSystemToolsMixin:
             max_size,
             min_date,
             max_date,
+            max_depth=10,
         ):
             """Search for files by name."""
             import fnmatch
@@ -1174,7 +1315,7 @@ class FileSystemToolsMixin:
             default_excludes = mixin._get_default_excludes()
 
             def _walk(current, depth):
-                if depth > 10 or len(results) >= max_results:
+                if depth > max_depth or len(results) >= max_results:
                     return
                 try:
                     for entry in os.scandir(str(current)):
@@ -1253,6 +1394,7 @@ class FileSystemToolsMixin:
             max_size,
             _min_date,
             _max_date,
+            max_depth=8,
         ):
             """Search inside file contents."""
             default_excludes = mixin._get_default_excludes()
@@ -1289,7 +1431,7 @@ class FileSystemToolsMixin:
             query_lower = query.lower()
 
             def _walk(current, depth):
-                if depth > 8 or len(results) >= max_results:
+                if depth > max_depth or len(results) >= max_results:
                     return
                 try:
                     for entry in os.scandir(str(current)):
@@ -1325,6 +1467,13 @@ class FileSystemToolsMixin:
                                     continue
 
                                 try:
+                                    mixin._validate_path(entry.path)
+                                except ValueError as exc:
+                                    logger.debug(
+                                        "Skipping unreadable search result: %s", exc
+                                    )
+                                    continue
+                                try:
                                     with open(
                                         entry.path,
                                         "r",
@@ -1347,8 +1496,10 @@ class FileSystemToolsMixin:
                                                     }
                                                 )
                                                 break  # One match per file
-                                except (OSError, UnicodeDecodeError):
-                                    pass  # Skip unreadable files during content search
+                                except (OSError, UnicodeDecodeError) as exc:
+                                    logger.debug(
+                                        "Cannot search %s: %s", entry.path, exc
+                                    )
                         except (PermissionError, OSError):
                             continue
                 except (PermissionError, OSError):

@@ -11,6 +11,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
@@ -244,7 +245,7 @@ func RunOneShot(
 			res.TerminalType = event.CanonicalTypeFinal
 			// `answer` is authoritative; the streamed tokens are the fallback for
 			// a sidecar that streams and then closes with an empty final.
-			res.Answer = e.Answer
+			res.Answer = chat.StripVerificationScope(e.Answer)
 			if res.Answer == "" {
 				res.Answer = streamed.String()
 			}
@@ -285,8 +286,8 @@ func RunOneShot(
 		// pointed at a subprocess agent.
 		case event.AnswerEvent:
 			res.TerminalType = event.CanonicalTypeFinal
-			res.Answer = e.Content
-			fmt.Fprintln(out, e.Content)
+			res.Answer = chat.StripVerificationScope(e.Content)
+			fmt.Fprintln(out, res.Answer)
 		case event.AgentErrorEvent:
 			res.TerminalType = event.CanonicalTypeError
 			res.ErrorDetail = e.Content
@@ -500,9 +501,9 @@ const (
 	// refuse a cold start the hub completes on the same machine.
 	readinessEnsureTimeout = 15 * time.Minute
 	// readinessCheckTimeout bounds the readiness probe. Same value as the gate's
-	// checkTimeout, over the same call — two paths asking the same question must
+	// CheckTimeout, over the same call — two paths asking the same question must
 	// not disagree about how long the answer may take.
-	readinessCheckTimeout = 90 * time.Second
+	readinessCheckTimeout = preflight.CheckTimeout
 	// DefaultOneShotTimeout bounds one whole non-interactive turn. The relay
 	// reads with a 300s idle timeout per chunk and an agent loop can take several
 	// steps, so this sits well above a healthy-but-slow run — including one whose

@@ -20,6 +20,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import _CONTEXT_STILL_OVERFLOWING_MESSAGE, Agent
+from gaia.agents.base.verification import strip_verification_scope
+from gaia.security import PathValidator
 
 
 class _DummyAgent(Agent):
@@ -57,6 +59,72 @@ class TestParseLLMResponseRaisesOnMalformed:
         )
         with pytest.raises(ValueError, match="Malformed native tool_calls"):
             agent._parse_llm_response(bad)
+
+    def test_empty_response_lists_files_modified_before_failure(
+        self, agent, tmp_path, mock_home
+    ):
+        """Empty-turn recovery reports files tracked from a successful edit."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        from gaia.agents.tools.file_tools import FileSearchToolsMixin
+
+        mixin = FileSearchToolsMixin()
+        mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
+        mixin._path_validator = None
+        saved_registry = dict(_TOOL_REGISTRY)
+        _TOOL_REGISTRY.clear()
+        try:
+            mixin.register_file_search_tools()
+            target = tmp_path / "edited.py"
+            target.write_text("value = 1\n")
+            responses = iter(
+                [
+                    # The edit tools refuse a file the agent hasn't read.
+                    json.dumps(
+                        {
+                            "thought": "Read the file.",
+                            "tool": "read_file",
+                            "tool_args": {"file_path": str(target)},
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "thought": "Edit the file.",
+                            "tool": "edit_file",
+                            "tool_args": {
+                                "file_path": str(target),
+                                "old_content": "value = 1",
+                                "new_content": "value = 2",
+                            },
+                        }
+                    ),
+                    "",
+                ]
+            )
+            chat = MagicMock()
+
+            def send_messages(*_, **__):
+                response = MagicMock()
+                response.text = next(responses)
+                response.stats = {}
+                return response
+
+            chat.send_messages.side_effect = send_messages
+            agent.chat = chat
+            with patch.object(agent, "_tool_requires_confirmation", return_value=False):
+                result = agent.process_query("Edit the file", max_steps=3)
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(saved_registry)
+
+        answer = result["result"]
+        assert "Files modified before the turn failed:" in answer
+        assert str(target) in answer
+
+        edited_files = agent._turn_file_edits
+        assert len(edited_files) == 1
+        backup_path = edited_files[0]["backup_path"]
+        assert backup_path is not None
+        assert backup_path in answer
 
 
 class TestProcessQueryRecoversOnParseError:
@@ -106,6 +174,84 @@ class TestProcessQueryRecoversOnParseError:
             if isinstance(result, dict)
             else True
         )
+
+    def test_fenced_only_tool_calls_then_plain_answer(self, agent):
+        """Issue #3596: a response that is nothing but fenced tool calls used to
+        be handed back to the user as the turn's answer — raw JSON, no tool run,
+        no error. It must now retry and answer on the next round."""
+        bad = (
+            '```json\n{"tool": "extract_audio", "tool_args": {}}\n```\n'
+            '```json\n{"tool": "summarize_document", "tool_args": {}}\n```\n'
+            "```json}"
+        )
+        good_answer = json.dumps({"thought": "Done.", "answer": "All set."})
+        chat = self._stub_chat(agent, bad, good_answer)
+
+        result = agent.process_query("Summarize the workshop video", max_steps=5)
+
+        assert chat.send_messages.call_count == 2
+        assert any(
+            e.get("type") == "tool_call_parse_error" for e in agent.error_history
+        )
+        text = result.get("response") if isinstance(result, dict) else str(result)
+        assert "```json" not in (text or "")
+
+    def test_retry_prompt_carries_the_parser_reason(self, agent):
+        """The recovery turn must quote the parser's own message.
+
+        Telling the model its *arguments* were malformed when the real defect
+        was duplicated fenced blocks sends it back down the same path and burns
+        every retry.
+        """
+        bad = (
+            '```json\n{"tool": "extract_audio", "tool_args": {}}\n```\n'
+            '```json\n{"tool": "summarize_document", "tool_args": {}}\n```'
+        )
+        good_answer = json.dumps({"thought": "Done.", "answer": "All set."})
+        chat = self._stub_chat(agent, bad, good_answer)
+
+        agent.process_query("Summarize the workshop video", max_steps=5)
+
+        retry_msgs = [
+            m["content"]
+            for call in chat.send_messages.call_args_list
+            for m in (call.kwargs.get("messages") or call.args[0])
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        ]
+        assert any(
+            "Ambiguous tool call" in c and "unfenced" in c for c in retry_msgs
+        ), f"parser reason missing from the retry prompt: {retry_msgs}"
+
+    def test_unparseable_plan_recovers_instead_of_crashing(self, agent):
+        """A plan reply that won't parse must retry, not escape as an error.
+
+        The planning branch calls the same parser as the main loop, so the
+        reply shapes that raise there raise here too.
+        """
+        needs_plan = json.dumps({"thought": "Need a plan.", "needs_plan": True})
+        bad_plan = (
+            '```json\n{"tool": "extract_audio", "tool_args": {}}\n```\n'
+            '```json\n{"tool": "summarize_document", "tool_args": {}}\n```'
+        )
+        good_answer = json.dumps({"thought": "Done.", "answer": "All set."})
+        chat = self._stub_chat(agent, needs_plan, bad_plan, good_answer)
+
+        result = agent.process_query("Plan then answer", max_steps=5)
+
+        assert chat.send_messages.call_count == 3
+        sent = [
+            m["content"]
+            for call in chat.send_messages.call_args_list
+            for m in (call.kwargs.get("messages") or call.args[0])
+            if isinstance(m.get("content"), str)
+        ]
+        assert any("You MUST create a detailed plan" in c for c in sent)
+        assert any("Ambiguous tool call" in c for c in sent)
+        assert any(
+            e.get("type") == "tool_call_parse_error" for e in agent.error_history
+        )
+        text = result.get("response") if isinstance(result, dict) else str(result)
+        assert "Agent error" not in (text or "")
 
     def test_three_consecutive_parse_errors_give_up_gracefully(self, agent):
         """After 3 parse errors the loop bails with a friendly message."""
@@ -221,7 +367,8 @@ class TestProcessQueryRecoversOnContextOverflow:
         # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
         text = result["result"] if isinstance(result, dict) else str(result)
         assert text, "expected the friendly trim-exhausted fallback text"
-        assert text == _CONTEXT_STILL_OVERFLOWING_MESSAGE
+        # The loop appends a verification-scope line to every answer (#3376).
+        assert strip_verification_scope(text) == _CONTEXT_STILL_OVERFLOWING_MESSAGE
         assert "Max length reached" not in text
         assert "Sorry, I ran into" not in text
 
@@ -353,7 +500,8 @@ class TestProcessQueryRecoversOnContextOverflowStreaming:
 
         assert call_count["n"] == 2  # initial attempt + one trim-and-retry
         text = result["result"] if isinstance(result, dict) else str(result)
-        assert text == _CONTEXT_STILL_OVERFLOWING_MESSAGE
+        # The loop appends a verification-scope line to every answer (#3376).
+        assert strip_verification_scope(text) == _CONTEXT_STILL_OVERFLOWING_MESSAGE
         assert "exceeds the available context size" not in text
         assert "Sorry, I ran into" not in text
 
@@ -917,3 +1065,90 @@ class TestParseRecoveryPromptSurfacesStep1ImagePath:
         # image, not the first.
         assert r"C:\second\b.png" in text
         assert r"C:\first\a.png" not in text
+
+
+class TestParseRetriesHaveTheirOwnBudget:
+    """Failed tool calls are ordinary work; they must not spend the retries a
+    malformed reply gets. A benchmark run lost its whole answer this way: three
+    refused or failing commands, then one malformed reply, and the turn ended
+    with "I had trouble formatting my tool call" on the first parse failure."""
+
+    @pytest.fixture
+    def failing_agent(self):
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            a = _DummyAgent(silent_mode=True, skip_lemonade=True)
+            a.streaming = False
+            # Per-instance so the fake tool never reaches the global registry.
+            a._instance_tools = {
+                "run_check": {
+                    "name": "run_check",
+                    "description": "Run a check that fails.",
+                    "parameters": {"target": {"type": "string", "required": False}},
+                    "function": lambda target="": {
+                        "status": "error",
+                        "error": "1 failed",
+                        "return_code": 1,
+                    },
+                    "atomic": True,
+                }
+            }
+            return a
+
+    @staticmethod
+    def _call(target: str) -> str:
+        # Vary the args so the three calls don't trip ``max_consecutive_repeats``
+        # (default 4) — this test is about the parse budget, nothing else.
+        return json.dumps({"tool": "run_check", "tool_args": {"target": target}})
+
+    def test_a_malformed_reply_after_failing_tools_is_retried(self, failing_agent):
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        good = json.dumps({"thought": "Done.", "answer": "test_retry hangs."})
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None,
+            failing_agent,
+            self._call("unit"),
+            self._call("mcp"),
+            self._call("integration"),
+            bad,
+            good,
+        )
+
+        result = failing_agent.process_query("Run the checks.", max_steps=10)
+
+        assert chat.send_messages.call_count == 5
+        assert "test_retry hangs." in result["result"]
+        assert "trouble formatting" not in result["result"]
+
+    def test_three_malformed_replies_still_give_up(self, failing_agent):
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None, failing_agent, bad, bad, bad, bad, bad
+        )
+
+        result = failing_agent.process_query("test", max_steps=10)
+
+        assert chat.send_messages.call_count == 3
+        assert "trouble formatting" in result["result"]
+
+    def test_a_clean_parse_gives_the_retries_back(self, failing_agent):
+        """The budget counts malformed replies in a row, not per turn. Two bad
+        replies, a good tool call, two more bad replies — a long turn that keeps
+        recovering must not lose its answer to a cumulative count."""
+        bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+        good = json.dumps({"thought": "Done.", "answer": "all checks ran."})
+        chat = TestProcessQueryRecoversOnParseError._stub_chat(
+            None,
+            failing_agent,
+            bad,
+            bad,
+            self._call("unit"),
+            bad,
+            bad,
+            good,
+        )
+
+        result = failing_agent.process_query("Run the checks.", max_steps=10)
+
+        assert chat.send_messages.call_count == 6
+        assert "all checks ran." in result["result"]
+        assert "trouble formatting" not in result["result"]

@@ -147,6 +147,36 @@ func TestParseAnswerEvent(t *testing.T) {
 	}
 }
 
+// The producer puts the backend's own measurements on the answer event, and
+// the legacy transport used to drop all three on the floor — so a subprocess
+// run showed no tokens and no ttft however well the backend had measured them.
+func TestParseAnswerEventCarriesTheBackendsMeasurements(t *testing.T) {
+	line := []byte(`{"type":"answer","content":"391","steps":2,"tools_used":1,` +
+		`"tokens":68,"ttft":31.695,"tok_per_s":13.3}`)
+	e, err := ParseEvent(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	a := e.(AnswerEvent)
+	if a.Tokens != 68 || a.TTFT != 31.695 || a.TokPerS != 13.3 {
+		t.Errorf("measurements lost in parsing: %+v", a)
+	}
+}
+
+// A backend that measured none leaves them off the wire; zero is how the
+// renderer is told to print nothing, so it must survive as zero.
+func TestParseAnswerEventWithoutMeasurements(t *testing.T) {
+	line := []byte(`{"type":"answer","content":"391","steps":2,"tools_used":1}`)
+	e, err := ParseEvent(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	a := e.(AnswerEvent)
+	if a.Tokens != 0 || a.TTFT != 0 || a.TokPerS != 0 {
+		t.Errorf("invented a measurement nobody reported: %+v", a)
+	}
+}
+
 func TestParseAgentErrorEvent(t *testing.T) {
 	line := []byte(`{"type":"agent_error","content":"Model load failed"}`)
 	e, err := ParseEvent(line)

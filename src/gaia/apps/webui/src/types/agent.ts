@@ -9,7 +9,8 @@ export interface AgentInfo {
   id: string;
   name: string;
   description: string;
-  version: string;
+  /** Version string, when known. Not every source populates this field. */
+  version?: string;
   binaries: Record<string, string>;  // platform → binary name
   language?: string;
   toolsCount: number;
@@ -118,6 +119,8 @@ export interface GaiaNotification {
   /** For permission_request type. */
   tool?: string;
   toolArgs?: Record<string, unknown>;
+  /** Chat session that raised the request; "always allow" grants are scoped to it. */
+  sessionId?: string;
   /** For policy_alert type. */
   decision?: string;
   reason?: string;
@@ -162,6 +165,12 @@ export interface TrayConfig {
     startOnLogin: boolean;
     showNotificationBadge: boolean;
   };
+}
+
+/** Payload for `tray.setConfig`; `agents` entries are merged by agent id. */
+export interface TrayConfigUpdate {
+  agents?: Record<string, AgentConfig>;
+  tray?: Partial<TrayConfig['tray']>;
 }
 
 // ── Agent Chat Types ─────────────────────────────────────────────────────
@@ -262,7 +271,7 @@ export interface GaiaElectronAPI {
   };
   tray: {
     getConfig: () => Promise<TrayConfig>;
-    setConfig: (config: Partial<TrayConfig>) => Promise<void>;
+    setConfig: (config: TrayConfigUpdate) => Promise<TrayConfig>;
   };
   notification: {
     onPermissionRequest: (cb: (data: GaiaNotification) => void) => void;

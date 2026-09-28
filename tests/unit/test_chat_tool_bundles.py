@@ -74,7 +74,7 @@ def test_core_is_subset_of_bundle_union():
     bundle_members: set[str] = set()
     for bundle in DOC_BUNDLES:
         bundle_members |= set(bundle.members)
-    assert DOC_CORE_TOOLS - bundle_members == {"load_tools"}
+    assert DOC_CORE_TOOLS - bundle_members == {"load_tools", "read_tool_output"}
 
 
 def test_bundles_have_unique_names():
@@ -96,3 +96,24 @@ def test_doc_profile_is_wired_to_the_doc_config():
     assert cfg.core is DOC_CORE_TOOLS
     assert cfg.bundles is DOC_BUNDLES
     assert not cfg.optional, "the doc registry has no absent-by-construction tools"
+
+
+def test_continuation_reader_is_core_and_session_owned_after_refresh():
+    from gaia.agents.base.artifacts import store_for
+
+    first = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=True
+    )
+    handle = store_for(first).put("first session")
+    second = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=True
+    )
+    other = store_for(second).put("second session")
+    first._register_tools()
+    first.tool_loader.validate_registry(first._tools_registry)
+    selected = first.tool_loader.select("hello", first._tools_registry)
+    assert "read_tool_output" in selected
+    reader = first._tools_registry["read_tool_output"]["function"]
+    assert reader(handle)["content"] == "first session"
+    with pytest.raises(ValueError, match="Unknown output"):
+        reader(other)

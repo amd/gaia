@@ -77,6 +77,12 @@ type AnswerEvent struct {
 	Content   string `json:"content"`
 	Steps     int    `json:"steps"`
 	ToolsUsed int    `json:"tools_used"`
+	// The same backend-measured figures the canonical transport carries in
+	// usage (see CanonicalUsage): absent — and so zero — whenever the backend
+	// reported none, never derived from anything observed on this side.
+	Tokens  int     `json:"tokens"`
+	TTFT    float64 `json:"ttft"`
+	TokPerS float64 `json:"tok_per_s"`
 }
 
 // ChunkEvent — streaming LLM token (disabled in v1 json-events mode)

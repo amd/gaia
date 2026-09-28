@@ -874,6 +874,37 @@ def test_calendar_view_returns_events(client, fake_calendar):
     assert body["schema_version"] == SCHEMA_VERSION
     assert body["events"][0]["id"] == "evt-1"
     assert body["events"][0]["organizer"] == "lead@example.com"
+    assert body["count"] == 1
+    assert body["truncated"] is False
+
+
+def test_calendar_view_returns_truncation_signal(client, fake_calendar, monkeypatch):
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        fake_calendar,
+        "list_events",
+        lambda **kwargs: {
+            "items": [
+                {
+                    "id": "evt-page-1",
+                    "summary": "Busy day",
+                    "start": {"dateTime": "2026-07-01T09:00:00Z"},
+                    "end": {"dateTime": "2026-07-01T10:00:00Z"},
+                }
+            ],
+            "nextPageToken": "page-2",
+        },
+    )
+    monkeypatch.setattr(
+        email_routes, "resolve_calendar_backend", lambda: fake_calendar
+    )
+
+    resp = client.get("/v1/email/calendar/events")
+
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 1
+    assert resp.json()["truncated"] is True
 
 
 def test_calendar_create_without_token_is_403(client, fake_calendar):

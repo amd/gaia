@@ -523,24 +523,89 @@ class TestReconcileAndStore:
         assert rows[0]["provenance"]["source"] == "synthesized"
         assert rows[0]["provenance"]["from_sessions"] == list(cluster.from_sessions)
 
-    def test_noop_when_existing_dominates(self, store):
-        # Existing row with a strong track record AND a matching trigger vector
-        # (the new match key is meaning, so the prior must carry an embedding).
+    def test_noop_when_the_cluster_brings_nothing_new(self, store):
+        """NOOP means "no new evidence", keyed on sessions rather than counts.
+
+        Reached when history is re-read — a ``force=True`` pass, or the first
+        pass after ``reset_synthesis_progress`` — over episodes the stored row
+        was already built from.
+        """
         vec = _unit([1, 0, 0]).tobytes()
+        cluster = _cluster(n=3)
         store.put_skill(
             name="triage-support-ticket",
             when_to_use="t",
             markdown_body="b",
             success_count=99,
             attempt_count=100,
+            provenance={
+                "source": "synthesized",
+                "from_sessions": list(cluster.from_sessions),
+            },
             embedding=vec,
         )
-        weak_cluster = _cluster(n=3)  # success_count 9 << 99
-        res = reconcile_and_store(self._candidate(), weak_cluster, store, embedding=vec)
+
+        res = reconcile_and_store(self._candidate(), cluster, store, embedding=vec)
+
         assert res.action == "noop"
         assert res.skill_id is None
         # Still exactly one (enabled, non-superseded) row.
         assert len(store.search_skills(name="triage-support-ticket")) == 1
+
+    def test_a_small_window_of_new_episodes_still_supersedes(self, store):
+        """The regression incremental passes introduced: a cluster holds only
+        the episodes no earlier pass consumed — a steady min_occurrences-sized
+        batch — so comparing it against a row a wider window wrote could never
+        win, and a drifted procedure would stay frozen forever."""
+        vec = _unit([1, 0, 0]).tobytes()
+        old_id = store.put_skill(
+            name="triage-support-ticket",
+            when_to_use="t",
+            markdown_body="b",
+            success_count=99,
+            attempt_count=100,
+            provenance={"source": "synthesized", "from_sessions": ["old_0", "old_1"]},
+            embedding=vec,
+        )
+        fresh = _cluster(n=3)  # success_count 9, every session new to the lineage
+
+        res = reconcile_and_store(self._candidate(), fresh, store, embedding=vec)
+
+        assert res.action == "update"
+        assert res.superseded_id == old_id
+        row = store.search_skills(skill_id=res.skill_id)[0]
+        # The lineage's record, not this one window's.
+        assert row["success_count"] == 99 + fresh.success_count
+        assert row["attempt_count"] == 100 + fresh.attempt_count
+        assert row["provenance"]["from_sessions"] == ["old_0", "old_1"] + list(
+            fresh.from_sessions
+        )
+
+    def test_re_reading_consumed_episodes_never_double_counts(self, store):
+        """A force pass re-reads episodes the row was built from. Only the ones
+        it was NOT built from may move the count."""
+        vec = _unit([1, 0, 0]).tobytes()
+        first = _cluster(n=3)
+        store.put_skill(
+            name="triage-support-ticket",
+            when_to_use="t",
+            markdown_body="b",
+            success_count=first.success_count,
+            attempt_count=first.attempt_count,
+            provenance={
+                "source": "synthesized",
+                "from_sessions": list(first.from_sessions),
+            },
+            embedding=vec,
+        )
+        wider = _cluster(n=5)  # the same three sessions plus two new ones
+
+        res = reconcile_and_store(self._candidate(), wider, store, embedding=vec)
+
+        assert res.action == "update"
+        row = store.search_skills(skill_id=res.skill_id)[0]
+        assert row["success_count"] == wider.success_count  # not first + wider
+        assert row["provenance"]["from_sessions"] == list(wider.from_sessions)
 
     def test_update_supersedes_lower_success_count(self, store):
         vec = _unit([1, 0, 0]).tobytes()
@@ -626,16 +691,21 @@ class TestReconcileAndStore:
         assert res.action == "add"
         assert len(store.search_skills()) == 2
 
-    def test_lower_success_same_meaning_noops(self, store):
-        """Dominance is unchanged under the new key: drifted name + matching
-        vector but a weaker cluster -> NOOP (existing row dominates)."""
+    def test_a_drifted_name_over_already_seen_episodes_noops(self, store):
+        """Drifted name + matching vector, but no episode the row lacks -> NOOP.
+        One row stays visible; the drift alone is not evidence."""
         v = _unit([1, 0, 0]).tobytes()
+        cluster = _cluster(n=3)
         store.put_skill(
             name="summarize-unread-emails",
             when_to_use="Summarize unread emails.",
             markdown_body="b",
             success_count=50,
             attempt_count=50,
+            provenance={
+                "source": "synthesized",
+                "from_sessions": list(cluster.from_sessions),
+            },
             embedding=v,
         )
         drifted = DistilledProcedure(
@@ -644,7 +714,9 @@ class TestReconcileAndStore:
             body="weaker",
             tools_required=["list_emails"],
         )
-        res = reconcile_and_store(drifted, _cluster(n=3), store, embedding=v)  # 9 < 50
+
+        res = reconcile_and_store(drifted, cluster, store, embedding=v)
+
         assert res.action == "noop"
         assert len(store.search_skills()) == 1
 

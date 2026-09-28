@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 import asyncio
-import os
 import queue
 import threading
 import time
@@ -69,24 +68,9 @@ class TestWhisperAsr(unittest.TestCase):
         except Exception as e:
             self.fail(f"Recording failed with error: {str(e)}")
 
-    def test_file_transcription(self):
-        """Test transcription of an existing file."""
-        test_file = os.path.join(
-            os.environ.get("LOCALAPPDATA"), "GAIA", "data", "audio", "test.m4a"
-        )
-        if not os.path.exists(test_file):
-            self.log.warning(
-                f"Test file {test_file} not found - skipping transcription test"
-            )
-            self.skipTest(
-                f"Test file {test_file} not found - skipping transcription test"
-            )
-            return
-
-        self.log.info(f"Found test file: {test_file}")
-        result = self.asr.transcribe_file(test_file)
-        self.log.info(f"Transcription Result: {result}")
-        self.assertTrue(result.strip() == "This is a test.")
+    def test_no_file_transcription_api(self):
+        """WhisperAsr is live-microphone only; file transcription was removed."""
+        self.assertFalse(hasattr(self.asr, "transcribe_file"))
 
     def tearDown(self):
         """Clean up resources after tests."""

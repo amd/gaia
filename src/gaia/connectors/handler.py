@@ -16,7 +16,9 @@ dispatcher is type-agnostic; adding a new type only requires:
 
 The per-agent grant check lives here (not in handlers) because it is
 type-agnostic: every connector type gates ``get_credential`` on whether
-the calling agent has been granted the required scopes.
+the calling agent has been granted the required scopes. It fails closed —
+a request made inside an agent turn with no resolvable identity is refused
+rather than falling through to the ungated CLI path (#915).
 """
 
 from __future__ import annotations
@@ -25,8 +27,12 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-from gaia.connectors.context import current_agent_id
-from gaia.connectors.errors import AuthRequiredError, ConnectorsError
+from gaia.connectors.context import agent_runtime_active, current_agent_id
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConfigurationError,
+    ConnectorsError,
+)
 from gaia.connectors.grants import check_agent_grant, list_agent_grants
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.spec import ConnectorSpec, ConnectorType
@@ -75,8 +81,15 @@ class ConnectorHandler(Protocol):
         spec: ConnectorSpec,
         *,
         account_id: Optional[str] = None,
-    ) -> None:
-        """Remove stored credentials for this connector."""
+    ) -> Optional[Dict[str, Any]]:
+        """Remove stored credentials for this connector.
+
+        OAuth handlers return a revoke-outcome dict (``revoke_supported``,
+        ``revoked_remotely``, ``revoke_error`` — see
+        ``oauth_pkce.OAuthPkceHandler.disconnect``) so callers can report the
+        provider-side outcome honestly; handlers with no remote-revoke
+        concept (e.g. ``mcp_server``) may return ``None``.
+        """
         ...
 
     async def test(self, spec: ConnectorSpec) -> Dict[str, Any]:
@@ -143,18 +156,40 @@ async def get_credential(
     Agent-id resolution order:
       1. Explicit ``agent_id`` kwarg, if non-None.
       2. Active contextvar (``current_agent_id()``), set by the agent runtime.
-      3. ``None`` → grant check is SKIPPED (CLI/debug callers).
+      3. ``None`` → grant check is SKIPPED, but ONLY outside an agent turn
+         (the CLI/debug escape hatch). Inside an agent turn a missing identity
+         means the context was dropped, not that the caller opted out, so the
+         request is refused (#915).
 
-    If an agent_id is resolved AND ``required_scopes`` is provided, the
-    per-agent grant is verified before calling the handler.
+    ``required_scopes`` defaults to the connector's own ceiling when the caller
+    omits it — the credential a handler hands back is the whole capability, so
+    "no scopes named" must not mean "nothing to check".
     """
     spec = REGISTRY.get(connector_id)
     resolved_agent = agent_id or current_agent_id()
 
-    if resolved_agent and required_scopes:
-        if not check_agent_grant(connector_id, resolved_agent, required_scopes):
+    if resolved_agent is None and agent_runtime_active():
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+            provider=connector_id,
+            agent_id=None,
+            missing_scopes=list(required_scopes or spec.scope_ceiling()),
+        )
+
+    if resolved_agent:
+        effective_scopes = list(required_scopes or spec.scope_ceiling())
+        if not effective_scopes:
+            # An empty scope list satisfies check_agent_grant vacuously, which
+            # would turn "the catalog names no scopes" into "everyone passes".
+            raise ConfigurationError(
+                f"Connector {connector_id!r} publishes no scopes, so the "
+                f"per-agent grant for {resolved_agent!r} cannot be verified. "
+                "Add an 'available_scopes' entry to its catalog spec under "
+                "gaia/connectors/catalog/, or pass required_scopes explicitly."
+            )
+        if not check_agent_grant(connector_id, resolved_agent, effective_scopes):
             granted = set(list_agent_grants(connector_id).get(resolved_agent, []))
-            missing = [s for s in required_scopes if s not in granted]
+            missing = [s for s in effective_scopes if s not in granted]
             raise AuthRequiredError(
                 AuthRequiredError.Reason.AGENT_NOT_GRANTED,
                 provider=connector_id,
@@ -224,11 +259,15 @@ async def disconnect(
     connector_id: str,
     *,
     account_id: Optional[str] = None,
-) -> None:
-    """Disconnect a connector (remove stored credentials)."""
+) -> Optional[Dict[str, Any]]:
+    """Disconnect a connector (remove stored credentials).
+
+    Returns the handler's revoke-outcome dict, or ``None`` for handler types
+    with no remote-revoke concept — see ``ConnectorHandler.disconnect``.
+    """
     spec = REGISTRY.get(connector_id)
     handler = _get_handler(spec)
-    await handler.disconnect(spec, account_id=account_id)
+    return await handler.disconnect(spec, account_id=account_id)
 
 
 async def health_check(connector_id: str) -> Dict[str, Any]:

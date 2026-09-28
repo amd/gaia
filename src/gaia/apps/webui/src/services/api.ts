@@ -11,6 +11,27 @@ const API_BASE = getApiBase();
 
 // -- Helpers -------------------------------------------------------------------
 
+/**
+ * Pull a human-readable message out of an error response body.
+ *
+ * FastAPI's `detail` is a plain string for `HTTPException`, but a *list of
+ * error objects* for request-validation failures (422) — interpolating one of
+ * those into a message renders "[object Object]" in the UI.
+ */
+function parseErrorDetail(errorText: string): string {
+    try {
+        const parsed = JSON.parse(errorText).detail;
+        if (Array.isArray(parsed)) {
+            return parsed.map((e) => e?.msg ?? JSON.stringify(e)).join('; ') || errorText;
+        }
+        if (parsed && typeof parsed !== 'string') return JSON.stringify(parsed);
+        return parsed || errorText;
+    } catch {
+        // Body isn't JSON (proxy HTML, empty response) — the raw text is the useful thing.
+        return errorText;
+    }
+}
+
 function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
@@ -26,6 +47,17 @@ function getFriendlyError(status: number, detail: string): string {
         default: return detail || `Request failed (HTTP ${status})`;
     }
 }
+
+/**
+ * CSRF marker required by the backend on every mutating request.
+ *
+ * A cross-origin page cannot set a custom header without a CORS
+ * preflight, and the backend approves preflights only from its own
+ * origins — so this is what stops a page the user visits from driving
+ * the Agent UI. Sent on reads too: a few read routes require it, and one
+ * unconditional rule is one fewer thing to forget.
+ */
+export const UI_HEADER = { 'x-gaia-ui': '1' };
 
 /** Fetch wrapper with logging, timing, and error handling. */
 async function apiFetch<T>(
@@ -44,9 +76,9 @@ async function apiFetch<T>(
         : {};
     const init: RequestInit = {
         method,
-        // extraHeaders first so Content-Type cannot be accidentally overridden
-        // by a caller for body requests.
-        headers: { ...extraHeaders, ...baseHeaders },
+        // UI_HEADER first so no caller can drop it; extraHeaders next so
+        // Content-Type cannot be accidentally overridden for body requests.
+        headers: { ...UI_HEADER, ...extraHeaders, ...baseHeaders },
         body: body !== undefined ? JSON.stringify(body) : undefined,
     };
 
@@ -61,9 +93,7 @@ async function apiFetch<T>(
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
-        let detail = errorText;
-        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
-        throw new Error(getFriendlyError(res.status, detail));
+        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
     }
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
@@ -216,7 +246,6 @@ export async function rollbackAgent(agentId: string): Promise<InstallStatus> {
 import type { AgentMcpServer, ConnectorRow } from '../types';
 
 // New framework endpoints (T-8b) — /api/connectors
-const UI_HEADER = { 'x-gaia-ui': '1' };
 
 export async function listConnectors(): Promise<{ connectors: ConnectorRow[] }> {
     return apiFetch('GET', '/connectors');
@@ -442,8 +471,34 @@ export async function toggleSessionPrivacy(id: string): Promise<Session> {
     return apiFetch('PATCH', `/sessions/${id}/private`);
 }
 
+export async function getMessageCount(sessionId: string): Promise<number> {
+    const { total } = await apiFetch<{ messages: Message[]; total: number }>(
+        'GET', `/sessions/${sessionId}/messages?limit=1&offset=0`,
+    );
+    return total;
+}
+
 export async function getMessages(sessionId: string): Promise<{ messages: Message[]; total: number }> {
-    return apiFetch('GET', `/sessions/${sessionId}/messages`);
+    const pageSize = 100;
+    const path = `/sessions/${sessionId}/messages`;
+    const first = await apiFetch<{ messages: Message[]; total: number }>(
+        'GET', `${path}?limit=${pageSize}&offset=0`,
+    );
+    const messages = [...first.messages];
+    // Bound this load to its initial count; a running agent may keep appending.
+    // The next refresh retrieves those newer messages.
+    const total = first.total;
+    while (messages.length < total) {
+        const limit = Math.min(pageSize, total - messages.length);
+        const page = await apiFetch<{ messages: Message[]; total: number }>(
+            'GET', `${path}?limit=${limit}&offset=${messages.length}`,
+        );
+        if (page.messages.length === 0) {
+            throw new Error('Incomplete transcript received. Please reload the conversation.');
+        }
+        messages.push(...page.messages);
+    }
+    return { messages, total };
 }
 
 export async function exportSession(sessionId: string): Promise<{ content: string }> {
@@ -483,7 +538,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request', 'needs_confirmation', 'policy_alert',
+    'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
 ]);
 
 export function sendMessageStream(
@@ -515,7 +570,7 @@ export function sendMessageStream(
 
     fetch(`${API_BASE}/chat/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...UI_HEADER, 'Content-Type': 'application/json' },
         body: JSON.stringify({
             session_id: sessionId,
             message,
@@ -677,19 +732,20 @@ export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
 
 // -- Tool Confirmation ---------------------------------------------------------
 
-/** Resolve a pending tool execution confirmation (Allow or Deny). */
-export async function confirmToolExecution(
-    sessionId: string,
-    confirmId: string,
-    action: 'allow' | 'deny',
-    remember: boolean,
-): Promise<void> {
-    return apiFetch('POST', '/chat/confirm', { session_id: sessionId, confirm_id: confirmId, action, remember });
-}
-
 /** Confirm or deny a tool execution (simplified API for permission_request events). */
 export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
     return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
+}
+
+/** Answer a pending mid-run `needs_input` question (#2595). The agent
+ *  blocks server-side until this call lands, so the run continues once it
+ *  resolves. */
+export async function respondToInput(
+    sessionId: string,
+    requestId: string,
+    value: string,
+): Promise<{ status: string; request_id: string }> {
+    return apiFetch('POST', '/chat/user-input', { session_id: sessionId, request_id: requestId, value });
 }
 
 /** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
@@ -729,7 +785,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
 
     let res: Response;
     try {
-        res = await fetch(url, { method: 'POST', body: formData });
+        res = await fetch(url, { method: 'POST', headers: UI_HEADER, body: formData });
     } catch (err) {
         log.api.error(`POST ${url} - network error`, err);
         throw err;
@@ -738,9 +794,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        let detail = errorText;
-        try { detail = JSON.parse(errorText).detail || errorText; } catch {}
-        throw new Error(getFriendlyError(res.status, detail));
+        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
     }
 
     const data = await res.json();
@@ -810,6 +864,7 @@ export async function uploadFile(file: File): Promise<{
 
     const res = await fetch(url, {
         method: 'POST',
+        headers: UI_HEADER,
         body: formData,
     });
 
@@ -831,6 +886,7 @@ export async function searchFiles(query: string, fileTypes?: string, maxResults?
     total: number;
     query: string;
     searched_locations: string[];
+    truncated: boolean;
 }> {
     const params = new URLSearchParams({ query });
     if (fileTypes) params.set('file_types', fileTypes);

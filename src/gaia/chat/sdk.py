@@ -8,9 +8,10 @@ Gaia Agent SDK - Unified text chat integration with conversation history
 
 import json
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from gaia.chat.prompts import Prompts
 from gaia.llm import create_client
@@ -26,12 +27,13 @@ class AgentConfig:
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
     temperature: Optional[float] = None
+    top_p: Optional[float] = None  # None = the provider's default
     system_prompt: Optional[str] = None
     max_history_length: int = 4  # Number of conversation pairs to keep
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Use ChatGPT/OpenAI API
+    use_chatgpt: bool = False  # Removed; True raises migration guidance
     use_local_llm: bool = (
         True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
     )
@@ -55,6 +57,11 @@ class AgentResponse:
     # as it was (the polled ``/stats`` measurement). ``None`` for providers/
     # calls that don't expose per-call usage.
     usage: Optional[Dict[str, Any]] = None
+    # Why the reply ended, as the provider reported it; ``"length"`` means
+    # the output-token limit cut it off.
+    finish_reason: Optional[str] = None
+    # The model's reasoning for this reply, kept apart from ``text``.
+    reasoning: Optional[str] = None
 
 
 class AgentSDK:
@@ -106,7 +113,8 @@ class AgentSDK:
                 else self.config.model
             ),
             base_url=self.config.base_url,
-            system_prompt=self.config.system_prompt,
+            # The SDK supplies per-request prompts, including runtime overrides.
+            system_prompt=None,
         )
 
         # Store conversation history
@@ -139,10 +147,39 @@ class AgentSDK:
             self.config.system_prompt,
         )
 
+    def _generate_conversation(
+        self,
+        full_prompt: str,
+        enhanced_message: str,
+        *,
+        no_history: bool = False,
+        **kwargs,
+    ):
+        """Keep custom instructions in the provider's native system channel."""
+        if not self.config.system_prompt:
+            return self.llm_client.generate(
+                full_prompt, model=self.effective_model, **kwargs
+            )
+        messages = [{"role": "system", "content": self.config.system_prompt}]
+        if not no_history:
+            for entry in self.get_formatted_history():
+                # Stored assistant prefixes can outlive a display-name change.
+                role = "user" if entry["role"] == "user" else "assistant"
+                messages.append({"role": role, "content": entry["message"]})
+            if len(messages) > 1:
+                messages[-1] = {"role": "user", "content": enhanced_message}
+            else:
+                messages.append({"role": "user", "content": enhanced_message})
+        else:
+            messages.append({"role": "user", "content": enhanced_message})
+        return self.llm_client.chat(messages, model=self.effective_model, **kwargs)
+
     def _normalize_message_content(self, content: Any) -> str:
         """
         Convert message content into a string for prompt construction, handling structured payloads.
         """
+        if content is None:
+            return ""
         if isinstance(content, str):
             return content
         if isinstance(content, list):
@@ -166,28 +203,140 @@ class AgentSDK:
         """
         Ensure messages are safe to send to the LLM.
 
-        Tool messages are converted to user-role messages in send_messages /
-        send_messages_stream, so no extra "continue" sentinel is needed here —
-        the tool result itself already forms a valid user turn for the LLM to
-        respond to.
+        Tool messages become provider-appropriate history in send_messages /
+        send_messages_stream, so no extra "continue" sentinel is needed here.
         """
         if not messages:
             return []
 
         return list(messages)
 
-    def _flatten_tool_call_turn(self, msg: Dict[str, Any]) -> str:
-        """Textual stand-in for an assistant turn that only called tools.
+    def _structure_history_message(self, msg: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert one history entry to the provider's message shape.
 
-        Without it the flattened history shows ``None`` where the model called
-        a tool, so it can't correlate the tool results that follow.
+        Native tool calls stay native for every backend. Flattened to text,
+        the call would vanish from its (empty) assistant turn and the result
+        would read as something the user said.
         """
-        calls = ", ".join(
-            f"{(tc.get('function') or {}).get('name', 'tool')}"
-            f"({(tc.get('function') or {}).get('arguments') or ''})"
-            for tc in msg.get("tool_calls", [])
-        )
-        return f"[Called tools: {calls}]"
+        role = msg.get("role", "user")
+        content = self._normalize_message_content(msg.get("content", ""))
+        if role == "assistant":
+            entry: Dict[str, Any] = {"role": "assistant", "content": content}
+            if msg.get("tool_calls"):
+                entry["content"] = content if msg.get("content") else None
+                entry["tool_calls"] = msg["tool_calls"]
+            if (
+                msg.get("reasoning_content")
+                and self.llm_client.accepts_reasoning_history
+            ):
+                entry["reasoning_content"] = msg["reasoning_content"]
+            return entry
+        if role == "tool":
+            entry = {
+                "role": "tool",
+                "content": content,
+                "tool_call_id": msg.get("tool_call_id"),
+            }
+            if self.config.use_claude:
+                entry["name"] = msg.get("name", "tool")
+            return entry
+        return {"role": role, "content": content}
+
+    @staticmethod
+    def _tool_result_as_text(msg: Dict[str, Any], name: str) -> Dict[str, Any]:
+        """A tool result with no native call to answer, sent as plain text."""
+        return {
+            "role": "user",
+            "content": f"[Tool result: {msg.get('name', name)}] {msg.get('content', '')}",
+        }
+
+    def _pair_tool_history(
+        self, structured: List[Dict[str, Any]], names: Dict[int, str]
+    ) -> List[Dict[str, Any]]:
+        """Send a call and its result natively only when both halves match.
+
+        OpenAI-style servers reject an unanswered call and a result that answers
+        no call in the turn directly before it. Matched pairs go native,
+        unanswered calls are dropped, and any other result is sent as text.
+        """
+        out: List[Dict[str, Any]] = []
+        i, n = 0, len(structured)
+        while i < n:
+            msg = structured[i]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                j = i + 1
+                while j < n and structured[j].get("role") == "tool":
+                    j += 1
+                block = list(range(i + 1, j))
+                result_ids = {structured[k].get("tool_call_id") for k in block}
+                calls = [
+                    tc
+                    for tc in msg["tool_calls"]
+                    if tc.get("id") and tc.get("id") in result_ids
+                ]
+                call_ids = {tc["id"] for tc in calls}
+                dropped = len(msg["tool_calls"]) - len(calls)
+                if dropped:
+                    self.log.warning(
+                        "Dropping %d of %d tool call(s) from an assistant turn: "
+                        "no result follows them directly.",
+                        dropped,
+                        len(msg["tool_calls"]),
+                    )
+                if calls:
+                    out.append({**msg, "tool_calls": calls})
+                else:
+                    bare = {k: v for k, v in msg.items() if k != "tool_calls"}
+                    out.append({**bare, "content": msg.get("content") or ""})
+                answered = set()
+                leftover = []
+                for k in block:
+                    tid = structured[k].get("tool_call_id")
+                    if tid in call_ids and tid not in answered:
+                        answered.add(tid)
+                        out.append(structured[k])
+                    else:
+                        leftover.append(k)
+                if leftover:
+                    self.log.debug(
+                        "Sending %d tool result(s) as text: they answer no call "
+                        "in the turn before them.",
+                        len(leftover),
+                    )
+                # Text results go after the native block on purpose: a text
+                # message inside it would split the pairs the server checks.
+                out.extend(
+                    self._tool_result_as_text(structured[k], names.get(k, "tool"))
+                    for k in leftover
+                )
+                i = j
+                continue
+            if msg.get("role") == "tool":
+                out.append(self._tool_result_as_text(msg, names.get(i, "tool")))
+            else:
+                out.append(msg)
+            i += 1
+        return out
+
+    def _structure_history(
+        self, messages: List[Dict[str, Any]], effective_system_prompt: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """System prompt, then the history in the provider's shape, paired."""
+        structured: List[Dict[str, Any]] = []
+        names: Dict[int, str] = {}
+        if effective_system_prompt:
+            structured.append({"role": "system", "content": effective_system_prompt})
+        for msg in messages:
+            if msg.get("role", "user") == "system":
+                self.log.warning(
+                    "Dropping system-role message from conversation history; "
+                    "system prompt already prepended."
+                )
+                continue
+            if msg.get("role") == "tool":
+                names[len(structured)] = msg.get("name", "tool")
+            structured.append(self._structure_history_message(msg))
+        return self._pair_tool_history(structured, names)
 
     # ── per-turn performance recording (dev mode, opt-in) ──────────────────
     #
@@ -199,6 +348,30 @@ class AgentSDK:
 
     #: Step index stamped onto the next recorded call, set by the agent loop.
     turn_step: int = 0
+
+    #: Receives one timing dict per model request; set by the agent loop.
+    llm_call_sink: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    def _report_llm_call(self, started: float, *, streamed: bool, ok: bool) -> None:
+        """Hand the sink this request's wall time, ttft, finish reason, and
+        the tokens from the response's own usage (never ``/stats``)."""
+        seconds = time.perf_counter() - started
+        sink = self.llm_call_sink
+        if sink is None:
+            return
+        usage = self.llm_client.get_last_usage() if ok else None
+        usage = usage if isinstance(usage, dict) else {}
+        ttft = self.llm_client.get_last_ttft_seconds() if streamed and ok else None
+        finish = self.llm_client.get_last_finish_reason() if ok else None
+        sink(
+            {
+                "seconds": seconds,
+                "ttft_seconds": ttft if isinstance(ttft, (int, float)) else None,
+                "finish_reason": finish if isinstance(finish, str) else None,
+                "completion_tokens": usage.get("completion_tokens"),
+                "reasoning_tokens": usage.get("reasoning_tokens"),
+            }
+        )
 
     def _recorder_begin(
         self, structured: List[Dict[str, Any]], tools: Optional[List[Dict]]
@@ -267,47 +440,7 @@ class AgentSDK:
             # Build structured messages for the LLM (no manual ChatML formatting —
             # the provider/server applies the chat template exactly once).
             effective_system_prompt = system_prompt or self.config.system_prompt
-            structured = []
-            if effective_system_prompt:
-                structured.append(
-                    {"role": "system", "content": effective_system_prompt}
-                )
-            for msg in messages:
-                role = msg.get("role", "user")
-                if role == "system":
-                    self.log.warning(
-                        "Dropping system-role message from conversation history; "
-                        "system prompt already prepended."
-                    )
-                    continue
-                content = self._normalize_message_content(msg.get("content", ""))
-                if role == "tool":
-                    # Tool results are surfaced as user messages so that the LLM
-                    # receives a proper user turn to reply to.  Converting them to
-                    # "assistant" caused the previously-injected "continue" sentinel
-                    # to become the visible user message, making the model think it
-                    # was asked to "continue" rather than respond to the real query.
-                    tool_name = msg.get("name", "tool")
-                    structured.append(
-                        {
-                            "role": "user",
-                            "content": f"[Tool result: {tool_name}] {content}",
-                        }
-                    )
-                elif (
-                    self.config.use_claude
-                    and role == "assistant"
-                    and not msg.get("content")
-                    and msg.get("tool_calls")
-                ):
-                    structured.append(
-                        {
-                            "role": "assistant",
-                            "content": self._flatten_tool_call_turn(msg),
-                        }
-                    )
-                else:
-                    structured.append({"role": role, "content": content})
+            structured = self._structure_history(messages, effective_system_prompt)
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -324,6 +457,8 @@ class AgentSDK:
 
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "top_p" not in kwargs and self.config.top_p is not None:
+                kwargs["top_p"] = self.config.top_p
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
 
@@ -333,6 +468,8 @@ class AgentSDK:
                 kwargs["tools"] = tools
 
             self._recorder_begin(structured, tools)
+            call_started = time.perf_counter()
+            call_ok = False
             try:
                 response = self.llm_client.chat(
                     messages=structured,
@@ -340,7 +477,9 @@ class AgentSDK:
                     stream=False,
                     **kwargs,
                 )
+                call_ok = True
             finally:
+                self._report_llm_call(call_started, streamed=False, ok=call_ok)
                 self._recorder_end()
 
             # Prepare response data
@@ -352,7 +491,12 @@ class AgentSDK:
             usage = self.llm_client.get_last_usage()
 
             return AgentResponse(
-                text=response, stats=stats, usage=usage, is_complete=True
+                text=response,
+                stats=stats,
+                usage=usage,
+                is_complete=True,
+                finish_reason=self.llm_client.get_last_finish_reason(),
+                reasoning=self.llm_client.get_last_reasoning(),
             )
 
         except ConnectionError as e:
@@ -381,50 +525,15 @@ class AgentSDK:
         Yields:
             AgentResponse chunks as they arrive
         """
+        call_started: Optional[float] = None
+        call_reported = False
         try:
             messages = self._prepare_messages_for_llm(messages)
 
             # Build structured messages for the LLM (no manual ChatML formatting —
             # the provider/server applies the chat template exactly once).
             effective_system_prompt = system_prompt or self.config.system_prompt
-            structured = []
-            if effective_system_prompt:
-                structured.append(
-                    {"role": "system", "content": effective_system_prompt}
-                )
-            for msg in messages:
-                role = msg.get("role", "user")
-                if role == "system":
-                    self.log.warning(
-                        "Dropping system-role message from conversation history; "
-                        "system prompt already prepended."
-                    )
-                    continue
-                content = self._normalize_message_content(msg.get("content", ""))
-                if role == "tool":
-                    # Tool results are surfaced as user messages — same reasoning
-                    # as in send_messages above.
-                    tool_name = msg.get("name", "tool")
-                    structured.append(
-                        {
-                            "role": "user",
-                            "content": f"[Tool result: {tool_name}] {content}",
-                        }
-                    )
-                elif (
-                    self.config.use_claude
-                    and role == "assistant"
-                    and not msg.get("content")
-                    and msg.get("tool_calls")
-                ):
-                    structured.append(
-                        {
-                            "role": "assistant",
-                            "content": self._flatten_tool_call_turn(msg),
-                        }
-                    )
-                else:
-                    structured.append({"role": role, "content": content})
+            structured = self._structure_history(messages, effective_system_prompt)
 
             # Debug logging
             self.log.debug(f"Structured messages: {len(structured)} entries")
@@ -441,6 +550,8 @@ class AgentSDK:
 
             if "temperature" not in kwargs and self.config.temperature is not None:
                 kwargs["temperature"] = self.config.temperature
+            if "top_p" not in kwargs and self.config.top_p is not None:
+                kwargs["top_p"] = self.config.top_p
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
 
@@ -451,6 +562,7 @@ class AgentSDK:
                 kwargs["tools"] = tools
 
             self._recorder_begin(structured, tools)
+            call_started = time.perf_counter()
             for chunk in self.llm_client.chat(
                 messages=structured, model=self.effective_model, stream=True, **kwargs
             ):
@@ -461,10 +573,15 @@ class AgentSDK:
                 # native tool_calls branch already parses.
                 if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
                     self._recorder_mark()
+                    call_reported = True
+                    self._report_llm_call(call_started, streamed=True, ok=True)
                     tool_call_stats = self.get_stats()
                     self._recorder_end(tool_call_stats)
                     yield AgentResponse(
-                        text=chunk, stats=tool_call_stats, is_complete=True
+                        text=chunk,
+                        stats=tool_call_stats,
+                        is_complete=True,
+                        reasoning=self.llm_client.get_last_reasoning(),
                     )
                     return
                 yield AgentResponse(text=chunk, is_complete=False)
@@ -472,10 +589,18 @@ class AgentSDK:
             # Send final response with stats
             # Always get stats for token tracking (show_stats controls display, not collection)
             self._recorder_mark()
+            call_reported = True
+            self._report_llm_call(call_started, streamed=True, ok=True)
             stats = self.get_stats()
             self._recorder_end(stats)
 
-            yield AgentResponse(text="", stats=stats, is_complete=True)
+            yield AgentResponse(
+                text="",
+                stats=stats,
+                is_complete=True,
+                finish_reason=self.llm_client.get_last_finish_reason(),
+                reasoning=self.llm_client.get_last_reasoning(),
+            )
 
         except ConnectionError as e:
             # Re-raise connection errors with additional context
@@ -490,6 +615,8 @@ class AgentSDK:
             # Cancelling closes this generator at the yield; without this the
             # call stays open and its seconds read as agent overhead. Empty
             # stats, never a fetch — a cancel must start no HTTP request.
+            if call_started is not None and not call_reported:
+                self._report_llm_call(call_started, streamed=True, ok=False)
             self._recorder_end(stats={})
 
     def send(
@@ -497,6 +624,8 @@ class AgentSDK:
     ) -> AgentResponse:
         """
         Send a message and get a complete response with conversation history.
+
+        Failed turns restore the conversation history to its pre-call state.
 
         Args:
             message: The message to send
@@ -506,6 +635,8 @@ class AgentSDK:
         Returns:
             AgentResponse with the complete response and updated history
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -547,11 +678,14 @@ class AgentSDK:
                 and self.config.temperature is not None
             ):
                 generate_kwargs["temperature"] = self.config.temperature
+            if "top_p" not in generate_kwargs and self.config.top_p is not None:
+                generate_kwargs["top_p"] = self.config.top_p
 
             # Note: Retry logic is now handled at the LLM client level
-            response = self.llm_client.generate(
+            response = self._generate_conversation(
                 full_prompt,
-                model=self.effective_model,
+                enhanced_message,
+                no_history=no_history,
                 **generate_kwargs,
             )
 
@@ -570,17 +704,26 @@ class AgentSDK:
                 else None
             )
 
-            return AgentResponse(
+            result = AgentResponse(
                 text=response, history=history, stats=stats, is_complete=True
             )
+            completed = True
+            return result
 
         except Exception as e:
             self.log.error(f"Error in send: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def send_stream(self, message: str, **kwargs):
         """
         Send a message and get a streaming response with conversation history.
+
+        Failure or cancellation before the final chunk restores prior history.
+        Closing after the final chunk preserves the completed turn.
 
         Args:
             message: The message to send
@@ -589,6 +732,8 @@ class AgentSDK:
         Yields:
             AgentResponse chunks as they arrive
         """
+        original_history = list(self.chat_history)
+        completed = False
         try:
             if not message.strip():
                 raise ValueError("Message cannot be empty")
@@ -621,10 +766,12 @@ class AgentSDK:
                 and self.config.temperature is not None
             ):
                 generate_kwargs["temperature"] = self.config.temperature
+            if "top_p" not in generate_kwargs and self.config.top_p is not None:
+                generate_kwargs["top_p"] = self.config.top_p
 
             full_response = ""
-            for chunk in self.llm_client.generate(
-                full_prompt, model=self.effective_model, stream=True, **generate_kwargs
+            for chunk in self._generate_conversation(
+                full_prompt, enhanced_message, stream=True, **generate_kwargs
             ):
                 full_response += chunk
                 yield AgentResponse(text=chunk, is_complete=False)
@@ -643,11 +790,19 @@ class AgentSDK:
                 else None
             )
 
-            yield AgentResponse(text="", history=history, stats=stats, is_complete=True)
+            result = AgentResponse(
+                text="", history=history, stats=stats, is_complete=True
+            )
+            completed = True
+            yield result
 
         except Exception as e:
             self.log.error(f"Error in send_stream: {e}")
             raise
+        finally:
+            if not completed:
+                self.chat_history.clear()
+                self.chat_history.extend(original_history)
 
     def get_history(self) -> List[str]:
         """
@@ -855,10 +1010,6 @@ class AgentSDK:
             new_maxlen = kwargs["max_history_length"] * 2
             self.chat_history = deque(old_history, maxlen=new_maxlen)
 
-        if "system_prompt" in kwargs:
-            # System prompt is handled through Prompts class, not directly
-            pass
-
         if "assistant_name" in kwargs:
             # Assistant name change affects history display but not underlying storage
             # since we dynamically parse the history based on current assistant_name
@@ -946,7 +1097,7 @@ class AgentSDK:
         if not self.rag_enabled or not self.rag:
             raise ValueError("RAG not enabled. Call enable_rag() first.")
 
-        return self.rag.index_document(document_path)
+        return bool(self.rag.index_document(document_path).get("success"))
 
     def _estimate_tokens(self, text: str) -> int:
         """

@@ -31,14 +31,18 @@ from gaia.connectors.store import (
     _chunk_username,
     _connection_username,
     _provider_credentials_username,
+    _secret_username,
     clear_provider_credentials,
     delete_connection,
+    delete_secret,
     list_connections,
     load_connection,
     peek_connection,
     peek_provider_credentials,
+    peek_secret,
     save_connection,
     save_provider_credentials,
+    save_secret,
     verify_keyring_backend,
 )
 
@@ -668,6 +672,82 @@ class TestProviderCredentials:
             "client_id": "cid",
             "client_secret": "cs",
         }
+
+
+class TestStandaloneSecrets:
+    """``save_secret`` / ``peek_secret`` / ``delete_secret`` hold plain API
+    keys under a ``secret:<name>`` slot that no connection or provider-
+    credential entry can share."""
+
+    def test_save_and_peek_roundtrip(self):
+        save_secret("fireworks_api_key", "fw-FAKE-KEY")
+        assert peek_secret("fireworks_api_key") == "fw-FAKE-KEY"
+
+    def test_peek_returns_none_when_absent(self):
+        assert peek_secret("fireworks_api_key") is None
+
+    def test_save_rejects_empty_value_without_writing(self):
+        with pytest.raises(ConnectorsError, match="value is empty"):
+            save_secret("fireworks_api_key", "")
+        assert peek_secret("fireworks_api_key") is None
+
+    def test_delete_is_idempotent(self):
+        save_secret("fireworks_api_key", "fw-FAKE-KEY")
+        delete_secret("fireworks_api_key")
+        assert peek_secret("fireworks_api_key") is None
+        delete_secret("fireworks_api_key")
+
+    def test_namespace_does_not_collide_with_connections_or_provider_creds(self):
+        assert _secret_username("google") == "secret:google"
+        assert _secret_username("google") != _provider_credentials_username("google")
+        assert _secret_username("google") != _connection_username("google", "default")
+
+        save_connection(
+            provider="google",
+            account_email="a@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s"],
+            client_id_hash="h",
+        )
+        save_provider_credentials("google", client_id="cid", client_secret="cs")
+        save_secret("google", "standalone")
+
+        assert peek_secret("google") == "standalone"
+        assert peek_connection("google") is not None
+        assert peek_provider_credentials("google") == {
+            "client_id": "cid",
+            "client_secret": "cs",
+        }
+
+        delete_secret("google")
+        assert peek_connection("google") is not None
+        assert peek_provider_credentials("google") is not None
+
+    def test_refused_backend_blocks_every_operation(self):
+        class PlaintextKeyring(keyring.backend.KeyringBackend):
+            priority = 1
+
+            def get_password(self, service, username):
+                return None
+
+            def set_password(self, service, username, password):
+                raise AssertionError("must not write to a plaintext backend")
+
+            def delete_password(self, service, username):
+                raise AssertionError("must not touch a plaintext backend")
+
+        previous = keyring.get_keyring()
+        keyring.set_keyring(PlaintextKeyring())
+        try:
+            for call in (
+                lambda: save_secret("k", "v"),
+                lambda: peek_secret("k"),
+                lambda: delete_secret("k"),
+            ):
+                with pytest.raises(ConnectorsError, match="Insecure keyring backend"):
+                    call()
+        finally:
+            keyring.set_keyring(previous)
 
 
 class TestConstants:

@@ -40,10 +40,8 @@ import stat
 import subprocess
 import sys
 import sysconfig
-import tarfile
 import tempfile
 import threading
-import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -55,6 +53,8 @@ from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
+from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 logger = get_logger(__name__)
 
@@ -474,77 +474,36 @@ def _install_python_artifact(
     return site_packages
 
 
-def _assert_member_within(install_dir: Path, member_name: str) -> None:
-    """Refuse an archive member whose path escapes *install_dir* (CWE-22).
-
-    ``_sanitize_artifact_filename`` only checks the *archive's* own filename, not
-    the paths of members inside it. ``tarfile`` follows ``..`` in member names and
-    would write outside the install dir, so every member is validated here before
-    anything is extracted (a self-consistent malicious archive whose checksum
-    matches the manifest still cannot escape the agent's install dir).
-    """
-    base = install_dir.resolve()
-    dest = (base / member_name).resolve()
-    if dest != base and not dest.is_relative_to(base):
-        raise InstallError(
-            f"Archive member {member_name!r} would extract outside the agent "
-            f"install directory. Refusing to install; report this hub artifact "
-            f"as malicious (path traversal, CWE-22)."
-        )
-
-
 def _install_cpp_artifact(
     artifact_bytes: bytes, filename: str, install_dir: Path
 ) -> Path:
     """Extract a C++ agent archive into ``install_dir``.
 
-    Every archive member is validated against ``install_dir`` before extraction
-    and links / non-regular entries are refused, so a malicious archive cannot
-    write outside the agent's install dir via ``../`` traversal or a symlink.
+    Extraction goes through :func:`gaia.utils.archive.safe_extract` with links
+    refused, so a malicious archive cannot write outside the agent's install
+    dir via ``../`` traversal, an absolute path, a link, or a special file.
     """
+    lower = filename.lower()
+    if lower.endswith(".zip"):
+        kind = "zip"
+    elif lower.endswith((".tar.gz", ".tgz", ".tar")):
+        kind = "tar"
+    else:
+        raise InstallError(
+            f"Unsupported C++ artifact format '{filename}'. Expected a .zip "
+            f"or .tar.gz archive."
+        )
     install_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="gaia-hub-") as tmp:
         archive_path = Path(tmp) / filename
         archive_path.write_bytes(artifact_bytes)
-        lower = filename.lower()
-        if lower.endswith(".zip"):
-            with zipfile.ZipFile(archive_path) as zf:
-                infos = zf.infolist()
-                for info in infos:
-                    if stat.S_ISLNK(info.external_attr >> 16):
-                        raise InstallError(
-                            f"Archive member {info.filename!r} is a symlink; "
-                            f"symlinks are not allowed in hub artifacts."
-                        )
-                    _assert_member_within(install_dir, info.filename)
-                # Members validated above — extract one at a time so this stays
-                # clear of ZipFile.extractall (S202).
-                for info in infos:
-                    zf.extract(info, install_dir)
-        elif lower.endswith((".tar.gz", ".tgz", ".tar")):
-            with tarfile.open(archive_path) as tf:
-                members = tf.getmembers()
-                for member in members:
-                    if member.issym() or member.islnk():
-                        raise InstallError(
-                            f"Archive member {member.name!r} is a link; links "
-                            f"are not allowed in hub artifacts (path traversal)."
-                        )
-                    if not (member.isfile() or member.isdir()):
-                        raise InstallError(
-                            f"Archive member {member.name!r} is not a regular "
-                            f"file or directory; refusing to install."
-                        )
-                    _assert_member_within(install_dir, member.name)
-                # Members validated above (no traversal, no links) — extract one
-                # at a time so this stays clear of tarfile.extractall (S202).
-                for member in members:
-                    tf.extract(member, install_dir)
-        else:
+        try:
+            safe_extract(archive_path, install_dir, kind=kind)
+        except ArchiveError as e:
             raise InstallError(
-                f"Unsupported C++ artifact format '{filename}'. Expected a .zip "
-                f"or .tar.gz archive."
-            )
+                f"Refusing to install '{filename}' into {install_dir}: {e}. "
+                f"Report this hub artifact as malicious."
+            ) from e
     return install_dir
 
 
@@ -612,13 +571,21 @@ def _looks_like_wheel(filename: str) -> bool:
 
 
 def _sanitize_artifact_filename(filename: str, agent_id: Optional[str]) -> None:
-    """Refuse a filename that could escape the install dir on path-join."""
-    if not filename or "/" in filename or "\\" in filename or ".." in filename:
-        raise InstallError(
-            f"Artifact filename {filename!r} for '{agent_id}' is unsafe (nested "
-            f"path or path traversal). Refusing to install; report this hub "
-            f"manifest as corrupt."
+    """Refuse a filename that could escape the install dir on path-join.
+
+    Shares :func:`gaia.utils.paths.safe_path_segment` with the skills installer:
+    a separator scan alone lets ``C:evil.whl`` and ``NUL`` through, and both
+    re-root or redirect the join this function exists to protect.
+
+    Raises:
+        InstallError: the manifest's filename is not a single safe path segment.
+    """
+    try:
+        safe_path_segment(
+            filename, what="artifact filename", origin=f"hub manifest for '{agent_id}'"
         )
+    except UnsafePathSegment as exc:
+        raise InstallError(str(exc)) from exc
 
 
 def _select_platform_artifact(
@@ -940,7 +907,14 @@ def register_installed_sidecars(registry: Any) -> None:
         if agent_id not in installed:
             continue
         registry.register_sidecar(
-            agent_id, spec.display_name, spec.required_connections
+            agent_id,
+            spec.display_name,
+            spec.required_connections,
+            description=spec.description,
+            conversation_starters=list(spec.conversation_starters),
+            category=spec.category,
+            tags=list(spec.tags),
+            icon=spec.icon,
         )
 
 
@@ -1150,15 +1124,6 @@ def install(
                 _write_agent_yaml(
                     agent_id, resolved_version, install_dir, base_url, fetcher
                 )
-                _write_sentinel(
-                    agent_id,
-                    resolved_version,
-                    language,
-                    artifact["sha256"],
-                    install_dir,
-                    artifact_kind=artifact_kind,
-                    executable=generic_name,
-                )
                 # Prime the ACTIVE environment (not just this process) so a
                 # later, unrelated `gaia` invocation using the same
                 # interpreter/venv can import this wheel too (#2358) — closes
@@ -1169,10 +1134,33 @@ def install(
                         install_dir / SITE_PACKAGES_DIRNAME,
                         active_env_site_packages,
                     )
+                # LAST, after everything that can fail. The sentinel is what
+                # every later command reads as "this agent is installed", so
+                # writing it earlier left a first install that died on an
+                # unwritable site-packages looking installed and importable
+                # nowhere (#3549).
+                _write_sentinel(
+                    agent_id,
+                    resolved_version,
+                    language,
+                    artifact["sha256"],
+                    install_dir,
+                    artifact_kind=artifact_kind,
+                    executable=generic_name,
+                )
             except Exception:
                 # Install failed mid-write — restore the backup if we made one so
                 # the user is left with a working previous version, not a stub.
                 _restore_backup_if_present(agent_id, root)
+                # Only a FIRST install is cleared. "No backup" is not the same
+                # question: binary agents deliberately skip the snapshot (they
+                # are replaced in place so a running sidecar's data directory
+                # is not moved out from under it), so treating a missing backup
+                # as a first install would delete a working binary agent and
+                # its sidecar state on a failed UPDATE — most likely when the
+                # agent is running and its executable cannot be replaced.
+                if not updated:
+                    _clear_failed_install(agent_id, root)
                 raise
 
             # --- hot-register ---
@@ -1382,15 +1370,40 @@ def _discard_backup(agent_id: str, install_root: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def _restore_backup_if_present(agent_id: str, install_root: Path) -> None:
+def _restore_backup_if_present(agent_id: str, install_root: Path) -> bool:
+    """Roll back to the previous version. True when a backup was restored.
+
+    A binary agent has no backup even on an update — it is replaced in place —
+    so ``False`` here does NOT mean "there was nothing installed before".
+    """
     backup = _backup_dir(agent_id, install_root)
     if not backup.exists():
-        return
+        return False
     install_dir = agent_install_dir(agent_id, install_root)
     if install_dir.exists():
         shutil.rmtree(install_dir, ignore_errors=True)
     shutil.move(str(backup), str(install_dir))
     logger.info("installer: restored %s from backup after failed install", agent_id)
+    return True
+
+
+def _clear_failed_install(agent_id: str, install_root: Path) -> None:
+    """Remove a first install that failed, so nothing reads it as present.
+
+    There is no previous version to fall back to, and a sentinel left behind
+    makes every later command believe the agent is installed while nothing can
+    import it (#3549). Re-running the install would not clear it either — the
+    record looks valid.
+    """
+    install_dir = agent_install_dir(agent_id, install_root)
+    if not install_dir.exists():
+        return
+    shutil.rmtree(install_dir, ignore_errors=True)
+    logger.info(
+        "installer: removed the failed first install of %s so it is not "
+        "reported as installed",
+        agent_id,
+    )
 
 
 def _deregister(agent_id: str, registry: Any) -> None:

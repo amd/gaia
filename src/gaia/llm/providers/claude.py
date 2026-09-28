@@ -10,6 +10,7 @@ so the agent loop's response parser works unchanged against either backend.
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -54,6 +55,9 @@ _MIN_MAX_TOKENS = 8192
 #: throw away the tool schemas as well. The second marker after the last tool
 #: keeps that segment readable whenever the tools themselves are unchanged.
 _CACHE_CONTROL = {"type": "ephemeral"}
+
+#: OpenAI ``tool_choice`` strings with a direct Anthropic equivalent.
+_TOOL_CHOICE_MAP = {"none": {"type": "none"}, "auto": {"type": "auto"}}
 
 _FINISH_REASON_MAP = {
     "tool_use": "tool_calls",
@@ -191,6 +195,9 @@ class ClaudeProvider(LLMClient):
             )
         self._system_prompt = system_prompt
         self._last_usage: Optional[dict] = None
+        self._last_finish_reason: Optional[str] = None
+        self._last_ttft_seconds: Optional[float] = None
+        # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
 
     @property
     def provider_name(self) -> str:
@@ -206,46 +213,213 @@ class ClaudeProvider(LLMClient):
                 return candidate
         return DEFAULT_CLAUDE_MODEL
 
+    #: Anthropic's tool-name contract. GAIA names can be wider — skill tools are
+    #: namespaced ``<skill>/<tool>`` and the ``/`` 400s the whole request — so
+    #: names are sanitized outbound and mapped back on returned tool_use blocks.
+    _TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+
+    def _api_tool_name(self, name: str) -> str:
+        if self._TOOL_NAME_RE.fullmatch(name):
+            return name
+        return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:128]
+
     @staticmethod
-    def _to_anthropic_tools(tools: Optional[List[dict]]) -> Optional[List[dict]]:
-        """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape."""
+    def _restore_tool_name(name_map: Dict[str, str], api_name: str) -> str:
+        if api_name not in name_map:
+            # Every outbound name is registered, so a miss means request and
+            # response were shaped against different tool sets. The message
+            # reaches the user verbatim, so the diagnostic detail goes to the
+            # log rather than into the exception.
+            logger.error(
+                "Tool %r is not in this request's outbound name map, so the "
+                "response was parsed against a different tool set than the one "
+                "sent. Registered: %s",
+                api_name,
+                sorted(name_map),
+            )
+            raise RuntimeError(
+                f"Claude returned tool {api_name!r}, which was not in the tool "
+                "set sent with this request."
+            )
+        return name_map[api_name]
+
+    def _to_anthropic_tools(
+        self, tools: Optional[List[dict]]
+    ) -> tuple[Optional[List[dict]], Dict[str, str]]:
+        """OpenAI ``{"type":"function","function":{...}}`` → Anthropic shape.
+
+        Returns the converted tools *and* the restore map. The map belongs to
+        the call, not the provider: one instance can serve two requests with
+        different tool sets, and a map on ``self`` lets the second overwrite the
+        first's names mid-flight.
+        """
+        name_map: Dict[str, str] = {}
         if not tools:
-            return None
+            return None, name_map
         converted = []
         for tool in tools:
             fn = tool.get("function") if tool.get("type") == "function" else None
-            if fn is None:
-                # Already Anthropic-shaped (has name + input_schema) — pass through.
-                converted.append(tool)
-                continue
-            converted.append(
-                {
-                    "name": fn["name"],
+            entry = (
+                dict(tool)  # already Anthropic-shaped (name + input_schema)
+                if fn is None
+                else {
+                    # .get so a nameless entry hits the guard below rather
+                    # than dying on a bare KeyError.
+                    "name": fn.get("name"),
                     "description": fn.get("description", ""),
                     "input_schema": fn.get("parameters")
                     or {"type": "object", "properties": {}},
                 }
             )
-        return converted
+            original = entry.get("name")
+            if not original:
+                raise ValueError(
+                    "Tool definition has no name: "
+                    f"{tool!r}. Anthropic requires a name on every tool entry "
+                    "(custom, server, and client-side alike), and GAIA needs "
+                    "one to route the model's call back to a registered tool."
+                )
+            api_name = self._api_tool_name(original)
+            # Register identity names too: `write/file` sanitizes onto the
+            # builtin `write_file`, and only a full map can see that clash.
+            if api_name in name_map:
+                clash = name_map[api_name]
+                raise ValueError(
+                    f"Tool names {clash!r} and {original!r} both map to "
+                    f"{api_name!r} for the Anthropic API — the model's call "
+                    "could not be routed back unambiguously. Rename one."
+                )
+            name_map[api_name] = original
+            entry["name"] = api_name
+            converted.append(entry)
+        return converted, name_map
 
     def _split_system(self, messages: List[dict]) -> tuple:
-        """Hoist role=system entries out of the array into the ``system`` param."""
+        """Hoist system text and translate OpenAI tool history for Anthropic."""
         system_parts: List[str] = []
         cleaned: List[dict] = []
-        for msg in messages:
+        index = 0
+        while index < len(messages):
+            msg = messages[index]
             role = msg.get("role", "user")
             content = msg.get("content")
             if role == "system":
                 if content:
                     system_parts.append(str(content))
+                index += 1
+                continue
+            if role == "assistant" and msg.get("tool_calls"):
+                blocks = self._tool_use_content(msg)
+                expected_ids = {
+                    block["id"] for block in blocks if block["type"] == "tool_use"
+                }
+                result_messages = []
+                result_index = index + 1
+                while result_index < len(messages) and expected_ids:
+                    result = messages[result_index]
+                    if result.get("role") != "tool":
+                        break
+                    tool_call_id = result.get("tool_call_id")
+                    if tool_call_id not in expected_ids:
+                        break
+                    result_messages.append(result)
+                    expected_ids.remove(tool_call_id)
+                    result_index += 1
+                if not expected_ids:
+                    cleaned.append({"role": "assistant", "content": blocks})
+                    for result in result_messages:
+                        self._append_tool_result(cleaned, result)
+                    index = result_index
+                    continue
+                raise ValueError(
+                    "Claude tool-call history requires a complete, immediately "
+                    "adjacent result group; missing tool_call_id(s): "
+                    + ", ".join(sorted(expected_ids))
+                    + ". Append every role='tool' result directly after the "
+                    "assistant turn that requested it — any user/system message "
+                    "injected between them must come after the group."
+                )
+            if role == "tool":
+                cleaned.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[Tool result: {msg.get('name', 'tool')}] "
+                            f"{msg.get('content', '')}"
+                        ),
+                    }
+                )
+                index += 1
                 continue
             if content is None or content == "":
                 # Anthropic rejects empty message content outright.
                 logger.debug("Dropping empty %s message for Claude request", role)
+                index += 1
                 continue
             cleaned.append({"role": role, "content": content})
+            index += 1
         system = "\n\n".join(system_parts) if system_parts else self._system_prompt
         return system, cleaned
+
+    @staticmethod
+    def _tool_use_content(message: dict) -> List[dict]:
+        content = message.get("content")
+        blocks = []
+        if content:
+            if isinstance(content, list):
+                blocks.extend(content)
+            else:
+                blocks.append({"type": "text", "text": str(content)})
+        for tool_call in message["tool_calls"]:
+            function = tool_call.get("function") or {}
+            tool_call_id = tool_call.get("id")
+            name = function.get("name")
+            if not tool_call_id or not name:
+                raise ValueError("Claude tool calls require both an id and a name.")
+            arguments = function.get("arguments") or "{}"
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"Claude tool call {tool_call_id!r} has invalid JSON arguments."
+                    ) from exc
+            if not isinstance(arguments, dict):
+                raise ValueError(
+                    f"Claude tool call {tool_call_id!r} arguments must decode to an object."
+                )
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tool_call_id,
+                    "name": name,
+                    "input": arguments,
+                }
+            )
+        return blocks
+
+    @staticmethod
+    def _append_tool_result(cleaned: List[dict], message: dict) -> None:
+        tool_call_id = message.get("tool_call_id")
+        if not tool_call_id:
+            raise ValueError("Claude tool results require a tool_call_id.")
+        block = {
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": message.get("content") or "[tool returned no output]",
+        }
+        if (
+            cleaned
+            and cleaned[-1]["role"] == "user"
+            and isinstance(cleaned[-1]["content"], list)
+            and all(
+                isinstance(item, dict) and item.get("type") == "tool_result"
+                for item in cleaned[-1]["content"]
+            )
+        ):
+            cleaned[-1]["content"].append(block)
+            return
+        cleaned.append({"role": "user", "content": [block]})
 
     def _build_params(
         self,
@@ -253,7 +427,8 @@ class ClaudeProvider(LLMClient):
         messages: List[dict],
         tools: Optional[List[dict]],
         kwargs: dict,
-    ) -> dict:
+        tool_choice: Optional[str] = None,
+    ) -> tuple[dict, Dict[str, str]]:
         system, cleaned = self._split_system(messages)
         if not cleaned:
             raise ValueError(
@@ -272,12 +447,25 @@ class ClaudeProvider(LLMClient):
             if k in kwargs and kwargs[k] is not None:
                 params[k] = kwargs[k]
         params["max_tokens"] = max(int(params.get("max_tokens") or 0), _MIN_MAX_TOKENS)
-        anthropic_tools = self._to_anthropic_tools(tools)
+        anthropic_tools, name_map = self._to_anthropic_tools(tools)
         if anthropic_tools:
             params["tools"] = _cache_last_tool(anthropic_tools)
+        if tool_choice is not None:
+            if not isinstance(tool_choice, str) or tool_choice not in _TOOL_CHOICE_MAP:
+                raise ValueError(
+                    f"The Claude provider does not support tool_choice="
+                    f"{tool_choice!r}. Use one of: {', '.join(_TOOL_CHOICE_MAP)}."
+                )
+            if not anthropic_tools:
+                raise ValueError(
+                    f"tool_choice={tool_choice!r} was passed without tools; it "
+                    "only applies to a request that offers tools. Pass tools= "
+                    "as well, or drop tool_choice."
+                )
+            params["tool_choice"] = dict(_TOOL_CHOICE_MAP[tool_choice])
         if system:
             params["system"] = _cached_system(system)
-        return params
+        return params, name_map
 
     # ── error translation ───────────────────────────────────────────────
 
@@ -333,13 +521,18 @@ class ClaudeProvider(LLMClient):
         model: str | None = None,
         stream: bool = False,
         tools: Optional[List[dict]] = None,
+        tool_choice: Optional[str] = None,
         **kwargs,
     ) -> Union[str, Iterator[str]]:
         self._last_usage = None
-        params = self._build_params(self._resolve_model(model), messages, tools, kwargs)
+        self._last_finish_reason = None
+        self._last_ttft_seconds = None
+        params, name_map = self._build_params(
+            self._resolve_model(model), messages, tools, kwargs, tool_choice
+        )
 
         if stream:
-            return self._stream_chat(params)
+            return self._stream_chat(params, name_map)
 
         start = time.monotonic()
         try:
@@ -347,9 +540,11 @@ class ClaudeProvider(LLMClient):
         except Exception as exc:  # translated to actionable errors below
             self._raise_actionable(exc)
             raise  # unreachable — _raise_actionable always raises
-        return self._parse_response(response, time.monotonic() - start)
+        return self._parse_response(response, time.monotonic() - start, name_map)
 
-    def _parse_response(self, response, elapsed: float) -> str:
+    def _parse_response(
+        self, response, elapsed: float, name_map: Dict[str, str]
+    ) -> str:
         text_parts: List[str] = []
         tool_calls: List[dict] = []
         for block in response.content:
@@ -361,7 +556,7 @@ class ClaudeProvider(LLMClient):
                         "id": block.id,
                         "type": "function",
                         "function": {
-                            "name": block.name,
+                            "name": self._restore_tool_name(name_map, block.name),
                             "arguments": json.dumps(block.input or {}),
                         },
                     }
@@ -377,6 +572,7 @@ class ClaudeProvider(LLMClient):
                 "query or check stop_details in the Anthropic console logs."
             )
         finish_reason = _FINISH_REASON_MAP.get(stop_reason, stop_reason)
+        self._last_finish_reason = finish_reason or None
         if tool_calls:
             return json.dumps(
                 {
@@ -387,7 +583,7 @@ class ClaudeProvider(LLMClient):
             )
         return "".join(text_parts)
 
-    def _stream_chat(self, params: dict) -> Iterator[str]:
+    def _stream_chat(self, params: dict, name_map: Dict[str, str]) -> Iterator[str]:
         start = time.monotonic()
         try:
             events = self._client.messages.create(**params, stream=True)
@@ -412,9 +608,14 @@ class ClaudeProvider(LLMClient):
                         tool_slots[event.index] = {
                             "id": block.id,
                             "type": "function",
-                            "function": {"name": block.name, "arguments": ""},
+                            "function": {
+                                "name": self._restore_tool_name(name_map, block.name),
+                                "arguments": "",
+                            },
                         }
                 elif etype == "content_block_delta":
+                    if self._last_ttft_seconds is None:
+                        self._last_ttft_seconds = time.monotonic() - start
                     delta = event.delta
                     if delta.type == "text_delta":
                         text_parts.append(delta.text)
@@ -434,6 +635,8 @@ class ClaudeProvider(LLMClient):
             raise  # unreachable — _raise_actionable always raises
 
         self._capture_usage(usage_totals, time.monotonic() - start)
+        finish_reason = _FINISH_REASON_MAP.get(stop_reason, stop_reason)
+        self._last_finish_reason = finish_reason or None
 
         if stop_reason == "refusal":
             raise RuntimeError(
@@ -447,7 +650,7 @@ class ClaudeProvider(LLMClient):
             yield json.dumps(
                 {
                     _NATIVE_TC_KEY: [tool_slots[i] for i in sorted(tool_slots)],
-                    "finish_reason": _FINISH_REASON_MAP.get(stop_reason, stop_reason),
+                    "finish_reason": finish_reason,
                     "content": "".join(text_parts) or None,
                 }
             )
@@ -488,6 +691,13 @@ class ClaudeProvider(LLMClient):
     def get_last_usage(self) -> Optional[dict]:
         """Token-usage dict from the most recent ``chat()`` call, or ``None``."""
         return self._last_usage
+
+    def get_last_finish_reason(self) -> Optional[str]:
+        """Why the last reply ended. Set once the stream is fully consumed."""
+        return self._last_finish_reason
+
+    def get_last_ttft_seconds(self) -> Optional[float]:
+        return self._last_ttft_seconds
 
     # embed() inherited from ABC - raises NotSupportedError (Anthropic has no
     # embeddings API; Lemonade keeps serving embeddings under --use-claude).

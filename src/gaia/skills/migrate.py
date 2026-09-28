@@ -59,6 +59,8 @@ from gaia.skills.format import (
     reset_security_tier,
     split_frontmatter,
 )
+from gaia.skills.lock import forget_skill
+from gaia.skills.naming import skill_directory
 from gaia.skills.permissions import refuse_unbridged_permissions
 
 log = get_logger(__name__)
@@ -920,7 +922,11 @@ def install_migrated(
         )
 
     skill = outcome.skill
-    target = Path(destination_root) / skill.name
+    # skill.name came out of a foreign vendor's manifest; --force rmtrees this
+    # path, so it is validated as a bare name inside the root before it is used.
+    target = skill_directory(
+        destination_root, skill.name, source=f"migrate {outcome.source}"
+    )
     source_dir = outcome.source.parent if outcome.source.is_file() else None
     if target.exists():
         if (
@@ -941,6 +947,9 @@ def install_migrated(
                 "to replace it, or --name to install under a different name."
             )
         shutil.rmtree(target)
+        # A migrated skill has no hub provenance; leaving the replaced install's
+        # lock entry behind would describe bytes that no longer exist.
+        forget_skill(Path(destination_root), skill.name)
     target.mkdir(parents=True)
 
     if copy_support_files and source_dir is not None:

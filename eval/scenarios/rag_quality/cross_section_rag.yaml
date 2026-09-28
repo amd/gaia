@@ -1,7 +1,6 @@
 id: cross_section_rag
 name: "Cross-Section RAG Synthesis"
 category: rag_quality
-agent_type: doc
 severity: high
 description: |
   Agent must retrieve facts from different sections of the same document and

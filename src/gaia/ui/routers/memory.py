@@ -9,18 +9,22 @@ import os
 import threading
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
-# Single source of truth imported from the data layer so that all three
-# validation sites (remember tool, update_memory tool, REST router) stay
-# in sync automatically when categories are added or removed.
+# Category sets come from the data layer. The dashboard may write the
+# chat-turn categories plus `profile`; `system` and `permission` are never typed
+# or approved in the UI. Only the eval-only admin seed takes the full set.
+from gaia.agents.base.memory_store import (
+    USER_REVIEWED_CATEGORIES as _DASHBOARD_CATEGORIES,
+)
 from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..security import require_ui_header as _require_ui_header
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +40,6 @@ def _log_server_error(context: str, exc: Exception) -> str:
     correlation_id = uuid.uuid4().hex[:8]
     logger.error("[memory router] %s (id=%s)", context, correlation_id, exc_info=exc)
     return correlation_id
-
-
-def _require_ui_header(request: Request) -> None:
-    """Require ``X-Gaia-UI: 1`` header as a lightweight CSRF guard."""
-    if request.headers.get("x-gaia-ui") != "1":
-        raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
 # Safe defaults returned when the data-layer lacks v2 methods.
@@ -99,9 +97,11 @@ class KnowledgeCreate(BaseModel):
     @field_validator("category")
     @classmethod
     def validate_category(cls, v: str) -> str:
-        if v not in _VALID_CATEGORIES:
+        if v not in _DASHBOARD_CATEGORIES:
             raise ValueError(
-                f"category must be one of {sorted(_VALID_CATEGORIES)}, got {v!r}"
+                f"category must be one of {sorted(_DASHBOARD_CATEGORIES)}, got "
+                f"{v!r} (system and permission rows are not writable from the "
+                f"dashboard)"
             )
         return v
 
@@ -200,9 +200,11 @@ class KnowledgeUpdate(BaseModel):
     @field_validator("category")
     @classmethod
     def validate_category(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in _VALID_CATEGORIES:
+        if v is not None and v not in _DASHBOARD_CATEGORIES:
             raise ValueError(
-                f"category must be one of {sorted(_VALID_CATEGORIES)}, got {v!r}"
+                f"category must be one of {sorted(_DASHBOARD_CATEGORIES)}, got "
+                f"{v!r} (system and permission rows are not writable from the "
+                f"dashboard)"
             )
         return v
 
@@ -435,6 +437,7 @@ def create_knowledge(body: KnowledgeCreate) -> Dict:
     """Create a knowledge entry from the dashboard."""
     store = _get_store()
     knowledge_id = store.store(
+        allow_privileged=True,  # category capped by KnowledgeCreate
         category=body.category,
         content=body.content,
         domain=body.domain,
@@ -454,7 +457,8 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
     kwargs = {k: v for k, v in body.model_dump().items() if v is not None}
     if not kwargs:
         raise HTTPException(400, "No fields to update")
-    success = _get_store().update(knowledge_id, **kwargs)
+    # Category capped by KnowledgeUpdate.
+    success = _get_store().update(knowledge_id, allow_privileged=True, **kwargs)
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
     return {"status": "updated", "knowledge_id": knowledge_id}
@@ -463,7 +467,7 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
 @router.delete("/api/memory/knowledge/{knowledge_id}")
 def delete_knowledge(knowledge_id: str) -> Dict:
     """Delete a knowledge entry from the dashboard."""
-    success = _get_store().delete(knowledge_id)
+    success = _get_store().delete(knowledge_id, allow_privileged=True)
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
     return {"status": "deleted", "knowledge_id": knowledge_id}
@@ -656,9 +660,20 @@ def get_session(
 
 
 @router.get("/api/memory/upcoming")
-def upcoming_items(days: int = Query(7, ge=1, le=90)) -> List[Dict]:
-    """Time-sensitive items due within N days + overdue."""
-    return _get_store().get_upcoming(within_days=days)
+def upcoming_items(
+    days: int = Query(7, ge=1, le=90),
+    include_sensitive: bool = Query(
+        False,
+        description="Include sensitive items in results. Defaults to False.",
+    ),
+) -> List[Dict]:
+    """Time-sensitive items due within N days + overdue.
+
+    Sensitive items are excluded by default, as in /api/memory/knowledge.
+    """
+    return _get_store().get_upcoming(
+        within_days=days, include_sensitive=include_sensitive
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -761,10 +776,12 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         try:
             return _reconcile_fn()
         except Exception as exc:
-            logger.warning(
-                "[memory router] agent reconcile failed, falling back to standalone: %s",
-                exc,
-            )
+            logger.error("[memory router] agent reconcile failed: %s", exc)
+            raise HTTPException(
+                500,
+                f"Agent reconciliation failed: {type(exc).__name__}: {exc}. "
+                "Check the GAIA server log for the traceback.",
+            ) from exc
 
     # Standalone path — build a temporary FAISS index from stored embeddings
     try:
@@ -841,6 +858,25 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             return result
 
         llm = create_client()
+        # One metadata dict per id for the whole run: a memory in several
+        # pairs must keep every marker, not just the last pair's.
+        metas: Dict[str, Dict[str, Any]] = {}
+
+        def _meta(knowledge_id: str) -> Dict[str, Any]:
+            if knowledge_id not in metas:
+                raw_meta = item_map[knowledge_id].get("metadata") or {}
+                if isinstance(raw_meta, str):
+                    try:
+                        raw_meta = json.loads(raw_meta) if raw_meta else {}
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"memory {knowledge_id} has unreadable metadata "
+                            f"({exc}); fix or delete that entry, then retry"
+                        ) from exc
+                meta = dict(raw_meta)
+                meta["reconciled_with"] = list(meta.get("reconciled_with") or [])
+                metas[knowledge_id] = meta
+            return metas[knowledge_id]
 
         for id_a, id_b, _sim in pairs:
             item_a = item_map.get(id_a)
@@ -849,21 +885,9 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                 continue
 
             # Skip already-reconciled pairs
-            meta_a = item_a.get("metadata") or {}
-            meta_b = item_b.get("metadata") or {}
-            if isinstance(meta_a, str):
-                try:
-                    meta_a = json.loads(meta_a) if meta_a else {}
-                except Exception:
-                    meta_a = {}
-            if isinstance(meta_b, str):
-                try:
-                    meta_b = json.loads(meta_b) if meta_b else {}
-                except Exception:
-                    meta_b = {}
-            if id_b in meta_a.get("reconciled_with", []) or id_a in meta_b.get(
-                "reconciled_with", []
-            ):
+            meta_a = _meta(id_a)
+            meta_b = _meta(id_b)
+            if id_b in meta_a["reconciled_with"] or id_a in meta_b["reconciled_with"]:
                 continue
 
             try:
@@ -911,13 +935,15 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             else:
                 result["neutral"] += 1
 
-            # Mark pair as reconciled in metadata to avoid re-checking
-            try:
-                new_meta_a = dict(meta_a)
-                new_meta_a.setdefault("reconciled_with", []).append(id_b)
-                store.update(id_a, metadata=new_meta_a)
-            except Exception:
-                pass
+            # An unrecorded pair is re-classified, and re-penalised, next run.
+            meta_a["reconciled_with"].append(id_b)
+            meta_b["reconciled_with"].append(id_a)
+            for knowledge_id, meta in ((id_a, meta_a), (id_b, meta_b)):
+                if not store.update(knowledge_id, metadata=meta):
+                    raise RuntimeError(
+                        f"could not mark memory {knowledge_id} as reconciled: "
+                        "the entry no longer exists"
+                    )
 
         logger.info("[memory router] standalone reconcile: %s", result)
         return result
@@ -1050,6 +1076,7 @@ def _do_system_context_refresh() -> Dict:
     for fact in facts:
         try:
             store.store(
+                allow_privileged=True,  # system-context collection
                 category="system",
                 content=fact["content"],
                 domain=fact.get("domain"),
@@ -1546,37 +1573,60 @@ def stream_inference(include_browser: bool = Query(False)):
     )
 
 
+class DiscoveryCommitItem(KnowledgeCreate):
+    """One approved discovery finding; KnowledgeCreate caps its category."""
+
+    category: str = "profile"
+    confidence: float = 0.6
+
+
+class InferenceCommitItem(KnowledgeCreate):
+    """One approved inference insight. Always stored as a global ``profile`` row."""
+
+    category: Literal["profile"] = "profile"
+    domain: Optional[str] = "general"
+    confidence: float = 0.7
+
+
 class DiscoveryCommit(BaseModel):
-    items: List[Dict[str, Any]]
+    items: List[DiscoveryCommitItem]
 
 
 class InferenceCommit(BaseModel):
-    insights: List[Dict[str, Any]]
+    insights: List[InferenceCommitItem]
 
 
 @router.post("/api/memory/commit-discovery")
 def commit_discovery(body: DiscoveryCommit) -> Dict:
-    """Store approved discovery findings. Returns ``{stored: int}``."""
+    """Store approved discovery findings. Returns ``{stored: int}``.
+
+    Items are validated as ``KnowledgeCreate`` at the request boundary, so a
+    ``system`` or ``permission`` category rejects the batch (422) before any
+    row is written.
+    """
     store = _get_store()
     stored = 0
-    for item in body.items:
-        try:
-            content = str(item.get("content", "")).strip()
-            if not content:
-                continue
+    try:
+        for item in body.items:
             store.store(
-                category=item.get("category", "profile"),
-                content=content,
+                allow_privileged=True,  # category capped by KnowledgeCreate
+                category=item.category,
+                content=item.content.strip(),
                 source="discovery",
-                context=item.get("context", "global"),
-                sensitive=bool(item.get("sensitive", False)),
-                confidence=float(item.get("confidence", 0.6)),
-                domain=item.get("domain") or None,
-                entity=item.get("entity") or None,
+                context=item.context,
+                sensitive=item.sensitive,
+                confidence=item.confidence,
+                domain=item.domain or None,
+                entity=item.entity or None,
             )
             stored += 1
-        except Exception as e:
-            logger.debug("[memory router] commit-discovery item failed: %s", e)
+    except Exception as exc:
+        cid = _log_server_error("commit-discovery failed", exc)
+        raise HTTPException(
+            500,
+            f"Stored {stored} of {len(body.items)} discovery items, then failed "
+            f"— see server logs (id={cid}).",
+        ) from exc
     logger.info("[memory router] commit-discovery: stored %d items", stored)
     return {"stored": stored}
 
@@ -1584,6 +1634,9 @@ def commit_discovery(body: DiscoveryCommit) -> Dict:
 @router.post("/api/memory/commit-inference")
 def commit_inference(body: InferenceCommit) -> Dict:
     """Store approved inference insights, replacing old inferred entries.
+
+    Insights are validated as ``KnowledgeCreate`` before the old inferred
+    profile is cleared, so a malformed batch never wipes it.
 
     Returns ``{stored: int}``.
     """
@@ -1598,23 +1651,26 @@ def commit_inference(body: InferenceCommit) -> Dict:
         )
         raise HTTPException(500, f"Failed to clear old inferred profile: {exc}")
     stored = 0
-    for insight in body.insights:
-        try:
-            content = str(insight.get("content", "")).strip()
-            if not content:
-                continue
+    try:
+        for insight in body.insights:
             store.store(
+                allow_privileged=True,  # inference writes the user's profile
                 category="profile",
-                content=content,
+                content=insight.content.strip(),
                 source="inferred",
                 context="global",
                 sensitive=False,
-                confidence=float(insight.get("confidence", 0.7)),
-                domain=insight.get("domain", "general"),
+                confidence=insight.confidence,
+                domain=insight.domain or "general",
             )
             stored += 1
-        except Exception as e:
-            logger.debug("[memory router] commit-inference item failed: %s", e)
+    except Exception as exc:
+        cid = _log_server_error("commit-inference failed", exc)
+        raise HTTPException(
+            500,
+            f"Stored {stored} of {len(body.insights)} insights, then failed "
+            f"— see server logs (id={cid}).",
+        ) from exc
     logger.info("[memory router] commit-inference: stored %d insights", stored)
     return {"stored": stored}
 

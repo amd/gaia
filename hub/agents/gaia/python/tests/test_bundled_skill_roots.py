@@ -114,11 +114,13 @@ class TestTheFlagshipCanSearchCode:
             "get_index_status",
             "clear_code_index",
         ):
-            assert name in flagship._tools_registry, (
-                f"{name} is missing — the flagship cannot index or search code"
-            )
+            assert (
+                name in flagship._tools_registry
+            ), f"{name} is missing — the flagship cannot index or search code"
 
     def test_the_index_is_rooted_somewhere_real(self, flagship):
-        assert Path(flagship._repo_path).is_dir(), (
+        assert Path(
+            flagship._repo_path
+        ).is_dir(), (
             "the code index has no valid repository root, so indexing cannot start"
         )

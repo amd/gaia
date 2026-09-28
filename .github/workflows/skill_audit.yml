@@ -47,7 +47,7 @@ name: Skill Audit
 
 on:
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     # `labeled`/`unlabeled` are here so applying the sign-off label re-runs the
     # gate instead of needing a manual re-run.
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
@@ -66,7 +66,7 @@ permissions:
   contents: read
 
 env:
-  AUDIT_MODEL: claude-opus-4-8
+  AUDIT_MODEL: claude-opus-5-5
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -477,7 +477,7 @@ jobs:
       - name: Run Claude (skill-intent lens)
         id: claude
         continue-on-error: true   # advisory: a crash here must not gate the merge
-        uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10  # v1.0.210
+        uses: anthropics/claude-code-action@9171db3e57d6a3140a37ddc2ba92788584e0ead6  # v1.0.234
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -536,6 +536,6 @@ jobs:
             line what you checked. End with a one-paragraph plain-language summary for the human
             reading this log.
           claude_args: |
-            --max-turns 30
+            --max-turns 100
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash

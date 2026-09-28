@@ -65,6 +65,7 @@ class DocumentMonitor:
         index_fn: Callable[[Path], Awaitable[int]],
         interval: float = DEFAULT_INTERVAL,
         active_tasks: Optional[Dict[str, Any]] = None,
+        startup_delay: float = 5.0,
     ):
         """Initialize the document monitor.
 
@@ -76,10 +77,13 @@ class DocumentMonitor:
             active_tasks: Dict of currently active indexing tasks (doc_id → Task).
                           Used to avoid re-indexing docs that are being indexed
                           by user action.
+            startup_delay: Seconds to wait before the first sweep, letting the
+                          server finish starting. Lowered by tests.
         """
         self._db = db
         self._index_fn = index_fn
         self._interval = interval
+        self._startup_delay = startup_delay
         self._active_tasks = active_tasks or {}
         self._task: Optional[asyncio.Task] = None
         self._reindexing: Set[str] = set()  # doc IDs currently being re-indexed
@@ -120,7 +124,7 @@ class DocumentMonitor:
     async def _run_loop(self) -> None:
         """Main polling loop: sleep, check documents, repeat."""
         # Initial delay to let the server finish starting up
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(self._startup_delay)
 
         while not self._stop_event.is_set():
             try:
@@ -177,6 +181,20 @@ class DocumentMonitor:
                 continue
 
             current_mtime, current_size = file_info
+
+            # Repair before the fast path — a reconnected drive keeps its mtime.
+            if status == "missing":
+                logger.info(
+                    "Indexed file is reachable again: %s (doc_id=%s)",
+                    filepath,
+                    doc_id,
+                )
+                self._db.update_document_status(doc_id, "complete")
+                status = "complete"
+                # Size too: mtime alone is trustworthy only while the monitor
+                # has been watching, and it was not.
+                if current_size != doc.get("file_size"):
+                    stored_mtime = None
 
             # Fast path: mtime unchanged → skip hash computation
             if stored_mtime is not None and current_mtime == stored_mtime:

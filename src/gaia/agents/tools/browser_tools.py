@@ -65,7 +65,8 @@ class BrowserToolsMixin:
                 return "Error: Browser tools not initialized. Web browsing is disabled."
 
             # Clamp max_length to prevent extreme values
-            max_length = max(100, min(max_length, 20000))
+            max_length = max(512, min(max_length, 20000))
+            from gaia.agents.base.artifacts import retain_excerpt
 
             # Validate extract mode
             valid_modes = {"text", "html", "links", "tables"}
@@ -96,9 +97,7 @@ class BrowserToolsMixin:
                     for t in ["application/json", "text/plain", "text/csv", "text/xml"]
                 ):
                     # Text-based content — return directly
-                    text = response.text[:max_length]
-                    if len(response.text) > max_length:
-                        text += "\n\n... (truncated)"
+                    text = retain_excerpt(mixin, response.text, max_length)
                     return (
                         f"Content from: {url}\n"
                         f"Type: {content_type}\n"
@@ -124,9 +123,7 @@ class BrowserToolsMixin:
             title = title_tag.get_text(strip=True) if title_tag else "(no title)"
 
             if extract == "html":
-                html = response.text[:max_length]
-                if len(response.text) > max_length:
-                    html += "\n\n... (truncated)"
+                html = retain_excerpt(mixin, response.text, max_length)
                 return (
                     f"Page: {title}\n"
                     f"URL: {url}\n"
@@ -140,16 +137,12 @@ class BrowserToolsMixin:
                     return f"Page: {title}\nURL: {url}\n\nNo links found on this page."
 
                 lines = [f"Page: {title}", f"URL: {url}", f"Links: {len(links)}", ""]
-                for i, link in enumerate(links[:100], 1):  # Cap at 100 links
+                for i, link in enumerate(links, 1):
                     lines.append(f"  {i}. {link['text']}")
                     lines.append(f"     {link['url']}")
 
-                if len(links) > 100:
-                    lines.append(f"\n... and {len(links) - 100} more links")
-
                 result = "\n".join(lines)
-                if len(result) > max_length:
-                    result = result[:max_length] + "\n\n... (truncated)"
+                result = retain_excerpt(mixin, result, max_length)
                 return result
 
             elif extract == "tables":
@@ -171,12 +164,12 @@ class BrowserToolsMixin:
                     lines.append("")
 
                 result = "\n".join(lines)
-                if len(result) > max_length:
-                    result = result[:max_length] + "\n\n... (truncated)"
+                result = retain_excerpt(mixin, result, max_length)
                 return result
 
             else:  # text (default)
-                text = mixin._web_client.extract_text(soup, max_length=max_length)
+                text = mixin._web_client.extract_text(soup, max_length=None)
+                text = retain_excerpt(mixin, text, max_length)
                 return (
                     f"Page: {title}\n"
                     f"URL: {url}\n"
@@ -248,6 +241,9 @@ class BrowserToolsMixin:
             PDFs, CSVs, images, or any file from the web for local analysis.
             After downloading, use read_file or index_document to process it.
 
+            Never replaces a file that already exists: if the destination is
+            taken the download fails, so pass filename= to choose a free name.
+
             Args:
                 url: Direct URL to the file to download
                 save_to: Local directory to save the file (default: ~/Downloads)
@@ -273,36 +269,35 @@ class BrowserToolsMixin:
                 if is_blocked:
                     return f"Error: {reason}"
 
+            # Screen the *resolved file path* (not just the directory) against
+            # the sensitive-filename guardrail before a single byte is written.
+            # The directory check above catches blocked dirs, but the final
+            # filename (from Content-Disposition or URL) could be something
+            # like `credentials.json` that is_write_blocked would reject for
+            # write_file. WebClient.download calls this before creating the
+            # file, so a blocked download leaves the filesystem untouched.
+            def _screen_destination(dest_path: Path) -> None:
+                validator = getattr(mixin, "_path_validator", None)
+                if not validator:
+                    return
+                is_blocked, reason = validator.is_write_blocked(str(dest_path))
+                if is_blocked:
+                    raise ValueError(
+                        f"Downloaded file blocked by security policy: {reason}"
+                    )
+
             try:
                 result = mixin._web_client.download(
                     url=url,
                     save_dir=save_to,
                     filename=filename,
+                    on_path_resolved=_screen_destination,
                 )
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:
                 logger.error(f"Error downloading {url}: {e}")
                 return f"Error downloading file: {e}"
-
-            # Post-download: check the *resolved file path* (not just the
-            # directory) against the sensitive-filename guardrail. The
-            # directory check above catches blocked dirs, but the final
-            # filename (from Content-Disposition or URL) could be something
-            # like `credentials.json` or `.env` that is_write_blocked
-            # would reject for write_file.  Delete the file if blocked.
-            if hasattr(mixin, "_path_validator") and mixin._path_validator:
-                saved_path = result.get("path", "")
-                is_blocked, reason = mixin._path_validator.is_write_blocked(saved_path)
-                if is_blocked:
-                    try:
-                        Path(saved_path).unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                    return (
-                        f"Error: Downloaded file blocked by security policy: "
-                        f"{reason}"
-                    )
 
             # Format file size
             size_bytes = result["size"]

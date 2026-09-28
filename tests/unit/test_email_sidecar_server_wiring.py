@@ -6,9 +6,22 @@ UI backend no longer owns a spawning manager on ``app.state`` — it acquires a
 handle from the daemon per request (``daemon_client.acquire_handle()``).
 """
 
+import pytest
 from fastapi.testclient import TestClient
 
+import gaia.ui.email_sidecar.daemon_client as daemon_client_module
+from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui.server import create_app
+
+
+@pytest.fixture(autouse=True)
+def _daemon_down(monkeypatch):
+    # These tests prove the routes are mounted, not that a sidecar answers:
+    # a daemon that refuses turns every mounted route into a 503.
+    def _refuse(agent_id="email"):
+        raise SidecarError(f"daemon mocked out for '{agent_id}'")
+
+    monkeypatch.setattr(daemon_client_module, "acquire_handle", _refuse)
 
 
 def _assert_sidecar_surface(app):
@@ -16,12 +29,13 @@ def _assert_sidecar_surface(app):
     # Starlette versions expose _IncludedRouter objects without a .path attribute,
     # so HTTP reachability is the robust cross-version assertion.
     client = TestClient(app, raise_server_exceptions=False)
-    # The full schema-2.1 surface is mounted: NOT 404 (422/405/503/200 all prove
-    # the route exists). /prescan + /calendar/events are the routes the in-process
-    # mount used to serve — they must survive the cutover via the sidecar router.
-    assert client.post("/v1/email/triage", json={}).status_code != 404
-    assert client.post("/v1/email/prescan", json={}).status_code != 404
-    assert client.get("/v1/email/calendar/events").status_code != 404
+    # The full schema-2.1 surface is mounted: each route reaches the daemon
+    # boundary, which _daemon_down turns into a 503. /prescan + /calendar/events
+    # are the routes the in-process mount used to serve — they must survive the
+    # cutover via the sidecar router.
+    assert client.post("/v1/email/triage", json={}).status_code == 503
+    assert client.post("/v1/email/prescan", json={}).status_code == 503
+    assert client.get("/v1/email/calendar/events").status_code == 503
     # Security: connector write routes are NOT handled by the sidecar surface.
     connector_post = client.post("/v1/email/connectors/google/complete", json={})
     assert connector_post.status_code in (404, 405)

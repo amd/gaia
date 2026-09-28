@@ -218,18 +218,18 @@ class TestAgentEvalAudit:
     def test_audit_reads_real_chat_helpers_values(self):
         """Integration canary: audit must read the real constants from _chat_helpers.py.
 
-        This test breaks intentionally if someone renames or changes _MAX_HISTORY_PAIRS
-        or _MAX_MSG_CHARS, alerting that eval recommendations need updating.
+        This test breaks intentionally if someone renames or changes _MAX_PAIRS
+        or _MAX_CHARS, alerting that eval recommendations need updating.
         """
         from gaia.eval.audit import audit_chat_helpers
 
         constants = audit_chat_helpers()
         assert (
-            constants.get("_MAX_HISTORY_PAIRS") == 5
-        ), "_MAX_HISTORY_PAIRS changed in _chat_helpers.py — update eval recommendations"
+            constants.get("_MAX_PAIRS") == 5
+        ), "_MAX_PAIRS changed in _chat_helpers.py — update eval recommendations"
         assert (
-            constants.get("_MAX_MSG_CHARS") == 2000
-        ), "_MAX_MSG_CHARS changed in _chat_helpers.py — update eval recommendations"
+            constants.get("_MAX_CHARS") == 2000
+        ), "_MAX_CHARS changed in _chat_helpers.py — update eval recommendations"
 
 
 class TestAgentEvalRunner:
@@ -280,6 +280,49 @@ class TestAgentEvalRunner:
             assert "turns" in data, f"{path.name} missing 'turns'"
             assert len(data["turns"]) > 0, f"{path.name} has no turns"
             assert "setup" in data, f"{path.name} missing 'setup'"
+
+    def test_gaia_corpus_categories_and_tags(self):
+        """Every gaia_* scenario uses known tags and leaves the agent to the CLI."""
+        from gaia.eval.runner import find_scenarios
+
+        expected_categories = {
+            "gaia_core",
+            "gaia_memory",
+            "gaia_rag",
+            "gaia_files",
+            "gaia_data",
+            "gaia_web",
+            "gaia_shell",
+            "gaia_skills_lifecycle",
+            "gaia_skills_tasks",
+            "gaia_skills_capture",
+            "gaia_honesty",
+            "gaia_tool_selection",
+            "gaia_code",
+        }
+        known_tags = {
+            "t1_basic",
+            "t2_compound",
+            "t3_stress",
+            "t4_adversarial",
+            "live",
+            "tui",
+            "local_blocked_no_embedder",
+            "local_blocked_win_shim",
+        }
+        gaia = [
+            (path, data)
+            for path, data in find_scenarios()
+            if data["category"].startswith("gaia_")
+        ]
+        assert expected_categories <= {data["category"] for _, data in gaia}
+        for path, data in gaia:
+            assert "agent_type" not in data, (
+                f"{path.name}: a scenario may not pin agent_type — one run scores "
+                "one agent, chosen by `gaia eval agent --agent-type`"
+            )
+            unknown = set(data.get("tags", [])) - known_tags
+            assert not unknown, f"{path.name}: unknown tags {unknown}"
 
     def test_compare_scorecards_detects_regression(self, tmp_path):
         import json
@@ -431,6 +474,90 @@ class TestAgentEvalRunner:
         diff = compare_scorecards(_sc(baseline_results), _sc(current_results))
         assert len(diff["score_regressed"]) == 0
         assert len(diff["unchanged"]) == 1
+
+    @pytest.mark.parametrize(
+        "status",
+        ["INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"],
+    )
+    def test_unmeasured_scenario_is_not_a_regression(self, tmp_path, status):
+        """A harness failure scores 0.0; that must not read as PASS -> FAIL.
+
+        Run 34163958523 reported ``multi_step_plan 7.3 -> 0.0`` as a PASS -> FAIL
+        regression when the scenario had actually ended in SETUP_ERROR and was
+        never scored at all. "We could not measure" and "it got worse" are
+        different findings; only the second is a regression.
+        """
+        from gaia.eval.runner import compare_scorecards
+        from gaia.eval.scorecard import build_scorecard
+
+        def _sc(results, name):
+            sc = build_scorecard("run", results, {})
+            p = tmp_path / f"sc_{name}_{status}.json"
+            p.write_text(json.dumps(sc))
+            return p
+
+        baseline_results = [
+            {
+                "scenario_id": "multi_step_plan",
+                "status": "PASS",
+                "overall_score": 7.3,
+                "category": "tool_selection",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+        ]
+        current_results = [
+            {
+                "scenario_id": "multi_step_plan",
+                "status": status,
+                "overall_score": 0.0,
+                "category": "tool_selection",
+                "cost_estimate": {"estimated_usd": 0},
+            },
+        ]
+        diff = compare_scorecards(
+            _sc(baseline_results, "base"), _sc(current_results, "curr")
+        )
+        assert len(diff["unmeasured"]) == 1
+        assert diff["unmeasured"][0]["scenario_id"] == "multi_step_plan"
+        assert diff["unmeasured"][0]["current_status"] == status
+        # Excluded from every bucket the CLI turns into a non-zero exit code.
+        assert diff["regressed"] == []
+        assert diff["score_regressed"] == []
+        assert diff["time_regressed"] == []
+
+    def test_unmeasured_does_not_mask_a_real_regression(self, tmp_path):
+        """The scenarios that DID get measured are still judged normally."""
+        from gaia.eval.runner import compare_scorecards
+        from gaia.eval.scorecard import build_scorecard
+
+        def _sc(results, name):
+            sc = build_scorecard("run", results, {})
+            p = tmp_path / f"mixed_{name}.json"
+            p.write_text(json.dumps(sc))
+            return p
+
+        def _r(sid, status, score):
+            return {
+                "scenario_id": sid,
+                "status": status,
+                "overall_score": score,
+                "category": "tool_selection",
+                "cost_estimate": {"estimated_usd": 0},
+            }
+
+        baseline_results = [
+            _r("multi_step_plan", "PASS", 7.3),
+            _r("smart_discovery", "PASS", 9.4),
+        ]
+        current_results = [
+            _r("multi_step_plan", "SETUP_ERROR", 0.0),
+            _r("smart_discovery", "FAIL", 3.4),
+        ]
+        diff = compare_scorecards(
+            _sc(baseline_results, "base"), _sc(current_results, "curr")
+        )
+        assert [e["scenario_id"] for e in diff["unmeasured"]] == ["multi_step_plan"]
+        assert [e["scenario_id"] for e in diff["regressed"]] == ["smart_discovery"]
 
 
 class TestScoreValidation:
@@ -1020,14 +1147,14 @@ class TestRunScenarioSubprocess:
             "turns": [{"turn": 1, "objective": "x", "success_criteria": "ok"}],
         }
 
-    def _run(self, mocker, stdout, returncode=0):
+    def _run(self, mocker, stdout, returncode=0, stderr=""):
         import tempfile
 
         from gaia.eval.runner import run_scenario_subprocess
 
         mock_proc = mocker.MagicMock()
         mock_proc.stdout = stdout
-        mock_proc.stderr = ""
+        mock_proc.stderr = stderr
         mock_proc.returncode = returncode
         mocker.patch("subprocess.run", return_value=mock_proc)
 
@@ -1073,6 +1200,37 @@ class TestRunScenarioSubprocess:
         result = self._run(mocker, "", returncode=1)
         assert result["status"] == "ERRORED"
         assert result["overall_score"] is None
+
+    def test_nonzero_exit_captures_stdout(self, mocker):
+        """`--output-format json` puts the CLI's error on stdout, not stderr.
+
+        Regression guard for the CI signature where every scenario ERRORED with
+        an empty `error` field, making the failure impossible to triage.
+        """
+        result = self._run(
+            mocker,
+            '{"type":"result","subtype":"error_during_execution"}',
+            returncode=1,
+        )
+        assert result["status"] == "ERRORED"
+        assert "error_during_execution" in result["error"]
+
+    def test_nonzero_exit_captures_both_streams(self, mocker):
+        result = self._run(mocker, "on-stdout", returncode=1, stderr="on-stderr")
+        assert "on-stderr" in result["error"]
+        assert "on-stdout" in result["error"]
+
+    def test_malformed_json_includes_stderr_diagnostic(self, mocker):
+        result = self._run(mocker, "{broken", stderr="Output stream interrupted")
+        assert result["status"] == "ERRORED"
+        assert "{broken" in result["error"]
+        assert "Output stream interrupted" in result["error"]
+
+    def test_nonzero_exit_error_never_empty(self, mocker):
+        """A silent exit must still say something — an empty string explains nothing."""
+        result = self._run(mocker, "", returncode=3, stderr="")
+        assert result["error"].strip()
+        assert "exit 3" in result["error"]
 
     def test_missing_status_field_defaulted(self, mocker):
         """Eval agent returning JSON without 'status' should be defaulted to ERRORED."""
@@ -2135,6 +2293,36 @@ class TestFindScenariosExtraDirs:
         assert "tag_a" in ids
         assert "tag_b" in ids
 
+    def test_exclude_tag_filtering(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        self._write_scenario(tmp_path, "keep_me", tags=["t1_basic"])
+        self._write_scenario(tmp_path, "blocked", tags=["t1_basic", "live"])
+        self._write_scenario(tmp_path, "untagged_kept")
+
+        results = find_scenarios(extra_dirs=[str(tmp_path)], exclude_tags=["live"])
+        ids = [data["id"] for _, data in results]
+        assert "keep_me" in ids
+        assert "untagged_kept" in ids
+        assert "blocked" not in ids
+
+    def test_exclude_tag_applies_after_include_filters(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        self._write_scenario(tmp_path, "in_and_kept", tags=["t1_basic"])
+        self._write_scenario(tmp_path, "in_but_excluded", tags=["t1_basic", "live"])
+        self._write_scenario(tmp_path, "not_included", tags=["other"])
+
+        results = find_scenarios(
+            extra_dirs=[str(tmp_path)], tags=["t1_basic"], exclude_tags=["live"]
+        )
+        ids = [data["id"] for _, data in results]
+        assert ids == ["in_and_kept"] or (
+            "in_and_kept" in ids
+            and "in_but_excluded" not in ids
+            and "not_included" not in ids
+        )
+
     def test_tags_field_accepted_in_scenario_yaml(self, tmp_path):
         """Tags field in scenario YAML should not cause validation errors."""
         from gaia.eval.runner import validate_scenario
@@ -2646,6 +2834,8 @@ class TestRunner:
         assert result["status"] == "TIMEOUT"
         assert result["overall_score"] is None
         assert result["scenario_id"] == "timeout_test"
+        assert "timeout" in result["error"]
+        assert "30s" in result["error"]
         assert "elapsed_s" in result
         assert isinstance(result["elapsed_s"], float)
 

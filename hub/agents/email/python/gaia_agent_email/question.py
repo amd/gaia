@@ -112,7 +112,8 @@ def ask(
         raise InputUnsupportedError(
             "This surface cannot ask questions during a run "
             f"({type(console).__name__} has no request_user_input_blocking). "
-            "Run the agent through the GAIA TUI or the Agent UI, which do."
+            "Run the agent through the GAIA TUI or the Agent UI, both of "
+            "which support it."
         )
     # The handler exists on every /query run, so its presence says nothing about
     # whether anyone is watching. The CALLER declares that (can_answer_questions

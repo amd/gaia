@@ -188,3 +188,36 @@ func TestChangedBroadcastsOnSnapshotChangeOnly(t *testing.T) {
 		t.Fatal("a state change with no repaint did not wake waiters — POST /wait on a state matcher would hang")
 	}
 }
+
+// The composer's cursor blinks, which rewrites the styled bytes a couple of
+// times a second while the screen says exactly the same thing. Keying the ring
+// on those bytes filled all 200 slots with one motionless frame and pushed out
+// the history anyone would want to watch — a "recording" of a still image.
+func TestBlinkingDoesNotFillTheFrameRing(t *testing.T) {
+	s := NewState(nil)
+	s.recordFrame("\x1b[7m \x1b[0mAsk anything")
+	for i := 0; i < 50; i++ {
+		// Same visible screen, different styling each time.
+		if i%2 == 0 {
+			s.recordFrame("\x1b[0m \x1b[0mAsk anything")
+		} else {
+			s.recordFrame("\x1b[7m \x1b[0mAsk anything")
+		}
+	}
+	frames, _, _ := s.Frames(0, 0)
+	if len(frames) != 1 {
+		t.Errorf("the ring holds %d frames of one unchanging screen, want 1", len(frames))
+	}
+
+	s.recordFrame("\x1b[7m \x1b[0mSomething else")
+	frames, _, _ = s.Frames(0, 0)
+	if len(frames) != 2 {
+		t.Fatalf("a real change was not recorded: %d frames", len(frames))
+	}
+	if frames[1].Raw == "" {
+		t.Error("the styled frame was not kept, so a replay of it has no colour")
+	}
+	if frames[1].Screen == frames[1].Raw {
+		t.Error("Screen should be the stripped text, not the styled bytes")
+	}
+}

@@ -28,7 +28,7 @@ on:
       - 'tests/integration/test_email_corpus_alignment.py'
       - '.github/workflows/test_email_agent.yml'
   pull_request:
-    branches: [ main ]
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/email/python/**'
@@ -84,6 +84,9 @@ jobs:
           uv pip install --system -e .[dev,api,publish]
           # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102)
           uv pip install --system -e hub/agents/email/python
+
+      - name: Check no test file skips wholesale
+        run: python util/check_module_skips.py --workflow test_email_agent.yml --job test-email-agent
 
       - name: Run Email Agent Tests
         run: |

@@ -44,9 +44,16 @@ class AudioRecorder:
         self.device_index = (
             self._get_default_input_device() if device_index is None else device_index
         )
-        self.is_recording = False
+        self._is_recording = False
         self.audio_queue = queue.Queue()
         self.stream = None  # Add stream as class attribute
+
+        #: Why the microphone stopped, set by the capture thread. ``None`` until
+        #: something goes wrong. Capture runs on its own thread, so raising
+        #: there reaches nobody — the caller reads this to say what happened
+        #: instead of printing "Listening…" at a dead device (#3554).
+        self.mic_error = None
+        self._stop_requested = False
 
         # Voice detection parameters
         self.SILENCE_THRESHOLD = 0.003
@@ -56,6 +63,32 @@ class AudioRecorder:
         # New attributes for pause functionality
         self.is_paused = False
         self.pause_lock = threading.Lock()
+
+    @property
+    def is_recording(self) -> bool:
+        """True only while the capture thread is actually alive.
+
+        A device error breaks out of ``_record_audio`` without unsetting the
+        flag, so callers polling a plain attribute wait on "Listening..."
+        forever after the microphone dies.
+        """
+        if not self._is_recording:
+            return False
+        return self.record_thread is None or self.record_thread.is_alive()
+
+    @is_recording.setter
+    def is_recording(self, value: bool) -> None:
+        self._is_recording = bool(value)
+
+    @property
+    def capture_failed(self) -> bool:
+        """True when capture stopped on a device error, not on request.
+
+        Keyed on ``mic_error`` rather than thread liveness: ``_record_audio``
+        clears ``is_recording`` on its way out, so by the time anyone asks,
+        a failed capture and a requested stop look identical from the flag.
+        """
+        return self.mic_error is not None and not self._stop_requested
 
     def _get_default_input_device(self):
         """Get the default input device index."""
@@ -71,8 +104,31 @@ class AudioRecorder:
         """Detect if audio chunk contains speech based on amplitude."""
         return np.abs(audio_chunk).mean() > self.SILENCE_THRESHOLD
 
+    def device_error_message(self, verb: str, error: Exception) -> str:
+        """One actionable line naming the device and what to try next."""
+        try:
+            name = sd.query_devices(self.device_index)["name"]
+            device = f"[{self.device_index}] {name}"
+        except Exception:  # noqa: BLE001 - the device is what is broken
+            device = (
+                f"index {self.device_index}"
+                if self.device_index is not None
+                else "the default input device"
+            )
+        return (
+            f"Microphone unavailable: could not {verb} {device} ({error}). "
+            "Pick another with `gaia talk --audio-device-index <N>`; list them "
+            "with `gaia test asr-list-audio-devices`."
+        )
+
     def _record_audio(self):
-        """Internal method to record audio."""
+        """Internal method to record audio.
+
+        Any failure clears ``is_recording`` and records the reason on
+        ``mic_error``. This runs on its own thread, so the old ``raise`` reached
+        nobody and left the flag set — which is what kept ``gaia talk`` printing
+        "Listening…" at a microphone that never opened (#3554).
+        """
         try:
             device_info = sd.query_devices(self.device_index)
             self.log.debug(f"Using audio device: {device_info['name']}")
@@ -100,11 +156,17 @@ class AudioRecorder:
 
             while self.is_recording:
                 try:
-                    # Skip recording if paused
                     with self.pause_lock:
-                        if self.is_paused:
-                            time.sleep(0.1)
-                            continue
+                        paused = self.is_paused
+                    if paused:
+                        # Keep draining the device and throw the frames away.
+                        # Not reading lets the input ring buffer hand us the
+                        # assistant's own speech the moment we resume.
+                        self.stream.read(self.CHUNK)
+                        speech_buffer = np.array([], dtype=np.float32)
+                        self.is_speaking = False
+                        silence_counter = 0
+                        continue
 
                     frames, _ = self.stream.read(self.CHUNK)
                     data = frames[:, 0].copy()  # Extract mono channel
@@ -148,13 +210,18 @@ class AudioRecorder:
                             silence_counter = 0
 
                 except Exception as e:
-                    self.log.error(f"Error reading from stream: {e}")
+                    self.mic_error = self.device_error_message("read from", e)
+                    self.log.error(self.mic_error)
                     break
 
         except Exception as e:
-            self.log.error(f"Error with device {self.device_index}: {e}")
-            raise
+            # Opening or querying the device failed, so recording never began.
+            self.mic_error = self.device_error_message("open", e)
+            self.log.error(self.mic_error)
         finally:
+            # Always clear the flag: the supervisor loop polls it to notice the
+            # capture thread is gone, and it is the only way out of "Listening…".
+            self.is_recording = False
             try:
                 if self.stream is not None:
                     self.stream.stop()
@@ -207,7 +274,12 @@ class AudioRecorder:
             self.log.warning("Recording is already in progress")
             return
 
+        # Drop the previous session's dead thread before arming the flag --
+        # ``is_recording`` reads thread liveness.
+        self.record_thread = None
         # Set recording flag before starting threads
+        self.mic_error = None
+        self._stop_requested = False
         self.is_recording = True
 
         # Start record thread
@@ -233,6 +305,7 @@ class AudioRecorder:
     def stop_recording(self):
         """Stop recording and transcription."""
         self.log.debug("Stopping recording...")
+        self._stop_requested = True
         self.is_recording = False
         if self.record_thread:
             self.log.debug("Waiting for record thread to finish...")

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -58,7 +57,9 @@ _INIT_MARKER = Path.home() / ".gaia" / "chat" / "initialized"
 
 
 def _get_lemonade_base_url() -> str:
-    return os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    return resolve_lemonade_base_url()
 
 
 async def _probe_lemonade_devices() -> Dict[str, Any]:
@@ -89,7 +90,7 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
         import httpx  # pylint: disable=import-outside-toplevel
 
         base_url = _get_lemonade_base_url()
-        auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{base_url}/system-info", headers=auth)
             if resp.status_code != 200:

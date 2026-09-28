@@ -323,7 +323,11 @@ class TestPythonFactoryFiltering:
             )
 
         assert agent is not None
-        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        debug_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.DEBUG and r.name == "gaia.agents.registry"
+        ]
         drop_msgs = [
             r.getMessage() for r in debug_records if "dropped" in r.getMessage()
         ]
@@ -350,7 +354,9 @@ class TestPythonFactoryFiltering:
         warning_msgs = [
             r.getMessage()
             for r in caplog.records
-            if r.levelno == logging.WARNING and "security-relevant" in r.getMessage()
+            if r.levelno == logging.WARNING
+            and r.name == "gaia.agents.registry"
+            and "security-relevant" in r.getMessage()
         ]
         assert len(warning_msgs) >= 1
         assert "allowed_paths" in warning_msgs[0]
@@ -402,7 +408,9 @@ class TestPythonFactoryFiltering:
         sec_warnings = [
             r
             for r in caplog.records
-            if r.levelno == logging.WARNING and "security-relevant" in r.getMessage()
+            if r.levelno == logging.WARNING
+            and r.name == "gaia.agents.registry"
+            and "security-relevant" in r.getMessage()
         ]
         assert sec_warnings == []
 

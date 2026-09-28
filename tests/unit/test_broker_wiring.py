@@ -189,6 +189,8 @@ class _FakeClient:
     def build(self, monkeypatch):
         client = object.__new__(self.cls)
         client.model_lease_priority = "background"
+        # load_model consults the cloud-provider lookup, which reads this cache.
+        client._model_metadata = {}
         import logging
 
         client.log = logging.getLogger("test.lemonade")
@@ -290,6 +292,8 @@ def test_load_model_forwards_every_kwarg_through_the_lease(monkeypatch):
 
     client = object.__new__(LemonadeClient)
     client.model_lease_priority = "background"
+    # load_model consults the cloud-provider lookup, which reads this cache.
+    client._model_metadata = {}
     import logging
 
     client.log = logging.getLogger("test.lemonade")
@@ -412,6 +416,8 @@ def _bare_chat_client():
     client.model_lease_priority = "background"
     client.base_url = "http://127.0.0.1:0/api/v1"
     client.api_key = None
+    # The chat paths consult the cloud-provider lookup, which reads this cache.
+    client._model_metadata = {}
     client.log = logging.getLogger("test.lemonade")
     return client
 

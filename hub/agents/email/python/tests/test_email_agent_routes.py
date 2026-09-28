@@ -831,6 +831,57 @@ class TestWorkerDiesWithoutTerminalEvent:
         assert session is not None and not session.is_running()
 
 
+def test_run_lock_is_released_before_run_complete(client, monkeypatch):
+    """Regression pin (#2919): a client that observes ``run_complete`` must
+    never race a still-held ``run_lock`` -- a resend on the same session
+    right after seeing completion must not get a spurious 409. Pins the
+    ORDER (release, then run_complete emitted), not merely that both
+    eventually happen, so a future reorder fails loudly."""
+    import gaia.ui.sse_handler as sse_mod
+
+    client.post("/v1/email/agent/session", json={"session_id": "s1"})
+    session = agent_routes.registry.get("s1")
+
+    order: list = []
+
+    class _TrackedLock:
+        """Wraps the real lock -- a bare ``threading.Lock`` instance has no
+        ``__dict__`` and rejects attribute assignment, so the release call
+        can't be monkeypatched directly."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def acquire(self, *a, **k):
+            return self._inner.acquire(*a, **k)
+
+        def release(self):
+            order.append("release")
+            return self._inner.release()
+
+        def locked(self):
+            return self._inner.locked()
+
+    session.run_lock = _TrackedLock(session.run_lock)
+
+    real_emit = sse_mod.SSEOutputHandler._emit
+
+    def _tracked_emit(self, event):
+        if event.get("type") == "run_complete":
+            order.append("run_complete")
+        return real_emit(self, event)
+
+    monkeypatch.setattr(sse_mod.SSEOutputHandler, "_emit", _tracked_emit)
+
+    with client.stream(
+        "POST", "/v1/email/agent/query", json={"session_id": "s1", "message": "hi"}
+    ) as resp:
+        assert resp.status_code == 200
+        _sse_events(resp)  # drains the stream, so the worker thread has finished
+
+    assert order == ["release", "run_complete"], order
+
+
 # ---------------------------------------------------------------------------
 # Idle-TTL reaper + LRU cap (#2829)
 #

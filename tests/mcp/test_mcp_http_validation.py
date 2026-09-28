@@ -117,7 +117,16 @@ def test_list_tools():
 
 @test("JSON-RPC Initialize", "Test JSON-RPC initialization")
 def test_jsonrpc_initialize():
-    data = {"jsonrpc": "2.0", "id": "test-init", "method": "initialize", "params": {}}
+    data = {
+        "jsonrpc": "2.0",
+        "id": "test-init",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "gaia-http-validation", "version": "1"},
+        },
+    }
     response = make_request("/", method="POST", data=data)
 
     assert "jsonrpc" in response, "Not a valid JSON-RPC response"
@@ -129,8 +138,9 @@ def test_jsonrpc_initialize():
     assert "serverInfo" in result, "Missing server info"
     assert "capabilities" in result, "Missing capabilities"
 
+    assert result["protocolVersion"] == "2025-06-18", "Requested version not echoed"
     caps = result["capabilities"]
-    assert caps.get("tools") is True, "Tools capability not enabled"
+    assert caps == {"tools": {}}, f"Expected only a tools capability object: {caps}"
 
     print(f"   📌 Protocol: {result['protocolVersion']}")
     print(
@@ -151,9 +161,10 @@ def test_jsonrpc_tool_list():
     assert len(tools) > 0, "No tools returned"
 
     # Verify tool structure
-    for tool in tools[:1]:  # Check first tool
+    for tool in tools:
         assert "name" in tool, "Tool missing name"
         assert "description" in tool, "Tool missing description"
+        assert tool["inputSchema"]["type"] == "object", "Tool missing inputSchema"
 
     print(f"   🛠️ {len(tools)} tools available via JSON-RPC")
     return True
@@ -184,15 +195,8 @@ def test_error_unknown_tool():
     }
     response = make_request("/", method="POST", data=data)
 
-    # Should have either error in response or error in result content
-    if "error" in response:
-        print(
-            f"   👍 Properly returned error: {response['error'].get('message', 'Unknown')}"
-        )
-    elif "result" in response:
-        content = json.loads(response["result"]["content"][0]["text"])
-        assert "error" in content, "Should indicate tool error"
-        print(f"   👍 Error handled: {content['error']}")
+    assert response.get("error", {}).get("code") == -32602, response
+    print(f"   👍 Properly returned error: {response['error']['message']}")
     return True
 
 
@@ -217,15 +221,52 @@ def test_direct_llm():
     return True
 
 
-@test("CORS Headers", "Verify CORS support for browser clients")
+@test(
+    "CORS Headers",
+    "Loopback origins are echoed; an Origin-less request gets no wildcard",
+)
 def test_cors():
-    # Test OPTIONS request
-    req = urllib.request.Request(f"{BASE_URL}/", method="OPTIONS")
+    origin = "http://localhost:3000"
+    req = urllib.request.Request(
+        f"{BASE_URL}/", method="OPTIONS", headers={"Origin": origin}
+    )
     with urllib.request.urlopen(req) as response:
         headers = response.headers
-        assert "Access-Control-Allow-Origin" in headers, "Missing CORS origin header"
+        echoed = headers.get("Access-Control-Allow-Origin")
+        assert echoed == origin, f"Loopback origin not echoed: {echoed!r}"
         assert "Access-Control-Allow-Methods" in headers, "Missing CORS methods header"
-        print(f"   🌐 CORS enabled: {headers['Access-Control-Allow-Origin']}")
+        print(f"   🌐 Loopback origin echoed: {origin}")
+
+    # No Origin means no browser cross-origin call (curl, MCP clients, n8n):
+    # it is served, and must never be answered with a wildcard.
+    req = urllib.request.Request(f"{BASE_URL}/", method="OPTIONS")
+    with urllib.request.urlopen(req) as response:
+        acao = response.headers.get("Access-Control-Allow-Origin")
+        assert (
+            acao is None
+        ), f"Origin-less request got Access-Control-Allow-Origin: {acao!r}"
+    return True
+
+
+@test(
+    "CORS - Foreign Origin",
+    "A non-loopback browser origin is refused before any tool runs",
+)
+def test_cors_foreign_origin_refused():
+    req = urllib.request.Request(
+        f"{BASE_URL}/", method="OPTIONS", headers={"Origin": "https://attacker.example"}
+    )
+    try:
+        with urllib.request.urlopen(req) as response:
+            raise AssertionError(
+                f"Foreign origin was served with HTTP {response.status}"
+            )
+    except urllib.error.HTTPError as e:
+        assert e.code == 403, f"Foreign origin got HTTP {e.code}, expected 403"
+        assert (
+            e.headers.get("Access-Control-Allow-Origin") is None
+        ), "Foreign origin was echoed"
+        print("   🛡️  Foreign origin refused with 403")
     return True
 
 
@@ -264,6 +305,8 @@ def run_all_tests():
     test_error_unknown_tool()
     test_direct_llm()
     test_cors()
+
+    test_cors_foreign_origin_refused()
     test_performance()
 
     # Generate report

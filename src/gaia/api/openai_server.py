@@ -17,12 +17,13 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import uuid
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Tuple
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -30,19 +31,21 @@ from gaia.agents.base.api_agent import ApiAgent
 
 from .agent_proxy import build_agent_proxy_router
 from .agent_registry import registry
+from .local_http import build_caller_guard, cors_config
 from .schemas import (
     ChatCompletionChoice,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionResponseMessage,
+    ChatMessage,
     ModelListResponse,
     UsageInfo,
+    message_text,
 )
 
 # Configure logging
 logger = logging.getLogger(__name__)
 _REDACTED_LOG_VALUE = "[redacted]"
-_DEFAULT_LEMONADE_BASE_URL = "http://localhost:13305/api/v1"
 _LEMONADE_HEALTH_TIMEOUT_SECONDS = 0.35
 
 # Set logger level based on debug flag
@@ -63,7 +66,11 @@ def _log_header_summary(headers) -> None:
 
 
 def _log_message_summary(index: int, message) -> None:
-    content_length = len(message.content or "")
+    content = message.content or ""
+    if isinstance(content, list):
+        content_length = sum(len(part.text or "") for part in content)
+    else:
+        content_length = len(content)
     logger.debug("Message %d:", index)
     logger.debug("  Role: %s", message.role)
     logger.debug("  Content: %s (%d chars)", _REDACTED_LOG_VALUE, content_length)
@@ -78,6 +85,73 @@ def _log_request_parameter_summary(request: ChatCompletionRequest) -> None:
     for field_name in ("temperature", "max_tokens", "top_p"):
         value = getattr(request, field_name, None)
         logger.debug("  %s: %s", field_name, "set" if value is not None else "not set")
+
+
+def _split_conversation(messages: List[ChatMessage]) -> Tuple[str, list, str]:
+    """Split a request into (query, prior turns, caller system text).
+
+    The query is the final message, which must come from the user. Every
+    ``system`` / ``developer`` message becomes caller system text; everything
+    else before the query is history in the agent's message format.
+    """
+    system_texts = []
+    turns = []
+    for message in messages:
+        if message.role in ("system", "developer"):
+            text = message_text(message)
+            if text:
+                system_texts.append(text)
+        else:
+            turns.append(message)
+
+    if not any(m.role == "user" for m in turns):
+        raise HTTPException(
+            status_code=400, detail="No user message found in messages array"
+        )
+    if turns[-1].role != "user":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The last message must be a user message, got '{turns[-1].role}'. "
+                "gaia api answers the final user turn."
+            ),
+        )
+    query = message_text(turns[-1])
+    if not query:
+        raise HTTPException(status_code=400, detail="The last user message is empty")
+
+    history = []
+    for message in turns[:-1]:
+        entry = {"role": message.role, "content": message_text(message)}
+        if message.tool_calls:
+            entry["tool_calls"] = message.tool_calls
+        if message.tool_call_id is not None:
+            entry["tool_call_id"] = message.tool_call_id
+        history.append(entry)
+    return query, history, "\n\n".join(system_texts)
+
+
+def _prepare_agent(
+    agent, request: ChatCompletionRequest, history: list, system_text: str
+) -> None:
+    """Load the caller's conversation and sampling settings into the agent."""
+    agent.conversation_history = history
+    if system_text:
+        agent.set_caller_system_prompt(system_text)
+    if history or system_text:
+        # Caller-supplied text, not the user typing this turn.
+        agent.mark_external_content()
+
+    config = agent.chat.config
+    if request.temperature is not None:
+        config.temperature = request.temperature
+    if request.top_p is not None:
+        config.top_p = request.top_p
+    if request.max_tokens is not None:
+        config.max_tokens = request.max_tokens
+        # The agent loop reads its own cap per call and would otherwise ignore
+        # the config value, silently answering at the model default instead.
+        agent.max_output_tokens = request.max_tokens
 
 
 def _prepend_tool_denials(agent, content: str) -> str:
@@ -112,38 +186,6 @@ def _prepend_tool_denials(agent, content: str) -> str:
     return "\n".join(list(denials.values()) + ([content] if content else []))
 
 
-def extract_workspace_root(messages):
-    """
-    Extract workspace root path from GitHub Copilot messages.
-
-    GitHub Copilot includes workspace info in messages like:
-    <workspace_info>
-    I am working in a workspace with the following folders:
-    - /Users/username/path/to/workspace
-    </workspace_info>
-
-    Args:
-        messages: List of ChatMessage objects
-
-    Returns:
-        str: Workspace root path, or None if not found
-    """
-    import re
-
-    for msg in messages:
-        if msg.role == "user" and msg.content:
-            # Look for workspace_info section
-            workspace_match = re.search(
-                r"<workspace_info>.*?following folders:\s*\n\s*-\s*([^\s\n]+)",
-                msg.content,
-                re.DOTALL,
-            )
-            if workspace_match:
-                return workspace_match.group(1).strip()
-
-    return None
-
-
 # Initialize FastAPI app
 app = FastAPI(
     title="GAIA OpenAI-Compatible API",
@@ -151,45 +193,10 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Browser origins allowed by default: localhost/127.0.0.1 on any port.
-_LOCAL_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+# Cross-origin and caller-auth policy live in one place for every GAIA local
+# HTTP server -- see gaia/api/local_http.py.
+app.add_middleware(CORSMiddleware, **cors_config())
 
-
-def _cors_config() -> dict:
-    """Build the CORS policy: localhost-only by default.
-
-    ``GAIA_API_CORS_ORIGINS`` (comma-separated) adds extra allowed origins,
-    e.g. ``https://myapp.example.com``. A literal ``*`` opts into open CORS
-    for all origins, which the Fetch spec forbids combining with credentials
-    — so the wildcard also disables credentialed requests. Wildcard origins
-    WITH credentials are never configured: Starlette would reflect any
-    request Origin, letting any website the user visits call this local,
-    unauthenticated API with credentials.
-    """
-    raw = os.environ.get("GAIA_API_CORS_ORIGINS", "")
-    origins = [o.strip() for o in raw.split(",") if o.strip()]
-    if "*" in origins:
-        logger.warning(
-            "GAIA_API_CORS_ORIGINS='*': allowing all origins WITHOUT "
-            "credentials. To allow credentialed cross-origin calls, list "
-            "explicit origins instead of '*'."
-        )
-        return {
-            "allow_origins": ["*"],
-            "allow_credentials": False,
-            "allow_methods": ["*"],
-            "allow_headers": ["*"],
-        }
-    return {
-        "allow_origins": origins,
-        "allow_origin_regex": _LOCAL_ORIGIN_REGEX,
-        "allow_credentials": True,
-        "allow_methods": ["*"],
-        "allow_headers": ["*"],
-    }
-
-
-app.add_middleware(CORSMiddleware, **_cors_config())
 
 # The email agent's REST surface (POST /v1/email/*) is no longer mounted
 # in-process (#2176). It was the last in-process agent mount after the v2
@@ -245,7 +252,14 @@ async def log_raw_requests(request: Request, call_next):
     return response
 
 
-@app.post("/v1/chat/completions")
+#: Foreign browser origins are refused; the API key is enforced when set and
+#: warned about once when not (mandatory would break every consumer at once).
+_chat_completions_guard = build_caller_guard(
+    "POST /v1/chat/completions", public_paths=frozenset()
+)
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(_chat_completions_guard)])
 async def create_chat_completion(request: ChatCompletionRequest):
     """
     Create chat completion (OpenAI-compatible endpoint).
@@ -261,7 +275,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     Raises:
         HTTPException 404: Model not found
-        HTTPException 400: No user message in request
+        HTTPException 400: No user message, the last message is not from the
+            user, or a content part is not text
 
     Example:
         Non-streaming:
@@ -307,20 +322,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             status_code=404, detail=f"Model '{request.model}' not found"
         )
 
-    # Extract workspace root from messages (for converting relative paths to absolute)
-    workspace_root = extract_workspace_root(request.messages)
-    if _api_debug_enabled() and workspace_root:
-        logger.debug("📁 Extracted workspace root: %s", _REDACTED_LOG_VALUE)
-
-    # Extract user query from messages (get last user message)
-    user_message = next(
-        (m.content for m in reversed(request.messages) if m.role == "user"), None
-    )
-
-    if not user_message:
-        raise HTTPException(
-            status_code=400, detail="No user message found in messages array"
-        )
+    user_message, history, system_text = _split_conversation(request.messages)
 
     # Debug logging: show what we're passing to the agent
     if _api_debug_enabled():
@@ -338,6 +340,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    _prepare_agent(agent, request, history, system_text)
+
     # Handle streaming vs non-streaming
     if request.stream:
         # Debug logging for streaming mode
@@ -345,9 +349,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             logger.debug("🌊 Using STREAMING mode")
 
         return StreamingResponse(
-            create_sse_stream(
-                agent, user_message, request.model, workspace_root=workspace_root
-            ),
+            create_sse_stream(agent, user_message, request.model),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -360,8 +362,9 @@ async def create_chat_completion(request: ChatCompletionRequest):
         if _api_debug_enabled():
             logger.debug("📦 Using NON-STREAMING mode")
 
-        # Process query synchronously with workspace root
-        result = agent.process_query(user_message, workspace_root=workspace_root)
+        # Keep synchronous agent work from blocking health checks and other
+        # requests handled by the event loop.
+        result = await asyncio.to_thread(agent.process_query, user_message)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
@@ -400,11 +403,14 @@ async def create_chat_completion(request: ChatCompletionRequest):
         content = _prepend_tool_denials(agent, content)
 
         # Estimate tokens
+        prompt_text = "\n".join(
+            [system_text, *(m["content"] for m in history), user_message]
+        )
         if isinstance(agent, ApiAgent):
-            prompt_tokens = agent.estimate_tokens(user_message)
+            prompt_tokens = agent.estimate_tokens(prompt_text)
             completion_tokens = agent.estimate_tokens(content)
         else:
-            prompt_tokens = len(user_message) // 4
+            prompt_tokens = len(prompt_text) // 4
             completion_tokens = len(content) // 4
 
         return ChatCompletionResponse(
@@ -430,20 +436,20 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
 
 
-async def create_sse_stream(
-    agent, query: str, model: str, workspace_root: str = None
-) -> AsyncGenerator[str, None]:
+async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str, None]:
     """
     Create Server-Sent Events stream for chat completion.
 
     This function processes the agent query in a thread pool (to avoid blocking)
     and streams agent progress events in real-time via the SSEOutputHandler.
 
+    If the client disconnects, the agent is told to stop. If the agent raises,
+    the stream ends with an ``{"error": ...}`` chunk and ``data: [DONE]``.
+
     Args:
         agent: Agent instance (with SSEOutputHandler)
         query: User query string
         model: Model ID
-        workspace_root: Optional workspace root path for absolute file paths
 
     Yields:
         SSE-formatted chunks with "data: " prefix
@@ -490,11 +496,14 @@ async def create_sse_stream(
         agent, "console", None
     )
 
+    cancel_event = threading.Event()
+    agent._cancel_event = cancel_event
+    task = None
+    failure = None
+
     try:
         # Start processing in background
-        task = loop.run_in_executor(
-            None, lambda: agent.process_query(query, workspace_root=workspace_root)
-        )
+        task = loop.run_in_executor(None, lambda: agent.process_query(query))
 
         # Stream events as they are generated
         while not task.done():
@@ -609,10 +618,30 @@ async def create_sse_stream(
             )
             logger.debug("=" * 80)
 
-    except Exception as e:
-        # Log and re-raise errors
+    except Exception as e:  # noqa: BLE001 - reported to the client in-band below
         logger.error(f"❌ Agent query processing failed: {e}", exc_info=True)
-        raise
+        failure = e
+    finally:
+        # A client disconnect cancels this generator; the worker thread keeps
+        # running unless told to stop.
+        if task is not None and not task.done():
+            logger.info("Stream %s ended early; stopping the agent", completion_id)
+            cancel_event.set()
+            handler_cancelled = getattr(output_handler, "cancelled", None)
+            if handler_cancelled is not None:
+                handler_cancelled.set()
+
+    if failure is not None:
+        # Headers are already sent, so the status can't change; say it in-band.
+        error_chunk = {
+            "error": {
+                "message": str(failure) or type(failure).__name__,
+                "type": "server_error",
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
     # Final chunk with finish_reason
     final_chunk = {
@@ -703,7 +732,12 @@ async def health_check():
 
 
 async def _lemonade_health():
-    base_url = os.getenv("LEMONADE_BASE_URL", _DEFAULT_LEMONADE_BASE_URL).rstrip("/")
+    from gaia.llm.lemonade_client import (
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+
+    base_url = resolve_lemonade_base_url().rstrip("/")
     if not base_url.endswith("/api/v1"):
         base_url = f"{base_url}/api/v1"
 
@@ -713,7 +747,7 @@ async def _lemonade_health():
         "model": None,
         "url": base_url,
     }
-    api_key = os.getenv("LEMONADE_API_KEY", "").strip()
+    api_key = resolve_lemonade_api_key(base_url=base_url)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     try:

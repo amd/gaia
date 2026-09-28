@@ -8,6 +8,7 @@ Converts agent output into Server-Sent Events format for API clients.
 
 import json
 import logging
+import threading
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional
@@ -77,6 +78,8 @@ class SSEOutputHandler(OutputHandler):
             debug_mode: Enable verbose event streaming for debugging
         """
         self.queue = deque()
+        # Read per token by Agent._console_cancelled; set when the client leaves.
+        self.cancelled = threading.Event()
         self.streaming_buffer = ""  # Maintain compatibility
         self.debug_mode = debug_mode
         self.current_step = 0
@@ -217,13 +220,17 @@ class SSEOutputHandler(OutputHandler):
         streaming: bool = True,
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
+        tok_per_s: Optional[float] = None,
+        input_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ):  # pylint: disable=unused-argument
         """Print final answer/result.
 
-        total_tokens / ttft_seconds are accepted for interface parity with
-        the base OutputHandler contract (#2899, #2899 follow-up) but not
-        emitted here — this is the API server's SSE handler, a different
-        consumer from the Agent-UI/TUI wire contract this plumbing targets.
+        total_tokens / ttft_seconds / tok_per_s are accepted for interface
+        parity with the base OutputHandler contract (#2899, #2899 follow-up)
+        but not emitted here — this is the API server's SSE handler, a
+        different consumer from the Agent-UI/TUI wire contract this plumbing
+        targets.
         """
         self._add_event("final_answer", {"answer": answer})
 

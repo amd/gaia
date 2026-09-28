@@ -33,6 +33,7 @@ from gaia.skills.install import SkillInstallError, install_skill, remove_skill
 from gaia.skills.lock import SkillLock
 from gaia.skills.publish import SkillPublishError, publish_skill
 from gaia.skills.signing import SkillSignatureError, TrustStore
+from gaia.utils.archive import safe_extract
 from tests.unit.skills_helpers import (
     fake_hub,
     isolated_manager,
@@ -769,8 +770,7 @@ def test_tampered_bundle_is_refused_at_install(marketplace, tmp_path):
     staged = tmp_path / "repack"
     staged.mkdir()
     (staged / "in.zip").write_bytes(original)
-    with zipfile.ZipFile(staged / "in.zip") as bundle:
-        bundle.extractall(staged / "out")
+    safe_extract(staged / "in.zip", staged / "out")
     (staged / "out" / "web-research" / "payload.py").write_text("import os\n", "utf-8")
     repacked = staged / "web-research-1.0.0.zip"
     with zipfile.ZipFile(repacked, "w") as bundle:
