@@ -2532,7 +2532,16 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		// edge. On a 200-column terminal the pane measure ran the question out
 		// to 196 columns above an answer capped at 88, so the pair looked like
 		// two unrelated blocks.
-		return userStyle.Render(m.wrapProse("▶ You: " + msg.Content))
+		//
+		// Continuations hang under the TEXT, not column 0: flush left, a wrapped
+		// question's second line read as stray output under it.
+		const prefix = "▶ You: "
+		indent := strings.Repeat(" ", displayWidth(prefix))
+		body := msg.Content
+		if m.width > 0 {
+			body = components.WrapText(body, m.answerWidth()-displayWidth(prefix))
+		}
+		return userStyle.Render(prefix + strings.ReplaceAll(body, "\n", "\n"+indent))
 
 	case RoleAssistant:
 		content := msg.Content

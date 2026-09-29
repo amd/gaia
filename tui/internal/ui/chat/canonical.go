@@ -604,17 +604,27 @@ func toolResultSucceeded(data json.RawMessage) bool {
 		return true
 	}
 	var probe struct {
-		OK      *bool `json:"ok"`
-		Success *bool `json:"success"`
+		OK            *bool `json:"ok"`
+		Success       *bool `json:"success"`
+		ReturnCode    *int  `json:"return_code"`
+		CommandOutput *struct {
+			ReturnCode *int `json:"return_code"`
+		} `json:"command_output"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return true
 	}
-	if probe.OK != nil {
-		return *probe.OK
+	if probe.OK != nil && !*probe.OK || probe.Success != nil && !*probe.Success {
+		return false
 	}
-	if probe.Success != nil {
-		return *probe.Success
+	// A shell tool reports success when the command RAN, whatever it
+	// returned — so pytest exiting 2 drew as a passed step. The exit code is
+	// the command's own verdict.
+	if rc := probe.ReturnCode; rc != nil && *rc != 0 {
+		return false
+	}
+	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 {
+		return false
 	}
 	return true
 }

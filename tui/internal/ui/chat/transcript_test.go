@@ -553,3 +553,53 @@ func TestTheFrameFillsTheWindowExactly(t *testing.T) {
 		t.Errorf("with a confirmation up the frame is %d rows of 30", got)
 	}
 }
+
+// The live drive: pytest exited 2 and the step read "└ exit 2" in the success
+// colour, because the shell tool reports success for a command that ran.
+func TestANonZeroExitIsAFailedStep(t *testing.T) {
+	for _, data := range []string{
+		`{"success":true,"command_output":{"return_code":2,"stdout":"","stderr":"E   SyntaxError"}}`,
+		`{"success":true,"return_code":1}`,
+	} {
+		m := feed(t, sizedChat(t, 120, 40),
+			shellCall("python -m pytest -q"),
+			event.CanonicalToolResultEvent{
+				Type: "tool_result", Tool: "run_shell_command",
+				Preview: "exit 2: E   SyntaxError", Data: json.RawMessage(data),
+			},
+		)
+		item := m.activity[len(m.activity)-1]
+		if item.Success == nil || *item.Success {
+			t.Errorf("%s: a non-zero exit ticked as a success", data)
+		}
+		if !strings.HasPrefix(item.Detail, "failed") {
+			t.Errorf("%s: the outcome must say it failed in words: %q", data, item.Detail)
+		}
+	}
+	m := feed(t, sizedChat(t, 120, 40), shellCall("ls"), event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "run_shell_command", Preview: "exit 0 · 3 lines",
+		Data: json.RawMessage(`{"success":true,"command_output":{"return_code":0}}`),
+	})
+	if item := m.activity[len(m.activity)-1]; item.Success == nil || !*item.Success {
+		t.Error("a zero exit must stay a success")
+	}
+}
+
+// A long or multi-line question wrapped flush to column 0, so its second line
+// read as stray output under it. Every continuation hangs under the text.
+func TestAWrappedQuestionHangsUnderItsText(t *testing.T) {
+	m := sizedChat(t, 60, 30)
+	msg := Message{Role: RoleUser, Content: strings.Repeat("parse_updated rejects a lowercase z ", 4) + "\nsecond line typed with Alt+Enter"}
+	rows := strings.Split(ansi.Strip(m.renderMessage(&msg, nil)), "\n")
+	if len(rows) < 3 {
+		t.Fatalf("expected the question to wrap, got %q", rows)
+	}
+	for i, r := range rows[1:] {
+		if !strings.HasPrefix(r, "       ") || strings.TrimSpace(r) == "" {
+			t.Errorf("continuation %d is not under the text: %q", i+1, r)
+		}
+		if w := ansi.StringWidth(r); w > m.answerWidth() {
+			t.Errorf("continuation %d is %d columns, wider than the answer measure", i+1, w)
+		}
+	}
+}
