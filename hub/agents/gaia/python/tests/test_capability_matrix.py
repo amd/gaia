@@ -266,6 +266,7 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
         "gaia_skills_lifecycle",
         "gaia_skills_tasks",
         "gaia_tool_selection",
+        "gaia_voice",
         "gaia_web",
     ]
     assert capability_matrix.EVAL_FOLLOWUP_PLAN.strip()

@@ -1,0 +1,60 @@
+id: voice_t2_why_goes_deeper
+name: "Voice — \"Why?\" Follow-ups Get Deeper, More Technical Answers"
+category: gaia_voice
+severity: high
+tags: [t2_compound]
+description: |
+  A short everyday answer first, then two follow-ups that ask for more. Each
+  follow-up must go a level deeper — mechanism, then the actual numbers —
+  without re-pasting the earlier answer. Depth is on request, so turn 1
+  stays short.
+  Counting rule: a sentence ends in . ! or ?; each bullet or numbered line
+  counts as one sentence; one closing offer of more detail does not count.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention, so no style preference stored by an earlier scenario shapes this one; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask why the sky is blue"
+    user_message: "why is the sky blue?"
+    ground_truth:
+      expected_behavior: "Short plain answer: sunlight hits the air and blue light gets scattered around the sky more than other colours"
+    success_criteria: |
+      Plain-English answer about blue light being scattered more by the air.
+      FAIL if the reply exceeds 3 sentences or 70 words, or contains an
+      equation or a wavelength number. FAIL if it names an internal tool
+      (search_web, fetch_page, query_documents) or contains "Verification:",
+      "Worth noting", "In summary" or "Great question".
+
+  - turn: 2
+    objective: "Ask why — wants the mechanism"
+    user_message: "why though? what's actually happening to the light?"
+    ground_truth:
+      expected_answer: "Rayleigh scattering: molecules much smaller than the light's wavelength scatter short wavelengths far more strongly; the sky isn't violet because sunlight has less violet and our eyes are less sensitive to it"
+    success_criteria: |
+      Must name Rayleigh scattering (or describe scattering by particles much
+      smaller than the wavelength) AND say shorter wavelengths scatter more
+      strongly. Must be clearly deeper than turn 1: longer than turn 1 and at
+      least 60 words. FAIL if it only rephrases turn 1, or exceeds 250 words.
+      Explaining why the sky isn't violet (less violet in sunlight, eyes less
+      sensitive to it) is a plus, not required.
+
+  - turn: 3
+    objective: "Ask for the technical details — the actual numbers"
+    user_message: "ok give me the technical details. how much more does blue scatter than red?"
+    ground_truth:
+      expected_answer: "Scattering ∝ 1/λ⁴; blue (~450 nm) vs red (~700 nm) gives (700/450)^4 ≈ 5.5–6x"
+    success_criteria: |
+      Must state the inverse-fourth-power law (intensity ∝ 1/λ⁴, λ^-4, or
+      "fourth power of the wavelength") AND give a blue-vs-red ratio between
+      4x and 10x together with the wavelengths it used. FAIL if the ratio is
+      missing or outside 4-10x, if the fourth-power relation is missing, or
+      if it restates turns 1-2 at length instead of adding the numbers.
+
+expected_outcome: |
+  Depth scales with the ask: a short plain answer, then the mechanism, then
+  the law and the numbers.

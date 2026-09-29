@@ -1,0 +1,60 @@
+id: voice_t2_tell_me_more_cache
+name: "Voice — \"Tell Me More\" Escalates from Plain to Technical"
+category: gaia_voice
+severity: high
+tags: [t2_compound]
+description: |
+  A plain yes/no answer, then "tell me more", then "give me the technical
+  details". Each turn must add something the previous one didn't, and the
+  final turn must carry real technical specifics (header names, status
+  codes).
+  Counting rule: a sentence ends in . ! or ?; each bullet or numbered line
+  counts as one sentence; one closing offer of more detail does not count.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention, so no style preference stored by an earlier scenario shapes this one; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask whether clearing the browser cache is safe"
+    user_message: "is it safe to clear my browser cache?"
+    ground_truth:
+      expected_behavior: "Yes, it's safe; pages may load a bit slower the first time afterwards"
+    success_criteria: |
+      Says yes, it's safe. FAIL if the reply exceeds 3 sentences or 60 words,
+      or mentions HTTP header names, status codes, or file paths. FAIL if it
+      names an internal tool (search_web, fetch_page, run_shell_command) or
+      contains "Verification:", "Worth noting", "In summary" or
+      "Great question".
+
+  - turn: 2
+    objective: "Ask to hear more — still a lay user"
+    user_message: "tell me more — what's actually in it and what happens when i clear it?"
+    ground_truth:
+      expected_behavior: "Saved copies of images, scripts and page files so sites load faster; clearing means they're downloaded again; cookies and logins are separate and only go if you also clear cookies"
+    success_criteria: |
+      Must say what the cache holds (saved copies of images/files from
+      websites) and what clearing does (sites download them again, first
+      loads are slower) AND distinguish the cache from cookies/saved logins.
+      Must be longer than turn 1. FAIL if cookies/logins aren't
+      distinguished, if it exceeds 200 words, or if it jumps to HTTP header
+      names (that is turn 3's level).
+
+  - turn: 3
+    objective: "Ask for the technical details"
+    user_message: "give me the technical details — how does the browser decide what to cache and for how long?"
+    ground_truth:
+      expected_answer: "Server response headers: Cache-Control (max-age, no-store, no-cache) and Expires; revalidation via ETag / If-None-Match or Last-Modified / If-Modified-Since, answered with 304 Not Modified"
+    success_criteria: |
+      Must name Cache-Control (with at least one directive such as max-age,
+      no-store or no-cache) AND at least one revalidation mechanism (ETag,
+      Last-Modified, If-None-Match, If-Modified-Since, or 304 Not Modified).
+      FAIL if either is missing, or if the answer is a plain-English rehash
+      of turn 2 with no header names.
+
+expected_outcome: |
+  The agent reads "tell me more" and "technical details" as requests for a
+  deeper level and delivers exactly that level each time.

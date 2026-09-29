@@ -41,7 +41,7 @@
     },
     {
       "lane": "gaia-code",
-      "categories": ["gaia_core", "gaia_files", "gaia_code"]
+      "categories": ["gaia_core", "gaia_files", "gaia_code", "gaia_voice"]
     },
     {
       "lane": "gaia-tools",

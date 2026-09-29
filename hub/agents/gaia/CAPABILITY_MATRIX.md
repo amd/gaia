@@ -75,7 +75,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 - Eval suites: **2**
   - `perf`: enforce=False, acceptance_enforce=None
   - `quality`: enforce=True, acceptance_enforce=None
-- Judged scenario categories (`eval/scenarios/gaia_*`): **13**
+- Judged scenario categories (`eval/scenarios/gaia_*`): **14**
   - `gaia_code`
   - `gaia_core`
   - `gaia_data`
@@ -88,6 +88,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `gaia_skills_lifecycle`
   - `gaia_skills_tasks`
   - `gaia_tool_selection`
+  - `gaia_voice`
   - `gaia_web`
 
 ## MCP Scope Decision

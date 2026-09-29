@@ -1,0 +1,49 @@
+id: voice_t1_plain_tech_help
+name: "Voice — Tech Help for a Non-Engineer Stays in Plain English"
+category: gaia_voice
+severity: high
+tags: [t1_basic]
+description: |
+  Everyday computer questions from a user who never uses technical words.
+  Answers stay within three sentences and use words a non-engineer follows:
+  no acronyms, commands, file paths or tool names.
+  Counting rule for every turn: a sentence ends in . ! or ?; each bullet or
+  numbered line counts as one sentence; one closing offer of more detail
+  ("Want the details?") is allowed and does not count toward the cap.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention, so no style preference stored by an earlier scenario shapes this one; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask about wifi dropping"
+    user_message: "my wifi keeps cutting out at home, what should i try first?"
+    ground_truth:
+      expected_behavior: "One or two simple first steps in plain words, e.g. restart the router, move closer to it"
+    success_criteria: |
+      Leads with a concrete first thing to try (e.g. restart / unplug the
+      router, move closer). FAIL if the reply exceeds 3 sentences or 75
+      words. FAIL if it uses any of these without a plain-words explanation:
+      DHCP, SSID, DNS, MTU, IP address, firmware, "802.11", "2.4 GHz",
+      "5 GHz", "channel". FAIL if it includes a command, a file path, or an
+      internal tool name (search_web, fetch_page, run_shell_command,
+      read_file), or contains "Verification:", "Worth noting", "In summary",
+      "Great question" or a status label such as "Status:".
+
+  - turn: 2
+    objective: "Ask whether a common cleanup is safe"
+    user_message: "is it ok to empty the recycle bin or will that break something?"
+    ground_truth:
+      expected_behavior: "Yes, it's safe; it only permanently deletes what's already in the bin, so check nothing you need is in there first"
+    success_criteria: |
+      Says yes, it is safe, and gives the one caveat that matters (anything
+      in the bin is gone for good). FAIL if the reply exceeds 3 sentences or
+      60 words, or contains a command, a file path (e.g. "$Recycle.Bin",
+      a drive letter like "C:"), a tool name, or any banned footer/label from turn 1.
+
+expected_outcome: |
+  Tech questions from a non-technical user get short, jargon-free answers
+  they can act on.
