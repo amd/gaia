@@ -528,11 +528,14 @@ rarely and in batches:
 
 `GAIA_CONTEXT_EVICTION`, `GAIA_EVICT_THRESHOLD`, `GAIA_EVICT_KEEP` and
 `GAIA_EVICT_MIN_BATCH` override the four settings; a malformed value is an
-error at construction. Once evicted, a result stays evicted, so the prefix is
-deterministic afterwards. `read_tool_output` pages and `delegate_task` results
-are never evicted, and user and assistant messages are never changed. Each
-batch adds `evicted_results` and `evicted_tokens_est` to that step's `stats`
-entry in the conversation log and logs one info line.
+error at construction. Eligibility is judged from each result's own text (a
+stub already, or not), never a remembered id — a result the turn log replays
+at full size on a later turn (the log always keeps the pre-eviction copy) is
+judged fresh, so a long session keeps getting evicted rather than drifting
+back to full size after its first turn. `read_tool_output` pages and
+`delegate_task` results are never evicted, and user and assistant messages
+are never changed. Each batch adds `evicted_results` and `evicted_tokens_est`
+to that step's `stats` entry in the conversation log and logs one info line.
 
 ## Common Pitfalls and Solutions
 

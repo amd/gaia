@@ -11,8 +11,11 @@ Every eviction changes the prompt prefix, so the next call re-reads everything
 after it uncached once. The policy therefore fires rarely: only when the last
 measured prompt is over ``threshold_tokens``, only for results older than
 ``keep_steps`` steps, and only when those add up to ``min_batch_tokens`` --
-then all of them go in one batch. Once evicted, a result stays evicted, so the
-prefix is deterministic afterwards.
+then all of them go in one batch. Eligibility is decided from each message's
+own text (already a stub, or not), not a remembered id: a result replayed at
+full size from conversation history on a later turn -- the turn log keeps the
+pre-eviction copy, so history always replays results whole -- is eligible
+again once it re-ages past ``keep_steps``.
 """
 
 from __future__ import annotations
@@ -45,6 +48,12 @@ NEVER_EVICTED_TOOLS = frozenset({"read_tool_output", "delegate_task"})
 
 _SUMMARY_VALUE_CHARS = 40
 _SUMMARY_CHARS = 100
+
+#: Marks a message as already evicted. Checked against the message's own
+#: text rather than a remembered id: history keeps the pre-eviction copy, so
+#: a result replayed on a later turn comes back full-size under its original
+#: tool_call_id and must be judged fresh, not skipped as "already done".
+_EVICTED_STUB_PREFIX = "[evicted: "
 
 
 def context_eviction_from_env() -> Optional[str]:
@@ -205,10 +214,16 @@ class ContextEvictor:
         self.live_tokens = 0
         self.total_evicted = 0
         self._result_step: Dict[str, int] = {}
-        self._evicted: set = set()
 
     def begin_turn(self) -> None:
-        """Steps restart per turn; evictions carry over."""
+        """Steps restart per turn; evictions carry over via each stub's own text.
+
+        Clearing ``_result_step`` means a result replayed from history (still
+        full text -- the turn log keeps the pre-eviction copy) gets a fresh
+        ``keep_steps`` grace window rather than resuming its true age. That
+        only delays re-eviction by a turn or two; it never prevents it, since
+        eligibility is now decided from the message's own text.
+        """
         self.live_tokens = 0
         self._result_step.clear()
 
@@ -240,13 +255,16 @@ class ContextEvictor:
             key = call_id if isinstance(call_id, str) else f"#{i}"
             if key not in self._result_step:
                 self._result_step[key] = step - 1
-            if key in self._evicted or message.get("name") in NEVER_EVICTED_TOOLS:
+            text = _message_text(message)
+            if (
+                message.get("name") in NEVER_EVICTED_TOOLS
+                or text is None
+                or text.startswith(_EVICTED_STUB_PREFIX)
+            ):
                 continue
             if step - self._result_step[key] <= self.keep_steps:
                 continue
-            text = _message_text(message)
-            if text is not None:
-                candidates.append((i, key, text))
+            candidates.append((i, key, text))
         if self.live_tokens <= self.threshold_tokens or not candidates:
             return None
         batch_tokens = sum(estimate_tokens(text) for _, _, text in candidates)
@@ -267,12 +285,12 @@ class ContextEvictor:
                 fetch = f"read_tool_output(artifact={handle}, offset=0, limit=8000)"
             summary = _arg_summary(arguments.get(key, ""))
             stub = (
-                f"[evicted: {name} {summary}; {len(text)} chars; {fetch} fetches it]"
+                f"{_EVICTED_STUB_PREFIX}{name} {summary}; {len(text)} chars; "
+                f"{fetch} fetches it]"
                 if summary
-                else f"[evicted: {name}; {len(text)} chars; {fetch} fetches it]"
+                else f"{_EVICTED_STUB_PREFIX}{name}; {len(text)} chars; {fetch} fetches it]"
             )
             messages[i] = {**message, "content": [{"type": "text", "text": stub}]}
-            self._evicted.add(key)
 
         self.total_evicted += len(candidates)
         self.live_tokens = max(0, self.live_tokens - batch_tokens)

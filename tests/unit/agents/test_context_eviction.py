@@ -127,6 +127,11 @@ def _script(calls: int):
     return [_native_call(n) for n in range(1, calls + 1)] + [_ANSWER]
 
 
+def _script_from(start: int, calls: int):
+    """A script whose tool-call ids and paths don't collide with another turn's."""
+    return [_native_call(n) for n in range(start, start + calls)] + [_ANSWER]
+
+
 def _tool_texts(messages):
     return [m["content"][0]["text"] for m in messages if m.get("role") == "tool"]
 
@@ -229,6 +234,37 @@ def test_nothing_is_evicted_under_the_threshold():
     agent.process_query("read the files")
 
     assert _tool_texts(sent[-1]) == [_full(n) for n in range(1, 8)]
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_eviction_still_fires_in_a_second_turn_on_replayed_history():
+    """A result stubbed in turn 1 is replayed at full size in turn 2 (the turn
+    log always keeps the pre-eviction copy) under its original tool_call_id;
+    it must be judged fresh rather than skipped as already handled, or a
+    session's context stops shrinking after its first eviction."""
+    agent = _make_agent(
+        context_eviction="on",
+        context_eviction_threshold_tokens=_THRESHOLD,
+        context_eviction_keep_steps=_KEEP,
+        context_eviction_min_batch_tokens=_MIN_BATCH,
+    )
+
+    _stub_chat(agent, _script(7))
+    result1 = agent.process_query("read the first batch of files")
+    # The turn log never sees a stub, even though eviction fired mid-turn.
+    assert all(
+        not t.startswith("[evicted:") for t in _tool_texts(result1["model_messages"])
+    )
+    assert any("evicted_results" in s for s in _stats_entries(result1))
+
+    # A new turn on a session-persisted agent replays turn 1's history whole.
+    agent.conversation_history = result1["model_messages"]
+    sent2 = _stub_chat(agent, _script_from(8, 7))
+    result2 = agent.process_query("read a second batch of files")
+
+    assert any("evicted_results" in s for s in _stats_entries(result2))
+    turn1_results = _tool_texts(sent2[-1])[:7]
+    assert all(t.startswith("[evicted:") for t in turn1_results), turn1_results
 
 
 # ---------------------------------------------------------------------------
