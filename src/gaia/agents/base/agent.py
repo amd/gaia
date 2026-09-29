@@ -62,6 +62,7 @@ from gaia.agents.base.extraction import (
     extraction_response_format,
     read_snapshot,
 )
+from gaia.agents.base.look_first import LOOK_FIRST_PROMPT, named_workspace_paths
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -910,6 +911,9 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
         return "narration"
     return None
 
+
+#: Any one of these lets the agent look at a file the request names.
+_LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 
 # Fabricated-save guard (#4010): a final answer that asserts a file was
 # written when no write tool ran this turn.
@@ -6804,6 +6808,7 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        look_first_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         cut_off_continuations = 0
@@ -8743,6 +8748,31 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     continue
+
+                # An answer about named workspace files that never opened one.
+                if (
+                    not look_first_reprompted
+                    and not tool_call_log
+                    and steps_taken < steps_limit - 1
+                    and any(name in self._tools_registry for name in _LOOK_TOOLS)
+                ):
+                    unlooked = named_workspace_paths(
+                        getattr(self, "_original_user_input", None) or user_input,
+                        os.getcwd(),
+                    )
+                    if unlooked:
+                        look_first_reprompted = True
+                        logger.info(
+                            "[WORKFLOW] Answer named %s without a tool call; asking "
+                            "the agent to look first",
+                            unlooked,
+                        )
+                        correction = LOOK_FIRST_PROMPT.format(
+                            paths=", ".join(f"`{p}`" for p in unlooked[:3])
+                        )
+                        messages.append({"role": "user", "content": correction})
+                        conversation.append({"role": "user", "content": correction})
+                        continue
 
                 # Universal planning-text guard: catch any short response that is
                 # only an intent sentence ("I'll check...", "Let me query...") with
