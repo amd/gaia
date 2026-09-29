@@ -278,8 +278,8 @@ func TestSetupNoticesExistingEnvironmentKey(t *testing.T) {
 	if !strings.Contains(view, "environment key is already active") {
 		t.Fatal("existing environment key was not surfaced to the user", view)
 	}
-	if !strings.Contains(m.fields[3].Placeholder, "environment key") {
-		t.Fatal("key field placeholder does not mention the environment key", m.fields[3].Placeholder)
+	if m.fields[3].Placeholder != "A key is already set — Enter connects" {
+		t.Fatal("key field placeholder does not say a key is set", m.fields[3].Placeholder)
 	}
 }
 
