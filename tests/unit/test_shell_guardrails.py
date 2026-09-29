@@ -900,6 +900,56 @@ class TestNewlineSeparatesSegmentsUnderBypass:
         assert check('echo "a\nb"', bypass=True) is None
 
 
+class TestHeredocUnderBypass:
+    """A heredoc body is input to the command that opened it, not a command.
+
+    Full access still refused `python3 - <<'EOF'` outright: the body was
+    walked as if it were more shell text, so an apostrophe inside it broke
+    tokenising and a stray `;` fractured the heredoc into extra segments the
+    gates then evaluated as their own commands."""
+
+    def test_a_heredoc_runs_instead_of_being_refused(self):
+        command = "python3 - <<'EOF'\nprint(1 + 1)\nEOF"
+        assert check(command, bypass=True) is None
+
+    def test_an_apostrophe_in_the_body_does_not_break_tokenising(self):
+        command = "python3 - <<'EOF'\nprint('hi')\nEOF"
+        assert check(command, bypass=True) is None
+
+    def test_a_semicolon_in_the_body_stays_inside_the_heredoc(self):
+        # Before the fix, `_split_connectors` read this `;` as ending the
+        # heredoc and starting a new command, so the body's second half was
+        # walked as its own (nonsensical) invocation.
+        command = "python3 - <<'EOF'\nimport os; os.getcwd()\nEOF"
+        assert check(command, bypass=True) is None
+        _, steps = _Shell(True)._validate_shell_command(command)
+        assert len(steps) == 1
+
+    def test_body_text_is_not_walked_as_the_binary_it_names(self):
+        # 'rm' is deliberately excluded from the developer set (#3374); if the
+        # body were tokenised as commands, this would be refused for it.
+        command = "python3 - <<'EOF'\nprint('rm -rf /tmp/x')\nEOF"
+        assert check(command, bypass=True) is None
+
+    def test_the_executed_step_still_carries_the_real_body(self):
+        # The gates may not see the body, but the shell that actually runs
+        # the step must — stripping is for validation only.
+        command = "python3 - <<'EOF'\nprint(1 + 1)\nEOF"
+        _, steps = _Shell(True)._validate_shell_command(command)
+        assert len(steps) == 1
+        assert "print(1 + 1)" in steps[0].text
+
+    def test_a_heredoc_is_still_refused_outside_full_access(self):
+        command = "python3 - <<'EOF'\nprint(1 + 1)\nEOF"
+        assert check(command, bypass=False) is not None
+
+    def test_an_unterminated_heredoc_is_refused_not_silently_passed(self):
+        # No closing delimiter: the gates cannot know where the body ends, so
+        # they must see the text and refuse it rather than guess.
+        command = "python3 - <<'EOF'\nprint(1 + 1)"
+        assert check(command, bypass=True) is not None
+
+
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
     """The find/sort/uniq/git/PowerShell guards all encode "this binary may not
     write" — the exact assumption bypass mode drops. Each must still hold with

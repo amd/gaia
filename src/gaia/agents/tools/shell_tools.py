@@ -921,6 +921,95 @@ _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 _BYPASS_PUNCTUATION = ";&|<>\n"
 
 
+def _heredoc_start(line: str) -> Optional[tuple]:
+    """``(delimiter, strip_tabs)`` for the heredoc *line* opens, else None.
+
+    Tokenised with the same lexer the gates use, so a ``<<`` inside quotes is
+    data and ``<<<`` (a here-string, no body) never opens one.
+    """
+    try:
+        tokens = _tokenize(line, bypass_gates=True)
+    except ValueError:
+        return None
+    for index, token in enumerate(tokens):
+        if token not in ("<<", "<<-") or index + 1 >= len(tokens):
+            continue
+        word = tokens[index + 1]
+        strip_tabs = token == "<<-"
+        if word == "-" and index + 2 < len(tokens):
+            word, strip_tabs = tokens[index + 2], True
+        elif word.startswith("-") and len(word) > 1:
+            word, strip_tabs = word[1:], True
+        if word and all(ch not in _BYPASS_PUNCTUATION for ch in word):
+            return word, strip_tabs
+    return None
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """*command* with every heredoc body removed.
+
+    A body is input to the command that opened it, not a command, so the gates
+    must not walk ``print(1+1)`` as a binary or choke on an apostrophe in it.
+    Only the text used to pick out which binaries run is affected — the caller
+    keeps the original for the step it actually executes. An unterminated body
+    is left in place, so the gates see it and refuse what they cannot parse.
+    """
+    if "<<" not in command:
+        return command
+    kept: list = []
+    lines = command.split("\n")
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        kept.append(line)
+        index += 1
+        opened = _heredoc_start(line)
+        if opened is None:
+            continue
+        word, strip_tabs = opened
+        end = index
+        while end < len(lines):
+            body_line = lines[end].lstrip("\t") if strip_tabs else lines[end]
+            if body_line == word:
+                break
+            end += 1
+        if end == len(lines):
+            kept.extend(lines[index:])
+            break
+        index = end + 1
+    return "\n".join(kept)
+
+
+def _mask_heredoc_connectors(command: str) -> str:
+    """*command* with ``;``, ``&``, ``|`` inside heredoc bodies neutralised.
+
+    ``_split_connectors`` cannot tell a heredoc body from three chained
+    commands — ``python3 - <<'EOF'\\nimport os; os.getcwd()\\nEOF`` would
+    otherwise fracture mid-script. Masking is position-preserving (same
+    length, same lines, quotes untouched) so a split point found here is
+    valid on the original command too.
+    """
+    if "<<" not in command:
+        return command
+    lines = command.split("\n")
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        opened = _heredoc_start(line)
+        if opened is None:
+            continue
+        word, strip_tabs = opened
+        while index < len(lines):
+            body_line = lines[index].lstrip("\t") if strip_tabs else lines[index]
+            if body_line == word:
+                break
+            for ch in ";&|":
+                lines[index] = lines[index].replace(ch, "x")
+            index += 1
+    return "\n".join(lines)
+
+
 def _tokenize(command: str, bypass_gates: bool = False) -> list:
     """Split *command* into argv tokens.
 
@@ -1054,7 +1143,7 @@ _CONNECTORS = ("&&", "||", ";")
 _COMMAND_NOT_FOUND = 127
 
 
-def _split_connectors(command: str) -> list:
+def _split_connectors(command: str, scan: Optional[str] = None) -> list:
     """``a && b; c`` as ``[("a", ""), (" b", "&&"), (" c", ";")]``.
 
     Each connector travels with the pipeline it gates, so the first is always
@@ -1066,18 +1155,25 @@ def _split_connectors(command: str) -> list:
     Single quotes deliberately do not protect an operator, because cmd.exe does
     not honour them: ``grep 'a||b' f`` splits here and dies on the unbalanced
     quote, rather than reaching cmd.exe as two commands one of them never saw.
+
+    *scan* decides where operators and quotes fall; *command* supplies the
+    text each part returns. They differ only under full access, where
+    ``_mask_heredoc_connectors`` has neutralised the operator characters
+    inside a heredoc body so it cannot fracture the command that opened it —
+    same length, same quotes, so an offset found in one slices the other.
     """
-    honour_quotes = command.count('"') % 2 == 0
+    scan = command if scan is None else scan
+    honour_quotes = scan.count('"') % 2 == 0
     parts: list = []
     start = 0
     connector = ""
     quoted = False
     index = 0
-    while index < len(command):
-        if honour_quotes and command[index] == '"':
+    while index < len(scan):
+        if honour_quotes and scan[index] == '"':
             quoted = not quoted
         elif not quoted:
-            found = next((c for c in _CONNECTORS if command.startswith(c, index)), None)
+            found = next((c for c in _CONNECTORS if scan.startswith(c, index)), None)
             if found:
                 parts.append((command[start:index], connector))
                 connector = found
@@ -1220,7 +1316,8 @@ def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
     each segment is still validated on its own.
     """
     steps: list = []
-    parts = _split_connectors(command)
+    scan_command = _mask_heredoc_connectors(command) if bypass_gates else command
+    parts = _split_connectors(command, scan_command)
     for raw_text, connector in parts:
         text, modes = _take_stderr_redirections(raw_text)
         if not bypass_gates and DANGEROUS_SHELL_OPERATORS.search(
@@ -1241,7 +1338,14 @@ def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
                 ),
             }
         try:
-            cmd_parts = _tokenize(text, bypass_gates=bypass_gates)
+            # A heredoc body is input to the command that opened it, not a
+            # command: stripped only for the walk that picks out which
+            # binaries run. ``text`` (below, and in the ``_Step`` it builds)
+            # keeps the body, so the step that actually executes still has it.
+            cmd_parts = _tokenize(
+                _strip_heredoc_bodies(text) if bypass_gates else text,
+                bypass_gates=bypass_gates,
+            )
         except ValueError as exc:
             return [], {
                 "status": "error",
