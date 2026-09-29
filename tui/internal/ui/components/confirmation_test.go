@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // --- state machine: pending -> approved / denied / timed-out ---------------
@@ -599,7 +602,7 @@ func TestTheCommandIsShownOnce(t *testing.T) {
 }
 
 // The keys are the last line, so a clipped modal is still answerable, and the
-// mode hint sits just above them.
+// mode hint sits above them with a blank row between, so the keys stand apart.
 func TestKeysAreTheLastLineAndTheModeHintIsAbove(t *testing.T) {
 	m := NewConfirmationModel("run-1", "run_shell_command", "pytest", "").
 		WithLiveChannel("cid", "pytest")
@@ -609,8 +612,30 @@ func TestKeysAreTheLastLineAndTheModeHintIsAbove(t *testing.T) {
 	if !strings.HasPrefix(last, "y once · a always: pytest") {
 		t.Errorf("last line = %q, want the keys", last)
 	}
-	if prev := lines[len(lines)-2]; !strings.Contains(prev, "shift+tab to change") {
-		t.Errorf("line above the keys = %q, want the mode hint", prev)
+	if gap := strings.TrimSpace(lines[len(lines)-2]); gap != "" {
+		t.Errorf("line above the keys = %q, want a blank spacer", gap)
+	}
+	if prev := lines[len(lines)-3]; !strings.Contains(prev, "shift+tab to change") {
+		t.Errorf("two lines above the keys = %q, want the mode hint", prev)
+	}
+}
+
+// The keys are what the user must act on, so they are never drawn in the dim
+// hint style, and nothing on the prompt is drawn in the error red.
+func TestTheKeysAreProminentAndNothingIsRed(t *testing.T) {
+	if confirmationKeyStyle.GetForeground() == confirmationHintStyle.GetForeground() {
+		t.Error("the keys share the dim hint colour")
+	}
+	if !confirmationKeyStyle.GetBold() {
+		t.Error("the keys must be bold")
+	}
+	for name, style := range map[string]lipgloss.Style{
+		"title": confirmationTitleStyle, "body": confirmationBodyStyle,
+		"denied": confirmationNoStyle, "key": confirmationKeyStyle,
+	} {
+		if style.GetForeground() == theme.Danger {
+			t.Errorf("the %s text is red, which reads as an error", name)
+		}
 	}
 }
 

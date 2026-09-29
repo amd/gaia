@@ -492,12 +492,14 @@ var (
 	confirmationPanelStyle = lipgloss.NewStyle().
 				Padding(0, 1)
 
-	confirmationTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Danger)
+	confirmationTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Text)
 	confirmationBodyStyle  = lipgloss.NewStyle().Foreground(theme.Text)
 	confirmationWarnStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.Warning)
 	confirmationHintStyle  = lipgloss.NewStyle().Foreground(theme.Dim).Italic(true)
-	confirmationOkStyle    = lipgloss.NewStyle().Foreground(theme.Success)
-	confirmationNoStyle    = lipgloss.NewStyle().Foreground(theme.Danger)
+	confirmationKeyStyle   = lipgloss.NewStyle().Bold(true).
+				Foreground(theme.OnFill).Background(theme.AccentFillBG).Padding(0, 1)
+	confirmationOkStyle = lipgloss.NewStyle().Foreground(theme.Success)
+	confirmationNoStyle = lipgloss.NewStyle().Foreground(theme.Dim)
 )
 
 // View renders the panel. Wrapping happens here and only here, exactly like
@@ -514,19 +516,20 @@ func (m ConfirmationModel) View() string {
 
 	// The call itself, once. The title already says what kind of action it is.
 	if summary := strings.TrimSpace(m.summary); summary != "" {
-		lines = append(lines, confirmationBodyStyle.Render(WrapText(summary, inner)))
+		lines = append(lines, "", confirmationBodyStyle.Render(WrapText(summary, inner)))
 	}
 
 	if m.tier == RiskDestructive {
-		lines = append(lines, confirmationWarnStyle.Render(WrapText(
+		lines = append(lines, "", confirmationWarnStyle.Render(WrapText(
 			destructiveWarning(m.action, m.riskFromAgent), inner)))
 	}
 
 	// The keys stay on the LAST line: clipConfirmation keeps the head and the
 	// final line on a short terminal, and a prompt whose keys are clipped is
 	// unanswerable. The mode line sits just above them.
+	lines = append(lines, "")
 	if m.state == ConfirmationPending {
-		lines = append(lines, confirmationHintStyle.Render(WrapText(m.footnote(), inner)))
+		lines = append(lines, confirmationHintStyle.Render(WrapText(m.footnote(), inner)), "")
 	}
 	lines = append(lines, m.resultOrHint(inner))
 
@@ -547,23 +550,29 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 			"no answer in "+HumanTimeout(m.timeout())+
 				" — skipped. The agent was told it timed out, not that you said no.", inner))
 	default:
-		return confirmationHintStyle.Render(WrapText(m.keyHint(), inner))
+		return WrapText(m.styledKeyHint(), inner)
 	}
 }
 
-// keyHint spells out each choice, and says what "always" actually grants.
+// styledKeyHint spells out each choice as a filled keycap and a label. The keys
+// are what the user must act on, so they are the loudest thing on the prompt —
+// never dimmed.
 //
-// "always allow" alone reads as "allow this again", which says nothing about
-// how much else it covers. The backend records an INVOCATION-scoped key, not
-// the tool name (gaia/agents/base/tool_grants.py), so the honest label is the
-// scope it sent us — `gh issue comment`, not `run_shell_command`. Printing that
-// scope verbatim is the difference between informed consent and a pleasant
-// surprise, and it is why an empty AlwaysScope hides the choice entirely.
-func (m ConfirmationModel) keyHint() string {
+// "always" names the scope the agent sent (`pytest`, `gh issue comment`), never
+// the tool: that label is the only account of the grant anyone reads, and an
+// empty scope hides the choice entirely.
+func (m ConfirmationModel) styledKeyHint() string {
+	type choice struct{ key, label string }
+	choices := []choice{{"y", "once"}}
 	if m.allowAlways() {
-		return "y once · a always: " + m.alwaysScope + " (this session) · n/esc deny"
+		choices = append(choices, choice{"a", "always: " + m.alwaysScope + " (this session)"})
 	}
-	return "y once · n/esc deny"
+	choices = append(choices, choice{"n/esc", "deny"})
+	parts := make([]string, 0, len(choices))
+	for _, c := range choices {
+		parts = append(parts, confirmationKeyStyle.Render(c.key)+" "+confirmationBodyStyle.Render(c.label))
+	}
+	return strings.Join(parts, confirmationHintStyle.Render(" · "))
 }
 
 // footnote is the dim line above the keys: the mode, and when the prompt expires.

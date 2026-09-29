@@ -45,7 +45,7 @@ const (
 // session, which is the opposite of staying noticeable. The warning colour and
 // the glyph carry it; the requirement is that it is always THERE and unscrollable,
 // not that it shouts.
-var fullAccessBannerStyle = lipgloss.NewStyle().Foreground(theme.Danger)
+var fullAccessBannerStyle = lipgloss.NewStyle().Foreground(theme.Warning)
 
 // renderFullAccessBanner draws the full-width warning band, or "" when full access is
 // off.
