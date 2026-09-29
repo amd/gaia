@@ -509,7 +509,8 @@ func (m Model) View() string {
 	if m.stage == "setup" {
 		hint = "tab field · enter connect · ctrl+d forget key · esc back"
 	}
-	if w < 65 {
+	// The full models hint is wider than 65 cells, so width alone decides too.
+	if w < 65 || ansi.StringWidth(hint) > w {
 		switch m.stage {
 		case "models":
 			hint = "type to search · ↑/↓ · enter · esc back"

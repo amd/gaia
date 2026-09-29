@@ -338,3 +338,26 @@ func TestQuestionPanelBorderDoesNotShear(t *testing.T) {
 		}
 	}
 }
+
+// A URL or path wider than the panel was wrapped by lipgloss, not layout, so the
+// panel grew rows RowAt never counted and a click landed on the wrong option.
+func TestRowAtMatchesViewWhenAWordIsWiderThanThePanel(t *testing.T) {
+	q := NewQuestionModel("q",
+		"Open https://github.com/amd/gaia/blob/main/docs/reference/a-very-long-document-name.mdx?",
+		[]QuestionOption{
+			{Value: "a", Label: "Open it", Description: "https://example.com/a/very/long/unbreakable/url/that/keeps/going/for/a/while.html"},
+			{Value: "b", Label: "Skip"},
+		}, false, false)
+	for _, w := range []int{30, 60, 90} {
+		q.SetWidth(w)
+		lines := strings.Split(stripANSI(q.View()), "\n")
+		for row, line := range lines {
+			if strings.Contains(line, "[2] Skip") && q.RowAt(row) != 1 {
+				t.Fatalf("width %d: the Skip row maps to %d, not option 1", w, q.RowAt(row))
+			}
+		}
+		if q.RowAt(len(lines)-1) != -1 || q.RowAt(len(lines)) != -1 {
+			t.Fatalf("width %d: View has %d rows but RowAt still maps past its hint", w, len(lines))
+		}
+	}
+}

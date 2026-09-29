@@ -81,8 +81,8 @@ type ChatState struct {
 // to the token totals, and MeasuredTurns says how many were measured — so a
 // caller can tell a genuinely cheap session from a partly-unmeasured one.
 type SessionCost struct {
-	Turns         int     `json:"turns"`
-	MeasuredTurns int     `json:"measured_turns"`
+	Turns         int `json:"turns"`
+	MeasuredTurns int `json:"measured_turns"`
 	// ActiveSeconds is the sum of the turns, not the session's wall clock —
 	// the time between turns is the user reading, not the agent working. A
 	// driver attributing a task's duration wants this; one that wants wall

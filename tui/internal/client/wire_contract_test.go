@@ -132,7 +132,7 @@ func TestEveryControlLineTheClientWritesMatchesTheSharedFixture(t *testing.T) {
 			return c.RespondToolPermission("confirm-7", PermissionAlways)
 		},
 		"full_access": func(c *SubprocessClient) error { return c.SetFullAccess(true) },
-		"cancel": func(c *SubprocessClient) error { return c.Cancel(context.Background()) },
+		"cancel":      func(c *SubprocessClient) error { return c.Cancel(context.Background()) },
 	}
 
 	for verb, spec := range f.Stdin.ControlVerbs {

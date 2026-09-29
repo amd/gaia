@@ -2113,6 +2113,10 @@ func (m *ChatModel) flushBuffer() {
 // the user is writing about.
 const composerMaxRows = 6
 
+// composerMinWidth is the narrowest the composer may get to make room for the
+// mid-turn Enter hint; below it the hint is dropped rather than the text.
+const composerMinWidth = 16
+
 // composerRows is the height the composer wants right now — one row per line
 // the user has actually written.
 func (m ChatModel) composerRows() int {
@@ -2562,7 +2566,16 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		// edge. On a 200-column terminal the pane measure ran the question out
 		// to 196 columns above an answer capped at 88, so the pair looked like
 		// two unrelated blocks.
-		return userStyle.Render(m.wrapProse("▶ You: " + msg.Content))
+		//
+		// Continuations hang under the TEXT, not column 0: flush left, a wrapped
+		// question's second line read as stray output under it.
+		const prefix = "▶ You: "
+		indent := strings.Repeat(" ", displayWidth(prefix))
+		body := msg.Content
+		if m.width > 0 {
+			body = components.WrapText(body, m.answerWidth()-displayWidth(prefix))
+		}
+		return userStyle.Render(prefix + strings.ReplaceAll(body, "\n", "\n"+indent))
 
 	case RoleAssistant:
 		content := msg.Content
@@ -2571,7 +2584,7 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 				msg.Rendered = components.RenderMarkdown(msg.Content)
 				msg.renderedWrap = wrap
 			}
-			content = msg.Rendered
+			content = trimBlankLines(msg.Rendered)
 		}
 		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
 
@@ -2605,6 +2618,22 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 	default:
 		return msg.Content
 	}
+}
+
+// trimBlankLines drops the blank rows glamour puts above and below every
+// document. The transcript spaces its own blocks, so those rows doubled every
+// gap — and the streamed copy has none, so the answer dropped a row when the
+// finished one replaced it.
+func trimBlankLines(s string) string {
+	lines := strings.Split(s, "\n")
+	blank := func(l string) bool { return strings.TrimSpace(ansi.Strip(l)) == "" }
+	for len(lines) > 0 && blank(lines[0]) {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && blank(lines[len(lines)-1]) {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // workLogLines caps how many ACTIONS the live work log keeps. Bounded so a long
@@ -3310,7 +3339,16 @@ func (m ChatModel) View() string {
 		// owns that line; here only the user's own text has anything to add.
 		switch {
 		case strings.TrimSpace(m.input.Value()) != "":
-			inputView = m.input.View() + "  " + activityStyle.Render(m.midTurnEnterHint())
+			// The composer already spans the pane, so the hint has to come out
+			// of its width: appended after it, the row overran the terminal and
+			// every row of the frame was padded to match — the terminal wrapped
+			// them all the moment the user typed mid-turn.
+			hint := "  " + activityStyle.Render(m.midTurnEnterHint())
+			if w := m.input.Width() - lipgloss.Width(hint); w >= composerMinWidth {
+				in := m.input
+				in.SetWidth(w)
+				inputView = lipgloss.JoinHorizontal(lipgloss.Top, in.View(), hint)
+			}
 		case len(m.sending) > 0 || len(m.queued) > 0:
 			inputView = m.renderQueuedRow()
 		default:

@@ -263,7 +263,7 @@ func (m QuestionModel) layout(inner int) []questionLine {
 
 	// The "? " marker occupies two columns on the first line, so the text
 	// wraps two columns narrower and continuation lines hang under it.
-	for _, l := range strings.Split(hang(WrapText(m.question, inner-2), "? ", "  "), "\n") {
+	for _, l := range strings.Split(hang(wrapFit(m.question, inner-2), "? ", "  "), "\n") {
 		lines = append(lines, questionLine{questionTitleStyle.Render(l), -1})
 	}
 
@@ -284,7 +284,7 @@ func (m QuestionModel) layout(inner int) []questionLine {
 			ansi.Truncate(fmt.Sprintf("%s%s [%d] %s", cursor, marker, i+1, label), inner, "…"), i,
 		})
 		if opt.Description != "" {
-			for _, l := range strings.Split(WrapText("      "+opt.Description, inner), "\n") {
+			for _, l := range strings.Split(wrapFit("      "+opt.Description, inner), "\n") {
 				lines = append(lines, questionLine{questionDescStyle.Render(l), i})
 			}
 		}
@@ -365,6 +365,13 @@ func hang(s, first, rest string) string {
 		lines[i] = rest + lines[i]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// wrapFit is WrapText plus a hard break inside any word still wider than limit
+// (a URL, a path). Left whole, lipgloss wraps it in View and the panel grows a
+// row that layout — and so RowAt's click map — never counted.
+func wrapFit(s string, limit int) string {
+	return ansi.Hardwrap(WrapText(s, limit), limit, true)
 }
 
 // WrapText hard-wraps text at limit columns on word boundaries, preserving each

@@ -156,7 +156,7 @@ func (m FlagshipModel) cancelFromGate() (tea.Model, tea.Cmd) {
 	if switching {
 		m.activeView = viewChat
 		m.chat.AppendStatus(fmt.Sprintf("Switch cancelled — staying on %s.", m.agent.ID))
-		return m, nil
+		return m.syncChatSize()
 	}
 
 	// Say which row it was on the way out — the one that refused the launch, or

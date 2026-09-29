@@ -379,3 +379,16 @@ func TestFocusedRecommendedModelShowsItsMeasuredEvidence(t *testing.T) {
 		t.Fatalf("plain model shows evidence: %s", view)
 	}
 }
+
+// Terminals 69-73 columns wide cut the model-list hint mid-word ("esc b…").
+func TestModelListHintIsNeverCutMidWord(t *testing.T) {
+	for width := 60; width <= 80; width++ {
+		m := New("", width, 30)
+		m.selected = 1
+		next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.a"}}})
+		lines := strings.Split(ansi.Strip(next.(Model).View()), "\n")
+		if hint := lines[len(lines)-2]; strings.Contains(hint, "…") {
+			t.Fatalf("hint truncated at width %d: %q", width, hint)
+		}
+	}
+}
