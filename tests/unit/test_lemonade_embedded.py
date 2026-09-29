@@ -347,6 +347,46 @@ class TestConfig:
         config = json.loads(manager.write_config().read_text(encoding="utf-8"))
         assert "no_fetch_executables" not in config
 
+    def test_keys_lemonade_saved_survive_a_rewrite(self, manager):
+        # POST /api/v1/install persists cloud providers into this file; losing
+        # them on restart makes fireworks.* models 404 (#4422).
+        providers = [{"name": "fireworks", "base_url": "https://example.test/v1"}]
+        manager.config_dir.mkdir(parents=True, exist_ok=True)
+        path = manager.config_dir / "config.json"
+        path.write_text(json.dumps({"cloud_providers": providers}), encoding="utf-8")
+
+        config = json.loads(manager.write_config().read_text(encoding="utf-8"))
+
+        assert config["cloud_providers"] == providers
+        assert config["broadcast"] is False
+
+    def test_gaia_owned_keys_are_still_updated(self, manager, monkeypatch):
+        monkeypatch.setenv("GAIA_LEMONADE_REQUEST_BUDGET", "4321")
+        manager.config_dir.mkdir(parents=True, exist_ok=True)
+        path = manager.config_dir / "config.json"
+        stale = {"broadcast": True, "auto_evict": True, "global_timeout": 600}
+        path.write_text(json.dumps(stale), encoding="utf-8")
+
+        config = json.loads(manager.write_config().read_text(encoding="utf-8"))
+
+        assert config["global_timeout"] == 4321
+        assert config["broadcast"] is False
+        assert config["auto_evict"] is False
+
+    @pytest.mark.parametrize("content", ["{ not json", "[1, 2]"])
+    def test_unusable_existing_config_is_replaced_loudly(
+        self, manager, content, caplog
+    ):
+        manager.config_dir.mkdir(parents=True, exist_ok=True)
+        path = manager.config_dir / "config.json"
+        path.write_text(content, encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            config = json.loads(manager.write_config().read_text(encoding="utf-8"))
+
+        assert config["broadcast"] is False
+        assert str(path) in caplog.text
+
 
 class TestStatus:
     """Status reporting and stale-state recovery."""
