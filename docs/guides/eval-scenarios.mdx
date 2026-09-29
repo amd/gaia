@@ -141,7 +141,10 @@ GAIA_FIXTURE_VALUES.md carries the full conventions. Tier tags (`t1_basic` → `
 difficulty in `gaia_core`/`gaia_memory`/`gaia_voice`; `live` marks non-gating real-network
 canaries; `tui` marks the capability-ladder subset; and
 `local_blocked_no_embedder` marks scenarios that require Lemonade embeddings
-(excluded mechanically from embedder-less local runs).
+(excluded mechanically from embedder-less local runs). `requires_asr` and
+`requires_vlm` name a model the scenario cannot run without: when the Lemonade
+server has not downloaded it (or, for ASR, ffmpeg is missing), the runner
+records `SKIPPED_NO_MODEL` with the reason instead of running it.
 
 | Category | Use When Testing... |
 |----------|---------------------|
@@ -159,6 +162,7 @@ canaries; `tui` marks the capability-ladder subset; and
 | `gaia_tool_selection` | Bundle routing: web vs data vs RAG vs memory per turn, and restraint when no tool is needed |
 | `gaia_code` | Code index over the fixture mini-repo: real symbols, honest misses on absent code |
 | `gaia_voice` | How the agent talks: short plain answers to everyday questions, deeper answers on "why?" / "tell me more", stated style preferences kept across turns and sessions, latest preference wins, matching a technical vs non-technical user |
+| `gaia_media` | Committed fixtures only: transcribe a voice memo and quote it (`transcribe_media` / `refine_transcript`), read planted text off an image through the VLM |
 
 ---
 

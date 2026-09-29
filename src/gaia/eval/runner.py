@@ -35,6 +35,7 @@ from typing import Optional
 import yaml
 
 from gaia.eval.config import DEFAULT_AGENT_TYPE
+from gaia.eval.scorecard import SKIPPED_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -533,6 +534,55 @@ def _documents_exist(scenario_data: dict) -> bool:
             if path and not (REPO_ROOT / path).exists():
                 return False
     return True
+
+
+# Tags declaring a model a scenario cannot run without. A machine lacking it
+# records SKIPPED_NO_MODEL with the reason, never an INFRA_ERROR or a FAIL that
+# would read as the agent's fault.
+REQUIRES_ASR_TAG = "requires_asr"
+REQUIRES_VLM_TAG = "requires_vlm"
+
+
+def _required_models(scenario_data: dict) -> list:
+    """Return ``(tag, model_id)`` for each ``requires_*`` tag the scenario carries."""
+    from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL
+    from gaia.vlm.mixin import DEFAULT_VLM_MODEL
+
+    by_tag = {REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL, REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL}
+    tags = set(scenario_data.get("tags") or [])
+    return [(tag, model) for tag, model in by_tag.items() if tag in tags]
+
+
+def _missing_requirements(scenario_data: dict, downloaded_models: set) -> list:
+    """Return why this machine cannot run the scenario; empty means it can."""
+    from gaia.audio.media import find_ffmpeg
+
+    missing = [
+        f"{model} is not downloaded on the Lemonade server (tag {tag})"
+        for tag, model in _required_models(scenario_data)
+        if model not in downloaded_models
+    ]
+    # transcribe_media would otherwise try a package-manager install mid-run.
+    if REQUIRES_ASR_TAG in (scenario_data.get("tags") or []) and not find_ffmpeg():
+        missing.append(f"ffmpeg is not on PATH (tag {REQUIRES_ASR_TAG})")
+    return missing
+
+
+def _downloaded_lemonade_models() -> set:
+    """Model ids downloaded on the Lemonade server the backend talks to."""
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    client = LemonadeClient(verbose=False, keep_alive=True)
+    try:
+        catalog = client.list_models()
+    except Exception as e:
+        raise RuntimeError(
+            f"Scenarios tagged {REQUIRES_ASR_TAG}/{REQUIRES_VLM_TAG} need Lemonade's "
+            f"model list to decide whether they can run, but GET "
+            f"{client.base_url}/models failed: {e}. Start Lemonade "
+            "(`gaia daemon start`) or set LEMONADE_BASE_URL to a running server."
+        ) from e
+    return {m["id"] for m in catalog.get("data", []) if m.get("id")}
 
 
 def find_scenarios(
@@ -1861,8 +1911,9 @@ def compare_scorecards(baseline_path, current_path):
     unchanged = []
     only_in_baseline = []
     only_in_current = []
-    # corpus_changed: one side is SKIPPED_NO_DOCUMENT — corpus availability changed,
-    # not a quality regression or improvement.  Reported separately to avoid noise.
+    # corpus_changed: one side was skipped (a corpus document or a required model
+    # was absent) — availability changed, not a quality regression or improvement.
+    # Reported separately to avoid noise.
     corpus_changed = []
     # unmeasured: the CURRENT run has a _NO_MEASUREMENT_STATUSES status — the
     # harness never produced a score, so there is nothing to compare.  Excluded
@@ -1880,8 +1931,8 @@ def compare_scorecards(baseline_path, current_path):
 
         b = base_map[sid]
         c = curr_map[sid]
-        b_skipped = b.get("status") == "SKIPPED_NO_DOCUMENT"
-        c_skipped = c.get("status") == "SKIPPED_NO_DOCUMENT"
+        b_skipped = b.get("status") in SKIPPED_STATUSES
+        c_skipped = c.get("status") in SKIPPED_STATUSES
         # Current side only. A baseline that never measured and a current run
         # that did is strictly more information than before, and cannot produce a
         # false regression: an unmeasured scenario scores 0, so every delta out of
@@ -2043,8 +2094,9 @@ def compare_scorecards(baseline_path, current_path):
 
     if corpus_changed:
         print(
-            f"\n[~] CORPUS AVAILABILITY CHANGED ({len(corpus_changed)} scenario(s)) — "
-            "SKIPPED_NO_DOCUMENT in one run; not a quality signal:"
+            f"\n[~] AVAILABILITY CHANGED ({len(corpus_changed)} scenario(s)) — "
+            "skipped in one run (corpus document or required model absent); "
+            "not a quality signal:"
         )
         for e in corpus_changed:
             print(
@@ -2194,6 +2246,30 @@ class AgentEvalRunner:
                 keep_sessions=keep_sessions,
             )
 
+    def _record_skip(self, scenario_data, status, reason, run_dir, results):
+        """Record a scenario the runner could not start on this machine."""
+        sid = scenario_data["id"]
+        print(f"[SKIP] {sid} — {reason}")
+        result = {
+            "scenario_id": sid,
+            "category": scenario_data.get("category", "unknown"),
+            "agent_type_requested": self.agent_type,
+            "agent_type_observed": None,
+            "status": status,
+            "skip_reason": reason,
+            "overall_score": None,
+            "turns": [],
+            "elapsed_s": 0.0,
+            "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
+        }
+        # Write a trace so resume mode can reload this result without re-running
+        traces_dir = run_dir / "traces"
+        traces_dir.mkdir(exist_ok=True)
+        (traces_dir / f"{sid}.json").write_text(
+            json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        results.append(result)
+
     def _run_locked(
         self,
         scenario_id=None,
@@ -2237,6 +2313,12 @@ class AgentEvalRunner:
                 print(f"  - {e}", file=sys.stderr)
             sys.exit(1)
 
+        downloaded_models = (
+            _downloaded_lemonade_models()
+            if any(_required_models(sd) for _p, sd in scenarios)
+            else set()
+        )
+
         # Create run dir
         run_id = f"eval-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         run_dir = self.results_dir / run_id
@@ -2273,32 +2355,29 @@ class AgentEvalRunner:
                         print(f"[WARN] {sid} trace file corrupt — re-running")
                         del completed[sid]
 
-            # Skip scenarios whose corpus documents are not on disk.
             # Real-world documents are not committed to git; skip gracefully
             # rather than failing with SETUP_ERROR or INFRA_ERROR.
             if not _documents_exist(scenario_data):
-                print(
-                    f"[SKIP] {sid} — corpus document(s) not on disk (real-world corpus not committed to git)"
+                reason = "corpus document(s) not on disk (real-world corpus not committed to git)"
+                self._record_skip(
+                    scenario_data, "SKIPPED_NO_DOCUMENT", reason, run_dir, results
                 )
-                result = {
-                    "scenario_id": sid,
-                    "category": scenario_data.get("category", "unknown"),
-                    "agent_type_requested": self.agent_type,
-                    "agent_type_observed": None,
-                    "status": "SKIPPED_NO_DOCUMENT",
-                    "overall_score": None,
-                    "turns": [],
-                    "elapsed_s": 0.0,
-                    "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
-                }
-                # Write a trace so resume mode can reload this result without re-running
-                traces_dir = run_dir / "traces"
-                traces_dir.mkdir(exist_ok=True)
-                (traces_dir / f"{sid}.json").write_text(
-                    json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
-                )
-                results.append(result)
                 completed[sid] = "SKIPPED_NO_DOCUMENT"
+                progress_path.write_text(
+                    json.dumps(completed, indent=2), encoding="utf-8"
+                )
+                continue
+
+            missing = _missing_requirements(scenario_data, downloaded_models)
+            if missing:
+                self._record_skip(
+                    scenario_data,
+                    "SKIPPED_NO_MODEL",
+                    "; ".join(missing),
+                    run_dir,
+                    results,
+                )
+                completed[sid] = "SKIPPED_NO_MODEL"
                 progress_path.write_text(
                     json.dumps(completed, indent=2), encoding="utf-8"
                 )
@@ -2393,7 +2472,7 @@ class AgentEvalRunner:
             failed = [
                 s
                 for s in current_scorecard["scenarios"]
-                if s.get("status") not in ("PASS", "SKIPPED_NO_DOCUMENT")
+                if s.get("status") != "PASS" and s.get("status") not in SKIPPED_STATUSES
             ]
             if not failed:
                 print("\n[FIX] All scenarios passing. Done.")
