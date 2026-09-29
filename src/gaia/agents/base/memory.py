@@ -74,6 +74,7 @@ from gaia.agents.base.verification import check_was_executed
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
+    backend_crash_remedy,
 )
 
 if TYPE_CHECKING:
@@ -173,13 +174,12 @@ def _changed_software_versions(existing: List[Dict]) -> List[str]:
 # ============================================================================
 
 #: Default embedder served by Lemonade — EmbeddingGemma 300M, 768-dim GGUF
-#: (GPU/CPU profiles). Replaced nomic-embed-text-v2-moe, which the current
-#: llama.cpp server cannot load. The active embedder is per-instance
+#: (GPU/CPU profiles). The active embedder is per-instance
 #: (``self._embedding_model``) and may be the NPU-native FLM embedder instead;
 #: see ``init_memory`` (#1744). These module constants remain the fallback default.
 EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
 
-#: Default embedding dimensionality (EmbeddingGemma 300M / nomic are both 768).
+#: Default embedding dimensionality (EmbeddingGemma 300M is 768).
 #: The active dim is derived from the live embedder at startup
 #: (``self._embedding_dim``); this is only the pre-probe fallback.
 EMBEDDING_DIM = 768
@@ -580,10 +580,11 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
 
 #: Reason codes for why memory is unavailable this session (#2519). Distinct
 #: codes because the remedies differ: an unset env var, a model that was
-#: never pulled into a *running* Lemonade, and Lemonade not running at all
-#: are three different problems with three different fixes.
+#: never pulled into a *running* Lemonade, a pulled model Lemonade cannot
+#: load, and Lemonade not running at all each have a different fix.
 MEMORY_UNAVAILABLE_DISABLED_BY_ENV = "disabled_by_env"
 MEMORY_UNAVAILABLE_MODEL_NOT_PULLED = "model_not_pulled"
+MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED = "model_load_failed"
 MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE = "service_unreachable"
 
 #: Substrings that identify a Lemonade "model not found" response (the
@@ -592,19 +593,26 @@ MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE = "service_unreachable"
 #: with ``{"error":{"code":"model_not_found", ...}}``.
 _MODEL_NOT_FOUND_MARKERS = ("model_not_found", "was not found", "404")
 
+#: Lemonade answered and has the model, but its backend died loading it —
+#: status 500 ``{"error":{"code":"model_load_error", ...}}`` (#1831).
+_MODEL_LOAD_FAILED_MARKERS = ("model_load_error", "llama-server failed to start")
+
 
 def _classify_embedding_failure(exc: Exception) -> str:
     """Classify why the embedding connectivity probe failed at startup.
 
     Returns ``MEMORY_UNAVAILABLE_MODEL_NOT_PULLED`` when Lemonade answered
-    but rejected the embedding model as unknown (never pulled), or
-    ``MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE`` for everything else (Lemonade
-    down, wrong port, connection refused/timeout, etc.) — the safer default
-    when the failure can't be positively identified as "model not pulled".
+    but rejected the embedding model as unknown (never pulled),
+    ``MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED`` when it has the model but could
+    not load it, or ``MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE`` for everything
+    else (Lemonade down, wrong port, connection refused/timeout, etc.) — the
+    safer default when the failure can't be positively identified.
     """
     text = str(exc).lower()
     if any(marker in text for marker in _MODEL_NOT_FOUND_MARKERS):
         return MEMORY_UNAVAILABLE_MODEL_NOT_PULLED
+    if any(marker in text for marker in _MODEL_LOAD_FAILED_MARKERS):
+        return MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED
     return MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE
 
 
@@ -642,8 +650,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 ``~/.gaia/memory.db`` (see ``resolve_memory_db_path``).
             context: Active context scope (e.g., 'work', 'personal', 'global').
             embedding_model: Embedder model id. Defaults to ``EMBEDDING_MODEL``
-                (GGUF nomic). The NPU profile passes the FLM-native embedder so
-                chat and embeddings stay co-resident on the NPU backend (#1744).
+                (EmbeddingGemma GGUF). The NPU profile passes the FLM-native
+                embedder so chat and embeddings stay co-resident on the NPU
+                backend (#1744).
                 The embedding dimension is derived from the live embedder, not
                 this id, so a model with a different dim works without changes.
 
@@ -769,21 +778,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 self._embedding_model,
                 self._embedding_dim,
             )
-            # Invalidate stored vectors when the embedder changed. Vectors from
-            # a different model live in a different vector space (even at the
-            # same dim), so reusing them silently corrupts similarity search.
-            # Clearing forces backfill to re-embed with the active model.
-            prior = self._memory_store.get_embedder_id()
-            if prior is not None and prior != self._embedding_model:
-                cleared = self._memory_store.clear_all_embeddings()
-                logger.warning(
-                    "[MemoryMixin] embedder changed (%s -> %s); cleared %d stored "
-                    "embedding(s) for re-embedding",
-                    prior,
-                    self._embedding_model,
-                    cleared,
-                )
-            self._memory_store.set_embedder_id(self._embedding_model)
+            # Clears vectors from any other embedder so backfill re-embeds them.
+            self._memory_store.reconcile_embedder(self._embedding_model)
         except Exception as e:
             reason = _classify_embedding_failure(e)
             self._memory_unavailable_reason = reason
@@ -793,6 +789,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                     "[MemoryMixin] embedding model '%s' is not pulled in "
                     "Lemonade — memory v2 disabled for this session (pull "
                     "the model and restart the agent to enable). Reason: %s",
+                    self._embedding_model,
+                    e,
+                )
+            elif reason == MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED:
+                logger.error(
+                    "[MemoryMixin] embedding model '%s' would not load in "
+                    "Lemonade — memory v2 disabled for this session. Reason: %s",
                     self._embedding_model,
                     e,
                 )
@@ -815,7 +818,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             return
 
         # (Embedder-change migration is handled above via the store's
-        # get_embedder_id / set_embedder_id + clear_all_embeddings, #1744.)
+        # reconcile_embedder, #1744.)
 
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)
@@ -1033,7 +1036,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         """Human-readable reason + remedy for why memory is off this session.
 
         Returns ``None`` when a memory store is live. Otherwise returns one of
-        three DISTINCT messages, keyed off the real cause recorded by
+        four DISTINCT messages, keyed off the real cause recorded by
         ``init_memory()`` — never conflates "the model was never pulled" (the
         service is reachable and running fine) with "the service itself is
         down" (start it), since a user who acts on the wrong one is sent down
@@ -1070,6 +1073,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                 f"running and reachable. {remedy}, then restart the agent. "
                 f"{restart_note}"
             )
+        if reason == MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED:
+            return (
+                f"Memory is unavailable this session: the embedding model "
+                f"'{model}' is downloaded but would not load. "
+                f"{backend_crash_remedy(model)} {restart_note}"
+            )
         # MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE, or an unclassified failure —
         # treat as unreachable, the safer default (matches the pre-#2519
         # behavior for anything we can't positively identify).
@@ -1093,6 +1102,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             return False
         if getattr(self, "_memory_unavailable_reason", None) not in (
             MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+            MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED,
             MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
         ):
             return False
@@ -2883,6 +2893,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             safe.append(item)
         return safe
+
+    def warm_up(self, progress=None):
+        """Run the deferred memory upkeep here, not in front of the first answer."""
+        if getattr(self, "_memory_post_init_pending", False):
+            if progress:
+                progress("Tidying memory")
+            self._memory_post_init_pending = False
+            self._run_memory_post_init()
+        return super().warm_up(progress)
 
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)

@@ -1,0 +1,64 @@
+id: voice_t4_nontechnical_user
+name: "Voice — A Clearly Non-Technical User Gets No Jargon (Adversarial)"
+category: gaia_voice
+severity: high
+tags: [t4_adversarial, usability]
+description: |
+  A user who says outright they don't understand computers, with a problem
+  whose usual fix is full of jargon (disk space). Every answer must stay in
+  words they can follow: no commands, paths, settings-app jargon dumped
+  without explanation, or tool names. A follow-up "what does that mean?"
+  must be answered more simply, not more technically.
+  Counting rule: a sentence ends in . ! or ?; each bullet or numbered line
+  counts as one sentence; one closing offer of more detail does not count.
+
+persona: confused_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention, so no style preference stored by an earlier scenario shapes this one; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Report a full-disk warning as a non-technical user"
+    user_message: "my computer keeps popping up 'disk almost full' and i dont really understand computers. what do i do??"
+    ground_truth:
+      expected_behavior: "Calm, simple first steps: empty the recycle bin, delete big old downloads or videos you don't need, uninstall apps you don't use"
+    success_criteria: |
+      Gives 1-3 simple actions a non-technical person can do (empty recycle
+      bin, delete old downloads/videos, remove unused apps). FAIL if the
+      reply exceeds 5 sentences or 100 words. FAIL if it contains a command
+      (anything in backticks or a shell/PowerShell line), a file path
+      (%TEMP%, AppData, C:\Windows, ~/Library), or the unexplained terms
+      "partition", "cache", "temp files", "hibernation file", "pagefile",
+      "Storage Sense", "WinSxS". FAIL if it names an internal tool
+      (run_shell_command, read_file, search_file) or contains
+      "Verification:", "Worth noting", "In summary".
+
+  - turn: 2
+    objective: "Say the answer was still too much"
+    user_message: "sorry that's still confusing. whats the ONE easiest thing i can do right now?"
+    ground_truth:
+      expected_behavior: "One step, in plain words, e.g. 'Open your Downloads folder and delete big files you don't need anymore'"
+    success_criteria: |
+      Exactly one action, simpler than turn 1, with how to do it in everyday
+      words. FAIL if more than one action is offered, if the reply exceeds 3
+      sentences or 60 words, or if it contains any item banned in turn 1.
+      FAIL if it apologises at length (more than a few words).
+
+  - turn: 3
+    objective: "Ask what an everyday computer word means"
+    user_message: "what does 'downloads folder' even mean"
+    ground_truth:
+      expected_behavior: "Plain explanation: the place on your computer where things you save from the internet go by default, and how to open it"
+    success_criteria: |
+      Explains in everyday words (where files you got from the internet end
+      up) and how to open it (e.g. File Explorer / Finder, then Downloads).
+      FAIL if the reply exceeds 3 sentences or 60 words, or contains a file
+      path such as C:\Users\...\Downloads or ~/Downloads, a command, or any
+      item banned in turn 1.
+
+expected_outcome: |
+  The agent reads a clearly non-technical user and keeps every answer short,
+  simple and free of jargon — simplifying further when asked, never
+  escalating.

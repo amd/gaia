@@ -213,6 +213,10 @@ def create_app(
     from gaia.daemon.gateway_routes import build_gateway_router
 
     app.include_router(build_gateway_router(token))
+    # Same reason, for the key the /provider panel sets (Fireworks or AMD).
+    from gaia.daemon.provider_key_routes import build_provider_key_router
+
+    app.include_router(build_provider_key_router(token))
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router

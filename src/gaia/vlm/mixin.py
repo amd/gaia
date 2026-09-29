@@ -32,6 +32,8 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+DEFAULT_VLM_MODEL = "Gemma-4-E4B-it-GGUF"
+
 
 class VLMToolsMixin:
     """
@@ -52,7 +54,7 @@ class VLMToolsMixin:
 
     def init_vlm(
         self,
-        model: str = "Gemma-4-E4B-it-GGUF",
+        model: str = DEFAULT_VLM_MODEL,
         base_url: str = "http://localhost:13305",
     ) -> None:
         """

@@ -1,0 +1,62 @@
+id: voice_t1_everyday_short
+name: "Voice — Everyday Questions Get Short, Plain Answers"
+category: gaia_voice
+severity: high
+tags: [t1_basic]
+description: |
+  Everyday questions from someone who is not a specialist. Each answer leads
+  with the answer itself in three sentences or fewer, in plain English, with
+  no tool names, internal terms or boilerplate footers.
+  Counting rule for every turn: a sentence ends in . ! or ?; each bullet or
+  numbered line counts as one sentence; one closing offer of more detail
+  ("Want the details?") is allowed and does not count toward the cap.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention, so no style preference stored by an earlier scenario shapes this one; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask why bread goes stale"
+    user_message: "why does bread go stale so fast?"
+    ground_truth:
+      expected_behavior: "Short plain answer: the starch dries out and re-hardens as the bread loses moisture; maybe a one-line storage tip"
+    success_criteria: |
+      The first sentence answers the question (moisture loss / the starch
+      firming up again). FAIL if the reply exceeds 3 sentences or 75 words,
+      uses a header or more than 3 bullets, or uses an unexplained technical
+      term (e.g. "retrogradation", "amylopectin", "crystallization") without
+      saying it in plain words. FAIL if the reply names an internal tool
+      (remember, recall, search_web, fetch_page, run_shell_command, read_file,
+      query_documents) or contains "Verification:", "Worth noting",
+      "In summary", "Great question" or a status label such as "Status:".
+
+  - turn: 2
+    objective: "Ask a quick cooking-time question"
+    user_message: "how long do i boil an egg if i want the yolk runny?"
+    ground_truth:
+      expected_answer: "About 6 minutes (5–7 accepted) in already-boiling water"
+    success_criteria: |
+      Gives a time of 5-7 minutes up front. FAIL if the time is outside
+      5-7 minutes or missing, if the reply exceeds 3 sentences or 60 words,
+      or if it contains any of the banned items from turn 1 (tool names,
+      "Verification:", "Worth noting", "In summary", "Great question",
+      status labels).
+
+  - turn: 3
+    objective: "Ask a practical everyday question that tempts a long list"
+    user_message: "is it bad to leave my phone charging overnight?"
+    ground_truth:
+      expected_behavior: "Short reassurance: it's generally fine, the phone stops charging when full; optional one-line tip (e.g. optimized/adaptive charging)"
+    success_criteria: |
+      Answers the actual question (generally fine / modern phones stop
+      charging when full) in the first sentence. FAIL if the reply exceeds
+      3 sentences or 75 words, turns into a list of more than 3 tips, or
+      ends with an unrequested analysis paragraph. FAIL on any banned item
+      from turn 1.
+
+expected_outcome: |
+  Every answer leads with the answer, stays within three sentences, and
+  reads like a person talking — no jargon, tool names or footers.

@@ -115,7 +115,9 @@ missing.
 ## The boot sequence
 
 Every launch — `gaia-tui` with no arguments, or `gaia-tui run email` — goes
-through the same three screens: a splash, a readiness gate, then chat.
+through the same screens: a splash, a readiness gate, then chat. The flagship
+agent adds a short "Getting GAIA ready" stage before chat opens — see
+[Getting ready](#getting-ready).
 
 ```bash
 gaia-tui                 # the flagship agent
@@ -271,6 +273,31 @@ screen names the blocker rather than starting a chat that cannot talk. It *is*
 offered when a row is merely unverified (`[?]`) — nothing there says anything is
 broken.
 
+### Getting ready
+
+On a local model, the flagship's first answer used to pay for starting the
+agent, loading the model and reading its ~10K-token instructions while you
+watched a spinner. That now happens before the chat opens, with each step
+named:
+
+```
+  Getting GAIA ready
+
+  ✓ Starting the agent
+  ✓ Tidying memory
+  ✓ Indexing tools
+  ⣾ Loading Gemma-4-E4B-it-GGUF and reading its instructions  0:05
+
+  This happens once per session, so your first answer starts right away.
+  Type now — it's sent the moment GAIA is ready · Esc to show the chat
+```
+
+Anything you type meanwhile waits and is sent the moment GAIA is ready. `Esc`
+shows the chat without stopping the warm-up. A remote model (Fireworks, the AMD
+gateway, Claude) has nothing to load, so the stage ends as soon as the agent
+has started. A launch with `--query` skips it, because the question pays for
+the same work.
+
 ### 3. Chat
 
 Once the gate clears, GAIA starts the agent and drops you into the conversation:
@@ -311,6 +338,32 @@ can't be, the chat says so in one line and opens the provider picker. See
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
+| `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
+
+### Reading a turn
+
+While the agent works, and afterwards, each thing it did is one short row, with
+the answer set apart below:
+
+```
+  ▪ Reading file: toybox/dates.py
+    └ 3 symbols
+  ▪ Editing file: toybox/dates.py x2 · approved
+  ▪ Running command: python -m pytest -q tests/
+    └ exit 0 · 2 lines
+
+  Fixed and verified — all 4 tests pass.
+```
+
+- **Paths** are shown relative to the folder you started GAIA in, or under `~`;
+  a path that is still long keeps its end.
+- **A failed step** keeps its reason under it, remedy included — that row is
+  where a failure lives, so a retried call is one red row, not a separate error.
+- **A confirmation** asks once, in the prompt pinned above the composer. The step
+  it gated then records your answer in a word: `approved`, `denied`, or `always
+  allowed '<scope>'`.
+- **The agent's narration** ("Let me check the tests first") is folded away.
+  `Ctrl+O` shows it, along with each step's full command and timing.
 
 ### Saying something while the agent is still working
 
@@ -336,19 +389,19 @@ composer, if the turn has already ended) rather than disappearing.
 Mid-turn messages need agent contract 2.15 or newer. On an older one `Enter`
 queues as before, and the TUI says so with the command to update.
 
-By default GAIA owns the mouse, so the wheel scrolls the conversation — a
-full-screen terminal app has no scrollback of its own behind it — and a printed
-link is clickable. Hold `Shift` (`Option` in iTerm2) to drag-select without
-leaving that mode, or press `Ctrl+T` to hand the mouse back to your terminal
-outright.
+By default the mouse belongs to your terminal, so you drag to select text and
+copy and paste with your terminal's own keys (`Ctrl+Shift+C` / `Ctrl+Shift+V`,
+`Cmd+C` / `Cmd+V`, or right-click). The wheel still scrolls the conversation:
+GAIA turns on your terminal's alternate scroll mode, which sends each wheel tick
+as `↑` / `↓`. Press `Ctrl+T` to hand the mouse to GAIA instead, for clickable
+links and double-click copy.
 
 | Mouse | What it does |
 |---|---|
 | Wheel | Scrolls the conversation |
-| Click, on a printed `http(s)` link | Opens it in your browser. Only `http(s)` is clickable, so agent output cannot launch an arbitrary handler. Printed links are also marked up as real terminal hyperlinks, so a terminal that supports them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) underlines them on hover and offers its own right-click menu — and those keep working in select mode, where no click reaches GAIA |
-| Double-click, on a message | Copies that message |
-| `Ctrl+T` | Select mode — hands the mouse to your terminal for plain drag-select and its own copy/paste (right-click, `Ctrl+Shift+C`, `Cmd+C`). The wheel stops scrolling and links stop being clickable while it is on; `Ctrl+T` or `Esc` gives both back, and a banner says so meanwhile |
-| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. A `Ctrl+T` you turned on yourself survives the palette or question opening and closing |
+| Drag | Selects text, for your terminal's own copy |
+| `Ctrl+T` | Hands the mouse to GAIA: a printed `http(s)` link opens in your browser on click, and a double-click copies a whole message. Drag-select then needs `Shift` held (`Option` in iTerm2). `Ctrl+T` again gives the mouse back. Printed links are also real terminal hyperlinks, so terminals that support them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) open them with their own gesture either way |
+| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. The palette takes the mouse only while it is open |
 
 | Command | What it does |
 |---|---|

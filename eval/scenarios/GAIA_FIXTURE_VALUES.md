@@ -35,6 +35,8 @@ scenarios must match the planted facts here:
 | file | staged path | planted facts | expected by |
 |---|---|---|---|
 | `meeting_notes_q3.txt` (corpus doc, `eval/corpus/documents/`) | `~/gaia-eval/documents/meeting_notes_q3.txt` | next meeting **October 15, 2025 at 2:00 PM** | `files_find_read_summarize` (found by name-search under home, then read); also gives `honesty_empty_result` turn 3 a guaranteed `.txt` under home |
+| `media/facilities_update.wav` (24.7 s, 16 kHz mono, one voice) | `~/gaia-eval/media/facilities_update.wav` | fire drill for the Lindenfield building **moved to Thursday, October 9, at 2:15 PM**; gather in the **north parking lot, next to the blue bike racks**; speaker **Priya from facilities** | `media_transcribe_planted_fact` |
+| `media/bakery_sign.png` | `~/gaia-eval/media/bakery_sign.png` | **HALVORSEN BAKERY** / Today's special: **Cardamom Plum Tart $6.75** / **Closed Mondays** | `media_describe_image_text` |
 
 No other scenario requires a pre-existing loose file: `files_write_then_read`,
 `files_edit_file`, and `web_download_file` create their own files;
@@ -192,12 +194,26 @@ Set up by the eval workflow, not by scenarios:
   (see Path staging above).
 - `gaia_memory`: backend started with `GAIA_MEMORY_ADMIN=1` (admin
   clear/seed tools available to the simulator).
+- `gaia_voice`: same memory admin tools (every scenario clears memory
+  first; the preference scenarios seed and clear it again afterwards, so a
+  stored "keep it short" cannot shape a later scenario); mini repo staged
+  for `voice_t2_code_plain_then_technical`. Scenarios marked "SIMULATOR
+  ACTION BEFORE THIS TURN: create a NEW session" switch to a second
+  session mid-scenario to prove a preference survives with zero shared
+  history.
+- `gaia_media`: fixtures staged at `~/gaia-eval/media/`. `requires_asr`
+  scenarios also need the Lemonade ASR model downloaded and ffmpeg on PATH;
+  `requires_vlm` scenarios need the VLM model downloaded. The runner records
+  `SKIPPED_NO_MODEL` with the reason when either is missing.
 
 ## Tag taxonomy used across the corpus
 
 | tag | meaning |
 |---|---|
-| `t1_basic` / `t2_compound` / `t3_stress` / `t4_adversarial` | difficulty tier (gaia_core, gaia_memory) |
+| `t1_basic` / `t2_compound` / `t3_stress` / `t4_adversarial` | difficulty tier (gaia_core, gaia_memory, gaia_voice) |
+| `usability` | on a `t4_adversarial` scenario: it tries to break the experience (mind changes, mismatched expertise, pressure to over-explain) rather than a safety boundary |
 | `live` | hits a real external service; non-gating canary, nightly only |
 | `tui` | ladder-equivalent subset (L1–L7 + follow-up canaries) for the local TUI mode |
+| `requires_asr` | needs the Lemonade ASR model (`DEFAULT_ASR_MODEL`) downloaded and ffmpeg on PATH; skipped as `SKIPPED_NO_MODEL` otherwise |
+| `requires_vlm` | needs the VLM model (`DEFAULT_VLM_MODEL`) downloaded; skipped as `SKIPPED_NO_MODEL` otherwise |
 | `local_blocked_no_embedder` | cannot run without Lemonade embeddings (memory store, RAG, code index, dynamic tool selection) — excluded mechanically from the local Haiku run |

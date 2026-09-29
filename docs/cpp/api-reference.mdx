@@ -683,7 +683,7 @@ naming both models.
 ```cpp
 VectorIndexOptions opts;
 opts.dimension = 768;
-opts.embeddingModel = "nomic-embed-text-v1-GGUF";
+opts.embeddingModel = "embeddinggemma-300m-GGUF";
 
 gaia::VectorIndex index(opts);
 index.add("chunk-0", embedding);

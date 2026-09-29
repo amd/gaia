@@ -82,7 +82,9 @@ func flat(rows []string) string {
 }
 
 // The tail is the point. A clipped shell command loses the flags that say what
-// it did; a clipped failure loses the remedy.
+// it did; a clipped failure loses the remedy. This is the Ctrl+O view: folded,
+// a step is one row (TestAFoldedStepIsOneRow) — but a failure's remedy
+// survives either way (TestAFoldedFailureKeepsItsRemedy).
 func TestWorkLogWrapsRatherThanClipping(t *testing.T) {
 	cases := []struct {
 		name string
@@ -156,6 +158,7 @@ func TestWorkLogWrapsRatherThanClipping(t *testing.T) {
 		for _, tm := range terms[1:] {
 			t.Run(tc.name+"/"+tm.name, func(t *testing.T) {
 				m := feed(t, chatAt(t, tm), tc.feed...)
+				m.expandWork = true
 				rows := rowsOf(m.renderLiveRegion())
 				t.Logf("\n%s", strings.Join(rows, "\n"))
 
@@ -234,6 +237,7 @@ func TestWorkLogNeverRendersEmpty(t *testing.T) {
 // hides everything else the agent did.
 func TestOneLongActionCannotFillTheRegion(t *testing.T) {
 	m := chatAt(t, term{"standard", 80, 24})
+	m.expandWork = true // folded, every action is one row anyway
 	m = feed(t, m,
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_skills"},
 		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "list_skills", Preview: "18 skills"},
@@ -266,6 +270,7 @@ func TestOneLongActionCannotFillTheRegion(t *testing.T) {
 // happening over and over" — and the calls that repeat are the long ones.
 func TestRepeatCounterSurvivesWrapping(t *testing.T) {
 	m := chatAt(t, term{"standard", 80, 24})
+	m.expandWork = true // the folded row is TestAFoldedRowKeepsItsCounter
 	for i := 0; i < 13; i++ {
 		m = feed(t, m, shellCall(longShell))
 	}
@@ -423,6 +428,7 @@ func TestTheCutMarkerLandsInTheTextNotAfterTheClock(t *testing.T) {
 // away two words a row on the longest lines in the log.
 func TestOnlyTheClockRowPaysForTheClock(t *testing.T) {
 	m := chatAt(t, term{"standard", 80, 24})
+	m.expandWork = true // folded, there are no continuation rows
 	m = feed(t, m, shellCall(longShell+" "+longShell))
 	rows := rowsOf(m.renderLiveRegion())
 	t.Logf("\n%s", strings.Join(rows, "\n"))

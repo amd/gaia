@@ -1,0 +1,55 @@
+# FIXTURE-SYNC: ~/gaia-eval/media/facilities_update.wav — see GAIA_FIXTURE_VALUES.md.
+id: media_transcribe_planted_fact
+name: "Media — Transcribe a Voice Memo, Quote What It Says"
+category: gaia_media
+severity: high
+tags: [requires_asr]
+description: |
+  A 25-second voice memo sits on disk. The agent must transcribe it with
+  transcribe_media and quote what the recording actually says (the moved
+  fire-drill time and the meeting point), then clean it up with
+  refine_transcript. A plausible guess at a date is the failure this catches.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Clip staged at ~/gaia-eval/media/facilities_update.wav (from tests/fixtures/gaia/media/)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to transcribe ~/gaia-eval/media/facilities_update.wav and say when the fire drill now is"
+    user_message: "facilities left me a voice memo at ~/gaia-eval/media/facilities_update.wav — can you transcribe it and tell me when the fire drill is now?"
+    ground_truth:
+      expected_answer: "Thursday, October 9th, at 2:15 in the afternoon"
+    success_criteria: |
+      agent_tools[] shows transcribe_media on the staged .wav, and the answer
+      gives Thursday, October 9 at 2:15 PM as said in the recording. FAIL if
+      transcribe_media was never called, if it reports a different day or
+      time, or if it says it cannot process audio.
+
+  - turn: 2
+    objective: "Ask where everyone is supposed to gather"
+    user_message: "and where are we supposed to meet up when the alarm goes off?"
+    ground_truth:
+      expected_answer: "The north parking lot, next to the blue bike racks"
+    success_criteria: |
+      Agent answers the north parking lot by the blue bike racks, taken from
+      the transcript it already has (re-reading the transcript file is fine).
+      FAIL if it invents a different location or claims the memo did not say.
+
+  - turn: 3
+    objective: "Ask for a cleaned-up copy of the transcript with the speaker labelled"
+    user_message: "great, can you clean up that transcript and label who's talking?"
+    ground_truth:
+      expected_behavior: "refine_transcript on the transcript from turn 1, reporting the refined file and one speaker (Priya from facilities)"
+    success_criteria: |
+      agent_tools[] shows refine_transcript on the transcript_path turn 1
+      produced, and the agent reports where the refined file is. One speaker
+      is correct; naming the speaker Priya (or "facilities") is right, inventing a
+      second speaker is a FAIL. FAIL if it claims a refined file with no
+      refine_transcript call.
+
+expected_outcome: |
+  Every fact quoted comes from a real transcription of the committed clip,
+  and the cleanup step runs the real refine tool on that transcript.

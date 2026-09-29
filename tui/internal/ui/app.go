@@ -100,6 +100,12 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
 }
 
+// DECSET/DECRST 1007, alternate scroll mode.
+const (
+	altScrollOn  = "\x1b[?1007h"
+	altScrollOff = "\x1b[?1007l"
+)
+
 // teaOptions are the terminal capabilities every GAIA TUI program asks for.
 //
 // The mouse is deliberately NOT among them: who owns it is a per-screen
@@ -119,6 +125,12 @@ func teaOptions() []tea.ProgramOption {
 func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	prepareTerminal()
 
+	// Alternate scroll mode: with the mouse left to the terminal (so drag-select
+	// works), the terminal sends each wheel tick as ↑/↓, which scroll the
+	// transcript. Reset on the way out so the shell gets its wheel back.
+	fmt.Fprint(os.Stdout, altScrollOn)
+	defer fmt.Fprint(os.Stdout, altScrollOff)
+
 	// The agent is a child process, and on Windows nothing reaps it when this
 	// one exits — so whatever the session opened is closed here, after the
 	// event loop has stopped, rather than left to the OS.
@@ -129,6 +141,9 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 			}
 		}()
 	}
+
+	// After the Closer check above, which has to see the real model.
+	model = repaintOnResize{inner: model}
 
 	// Swept whether or not this run publishes one of its own: a session started
 	// WITHOUT --control used to leave a dead predecessor's file in place.

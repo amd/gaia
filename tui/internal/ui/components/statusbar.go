@@ -21,7 +21,10 @@ type StatusBarState struct {
 	// it is waiting on a person. Reading "streaming" for minutes while a
 	// prompt sits unanswered is how a question reads as a hang.
 	AwaitingDecision bool
-	Hint             string
+	// Preparing is the warm-up before the first question: the agent is busy,
+	// but not answering anything yet, so "streaming" would be the wrong word.
+	Preparing bool
+	Hint      string
 }
 
 var (
@@ -62,20 +65,7 @@ func RenderStatusBar(state StatusBarState, width int) string {
 		return ""
 	}
 
-	dot := disconnectedDot()
-	status := "disconnected"
-	if state.Connected {
-		dot = connectedDot()
-		status = "connected"
-	}
-	if state.Streaming {
-		status = "streaming"
-	}
-	if state.AwaitingDecision {
-		status = "waiting for your answer"
-	}
-
-	left := " " + dot + " " + fmt.Sprintf("%s %s", state.AgentName, status)
+	left := statusLeft(state)
 	right := ""
 	if state.Hint != "" {
 		right = state.Hint
@@ -124,4 +114,33 @@ func RenderStatusBar(state StatusBarState, width int) string {
 	}
 	content := left + strings.Repeat(" ", gap) + right
 	return statusBarStyle.Width(width).Render(content)
+}
+
+// statusLeft is the bar's left half: who is talking and what it is doing.
+func statusLeft(state StatusBarState) string {
+	dot := disconnectedDot()
+	status := "disconnected"
+	if state.Connected {
+		dot = connectedDot()
+		status = "connected"
+	}
+	if state.Streaming {
+		status = "streaming"
+	}
+	if state.Preparing {
+		status = "getting ready"
+	}
+	if state.AwaitingDecision {
+		status = "waiting for your answer"
+	}
+	return " " + dot + " " + fmt.Sprintf("%s %s", state.AgentName, status)
+}
+
+// StatusHintBudget is how many columns a hint can take in the bar RenderStatusBar
+// draws for state at width without being cut: the padding, the left half, the
+// gap before the hint and the column of air after it. A caller that measures the
+// bar any other way thins its hints against the wrong number, and the bar then
+// cuts the last one mid-word ("Ctrl+C q…").
+func StatusHintBudget(state StatusBarState, width int) int {
+	return width - 2 - ansi.StringWidth(statusLeft(state)) - 2
 }

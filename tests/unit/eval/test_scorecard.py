@@ -323,3 +323,29 @@ class TestWriteJunitXml:
         suite_names = {s.get("name") for s in suites}
         assert "cat1" in suite_names
         assert "cat2" in suite_names
+
+
+class TestSkippedNoModel:
+    def test_counts_as_skipped_not_errored(self):
+        results = [_result("m", "SKIPPED_NO_MODEL", None, category="gaia_media")]
+        sc = build_scorecard("run-nm", results, _MINIMAL_CONFIG)
+        s = sc["summary"]
+        assert s["skipped"] == 1
+        assert s["errored"] == 0
+        assert s["by_category"]["gaia_media"]["skipped"] == 1
+        assert "warnings" not in sc
+
+    def test_junit_skip_carries_the_reason(self):
+        result = _result("m", "SKIPPED_NO_MODEL", None, category="gaia_media")
+        result["skip_reason"] = "Whisper-Large-v3-Turbo is not downloaded"
+        sc = build_scorecard("run-nmx", [result], _MINIMAL_CONFIG)
+        root = ET.fromstring(write_junit_xml(sc))
+        skipped = root.find(".//testcase[@name='m']/skipped")
+        assert skipped is not None
+        assert "Whisper-Large-v3-Turbo" in skipped.get("message")
+
+    def test_summary_shows_the_reason(self):
+        result = _result("m", "SKIPPED_NO_MODEL", None, category="gaia_media")
+        result["skip_reason"] = "ffmpeg is not on PATH (tag requires_asr)"
+        sc = build_scorecard("run-nms", [result], _MINIMAL_CONFIG)
+        assert "ffmpeg is not on PATH" in write_summary_md(sc)

@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 # from avg_score to avoid diluting quality metrics with infra noise.
 _JUDGED_STATUSES = {"PASS", "FAIL", "BLOCKED_BY_ARCHITECTURE"}
 
+# The runner never started these: a corpus document is not on disk
+# (SKIPPED_NO_DOCUMENT), or a model/tool a `requires_*` tag names is not
+# available on this machine (SKIPPED_NO_MODEL).
+SKIPPED_STATUSES = frozenset({"SKIPPED_NO_DOCUMENT", "SKIPPED_NO_MODEL"})
+
 
 def build_scorecard(run_id, results, config):
     """Build scorecard dict from list of scenario result dicts."""
@@ -24,8 +29,7 @@ def build_scorecard(run_id, results, config):
     infra_error = sum(
         1 for r in results if r.get("status") in ("INFRA_ERROR", "SETUP_ERROR")
     )
-    # SKIPPED_NO_DOCUMENT: corpus file absent from disk (e.g. real-world docs not committed)
-    skipped = sum(1 for r in results if r.get("status") == "SKIPPED_NO_DOCUMENT")
+    skipped = sum(1 for r in results if r.get("status") in SKIPPED_STATUSES)
     errored = sum(
         1
         for r in results
@@ -38,7 +42,7 @@ def build_scorecard(run_id, results, config):
             "BUDGET_EXCEEDED",
             "INFRA_ERROR",
             "SETUP_ERROR",
-            "SKIPPED_NO_DOCUMENT",
+            *SKIPPED_STATUSES,
         )
     )
 
@@ -87,7 +91,7 @@ def build_scorecard(run_id, results, config):
             by_category[cat]["budget_exceeded"] += 1
         elif status in ("INFRA_ERROR", "SETUP_ERROR"):
             by_category[cat]["infra_error"] += 1
-        elif status == "SKIPPED_NO_DOCUMENT":
+        elif status in SKIPPED_STATUSES:
             by_category[cat]["skipped"] += 1
         else:
             by_category[cat]["errored"] += 1
@@ -141,7 +145,7 @@ def build_scorecard(run_id, results, config):
         "BUDGET_EXCEEDED",
         "INFRA_ERROR",
         "SETUP_ERROR",
-        "SKIPPED_NO_DOCUMENT",
+        *SKIPPED_STATUSES,
         "ERRORED",
     }
     unrecognized = sorted(
@@ -224,7 +228,7 @@ def write_summary_md(scorecard):
         f"- **Timeout:** {s.get('timeout', 0)} \u23f1",
         f"- **Budget exceeded:** {s.get('budget_exceeded', 0)} \U0001f4b8",
         f"- **Infra error:** {s.get('infra_error', 0)} \U0001f527",
-        f"- **Skipped (no doc):** {s.get('skipped', 0)} \u23ed",
+        f"- **Skipped:** {s.get('skipped', 0)} \u23ed",
         f"- **Errored:** {s.get('errored', 0)} \u26a0\ufe0f",
         f"- **Pass rate (all):** {s.get('pass_rate', 0)*100:.0f}%",
         f"- **Pass rate (judged):** {s.get('judged_pass_rate', 0)*100:.0f}%",
@@ -262,6 +266,8 @@ def write_summary_md(scorecard):
         )
         if r.get("root_cause"):
             lines.append(f"  - Root cause: {r['root_cause']}")
+        if r.get("skip_reason"):
+            lines.append(f"  - Skipped: {r['skip_reason']}")
 
     # Performance section
     perf = scorecard.get("performance", {})
@@ -356,7 +362,7 @@ def write_junit_xml(scorecard):
             in ("TIMEOUT", "BUDGET_EXCEEDED", "INFRA_ERROR", "SETUP_ERROR", "ERRORED")
         )
         cat_skipped = sum(
-            1 for r in cat_scenarios if r.get("status") == "SKIPPED_NO_DOCUMENT"
+            1 for r in cat_scenarios if r.get("status") in SKIPPED_STATUSES
         )
         testsuite.set("failures", str(cat_failures))
         testsuite.set("errors", str(cat_errors))
@@ -379,9 +385,12 @@ def write_junit_xml(scorecard):
             if status == "PASS":
                 # Passing tests have no sub-elements
                 pass
-            elif status == "SKIPPED_NO_DOCUMENT":
+            elif status in SKIPPED_STATUSES:
                 skipped_el = ET.SubElement(testcase, "skipped")
-                skipped_el.set("message", "Corpus document(s) not on disk")
+                skipped_el.set(
+                    "message",
+                    result.get("skip_reason") or "Corpus document(s) not on disk",
+                )
             elif status in ("FAIL", "BLOCKED_BY_ARCHITECTURE"):
                 failure = ET.SubElement(testcase, "failure")
                 failure.set("message", f"{status} — score: {score_str}")

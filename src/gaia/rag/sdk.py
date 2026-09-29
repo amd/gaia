@@ -493,7 +493,7 @@ class RAGSDK:
             # Register + download the embedder before loading. Custom
             # (``user.``) embedders aren't Lemonade built-ins — they need
             # checkpoint + recipe + the embedding label on first pull. Fail
-            # loudly if registration fails (no silent fall-back to nomic).
+            # loudly if registration fails (no silent fall-back to another model).
             mr = next(
                 (
                     m

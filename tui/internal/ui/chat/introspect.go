@@ -49,7 +49,7 @@ func (m ChatModel) controlChatState() *control.ChatState {
 		FollowTail:   m.followTail,
 		MouseOwner:   owner,
 		MouseMotion:  motion,
-		SelectMode:   m.mouseSelectMode,
+		SelectMode:   !m.appMouse,
 		ViewportRows: m.viewport.Height,
 		HeaderRows:   m.contentHeaderRows(),
 		HelpOpen:     m.help.Open,

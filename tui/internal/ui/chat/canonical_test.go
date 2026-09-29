@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/amd/gaia/tui/internal/event"
 )
 
@@ -370,12 +372,20 @@ func TestCanonicalNeedsConfirmationIsSurfacedAndTurnContinues(t *testing.T) {
 	if !m.streaming {
 		t.Error("needs_confirmation must not end the turn on its own")
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus {
-		t.Fatalf("unexpected role %v", last.Role)
+	// Shown once: the modal carries the question, the step carries the wait.
+	if m.confirmation == nil {
+		t.Fatal("the confirmation modal was not put up")
 	}
-	if !strings.Contains(last.Content, "send_draft") || !strings.Contains(last.Content, "alice@example.com") {
-		t.Errorf("the pending action must be readable: %q", last.Content)
+	if frame := ansi.Strip(m.View()); !strings.Contains(frame, "alice@example.com") {
+		t.Errorf("the pending action must be readable on screen:\n%s", frame)
+	}
+	if n := len(m.activity); n == 0 || m.activity[n-1].Approval != approvalWaiting {
+		t.Errorf("the gated step must say it is waiting on the user: %+v", m.activity)
+	}
+	for _, msg := range m.messages {
+		if strings.Contains(msg.Content, "send_draft") {
+			t.Errorf("the prompt must not also be copied into the transcript: %+v", msg)
+		}
 	}
 
 	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "Skipped — needs approval."})

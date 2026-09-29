@@ -1,0 +1,63 @@
+id: voice_t3_bullets_new_session
+name: "Voice — \"Use Bullet Points\" Holds on Later Turns and in a New Session"
+category: gaia_voice
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  The user asks for steps and options as bullet points. The format must be
+  stored, applied to later list-shaped answers, and applied again in a NEW
+  session without being repeated. A "bulleted" answer here means the steps
+  or options themselves are list items (- , * , • or 1.), not a paragraph
+  with one stray bullet.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: State a formatting preference"
+    user_message: "one thing about me: whenever you give me steps or a list of options, use bullet points, not paragraphs. i skim. remember that for next time too."
+    ground_truth:
+      expected_answer: "Acknowledged and stored as a preference"
+    success_criteria: |
+      Agent acknowledges briefly and agent_tools[] includes a remember call
+      storing the bullet-point preference. FAIL if there is no memory tool
+      call.
+
+  - turn: 2
+    objective: "Ask for steps"
+    user_message: "how do i get a coffee stain out of a white shirt?"
+    ground_truth:
+      expected_behavior: "Steps as bullet or numbered items: blot, rinse from the back with cold water, pre-treat with detergent or stain remover, wash, check before drying"
+    success_criteria: |
+      The steps are bullet or numbered items. FAIL if the steps are written
+      as prose paragraphs, if any single item runs past 2 sentences, or if
+      it advises hot water / the dryer before the stain is gone (that sets
+      the stain).
+
+  - turn: 3
+    objective: "SIMULATOR ACTION BEFORE THIS TURN: create a NEW session with create_session (pass the same agent_type as the Phase 1 session if one was set) and send this turn and turn 4 to the NEW session id. Keep reporting the Phase 1 session_id as the scenario's session_id. Then ask what to pack for camping — do NOT restate the preference"
+    user_message: "what should i pack for a weekend camping trip?"
+    ground_truth:
+      expected_behavior: "A bulleted packing list (shelter, sleeping bag, water, food, light, layers, first aid...)"
+    success_criteria: |
+      This session has no history, so the format must come from persistent
+      memory. The packing list is bullet or numbered items. FAIL if the list
+      is written as prose paragraphs.
+
+  - turn: 4
+    objective: "Ask for options in the same new session. AFTER scoring this turn (simulator action): call memory_clear(scope=all) so this scenario's stored preference cannot shape a later scenario."
+    user_message: "what are some good ways to learn to touch type?"
+    ground_truth:
+      expected_behavior: "Bulleted options (a typing-tutor site or app, home-row practice without looking, short daily sessions, accuracy before speed)"
+    success_criteria: |
+      The options are bullet or numbered items. FAIL if they are written as
+      prose paragraphs, or if the reply ends with an unrequested analysis
+      paragraph longer than 2 sentences.
+
+expected_outcome: |
+  A stated formatting preference is stored once and honoured on every later
+  list-shaped answer, including in a fresh session.

@@ -2708,6 +2708,58 @@ class TestEmbeddingPipeline:
         assert len(still_without) == 0
 
 
+class TestEmbedderLoadFailure:
+    """Lemonade is up and has the embedder, but llama-server dies loading it."""
+
+    # Verbatim from Lemonade 2026.39.1 on a Radeon 8060S (Vulkan, #1831).
+    LOAD_ERROR = (
+        "Embedding failed: Error generating embeddings: Request failed with "
+        'status 500: {"error":{"code":"model_load_error","message":"Failed to '
+        "load model 'user.embeddinggemma-300m-GGUF': llama-server failed to "
+        'start","param":"model","type":"model_load_error"}}'
+    )
+
+    @pytest.fixture
+    def failed_host(self, tmp_path):
+        from gaia.agents.base.memory import MemoryMixin
+
+        class TestLoadFailAgent(MemoryMixin, FakeAgent):
+            pass
+
+        host = TestLoadFailAgent()
+        with (
+            _mock_v2_init_context(),
+            patch.object(
+                MemoryMixin, "_embed_text", side_effect=RuntimeError(self.LOAD_ERROR)
+            ),
+        ):
+            host.init_memory(db_path=tmp_path / "load_fail.db", context="global")
+        return host
+
+    def test_is_not_reported_as_an_unreachable_server(self, failed_host):
+        """Telling the user to start a server that is running sends them the
+        wrong way; the remedy is the backend setting that stops the crash."""
+        from gaia.agents.base.memory import MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED
+
+        assert failed_host.memory_store is None
+        assert failed_host._memory_unavailable_reason == (
+            MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED
+        )
+        message = failed_host.memory_unavailable_message()
+        assert "would not load" in message
+        assert "GGML_VK_DISABLE_COOPMAT=1" in message
+        assert "gaia lemonade embedded stop" in message
+        assert "unreachable" not in message
+
+    def test_reaches_the_user_console(self, failed_host):
+        console = MagicMock()
+        failed_host.console = console
+
+        assert failed_host.report_memory_unavailable() is True
+        console.print_warning.assert_called_once()
+        assert "would not load" in console.print_warning.call_args.args[0]
+
+
 # ===========================================================================
 # v2 Tests — LLM Extraction (Mem0-Inspired)
 # ===========================================================================

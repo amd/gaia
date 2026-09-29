@@ -1,0 +1,49 @@
+id: voice_t4_technical_user_detected
+name: "Voice — A Clearly Technical User Gets Technical Answers Unasked (Adversarial)"
+category: gaia_voice
+severity: high
+tags: [t4_adversarial, usability]
+description: |
+  The user never states a preference, but writes like an engineer: error
+  codes, tool names, config terms. The agent must match that level —
+  concrete causes, config keys and commands — without being asked, and
+  without explaining basics the user plainly knows. Still concise: an
+  engineer wants the fix, not an essay.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention, so no style preference stored by an earlier scenario shapes this one; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Report a container networking error the way an engineer would"
+    user_message: "node app gets ECONNREFUSED 127.0.0.1:5432 right after `docker compose up`. postgres container reports healthy. what gives?"
+    ground_truth:
+      expected_behavior: "Inside the app container 127.0.0.1 is the app container itself, not Postgres; connect to the compose service name (e.g. host=db) on 5432; if the app runs on the host instead, publish the port (ports: '5432:5432')"
+    success_criteria: |
+      Must identify the real cause: 127.0.0.1 inside a container points at
+      that container, so the app should use the compose service name as the
+      host (or, if the app runs on the host, publish 5432 via ports:).
+      Must include at least one concrete config/command specific (a
+      DATABASE_URL / host=<service> example, a ports: mapping, or a
+      docker compose ps / logs command). FAIL if it misses the localhost-
+      inside-container cause, explains what Docker, a container or Postgres
+      is, or exceeds 250 words.
+
+  - turn: 2
+    objective: "Confirm the setup — both services in one compose file, db service named 'db'"
+    user_message: "yeah both are in the same compose file, service is called db"
+    ground_truth:
+      expected_answer: "Point the app at host db, port 5432 — e.g. DATABASE_URL=postgres://user:pass@db:5432/dbname; depends_on with condition: service_healthy to avoid the startup race"
+    success_criteria: |
+      Must give the concrete fix with the service name: host db on port
+      5432 (e.g. a connection string containing @db:5432 or PGHOST=db).
+      FAIL if the fix doesn't use "db" as the host, or if the reply is
+      longer than 150 words. Mentioning depends_on with
+      condition: service_healthy is a plus.
+
+expected_outcome: |
+  The agent picks up that the user is technical and answers at that level —
+  specific cause, specific config — without being told and without padding.

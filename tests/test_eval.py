@@ -299,16 +299,21 @@ class TestAgentEvalRunner:
             "gaia_honesty",
             "gaia_tool_selection",
             "gaia_code",
+            "gaia_voice",
+            "gaia_media",
         }
         known_tags = {
             "t1_basic",
             "t2_compound",
             "t3_stress",
             "t4_adversarial",
+            "usability",
             "live",
             "tui",
             "local_blocked_no_embedder",
             "local_blocked_win_shim",
+            "requires_asr",
+            "requires_vlm",
         }
         gaia = [
             (path, data)

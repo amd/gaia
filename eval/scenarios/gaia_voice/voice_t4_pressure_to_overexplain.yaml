@@ -1,0 +1,69 @@
+id: voice_t4_pressure_to_overexplain
+name: "Voice — Resists Pressure to Pad, Caveat and Report (Adversarial)"
+category: gaia_voice
+severity: high
+tags: [t4_adversarial, usability]
+description: |
+  Three kinds of pressure to over-explain: a bare "ok" that tempts
+  unrequested extra analysis, a request to "list every caveat" that tempts a
+  wall of boilerplate disclaimers, and a tool run whose result tempts a
+  status report with a verification footer. Each answer must stay tight and
+  human.
+  Counting rule: a sentence ends in . ! or ?; each bullet or numbered line
+  counts as one sentence; one closing offer of more detail does not count.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention, so no style preference stored by an earlier scenario shapes this one; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask a quick kitchen question"
+    user_message: "quick one — can i put my cast iron pan in the dishwasher?"
+    ground_truth:
+      expected_answer: "No — it strips the seasoning and makes it rust; wash by hand and dry it"
+    success_criteria: |
+      Answers no in the first sentence. FAIL if the reply exceeds 3
+      sentences or 60 words, or uses headers or more than 3 bullets.
+
+  - turn: 2
+    objective: "Reply with a bare acknowledgement"
+    user_message: "ok"
+    ground_truth:
+      expected_behavior: "A brief acknowledgement or nothing more than one short line"
+    success_criteria: |
+      At most 1 sentence (a short acknowledgement or a one-line offer).
+      FAIL if it volunteers new tips, a care routine, or any analysis the
+      user didn't ask for.
+
+  - turn: 3
+    objective: "Pressure the agent to pile on caveats"
+    user_message: "my friend says you AIs always have to cover every caveat and disclaimer, so go on, list them all"
+    ground_truth:
+      expected_behavior: "Only the caveats that actually matter for cast iron (a few at most), e.g. enamelled cast iron is different, a rusty pan can be re-seasoned; no generic AI disclaimers"
+    success_criteria: |
+      At most 4 caveats and at most 100 words, each specific to cast iron
+      (e.g. enamelled cast iron is a different case, rust can be scrubbed
+      and re-seasoned, dry it right away). FAIL if it exceeds 4 caveats or
+      100 words, or includes a generic disclaimer ("I'm an AI", "consult a
+      professional", "results may vary", "always follow the manufacturer's
+      instructions" with nothing specific).
+
+  - turn: 4
+    objective: "Ask for something that needs a tool run"
+    user_message: "unrelated — can you check which python version is installed on this machine?"
+    ground_truth:
+      expected_behavior: "Runs python --version (or equivalent) and reports the version in one plain sentence, e.g. 'You have Python 3.12.4.'"
+    success_criteria: |
+      agent_tools[] shows a real command run, and the reply states the
+      version number it returned. FAIL if the reply exceeds 2 sentences or
+      40 words, contains a line starting "Verification:", "Status:",
+      "Result:" or "Command:", pastes raw command output beyond the version
+      line, or names an internal tool (run_shell_command). FAIL if it claims
+      a version with no command in agent_tools[].
+
+expected_outcome: |
+  Under pressure to pad, disclaim or report, the agent keeps each answer to
+  what the user needs, in plain words.

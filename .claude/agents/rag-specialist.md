@@ -102,7 +102,7 @@ Agents compose `RAGToolsMixin` directly in the class declaration; resolve it dyn
 1. **Chunk size** — too small → loses context; too large → dilutes signal
 2. **Overlap** — 10–20% of chunk size is a decent default
 3. **`max_chunks`** — more context isn't always better; cap at 3–5 for short LLM context windows
-4. **Embedding model** — `nomic-embed-text-v2-moe-GGUF` is the common choice on Lemonade
+4. **Embedding model** — GAIA's default is `user.embeddinggemma-300m-GGUF` (`DEFAULT_EMBEDDING_MODEL` in `lemonade_client.py`); reference the constant, never a literal id
 5. **Re-ranking** — cross-encoder rerank of top-K embeddings substantially improves precision
 
 ## Agentic RAG

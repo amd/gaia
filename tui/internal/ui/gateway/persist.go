@@ -1,13 +1,9 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/amd/gaia/tui/internal/daemon"
 )
@@ -18,6 +14,7 @@ import (
 const (
 	gatewayTokenPath = "/daemon/v1/gateway/token"
 	gatewayAuthPath  = "/daemon/v1/gateway/authenticate"
+	tokenAlternative = "Run `gaia gateway auth` once to store the token instead"
 )
 
 // rememberToken asks the daemon to keep the token in the OS credential store.
@@ -41,8 +38,8 @@ func rememberToken(token string) error {
 	// Starting the daemon is warranted here: the user explicitly asked to
 	// connect, and "the token vanished because a background process happened
 	// to be down" is exactly the surprise this route exists to remove.
-	_, err = daemonCall(http.MethodPost, gatewayTokenPath, body, true,
-		"store the gateway token")
+	_, err = daemon.Call(http.MethodPost, gatewayTokenPath, body, true,
+		"store the gateway token", tokenAlternative)
 	return err
 }
 
@@ -52,8 +49,8 @@ func rememberToken(token string) error {
 // A failure is not surfaced to the user: the common case is simply that
 // nothing was stored, and the token prompt already covers that.
 func restoreToken() bool {
-	raw, err := daemonCall(http.MethodPost, gatewayAuthPath, nil, false,
-		"restore the gateway token")
+	raw, err := daemon.Call(http.MethodPost, gatewayAuthPath, nil, false,
+		"restore the gateway token", tokenAlternative)
 	if err != nil {
 		return false
 	}
@@ -61,54 +58,4 @@ func restoreToken() bool {
 		Authenticated bool `json:"authenticated"`
 	}
 	return json.Unmarshal(raw, &body) == nil && body.Authenticated
-}
-
-// daemonCall performs one authenticated daemon request and returns the 2xx
-// body. start=false attaches only to a daemon that is already running.
-func daemonCall(method, path string, body []byte, start bool, op string) ([]byte, error) {
-	dc := daemon.New(daemon.Options{})
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	var (
-		inst *daemon.Instance
-		err  error
-	)
-	if start {
-		inst, err = dc.StartOrAttach(ctx)
-	} else {
-		inst, err = dc.Attach(ctx)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("could not reach the GAIA daemon: %w", err)
-	}
-
-	req := daemon.Request{Method: method, Path: path, Body: body, Op: op}
-	if body != nil {
-		req.Header = http.Header{"Content-Type": []string{"application/json"}}
-	}
-	resp, _, err := dc.Do(ctx, inst, req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// ErrorDetail prefixes the status; IsRouteMissing matches on the bare
-		// detail, which is what tells version skew from the route's own refusal.
-		full := daemon.ErrorDetail(resp)
-		bare := strings.TrimPrefix(full, fmt.Sprintf("HTTP %d: ", resp.StatusCode))
-		if daemon.IsRouteMissing(path, resp.StatusCode, bare) {
-			return nil, &daemon.RouteMissingError{
-				Op:          op,
-				Path:        path,
-				Alternative: "Run `gaia gateway auth` once to store the token instead",
-			}
-		}
-		// A 503 carries the daemon's platform-specific remedy for an
-		// unavailable credential store; pass it through rather than inventing
-		// a message.
-		return nil, fmt.Errorf("%s", full)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 }

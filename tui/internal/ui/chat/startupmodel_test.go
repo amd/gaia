@@ -395,3 +395,74 @@ func TestAnInitialQueryWaitsForTheRestore(t *testing.T) {
 		t.Fatalf("sent %q", c.sent)
 	}
 }
+
+type warmCapturingClient struct{ queryCapturingClient }
+
+// schedulesWarmUp reports whether cmd, unwrapped through any batches, starts
+// the warm-up. Only called on commands made of zero-delay messages.
+func schedulesWarmUp(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	switch msg := cmd().(type) {
+	case startWarmUpMsg:
+		return true
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			if schedulesWarmUp(sub) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (*warmCapturingClient) SupportsWarmUp() bool { return true }
+
+func warmChat(t *testing.T) (ChatModel, *warmCapturingClient) {
+	t.Helper()
+	c := &warmCapturingClient{}
+	m := NewChatModelForFlagship(c, "gaia", "GAIA", "", false, true).
+		WithStartupModel(StartupRestore, "local", "Qwen3-4B-GGUF")
+	m.width, m.height = 120, 30
+	return m, c
+}
+
+// The warm-up loads the model the session will use, so it waits for the
+// restore and runs on the restored model — never before it, on the default.
+func TestWarmUpFollowsAConfirmedRestore(t *testing.T) {
+	m, c := warmChat(t)
+	m = openChat(t, m, &c.queryCapturingClient)
+	updated, _ := m.Update(eventMsg{ch: m.events, event: ping("Qwen3-4B-GGUF", "Qwen3-4B-GGUF", "lemonade", false)})
+	m = updated.(ChatModel)
+	updated, cmd := m.Update(eventMsg{ch: m.events, event: event.CanonicalFinalEvent{Type: "final", Answer: "Switched."}})
+	m = updated.(ChatModel)
+	if !schedulesWarmUp(cmd) {
+		t.Fatal("a confirmed restore must start the warm-up")
+	}
+	if c.sent[0] != "/model Qwen3-4B-GGUF" {
+		t.Fatalf("the restore must come before the warm-up, sent %q", c.sent)
+	}
+}
+
+func TestNoWarmUpBeforeTheRestoreOrAfterAFailedOne(t *testing.T) {
+	m, c := warmChat(t)
+	count := func(m ChatModel) int {
+		batch, _ := m.Init()().(tea.BatchMsg)
+		return len(batch)
+	}
+	plain := NewChatModelForFlagship(&warmCapturingClient{}, "gaia", "GAIA", "", false, true)
+	// plain schedules the warm-up; the restoring chat schedules the restore instead.
+	if count(m) != count(plain) {
+		t.Fatal("Init must send the restore in place of the warm-up, not both")
+	}
+	m = openChat(t, m, &c.queryCapturingClient)
+	updated, cmd := m.Update(eventMsg{ch: m.events, event: event.CanonicalErrorEvent{Type: "error", Detail: "Unknown Lemonade model"}})
+	m = updated.(ChatModel)
+	if schedulesWarmUp(cmd) {
+		t.Fatal("a failed restore must hand the choice back, not warm up the default")
+	}
+	if m.providerPanel == nil {
+		t.Fatal("the picker did not open")
+	}
+}

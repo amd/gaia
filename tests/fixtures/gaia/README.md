@@ -15,6 +15,7 @@ carry `# FIXTURE-SYNC:` comments naming the fixture).
 | `rss/feed.xml` | rss-digest | "Widgetworks Release Notes", exactly 3 entries |
 | `csv/sales.csv` + `csv/ground_truth.json` | gaia_data | the six contract aggregates; regenerate with `csv/_gen_sales.py` (it asserts them) |
 | `mini_repo/` | gaia_code (code-index) | `tempkeeper` package; see below |
+| `media/` | gaia_media | a 24.7 s voice memo + a sign image, planted facts in the contract; regenerate with `media/_gen_media.py` |
 | `fixture_hub/` | gaia_skills_lifecycle (search/install) | committed sources only; built + signed per run — see its README |
 | `prepare_fixture_hub.py` | per-run hub build | ephemeral `eval-test-publisher` keypair, signs + trust-adds; no key committed |
 | `serve_fixtures.py` | HTTP for web/rss/hub | routed layout (below) |

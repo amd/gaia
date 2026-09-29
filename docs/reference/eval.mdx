@@ -374,7 +374,7 @@ An abridged, illustrative file:
 - CI uploads a proposal with every scorecard. To set or move the bar, commit a proposal from a run of `main` on the CI runner. The limits change only through a reviewed commit, never automatically.
 
 <Warning>
-  The run step never holds the judge's credentials: `run` removes `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from its own environment before the agent starts, because the agent runs shell commands. In CI they exist only in the judge step. The CI artifact holds scores only; reproduce a failure locally to get its transcripts.
+  The run step never holds the judge's credentials: `run` removes `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from its own environment before the agent starts, because the agent runs shell commands. In CI they exist only in the judge step. The CI artifact is public and holds each task's transcript and diffs as well as the scores; every file is scanned for the CI credentials and redacted before upload, but that catches credentials only.
 </Warning>
 
 

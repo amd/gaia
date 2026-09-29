@@ -37,11 +37,11 @@
     },
     {
       "lane": "gaia-signal",
-      "categories": ["gaia_memory", "gaia_honesty", "gaia_web"]
+      "categories": ["gaia_memory", "gaia_honesty", "gaia_web", "gaia_media"]
     },
     {
       "lane": "gaia-code",
-      "categories": ["gaia_core", "gaia_files", "gaia_code"]
+      "categories": ["gaia_core", "gaia_files", "gaia_code", "gaia_voice"]
     },
     {
       "lane": "gaia-tools",

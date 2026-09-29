@@ -557,7 +557,7 @@ the gated side. Pinned by `tests/unit/test_tool_loader_disambiguation.py`
 ## Dependencies
 
 - **#606 (memory v2)** — *landed.* Provides `MemoryMixin._embed_text`
-  (`nomic-embed-text-v2-moe-GGUF`, 768-dim) already mixed into ChatAgent. Hard
+  (`user.embeddinggemma-300m-GGUF`, 768-dim) already mixed into ChatAgent. Hard
   dependency for semantic selection; no new infra needed. Note memory is
   **user-controllable** — when the user turns it off, the loader reverts to the
   legacy all-tools path (see

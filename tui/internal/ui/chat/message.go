@@ -19,10 +19,10 @@ const (
 	// RoleCard is a typed `tool_result.render` card, drawn inline in the
 	// transcript at the point the tool returned so work and results stay in order.
 	RoleCard MessageRole = "card"
-	// RoleToolError is one tool's own failure text, drawn as an inline aside
-	// rather than RoleError's bordered panel: the agent frequently retries and
-	// still answers, and a panel per failed attempt reads as a failed turn.
-	RoleToolError MessageRole = "tool_error"
+	// RoleWork is a finished turn's work log, kept in the transcript: one row
+	// per step, with a failed step's reason under it. It is the durable record
+	// of what ran, what failed and what the user approved.
+	RoleWork MessageRole = "work"
 )
 
 type Message struct {
@@ -60,12 +60,20 @@ type Message struct {
 	// a stale index would panic or silently overwrite an unrelated message.
 	Identity string
 
+	// Work is a RoleWork message's steps, as the live log held them.
+	Work []ActivityItem
+
 	// cardCache memoizes the drawn card. updateViewport re-renders every message
 	// on each streamed token, and laying a card out means re-parsing its JSON —
 	// so without this a long answer re-parses every card on screen per token.
 	// Keyed by width; a resize invalidates it.
 	cardCache      string
 	cardCacheWidth int
+
+	// renderedWrap is the markdown measure Rendered was laid out at. An answer
+	// rendered before the window narrowed keeps rows wider than the pane, and
+	// the viewport clips them; renderMessage re-renders when this differs.
+	renderedWrap int
 }
 
 // renderCard draws the card at w, reusing the last render when the width has not
@@ -97,7 +105,10 @@ func (m *Message) renderCardDeduped(w int, seen map[string]bool) string {
 }
 
 type ActivityItem struct {
-	Kind string // "thinking", "tool", "step", "status", "confirm"
+	// "thinking", "tool", "step", "status", "confirm", "note" — model text
+	// streamed before a tool call, which is narration rather than the answer —
+	// or "stage", a progress line the TUI itself owns ("Clearing conversation").
+	Kind string
 	// Content is the user-facing line — for a tool, the narrated phrase
 	// ("Loading the github-triage skill"), never the bare tool name.
 	Content string
@@ -116,6 +127,10 @@ type ActivityItem struct {
 	Output  string
 	Done    bool
 	Success *bool
+	// Approval is the user's answer to a confirmation this step asked for —
+	// approvalWaiting until they answer, then "approved", "denied"… — or ""
+	// when it asked for none.
+	Approval string
 	// Repeat counts additional consecutive occurrences folded into this item by
 	// the live work log; 0 means it happened once.
 	Repeat int

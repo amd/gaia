@@ -756,6 +756,9 @@ class TestLemonadeClientMock(unittest.TestCase):
                 with self.assertRaises(LemonadeClientError) as ctx:
                     self.client.load_model(model_name=TEST_MODEL, load_retries=2)
             self.assertIn("llama-server failed to start", str(ctx.exception))
+            # A crash that outlives the retries names the fix, not just the
+            # symptom (#1831).
+            self.assertIn("GGML_VK_DISABLE_COOPMAT=1", str(ctx.exception))
             # 1 initial attempt + 2 retries = 3 load calls.
             self.assertEqual(len(responses.calls), 3)
         finally:
@@ -1102,7 +1105,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         )
         self.assertTrue(_model_ids_match("user.Foo-GGUF", "foo-gguf"))
         self.assertFalse(
-            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "nomic-embed-text-v2-moe-GGUF")
+            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "embed-gemma-300m-FLM")
         )
 
         # Server lists the stripped id; requesting the user.-prefixed name must

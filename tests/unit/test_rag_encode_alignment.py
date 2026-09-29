@@ -13,7 +13,7 @@ from gaia.rag.sdk import RAGSDK
 def _sdk(embeddings):
     sdk = RAGSDK.__new__(RAGSDK)  # skip heavy __init__
     sdk.config = MagicMock()
-    sdk.config.embedding_model = "nomic-embed-text-v2-moe-GGUF"
+    sdk.config.embedding_model = "user.embeddinggemma-300m-GGUF"
     sdk.config.show_stats = False
     sdk.log = MagicMock()
     sdk.embedder = MagicMock()

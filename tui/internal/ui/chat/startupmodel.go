@@ -41,8 +41,10 @@ type startupModel struct {
 	pending  bool // not sent yet
 	inFlight bool // its turn has not ended
 	pinged   bool // the agent reported its model during that turn
-	// confirmed is set when the agent switched to exactly this model.
+	// confirmed is set when the agent switched to exactly this model;
+	// warmNext then starts the warm-up (warmup.go) on it.
 	confirmed bool
+	warmNext  bool
 	// unresolved is set when the turn ended any other way; Update reports it.
 	unresolved bool
 	// reason is the clause the failure line gives, when one is known.

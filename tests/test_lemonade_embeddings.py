@@ -40,7 +40,7 @@ class TestLemonadeEmbeddings:
         assert len(response["data"]) == 1, "Should have one embedding for one text"
 
         embedding = response["data"][0]["embedding"]
-        assert len(embedding) == 768, "Nomic embeddings should be 768 dimensions"
+        assert len(embedding) == 768, "Embeddings should be 768 dimensions"
         assert all(
             isinstance(x, float) for x in embedding[:5]
         ), "Embedding values should be floats"
