@@ -619,3 +619,27 @@ func TestAnAnswerHasNoBlankRowsOfItsOwn(t *testing.T) {
 		t.Errorf("the answer ends in a blank row: %q", rows)
 	}
 }
+
+// Typing during a turn appended the Enter hint AFTER a composer that already
+// spanned the pane, so that row overran the terminal and JoinVertical padded
+// every row of the frame to match: the whole screen wrapped the moment the
+// user typed mid-turn. The composer now gives the hint its width.
+func TestTypingMidTurnKeepsTheFrameInsideTheTerminal(t *testing.T) {
+	for _, w := range []int{40, 60, 80, 120, 200} {
+		for _, text := range []string{"hi", strings.Repeat("a long follow up ", 12)} {
+			m := sizedChat(t, w, 30)
+			m.input.SetValue(text)
+			m.syncComposerHeight()
+			m.updateViewport()
+			frame := m.View()
+			for i, r := range strings.Split(frame, "\n") {
+				if got := ansi.StringWidth(r); got > w {
+					t.Fatalf("w=%d: row %d is %d columns: %q", w, i, got, ansi.Strip(r))
+				}
+			}
+			if w >= 60 && !strings.Contains(ansi.Strip(frame), m.midTurnEnterHint()) {
+				t.Errorf("w=%d: the Enter hint vanished though there is room for it", w)
+			}
+		}
+	}
+}

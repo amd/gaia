@@ -2083,6 +2083,10 @@ func (m *ChatModel) flushBuffer() {
 // the user is writing about.
 const composerMaxRows = 6
 
+// composerMinWidth is the narrowest the composer may get to make room for the
+// mid-turn Enter hint; below it the hint is dropped rather than the text.
+const composerMinWidth = 16
+
 // composerRows is the height the composer wants right now — one row per line
 // the user has actually written.
 func (m ChatModel) composerRows() int {
@@ -3290,7 +3294,16 @@ func (m ChatModel) View() string {
 		// owns that line; here only the user's own text has anything to add.
 		switch {
 		case strings.TrimSpace(m.input.Value()) != "":
-			inputView = m.input.View() + "  " + activityStyle.Render(m.midTurnEnterHint())
+			// The composer already spans the pane, so the hint has to come out
+			// of its width: appended after it, the row overran the terminal and
+			// every row of the frame was padded to match — the terminal wrapped
+			// them all the moment the user typed mid-turn.
+			hint := "  " + activityStyle.Render(m.midTurnEnterHint())
+			if w := m.input.Width() - lipgloss.Width(hint); w >= composerMinWidth {
+				in := m.input
+				in.SetWidth(w)
+				inputView = lipgloss.JoinHorizontal(lipgloss.Top, in.View(), hint)
+			}
 		case len(m.sending) > 0 || len(m.queued) > 0:
 			inputView = m.renderQueuedRow()
 		default:
