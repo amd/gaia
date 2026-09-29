@@ -576,9 +576,32 @@ class EmbeddedLemonade:
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         path = self.config_dir / "config.json"
+        # Lemonade persists its own keys here (e.g. cloud_providers), so only
+        # the keys GAIA owns are overwritten; the rest must survive a restart.
+        existing: Dict[str, object] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                log.warning(
+                    "Replacing unreadable %s (%s); any cloud providers Lemonade "
+                    "saved there must be reinstalled",
+                    path,
+                    e,
+                )
+            else:
+                if isinstance(loaded, dict):
+                    existing = loaded
+                else:
+                    log.warning(
+                        "Replacing %s: expected a JSON object, found %s",
+                        path,
+                        type(loaded).__name__,
+                    )
         # Rewritten on every start(), so a device-profile or GAIA_CTX_SIZE change
         # moves the request budget with it rather than leaving a stale number.
-        path.write_text(json.dumps(_lemond_config(), indent=2), encoding="utf-8")
+        merged = {**existing, **_lemond_config()}
+        path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
         return path
 
     # -- state ------------------------------------------------------------
