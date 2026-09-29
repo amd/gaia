@@ -90,6 +90,7 @@
                       "guides/document-extraction",
                       "guides/ai-providers",
                       "guides/chat",
+              "guides/harness-engineering",
                       "guides/talk",
                       "guides/transcription"
                     ]
@@ -434,6 +435,7 @@
               "plans/skill-format",
               "plans/skill-synthesis",
               "plans/adaptive-skills",
+              "spec/harness-engineering-mode",
               "plans/adaptive-memory",
               "plans/oem-bundling"
             ]

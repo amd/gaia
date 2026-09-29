@@ -27,6 +27,9 @@ import (
 // (see init) — old scripts and docs keep working, help lists one flag.
 var dev bool
 
+// developerMode enables harness engineering, independently of diagnostic output.
+var developerMode bool
+
 // fullAccessFlag backs --full-access: the agent runs every gated tool — shell
 // commands, file writes — without asking, and the shell's own guardrails come
 // off with them (redirection and the other shell-only operators parse, the
@@ -163,6 +166,10 @@ var rootCmd = &cobra.Command{
 	// actual error off a short terminal. Usage is what --help is for.
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := applyDeveloperMode(); err != nil {
+			return err
+		}
+
 		ctrl, err := controlOptionsFor(cmd)
 		if err != nil {
 			return err
@@ -184,6 +191,15 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// applyDeveloperMode opts the subprocess in while leaving an existing host
+// environment untouched when the flag is absent (also used by WebUI hosts).
+func applyDeveloperMode() error {
+	if developerMode {
+		return os.Setenv("GAIA_DEVELOPER_MODE", "1")
+	}
+	return nil
+}
+
 // closeTrace flushes and closes the trace, reporting a recording that stopped
 // early. Silence here would let a truncated trace read as a complete one.
 func closeTrace(w *event.TraceWriter) {
@@ -201,6 +217,8 @@ func init() {
 	// not a mistake. root_test.go pins this.
 	cobra.MousetrapHelpText = ""
 
+	rootCmd.Flags().BoolVar(&developerMode, "developer-mode", false,
+		"enable the developer skill and consent-based Claude Code/Codex handoff")
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
 		"developer mode: show per-turn timings, steps, and tool arguments and output "+
 			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/). "+
