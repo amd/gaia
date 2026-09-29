@@ -274,6 +274,9 @@ type Report struct {
 	// Chat names the model chat will run on, and its size when it runs here —
 	// "Gemma-4-E4B-it-GGUF (3.2 GB, on this machine)". Empty when unknown.
 	Chat string
+	// ChatModel is the local chat model id the check loaded, when chat runs
+	// on this machine. Empty for Claude, a cloud model, or an unproven row.
+	ChatModel string
 }
 
 // Ready reports whether every precondition proved OK. An indeterminate row is

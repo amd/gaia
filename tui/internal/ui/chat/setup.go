@@ -124,12 +124,16 @@ func (m ChatModel) supersededSetup(ch <-chan gaiainit.Event) bool {
 // or was cancelled. Today that is only the one-shot --query launch; nothing
 // queues a chat turn before the user has seen the composer at least once.
 func (m *ChatModel) releaseAfterSetupGate() tea.Cmd {
-	if m.initialQuery == "" {
-		return nil
+	var cmds []tea.Cmd
+	if m.startup.pending {
+		cmds = append(cmds, startupModelCmd())
 	}
-	query := m.initialQuery
-	m.initialQuery = ""
-	return func() tea.Msg { return sendQueryMsg{query: query} }
+	if m.initialQuery != "" {
+		query := m.initialQuery
+		m.initialQuery = ""
+		cmds = append(cmds, func() tea.Msg { return sendQueryMsg{query: query} })
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleSetupCheckResult reacts to the first-boot readiness probe. A ready

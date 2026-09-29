@@ -293,6 +293,12 @@ The `agent <id>` segment is always the stable id, lowercased — the same string
 On a narrow terminal this segment is the first thing to give way, never the model
 chip next to it.
 
+The model chip names the chat model from the moment the chat opens, local
+included: the one the startup check loaded, until the agent reports the model it
+actually runs. The model you last picked is restored on the next launch; if it
+can't be, the chat says so in one line and opens the provider picker. See
+[Your model is remembered](/guides/ai-providers#your-model-is-remembered).
+
 | Key | What it does |
 |---|---|
 | `Enter` | Send message. Mid-answer it goes to the turn already running — see below |

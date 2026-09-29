@@ -367,6 +367,16 @@ type ChatModel struct {
 	// (Lemonade down, bad credential — no ping ever arrives) never leaves
 	// this stuck true.
 	awaitingModelSwitch bool
+	// switchTarget is the id the in-flight `/model <id>` asked for, and
+	// switchedTo what the agent's ping said it moved to — the choice is saved
+	// only when the two match and the turn ends in a final.
+	switchTarget string
+	switchedTo   savedChoice
+
+	// startup is the one `/model` turn sent when the chat opens — see
+	// startupmodel.go. saveModel persists a confirmed switch; nil saves nothing.
+	startup   startupModel
+	saveModel func(provider, model string) error
 
 	connected  bool
 	totalSteps int
@@ -598,6 +608,9 @@ func (m ChatModel) Init() tea.Cmd {
 		// ours -- this only asks.
 		cmds = append(cmds, querySlackCmd(true /* offer */))
 	}
+	if m.startup.pending && !m.setupChecking {
+		cmds = append(cmds, startupModelCmd())
+	}
 	if m.setupChecking {
 		// The flagship agent's first-boot gate (see applyFirstBootGate):
 		// hold the initial query, if any, until the check -- and the setup
@@ -735,11 +748,18 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// can open or close an overlay (a keystroke, a canonical needs_input
 	// event, the turn settling and clearing m.question) — see
 	// mousecapture.go's doc comment on overlayOpen.
+	// Here, like the queue drain below: the opening /model turn can end down
+	// any terminal path, and this is the one place that sees them all.
+	if next.startup.unresolved {
+		var refusedCmd tea.Cmd
+		next, refusedCmd = next.startupRefused()
+		cmd = tea.Batch(cmd, refusedCmd)
+	}
 	if capCmd := next.applyMouseCapture(); capCmd != nil {
 		cmd = tea.Batch(cmd, capCmd)
 	}
 
-	if len(next.queued) == 0 || next.streaming ||
+	if len(next.queued) == 0 || next.streaming || next.startup.pending ||
 		next.setupChecking || next.setupRunning ||
 		next.providerPanel != nil || next.agentsPanel != nil {
 		return next, cmd
@@ -848,7 +868,16 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleConversationCleared(msg)
 
 	case sendQueryMsg:
+		// Behind the opening /model turn, like anything typed before it.
+		if m.startup.pending || m.streaming {
+			m.queued = append(m.queued, msg.query)
+			m.updateViewport()
+			return m, nil
+		}
 		return m.sendQuery(msg.query)
+
+	case startupModelMsg:
+		return m.runStartupModel()
 
 	case channelReadyMsg:
 		m.events = msg.ch
@@ -1366,7 +1395,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, m.sendFollowUp(query)
 		}
-		if m.streaming || m.setupChecking || m.setupRunning {
+		// The opening /model turn goes first: a question sent before it would
+		// run on whatever model the agent happened to start on.
+		if m.streaming || m.setupChecking || m.setupRunning || m.startup.pending {
 			m.queued = append(m.queued, query)
 			m.updateViewport()
 			return m, nil
@@ -1556,6 +1587,9 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	m.question = nil
 	m.confirmation = nil
 	m.activity = nil
+	m.awaitingModelSwitch = false
+	m.switchTarget = ""
+	m.endStartupTurn("you stopped it")
 	abandoned := m.queued
 	m.queued = nil
 	content := "gave up waiting locally — the run may still be finishing on the server; " +
@@ -1639,6 +1673,8 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		// fire-and-forget control one /full-access uses — see
 		// gaia_agent.stdio.run_model_command for why.
 		m.awaitingModelSwitch = true
+		m.switchTarget = modelCommandArg(query)
+		m.switchedTo = savedChoice{}
 		return m.startTurn(query)
 	}
 
@@ -1861,6 +1897,11 @@ func (m *ChatModel) settleTurn() {
 	// keeps a failure from leaving this stuck true and permanently
 	// suppressing the revert-warning in handleCanonicalEvent.
 	m.awaitingModelSwitch = false
+	m.switchTarget = ""
+	if m.cancelPending {
+		m.endStartupTurn("you cancelled it")
+	}
+	m.endStartupTurn("the agent stopped before it could switch")
 	// "cancelling…" describes a request that is in flight, so it must not
 	// outlive it. Left in place it became a permanent claim in the scrollback —
 	// and when the cancel lost the race it sat directly above the answer that

@@ -118,8 +118,9 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 		steps = append(steps, l.checkClaudeCredential)
 	}
 	steps = append(steps, l.checkLemonade, func(ctx context.Context, cfg Config) Row {
-		row, chat := l.verifyModels(ctx, cfg)
+		row, chat, chatID := l.verifyModels(ctx, cfg)
 		rep.Chat = chat
+		rep.ChatModel = chatID
 		return row
 	})
 	for _, step := range steps {
@@ -497,7 +498,7 @@ func (l localRunner) localChatModel() string {
 // embedder llama-server cannot start is "downloaded" and still breaks document
 // search and memory on the first turn. It also returns the chat line for the
 // hand-off, empty when there is nothing proven to name.
-func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string) {
+func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, string) {
 	row := Row{Key: KeyModel}
 
 	st, err := gaiainit.Verify(ctx, l.skipChatModel(), l.localChatModel())
@@ -517,7 +518,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string) {
 			Where:   installDocs,
 		}
 		row.Raw = err.Error()
-		return row, ""
+		return row, "", ""
 
 	case err != nil:
 		// Verify only ever wraps ErrUnanswered today; anything else reaching
@@ -527,7 +528,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string) {
 		row.Line = "could not be checked"
 		row.Detail = err.Error()
 		row.Raw = err.Error()
-		return row, ""
+		return row, "", ""
 
 	case st.Ready:
 		row.State = StateOK
@@ -535,23 +536,23 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string) {
 		switch {
 		case l.opts.ClaudeMode:
 			row.Line = "embedder loads — chat runs on Claude"
-			return row, "Claude"
+			return row, "Claude", ""
 		case lemonade.IsCloudID(l.opts.Model):
 			row.Line = "embedder loads — chat uses " + l.opts.Model
-			return row, l.opts.Model + " (in the cloud)"
+			return row, l.opts.Model + " (in the cloud)", ""
 		}
 		chat, ok := st.Chat()
 		if !ok {
 			row.Line = "loads"
-			return row, ""
+			return row, "", ""
 		}
 		row.Line = chat.ID + sizeSuffix(chat.SizeGB) + " and the embedder load"
-		return row, describeChat(chat)
+		return row, describeChat(chat), chat.ID
 	}
 
 	switch st.Stage {
 	case gaiainit.StageLoad:
-		return l.loadFailedRow(st), ""
+		return l.loadFailedRow(st), "", ""
 	case gaiainit.StageServer:
 		// Installed and not answering is a fault, not a step still to do.
 		row.State = StateFailed
@@ -565,7 +566,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string) {
 			Where:   installDocs,
 		}
 		row.Raw = row.Detail
-		return row, ""
+		return row, "", ""
 	}
 
 	// Not downloaded yet: the normal state of a first run.
@@ -587,7 +588,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string) {
 		Where:   installDocs,
 	}
 	row.Raw = strings.Join(st.Reasons, "\n")
-	return row, ""
+	return row, "", ""
 }
 
 // loadFailedRow is a model that is downloaded and will not load — a real

@@ -54,11 +54,11 @@ func (m FlagshipModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) 
 func (m FlagshipModel) localOptions(agent catalog.Agent) preflight.LocalOptions {
 	if m.pfLocal != nil {
 		opts := *m.pfLocal
-		opts.Model = m.model
+		opts.Model = m.launchModel(agent)
 		opts.ClaudeMode = m.useClaude
 		return opts
 	}
-	return preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: m.useClaude, Model: m.model}
+	return preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: m.useClaude, Model: m.launchModel(agent)}
 }
 
 // preflightTransport builds the gate's transport on first use and keeps it for
@@ -116,6 +116,7 @@ func (m FlagshipModel) proceedFromGate() (tea.Model, tea.Cmd) {
 	// first-boot check must not ask again — each costs a fresh Python
 	// interpreter for up to 30s, and a cold launch was paying that twice.
 	verified := gateAskedAboutSetup(m.preflight.Report())
+	m.gateChatModel = m.preflight.Report().ChatModel
 	// Before closeGate clears halted: proceeding IS the deliberate choice
 	// the halt exists to gate, so mark these StepIDs accepted for the rest
 	// of the session before the record of them is gone.

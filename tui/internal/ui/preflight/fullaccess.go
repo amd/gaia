@@ -74,6 +74,11 @@ func readFullAccess(p hostProbe) FullAccessConfig {
 // default_device, default_model, anything added later — has to survive a write
 // from here untouched. Marshalling a struct would silently drop them.
 func WriteFullAccess(enabled bool) (string, error) {
+	return writeConfigKeys(map[string]any{"full_access": enabled})
+}
+
+// writeConfigKeys sets keys in config.json, leaving every other key as it was.
+func writeConfigKeys(keys map[string]any) (string, error) {
 	path := configPath(realHostProbe())
 	if path == "" {
 		return "", fmt.Errorf("cannot locate ~/.gaia/config.json (no home directory)")
@@ -92,7 +97,9 @@ func WriteFullAccess(enabled bool) (string, error) {
 		return path, fmt.Errorf("cannot read %s: %w", path, err)
 	}
 
-	doc["full_access"] = enabled
+	for k, v := range keys {
+		doc[k] = v
+	}
 	body, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return path, fmt.Errorf("cannot encode %s: %w", path, err)

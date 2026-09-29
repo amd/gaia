@@ -55,6 +55,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 						e.ModelDisplay + " — use /model to switch again.",
 				})
 			}
+			if m.startup.inFlight {
+				m.startup.pinged = true
+			}
+			if m.awaitingModelSwitch {
+				m.switchedTo = savedChoice{provider: providerOfBackend(e.ModelBackend), model: e.ModelID}
+			}
 			m.modelID = e.ModelID
 			m.modelDisplay = e.ModelDisplay
 			m.modelBackend = e.ModelBackend
@@ -228,6 +234,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
+		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
+			m.rememberModel(m.switchedTo)
+			if m.startup.inFlight && m.switchTarget == m.startup.model {
+				m.startup.confirmed = true
+				if m.startup.kind == StartupRestore {
+					content = "Restored your last model.\n\n" + content
+				}
+			}
+		}
 		// A turn stopped before it said anything ends with an empty final; the
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
@@ -287,7 +302,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 	case event.CanonicalErrorEvent:
 		m.flushBuffer()
 		m.resolveConfirmationOnTurnEnd()
-		m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
+		// The agent is up (it pinged) and refused the opening switch: the
+		// failure line says why. An agent that died first shows its own error.
+		if m.startup.inFlight && m.startup.pinged {
+			m.startup.reason = startupFailureReason(m.startup.provider, e.Detail)
+		} else {
+			m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
+		}
 		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil

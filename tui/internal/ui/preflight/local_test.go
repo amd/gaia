@@ -499,7 +499,10 @@ func TestExitZeroMeansReadyAndNamesTheChatModel(t *testing.T) {
 	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 0, localLoadsJSON), nil })
 
 	rep := localRunner{}
-	row, chat := rep.verifyModels(context.Background(), localCfg())
+	row, chat, chatID := rep.verifyModels(context.Background(), localCfg())
+	if chatID != "Gemma-4-E4B-it-GGUF" {
+		t.Errorf("chat model id = %q — the chat header names it before the agent's first ping", chatID)
+	}
 	if row.State != StateOK {
 		t.Fatalf("state = %s, want ok: %s", row.State.Word(), row.Detail)
 	}
@@ -825,7 +828,7 @@ var autoStartForTest = tryAutoStartLemonade
 
 // modelRow is the model row as Check produces it.
 func modelRow(r localRunner) Row {
-	row, _ := r.verifyModels(context.Background(), localCfg())
+	row, _, _ := r.verifyModels(context.Background(), localCfg())
 	return row
 }
 

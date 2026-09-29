@@ -74,7 +74,11 @@ from typing import Any, Dict, List, Optional
 
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
-from gaia.agents.base.readiness import start_advice
+from gaia.agents.base.readiness import (
+    probe_model_present,
+    resolve_probe_base,
+    start_advice,
+)
 from gaia.llm import create_client
 from gaia.llm.inference_location import resolve_inference_location
 from gaia.llm.lemonade_client import (
@@ -614,10 +618,32 @@ def _apply_claude_switch(agent: Any, target: str) -> str:
     return CLAUDE_MODELS[target]
 
 
+def _replayed_cloud_key(base_url: Optional[str], target: str) -> bool:
+    """Whether Lemonade lists cloud model *target* once handed its remembered key.
+
+    A restarted Lemonade forgets runtime keys and discovers nothing; the
+    readiness probe is the one place that gives back a key GAIA remembers for
+    that provider. False
+    for a local id, or when the probe cannot reach Lemonade — the caller's
+    "Unknown Lemonade model" refusal is then the actionable answer.
+    """
+    import requests
+
+    if cloud_model_provider(target) is None:
+        return False
+    try:
+        return probe_model_present(resolve_probe_base(base_url), target)
+    except requests.RequestException as exc:
+        logger.debug("[lemonade] cloud key replay probe for %r failed: %s", target, exc)
+        return False
+
+
 def _apply_local_switch(agent: Any, target: str) -> str:
     """Swap the live client to a local or cloud Lemonade model."""
     chat = agent.chat
     available = _lemonade_models(chat.config.base_url)  # raises if unreachable
+    if target not in available and _replayed_cloud_key(chat.config.base_url, target):
+        available = _lemonade_models(chat.config.base_url)
     if target not in available:
         raise RuntimeError(
             f"Unknown Lemonade model '{target}'. Downloaded local or discovered cloud "
