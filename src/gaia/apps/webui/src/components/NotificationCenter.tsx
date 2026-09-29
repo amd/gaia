@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useCallback, useRef } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import {
   Bell,
   X,
@@ -85,7 +86,9 @@ function formatNotifTime(timestamp: number): string {
 // ── Component ────────────────────────────────────────────────────────────
 
 export function NotificationCenter({ onClose }: NotificationCenterProps) {
-  const notifications = useNotificationStore(selectVisibleNotifications);
+  // useShallow is required — the selector filters into a fresh array, and an
+  // uncached snapshot makes useSyncExternalStore re-render without end.
+  const notifications = useNotificationStore(useShallow(selectVisibleNotifications));
   const unreadCount = useNotificationStore(selectUnreadCount);
   const markRead = useNotificationStore((s) => s.markRead);
   const markAllRead = useNotificationStore((s) => s.markAllRead);

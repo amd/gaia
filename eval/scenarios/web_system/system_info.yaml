@@ -1,7 +1,6 @@
 id: system_info
 name: "System Info Tool"
 category: web_system
-agent_type: chat
 severity: low
 description: |
   Tests that get_system_info tool is registered and returns correct OS/hardware info.

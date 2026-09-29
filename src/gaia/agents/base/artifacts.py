@@ -4,7 +4,11 @@
 
 import threading
 import time
+from typing import Optional, Tuple
 from uuid import uuid4
+
+#: Most characters one ``read`` returns; a longer span continues at ``next_offset``.
+PAGE_CHARS = 8000
 
 
 class ArtifactStore:
@@ -14,6 +18,8 @@ class ArtifactStore:
         self.max_bytes = max_bytes
         self.ttl = ttl
         self._items = {}
+        #: handle -> [(offset, length), ...] for index entries 1..n.
+        self._indexes = {}
         self._lock = threading.Lock()
 
     def put(self, text: str) -> str:
@@ -23,6 +29,7 @@ class ArtifactStore:
             self._items = {
                 k: v for k, v in self._items.items() if now - v[0] < self.ttl
             }
+            self._indexes = {k: v for k, v in self._indexes.items() if k in self._items}
             if size + sum(v[2] for v in self._items.values()) > self.max_bytes:
                 raise ValueError(
                     "Tool output archive is full (64 MiB default); request smaller output or start a new session."
@@ -31,17 +38,58 @@ class ArtifactStore:
             self._items[handle] = (now, text, size)
             return handle
 
-    def read(self, handle: str, offset: int = 0, limit: int = 2000) -> dict:
+    def set_index(self, handle: str, entries) -> None:
+        """Record a handle's index so ``read(entry=n)`` returns entry ``n``."""
+        with self._lock:
+            if handle not in self._items:
+                raise ValueError(f"Unknown output handle {handle}; cannot index it.")
+            self._indexes[handle] = [(e["offset"], e["length"]) for e in entries]
+
+    def has(self, handle) -> bool:
+        """Whether ``handle`` names live output in this store."""
+        with self._lock:
+            item = self._items.get(handle) if isinstance(handle, str) else None
+            return item is not None and time.monotonic() - item[0] < self.ttl
+
+    def text(self, handle: str) -> str:
+        """The whole archived text, for indexing it; the model pages via ``read``."""
+        with self._lock:
+            item = self._items.get(handle)
+            if item is None or time.monotonic() - item[0] >= self.ttl:
+                raise ValueError(f"Unknown or expired output handle {handle}.")
+            return item[1]
+
+    def read(
+        self,
+        handle: str,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        entry: Optional[int] = None,
+    ) -> dict:
+        """A page of archived text: index entry ``entry``, or ``offset``/``limit``.
+
+        ``limit`` defaults to the entry's length, or 2000 without an entry. A
+        page holds at most ``PAGE_CHARS``; ``remaining`` and ``next_offset``
+        say where the rest of the requested span continues.
+        """
+        if entry is not None:
+            if offset:
+                raise ValueError("Pass entry or offset, not both.")
+            offset, length = self._entry_span(handle, entry)
+            limit = length if limit is None else limit
+        elif limit is None:
+            limit = 2000
         if (
             not isinstance(offset, int)
             or isinstance(offset, bool)
             or offset < 0
             or not isinstance(limit, int)
             or isinstance(limit, bool)
-            or not 1 <= limit <= 8000
+            or limit < 1
         ):
             raise ValueError(
-                "offset must be a nonnegative character index; limit must be 1..8000"
+                "offset must be a nonnegative character index; limit must be a "
+                "positive character count"
             )
         with self._lock:
             item = self._items.get(handle)
@@ -57,14 +105,41 @@ class ArtifactStore:
                 )
             if offset > len(text):
                 raise ValueError(f"offset exceeds output length {len(text)}")
-            end = min(len(text), offset + limit)
-            return {
+            end = min(len(text), offset + min(limit, PAGE_CHARS))
+            page = {
                 "artifact": handle,
                 "content": text[offset:end],
                 "offset": offset,
                 "next_offset": end if end < len(text) else None,
                 "total_chars": len(text),
             }
+            span_end = min(len(text), offset + limit)
+            if end < span_end:
+                page["remaining"] = span_end - end
+            if entry is not None:
+                page["entry"] = entry
+            return page
+
+    def _entry_span(self, handle: str, entry) -> Tuple[int, int]:
+        if not isinstance(entry, int) or isinstance(entry, bool):
+            raise ValueError(f"entry must be an index entry number, got {entry!r}.")
+        with self._lock:
+            if handle not in self._items:
+                raise ValueError(
+                    f"Unknown output handle {handle}; handles belong to the producing agent session."
+                )
+            spans = self._indexes.get(handle)
+        if spans is None:
+            raise ValueError(
+                f"Output {handle} has no index; read it with offset and limit."
+            )
+        if not 1 <= entry <= len(spans):
+            listed = f"entries 1-{len(spans)}" if spans else "no entries"
+            raise ValueError(
+                f"Entry {entry} is not in the index of {handle}, which lists "
+                f"{listed}; use an n from that result's index."
+            )
+        return spans[entry - 1]
 
 
 def store_for(owner) -> ArtifactStore:

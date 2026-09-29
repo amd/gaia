@@ -88,20 +88,51 @@ type fakeRelay struct {
 	// down its own read (#2901).
 	onCancelPost func()
 
-	mu          sync.Mutex
-	token       string
-	queries     []queryRequest
-	rawBodies   []string
-	cancelled   []string
-	confirmed   []confirmCall
-	auths       []string
-	versionHits int
+	// followUpStatus overrides the status POST .../followup answers with.
+	// Zero means 200. The interesting values are the two refusals the real
+	// route sends (404 for a run that ended, 409 for an agent that will not
+	// take one), because BOTH have to reach the user rather than be swallowed.
+	followUpStatus int
+
+	mu             sync.Mutex
+	token          string
+	queries        []queryRequest
+	rawBodies      []string
+	cancelled      []string
+	confirmed      []confirmCall
+	followUps      []followUpCall
+	decisions      []decisionCall
+	bypasses       []bypassCall
+	decisionStatus int
+	bypassStatus   int
+	auths          []string
+	versionHits    int
 }
 
 // confirmCall is one recorded POST .../query/{run_id}/confirm.
 type confirmCall struct {
 	runID    string
 	approved bool
+}
+
+// followUpCall is one recorded POST .../query/{run_id}/followup.
+type followUpCall struct {
+	runID string
+	text  string
+}
+
+// decisionCall is one recorded POST .../query/{run_id}/tool_decision — the LIVE
+// permission seam, distinct from /confirm's resume model.
+type decisionCall struct {
+	runID     string
+	decision  string
+	confirmID string
+}
+
+// bypassCall is one recorded POST .../sessions/{session_id}/bypass.
+type bypassCall struct {
+	sessionID string
+	enabled   bool
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -248,6 +279,78 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			// that the ask-to-stop and its eventual effect are decoupled.
 			f.onCancelPost()
 		}
+
+	case strings.HasSuffix(r.URL.Path, "/followup"):
+		parts := strings.Split(r.URL.Path, "/")
+		var body followUpRequest
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("followup body is not valid JSON: %v (%s)", err, raw)
+		}
+		f.mu.Lock()
+		f.followUps = append(f.followUps, followUpCall{runID: parts[len(parts)-2], text: body.Text})
+		status := f.followUpStatus
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"detail":"no run in flight"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"run_id":%q,"delivered":true}`, parts[len(parts)-2])
+
+	case strings.HasSuffix(r.URL.Path, "/tool_decision"):
+		if r.Method != http.MethodPost {
+			f.t.Errorf("tool_decision method = %q, want POST", r.Method)
+		}
+		var body struct {
+			Decision  string `json:"decision"`
+			ConfirmID string `json:"confirm_id"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("tool_decision body: %v", err)
+		}
+		parts := strings.Split(r.URL.Path, "/")
+		f.mu.Lock()
+		f.decisions = append(f.decisions, decisionCall{
+			runID: parts[len(parts)-2], decision: body.Decision, confirmID: body.ConfirmID,
+		})
+		status := f.decisionStatus
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"detail":"nothing pending"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"run_id":"r","decision":"allow","delivered":true}`))
+
+	case strings.HasSuffix(r.URL.Path, "/bypass"):
+		if r.Method != http.MethodPost {
+			f.t.Errorf("bypass method = %q, want POST", r.Method)
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("bypass body: %v", err)
+		}
+		parts := strings.Split(r.URL.Path, "/")
+		f.mu.Lock()
+		f.bypasses = append(f.bypasses, bypassCall{
+			sessionID: parts[len(parts)-2], enabled: body.Enabled,
+		})
+		status := f.bypassStatus
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"detail":"no such session"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"session_id":"s","enabled":true}`))
 
 	case strings.HasSuffix(r.URL.Path, "/confirm"):
 		// No shipped sidecar has this route (the resume model is unimplemented

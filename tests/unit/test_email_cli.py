@@ -110,3 +110,114 @@ class TestDispatch:
             assert init_kwargs.get("use_chatgpt", False) is False
             assert "use_claude" not in call.kwargs
             assert "use_chatgpt" not in call.kwargs
+            # No --trace on the namespace -> tracing stays off.
+            assert call.kwargs["trace"] is False
+
+    def test_handle_email_command_relays_trace_flag(self):
+        """``--trace`` is advertised on the email subcommand, so it must reach
+        ``run_query`` — it used to be parsed and dropped (#3345)."""
+        import argparse
+
+        from gaia import cli
+        from gaia.daemon.agent_query import QueryOutcome
+
+        ns = argparse.Namespace(
+            action="email",
+            query="triage my inbox",
+            interactive=False,
+            verbose=False,
+            debug=False,
+            no_lemonade_check=False,
+            base_url=None,
+            model=None,
+            spec=False,
+            trace=True,
+        )
+
+        with (
+            patch("gaia.daemon.agent_query.run_query") as run_query,
+            patch("gaia.cli.initialize_lemonade_for_agent", return_value=(True, None)),
+        ):
+            run_query.return_value = QueryOutcome(
+                exit_code=0,
+                terminal_type="final",
+                final_answer="done",
+                trace_path="/tmp/email_trace.json",
+            )
+            with pytest.raises(SystemExit) as exc:
+                cli.handle_email_command(ns)
+            assert exc.value.code == 0
+
+            assert run_query.call_args.kwargs["trace"] is True
+
+    @pytest.mark.parametrize(
+        "argv_tail",
+        [
+            pytest.param(
+                [
+                    "email",
+                    "--base-url",
+                    "http://lemonade.example:13305/api/v1",
+                    "-q",
+                    "ping",
+                ],
+                id="after-subcommand",
+            ),
+            pytest.param(
+                [
+                    "--base-url",
+                    "http://lemonade.example:13305/api/v1",
+                    "email",
+                    "-q",
+                    "ping",
+                ],
+                id="before-subcommand",
+            ),
+            pytest.param(
+                [
+                    "--base-url=http://lemonade.example:13305/api/v1",
+                    "email",
+                    "-q",
+                    "ping",
+                ],
+                id="before-subcommand-equals",
+            ),
+        ],
+    )
+    def test_base_url_is_rejected_instead_of_only_reaching_the_health_check(
+        self, capsys, argv_tail
+    ):
+        """#4312: the query runs in the daemon's email sidecar, which never sees
+        the CLI's ``--base-url``. Accepting it would pre-flight one server and
+        then triage on another, so the flag must fail loudly before either.
+
+        Parametrized over flag position: argparse copies the subparser namespace
+        over the parent's, so a pre-subcommand ``gaia --base-url ... email`` used
+        to be discarded and run on the daemon's server with no warning at all.
+        """
+        import sys
+
+        from gaia import cli
+
+        old_argv = sys.argv
+        sys.argv = ["gaia", *argv_tail]
+        try:
+            with (
+                patch("gaia.daemon.agent_query.run_query") as run_query,
+                patch(
+                    "gaia.cli.initialize_lemonade_for_agent",
+                    return_value=(True, None),
+                ) as init_lemonade,
+                pytest.raises(SystemExit) as exc,
+            ):
+                cli.main()
+        finally:
+            sys.argv = old_argv
+
+        assert exc.value.code == 2
+        run_query.assert_not_called()
+        init_lemonade.assert_not_called()
+        err = capsys.readouterr().err
+        assert "--base-url" in err
+        assert "LEMONADE_BASE_URL=http://lemonade.example:13305/api/v1" in err
+        assert "gaia daemon stop" in err

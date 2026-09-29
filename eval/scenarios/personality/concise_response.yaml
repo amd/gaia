@@ -1,7 +1,6 @@
 id: concise_response
 name: "Concise Response -- Short Greeting"
 category: personality
-agent_type: chat
 severity: medium
 description: |
   User sends a short greeting. Agent should respond concisely (1-2 sentences)

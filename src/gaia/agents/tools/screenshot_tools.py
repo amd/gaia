@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """ScreenshotToolsMixin — cross-platform screenshot capture for GAIA agents."""
 
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -50,6 +51,9 @@ class ScreenshotToolsMixin:
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
 
+        missing = []
+        failures = []
+
         # Try mss first (cross-platform, no display server required on Linux)
         try:
             import mss
@@ -67,9 +71,10 @@ class ScreenshotToolsMixin:
                 "method": "mss",
             }
         except ImportError:
-            pass
+            missing.append("mss is not installed")
         except Exception as e:
-            logger.debug("mss screenshot failed: %s", e)
+            logger.warning("mss screenshot failed: %s", e)
+            failures.append(f"mss failed: {type(e).__name__}: {e}")
 
         # Fall back to PIL.ImageGrab (Windows / macOS)
         try:
@@ -84,13 +89,27 @@ class ScreenshotToolsMixin:
                 "height": img.height,
                 "method": "PIL.ImageGrab",
             }
+        except ImportError:
+            missing.append("PIL.ImageGrab is not available")
         except Exception as e:
-            logger.debug("PIL.ImageGrab screenshot failed: %s", e)
+            logger.warning("PIL.ImageGrab screenshot failed: %s", e)
+            failures.append(f"PIL.ImageGrab failed: {type(e).__name__}: {e}")
 
+        if failures:
+            hint = "A capture backend is installed but could not grab the screen."
+            if sys.platform == "darwin":
+                hint += (
+                    " On macOS, allow Screen Recording for the app running GAIA in "
+                    "System Settings > Privacy & Security > Screen Recording."
+                )
+        else:
+            hint = (
+                "Install mss (pip install mss), or Pillow for PIL.ImageGrab "
+                "on Windows/macOS."
+            )
         return {
             "status": "error",
             "error": (
-                "Screenshot capture failed. Install mss (pip install mss) or "
-                "ensure PIL.ImageGrab is available (Pillow on Windows/macOS)."
+                f"Screenshot capture failed: {'; '.join(failures + missing)}. {hint}"
             ),
         }

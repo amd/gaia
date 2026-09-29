@@ -77,7 +77,7 @@ Fastest path for end users: `gaia chat --ui` → "+" → **BuilderAgent** (inter
 
 **Optional:**
 - `_create_console(self) -> AgentConsole` — only override if you need a custom console; the base class provides a default
-- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — required *only* for agents exposed through the registry/BuilderAgent flow (see `src/gaia/agents/builder/agent.py`). Most concrete Python agents (`ChatAgent`, `CodeAgent`, `JiraAgent`, …) don't declare them at all.
+- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — required *only* for agents exposed through the registry/BuilderAgent flow (see `src/gaia/agents/builder/agent.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `hub/agents/hello-world`, `hub/agents/word-count` and `hub/agents/email` do declare them.
 
 ### 2. Tools
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope
@@ -144,7 +144,7 @@ The registry discovers packaged agents by scanning the `gaia.agent` entry-point 
 
 That's the full `KNOWN_TOOLS` set — re-read `registry.py` rather than trusting this table if it looks short.
 
-**MRO rule (GAIA convention, verified against the tree):** TOOL mixins go **after** `Agent`; a STATE mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent(MemoryMixin, Agent, RAGToolsMixin, …)`). `SDAgent` and `MedicalIntakeAgent` follow the simpler `class X(Agent, …Mixin)` shape. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a tool mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
+**MRO rule (GAIA convention, verified against the tree):** TOOL mixins go **after** `Agent`; a STATE mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent(MemoryMixin, Agent, RAGToolsMixin, …)`). `hub/agents/hello-world`'s `HelloWorldAgent` follows the simpler `class X(Agent)` shape. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a tool mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
 
 ## Default models (verified)
 

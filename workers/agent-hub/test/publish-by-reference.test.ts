@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
 
 import worker from "../src/index";
 import type { AgentManifest } from "../src/types";
-import { makeEnv, publishByRefRequest, sampleManifest, sha256Of } from "./fake-r2";
+import { makeEnv, publishByRefRequest, publishRequest, sampleManifest, sha256Of } from "./fake-r2";
 
 const BYTES = new TextEncoder().encode("pretend this is a 130 MiB installer");
 const FILENAME = "gaia-agent-ui-1.0.0-x64-setup.exe";
@@ -143,6 +143,40 @@ describe("publish by reference", () => {
     const again = await publishRef(env, {}, sha, bytes.byteLength);
     expect(again.status).toBe(409);
     expect((await again.json() as any).error.code).toBe("version_exists");
+  });
+
+  it("joins an existing version when the manifest matches, and refuses when it does not", async () => {
+    // Release lanes mix inline binaries with by-reference installers under one
+    // version; each post carries the same gaia-agent.yaml.
+    const env = makeEnv();
+    const inline = await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest(),
+        artifact: "small-binary",
+        filename: "gaia-agent-ui-1.0.0-linux.AppImage",
+      }),
+      env as never
+    );
+    expect(inline.status).toBe(201);
+
+    const { sha, bytes } = await stage(env);
+    const changed = await publishRef(
+      env,
+      { manifestYaml: sampleManifest({ security_tier: "experimental" }) },
+      sha,
+      bytes.byteLength
+    );
+    expect(changed.status).toBe(409);
+    expect((await changed.json() as any).error.code).toBe("manifest_mismatch");
+
+    const same = await publishRef(env, {}, sha, bytes.byteLength);
+    expect(same.status).toBe(201);
+    const manifest = (await (await env.bucket.get("agents/chat/manifest.json"))!.json()) as AgentManifest;
+    expect(manifest.versions["0.1.0"].artifacts.map((a) => a.filename).sort()).toEqual([
+      "gaia-agent-ui-1.0.0-linux.AppImage",
+      FILENAME,
+    ]);
   });
 
   it("refuses a request carrying both an inline artifact and a reference", async () => {

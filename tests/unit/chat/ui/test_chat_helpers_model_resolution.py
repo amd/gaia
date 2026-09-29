@@ -66,6 +66,10 @@ def _make_registry(resolve_model_return=None, setdefault_model="SetdefaultChose-
         fake = MagicMock()
         fake.model_id = kwargs.get("model_id", setdefault_model)
         fake.process_query.return_value = "ok"
+        fake.device = None
+        fake.system_prompt = "Test prompt"
+        fake._openai_tools = []
+        fake.chat.config.max_tokens = 8192
         fake.conversation_history = []
         fake.indexed_files = set()
         return fake

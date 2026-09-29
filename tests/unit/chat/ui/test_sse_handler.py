@@ -2060,3 +2060,47 @@ class TestStripBalancedJsonBlobs:
         text = 'oops {"kind": "email_pre_scan", "n": 1 and no close'
         out = _strip_balanced_json_blobs(text, self.KIND_RE)
         assert out == text  # incomplete object is not removed
+
+
+# ===========================================================================
+# Input / cached token reporting on the terminal answer event
+# ===========================================================================
+
+
+class TestInputAndCachedTokenEmission:
+    """What the answer event may claim about the prompt it was billed for.
+
+    Every figure here is either measured or absent — the surfaces downstream
+    turn these into a dollar amount, so a fabricated zero is not a harmless
+    default. Cached is emitted as an explicit ``0`` only alongside a real
+    input count: "the backend counted the prompt and cached none of it" and
+    "nobody counted" are different claims, and only the first is a zero.
+    """
+
+    def _answer(self, handler, **kwargs):
+        handler.print_final_answer("done", **kwargs)
+        return [e for e in _drain(handler) if e and e.get("type") == "answer"][0]
+
+    def test_measured_counts_are_reported(self, handler):
+        event = self._answer(handler, input_tokens=1200, cached_tokens=900)
+        assert event["input_tokens"] == 1200
+        assert event["cached_tokens"] == 900
+
+    def test_nothing_cached_is_an_explicit_zero(self, handler):
+        event = self._answer(handler, input_tokens=1200, cached_tokens=0)
+        assert event["cached_tokens"] == 0, "a measured zero must survive"
+
+    def test_an_unmeasured_prompt_reports_neither(self, handler):
+        event = self._answer(handler, input_tokens=None, cached_tokens=None)
+        assert "input_tokens" not in event
+        assert "cached_tokens" not in event
+
+    def test_cached_alone_is_not_reported(self, handler):
+        """Without an input count a cache share has nothing to be a share of."""
+        event = self._answer(handler, input_tokens=None, cached_tokens=500)
+        assert "cached_tokens" not in event
+
+    def test_a_zero_input_count_is_not_a_measurement(self, handler):
+        event = self._answer(handler, input_tokens=0, cached_tokens=0)
+        assert "input_tokens" not in event
+        assert "cached_tokens" not in event

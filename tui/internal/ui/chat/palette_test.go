@@ -341,11 +341,22 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 
 	seen := make(map[string]bool)
 	for _, cmd := range submitCommandLiterals(t) {
-		base := cmd
 		if strings.HasPrefix(cmd, "/bypass") {
-			// /bypass on|confirm|off are four distinct case values for the
-			// one command the palette offers.
-			base = "/bypass"
+			// The retired name: answered with a rename notice and deliberately
+			// never offered, so it has no palette or help entry.
+			continue
+		}
+		base := cmd
+		// A command and its sub-forms are one palette row: "/full-access
+		// on|confirm|off|always|never", "/cost help" and "/slack
+		// setup|skip|never" are extra case values for a command the palette
+		// already offers, not commands of their own. Listing them at the top
+		// level would put rows nobody asked for above the command that
+		// explains them.
+		for _, prefix := range []string{"/full-access", "/cost", "/slack"} {
+			if strings.HasPrefix(cmd, prefix) {
+				base = prefix
+			}
 		}
 		seen[base] = true
 		if !known[base] {

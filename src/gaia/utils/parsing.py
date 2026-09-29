@@ -18,12 +18,16 @@ logger = logging.getLogger(__name__)
 
 def _extract_balanced_json(
     text: str, start: int, open_ch: str, close_ch: str
-) -> Optional[Union[Dict[str, Any], List[Any]]]:
+) -> Tuple[Optional[Union[Dict[str, Any], List[Any]]], Optional[int]]:
     """Parse the balanced JSON value opening at ``text[start]``.
 
     Counts only the outer bracket type (inner brackets of the same type are
     themselves balanced), ignoring brackets inside JSON string values and
     handling escaped characters within them.
+
+    Returns ``(value, end)`` where ``end`` is the index of the matching close
+    bracket, or ``None`` when the opener is never closed. ``value`` is ``None``
+    when the balanced span is not valid JSON.
     """
     depth = 0
     in_string = False
@@ -45,14 +49,12 @@ def _extract_balanced_json(
             depth -= 1
             if depth == 0:
                 try:
-                    return json.loads(  # type: ignore[no-any-return]
-                        text[start : i + 1]
-                    )
+                    return json.loads(text[start : i + 1]), i
                 except json.JSONDecodeError as e:
                     logger.debug(f"JSON decode error: {e}")
-                    return None
+                    return None, i
     logger.debug(f"Failed to find matching {close_ch!r} in text: {text[:200]}...")
-    return None
+    return None, None
 
 
 def extract_json_from_text(text: str) -> Optional[Union[Dict[str, Any], List[Any]]]:
@@ -92,18 +94,23 @@ def extract_json_from_text(text: str) -> Optional[Union[Dict[str, Any], List[Any
     # Look for a JSON object or array in the response, trying whichever
     # opens first (a top-level array's first "{" is an inner row object —
     # scanning only "{" would silently drop every row after the first).
-    candidates = sorted(
-        (text.find(open_ch), open_ch, close_ch)
-        for open_ch, close_ch in (("{", "}"), ("[", "]"))
-        if text.find(open_ch) != -1
-    )
-    if not candidates:
+    pairs = {"{": "}", "[": "]"}
+    next_start = {open_ch: text.find(open_ch) for open_ch in pairs}
+    if all(start == -1 for start in next_start.values()):
         logger.debug("No JSON object or array found in text")
         return None
-    for start, open_ch, close_ch in candidates:
-        parsed = _extract_balanced_json(text, start, open_ch, close_ch)
+    while any(start != -1 for start in next_start.values()):
+        open_ch = min(
+            (ch for ch, start in next_start.items() if start != -1),
+            key=next_start.__getitem__,
+        )
+        start = next_start[open_ch]
+        parsed, end = _extract_balanced_json(text, start, open_ch, pairs[open_ch])
         if parsed is not None:
             return parsed
+        # Resume after an invalid span (e.g. a "{field}" placeholder) but never
+        # inside it, so a malformed object can't yield one of its fragments.
+        next_start[open_ch] = -1 if end is None else text.find(open_ch, end + 1)
     return None
 
 

@@ -123,7 +123,7 @@ if (-not $hasCompiler) {
 if (-not $hasCompiler) {
     $cachedGxx = Join-Path (Get-W64DevkitInstallDir -ToolsRoot $toolsRoot) 'bin'
     Write-Host "Checking cached w64devkit: $cachedGxx"
-    if (Test-ToolInstallation -BinDir $cachedGxx -ExecutableName 'g++.exe') {
+    if (Test-W64DevkitInstallation -BinDir $cachedGxx) {
         Write-Host "[OK] Using cached w64devkit"
         Add-PathEntry -Directory $cachedGxx
         $hasCompiler = $true

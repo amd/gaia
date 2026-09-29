@@ -56,7 +56,7 @@ export const DEFAULT_PORT = 8141;
 export const RESERVED_PORT = 4001;
 
 /** The apiVersion this package is built against (`server.py: API_VERSION`). */
-export const API_VERSION = "2.13";
+export const API_VERSION = "2.15";
 
 /** The agent id in the sidecar's route prefix (`/v1/gaia/...`). */
 export const AGENT_ID = "gaia";
@@ -477,7 +477,7 @@ export async function waitForHealth(
   );
 }
 
-/** Parse "2.12" → 2 (major). Throws on a non-numeric major. */
+/** Parse "2.15" → 2 (major). Throws on a non-numeric major. */
 function majorOf(v: string): number {
   const major = Number.parseInt(String(v).split(".")[0] ?? "", 10);
   if (Number.isNaN(major)) {
@@ -487,7 +487,7 @@ function majorOf(v: string): number {
 }
 
 export interface VersionCheckOptions {
-  /** apiVersion this package was built against. Default API_VERSION ("2.13"). */
+  /** apiVersion this package was built against. Default API_VERSION ("2.15"). */
   expectedApiVersion?: string;
 }
 
@@ -732,7 +732,13 @@ export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
     return sidecar;
   } catch (e) {
     log.error(`startSidecar failed (${(e as Error).message}); shutting down`);
-    await shutdown(sidecar).catch(() => undefined);
+    try {
+      await shutdown(sidecar);
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      log.error(`startSidecar cleanup failed: ${message}`);
+    }
     throw e;
   }
 }

@@ -97,7 +97,8 @@ class TestRAGConfig:
         assert config.chunk_overlap == 100
         assert config.max_chunks == 5
         assert config.embedding_model == "user.embeddinggemma-300m-GGUF"
-        assert config.cache_dir == ".gaia"
+        assert Path(config.cache_dir).is_absolute()
+        assert Path(config.cache_dir).parts[-2:] == ("cache", "rag")
         assert config.show_stats is False
         assert config.use_local_llm is True
 
@@ -1520,6 +1521,69 @@ class TestCacheSecurity:
                 result2 = rag2.index_document(str(fake_pdf))
                 assert result2["success"] is True
                 assert len(rag2.chunks) > 0
+
+
+class TestClearCacheSafety:
+    """clear_cache must only ever delete files the RAG cache wrote (#4194)."""
+
+    @pytest.fixture
+    def gaia_home(self, tmp_path, monkeypatch):
+        """Isolated $HOME whose ~/.gaia holds state that must survive a clear."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+        home = tmp_path / "home"
+        gaia_dir = home / ".gaia"
+        gaia_dir.mkdir(parents=True)
+        (gaia_dir / "memory.db").write_text("sentinel")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_DIR", gaia_dir)
+        monkeypatch.chdir(home)
+        return home
+
+    def _make_rag(self, config=None):
+        with (
+            patch("gaia.rag.sdk.RAGSDK._check_dependencies"),
+            patch("gaia.rag.sdk.AgentSDK"),
+        ):
+            return RAGSDK(config)
+
+    def test_default_clear_from_home_keeps_gaia_state(self, gaia_home):
+        rag = self._make_rag()
+        rag.clear_cache()
+
+        assert (gaia_home / ".gaia" / "memory.db").read_text() == "sentinel"
+        assert Path(rag.config.cache_dir) == gaia_home / ".gaia" / "cache" / "rag"
+
+    def test_clear_deletes_only_cache_owned_files(self, gaia_home):
+        cache_dir = gaia_home / "custom_cache"
+        rag = self._make_rag(RAGConfig(cache_dir=str(cache_dir)))
+        owned = [
+            f"{'a' * 16}_{'b' * 32}.json",
+            f"{'a' * 16}_{'b' * 32}.json.sig",
+            f"{'c' * 64}_notfound.json",
+            f"{'a' * 16}_{'b' * 32}_extracted.md",
+            "report_extracted.md",
+        ]
+        foreign = ["settings.json", "notes.md", "memory.db"]
+        for name in owned + foreign:
+            (cache_dir / name).write_text("x")
+        (cache_dir / "subdir").mkdir()
+
+        rag.clear_cache()
+
+        remaining = sorted(p.name for p in cache_dir.iterdir())
+        assert remaining == sorted(foreign + ["subdir"])
+
+    @pytest.mark.parametrize("target", ["gaia_dir", "home"])
+    def test_clear_refuses_gaia_home_and_user_home(self, gaia_home, target):
+        cache_dir = gaia_home / ".gaia" if target == "gaia_dir" else gaia_home
+        rag = self._make_rag(RAGConfig(cache_dir=str(cache_dir)))
+
+        with pytest.raises(ValueError, match="Refusing to clear"):
+            rag.clear_cache()
+
+        assert (gaia_home / ".gaia" / "memory.db").read_text() == "sentinel"
 
 
 if __name__ == "__main__":

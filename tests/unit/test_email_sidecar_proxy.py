@@ -463,7 +463,7 @@ def test_live_triage_roundtrip_through_manager_proxy():
             assert "triage failed" in ei.value.detail.lower()
 
 
-# -- query_stream / cancel_query (#2109 query relay, not yet implemented) --------
+# -- query_stream / cancel_query (#2109 query relay) -----------------------------
 
 
 class _SSERespLines:

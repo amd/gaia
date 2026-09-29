@@ -327,17 +327,23 @@ def compute_cost(
     total_output_tokens: int,
     *,
     model: str | None = None,
+    cached_input_tokens: int = 0,
     cost_per_1m_input: float | None = None,
     cost_per_1m_output: float | None = None,
+    cost_per_1m_cached: float | None = None,
 ) -> float:
     """Token cost in USD.
 
     Explicit ``cost_per_1m_*`` overrides win. Otherwise the model is looked up
-    by exact id in ``MODEL_PRICING`` (cloud judge models). Local models
+    by exact id in ``MODEL_PRICING`` (cloud models). Local models
     (Lemonade-served Gemma/Qwen/etc.) are absent from the table and therefore
     cost ``0.0`` — local inference has no per-token API cost. This is defined
     behavior, not a fallback: the ``"default"`` pricing row is intentionally
     NOT applied to unrecognized models so local runs never get mis-billed.
+
+    ``cached_input_tokens`` is a subset of ``total_input_tokens`` billed at the
+    cached rate. With no cached rate (none in the table, or explicit overrides
+    without ``cost_per_1m_cached``) cached input bills at the input rate.
     """
     if cost_per_1m_input is None or cost_per_1m_output is None:
         pricing = MODEL_PRICING.get(model or "")
@@ -353,10 +359,23 @@ def compute_cost(
         )
     else:
         in_rate, out_rate = cost_per_1m_input, cost_per_1m_output
+        # Never mix an explicit rate card with the table's cached rate.
+        pricing = None
 
-    input_cost = total_input_tokens * in_rate / 1_000_000
+    if cost_per_1m_cached is not None:
+        cached_rate = cost_per_1m_cached
+    elif pricing and pricing.get("cached_per_mtok") is not None:
+        cached_rate = pricing["cached_per_mtok"]
+    else:
+        cached_rate = in_rate
+
+    cached = max(0, min(cached_input_tokens, total_input_tokens))
+    uncached = total_input_tokens - cached
+
+    input_cost = uncached * in_rate / 1_000_000
+    cached_cost = cached * cached_rate / 1_000_000
     output_cost = total_output_tokens * out_rate / 1_000_000
-    return round(input_cost + output_cost, 6)
+    return round(input_cost + cached_cost + output_cost, 6)
 
 
 # ---------------------------------------------------------------------------

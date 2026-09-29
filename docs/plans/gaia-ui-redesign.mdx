@@ -1,0 +1,341 @@
+---
+title: GAIA UI redesign
+description: One readable terminal-inspired design language across the GAIA website, WebUI, Electron, and TUI
+---
+
+**Status: Draft scope and design plan; implementation has not started.**
+Baseline: `8eb53c6b` on `main`, September 14, 2026.
+
+GAIA should feel like the same assistant in the terminal, browser, and desktop app.
+The flagship TUI defines agent behavior; the website, WebUI/Electron, and TUI
+share a terminal-inspired design language. The Codex Mac app informs restraint,
+spacing, and graphical polish. Open GAIA, describe the work, follow its progress,
+answer when needed, and use the result. GAIA is a general-purpose assistant for documents, research,
+planning, data, and everyday work. Choosing an agent disappears from that flow.
+
+**Usability and readability outrank styling.** Keep comfortable text sizes and line
+lengths, obvious actions, strong contrast, predictable keyboard behavior, and clear
+progress/recovery. No terminal convention should make a first-time user learn commands.
+
+## Product boundary
+
+For the agent clients, “mirror” means the same flagship, tools, context semantics,
+provider choices,
+questions, approval rules, cancellation, and outcomes. Layout and input mechanics
+adapt to each surface. It does not mean embedding a terminal in the web app.
+
+This first release aligns behavior. Live handoff of a conversation between TUI
+and web, synchronized history, and simultaneous control of the same run are separate
+work: the current persistent TUI child and web session store have different lifetimes.
+Do not advertise cross-app continuation until there is a shared session contract.
+
+## One design language across all three surfaces
+
+Website and TUI updates are explicitly in scope alongside WebUI/Electron. Shared
+identity means the same color roles, readable hierarchy, prompt vocabulary, quiet
+status language, restrained accent, and focus/selection cues. Share design decisions,
+not a new cross-framework component platform. Usability takes priority over exact
+pixel matching or forcing terminal limitations onto the web.
+
+| Surface | Purpose and scoped change | Keep simple |
+|---|---|---|
+| Primary website (`website/`) | Introduce general-purpose GAIA, show an honest example, and make download/setup easy; apply the shared language to homepage, shared chrome, and existing Hub pages | One clear primary download action; secondary documentation access; preserve useful URLs and catalog functionality |
+| Agent WebUI / Electron (`src/gaia/apps/webui/`) | The graphical terminal conversation defined below | Small history sidebar, readable transcript, one composer; same React UI in browser and desktop |
+| TUI (`tui/internal/ui/`) | Align theme, spacing, transcript hierarchy, prompt, status, and wording with the graphical app | Preserve terminal-native keyboard interaction, width-aware wrapping, and existing agent behavior |
+
+Start from existing website tokens (`website/src/design/tokens.css`), WebUI CSS
+variables, and TUI theme (`tui/internal/ui/theme/theme.go`). Pin one small semantic
+palette and typography/spacing guide, with explicit CSS and terminal mappings.
+Website prose can use readable proportional type; terminal type follows the user's
+terminal font. Do not force terminal font size, truecolor, or background settings.
+Keep light-theme legibility, limited-color contrast, narrow-terminal support, and
+plain text status labels. No custom token compiler is needed for this scope.
+
+Remove distracting effects such as starfield/glow treatments where they compete
+with the shared quiet design. Website demonstrations must be labeled examples,
+not pretend live input. Preserve working installation paths during the redesign;
+never replace a published download with a link to an unbuilt installer.
+
+### Original palette: graphite, ivory, copper
+
+No green motif. Use a warm mineral palette as the prototype direction, giving GAIA
+a distinct identity rather than reproducing Codex or a conventional hacker terminal.
+Most of the screen stays neutral; color marks the prompt, selection, focus, and the
+single primary action. Keep ordinary answers uncolored and comfortable to read.
+
+| Role | Dark | Light |
+|---|---|---|
+| Canvas | Graphite `#17161C` | Porcelain `#F5F2EC` |
+| Raised surface | Warm slate `#222128` | Pale stone `#EAE5DC` |
+| Primary text | Ivory `#F0EDE7` | Graphite `#242129` |
+| Secondary text | Ash `#AAA5B0` | Slate `#645D6A` |
+| Accent / focus | Copper `#EBA474` | Burnished copper `#91491F` |
+
+Validate these prototype values in real layouts. The character comes from their
+restrained use, a recognizable `>`
+prompt, precise monospace details, and generous readable space. Avoid neon, glow,
+blinking decoration, gradient-filled panels, and a wall of colored badges.
+
+Use text and icons for success/warning/error, with dedicated semantic colors only
+where needed; success need not be green. Colored buttons need independently checked
+foreground contrast. Terminal mappings must remain legible with user themes and
+limited palettes, even when exact copper cannot be reproduced. Before approval,
+compare website, graphical app, and TUI renders together in dark and light settings.
+
+## What the current code establishes
+
+| Finding | Evidence | Scope consequence |
+|---|---|---|
+| TUI launches the flagship directly | `tui/README.md`, `tui/internal/catalog/catalog.go` | New web tasks must explicitly select `gaia`, not relabel `chat` |
+| Web defaults to `chat`; sidebar groups sessions by agent | `src/gaia/apps/webui/src/stores/chatStore.ts`, `components/Sidebar.tsx` | Change new-task defaults and navigation; preserve existing task identities |
+| Welcome mixes animated branding, capability tiles, and Hub discovery | `components/WelcomeScreen.tsx` under the same frontend | Replace with a ready composer and a few useful prompts |
+| Web and Electron share React/Vite, Zustand, CSS variables, and Lucide | `src/gaia/apps/webui/package.json`, `main.cjs` | One shared UI; no framework migration or separate desktop redesign |
+| TUI holds a persistent flagship process and sends control messages during a run | `hub/agents/gaia/python/gaia_agent/stdio.py` | Preserve loaded skills/conversation across turns and interactive approvals |
+| Flagship HTTP retains agent sessions and supports input responses, but refuses confirmation-gated actions | `hub/agents/gaia/python/gaia_agent/server.py` | Transport parity is a release blocker, not visual polish |
+| Flagship stdio lacks a correlated question-response control; the TUI subprocess client does not implement `AgentResponder` | `gaia_agent/stdio.py`, `tui/internal/client/subprocess.go` | Question support requires a transport change; an adapter alone cannot provide it |
+| Canonical events and card renderers already exist | `tui/internal/event/canonical.go`, `src/gaia/ui/sse_translation.py`, `components/render/` | Reuse vocabulary and renderers; test parity instead of inventing a second protocol |
+
+Paths beginning with `components/` above are relative to `src/gaia/apps/webui/src/`;
+`gaia_agent/` is under `hub/agents/gaia/python/`.
+Older Agent UI v2 and email-TUI plans describe broader or historical work; they are
+context, not evidence that a capability ships. Recheck live code before implementation.
+
+## Design reference and the smallest useful UI
+
+The supplied Codex Mac screenshot is an interaction reference. Borrow its
+quiet sidebar, dark neutral canvas, readable conversation column, subtle rounded
+surfaces, muted activity summaries, and anchored composer. Keep GAIA's identity
+and general-purpose language. Do not import the screenshot's pull requests,
+project hierarchy, developer panels, or access-mode controls.
+
+The official [desktop reference](https://learn.chatgpt.com/docs/app) also describes
+keeping conversations in view and working with files. It supports those interaction
+principles; GAIA owns its visual identity. The screenshot is not included in this
+public plan.
+
+**An elegant graphical terminal is the design direction.** The terminal shapes the
+interaction: prompt-driven input, a continuous transcript, concise output, compact
+monospace input/labels/activity, a subtle `>` prompt marker, and quiet status lines.
+Use dark-first charcoal surfaces and readable typography for long-form results.
+Web affordances add selection, clickable citations/files, rich inline results,
+attachment chips, and accessible inline choices. Codex contributes spacing and
+restraint. Its developer workflows and bubble-heavy chat conventions are not the
+product model. This scope does not introduce a terminal emulator or shell console.
+
+```text
+┌──────────────────┬────────────────────────────────────────────┐
+│ GAIA             │ Conversation title                     ··· │
+│                  │                                            │
+│ + New chat       │ > Summarize this document                  │
+│ Search           │                                            │
+│                  │ GAIA's clear, readable response            │
+│ Recent chats     │ Sources or a useful result, when relevant  │
+│ Travel planning  │                                            │
+│ Document summary │ ▸ Read 3 documents                         │
+│                  │                                            │
+│                  │ ┌────────────────────────────────────────┐ │
+│                  │ │ > Ask GAIA anything…                   │ │
+│ Settings         │ │ +                     Local · Model  ↑ │ │
+│                  │ └────────────────────────────────────────┘ │
+└──────────────────┴────────────────────────────────────────────┘
+```
+
+**Four visible elements:** a small conversation sidebar, a quiet title bar, the
+conversation, and the composer. Settings is one entry at the sidebar foot.
+Search can be an icon that opens a field. No permanent results pane or dashboard.
+
+### Keep, remove, and reveal only when needed
+
+| Keep in the everyday flow | Remove from the everyday flow | Reveal when relevant |
+|---|---|---|
+| New chat and recent conversations | Agent picker, Hub tiles, agent-grouped history | Existing non-GAIA chats keep a discreet agent label |
+| One composer and file attachment button | Capability tiles, animated branding, startup marketing | Up to three plain starter prompts in an empty chat |
+| Clear answers and inline results | Separate file, memory, schedule, and activity dashboards in navigation | Existing management screens remain reachable through Settings |
+| Compact actual provider/model label | Hardware metrics, debug logs, advanced configuration | Model picker on click; runtime detail in Settings |
+| Brief activity summary | Verbose tool output by default | Expand activity for details; errors and decisions stay visible |
+
+Other-agent creation/management stays under Settings → Advanced for compatibility;
+there is no new catalog experience in this scope. Removing entry points does not
+uninstall agents or delete data. Preserve legacy session URLs, messages, attachments,
+and agent types. New chat always selects the flagship, including after viewing a
+legacy chat; never silently rewrite or reroute an existing conversation.
+
+### Interaction rules
+
+- **Start:** open straight into the conversation shell. A new chat has an immediately
+  usable composer once ready. Show setup guidance only for an actual blocker;
+  do not animate a welcome sequence before accepting input.
+- **Ask:** multiline composer, Enter to send, Shift+Enter for newline, attachment
+  chips with progress/removal, and a Send/Stop button reflecting real run state.
+  Starter prompts fill the composer and wait for submission. Preserve draft text.
+- **Follow:** answers stay on the open canvas. One expandable activity summary shows
+  what GAIA is doing. Keep scrolling under the reader's control when they look back.
+- **Respond:** questions and approvals appear inline at the moment needed. Show the
+  question or exact action clearly and only choices the agent actually supports.
+  A reply resumes that run; it does not create another conversation.
+- **Use the result:** show readable answers, citations, and existing result cards
+  inline. Open/download an attachment when selected. No new preview workspace,
+  split panes, terminal panel, or review surface in v1.
+- **Recover:** say what failed and what to do next. Retain the conversation and draft.
+  Unknown/malformed results display an explicit diagnostic. Never automatically
+  retry an action that may already have completed.
+
+### Visual constraints
+
+- Dark-first charcoal surfaces, subtle borders, one restrained accent, consistent Lucide icons.
+  Use the mascot sparingly; remove glow, hacker typing, and decorative status badges.
+- Prototype a 240–260px collapsible sidebar and roughly 760px readable content width.
+  Use 15–16px readable body text, a system monospace for composer input, prompt, labels and
+  activity, generous spacing, and restrained rounding. Avoid heavy bubble chrome.
+  These are starting points for visual review, not measurements of the screenshot.
+  No simulated typing, ASCII dashboard, decorative blinking cursor, or dense command log.
+- Evolve existing CSS variables and component CSS. No new design framework.
+  Support light/dark/system appearance, reduced motion, visible keyboard focus,
+  and accessible text contrast. Status must not depend on color alone.
+- Keep the existing mobile spec's 768px boundary and drawer navigation. At narrow
+  widths or 200% zoom, the conversation/composer remain usable without horizontal
+  page scrolling. Use 44px touch targets.
+- Preserve existing voice access where supported; no new voice engine. Keep
+  keyboard access to new chat, search, composer, and dismiss, with platform-specific
+  shortcuts verified against browser conflicts. Stop remains an explicit action.
+
+## Parity contract and drift prevention
+
+The flagship owns tools, policies, model behavior, and command semantics. Clients
+own presentation. Every shared user-visible change must update this parity matrix
+and its fixtures in the same PR, or identify a visible, explicitly unsupported state.
+Both clients must land support before that capability is called mirrored.
+
+| Journey | Required agreement | Verifiable acceptance |
+|---|---|---|
+| Start | Same flagship and readiness prerequisites for the selected provider | Fresh install, missing agent, missing model, unknown check, healthy machine |
+| Two-turn task | Same conversation/context and retained loaded skills | Follow-up consumes prior context without reconstructing the agent per turn |
+| Tools and outputs | Same tool outcome, sources, and canonical event meaning | Replay success, tool failure, malformed event, and every supported card |
+| Question | Same question, choices, free-text semantics, and active request | Answer continues the existing run; stale answer cannot resolve another question |
+| Approval | Same decision policy and allowed scopes | Approve/deny/cancel, expired or duplicate reply, and late reply after another request |
+| Stop | Cancellation reaches the running agent | Stop during generation and a tool; timeout/crash produces an honest terminal state |
+| Provider/model | Actual provider is visible; switches preserve context or report limits | Failed switch leaves the previous model; restart cannot silently revert the label |
+| Commands | Shared semantic commands such as model/setup have equivalent interactions | UI interaction and TUI command produce matching state; unsupported commands explain why |
+| Attachments/context | Same eligible input reaches the flagship | Text file, image, unsupported type, upload failure, remote-browser file versus host path |
+| Skills/memory | Same underlying capability and scope | Load skill, inspect memory, follow-up; no duplicate client-owned memory engine |
+
+Parity means equivalent decisions and state, not byte-identical model answers.
+Use deterministic canonical event recordings and assertions for automated checks;
+reserve live model runs for the shared golden journeys. Terminal-only selection,
+mouse capture, and key bindings remain surface-specific. Existing voice and rich card rendering
+may be graphical enhancements, clearly separate from the shared baseline.
+
+## Transport and session scope
+
+**Pin transport in milestone 0, before implementation.** Both browser and Electron
+must use backend-owned execution, with explicit session ownership and the existing
+local/tunnel access protections. Never spawn agents from the renderer or add a
+second Electron-only reasoning path.
+
+Compare two bounded options against the parity tests:
+
+- Adapt the persistent flagship stdio/control transport in the web backend. It
+  already supports approvals and live model commands, but needs correlated question
+  responses added to both the agent control protocol and TUI subprocess client.
+- Reuse the HTTP sidecar and its retained session registry. Persistence and input
+  responses already exist; resumable approval and TUI-equivalent model switching
+  need to be verified and completed before claiming parity.
+
+Choose the smaller verified gap, reusing existing run management. Persistence alone
+does not justify a new adapter. A tiny end-to-end proof of two turns, a question,
+an approval, and a model switch is the decision gate. Do not weaken approvals or
+label a refusal-only transport as interactive. The shared release baseline includes
+question support even where the current TUI transport still needs that addition.
+
+The implementation spec must pin these interfaces before assignment:
+
+- Session identity → owned agent process, working context, actual provider/model,
+  loaded state, lifecycle, and the explicit limits of restart recovery.
+- Run identity → canonical events, exactly one terminal outcome, bounded event
+  retention, reader attachment, and cancel acknowledgement.
+- Control request → session/run/request correlation, permitted choices, expiry,
+  single-use reply handling, and rejection of stale/cross-session requests.
+- Capability report → available commands, render types, supported input methods,
+  provider readiness, and whether a pending gate can actually be answered.
+
+Proposed run states are idle, starting, running, awaiting input, awaiting approval,
+cancelling, completed, failed, and cancelled. Only a confirmed backend transition
+ends the running indicator. Broken connections show “Connection lost” and reconcile
+the run before offering retry. No automatic resubmission. Process eviction must not
+silently discard loaded skills or make a restored transcript look like live memory.
+
+The adapter spec must also cover process/resource limits, one active controller per
+run, browser reload, window close, backend shutdown, and multi-tab races. Secrets and
+filesystem access stay behind existing backend authorization. Remote browser uploads
+are not host filesystem grants. Provider labels must not promise local-only handling
+when a remote provider is active.
+
+## Delivery sequence
+
+| Milestone | Bounded scope / likely files | Exit gate |
+|---|---|---|
+| 0. Pin design and parity | Shared website/WebUI/TUI design tokens and mappings, annotated wireframes, transport interfaces, fixture inventory | Human review of new task, running, question, approval, result, setup failure, and narrow layouts; pinned design-system spec |
+| 1. Prove flagship parity | `src/gaia/ui/` adapter/run lifecycle; chosen transport/control contract and any TUI response support; integration tests | Two turns, questions, approval, cancel, model state, and crash recovery work through the web backend; no visual rewrite required |
+| 2. Simplify shell and migration | `App.tsx`, `Sidebar`, `WelcomeScreen`, store/navigation utilities and tests | New tasks use `gaia`; old sessions/deep links still work; direct composer; advanced agent access preserved |
+| 3. Redesign the task experience | `ChatView`, `MessageBubble`, `AgentActivity`, render cards, component CSS and tests | All parity fixtures render correctly; keyboard decisions, truthful status, stable scrolling, draft retention |
+| 4. Finish context and platform polish | File/document surfaces, Settings, `main.cjs`/`preload.cjs` only where needed | Same core journeys in browser and Electron; desktop window controls, file actions, zoom, narrow layout, and themes verified |
+| 5. Align website and TUI | `website/src/design/`, shared layout/components and pages; `tui/internal/ui/theme/`, chat and status presentation | Consistent visual language, preserved website routes/downloads, readable TUI at narrow widths and light/dark terminal settings |
+| 6. Local showcase and feedback | Shared fixtures; website/frontend/Python/TUI/Electron checks; user guides and screenshots | Run and open all three locally for user comparison after self-review; incorporate feedback before release |
+| 7. Installer and website release | Existing packaging and website download integration | After user design approval: install/launch smoke test, validated artifacts and platform links, then enable the primary website download |
+
+Milestones are proposed implementation PR boundaries, not concurrent assignments.
+Steps touching the same frontend tree remain serial. Re-estimate after milestone 0
+resolves transport and lifecycle questions; an honest calendar estimate depends on
+those decisions. This PR contains only the plan and documentation navigation.
+
+## Test and review bar
+
+- Extend existing Vitest/Testing Library suites for default routing, legacy task
+  retention, run-state transitions, keyboard access, cards, drafts, and scrolling.
+- Add integration coverage for any backend adapter/control endpoints, including
+  stale approvals, cross-session replies, process failure, and duplicate submissions.
+- Replay a shared JSON fixture corpus in Go and TypeScript, plus adapter tests in
+  Python. Schema/behavior changes require both clients' expectations to be reviewed.
+- Run browser and Electron golden journeys: start → attach document → ask → answer
+  question → review/approve action → inspect output → follow up → stop → reopen.
+  Also cover offline startup and remote-provider state. Use isolated test data.
+- Test the website's navigation, keyboard access, responsive layout, and current
+  download selection; run its existing Vitest suite and Astro check/build. Test TUI
+  wrapping, input, questions, approvals, status, and theme contrast at 80×24 and
+  larger sizes, including limited-color terminals. Run affected Go tests.
+- Before the implementation PR is ready for review, inspect actual local renders,
+  review the diff, and exercise functionality. Open the website and agent WebUI in
+  browser tabs, launch Electron, and open the TUI in a terminal for a side-by-side
+  showcase. Record startup instructions and leave the review instances running.
+  Capture design evidence with test data; expose any unavailable platform checks.
+  Gather user feedback and iterate before presenting the redesign as finished.
+- Human usability target: at least 4 of 5 representative users can start a task,
+  attach context, answer a decision, and find a previous task without coaching.
+  Measure UI readiness separately from model startup; decorative animation must
+  never delay input. Profile long transcripts with at least 1,000 activity events.
+- Require code review, architecture review for transport/lifecycle changes, the
+  repository's automated reviewer, and human UX approval before implementation merges.
+  Check stop-the-line paths again before each PR; consumer-critical issues need
+  implementation-ready specs before work is assigned.
+
+## Explicit boundaries and decisions for review
+
+Included: flagship parity, simpler shell, conversation/composer polish, inline
+results, setup/recovery, keyboard/accessibility, shared web/Electron presentation,
+website design alignment, and TUI presentation updates. Local testing, self-review,
+a live three-surface showcase, and user feedback precede installer publication.
+Preserve existing voice access where supported; adding a new voice engine is separate.
+
+Deferred: multi-agent orchestration, marketplace expansion, full IDE/git workflows,
+new automation engines, a TUI framework rewrite, native SwiftUI migration, and live
+cross-surface session synchronization. None is necessary for the first mirrored UX.
+
+Recommended decisions: approve the minimal conversation layout; keep other agents behind
+Advanced; use behavior parity as the release gate; prototype light and dark together;
+settle transport ownership before frontend implementation. If “in sync” also requires
+opening the exact same live task across TUI and web in v1, expand the session milestone
+and acceptance tests explicitly before accepting this scope.
+
+The existing [mobile design system](https://github.com/amd/gaia/blob/main/docs/spec/mobile-design-system.md) remains the
+responsive baseline. This plan scopes the shared design and flagship experience;
+it does not implement or supersede the broader [Agent UI architecture plan](/plans/agent-ui).

@@ -18,7 +18,89 @@ import (
 )
 
 const FireworksURL = "https://api.fireworks.ai/inference/v1"
-const FireworksModel = "fireworks.gemma-4-31b-it"
+
+// Recommendation is a Fireworks model worth steering users to, with the reason.
+type Recommendation struct {
+	ID   string
+	Note string
+	// Evidence is the measured result behind the note, one line, or empty
+	// when the rank rests on the benchmark alone.
+	Evidence string
+}
+
+// RecommendedModels is ranked by the agent task benchmark (September 2026); refresh it as models change.
+//
+// Every Evidence figure is transcribed from the GAIA-harness rows of the
+// harness × model table published in amd/gaia#4335, over the `everyday` suite
+// defined in eval/tasks/tasks.json: 14 tasks, mean of 3 runs, graded by a blind
+// Opus 5 judge, cost metered from Fireworks' own billing. Regenerate with
+//
+//	gaia eval tasks run --suite everyday --model <id> --repeats 3
+//
+// and update EvidenceSource below in the same edit; TestEvidenceIsTranscribed
+// fails when a figure here drifts from it.
+var RecommendedModels = []Recommendation{
+	{
+		ID:       "fireworks.glm-5p3-flash",
+		Note:     "best overall, cheapest",
+		Evidence: "14/14 tasks · quality 4.89/5 · $0.09 per 14-task run",
+	},
+	{
+		ID:       "fireworks.deepseek-v4p1-flash",
+		Note:     "fastest",
+		Evidence: "14/14 tasks · quality 4.92/5 · $0.10 per 14-task run",
+	},
+	{ID: "fireworks.deepseek-v4-pro-0813", Note: "most truthful"},
+}
+
+// EvidenceSource is the published cell each Evidence figure was read from, keyed
+// by model id: passed, quality, cost. Kept beside the strings so a drifting
+// figure fails a test instead of shipping as an unsourced measurement.
+var EvidenceSource = map[string]struct {
+	Passed, Quality, Cost string
+}{
+	// from amd/gaia#4335, "What it measures today (14 everyday tasks, harness × model)",
+	// row "GLM-5.3 Flash · glm-5p3-flash | GAIA | 3 | 14/14 | 4.89 | … | 7:04 | $0.09"
+	"fireworks.glm-5p3-flash": {"14/14", "4.89", "$0.09"},
+	// same table, row "DeepSeek V4.1 Flash · deepseek-v4p1-flash | GAIA | 3 | 14/14 | 4.92 | … | 5:39 | $0.10"
+	"fireworks.deepseek-v4p1-flash": {"14/14", "4.92", "$0.10"},
+}
+
+func TopRecommendation() Recommendation { return RecommendedModels[0] }
+
+// rankKey reduces a cloud id to provider + trailing name segment, so that
+// "fireworks.accounts/fireworks/models/glm-5p3-flash" and
+// "fireworks.glm-5p3-flash" — both forms Lemonade reports — compare equal. The
+// provider stays in the key so amd.<name> never matches a Fireworks entry.
+func rankKey(id string) string {
+	provider, name, found := strings.Cut(id, ".")
+	if !found {
+		return id
+	}
+	return provider + "." + name[strings.LastIndex(name, "/")+1:]
+}
+
+// Evidence returns the measured line behind a recommended model, or "".
+func Evidence(id string) string {
+	key := rankKey(id)
+	for _, r := range RecommendedModels {
+		if rankKey(r.ID) == key {
+			return r.Evidence
+		}
+	}
+	return ""
+}
+
+// Rank returns a model's 1-based rank and note, or ok=false when it is not recommended.
+func Rank(id string) (rank int, note string, ok bool) {
+	key := rankKey(id)
+	for i, r := range RecommendedModels {
+		if rankKey(r.ID) == key {
+			return i + 1, r.Note, true
+		}
+	}
+	return 0, "", false
+}
 
 type Provider struct {
 	Name       string `json:"name"`

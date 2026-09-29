@@ -1,7 +1,6 @@
 id: cdc_flu_2023_2024
 name: "CDC 2023-2024 Influenza Season Statistics"
 category: real_world
-agent_type: doc
 severity: medium
 description: |
   Agent must retrieve public health statistics from the CDC 2023-2024 influenza

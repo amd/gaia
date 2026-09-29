@@ -28,8 +28,8 @@ developer's own ``~/.gaia``.
 
 from __future__ import annotations
 
-import pathlib
 import base64
+import pathlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -139,6 +139,17 @@ def library(tmp_path_factory):
             description="A recipe that leans on a tool this agent lacks.",
             marker=NEEDS_TOOLS_MARKER,
             tools_required=("launch_the_missiles",),
+        ),
+    )
+    _write_skill(
+        bundled,
+        "needs-pytest",
+        _skill_markdown(
+            "needs-pytest",
+            description="A coding recipe that runs the project's test suite.",
+            marker="ZZ-NEEDS-PYTEST-BODY-MARKER-ZZ",
+            tier="community",
+            permissions=("shell:execute:pytest",),
         ),
     )
     _write_skill(
@@ -723,6 +734,20 @@ def test_load_surfaces_a_tools_required_gap(session):
     assert NEEDS_TOOLS_MARKER in session.agent.system_prompt
 
 
+def test_load_surfaces_a_missing_command_that_has_a_substitute(session, monkeypatch):
+    """pytest off PATH (the virtualenv case) loads the skill and says what to do
+    instead, rather than refusing it or granting a command that cannot run."""
+    monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
+    result = call(session, "load_skill", name="needs-pytest")
+
+    assert result["status"] == "success"
+    assert result["unavailable_commands"] == ["pytest"]
+    assert "pytest.main" in result["warning"]
+    assert "pytest" not in session.agent.granted_binaries.binaries()
+    # The tool reply scrolls away; the skill prompt is what the model keeps reading.
+    assert "pytest.main" in session.agent.get_skills_system_prompt()
+
+
 # ---------------------------------------------------------------------------
 # Discovery and status
 # ---------------------------------------------------------------------------
@@ -871,8 +896,9 @@ class TestTheListViewNeverLosesASkill:
         """36 skills with 1KB descriptions each must still fit the NPU."""
         import json
 
-        from gaia.llm.lemonade_client import truncation_budget
         from gaia_agent.skill_tools import _summarize
+
+        from gaia.llm.lemonade_client import truncation_budget
 
         entries = [
             {

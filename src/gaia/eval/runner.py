@@ -21,6 +21,7 @@ import functools
 import json
 import logging
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -32,6 +33,8 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+
+from gaia.eval.config import DEFAULT_AGENT_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,67 @@ RESULTS_DIR = EVAL_DIR / "results"
 MCP_CONFIG = EVAL_DIR / "mcp-config.json"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
+
+# ── MCP interpreter resolution ────────────────────────────────────────────
+#
+# ``mcp-config.json`` is a template: hosts with ``python3`` but no bare
+# ``python`` (macOS, most Linux distros) would ENOENT the server, and the
+# scenario scores INFRA_ERROR rather than naming the cause. ``sys.executable``
+# is the one Python guaranteed to exist *and* to have ``gaia`` importable.
+_PYTHON_COMMAND_RE = re.compile(r"python[0-9.]*(\.exe)?$", re.IGNORECASE)
+
+
+def _is_python_command(command: str) -> bool:
+    """True if ``command`` names a generic Python interpreter to be resolved."""
+    return bool(_PYTHON_COMMAND_RE.fullmatch(Path(command).name))
+
+
+def _resolve_mcp_command(command: str) -> str:
+    """Map a generic interpreter name onto the running interpreter."""
+    return sys.executable if _is_python_command(command) else command
+
+
+def load_mcp_config_template() -> dict:
+    """Read the tracked MCP config template.
+
+    Raises with context rather than returning a partial config — a malformed
+    template means every scenario would lose its tools.
+    """
+    try:
+        return json.loads(MCP_CONFIG.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise OSError(f"Cannot read MCP config template at {MCP_CONFIG}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"MCP config template at {MCP_CONFIG} is not valid JSON: {e}"
+        ) from e
+
+
+def resolve_mcp_config(run_dir) -> Path:
+    """Write a runnable copy of the MCP config into ``run_dir``; return its path.
+
+    The tracked template is never modified; the resolved copy ships with the
+    run's artifacts. The path is absolute because ``claude -p`` runs from
+    ``REPO_ROOT``, not the caller's cwd.
+    """
+    config = load_mcp_config_template()
+    for name, server in (config.get("mcpServers") or {}).items():
+        command = server.get("command")
+        if isinstance(command, str):
+            server["command"] = _resolve_mcp_command(command)
+            if server["command"] != command:
+                logger.debug(
+                    "MCP server %r: resolved command %r -> %r",
+                    name,
+                    command,
+                    server["command"],
+                )
+
+    resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return resolved
+
 
 # ── Single-runner lock ────────────────────────────────────────────────────
 #
@@ -234,11 +298,6 @@ _STARTUP_OVERHEAD_S = (
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
 
-def _resolve_scenario_agent_type(scenario_data: dict, cli_agent_type):
-    """Return the agent a scenario asks for: its own ``agent_type:`` wins."""
-    return scenario_data.get("agent_type") or cli_agent_type
-
-
 def _canonical_agent_type(value):
     """Resolve legacy aliases so ``doc-lite`` and ``doc`` compare equal.
 
@@ -298,7 +357,7 @@ def _stamp_agent_provenance(
     every other status intact. Nothing is checked when no agent was requested —
     the backend default is the right answer by definition.
     """
-    requested = _resolve_scenario_agent_type(scenario_data, cli_agent_type)
+    requested = cli_agent_type
     result["agent_type_requested"] = requested
     result.setdefault("agent_type_observed", None)
 
@@ -369,6 +428,15 @@ def validate_scenario(path: Path, data: dict) -> None:
     for field in ("id", "category", "setup", "turns", "persona"):
         if field not in data:
             errors.append(f"missing top-level field '{field}'")
+
+    # Rejected at load, not ignored: a pin used to beat --agent-type, so a run
+    # scored one agent while its scorecard recorded another.
+    if "agent_type" in data:
+        errors.append(
+            "'agent_type' is not honoured — one run scores one agent, set by "
+            f"--agent-type (default '{DEFAULT_AGENT_TYPE}'). Delete the key; to "
+            "measure a different agent pass --agent-type for the whole run."
+        )
 
     if "setup" in data and "index_documents" not in data.get("setup", {}):
         errors.append("setup.index_documents is missing (use empty list [] if none)")
@@ -924,6 +992,49 @@ def summarize_attempts(attempts: list) -> dict:
     return result
 
 
+def _check_mcp_server_commands() -> list:
+    """Verify every MCP server in the config has a runnable command.
+
+    Without this, a missing interpreter surfaces mid-run as a scenario with no
+    callable tools — scored ``INFRA_ERROR 0.0/10``, which reads like an agent
+    failure rather than a broken host.
+    """
+    errors = []
+    try:
+        config = load_mcp_config_template()
+    except (OSError, ValueError) as e:
+        return [str(e)]
+
+    for name, server in (config.get("mcpServers") or {}).items():
+        command = (server or {}).get("command")
+        if not isinstance(command, str) or not command:
+            errors.append(
+                f"MCP server '{name}' in {MCP_CONFIG} has no 'command' — "
+                f"add one naming the executable that serves it."
+            )
+            continue
+
+        resolved = _resolve_mcp_command(command)
+        found = shutil.which(resolved)
+        if not found and Path(resolved).is_file() and os.access(resolved, os.X_OK):
+            found = resolved
+        if not found:
+            hint = (
+                f"the eval is running under {sys.executable}, which is missing or "
+                f"not executable"
+                if resolved != command
+                else f"install it or correct 'command' in {MCP_CONFIG}"
+            )
+            errors.append(
+                f"MCP server '{name}' command not executable: {resolved!r} "
+                f"(from 'command': {command!r} in {MCP_CONFIG}) — {hint}. "
+                f"Without it no eval tools are callable and every scenario "
+                f"scores INFRA_ERROR."
+            )
+
+    return errors
+
+
 def preflight_check(backend_url, scenarios=None):
     """Check prerequisites before running scenarios.
 
@@ -958,6 +1069,8 @@ def preflight_check(backend_url, scenarios=None):
     # Check MCP config
     if not MCP_CONFIG.exists():
         errors.append(f"MCP config not found: {MCP_CONFIG}")
+    else:
+        errors.extend(_check_mcp_server_commands())
 
     # Check claude CLI
     claude_bin = shutil.which("claude")
@@ -1191,7 +1304,7 @@ def run_scenario_subprocess(
             "--json-schema",
             result_schema,
             "--mcp-config",
-            str(MCP_CONFIG),
+            str(resolve_mcp_config(run_dir)),
             "--strict-mcp-config",
             # No built-in tools: the driver works only through the agent UI's
             # MCP tools, and holds the judge's credentials.
@@ -2004,7 +2117,9 @@ class AgentEvalRunner:
         tags=None,
         exclude_tags=None,
         output_format=None,
-        agent_type=None,
+        # Not None: _stamp_agent_provenance skips a scenario that requested no
+        # agent, so a null default would silently disarm the provenance check.
+        agent_type=DEFAULT_AGENT_TYPE,
         iterations=1,
     ):
         self.backend_url = backend_url
@@ -2168,9 +2283,7 @@ class AgentEvalRunner:
                 result = {
                     "scenario_id": sid,
                     "category": scenario_data.get("category", "unknown"),
-                    "agent_type_requested": _resolve_scenario_agent_type(
-                        scenario_data, self.agent_type
-                    ),
+                    "agent_type_requested": self.agent_type,
                     "agent_type_observed": None,
                     "status": "SKIPPED_NO_DOCUMENT",
                     "overall_score": None,
@@ -2192,9 +2305,6 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
-            scenario_agent_type = _resolve_scenario_agent_type(
-                scenario_data, self.agent_type
-            )
             # Repeat the scenario N times so a flaky result is distinguishable
             # from a hard failure — at N=1 they are indistinguishable.
             attempts = []
@@ -2217,7 +2327,9 @@ class AgentEvalRunner:
                         extra_corpus_dirs=(
                             self.extra_corpus_dirs if self.extra_corpus_dirs else None
                         ),
-                        agent_type=scenario_agent_type,
+                        # One run scores one agent (#4096) -- a scenario's own
+                        # agent_type is rejected at load time, never honoured.
+                        agent_type=self.agent_type,
                         attempt=(attempt_idx if self.iterations > 1 else None),
                     )
                 )
@@ -2310,9 +2422,6 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
-                scenario_agent_type = _resolve_scenario_agent_type(
-                    scenario_data, self.agent_type
-                )
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
@@ -2325,7 +2434,7 @@ class AgentEvalRunner:
                     extra_corpus_dirs=(
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
-                    agent_type=scenario_agent_type,
+                    agent_type=self.agent_type,
                 )
                 rerun_results.append(result)
 
@@ -2521,7 +2630,6 @@ def capture_session(session_id, output_dir=None, db_path=None):
     Returns:
         Path to the written YAML file
     """
-    import re
     import sqlite3
 
     db = Path(db_path) if db_path else GAIA_DB_PATH

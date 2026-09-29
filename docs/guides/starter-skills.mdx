@@ -179,14 +179,14 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
   grants the GitHub CLI to this skill's session on this agent, restricted to the
   subcommands in GAIA's policy table (see
   [Bring your own CLI](/plans/skill-format#bring-your-own-cli)).
-- **Configure** —
+- **Configure** — nothing, if you let GAIA do it. Ask it to set up the GitHub CLI
+  and it checks, installs, and signs in for you, showing you each command first —
+  see [Setting up a CLI a skill needs](/guides/gaia#setting-up-a-cli-a-skill-needs).
+  `gh` still owns its own auth; GAIA never sees the token. To do it by hand
+  instead, `gh auth login` then `gh auth status` works exactly as before.
 
-  ```bash
-  gh auth login       # gh owns its own auth — GAIA never sees the token
-  gh auth status
-  ```
-
-  If `gh` is not on PATH the skill refuses to load and names the install command.
+  If `gh` is not on PATH the skill refuses to load rather than answering from no
+  data — and the refusal now offers the setup rather than ending there.
   Reads run without a per-call approval prompt — loading the skill is the consent.
   The useful writes (`gh issue create|comment|edit`, `gh pr comment`,
   `gh label create|edit`) show you the exact command and wait for a yes, a no, or
@@ -253,9 +253,11 @@ gaia skill info gpu-restock-watch
 
 - **Permissions are declarations, and v1 only honors some of them.**
   `network:*` and `mcp:connect:<connector-id>` bridge to the connector model and
-  work today. `filesystem`, `shell`, `database`, `desktop`, and `env` need a
-  sandbox that has not shipped, so a skill declaring one is **refused at load**
-  rather than loaded unenforced ([#1019](https://github.com/amd/gaia/issues/1019)).
+  work today, and so does `shell:execute:<binary>` — that is the grant
+  `github-triage` uses. Everything else local — `filesystem`, `database`,
+  `desktop`, `env`, and a bare unscoped `shell:execute` — needs a sandbox that has
+  not shipped, so a skill declaring one is **refused at load** rather than loaded
+  unenforced ([#1019](https://github.com/amd/gaia/issues/1019)).
   Do not add a permission to look thorough — add it only if the skill needs it.
 - **`tools` and `tools_required` are different fields.** `tools` are `@tool`
   functions your skill *provides* (and must exist in its `tools.py`).
@@ -273,8 +275,8 @@ cannot run, they are left out, with the specific blocker named:
 
 | Proposed | Blocker |
 |---|---|
-| `morning-brief` (scheduled voice digest to Telegram) | Four at once: the scheduler cannot run skills; there is no Gmail/Calendar/Weather connector in the catalog; text-to-speech is not exposed as an agent tool; the Telegram adapter has no voice-note path. `daily-brief` covers the composition half. |
-| `voice-research` (voice in, voice out) | The Telegram adapter handles photos and documents but not voice messages, and TTS is CLI-only (`gaia talk`), not a tool an agent can call. |
+| `morning-brief` (scheduled voice digest to Telegram) | Three at once: the scheduler cannot run skills; there is no Gmail/Calendar/Weather connector in the catalog; the Telegram adapter has no voice-note path. `daily-brief` covers the composition half; the `text_to_speech` tool already covers the voice half. |
+| `voice-research` (voice in, voice out) | The Telegram adapter handles photos and documents but not voice messages, so there is no way to get a spoken question in even though `text_to_speech` can speak the answer back out. |
 | `trading-alert` (RSI / unusual volume) | No finance connector in the catalog, and no historical price source to compute an indicator from. Alerting on a number the agent cannot actually obtain would be theatre. |
 | `email-triage` (Gmail triage over MCP) | There is no `gmail` connector id — Gmail is a *scope* of the `google` OAuth connector, not an MCP server with tools. Email triage ships instead as a full agent: see the [Email guide](/guides/email). `github-triage` covers the same backlog-triage shape over a CLI grant. |
 

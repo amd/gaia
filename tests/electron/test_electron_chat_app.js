@@ -21,6 +21,11 @@ const fs = require('fs');
 const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
 const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 
+// Every theme write goes through this one module, so the callers below are
+// checked for the delegation and this file for the DOM write itself.
+const themeWriter = () =>
+  fs.readFileSync(path.join(CHAT_APP_PATH, 'src/utils/theme.ts'), 'utf8');
+
 describe('Chat App Integration', () => {
 
   // ── App Configuration ──────────────────────────────────────────────
@@ -408,7 +413,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should support dark theme via data-theme attribute', () => {
-      expect(storeContent).toContain('data-theme');
+      expect(storeContent).toMatch(/applyTheme\(/);
+      expect(themeWriter()).toContain('data-theme');
     });
 
     it('should persist theme to localStorage', () => {
@@ -581,7 +587,8 @@ describe('Chat App Integration', () => {
 
     it('should apply saved theme on load', () => {
       expect(mainContent).toContain('gaia-chat-theme');
-      expect(mainContent).toContain('data-theme');
+      expect(mainContent).toMatch(/applyTheme\(/);
+      expect(themeWriter()).toContain('data-theme');
     });
 
     it('should have copyright header', () => {
@@ -624,8 +631,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should have dark theme as default', () => {
-      // Store defaults to 'dark' theme (via localStorage or fallback)
-      expect(storeContent).toContain("|| 'dark'");
+      // Pinned to the fallback argument itself -- a looser line-level match
+      // also hits the `'light' | 'dark'` annotation and passes on any default.
+      expect(storeContent).toMatch(/['"]gaia-chat-theme['"]\s*,\s*['"]dark['"]/);
     });
 
     it('should have setShowDocLibrary and setShowSettings actions', () => {
@@ -1259,7 +1267,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should have error background tint', () => {
-      expect(msgCss).toContain('rgba(239, 68, 68');
+      // Tinted from the danger role, like the border above it. Pinning the hex
+      // instead would make any re-theming look like a broken error style.
+      expect(msgCss).toContain('background: color-mix(in srgb, var(--danger)');
     });
 
     it('should have copy feedback green style', () => {

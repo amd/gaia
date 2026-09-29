@@ -30,6 +30,9 @@ from gaia.connectors.store import save_connection
 
 pytestmark = pytest.mark.integration
 
+# The Agent UI refuses mutating /api/* calls without it (gaia.ui.security).
+UI_HEADER = {"x-gaia-ui": "1"}
+
 
 @pytest.fixture
 def env(monkeypatch, tmp_path, in_memory_keyring):  # noqa: F811
@@ -148,6 +151,7 @@ class TestUiPath:
         resp = ui_api_client.put(
             "/api/connectors/google/grants/builtin:ui-test",
             json={"scopes": ["https://www.googleapis.com/auth/gmail.readonly"]},
+            headers=UI_HEADER,
         )
         assert resp.status_code == 200, resp.text
 
@@ -192,14 +196,13 @@ class TestThreeCallersAgreeOnConnection:
         assert rc == 0
 
         # UI
-        ui_rows = ui_api_client.get("/api/connectors").json()["connections"]
-        assert any(r["provider"] == "google" for r in ui_rows)
+        ui_rows = ui_api_client.get("/api/connectors").json()["connectors"]
+        ui_google = next(r for r in ui_rows if r["id"] == "google")
+        assert ui_google["configured"] is True
 
         # Same email surfaces everywhere.
         sdk_email = next(r for r in sdk_rows if r["provider"] == "google")[
             "account_email"
         ]
-        ui_email = next(r for r in ui_rows if r["provider"] == "google")[
-            "account_email"
-        ]
+        ui_email = ui_google["account_id"]
         assert sdk_email == ui_email == "multi-caller@example.com"

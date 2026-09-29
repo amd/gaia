@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import json
 
+import numpy as np
 import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 from gaia_agent_chat.tool_bundles import (
@@ -36,7 +37,7 @@ from gaia_agent_chat.tool_bundles import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max=28 minus 15 CORE leaves 13).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=29 minus 16 CORE leaves 13).
 MAX_BUNDLE_MEMBERS = 6
 
 
@@ -106,8 +107,8 @@ def test_escape_hatch_is_registered_and_core(flagship_registry):
     assert "load_tools" in flagship_registry
 
 
-def test_skill_discovery_loader_is_registered_and_core(flagship_registry):
-    """A shortlist must be able to call the tool its prompt advertises."""
+def test_load_skill_is_registered_and_core(flagship_registry):
+    """The skill catalogue must be able to call the tool its prompt advertises."""
     assert "load_skill" in FULL_CORE_TOOLS
     assert "load_skill" in flagship_registry
 
@@ -122,6 +123,50 @@ def test_run_python_is_core(flagship_registry):
     """Without it the model guesses a number or leaves a script in the repo."""
     assert "run_python" in FULL_CORE_TOOLS
     assert "run_python" in flagship_registry
+
+
+def test_sleep_is_offered_on_a_turn_that_never_mentions_waiting(monkeypatch):
+    """A rate limit arrives mid-turn, so the wait has to be on offer already.
+
+    The request below says nothing about waiting. Were ``sleep`` left to
+    semantic selection, it would be missing exactly when GitHub answers with
+    "rate limit exceeded, resets at 19:43". The stub embedder matches no tool
+    at all, so only the always-on set is offered: the worst case.
+    """
+    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    monkeypatch.setattr(
+        GaiaAgent, "_embed_text", lambda _self, _t: np.zeros(8, dtype=np.float32)
+    )
+    monkeypatch.setattr(
+        GaiaAgent,
+        "_embed_texts_batch",
+        lambda _self, texts: np.zeros((len(texts), 8), dtype=np.float32),
+    )
+    with _isolated_registry():
+        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        # A non-None store is all the loader gates on; see flagship_registry.
+        agent._memory_store = object()
+        registry = set(agent._tools_registry)
+        selected = agent._select_tools_for_turn(
+            "Issue #4 in kovtcharov/toybox asks a question. Draft the reply."
+        )
+
+    assert "sleep" in registry
+    assert selected is not None, "dynamic selection fell back to the full registry"
+    assert len(selected) < len(registry), "nothing was trimmed; the test proves nothing"
+    assert "sleep" in selected
+
+
+def test_skill_catalogue_renders_for_the_flagship():
+    """A skill the model cannot see is a skill it never loads (#3764)."""
+    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.delenv("GAIA_SKILL_DISCOVERY", raising=False)
+        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        prompt = agent.system_prompt
+    assert "==== SKILLS ====" in prompt
+    assert "- github-triage: " in prompt
 
 
 def test_bundle_menu_renders_for_the_flagship():

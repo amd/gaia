@@ -617,6 +617,8 @@ class SSEOutputHandler(OutputHandler):
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
         tok_per_s: Optional[float] = None,
+        input_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ):
         if answer:
             # Set aside the verification-scope line before the cleaners run: an
@@ -665,6 +667,14 @@ class SSEOutputHandler(OutputHandler):
         # time as generation time and read an order of magnitude low.
         if tok_per_s is not None and math.isfinite(tok_per_s) and tok_per_s > 0:
             event["tok_per_s"] = round(tok_per_s, 1)
+        # Input and cached counts ride the same omit-don't-fake rule. Cached is
+        # reported at 0 rather than omitted when the turn had input tokens: a
+        # backend that counted the prompt and cached none of it is telling us
+        # zero, which is a different statement from "nobody counted".
+        if input_tokens is not None and input_tokens > 0:
+            event["input_tokens"] = input_tokens
+            if cached_tokens is not None and cached_tokens >= 0:
+                event["cached_tokens"] = cached_tokens
         # Dev-mode only. Gated on the same env var that produced the record, so
         # an ordinary turn's payload stays byte-identical to before this existed.
         record, self._turn_metrics = self._turn_metrics, None
@@ -967,9 +977,9 @@ class SSEOutputHandler(OutputHandler):
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
 
-        # Bypass and prior "always" grants are checked before anything is
+        # Full access and prior "always" grants are checked before anything is
         # emitted: neither has a question to ask, so putting a modal up would be
-        # theatre. Checked per call, so toggling bypass mid-run takes effect on
+        # theatre. Checked per call, so toggling full access mid-run takes effect on
         # the very next gated tool.
         if self.auto_approve_confirmations_enabled():
             self.log_auto_approval(tool_name)
@@ -977,10 +987,7 @@ class SSEOutputHandler(OutputHandler):
                 {
                     "type": "status",
                     "status": "warning",
-                    "message": (
-                        f"Bypass permissions is ON — ran '{tool_name}' without "
-                        "asking."
-                    ),
+                    "message": f"Full access is ON — ran '{tool_name}' without asking.",
                 }
             )
             return True

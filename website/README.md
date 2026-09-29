@@ -77,7 +77,6 @@ website/
 │   │   ├── InstallCommand.astro
 │   │   ├── InstallMethods.astro
 │   │   ├── SidebarCard.astro
-│   │   ├── StarField.astro
 │   │   ├── StatBlock.astro
 │   │   ├── Terminal.astro
 │   │   ├── ThemeToggle.astro
@@ -90,7 +89,8 @@ website/
 │   ├── design/
 │   │   ├── global.css               # Owns the @tailwind directives
 │   │   ├── tailwind-preset.mjs
-│   │   └── tokens.css               # Design tokens
+│   │   ├── tokens.css               # Design tokens
+│   │   └── tokens.contrast.test.ts  # Contrast floors, enforced
 │   ├── layouts/
 │   │   └── Layout.astro             # Base HTML layout
 │   ├── pages/
@@ -98,8 +98,6 @@ website/
 │   │   │   ├── [id].astro           # Agent detail page (one per catalog entry)
 │   │   │   └── index.astro          # Agent Hub listing
 │   │   └── index.astro              # Landing page
-│   ├── scripts/
-│   │   └── starfield.js
 │   └── env.d.ts
 ├── .railwayignore                   # Excluded from the `railway up` upload
 ├── astro.config.mjs
@@ -112,12 +110,13 @@ website/
 
 ## Design System
 
-`src/design/tokens.css` is the single source of truth;
+The cross-surface contract is [`docs/spec/gaia-design-language.mdx`](../docs/spec/gaia-design-language.mdx),
+shared with the Agent UI and the TUI. `src/design/tokens.css` implements it here;
 `src/design/tailwind-preset.mjs` maps those variables to `g-*` Tailwind
 utilities. Read those files rather than trusting a copy — the headlines only:
 
-- **Accent**: graphic gold `#E7A33C` (`--g-gold`) — *not* AMD red
-- **Ground**: dark `#08080a` is the designed default; light `#fbfaf7` is derived
+- **Accent**: copper `#9A4930` light / `#EBA474` dark (`--g-accent`) — *not* AMD red
+- **Ground**: graphite `#17161C` dark, porcelain `#F5F2EC` light
 - **Font (Display)**: Space Grotesk — headings and the wordmark only
 - **Font (UI)**: Inter
 - **Font (Code)**: JetBrains Mono

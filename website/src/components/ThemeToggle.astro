@@ -28,8 +28,15 @@
 
 <script>
   const btn = document.getElementById('theme-toggle')!;
+  // A meta tag can't read a CSS custom property, so the browser-chrome colour
+  // is the one place the canvas value has to be repeated in JS.
+  const CHROME = { light: '#F5F2EC', dark: '#17161C' };
   const render = () => {
-    btn.setAttribute('aria-pressed', String(document.documentElement.dataset.theme === 'dark'));
+    const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    btn.setAttribute('aria-pressed', String(theme === 'dark'));
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', CHROME[theme]);
   };
   btn.addEventListener('click', () => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';

@@ -223,6 +223,7 @@ class OutputHandler(ABC):
     # === Confirmation of gated tools (#2210) ===
 
     auto_approve_gated_tools: bool = False   # explicit unattended opt-in
+    full_access: bool = False   # a person's on-screen full access (TUI only)
 
     def confirm_tool_execution(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
         """Approve or deny a tool in ``Agent.confirmation_required_tools()``.
@@ -244,7 +245,10 @@ class OutputHandler(ABC):
   and email sends is the failure mode this replaced. An intentionally unattended
   host opts in with `auto_approve_gated_tools=True` or
   `GAIA_AUTO_APPROVE_TOOLS=1` (read from the startup environment, so a `.env`
-  cannot set it), and every approval taken that way is logged.
+  cannot set it), and every approval taken that way is logged. Neither widens
+  `run_shell_command`: a command off its read-only list is refused under them.
+  `full_access` lifts that, and only an interactive host that shows it on every
+  frame sets it (the TUI's `/full-access`, alongside `auto_approve_gated_tools`).
 </Warning>
 
 ### TerminalConfirmationMixin

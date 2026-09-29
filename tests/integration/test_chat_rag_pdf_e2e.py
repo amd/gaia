@@ -35,14 +35,15 @@ def test_chat_rag_pdf_e2e_short_timeout():
     if not can_run:
         pytest.skip(f"Skipping E2E: {reason}")
 
+    # No --compare: this asserts the scenario RUNS end to end, which is what the
+    # timing cap below measures. Comparison needs two scorecards of the same
+    # agent, and it is a separate question from "did the pipeline work".
     cmd = [
         "gaia",
         "eval",
         "agent",
         "--scenario",
         "safety_handbook_water",
-        "--compare",
-        "tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json",
     ]
 
     start = time.time()

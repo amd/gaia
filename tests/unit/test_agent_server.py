@@ -43,7 +43,13 @@ class FakeAgent(Agent):
             "greet": {
                 "name": "greet",
                 "description": "Greet someone by name.\nSecond line ignored.",
-                "parameters": {"name": {"type": "string", "required": True}},
+                "parameters": {
+                    "name": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Who to greet.",
+                    }
+                },
             }
         }
 
@@ -142,6 +148,19 @@ def test_api_lists_tools(api_client):
     assert tools[0]["inputSchema"]["required"] == ["name"]
 
 
+def test_api_tool_schema_carries_per_argument_descriptions(api_client):
+    """Argument text rides in the property, not the tool description.
+
+    The registry stopped shipping the ``Args:`` block inside ``description``,
+    so a client only sees what each argument means if the property carries it.
+    """
+    resp = api_client.get("/v1/tools")
+    name_property = resp.json()["tools"][0]["inputSchema"]["properties"]["name"]
+
+    assert name_property["type"] == "string"
+    assert name_property["description"] == "Who to greet."
+
+
 def test_api_chat_completion(api_client):
     resp = api_client.post(
         "/v1/chat/completions",
@@ -171,6 +190,49 @@ def test_api_chat_completion_no_user_message_400(api_client):
         json={"model": "gaia-fake", "messages": [{"role": "system", "content": "x"}]},
     )
     assert resp.status_code == 400
+
+
+def test_api_chat_completion_flattens_a_content_part_array(api_client):
+    """The schema is shared with `gaia api`, so the array shape reaches here too.
+
+    Before it was flattened, `content` arrived as a list of ContentPart and was
+    handed to process_query as a list — a 500 from inside the agent, where the
+    narrower schema used to give a clean 422.
+    """
+    resp = api_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gaia-fake",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                        {"type": "text", "text": "there"},
+                    ],
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["choices"][0]["message"]["content"] == "echo: hello\nthere"
+
+
+def test_api_chat_completion_rejects_a_non_text_content_part(api_client):
+    resp = api_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gaia-fake",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": "x"}}],
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 400
+    assert "image_url" in resp.json()["detail"]
 
 
 def test_api_streaming(api_client):
@@ -208,6 +270,9 @@ def test_mcp_tools_list(server):
     tools = resp["result"]["tools"]
     assert tools[0]["name"] == "greet"
     assert tools[0]["description"].startswith("Greet someone by name.")
+    assert (
+        tools[0]["inputSchema"]["properties"]["name"]["description"] == "Who to greet."
+    )
 
 
 def test_mcp_tools_call(server):
