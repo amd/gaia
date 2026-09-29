@@ -29,6 +29,7 @@ import os
 import re
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union, cast
@@ -531,6 +532,10 @@ def resolve_memory_db_path() -> Path:
     return gaia_dir / "memory.db"
 
 
+class MemoryStoreClosedError(RuntimeError):
+    """A store call arrived after ``close()``."""
+
+
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
@@ -552,6 +557,7 @@ class MemoryStore:
         self._db_path = db_path
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._lock = threading.Lock()
+        self._closed = False
 
         self._init_schema()
         logger.debug("[MemoryStore] initialized at %s", db_path)
@@ -567,7 +573,7 @@ class MemoryStore:
         migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3, v3→v4
         and v4→v5 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
         """
-        with self._lock:
+        with self._locked():
             self._conn.execute("PRAGMA journal_mode=WAL")
             # Allow up to 5 s of retries before raising SQLITE_BUSY.  This
             # prevents spurious errors when the dashboard REST singleton and
@@ -697,7 +703,7 @@ class MemoryStore:
 
     def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Execute SQL with lock. Commits automatically."""
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, params)
             self._conn.commit()
             return cursor
@@ -797,7 +803,7 @@ class MemoryStore:
         if not preserve_full and len(content) > MAX_TURN_LENGTH:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     "INSERT INTO conversations (session_id, role, content, context, timestamp) "
@@ -843,7 +849,7 @@ class MemoryStore:
             ) sub ORDER BY id ASC
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             rows = cursor.fetchall()
 
@@ -873,7 +879,7 @@ class MemoryStore:
         if not safe_query:
             return []
 
-        with self._lock:
+        with self._locked():
             results = self._fts5_search_conversations_locked(safe_query, context, limit)
             if not results:
                 safe_query_or = _sanitize_fts5_query(query, use_and=False)
@@ -958,7 +964,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             rows = cursor.fetchall()
 
@@ -981,7 +987,7 @@ class MemoryStore:
         if exclude_session is not None:
             sql += " WHERE session_id != ?"
             params = (exclude_session,)
-        with self._lock:
+        with self._locked():
             return int(self._conn.execute(sql, params).fetchone()[0])
 
     # ==================================================================
@@ -1059,7 +1065,7 @@ class MemoryStore:
         metadata_json = json.dumps(metadata) if metadata else None
         now = _now_iso()
 
-        with self._lock:
+        with self._locked():
             # Check for dedup match (scoped to category + context + entity)
             existing_id = self._find_similar_locked(content, category, context, entity)
 
@@ -1282,7 +1288,7 @@ class MemoryStore:
         if not safe_query:
             return []
 
-        with self._lock:
+        with self._locked():
             results = self._fts5_search_knowledge_locked(
                 safe_query,
                 category,
@@ -1433,20 +1439,28 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
     def get_by_category_contexts(
-        self, category: str, context: str, limit: int = 10
+        self, category: str, context: str | None, limit: int = 10
     ) -> List[Dict]:
         """Get non-sensitive knowledge by category for a specific context AND global.
 
-        Single query that replaces two sequential get_by_category() calls in
-        _get_context_items() — avoids the 2-round-trips-per-category overhead
-        during system prompt construction.
+        ``context=None`` reads every context. Single query that replaces two
+        sequential get_by_category() calls in _get_context_items() — avoids the
+        2-round-trips-per-category overhead during system prompt construction.
         """
-        if context == "global":
+        if context is None:
+            sql = f"""
+                SELECT {self._KNOWLEDGE_COLS} FROM knowledge
+                WHERE category = ? AND sensitive = 0 AND superseded_by IS NULL
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT ?
+            """
+            params = (category, limit)
+        elif context == "global":
             sql = f"""
                 SELECT {self._KNOWLEDGE_COLS} FROM knowledge
                 WHERE category = ? AND context = ? AND sensitive = 0
@@ -1465,7 +1479,7 @@ class MemoryStore:
             """
             params = (category, context, limit)
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, params)
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
@@ -1480,7 +1494,7 @@ class MemoryStore:
             ORDER BY updated_at DESC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (entity, limit))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
@@ -1495,7 +1509,7 @@ class MemoryStore:
         embedding excluded).
         """
         sql = f"SELECT {self._KNOWLEDGE_COLS} FROM knowledge WHERE id = ?"
-        with self._lock:
+        with self._locked():
             row = self._conn.execute(sql, (knowledge_id,)).fetchone()
         return self._row_to_knowledge_dict(row) if row else None
 
@@ -1505,12 +1519,17 @@ class MemoryStore:
         include_overdue: bool = True,
         context: str | None = None,
         limit: int = 10,
+        include_sensitive: bool = False,
     ) -> List[Dict]:
         """Get time-sensitive items due within N days (or overdue).
 
         Returns items where:
         - due_at is within the window (or overdue if include_overdue=True)
         - Either never reminded, or reminded before the due date (needs follow-up)
+        - Not marked sensitive, unless include_sensitive=True
+
+        Sensitive rows are filtered in SQL rather than by the caller so they
+        cannot consume ``limit`` and leave the visible list empty.
         """
         now_iso = _now_iso()
         future_iso = (
@@ -1538,6 +1557,9 @@ class MemoryStore:
             conditions.append("context = ?")
             params.append(context)
 
+        if not include_sensitive:
+            conditions.append("sensitive = 0")
+
         where = "WHERE " + " AND ".join(conditions)
 
         params.append(limit)
@@ -1548,7 +1570,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
@@ -1672,7 +1694,7 @@ class MemoryStore:
         params.append(knowledge_id)
         sql = f"UPDATE knowledge SET {', '.join(sets)} WHERE id = ?"
 
-        with self._lock:
+        with self._locked():
             try:
                 self._validate_existing_category_locked(
                     knowledge_id, allow_privileged=allow_privileged, where="update"
@@ -1694,7 +1716,7 @@ class MemoryStore:
 
     def update_confidence(self, knowledge_id: str, delta: float) -> None:
         """Adjust confidence by delta, clamped to [0.0, 1.0]."""
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     """
@@ -1725,7 +1747,7 @@ class MemoryStore:
         Returns False if not found. Raises ValueError for a privileged row
         unless allow_privileged=True, with the same callers as store().
         """
-        with self._lock:
+        with self._locked():
             try:
                 self._validate_existing_category_locked(
                     knowledge_id, allow_privileged=allow_privileged, where="delete"
@@ -1759,7 +1781,7 @@ class MemoryStore:
         Returns:
             True if the row was found and updated, False if knowledge_id not found.
         """
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     "UPDATE knowledge SET embedding = ? WHERE id = ?",
@@ -1780,7 +1802,7 @@ class MemoryStore:
         knowledge, procedure, and skill-delta embeddings. Returns the total rows
         cleared.
         """
-        with self._lock:
+        with self._locked():
             try:
                 knowledge = self._conn.execute(
                     "UPDATE knowledge SET embedding = NULL WHERE embedding IS NOT NULL"
@@ -1816,7 +1838,7 @@ class MemoryStore:
         that as "no change to detect". Read from the ``meta`` table so every
         connection (agent + UI router) sees the same value.
         """
-        with self._lock:
+        with self._locked():
             row = self._conn.execute(
                 "SELECT value FROM meta WHERE key = ?", (self._EMBEDDER_META_KEY,)
             ).fetchone()
@@ -1824,7 +1846,7 @@ class MemoryStore:
 
     def set_embedder_id(self, model_id: str) -> None:
         """Record the embedder model id that produced the stored embeddings."""
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     "INSERT INTO meta (key, value) VALUES (?, ?) "
@@ -1885,7 +1907,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             return [
                 self._row_to_knowledge_dict_with_embedding(r) for r in cursor.fetchall()
@@ -1905,7 +1927,7 @@ class MemoryStore:
             ORDER BY created_at ASC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (limit,))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
@@ -1915,7 +1937,7 @@ class MemoryStore:
         Returns:
             {total_items, with_embedding, without_embedding, coverage_pct}
         """
-        with self._lock:
+        with self._locked():
             row = self._conn.execute("""
                 SELECT
                     COUNT(*) AS total_items,
@@ -1999,7 +2021,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, tuple(params))
             return [
                 self._row_to_knowledge_dict_with_embedding(r) for r in cursor.fetchall()
@@ -2036,7 +2058,7 @@ class MemoryStore:
             LIMIT ?
         """
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (min_turns, cutoff, limit))
             return [row[0] for row in cursor.fetchall()]
 
@@ -2064,7 +2086,7 @@ class MemoryStore:
             ORDER BY id ASC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(sql, (session_id, limit)).fetchall()
 
         return [
@@ -2095,7 +2117,7 @@ class MemoryStore:
             WHERE id IN ({placeholders}) AND consolidated_at IS NULL
         """
 
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(sql, (now, *turn_ids)).rowcount
                 self._conn.commit()
@@ -2129,7 +2151,7 @@ class MemoryStore:
         if error and len(error) > MAX_FTS_QUERY_LENGTH:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     """
@@ -2178,13 +2200,13 @@ class MemoryStore:
             """
             params = (limit,)
 
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, params)
             return [self._row_to_tool_dict(r) for r in cursor.fetchall()]
 
     def get_tool_stats(self, tool_name: str) -> Dict:
         """Returns: {total_calls, success_rate, avg_duration_ms, last_error}"""
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT COUNT(*) as total,
@@ -2239,7 +2261,7 @@ class MemoryStore:
 
     def get_stats(self) -> Dict:
         """Aggregate statistics across all tables."""
-        with self._lock:
+        with self._locked():
             # Knowledge stats
             k_total = self._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
 
@@ -2486,7 +2508,7 @@ class MemoryStore:
         if conditions:
             where = "WHERE " + " AND ".join(conditions)
 
-        with self._lock:
+        with self._locked():
             # Total count
             count_sql = f"SELECT COUNT(*) FROM knowledge k {fts_join} {where}"
             total = self._conn.execute(count_sql, tuple(params)).fetchone()[0]
@@ -2548,7 +2570,7 @@ class MemoryStore:
                 WHERE success = 0 AND error IS NOT NULL
             ) e ON t.tool_name = e.tool_name AND e.rn = 1
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (limit,))
             rows = cursor.fetchall()
 
@@ -2570,7 +2592,7 @@ class MemoryStore:
         """Daily activity counts for the activity chart."""
         cutoff = (datetime.now().astimezone() - timedelta(days=days)).isoformat()
 
-        with self._lock:
+        with self._locked():
             # Conversation turns per day
             conv_rows = self._conn.execute(
                 """
@@ -2661,7 +2683,7 @@ class MemoryStore:
             ORDER BY timestamp DESC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(sql, (limit,))
             return [self._row_to_tool_dict(r) for r in cursor.fetchall()]
 
@@ -2671,7 +2693,7 @@ class MemoryStore:
 
     def get_source_counts(self) -> Dict[str, int]:
         """Return knowledge entry counts grouped by source (tool, user, discovery, …)."""
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(
                 "SELECT source, COUNT(*) FROM knowledge GROUP BY source"
             ).fetchall()
@@ -2684,7 +2706,7 @@ class MemoryStore:
         transaction — avoids the knowledge/FTS divergence that manual per-ID
         deletion without a wrapping transaction would risk.
         """
-        with self._lock:
+        with self._locked():
             try:
                 # FTS cleanup: delete all FTS entries for matching knowledge rows
                 self._conn.execute(
@@ -2708,7 +2730,7 @@ class MemoryStore:
 
         Atomically cleans FTS5 index and knowledge table in one transaction.
         """
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     """
@@ -2731,7 +2753,7 @@ class MemoryStore:
 
         Capped at `limit` rows (default 100) to prevent unbounded payloads.
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT entity, COUNT(*) as count, MAX(updated_at) as last_updated
@@ -2753,7 +2775,7 @@ class MemoryStore:
 
         Capped at `limit` rows (default 100) to prevent unbounded payloads.
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT context, COUNT(*) as count
@@ -2768,7 +2790,7 @@ class MemoryStore:
 
     def get_tool_history(self, tool_name: str, limit: int = 50) -> List[Dict]:
         """Recent call history for a specific tool."""
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT tool_name, args, result_summary, success, error, duration_ms, timestamp
@@ -2798,7 +2820,7 @@ class MemoryStore:
         Uses a single-pass query with a LEFT JOIN to the minimum user-turn ID
         per session, avoiding an N+1 correlated subquery.
         """
-        with self._lock:
+        with self._locked():
             cursor = self._conn.execute(
                 """
                 SELECT c.session_id,
@@ -2925,7 +2947,7 @@ class MemoryStore:
         prov_json = json.dumps(provenance) if provenance is not None else None
         now = _now_iso()
 
-        with self._lock:
+        with self._locked():
             try:
                 # existing_id is the str id only when skill_id was provided AND
                 # matches a row — keeping it a narrowed str (not str | None) so
@@ -3063,7 +3085,7 @@ class MemoryStore:
             ORDER BY created_at DESC
             LIMIT ?
         """
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(sql, tuple(params)).fetchall()
 
         if with_embedding:
@@ -3079,7 +3101,7 @@ class MemoryStore:
         Returns:
             True if a row was updated, False if ``skill_id`` was not found.
         """
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     "UPDATE procedures SET superseded_by = ? WHERE id = ?",
@@ -3108,7 +3130,7 @@ class MemoryStore:
             return 0
         stamp = when or _now_iso()
         placeholders = ",".join("?" for _ in skill_ids)
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     f"UPDATE procedures SET last_used_at = ? WHERE id IN ({placeholders})",
@@ -3160,7 +3182,7 @@ class MemoryStore:
         result_id = delta_id or f"delta_{uuid4().hex}"
         now = _now_iso()
 
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     """
@@ -3256,7 +3278,7 @@ class MemoryStore:
             sql += " LIMIT ?"
             params.append(limit + 1)
 
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(sql, params).fetchall()
         if limit is not None and len(rows) > limit:
             rows = rows[:limit]
@@ -3302,7 +3324,7 @@ class MemoryStore:
         reached the model.
         """
         stamp = when or _now_iso()
-        with self._lock:
+        with self._locked():
             try:
                 # superseded_by IS NULL: a retired row can never resolve, so
                 # activating one would report consent for a change that is
@@ -3329,7 +3351,7 @@ class MemoryStore:
         existing ``superseded_by`` would rewrite the lineage the audit trail is
         for.
         """
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     "UPDATE skill_deltas SET superseded_by = ? "
@@ -3370,7 +3392,7 @@ class MemoryStore:
         if scope:
             clauses.append("scope = ?")
             params.append(scope)
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     "UPDATE skill_deltas SET status = 'archived' "
@@ -3389,7 +3411,7 @@ class MemoryStore:
             return 0
         stamp = when or _now_iso()
         placeholders = ",".join("?" for _ in delta_ids)
-        with self._lock:
+        with self._locked():
             try:
                 rowcount = self._conn.execute(
                     f"UPDATE skill_deltas SET last_used_at = ? WHERE id IN ({placeholders})",
@@ -3448,7 +3470,7 @@ class MemoryStore:
             ORDER BY th.session_id, th.id
         """
         params = {"since": since, "min_steps": min_steps}
-        with self._lock:
+        with self._locked():
             rows = self._conn.execute(sql, params).fetchall()
 
         # Group the ordered rows into per-session spans.  The eligible CTE has
@@ -3509,7 +3531,7 @@ class MemoryStore:
         consumed yet" and gets its history distilled once.  Callers pass the
         value straight to :meth:`iter_sessions` as ``since``.
         """
-        with self._lock:
+        with self._locked():
             row = self._conn.execute(
                 "SELECT value FROM meta WHERE key = ?",
                 (self._SYNTHESIS_WATERMARK_META_KEY,),
@@ -3532,7 +3554,7 @@ class MemoryStore:
                 "Pass the ISO timestamp of the last consumed session, or leave "
                 "the existing watermark in place."
             )
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.execute(
                     "INSERT INTO meta (key, value) VALUES (?, ?) "
@@ -3583,7 +3605,7 @@ class MemoryStore:
             return 0
         now = _now_iso()
         rows = [(sid, outcome, goal, detail, now) for sid in ids]
-        with self._lock:
+        with self._locked():
             try:
                 self._conn.executemany(
                     "INSERT INTO synthesis_marks "
@@ -3614,7 +3636,7 @@ class MemoryStore:
         marks: Dict[str, Dict] = {}
 
         def _collect(sql: str, params: tuple) -> None:
-            with self._lock:
+            with self._locked():
                 rows = self._conn.execute(sql, params).fetchall()
             for session_id, outcome, goal, detail, marked_at in rows:
                 marks[session_id] = {
@@ -3650,7 +3672,7 @@ class MemoryStore:
         Returns:
             ``{"marks_cleared": int, "watermark_cleared": bool}``.
         """
-        with self._lock:
+        with self._locked():
             try:
                 cursor = self._conn.execute("DELETE FROM synthesis_marks")
                 marks_cleared = cursor.rowcount or 0
@@ -3683,7 +3705,7 @@ class MemoryStore:
         ).isoformat()
         now = _now_iso()
 
-        with self._lock:
+        with self._locked():
             try:
                 cursor = self._conn.execute(
                     """
@@ -3741,7 +3763,7 @@ class MemoryStore:
                AND SUM(CASE WHEN consolidated_at IS NULL THEN 1 ELSE 0 END) > 0
         """
 
-        with self._lock:
+        with self._locked():
             try:
                 # Prune tool_history
                 tool_deleted = self._conn.execute(
@@ -3837,7 +3859,7 @@ class MemoryStore:
         Atomic: if the rebuild fails (e.g. disk full), rolls back so the
         pending DELETE is not committed by the next unrelated operation.
         """
-        with self._lock:
+        with self._locked():
             try:
                 self._rebuild_knowledge_fts_locked()
                 self._rebuild_conversations_fts_locked()
@@ -3858,7 +3880,7 @@ class MemoryStore:
             Dict with counts of deleted rows per table:
             ``{knowledge: int, tool_history: int, conversations: int}``
         """
-        with self._lock:
+        with self._locked():
             try:
                 knowledge_deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
@@ -3888,7 +3910,7 @@ class MemoryStore:
         reset structural state between scenarios while keeping conversation
         history (or vice versa) for cross-session tests.
         """
-        with self._lock:
+        with self._locked():
             try:
                 deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
@@ -3904,7 +3926,7 @@ class MemoryStore:
 
         Leaves knowledge and tool_history untouched.
         """
-        with self._lock:
+        with self._locked():
             try:
                 deleted = self._conn.execute("DELETE FROM conversations").rowcount
                 self._rebuild_conversations_fts_locked()
@@ -3975,7 +3997,7 @@ class MemoryStore:
 
         now = _now_iso()
         ids: List[str] = []
-        with self._lock:
+        with self._locked():
             try:
                 for n in normalized:
                     self._conn.execute(
@@ -4032,8 +4054,32 @@ class MemoryStore:
         )
 
     def close(self) -> None:
-        """Close the database connection."""
-        try:
+        """Close the database connection.
+
+        Takes ``self._lock``: extraction runs on a background thread, and
+        sqlite3 frees a connection closed underneath a running statement —
+        the process segfaults rather than raising. Idempotent.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
             self._conn.close()
-        except Exception:
-            pass
+
+    @contextmanager
+    def _locked(self):
+        """Hold the connection lock, refusing a call that lost the race to close().
+
+        Every DB method goes through this rather than ``self._lock`` directly,
+        so a thread that blocks while ``close()`` runs finds the store shut
+        instead of executing on a freed sqlite3 connection.
+        """
+        with self._lock:
+            if self._closed:
+                raise MemoryStoreClosedError(
+                    f"memory store at {self._db_path} is closed; the call "
+                    "arrived after close(), most likely from the background "
+                    "extraction thread. Drain it with "
+                    "drain_memory_extraction(agent) before closing the agent."
+                )
+            yield

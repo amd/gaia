@@ -318,28 +318,28 @@ func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 	}
 }
 
-func TestDaemonBypassFailsBeforeConnection(t *testing.T) {
+func TestDaemonFullAccessFailsBeforeConnection(t *testing.T) {
 	for _, id := range []string{"gaia", "email"} {
-		c, err := ForAgent(catalog.Agent{ID: id, Transport: catalog.TransportDaemon}, ForAgentOptions{BypassPermissions: true})
+		c, err := ForAgent(catalog.Agent{ID: id, Transport: catalog.TransportDaemon}, ForAgentOptions{FullAccess: true})
 		if c != nil {
 			c.Close()
 		}
-		if err == nil || !strings.Contains(err.Error(), "--bypass-permissions") || !strings.Contains(err.Error(), "Drop") {
-			t.Fatalf("%s ignored bypass: client=%T err=%v", id, c, err)
+		if err == nil || !strings.Contains(err.Error(), "--full-access") || !strings.Contains(err.Error(), "Drop") {
+			t.Fatalf("%s ignored full access: client=%T err=%v", id, c, err)
 		}
 	}
 }
-func TestSubprocessBypassStillReachesAgent(t *testing.T) {
+func TestSubprocessFullAccessStillReachesAgent(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := ForAgent(catalog.Agent{ID: "gaia", Transport: catalog.TransportSubprocess, BinaryPath: self}, ForAgentOptions{BypassPermissions: true})
+	c, err := ForAgent(catalog.Agent{ID: "gaia", Transport: catalog.TransportSubprocess, BinaryPath: self}, ForAgentOptions{FullAccess: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	if !c.(*SubprocessClient).BypassAtLaunch() {
-		t.Fatal("subprocess bypass was dropped")
+	if !c.(*SubprocessClient).FullAccessAtLaunch() {
+		t.Fatal("subprocess full access was dropped")
 	}
 }

@@ -23,6 +23,8 @@ import pytest
 
 from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
+    TIER_CONFIRM,
+    TIER_REFUSE,
     ShellToolsMixin,
     skill_granted_binaries,
 )
@@ -150,6 +152,29 @@ def test_a_missing_binary_fails_loudly_and_names_how_to_install_it(monkeypatch):
     # substring — CodeQL's py/incomplete-url-substring-sanitization flags
     # `"cli.github.com" in message` as if it were validating a URL's origin.
     assert BINARY_POLICIES["gh"].install_hint in message
+
+
+def test_a_missing_binary_with_a_substitute_does_not_refuse_the_skill(monkeypatch):
+    """pytest usually lives in a project's virtualenv, not on PATH. Refusing the
+    whole coding skill for it blocked 42 of 48 loads in one benchmark run."""
+    from gaia.skills.binaries import unavailable_binaries
+
+    monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
+    permissions = parse_permissions(["shell:execute:pytest"], skill_name="coding")
+    assert resolve_binary_policies(permissions, skill_name="coding") == []
+    assert [p.binary for p in unavailable_binaries(permissions)] == ["pytest"]
+    assert BINARY_POLICIES["pytest"].substitute
+    assert not BINARY_POLICIES["gh"].substitute, "gh has no substitute, so it refuses"
+
+
+def test_an_installed_binary_is_never_reported_unavailable(monkeypatch):
+    from gaia.skills.binaries import unavailable_binaries
+
+    monkeypatch.setattr(
+        "gaia.skills.binaries.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+    permissions = parse_permissions(["shell:execute:pytest"], skill_name="coding")
+    assert unavailable_binaries(permissions) == []
 
 
 def test_a_present_binary_resolves(monkeypatch):
@@ -409,12 +434,52 @@ class _Shell(ShellToolsMixin):
     """A bare mixin host — no path validator, no agent."""
 
 
-def test_a_policed_binary_is_refused_without_a_grant():
+def test_a_policed_binary_is_refused_without_a_grant(monkeypatch):
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
     error = ShellToolsMixin._validate_command(
         "gh", ["gh", "issue", "list"], "gh issue list"
     )
     assert error is not None
     assert "shell:execute:gh" in error["error"]
+
+
+def test_a_binary_that_is_not_installed_is_not_blamed_on_a_missing_skill(monkeypatch):
+    """The coding skill can be loaded with pytest off PATH. Telling the model to
+    "load that skill first" then sends it into a reload that changes nothing."""
+    monkeypatch.setattr("gaia.agents.tools.shell_tools.shutil.which", lambda _n: None)
+
+    error = ShellToolsMixin._validate_command(
+        "pytest", ["pytest", "-q", "tests/"], "pytest -q tests/"
+    )
+    assert error is not None
+    assert "not installed here" in error["error"]
+    assert "load that skill first" not in error["error"]
+    assert BINARY_POLICIES["pytest"].substitute in error["error"]
+
+    error = ShellToolsMixin._validate_command(
+        "gh", ["gh", "issue", "list"], "gh issue list"
+    )
+    assert error is not None
+    assert BINARY_POLICIES["gh"].install_hint in error["error"]
+
+
+def test_the_python_m_spelling_of_a_missing_binary_is_refused_the_same_way(
+    monkeypatch,
+):
+    """`python -m pytest` is judged as `pytest`, so an absent pytest refuses it
+    too — and the model needs the substitute, not a skill-reload hint."""
+    monkeypatch.setattr("gaia.agents.tools.shell_tools.shutil.which", lambda _n: None)
+
+    error = ShellToolsMixin._validate_command(
+        "python",
+        ["python", "-m", "pytest", "-q", "tests/"],
+        "python -m pytest -q tests/",
+    )
+    assert error is not None
+    assert "not installed here" in error["error"]
+    assert BINARY_POLICIES["pytest"].substitute in error["error"]
 
 
 class _Manager:
@@ -427,7 +492,16 @@ class _Manager:
         return self._skills
 
 
-def test_a_refusal_names_the_installed_skill_that_grants_the_binary():
+@pytest.fixture(name="gh_on_path")
+def _gh_on_path(monkeypatch):
+    """The grant-route refusal is what these tests check, so gh must look
+    installed — otherwise the not-installed refusal answers first."""
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+
+
+def test_a_refusal_names_the_installed_skill_that_grants_the_binary(gh_on_path):
     """Without the name the model has no route, and most gave up (#3764)."""
     from gaia.skills.format import parse_skill
 
@@ -446,7 +520,7 @@ def test_a_refusal_names_the_installed_skill_that_grants_the_binary():
     assert "load_skill with 'github-triage'" in error["error"]
 
 
-def test_a_refusal_with_no_granting_skill_points_at_the_hub():
+def test_a_refusal_with_no_granting_skill_points_at_the_hub(gh_on_path):
     error = ShellToolsMixin._validate_command(
         "gh", ["gh", "issue", "list"], "gh issue list", skill_manager=_Manager({})
     )
@@ -454,7 +528,7 @@ def test_a_refusal_with_no_granting_skill_points_at_the_hub():
     assert "search_skill_hub" in error["error"]
 
 
-def test_a_refusal_without_a_skill_manager_does_not_claim_none_exists():
+def test_a_refusal_without_a_skill_manager_does_not_claim_none_exists(gh_on_path):
     error = ShellToolsMixin._validate_command(
         "gh", ["gh", "issue", "list"], "gh issue list"
     )
@@ -644,14 +718,25 @@ def test_a_query_string_ampersand_is_not_a_command_separator():
     assert host.skill_grant_covers_call("run_shell_command", {"command": command})
 
 
-def test_an_ungranted_command_in_a_pipeline_is_still_refused():
+def test_an_ungranted_command_in_a_pipeline_is_offered_for_confirmation():
+    """An ungranted binary no longer kills the pipeline — it asks.
+
+    ``_run`` calls the tool directly, so reaching "success" here means "would
+    run once approved"; the gate itself lives in ``Agent._execute_tool`` and is
+    covered by the confirmation tests below.
+    """
     host = _Validating()
     host._granted_binaries = BinaryGrants()
     host._granted_binaries.grant("gh", skill_name="github-triage")
 
-    result = _run(host, "gh issue list --repo amd/gaia | kubectl get pods")
-    assert result["status"] == "error"
-    assert "kubectl" in result["error"]
+    command = "gh issue list --repo amd/gaia | kubectl get pods"
+    assert (
+        host.policy_refusal_for_call("run_shell_command", {"command": command}) is None
+    )
+
+    error, _ = host._validate_shell_command(command)
+    assert error is not None and error["tier"] == TIER_CONFIRM
+    assert "kubectl" in error["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -797,14 +882,11 @@ def _refusal(host, command: str):
         ("gh issue close 2975", "Allowed issue actions"),
         ("gh api -X POST repos/amd/gaia/issues", "-X may only be GET"),
         ("gh alias set x", "is not allowed"),
-        # Ungranted and unknown commands are equally pre-decided.
-        ("kubectl get pods", "not in the allowed list"),
-        # A policed binary this host was not granted: refused before the modal,
-        # and the refusal names the grant rather than just saying no.
-        ("git push", "needs a skill grant"),
-        # Chaining is allowed; the command it chains to is still refused, and
-        # the refusal still lands before anyone is asked to approve the line.
-        ("gh issue list && rm -rf /", "not in the allowed list"),
+        # Chaining is allowed; a REFUSE-tier segment anywhere on the line is
+        # still refused before anyone is asked to approve any of it.
+        ("gh issue list && gh auth token", "Allowed auth actions: status"),
+        ("gh auth token && gh issue list", "Allowed auth actions: status"),
+        ("gh issue list; gh alias set x", "is not allowed"),
         ("gh issue list 'unterminated", "Invalid command syntax"),
     ],
 )
@@ -812,6 +894,27 @@ def test_a_call_the_policy_refuses_is_refused_before_any_prompt(command, expecte
     error = _refusal(_Gated("gh"), command)
     assert error is not None, f"{command!r} reached the confirmation prompt"
     assert expected in error["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Not reads, but a prompt can describe each one exactly. These used to
+        # be refused in front of the gate, which is what made the agent unable
+        # to do ordinary work its user was standing right there to approve.
+        "kubectl get pods",
+        # `git push` is NOT here: #3374 made it a refusal the git grant itself
+        # will not run, so no prompt can honestly offer it.
+        "git commit -m wip",
+        "npm test",
+        "rm notes.txt",
+        "find . -delete",
+    ],
+)
+def test_a_confirmable_command_reaches_the_prompt_instead_of_being_refused(command):
+    assert (
+        _refusal(_Gated("gh"), command) is None
+    ), f"{command!r} was refused before anyone could approve it"
 
 
 @pytest.mark.parametrize(
@@ -1155,6 +1258,26 @@ def test_a_write_is_never_pre_authorized_by_the_grant_alone():
         )
         is True
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh auth token",
+        "gh api -X POST repos/amd/gaia/issues",
+        "gh alias set x",
+    ],
+)
+def test_a_refused_invocation_stays_refused_without_a_grant(command):
+    """REFUSE is about what the command does, not who may run it.
+
+    With no grant at all these must still be refused. Gating on the grant
+    first sent them to the confirmation prompt instead — a weaker outcome for
+    an ungranted agent than for a granted one.
+    """
+    error = _refusal(_Gated(), command)
+    assert error is not None, f"{command!r} reached the prompt with no grant"
+    assert error["tier"] == TIER_REFUSE
 
 
 def test_a_refused_call_says_it_cannot_be_approved():
@@ -1922,7 +2045,11 @@ def _validation_error(host, command):
     )
 
 
-def test_python_m_pytest_without_the_grant_points_at_the_skill():
+def test_python_m_pytest_without_the_grant_points_at_the_skill(monkeypatch):
+    # Installed but ungranted: the answer is the grant, not "not installed".
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
     error = _validation_error(_Gated(), "python -m pytest -q")
     assert error is not None
     assert "shell:execute:pytest" in error["error"], error

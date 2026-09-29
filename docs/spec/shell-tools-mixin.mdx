@@ -15,10 +15,10 @@ title: "ShellToolsMixin"
 
 ## Overview
 
-ShellToolsMixin provides secure shell command execution with comprehensive rate limiting, command whitelisting, and path validation to prevent abuse while enabling file operations and system queries.
+ShellToolsMixin provides secure shell command execution with comprehensive rate limiting, permission tiers, and path validation to prevent abuse while enabling file operations and system queries.
 
 **Key Features:**
-- Whitelist-based command security (only safe, read-only commands)
+- Three permission tiers: a read-only list, commands the user approves first, and invocations refused outright
 - Compound lines — `&&`, `||`, `;` and `|` — so exploring and verifying is one call
 - Dual-tier rate limiting (burst + sustained)
 - Path traversal prevention with argument validation
@@ -26,10 +26,13 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 - Output truncation for large results
 
 **Security Model:**
-- WHITELIST approach (explicitly allow safe commands only)
-- Every command on a line validated before any of it runs
+- `run_shell_command` is confirmation-gated, so interactively every call is shown to the user
+- Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
+- Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
+- `TIER_REFUSE` for what a yes/no can't describe honestly (`gh auth token`, encoded PowerShell, `git -c`), however the program is spelled, and for shapes the runner can't execute (stray operators, broken quoting)
+- Every command on a line validated before any of it runs, so one `TIER_REFUSE` segment stops the whole line
 - Path validation for all file-like arguments
-- Git subcommand filtering (read-only only)
+- Git subcommand filtering (write subcommands are `TIER_CONFIRM`)
 - Rate limits prevent DOS attacks
 
 ### Command Composition
@@ -43,7 +46,7 @@ step from costing several agent turns:
 | `a \|\| b` | `b` runs only if `a` failed |
 | `a; b` | both run, whatever `a` returned |
 | `a \| b` | `a`'s output is piped into `b` |
-| `cd <dir> && a` | `cd` moves the rest of **its own line**, and nothing else |
+| `cd <dir> && a` | `cd` moves the rest of its line, and — if it actually ran — the **next separate call** too |
 | `a 2>&1` | `a`'s stderr joins its stdout, and flows on down the pipeline |
 | `a 2>/dev/null` | `a`'s stderr is discarded — its exit code is not |
 | `VAR=value a` | `VAR` is set for `a`'s process only |
@@ -58,6 +61,27 @@ its own exit code.
 the only two that name no file: they say where a command's stderr goes, and
 this process routes the stream it had already captured. Every other one is
 refused, `2>` to any other path included.
+
+### Persistent session
+
+Commands share one session per agent, so a `cd` is still in effect on the next
+separate call — `cd build` in one turn, then `make` in the next, without
+repeating the directory. Only the working directory persists; nothing is handed
+to a real shell, so `export` and `source` have nothing to persist *from*.
+
+A `cd` moves the session only when it actually ran: one that `&&`/`||` skipped,
+or that a timeout cut the line before reaching, leaves the session where it was.
+A `cd` into a directory the path policy refuses is not absorbed either —
+otherwise persistence would be a way to reach a forbidden directory and then
+read files there by bare name, which the per-argument check never sees.
+
+An explicit `working_directory` argument is a **one-shot override**: the command
+runs there, and the session's own directory is untouched.
+
+| Tool | Behaviour |
+|------|-----------|
+| `get_shell_state` | Reports the session's current working directory |
+| `reset_shell_session` | Returns the session to the directory the task started in |
 
 One or more leading `VAR=value` tokens set that one command's environment —
 `PYTHONPATH=. pytest -q` is the case this exists for. The value never reaches a
@@ -96,9 +120,9 @@ it to the whole string, so that step runs as argv on Windows too, and gives up
 ### Functional Requirements
 
 1. **Safe Command Execution**
-   - Whitelist: ls, cat, grep, find, git status, etc.
-   - Blacklist dangerous commands (rm, chmod, sudo, etc.)
-   - Git read-only subcommands only
+   - Read-only list: ls, cat, grep, find, git status, etc.
+   - Everything else asks the user first (rm, chmod, git commit, etc.)
+   - Git global options that can run code (`-c`, `--config-env`, `--exec-path`) are refused
    - Working directory support
    - Timeout protection, scaled to the kind of command (see below)
 
@@ -166,6 +190,8 @@ class ShellToolsMixin:
     Tools provided:
     - run_shell_command: Execute safe shell commands with security checks
     - wait_for_condition: Poll a predicate until it succeeds, or hit a deadline
+    - get_shell_state: Report the session's current working directory
+    - reset_shell_session: Return the session to its starting directory
     """
 
     def __init__(self, *args, **kwargs):
@@ -333,7 +359,11 @@ def _check_rate_limit(self) -> tuple:
     return True, "", 0.0
 ```
 
-### Command Whitelisting
+### Read-Only List and Tiers
+
+Every block carries a `tier`. Only `TIER_CONFIRM` reaches the confirmation
+prompt; a block with no tier is refused, so a guard that forgets to say fails
+closed.
 
 ```python
 ALLOWED_COMMANDS = {
@@ -355,8 +385,9 @@ cmd_base = cmd_parts[0].lower()
 if cmd_base not in ALLOWED_COMMANDS:
     return {
         "status": "error",
-        "error": f"Command '{cmd_base}' is not in the allowed list",
-        "hint": "Only read-only, informational commands are allowed",
+        "tier": TIER_CONFIRM,  # asks the user; not a refusal
+        "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
+        "hint": "Commands outside the no-prompt list run once the user approves them; they are not refused.",
         "examples": "ls, cat, grep, find, etc."
     }
 ```
@@ -364,8 +395,8 @@ if cmd_base not in ALLOWED_COMMANDS:
 ### Bypass Permissions
 
 Off by default. Turned on only by the flagship sidecar's `--bypass-permissions`
-launch flag or the TUI's `/bypass`, both of which set `bypass_permissions` on
-the session's output handler. `bypass_gates_active()` reads that attribute live,
+launch flag or the TUI's `/bypass`, both of which set `full_access` on
+the session's output handler. `full_access_active()` reads that attribute live,
 so a mid-session toggle takes effect on the next command.
 
 When on, `_validate_command` short-circuits the whole read-only policy above and
@@ -414,6 +445,12 @@ about which commands take it.
 This permits arbitrary code execution, and is reachable on the stdio transport
 only. See [Security Model](/plans/security-model) §4.5 for the full blast radius
 and why the HTTP transport is excluded.
+
+A heredoc (`python3 - <<'EOF' ... EOF`) is input to the command that opened
+it, not a command of its own: the body is stripped before the binary walk
+picks out which commands run, so a semicolon or apostrophe inside it cannot
+fracture the line or break tokenising. Only the check sees the stripped text
+— the step that actually executes still carries the real body.
 
 ### Git Command Filtering
 
@@ -521,19 +558,20 @@ def test_run_shell_command_rate_limit_sustained(agent):
     """Test sustained rate limiting (10 per minute)."""
     # Would require time manipulation or mocking
 
-def test_run_shell_command_dangerous_blocked(agent):
-    """Test dangerous commands are blocked."""
-    dangerous = ["rm -rf /", "chmod 777", "sudo su", "dd if=/dev/zero"]
-    for cmd in dangerous:
-        result = agent.run_shell_command(cmd)
-        assert result["status"] == "error"
-        assert "not in the allowed list" in result["error"]
+def test_a_write_is_confirmable_not_refused():
+    """Writes reach the confirmation prompt instead of dying in front of it.
 
-def test_run_shell_command_git_write_blocked(agent):
-    """Test git write operations are blocked."""
-    result = agent.run_shell_command("git commit -m test")
-    assert result["status"] == "error"
-    assert "not allowed" in result["error"]
+    Checked on the validator, never by running the command: a direct tool call
+    is what an approved call looks like, so it would execute.
+    """
+    for cmd in ["rm notes.txt", "chmod 644 a.txt", "git commit -m test"]:
+        parts = cmd.split()
+        assert ShellToolsMixin._validate_command(parts[0], parts, cmd)["tier"] == TIER_CONFIRM
+
+def test_an_undescribable_invocation_is_refused():
+    cmd = "git -c core.pager=x status"
+    parts = cmd.split()
+    assert ShellToolsMixin._validate_command(parts[0], parts, cmd)["tier"] == TIER_REFUSE
 
 def test_run_shell_command_git_read_allowed(agent):
     """Test git read operations are allowed."""
@@ -612,9 +650,8 @@ print(result["stdout"])
 # Allowed: git log
 result = agent.run_shell_command("git log --oneline -10")
 
-# Blocked: git commit
-result = agent.run_shell_command("git commit -m 'test'")
-# Returns error: "Git command 'commit' is not allowed"
+# Asks first: git commit is TIER_CONFIRM — shown to the user, runs if approved
+# (and refused under GAIA_AUTO_APPROVE_TOOLS alone)
 ```
 
 ### Example 3: Rate Limiting

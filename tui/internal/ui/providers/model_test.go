@@ -102,6 +102,7 @@ func TestRecommendedRowsShowRankAndNoteOnOneLine(t *testing.T) {
 		}
 	}
 }
+
 // The widths above are all wide enough to fit a ranked row untruncated, so they
 // never exercise the guard. This one is not: without the truncate the row wraps
 // onto a second line and pushes a row above it out of the height budget.
@@ -356,5 +357,25 @@ func TestCompactGatewayKeepsProviderAndFieldsVisible(t *testing.T) {
 		if !strings.Contains(m.View(), label) {
 			t.Fatalf("compact gateway with an existing key lost %s: %s", label, m.View())
 		}
+	}
+}
+
+func TestFocusedRecommendedModelShowsItsMeasuredEvidence(t *testing.T) {
+	rec := lemonade.RecommendedModels[0]
+	if rec.Evidence == "" {
+		t.Fatal("the top recommendation must carry measured evidence")
+	}
+	m := New("", 120, 30)
+	m.selected = 1
+	next, _ := m.Update(modelsMsg{models: []lemonade.Model{{ID: "fireworks.plain-model"}, {ID: rec.ID}}})
+	m = next.(Model)
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "Measured: "+rec.Evidence) {
+		t.Fatalf("focused ranked model shows no evidence: %s", view)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	if view := ansi.Strip(m.View()); strings.Contains(view, "Measured:") {
+		t.Fatalf("plain model shows evidence: %s", view)
 	}
 }

@@ -1045,7 +1045,7 @@ var (
 // connection cannot deliver a permission decision" and the tool never runs.
 var (
 	_ ToolPermissionResponder = (*SSEClient)(nil)
-	_ PermissionBypasser      = (*SSEClient)(nil)
+	_ FullAccessSetter        = (*SSEClient)(nil)
 	_ LivePermissionReporter  = (*SSEClient)(nil)
 )
 
@@ -1077,7 +1077,7 @@ type toolDecisionRequest struct {
 	ConfirmID string `json:"confirm_id,omitempty"`
 }
 
-type bypassRequest struct {
+type fullAccessRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
@@ -1160,11 +1160,14 @@ func (s *SSEClient) RespondToolPermission(confirmID string, decision PermissionD
 	}
 }
 
-// SetBypassPermissions turns unattended approval on or off for this
-// conversation. Session-scoped, not run-scoped: bypass outliving a turn is the
-// entire point of it, and it takes effect on the very next gated tool including
-// one in a turn already running.
-func (s *SSEClient) SetBypassPermissions(enabled bool) error {
+// SetFullAccess turns unattended approval on or off for this conversation.
+// Session-scoped, not run-scoped: full access outliving a turn is the entire
+// point of it, and it takes effect on the very next gated tool including one in
+// a turn already running.
+//
+// The route is still spelled /bypass — renaming it would break every sidecar
+// already published against the old path.
+func (s *SSEClient) SetFullAccess(enabled bool) error {
 	sessionID, err := s.ensureSessionID()
 	if err != nil {
 		return err
@@ -1175,16 +1178,16 @@ func (s *SSEClient) SetBypassPermissions(enabled bool) error {
 	s.mu.Unlock()
 	if inst == nil {
 		return fmt.Errorf(
-			"the '%s' agent is not connected yet, so bypass could not be changed. "+
+			"the '%s' agent is not connected yet, so full access could not be changed. "+
 				"Send a message first", s.agentID)
 	}
 	if peer := s.negotiate(context.Background(), inst); !peer.supportsToolDecision {
-		return s.noLivePermissions("toggle bypass", peer, "Nothing was changed")
+		return s.noLivePermissions("toggle full access", peer, "Nothing was changed")
 	}
 
-	payload, err := json.Marshal(bypassRequest{Enabled: enabled})
+	payload, err := json.Marshal(fullAccessRequest{Enabled: enabled})
 	if err != nil {
-		return fmt.Errorf("could not encode the bypass setting for '%s': %w", s.agentID, err)
+		return fmt.Errorf("could not encode the full-access setting for '%s': %w", s.agentID, err)
 	}
 
 	resp, _, err := s.daemon.Do(context.Background(), inst, daemon.Request{
@@ -1194,7 +1197,7 @@ func (s *SSEClient) SetBypassPermissions(enabled bool) error {
 		Body:       payload,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		HTTPClient: s.cancelHTTP,
-		Op:         fmt.Sprintf("change the '%s' agent's bypass setting", s.agentID),
+		Op:         fmt.Sprintf("change the '%s' agent's full-access setting", s.agentID),
 	})
 	if err != nil {
 		return err
@@ -1205,13 +1208,13 @@ func (s *SSEClient) SetBypassPermissions(enabled bool) error {
 	case http.StatusOK:
 		return nil
 	case http.StatusNotFound:
-		// Bypass applies to a conversation, and this one has not started. Said
-		// plainly rather than as a bare 404: the user just pressed a key.
+		// Full access applies to a conversation, and this one has not started.
+		// Said plainly rather than as a bare 404: the user just pressed a key.
 		return fmt.Errorf(
 			"this '%s' conversation has not started yet, so there is nothing to "+
-				"apply bypass to. Send a message first, then toggle it", s.agentID)
+				"apply full access to. Send a message first, then toggle it", s.agentID)
 	default:
-		return fmt.Errorf("changing the '%s' agent's bypass setting failed (%s)",
+		return fmt.Errorf("changing the '%s' agent's full-access setting failed (%s)",
 			s.agentID, daemon.ErrorDetail(resp))
 	}
 }

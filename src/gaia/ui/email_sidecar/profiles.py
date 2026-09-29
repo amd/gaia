@@ -270,6 +270,8 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "run_python": "Running Python",
     "run_shell_command": "Running a shell command",
     "wait_for_condition": "Waiting for a condition",
+    "get_shell_state": "Checking the shell session",
+    "reset_shell_session": "Resetting the shell session",
     "sleep": "Waiting",
     "get_file_info": "Inspecting file",
     "list_recent_files": "Listing recent files",
@@ -311,6 +313,9 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "skill_status": "Checking skills",
     "capture_skill": "Saving skill",
     "remember_skill_lesson": "Remembering a lesson",
+    "check_cli_setup": "Checking a CLI's setup",
+    "install_cli": "Installing a CLI",
+    "sign_in_cli": "Signing in to a CLI",
     "load_tools": "Loading tools",
     "request_user_input": "Asking you a question",
     # Media / desktop

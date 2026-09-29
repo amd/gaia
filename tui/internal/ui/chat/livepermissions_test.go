@@ -40,16 +40,16 @@ func TestATransportThatDoesNotReportIsStillAble(t *testing.T) {
 	}
 }
 
-func TestBypassIsRefusedWhenThePeerCannotCarryIt(t *testing.T) {
+func TestFullAccessIsRefusedWhenThePeerCannotCarryIt(t *testing.T) {
 	c := &reportingClient{live: false}
 	m := NewChatModel(c, "gaia", "", false)
 	m.width, m.height = 100, 30
 
-	updated, _ := m.setBypass(true)
+	updated, _ := m.setFullAccess(true)
 	after := updated.(ChatModel)
 
-	if len(c.bypassCalls) != 0 {
-		t.Errorf("bypass must not be sent to a peer without the route: %v", c.bypassCalls)
+	if len(c.fullAccessCalls) != 0 {
+		t.Errorf("full access must not be sent to a peer without the route: %v", c.fullAccessCalls)
 	}
 	last := after.messages[len(after.messages)-1].Content
 	if !strings.Contains(last, "cannot change permission mode") {

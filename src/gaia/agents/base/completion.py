@@ -341,11 +341,13 @@ class FileEvidence:
 
 def _normalize_key(path: str, base: str) -> str:
     """One identity per file for Windows and POSIX paths, shared by every ledger."""
-    if ntpath.isabs(path) and ("\\" in path or ntpath.splitdrive(path)[0]):
-        return ntpath.normcase(ntpath.normpath(path))
-    if ntpath.splitdrive(base)[0]:
+    if os.name != "nt" and (
+        (ntpath.isabs(path) and ("\\" in path or ntpath.splitdrive(path)[0]))
+        or ntpath.splitdrive(base)[0]
+    ):
+        # A drive-lettered path off Windows: no filesystem here can resolve it.
         return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
-    # Write tools report resolved paths; macOS /tmp and /var are symlinks.
+    # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
     return os.path.normcase(
         os.path.realpath(os.path.join(base, os.path.expanduser(path)))
     )

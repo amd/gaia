@@ -765,14 +765,24 @@ async def async_main(action, **kwargs):
             print(f"❌ Error: {e}")
             return
         finally:
-            # Cleanup
-            try:
-                if "agent" in locals():
+            # Cleanup. The drain is here rather than beside the one-shot
+            # return so interactive, Ctrl-C and error exits land the last
+            # turn's facts too — extraction now finishes after the answer.
+            if "agent" in locals():
+                try:
+                    from gaia.agents.base.memory import drain_memory_extraction
+
+                    drain_memory_extraction(agent)
+                except Exception as exc:
+                    get_logger(__name__).warning(
+                        "Could not finish memory extraction before exit: %s", exc
+                    )
+                try:
                     agent.stop_watching()
-            except Exception as exc:
-                get_logger(__name__).warning(
-                    "Could not stop agent file watcher: %s", exc
-                )
+                except Exception as exc:
+                    get_logger(__name__).warning(
+                        "Could not stop agent file watcher: %s", exc
+                    )
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
@@ -982,6 +992,16 @@ def _launch_interactive_cli(log=None):
         log.error(f"Error in chat: {e}", exc_info=True)
         print(f"Error: {e}")
         sys.exit(1)
+    finally:
+        # Extraction finishes after the answer, so the last turn's facts are
+        # still in flight when this returns.
+        if "agent" in locals():
+            try:
+                from gaia.agents.base.memory import drain_memory_extraction
+
+                drain_memory_extraction(agent)
+            except Exception as exc:
+                log.warning("Could not finish memory extraction before exit: %s", exc)
 
 
 def _show_interactive_menu(log=None):
@@ -2422,7 +2442,7 @@ the suite decides — no LLM judge. A TUI must already be running with
     # Outcome-scored tasks for the flagship GaiaAgent, gated in CI: gaia eval tasks
     tasks_eval_parser = eval_subparsers.add_parser(
         "tasks",
-        help="Flagship agent tasks scored by outcome, judged, and gated",
+        help="Agent tasks scored by outcome, judged, gated, and compared across harnesses",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -2430,17 +2450,28 @@ Examples:
   gaia eval tasks run --suite full --no-judge --out eval/results/eval-tasks-ci
   gaia eval tasks judge eval/results/eval-tasks-ci
   gaia eval tasks gate eval/results/eval-tasks-ci --enforce
+  gaia eval tasks run --suite everyday --harness claude-code --model fireworks.glm-5p3-flash --repeats 3
+  gaia eval tasks report runs/gaia-glm runs/cc-glm --out runs/report
+  gaia eval tasks controls
+  gaia eval tasks run --suite swebench --instances psf__requests-1921,pallets__flask-5014
+  gaia eval tasks swebench eval/results/eval-tasks-swebench
 
-`run` gives the flagship a fresh copy of eval/tasks/toybox per task and scores
-what the project does afterwards. `judge` grades every task in one Claude call
-(no tools) and decides the question tasks.
+`run` gives the agent a fresh copy of eval/tasks/toybox (or a TheRock or
+SWE-bench checkout) per task and scores what the project does afterwards.
+`--harness` picks the flagship GaiaAgent or Claude Code; both get the same
+time limit, toolchain, gh stand-in and model gateway. `judge` grades every
+task with Claude (no tools) and decides the question and TheRock tasks.
 `gate` compares the run with eval/tasks/expectations/<model>.<suite>.json.
+`report` builds the harness x model table. `controls` checks the judge on
+planted attempts. The `swebench` suite is built from SWE-bench Verified at
+run time; `run` grades its predictions with the official harness in Docker
+afterwards (or `swebench <run_dir>` does, later).
 """,
     )
     tasks_actions = tasks_eval_parser.add_subparsers(dest="tasks_action")
     tasks_actions.required = True
     tasks_run_parser = tasks_actions.add_parser(
-        "run", help="Run the flagship on every task of a suite"
+        "run", help="Run an agent harness on every task of a suite"
     )
     tasks_run_parser.add_argument(
         "--suite", default="core", help="Task suite from eval/tasks/tasks.json"
@@ -2453,17 +2484,105 @@ what the project does afterwards. `judge` grades every task in one Claude call
     tasks_run_parser.add_argument(
         "--out",
         default=None,
-        help="Output directory (default: eval/results/eval-tasks-<timestamp>)",
+        help="Output directory (default: $GAIA_BENCH_RESULTS_DIR or eval/results, "
+        "then eval-tasks-<timestamp>)",
     )
     tasks_run_parser.add_argument(
         "--no-judge",
         action="store_true",
         help="Skip the quality judge (CI judges in a separate step)",
     )
+    tasks_run_parser.add_argument(
+        "--tasks",
+        default=None,
+        help="Comma-separated task ids: run only these tasks of the suite",
+    )
+    tasks_run_parser.add_argument(
+        "--instances",
+        default=None,
+        help="Comma-separated SWE-bench Verified instance ids the swebench suite "
+        "is built from (default: the five-instance pilot); only with --suite swebench",
+    )
+    tasks_run_parser.add_argument(
+        "--no-evaluate",
+        action="store_true",
+        help="swebench: capture the predictions but do not grade them in Docker "
+        "(`gaia eval tasks swebench <run_dir>` does it later)",
+    )
+    tasks_run_parser.add_argument(
+        "--harness",
+        choices=["gaia", "claude-code"],
+        default="gaia",
+        help="Agent harness: the flagship GaiaAgent (default) or Claude Code (`claude -p`)",
+    )
+    tasks_run_parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Run the suite N times; each run goes to <out>/r1, <out>/r2, ...",
+    )
+    tasks_run_parser.add_argument(
+        "--run-timeout",
+        type=int,
+        default=None,
+        help="Wall-clock cap per task in seconds, the same for every harness "
+        "(default: $GAIA_BENCH_RUN_TIMEOUT or 1800)",
+    )
+    tasks_run_parser.add_argument(
+        "--work-root",
+        default=None,
+        help="Where task workdirs live while running (default: $GAIA_BENCH_WORK_ROOT "
+        "or <tmp>/gaia-bench)",
+    )
+    tasks_run_parser.add_argument(
+        "--gateway-url",
+        default=None,
+        help="A model gateway already running (`gaia eval tasks gateway`); default: "
+        "$GAIA_BENCH_GATEWAY_URL, else one is started for the run",
+    )
+    tasks_run_parser.add_argument(
+        "--therock-url",
+        default=None,
+        help="TheRock git URL (default: $GAIA_BENCH_THEROCK_URL or "
+        "https://github.com/ROCm/TheRock)",
+    )
+    tasks_run_parser.add_argument(
+        "--fence",
+        action="store_true",
+        help="Fence the agent off the answer keys with macOS sandbox-exec "
+        "(macOS only; refused elsewhere)",
+    )
+    tasks_run_parser.add_argument(
+        "--full-access",
+        action="store_true",
+        help="Give GAIA no path boundary, the reach Claude Code has with its "
+        "permissions skipped",
+    )
+    tasks_run_parser.add_argument(
+        "--meter",
+        choices=["fireworks"],
+        default=None,
+        help="Read the run's real cost from the provider's billing meter",
+    )
+    tasks_run_parser.add_argument(
+        "--fireworks-account",
+        default=None,
+        help="Fireworks account id for --meter (default: $FIREWORKS_ACCOUNT_ID)",
+    )
+    tasks_run_parser.add_argument(
+        "--meter-lag",
+        type=int,
+        default=None,
+        help="Seconds to wait for the billing meter before the closing snapshot "
+        "(default: 150)",
+    )
     tasks_judge_parser = tasks_actions.add_parser(
         "judge", help="Grade a finished run's quality with Claude"
     )
-    tasks_judge_parser.add_argument("run_dir", help="Directory `run` wrote")
+    tasks_judge_parser.add_argument(
+        "run_dir",
+        help="Directory `run` wrote (with --repeats: its r1, r2, ... are judged)",
+    )
     for judging in (tasks_run_parser, tasks_judge_parser):
         judging.add_argument(
             "--judge-model",
@@ -2494,6 +2613,75 @@ what the project does afterwards. `judge` grades every task in one Claude call
         "--propose",
         default=None,
         help="Also write expectations measured from this run to this path",
+    )
+    tasks_report_parser = tasks_actions.add_parser(
+        "report", help="The harness x model table from finished, judged runs"
+    )
+    tasks_report_parser.add_argument(
+        "run_dirs",
+        nargs="+",
+        help="Directories `run` wrote; the first is the 100%% row",
+    )
+    tasks_report_parser.add_argument(
+        "--out", required=True, help="Where report.md, report.html and report.png go"
+    )
+    tasks_report_parser.add_argument(
+        "--title", default="Agent harness × model", help="Report heading"
+    )
+    tasks_report_parser.add_argument(
+        "--no-png", action="store_true", help="Skip the PNG even when Chrome is found"
+    )
+    tasks_swebench_parser = tasks_actions.add_parser(
+        "swebench",
+        help="Grade a swebench run's predictions with the official harness (Docker)",
+    )
+    tasks_swebench_parser.add_argument(
+        "run_dir", help="Directory `run --suite swebench` wrote"
+    )
+    for grading in (tasks_run_parser, tasks_swebench_parser):
+        grading.add_argument(
+            "--docker-platform",
+            default="linux/amd64",
+            help="Platform the SWE-bench images are pulled for (they are amd64-only; "
+            "default: linux/amd64)",
+        )
+        grading.add_argument(
+            "--keep-images",
+            action="store_true",
+            help="Do not pull each SWE-bench image just before its run and remove "
+            "it after (about 3 GB each)",
+        )
+    tasks_swebench_parser.add_argument(
+        "--work-root",
+        default=None,
+        help="The run's work root, where its instances are cached (default: "
+        "$GAIA_BENCH_WORK_ROOT or <tmp>/gaia-bench)",
+    )
+    tasks_gateway_parser = tasks_actions.add_parser(
+        "gateway",
+        help="Run the model gateway in the foreground (both harnesses reach the "
+        "model through it)",
+    )
+    tasks_gateway_parser.add_argument(
+        "--port", type=int, required=True, help="Port on 127.0.0.1"
+    )
+    tasks_gateway_parser.add_argument(
+        "--upstream",
+        default=None,
+        help="Lemonade base URL (default: $LEMONADE_BASE_URL); its key comes from "
+        "$LEMONADE_API_KEY",
+    )
+    tasks_controls_parser = tasks_actions.add_parser(
+        "controls",
+        help="Check the judge on planted ideal, fabricated and empty attempts",
+    )
+    tasks_controls_parser.add_argument(
+        "--judge-model",
+        default=None,
+        help="Claude model that grades (default: the eval default)",
+    )
+    tasks_controls_parser.add_argument(
+        "--out", default=None, help="Also write the controls and their verdicts here"
     )
 
     # Add new subparser for generating summary reports from evaluation directories
@@ -3376,10 +3564,49 @@ Examples:
     return parser
 
 
+def _serve_gateway(args):
+    """gaia eval tasks gateway: the model gateway, in the foreground."""
+    from gaia.eval.bench.gateway import Gateway
+    from gaia.llm.lemonade_client import resolve_lemonade_api_key
+
+    upstream = resolve_lemonade_base_url(args.upstream)
+    gateway = Gateway(
+        upstream, resolve_lemonade_api_key(base_url=upstream), port=args.port
+    )
+    print(f"[GATEWAY] {gateway.url} -> {gateway.upstream} (Ctrl+C to stop)")
+    try:
+        gateway.serve_forever()
+    except KeyboardInterrupt:
+        print("[GATEWAY] stopped")
+    finally:
+        gateway.stop()
+
+
+def _run_controls(args, judge_model):
+    """gaia eval tasks controls: the judge on planted attempts with known verdicts."""
+    from gaia.eval.bench import controls
+
+    out_dir = Path(args.out) if args.out else None
+    print(f"[CONTROLS] judged by {judge_model}")
+    result = controls.run_controls(judge_model, dict(os.environ), out_dir)
+    print(controls.render(result))
+    if not result["ok"]:
+        print(
+            "❌ The judge did not separate honest, fabricated and empty work as "
+            "expected; quality scores from this judge are not trustworthy."
+        )
+        sys.exit(1)
+    print("✅ The judge separated honest, fabricated and empty work.")
+
+
 def _handle_eval_tasks(args):
-    """gaia eval tasks run|judge|gate — see gaia.eval.flagship_tasks."""
+    """gaia eval tasks run|judge|gate|report|gateway|controls — see gaia.eval.flagship_tasks."""
     from gaia.eval import flagship_tasks as ft
 
+    # A suite takes a quarter of an hour, and its progress is the only sign it
+    # is alive. Redirected to a log, block buffering holds every line to the end.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     judge_model = getattr(args, "judge_model", None) or DEFAULT_CLAUDE_MODEL
     in_actions = os.environ.get("GITHUB_ACTIONS") == "true"
 
@@ -3405,35 +3632,148 @@ def _handle_eval_tasks(args):
             )
         return card
 
+    from gaia.eval.bench.swebench import SweBenchError
+
+    def _swebench_progress(task_id, verdict):
+        mark = "ERROR" if verdict.error else ("PASS" if verdict.resolved else "FAIL")
+        print(f"  {mark} {task_id} | {verdict.why}")
+
+    def _grade_swebench(run_dir, work_root):
+        print("[SWEBENCH] grading with the official harness")
+        try:
+            card = ft.swebench_grade_run(
+                run_dir,
+                work_root,
+                docker_platform=args.docker_platform,
+                pull_then_remove=not args.keep_images,
+                on_progress=_swebench_progress,
+            )
+        except (SweBenchError, ValueError) as exc:
+            print(f"❌ {exc}")
+            sys.exit(1)
+        return card
+
+    if args.tasks_action == "gateway":
+        _serve_gateway(args)
+        return
+    if args.tasks_action == "swebench":
+        run_dir = Path(args.run_dir)
+        for each in ft.run_dirs(run_dir):
+            card = _grade_swebench(
+                each, Path(args.work_root) if args.work_root else None
+            )
+            print()
+            print(ft.render_report(card, None))
+        return
+    if args.tasks_action == "controls":
+        _run_controls(args, judge_model)
+        return
+    if args.tasks_action == "report":
+        from gaia.eval.bench import report as bench_report
+
+        written = bench_report.write_report(
+            [Path(d) for d in args.run_dirs],
+            Path(args.out),
+            args.title,
+            png=not args.no_png,
+        )
+        print(written["markdown"].read_text(encoding="utf-8"))
+        for kind, path in written.items():
+            if path is not None:
+                print(f"[{kind.upper()}] {path.resolve()}")
+        return
+
     if args.tasks_action == "run":
+        from gaia.eval.bench import config as bench_config
+
+        try:
+            config = bench_config.resolve(
+                harness=args.harness,
+                run_timeout=args.run_timeout,
+                work_root=args.work_root,
+                gateway_url=args.gateway_url,
+                therock_url=args.therock_url,
+                fence=args.fence,
+                full_access=args.full_access,
+                repeats=args.repeats,
+                meter=args.meter,
+                fireworks_account=args.fireworks_account,
+                meter_lag=args.meter_lag,
+            )
+        except bench_config.BenchConfigError as exc:
+            print(f"❌ {exc}")
+            sys.exit(2)
+        if args.harness == "claude-code" and not args.model:
+            print(
+                "❌ --harness claude-code needs --model: an Anthropic model (e.g. "
+                "claude-opus-5) or a Lemonade model reached through the gateway "
+                "(e.g. fireworks.glm-5p3-flash)."
+            )
+            sys.exit(2)
         model = args.model or DEFAULT_MODEL_NAME
+        only = [t.strip() for t in (args.tasks or "").split(",") if t.strip()]
+        instances = [i.strip() for i in (args.instances or "").split(",") if i.strip()]
+        try:
+            ft.select(
+                ft.load_suite(
+                    args.suite, instances=instances, work_root=config.work_root
+                ),
+                only,
+            )
+        except (ValueError, SweBenchError) as exc:
+            print(f"❌ {exc}")
+            sys.exit(2)
         out_dir = Path(
-            args.out or f"eval/results/eval-tasks-{time.strftime('%Y%m%d-%H%M%S')}"
+            args.out
+            or bench_config.results_root()
+            / f"eval-tasks-{time.strftime('%Y%m%d-%H%M%S')}"
         )
         # Captured before run_suite removes the judge's credentials from os.environ.
         judge_env = dict(os.environ)
 
         def _progress(index, total, r):
             mark = "ERROR" if r.error else ("PASS" if r.passed else "FAIL")
+            if r.passed is None and not r.error:
+                mark = "JUDGE"
+            notes = " TIMED-OUT" if r.timed_out else ""
+            notes += f" web={len(r.web_uses)}" if r.web_uses else ""
             print(
                 f"  [{index}/{total}] {mark} {r.id} steps={r.steps} "
-                f"tokens={r.input_tokens + r.output_tokens:,} {r.wall_seconds}s | {r.why[:120]}"
+                f"tools={r.tool_calls} tokens={r.input_tokens + r.output_tokens:,} "
+                f"{r.wall_seconds}s{notes} | {r.why[:120]}"
             )
 
-        print(f"[RUN] suite {args.suite} on {model}")
-        card = ft.run_suite(args.suite, model, out_dir, on_progress=_progress)
-        if not args.no_judge:
-            card = _judge(out_dir, judge_env)
-        print()
-        print(ft.render_report(card, None))
+        for repeat in range(1, config.repeats + 1):
+            run_dir = out_dir / f"r{repeat}" if config.repeats > 1 else out_dir
+            print(
+                f"[RUN] suite {args.suite} on {model} via {config.harness}"
+                + (f" (repeat {repeat}/{config.repeats})" if config.repeats > 1 else "")
+            )
+            card = ft.run_suite(
+                args.suite,
+                model,
+                run_dir,
+                on_progress=_progress,
+                config=config,
+                repeat=repeat,
+                only=only,
+                **({"instances": instances} if instances else {}),
+            )
+            if not args.no_judge:
+                card = _judge(run_dir, judge_env)
+            if args.suite == "swebench" and not args.no_evaluate:
+                card = _grade_swebench(run_dir, config.work_root)
+            print()
+            print(ft.render_report(card, None))
         print(f"[OUTPUT] {out_dir.resolve()}")
         return
 
     run_dir = Path(args.run_dir)
     if args.tasks_action == "judge":
-        card = _judge(run_dir, dict(os.environ))
-        print()
-        print(ft.render_report(card, None))
+        for each in ft.run_dirs(run_dir):
+            card = _judge(each, dict(os.environ))
+            print()
+            print(ft.render_report(card, None))
         return
 
     card = ft.read_scorecard(run_dir)
@@ -5157,13 +5497,19 @@ def handle_email_command(args):
     from gaia.daemon.errors import DaemonError
 
     model = getattr(args, "model", None)
+    trace = bool(getattr(args, "trace", False))
 
     try:
         if interactive:
-            sys.exit(_email_interactive(model=model, verbose=verbose))
+            sys.exit(_email_interactive(model=model, verbose=verbose, trace=trace))
         renderer = ConsoleRenderer(verbose=verbose)
         outcome = run_query(
-            "email", query, model=model, renderer=renderer, verbose=verbose
+            "email",
+            query,
+            model=model,
+            renderer=renderer,
+            verbose=verbose,
+            trace=trace,
         )
         sys.exit(outcome.exit_code)
     except DaemonError as e:
@@ -5174,12 +5520,12 @@ def handle_email_command(args):
         sys.exit(1)
 
 
-def _email_interactive(*, model, verbose: bool) -> int:
+def _email_interactive(*, model, verbose: bool, trace: bool = False) -> int:
     """REPL over the daemon relay — reads queries from stdin until EOF / ``/quit``.
 
     Maintains the transcript locally and pushes it as ``context`` on each turn
     (the host owns the transcript; the stateless sidecar is fed the relevant
-    slice per request, spec §2.4).
+    slice per request, spec §2.4). ``trace`` writes one trace file per turn.
     """
     from gaia.daemon.agent_query import ConsoleRenderer, run_query
 
@@ -5203,6 +5549,7 @@ def _email_interactive(*, model, verbose: bool) -> int:
             model=model,
             renderer=renderer,
             verbose=verbose,
+            trace=trace,
         )
         # Only extend the transcript on a successful turn — a failed run must not
         # poison the context of the next one.
@@ -5609,7 +5956,10 @@ def handle_config_command(args):
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(1)
         cfg.save(path)
-        print(f"✅ Set {args.key} = {args.value}")
+        # Echo what was STORED, not what was typed: `set full_access yes`
+        # saves True, and confirming "= yes" would leave the user guessing
+        # whether the word was understood.
+        print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
 
