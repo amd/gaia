@@ -41,3 +41,6 @@ scripts/dev/bin/gaia-agent text eol=lf
 # Generated from the Agent UI backend models; regenerate, never hand-edit.
 src/gaia/apps/webui/src/types/api.gen.ts linguist-generated=true
 src/gaia/apps/webui/src/types/api.schemas.json linguist-generated=true
+
+# The gaia_email fixture mailbox is checked byte-for-byte against its builder.
+tests/fixtures/gaia/email/*.mbox -text

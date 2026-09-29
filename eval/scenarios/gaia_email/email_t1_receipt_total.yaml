@@ -1,0 +1,42 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/email/eval_inbox.mbox (build_mailbox.py) —
+# Harbor Hardware receipt #HH-58213 (2026-09-19): cordless drill (18V) $129.00,
+# drill bit set 21 pc $34.90, sales tax $22.50, total paid $186.40, Visa
+# ending 7719. Items sit past the 200-char listing preview.
+id: email_t1_receipt_total
+name: "Email — Read a Receipt and Answer Its Line Items"
+category: gaia_email
+severity: high
+tags: [t1_basic]
+description: |
+  A planted receipt: find it, read it, report the total and what was bought.
+  The line items are only in the body.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  mailbox_fixture: attached
+  notes: "Backend runs with GAIA_EVAL_MAILBOX (the fixture mailbox) and GAIA_MEMORY_ADMIN=1; the runner applies mailbox_fixture."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator actions, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), so no earlier scenario's memory leaks in (the runner has already set the fixture mailbox from setup.mailbox_fixture). Then send this turn: ask how much was spent at Harbor Hardware and on what"
+    user_message: "How much did I spend at Harbor Hardware, and what did I buy?"
+    ground_truth:
+      expected_answer: "$186.40 total: a cordless drill (18V) $129.00 and a 21-piece drill bit set $34.90, plus $22.50 sales tax"
+    success_criteria: |
+      States the total $186.40 and names both items (cordless drill,
+      drill bit set). Item prices are a bonus. agent_tools must show a mail
+      tool call; a total other than $186.40 is a FAIL.
+
+  - turn: 2
+    objective: "Detail follow-up"
+    user_message: "Which card did I pay with?"
+    ground_truth:
+      expected_answer: "A Visa ending in 7719"
+    success_criteria: "States Visa ending 7719. Any other digits is a FAIL."
+
+expected_outcome: |
+  The receipt is read from the fixture mailbox and every figure asked for is
+  reported exactly.
