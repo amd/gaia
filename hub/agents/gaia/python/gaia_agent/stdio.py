@@ -1199,6 +1199,41 @@ def run_turn(
 
 CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
 
+#: Sent by the host before the chat opens, so the first question does not pay
+#: for loading the model and reading the system prompt. Answered with a `final`
+#: whose answer is WARMED_UP, or WARM_UP_SKIPPED for a remote model, where
+#: nothing loads locally and a priming call would only cost money.
+WARM_UP_QUERY = "\x00gaia:warm_up\x00"
+WARMED_UP = "warmed_up"
+WARM_UP_SKIPPED = "warm_up_skipped"
+
+
+def run_warm_up(agent: Any, out) -> None:
+    """Do the first turn's one-time work now, reporting each step as a status.
+
+    A failure is reported as an `error` event naming what went wrong and that
+    chat still works — never swallowed, because the slow first answer it
+    leaves behind would otherwise look unexplained.
+    """
+    if _model_state_event(agent).get("model_remote"):
+        _write({"type": "final", "answer": WARM_UP_SKIPPED}, out)
+        return
+    try:
+        result = agent.warm_up(
+            progress=lambda message: _write({"type": "status", "message": message}, out)
+        )
+    except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
+        logger.warning("Warm-up failed: %s", exc, exc_info=True)
+        event = _terminal_error(exc)
+        event["detail"] = (
+            "Could not get the model ready ahead of time — chat still works, but "
+            f"the first answer will take longer. {event['detail']}"
+        )
+        _write(event, out)
+        return
+    logger.info("Warm-up finished in %ss", result.get("seconds"))
+    _write({"type": "final", "answer": WARMED_UP}, out)
+
 
 def dispatch_query(
     agent: Any,
@@ -1233,6 +1268,9 @@ def dispatch_query(
         return
     if query == MEMORY_DUMP_QUERY:
         _write(_memory_dump_event(agent), out)
+        return
+    if query == WARM_UP_QUERY:
+        run_warm_up(agent, out)
         return
     if is_model_command(query):
         run_model_command(agent, query, out)

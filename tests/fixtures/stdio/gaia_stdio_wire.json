@@ -12,7 +12,8 @@
     "decisions": ["allow", "deny", "always"],
     "query_sentinels": {
       "clear_conversation": { "query": "\u0000gaia:clear_conversation\u0000", "ack_answer": "conversation_cleared" },
-      "memory_dump": { "query": "\u0000gaia:memory_dump\u0000" }
+      "memory_dump": { "query": "\u0000gaia:memory_dump\u0000" },
+      "warm_up": { "query": "\u0000gaia:warm_up\u0000", "ack_answer": "warmed_up", "skipped_answer": "warm_up_skipped" }
     }
   },
   "events": {

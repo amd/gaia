@@ -238,6 +238,20 @@ class ToolLoader:
                 "the name — selection must account for every registered tool."
             )
 
+    def warm(self, registry: Dict[str, dict]) -> List[str]:
+        """Build the tool embeddings now; return CORE in registry order.
+
+        CORE is admitted first every turn, so it is the stable start of every
+        turn's tool list — the part a warm-up can usefully prime. Touches no
+        turn state (no turn count, no admissions, no LRU), so the first real
+        turn selects exactly as it would have. Raises if the embedder fails:
+        the caller is warming up on purpose and must hear about it.
+        """
+        if self._session_disabled:
+            return []
+        self._ensure_tool_embeddings(registry)
+        return [name for name in registry if name in self._core]
+
     def select(
         self,
         query: str,

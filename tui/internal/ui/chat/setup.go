@@ -121,10 +121,13 @@ func (m ChatModel) supersededSetup(ch <-chan gaiainit.Event) bool {
 
 // releaseAfterSetupGate fires whatever Init() deferred behind the first-boot
 // gate now that it has resolved -- ready, or a setup run finished, failed,
-// or was cancelled. Today that is only the one-shot --query launch; nothing
-// queues a chat turn before the user has seen the composer at least once.
+// or was cancelled: the one-shot --query launch, or else the warm-up stage
+// (warmup.go), which has no model to load until setup has run.
 func (m *ChatModel) releaseAfterSetupGate() tea.Cmd {
 	if m.initialQuery == "" {
+		if m.warmUpApplies() {
+			return func() tea.Msg { return startWarmUpMsg{} }
+		}
 		return nil
 	}
 	query := m.initialQuery

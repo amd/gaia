@@ -32,6 +32,11 @@ type stdioWireFixture struct {
 			MemoryDump struct {
 				Query string `json:"query"`
 			} `json:"memory_dump"`
+			WarmUp struct {
+				Query         string `json:"query"`
+				AckAnswer     string `json:"ack_answer"`
+				SkippedAnswer string `json:"skipped_answer"`
+			} `json:"warm_up"`
 		} `json:"query_sentinels"`
 	} `json:"stdin"`
 }
@@ -106,6 +111,11 @@ func TestQuerySentinelsMatchTheSharedFixture(t *testing.T) {
 	if clearConversationAck != f.Stdin.QuerySentinels.ClearConversation.AckAnswer {
 		t.Errorf("clearConversationAck = %q, fixture says %q",
 			clearConversationAck, f.Stdin.QuerySentinels.ClearConversation.AckAnswer)
+	}
+	if w := f.Stdin.QuerySentinels.WarmUp; WarmUpQuery != w.Query ||
+		WarmedUp != w.AckAnswer || WarmUpSkipped != w.SkippedAnswer {
+		t.Errorf("warm-up sentinel = (%q, %q, %q), fixture says (%q, %q, %q)",
+			WarmUpQuery, WarmedUp, WarmUpSkipped, w.Query, w.AckAnswer, w.SkippedAnswer)
 	}
 	if memoryDumpQuery != f.Stdin.QuerySentinels.MemoryDump.Query {
 		t.Errorf("memoryDumpQuery = %q, fixture says %q",

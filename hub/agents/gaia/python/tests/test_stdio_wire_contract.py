@@ -137,6 +137,59 @@ def test_query_sentinels_match():
     sentinels = STDIN["query_sentinels"]
     assert stdio.CLEAR_CONVERSATION_QUERY == sentinels["clear_conversation"]["query"]
     assert stdio.MEMORY_DUMP_QUERY == sentinels["memory_dump"]["query"]
+    assert stdio.WARM_UP_QUERY == sentinels["warm_up"]["query"]
+    assert stdio.WARMED_UP == sentinels["warm_up"]["ack_answer"]
+    assert stdio.WARM_UP_SKIPPED == sentinels["warm_up"]["skipped_answer"]
+
+
+class _WarmAgent:
+    """Just enough agent for the warm-up sentinel."""
+
+    def __init__(self, remote=False, fail=None):
+        self.remote, self.fail, self.warmed = remote, fail, False
+
+    def warm_up(self, progress=None):
+        progress("Loading the model")
+        if self.fail:
+            raise self.fail
+        self.warmed = True
+        return {"seconds": 1.0}
+
+
+def _warm(monkeypatch, agent):
+    monkeypatch.setattr(
+        stdio, "_model_state_event", lambda a: {"model_remote": a.remote}
+    )
+    out = io.StringIO()
+    stdio.dispatch_query(agent, STDIN["query_sentinels"]["warm_up"]["query"], out)
+    return [json.loads(line) for line in out.getvalue().splitlines()]
+
+
+def test_warm_up_reports_progress_then_the_answer_the_tui_waits_for(monkeypatch):
+    agent = _WarmAgent()
+    events = _warm(monkeypatch, agent)
+    assert agent.warmed
+    assert events[0] == {"type": "status", "message": "Loading the model"}
+    assert events[-1] == {
+        "type": "final",
+        "answer": STDIN["query_sentinels"]["warm_up"]["ack_answer"],
+    }
+
+
+def test_warm_up_is_skipped_for_a_remote_model(monkeypatch):
+    agent = _WarmAgent(remote=True)
+    events = _warm(monkeypatch, agent)
+    assert not agent.warmed
+    assert events == [
+        {"type": "final", "answer": STDIN["query_sentinels"]["warm_up"]["skipped_answer"]}
+    ]
+
+
+def test_a_failed_warm_up_is_an_error_not_silence(monkeypatch):
+    events = _warm(monkeypatch, _WarmAgent(fail=RuntimeError("model load timed out")))
+    assert events[-1]["type"] == "error"
+    assert "model load timed out" in events[-1]["detail"]
+    assert "chat still works" in events[-1]["detail"]
 
 
 def test_clear_conversation_is_acknowledged_with_the_answer_the_tui_waits_for():

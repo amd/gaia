@@ -2884,6 +2884,15 @@ class MemoryMixin(ProceduralMemoryMixin):
             safe.append(item)
         return safe
 
+    def warm_up(self, progress=None):
+        """Run the deferred memory upkeep here, not in front of the first answer."""
+        if getattr(self, "_memory_post_init_pending", False):
+            if progress:
+                progress("Tidying memory")
+            self._memory_post_init_pending = False
+            self._run_memory_post_init()
+        return super().warm_up(progress)
+
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)
     # ------------------------------------------------------------------

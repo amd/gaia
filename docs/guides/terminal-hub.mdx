@@ -115,7 +115,9 @@ missing.
 ## The boot sequence
 
 Every launch — `gaia-tui` with no arguments, or `gaia-tui run email` — goes
-through the same three screens: a splash, a readiness gate, then chat.
+through the same screens: a splash, a readiness gate, then chat. The flagship
+agent adds a short "Getting GAIA ready" stage before chat opens — see
+[Getting ready](#getting-ready).
 
 ```bash
 gaia-tui                 # the flagship agent
@@ -270,6 +272,31 @@ on a monochrome terminal or piped to a file.
 screen names the blocker rather than starting a chat that cannot talk. It *is*
 offered when a row is merely unverified (`[?]`) — nothing there says anything is
 broken.
+
+### Getting ready
+
+On a local model, the flagship's first answer used to pay for starting the
+agent, loading the model and reading its ~10K-token instructions while you
+watched a spinner. That now happens before the chat opens, with each step
+named:
+
+```
+  Getting GAIA ready
+
+  ✓ Starting the agent
+  ✓ Tidying memory
+  ✓ Indexing tools
+  ⣾ Loading Gemma-4-E4B-it-GGUF and reading its instructions  0:05
+
+  This happens once per session, so your first answer starts right away.
+  Type now — it's sent the moment GAIA is ready · Esc to show the chat
+```
+
+Anything you type meanwhile waits and is sent the moment GAIA is ready. `Esc`
+shows the chat without stopping the warm-up. A remote model (Fireworks, the AMD
+gateway, Claude) has nothing to load, so the stage ends as soon as the agent
+has started. A launch with `--query` skips it, because the question pays for
+the same work.
 
 ### 3. Chat
 
