@@ -1,0 +1,80 @@
+id: voice_t4_preference_flip_latest_wins
+name: "Voice — A Changed Style Preference Wins, Including in a New Session (Adversarial)"
+category: gaia_voice
+severity: critical
+tags: [t4_adversarial, usability, local_blocked_no_embedder]
+description: |
+  Memory already holds "short answers, two sentences max". The user first
+  gets that style, then changes their mind and asks for thorough answers
+  with examples. The NEW preference must win on later turns and in a NEW
+  session; the old one must not resurface or be blended in.
+  Counting rule: a sentence ends in . ! or ?; each bullet or numbered line
+  counts as one sentence; one closing offer of more detail does not count.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  memory_seed:
+    - content: "The user prefers short answers — two sentences max"
+      category: preference
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), THEN call memory_seed(items=<setup.memory_seed>) — the seed must come after the clear, so re-seed if you already seeded during Phase 1; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask about compound interest"
+    user_message: "how does compound interest work?"
+    ground_truth:
+      expected_behavior: "Two sentences at most: you earn interest on your interest, so the balance grows faster each year"
+    success_criteria: |
+      The seeded short-answer preference applies. Correct gist (interest
+      earned on previous interest). FAIL if the reply exceeds 2 sentences.
+
+  - turn: 2
+    objective: "Change the preference explicitly"
+    user_message: "actually I've changed my mind — those short answers aren't enough for me. from now on give me thorough answers with an example, in this chat and future ones. update that."
+    ground_truth:
+      expected_answer: "Preference updated to thorough answers with examples"
+    success_criteria: |
+      agent_tools[] includes update_memory, forget + remember, or a remember
+      call that supersedes the short-answer preference. FAIL if no memory
+      tool call is made, or if the agent keeps both preferences as current
+      (e.g. says it will be "short but thorough").
+
+  - turn: 3
+    objective: "Ask a question in the same session — the new preference applies"
+    user_message: "how does a mortgage amortization schedule work?"
+    ground_truth:
+      expected_behavior: "Thorough: fixed monthly payment; early payments mostly interest, later mostly principal; a worked example with numbers"
+    success_criteria: |
+      Thorough answer: at least 120 words AND a worked example with real
+      numbers (e.g. a loan amount, rate and how the interest/principal split
+      shifts). Must be correct that early payments are mostly interest.
+      FAIL if the reply is 2 sentences or fewer, has no numeric example, or
+      says it is keeping it short.
+
+  - turn: 4
+    objective: "SIMULATOR ACTION BEFORE THIS TURN: create a NEW session with create_session (pass the same agent_type as the Phase 1 session if one was set) and send this turn and turn 5 to the NEW session id. Keep reporting the Phase 1 session_id as the scenario's session_id. Then ask what an index fund is — do NOT restate either preference"
+    user_message: "what's an index fund?"
+    ground_truth:
+      expected_behavior: "Thorough answer with an example (e.g. an S&P 500 index fund holding all 500 companies; low fees; tracks rather than beats the market)"
+    success_criteria: |
+      This session has no history, so the preference must come from
+      persistent memory — and it must be the NEW one. At least 100 words
+      AND a concrete example (a named index such as the S&P 500, or a
+      numbered illustration). FAIL if the reply is 2 sentences or fewer.
+
+  - turn: 5
+    objective: "Ask what the current style preference is. AFTER scoring this turn (simulator action): call memory_clear(scope=all) so this scenario's stored preference cannot shape a later scenario."
+    user_message: "remind me — how do I like my answers?"
+    ground_truth:
+      expected_answer: "Thorough answers with an example (changed from short answers)"
+    success_criteria: |
+      States the thorough-with-examples preference as the current one.
+      Mentioning that it replaced the old short-answer preference is fine.
+      FAIL if it says short / two sentences max is current, or presents both
+      as current without saying which one applies.
+
+expected_outcome: |
+  The latest stated preference replaces the seeded one in memory and governs
+  every later answer, in this session and the next.

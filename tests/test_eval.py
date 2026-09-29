@@ -299,12 +299,14 @@ class TestAgentEvalRunner:
             "gaia_honesty",
             "gaia_tool_selection",
             "gaia_code",
+            "gaia_voice",
         }
         known_tags = {
             "t1_basic",
             "t2_compound",
             "t3_stress",
             "t4_adversarial",
+            "usability",
             "live",
             "tui",
             "local_blocked_no_embedder",

@@ -1,0 +1,59 @@
+id: voice_t3_technical_details_new_session
+name: "Voice — \"Give Me the Technical Details\" Holds in a New Session"
+category: gaia_voice
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  The opposite of "keep it short": an engineer asks for exact commands,
+  names and reasoning by default. The preference must be stored, applied to
+  a later question, and applied again in a NEW session — where a default
+  plain-English answer would be the failure.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: State a standing preference for technical detail"
+    user_message: "I'm a backend engineer — by default give me the technical details: exact commands, API/flag names and the reasoning. Don't simplify. Remember that for future chats too."
+    ground_truth:
+      expected_answer: "Acknowledged and stored as a preference"
+    success_criteria: |
+      Agent acknowledges briefly and agent_tools[] includes a remember call
+      storing the technical-detail preference. FAIL if there is no memory
+      tool call.
+
+  - turn: 2
+    objective: "Ask a question a lay answer would dodge"
+    user_message: "my python script that reads a 4 GB CSV runs out of memory. what should I do?"
+    ground_truth:
+      expected_behavior: "Concrete techniques with names: stream/iterate (csv module), pandas read_csv(chunksize=...), usecols/dtype to shrink columns, or a columnar engine (polars/pyarrow/duckdb); why: the whole file is loaded into RAM"
+    success_criteria: |
+      Must include at least two concrete technical specifics: an API or
+      parameter name (e.g. read_csv(chunksize=...), usecols, dtype, the csv
+      module's reader) or a named library (polars, pyarrow, duckdb, dask),
+      plus the reason (the whole file is loaded into memory at once). At
+      least one code snippet or exact call is expected. FAIL if the answer
+      is generic advice ("process it in smaller pieces") with no API,
+      parameter or library names.
+
+  - turn: 3
+    objective: "SIMULATOR ACTION BEFORE THIS TURN: create a NEW session with create_session (pass the same agent_type as the Phase 1 session if one was set) and send this turn to the NEW session id. Keep reporting the Phase 1 session_id as the scenario's session_id. Then ask about a port conflict — do NOT restate the preference. AFTER scoring this turn (simulator action): call memory_clear(scope=all) so this scenario's stored preference cannot shape a later scenario."
+    user_message: "something is already using port 8080 on my machine. how do I find out what?"
+    ground_truth:
+      expected_behavior: "Exact commands: Windows netstat -ano | findstr :8080 then tasklist /FI \"PID eq <pid>\" (or Get-NetTCPConnection -LocalPort 8080); macOS/Linux lsof -i :8080 or ss -ltnp | grep 8080"
+    success_criteria: |
+      This session has no history, so the preference must come from
+      persistent memory. Must give at least one exact, runnable command that
+      finds the process on port 8080 (e.g. netstat -ano | findstr :8080,
+      Get-NetTCPConnection -LocalPort 8080, lsof -i :8080, ss -ltnp) AND how
+      to map the result to a process (PID -> tasklist / process name). FAIL
+      if no exact command is given, or if the answer is only plain-English
+      advice ("check which programs are running").
+
+expected_outcome: |
+  A stated preference for technical depth is stored and applied, including
+  in a fresh session, instead of reverting to the plain-English default.

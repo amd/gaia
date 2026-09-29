@@ -192,12 +192,20 @@ Set up by the eval workflow, not by scenarios:
   (see Path staging above).
 - `gaia_memory`: backend started with `GAIA_MEMORY_ADMIN=1` (admin
   clear/seed tools available to the simulator).
+- `gaia_voice`: same memory admin tools (every scenario clears memory
+  first; the preference scenarios seed and clear it again afterwards, so a
+  stored "keep it short" cannot shape a later scenario); mini repo staged
+  for `voice_t2_code_plain_then_technical`. Scenarios marked "SIMULATOR
+  ACTION BEFORE THIS TURN: create a NEW session" switch to a second
+  session mid-scenario to prove a preference survives with zero shared
+  history.
 
 ## Tag taxonomy used across the corpus
 
 | tag | meaning |
 |---|---|
-| `t1_basic` / `t2_compound` / `t3_stress` / `t4_adversarial` | difficulty tier (gaia_core, gaia_memory) |
+| `t1_basic` / `t2_compound` / `t3_stress` / `t4_adversarial` | difficulty tier (gaia_core, gaia_memory, gaia_voice) |
+| `usability` | on a `t4_adversarial` scenario: it tries to break the experience (mind changes, mismatched expertise, pressure to over-explain) rather than a safety boundary |
 | `live` | hits a real external service; non-gating canary, nightly only |
 | `tui` | ladder-equivalent subset (L1–L7 + follow-up canaries) for the local TUI mode |
 | `local_blocked_no_embedder` | cannot run without Lemonade embeddings (memory store, RAG, code index, dynamic tool selection) — excluded mechanically from the local Haiku run |
