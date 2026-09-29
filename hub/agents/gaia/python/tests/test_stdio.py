@@ -843,6 +843,69 @@ def test_model_switch_unknown_local_id_is_refused_not_accepted(monkeypatch):
     assert agent.rebuild_count == 0
 
 
+def test_missing_cloud_model_is_listed_again_after_its_key_is_replayed(monkeypatch):
+    """A restarted Lemonade forgot the gateway key; the readiness probe hands it back."""
+    from gaia_agent import stdio as stdio_mod
+
+    model = "amd.gpt-4.1"
+    listings = [["Gemma-4-E4B-it-GGUF"], ["Gemma-4-E4B-it-GGUF", model]]
+    monkeypatch.setattr(stdio_mod, "_lemonade_models", lambda base_url: listings.pop(0))
+    probed = []
+    monkeypatch.setattr(
+        stdio_mod,
+        "probe_model_present",
+        lambda base, model_id: probed.append(model_id) or True,
+    )
+    monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: object())
+    agent = _ModelSwitchAgent()
+
+    events = _events(_model_run(agent, f"/model {model}"))
+
+    assert probed == [model]
+    assert [e["type"] for e in events] == ["status", "final"]
+    assert events[0]["model_id"] == model
+
+
+def test_cloud_model_still_missing_after_replay_is_refused(monkeypatch):
+    from gaia_agent import stdio as stdio_mod
+
+    monkeypatch.setattr(
+        stdio_mod, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
+    )
+    probed = []
+    monkeypatch.setattr(
+        stdio_mod,
+        "probe_model_present",
+        lambda base, model_id: probed.append(model_id) or False,
+    )
+    agent = _ModelSwitchAgent()
+    previous_client = agent.chat.llm_client
+
+    events = _events(_model_run(agent, "/model fireworks.deepseek-v4p1-flash"))
+
+    assert probed == ["fireworks.deepseek-v4p1-flash"]
+    assert len(events) == 1 and events[0]["type"] == "error"
+    assert "Unknown Lemonade model" in events[0]["detail"]
+    assert agent.chat.llm_client is previous_client
+
+
+def test_missing_local_model_does_not_probe_for_a_key(monkeypatch):
+    from gaia_agent import stdio as stdio_mod
+
+    monkeypatch.setattr(
+        stdio_mod, "_lemonade_models", lambda base_url: ["Gemma-4-E4B-it-GGUF"]
+    )
+    monkeypatch.setattr(
+        stdio_mod,
+        "probe_model_present",
+        lambda base, model_id: pytest.fail("a local model has no key to replay"),
+    )
+
+    events = _events(_model_run(_ModelSwitchAgent(), "/model Qwen3-4B-GGUF"))
+
+    assert events[0]["type"] == "error"
+
+
 def test_model_switch_missing_credential_leaves_previous_model_running(monkeypatch):
     """FAIL LOUDLY: a bad/missing credential must not half-swap the session."""
     from gaia_agent import stdio as stdio_mod

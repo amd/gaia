@@ -55,6 +55,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 						e.ModelDisplay + " — use /model to switch again.",
 				})
 			}
+			if m.startup.inFlight {
+				m.startup.pinged = true
+			}
+			if m.awaitingModelSwitch {
+				m.switchedTo = savedChoice{provider: providerOfBackend(e.ModelBackend), model: e.ModelID}
+			}
 			m.modelID = e.ModelID
 			m.modelDisplay = e.ModelDisplay
 			m.modelBackend = e.ModelBackend
@@ -237,6 +243,16 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
+		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
+			m.rememberModel(m.switchedTo)
+			if m.startup.inFlight && m.switchTarget == m.startup.model {
+				m.startup.confirmed = true
+				m.startup.warmNext = true
+				if m.startup.kind == StartupRestore {
+					content = "Restored your last model.\n\n" + content
+				}
+			}
+		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
 		m.resolveConfirmationOnTurnEnd()
@@ -300,7 +316,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.resolveConfirmationOnTurnEnd()
 		m.commitWork()
 		m.flushBuffer()
-		m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
+		// The agent is up (it pinged) and refused the opening switch: the
+		// failure line says why. An agent that died first shows its own error.
+		if m.startup.inFlight && m.startup.pinged {
+			m.startup.reason = startupFailureReason(m.startup.provider, e.Detail)
+		} else {
+			m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
+		}
 		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
