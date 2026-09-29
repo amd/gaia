@@ -412,33 +412,35 @@ def probe_model_present(probe_base: str, model_id: str) -> bool:
 
     if _probe_once():
         return True
-    # A gateway model missing from the catalog usually means Lemonade restarted
-    # and forgot its token, not that the model is gone — Lemonade discovers
+    # A cloud model missing from the catalog usually means Lemonade restarted
+    # and forgot its key, not that the model is gone — Lemonade discovers
     # nothing until it can authenticate. Every front-end funnels through here,
-    # so this is the one place that makes a remembered token survive a restart.
-    if _replay_gateway_token(model_id):
+    # so this is the one place that makes a remembered key survive a restart.
+    if _replay_cloud_key(model_id):
         return _probe_once()
     return False
 
 
-def _replay_gateway_token(model_id: str) -> bool:
-    """Give Lemonade its remembered gateway token back. True if that changed anything.
+def _replay_cloud_key(model_id: str) -> bool:
+    """Give Lemonade its remembered cloud key back. True if that changed anything.
 
     Returns False for a local model, when nothing is stored, or when the stored
-    token is rejected — all cases where re-probing would just repeat itself.
+    key is rejected — all cases where re-probing would just repeat itself.
     """
     import requests
 
-    from gaia.llm.gateway import GATEWAY_PROVIDER, GatewayError, GatewayManager
+    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+    from gaia.llm.gateway import GatewayError
 
-    if not str(model_id or "").lower().startswith(f"{GATEWAY_PROVIDER}."):
+    provider = str(model_id or "").lower().split(".", 1)[0]
+    if "." not in str(model_id or "") or provider not in PROVIDERS:
         return False
     try:
-        return GatewayManager().ensure_authenticated()
-    except (GatewayError, requests.RequestException) as e:
+        return ensure_authenticated(provider)
+    except (CloudKeyError, GatewayError, requests.RequestException) as e:
         # Never fatal: the model may simply be absent, and the caller's own
         # "not found" message is the actionable one.
-        logger.debug(f"Could not replay the remembered gateway token: {e}")
+        logger.debug(f"Could not replay the remembered {provider} key: {e}")
         return False
 
 

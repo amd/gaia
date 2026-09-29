@@ -30,6 +30,9 @@ type modelsMsg struct {
 	source *lemonade.Client
 	models []lemonade.Model
 	err    error
+	// note is a warning about an otherwise successful connect — the key
+	// works, but could not be kept for the next session.
+	note string
 }
 type clearedMsg struct {
 	source *lemonade.Client
@@ -65,7 +68,15 @@ func New(base string, width, height int) Model {
 }
 func (m Model) Init() tea.Cmd {
 	c := m.client
-	return func() tea.Msg { p, e := c.Providers(m.ctx); return loadedMsg{source: c, providers: p, err: e} }
+	return func() tea.Msg {
+		// Lemonade forgets a pasted key when it restarts; give it back any key
+		// kept from an earlier session before reading which providers have one.
+		for _, name := range names[1:] {
+			restoreKey(name)
+		}
+		p, e := c.Providers(m.ctx)
+		return loadedMsg{source: c, providers: p, err: e}
+	}
 }
 func (m Model) chosen() string { return names[m.selected] }
 
@@ -188,7 +199,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stage = "models"
 		m.search = ""
 		m.focus = 0
-		m.note = ""
+		m.note = v.note
 		return m, m.Init()
 	case clearedMsg:
 		if v.source != nil && v.source != m.client {
@@ -198,7 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.err != nil {
 			m.note = v.err.Error()
 		} else {
-			m.note = "Runtime key cleared. An environment key, if set, remains active."
+			m.note = "Key cleared, here and for future sessions. An environment key, if set, remains active."
 			// Reflect the clear immediately rather than waiting on the
 			// m.Init() refresh below to land — otherwise the "key already
 			// configured" notice keeps claiming a key that was just removed
@@ -303,7 +314,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.note = ""
 				m.activity = "Clearing key"
 				c, p := m.client, m.chosen()
-				return m, tea.Batch(m.spin.Tick, func() tea.Msg { return clearedMsg{source: c, err: c.Clear(m.ctx, p)} })
+				return m, tea.Batch(m.spin.Tick, func() tea.Msg {
+					if err := c.Clear(m.ctx, p); err != nil {
+						return clearedMsg{source: c, err: err}
+					}
+					// A kept copy would come straight back on the next launch.
+					if err := forgetKey(p); err != nil {
+						return clearedMsg{source: c, err: fmt.Errorf(
+							"Cleared for this session, but the saved copy could not be removed: %w", err)}
+					}
+					return clearedMsg{source: c}
+				})
 			case "enter":
 				p := lemonade.Provider{Name: m.chosen(), BaseURL: strings.TrimSpace(m.fields[0].Value()), Header: strings.TrimSpace(m.fields[1].Value()), Prefix: m.fields[2].Value()}
 				key := strings.TrimSpace(m.fields[3].Value())
@@ -317,7 +338,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return modelsMsg{source: c, err: err}
 					}
 					models, err := c.Models(m.ctx, p.Name)
-					return modelsMsg{source: c, models: models, err: err}
+					// Kept only once it has proven to work: a key that discovers
+					// nothing would be replayed into every later session.
+					if err != nil || key == "" || len(models) == 0 {
+						return modelsMsg{source: c, models: models, err: err}
+					}
+					note := ""
+					if err := rememberKey(p.Name, key); err != nil {
+						note = "Connected for this session only — the key could not be kept: " + err.Error()
+					}
+					return modelsMsg{source: c, models: models, note: note}
 				})
 			}
 			var cmd tea.Cmd
