@@ -461,26 +461,16 @@ class EmailToolsMixin:
 
         @tool(atomic=True)
         def search_email(query: str, limit: int = 25) -> str:
-            """Find email matching a keyword, from anyone, in any mail folder.
+            """Find a sender, receipt, or thread the user half-remembers, in any
+            folder. Relevance order, NOT newest-first.
 
-            Finds a sender, receipt or thread the user half-remembers, in
-            every folder. Results come in relevance order, NOT newest-first
-            — check timestamps before calling one "recent".
+            EVERY term is ANDed, so longer is NARROWER — send 2-3 rare
+            nouns, never a sentence or paraphrase.
 
-            EVERY term is ANDed, so a longer query is NARROWER. Send 2-3 rare
-            nouns, never a sentence, and not the user's paraphrase.
-
-            One hit per conversation, so a chatty thread cannot spend every
-            slot. `exact_match` says whether anything matched the query as you
-            sent it.
-
-            Any hit that did NOT match your query carries `unverified: true`
-            and a `matched_query` naming the broader query that found it — a
-            candidate, not an answer. Those hits are in `messages` when
-            nothing matched your query at all (the payload repeats the flag
-            and adds a `note`), and in `alternatives` alongside an exact hit,
-            where they are a fallback for when none of the exact hits is the
-            message the user meant.
+            One hit per conversation. `exact_match` says the query matched as
+            sent; other hits carry `unverified: true` + `matched_query` and
+            are candidates, not answers — in `alternatives` beside an exact
+            hit, or in `messages` (with a `note`) when nothing matched.
 
             Args:
                 query: 2-3 distinctive keywords (e.g. 'Acme invoice')
