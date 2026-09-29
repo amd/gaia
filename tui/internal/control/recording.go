@@ -71,8 +71,8 @@ func RecordingSVG(frames []Frame, cols, rows int) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" `+
-		`viewBox="0 0 %.0f %.0f" preserveAspectRatio="xMidYMid meet" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" `+
-		`font-size="%.1f">`, w, h, w, h, svgFontSize)
+		`viewBox="0 0 %.0f %.0f" preserveAspectRatio="xMidYMid meet" font-family="%s" `+
+		`font-size="%.1f">`, w, h, w, h, svgFontFamily, svgFontSize)
 
 	b.WriteString("<style>")
 	fmt.Fprintf(&b, `.f{visibility:hidden;animation-duration:%.3fs;animation-iteration-count:infinite;animation-timing-function:step-end}`,
