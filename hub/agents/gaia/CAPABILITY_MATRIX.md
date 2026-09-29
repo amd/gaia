@@ -77,17 +77,19 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 - Eval suites: **2**
   - `perf`: enforce=False, acceptance_enforce=None
   - `quality`: enforce=True, acceptance_enforce=None
-- Judged scenario categories (`eval/scenarios/gaia_*`): **17**
+- Judged scenario categories (`eval/scenarios/gaia_*`): **19**
   - `gaia_code`
   - `gaia_core`
   - `gaia_data`
   - `gaia_email`
   - `gaia_files`
+  - `gaia_git`
   - `gaia_honesty`
   - `gaia_mcp`
   - `gaia_media`
   - `gaia_memory`
   - `gaia_rag`
+  - `gaia_resilience`
   - `gaia_shell`
   - `gaia_skills_capture`
   - `gaia_skills_lifecycle`
