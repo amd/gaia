@@ -9,13 +9,13 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 )
 
-// `/model` and `/model <id>` — live model switching. Unlike /bypass this
+// `/model` and `/model <id>` — live model switching. Unlike /full-access this
 // command genuinely needs the AGENT: only it can discover which local
 // Lemonade models are downloaded and validate a Claude id against a live
 // credential. So it is recognized here (so the composer never treats it as a
 // question typed at the LLM) but still dispatched over the query channel —
 // see gaia_agent.stdio.run_model_command for why that channel, not the
-// fire-and-forget control one /bypass uses, is the only one this transport
+// fire-and-forget control one /full-access uses, is the only one this transport
 // can reliably carry a response back on.
 
 // modelSwitchAgentID is the only agent whose transport understands `/model`
@@ -30,15 +30,15 @@ const modelSwitchAgentID = "gaia"
 
 // supportsModelCommand reports whether this session's agent understands
 // `/model`. Checked before dispatch (see submit) so an unsupported agent gets
-// an explicit refusal — the same shape as setBypass's capability check in
-// bypass.go — instead of `/model` silently turning into a literal question.
+// an explicit refusal — the same shape as setFullAccess's capability check in
+// fullaccess.go — instead of `/model` silently turning into a literal question.
 func (m ChatModel) supportsModelCommand() bool {
 	return m.agentID == modelSwitchAgentID
 }
 
 // isModelCommand reports whether a composed line is `/model` or `/model
 // <id>`, so the composer routes it to a command dispatch instead of asking
-// the agent a free-text question — mirrors isBypassCommand. Recognition is
+// the agent a free-text question — mirrors isFullAccessCommand. Recognition is
 // independent of supportsModelCommand: a line still LOOKS like a command on
 // an agent that doesn't support it, and submit() answers that case with a
 // refusal rather than falling through to a literal question either way.

@@ -40,7 +40,9 @@ def ensure_audit_log_handler(cache_dir: Optional[Path] = None) -> None:
 
     from logging.handlers import RotatingFileHandler
 
-    cache_dir = cache_dir or (Path.home() / ".gaia" / "cache")
+    from gaia.config import gaia_home
+
+    cache_dir = cache_dir or (gaia_home() / "cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
         str(cache_dir / "file_audit.log"),
@@ -501,7 +503,9 @@ class PathValidator:
                 self.allowed_paths.add(Path(p).resolve())
 
         # Setup cache directory
-        self.cache_dir = Path.home() / ".gaia" / "cache"
+        from gaia.config import gaia_home
+
+        self.cache_dir = gaia_home() / "cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.cache_dir / "allowed_paths.json"
 
@@ -1111,7 +1115,9 @@ def backup_file(path: str, cache_dir: Optional[Path] = None) -> Optional[str]:
     if not real_path.exists():
         return None
 
-    root = (cache_dir or Path.home() / ".gaia" / "cache") / "backups"
+    from gaia.config import gaia_home
+
+    root = (cache_dir or (gaia_home() / "cache")) / "backups"
     stamp_time = datetime.datetime.now()
     # A drive or UNC share becomes one plain folder name under backups/.
     drive = re.sub(r"[:\\/]+", "_", real_path.drive).strip("_")

@@ -39,10 +39,10 @@ var chatCmd = &cobra.Command{
 			return fmt.Errorf("--agent and --subprocess are mutually exclusive: pick one")
 		}
 		if subprocess != "" {
-			if cmd.Flags().Changed("bypass-permissions") {
-				return fmt.Errorf("--bypass-permissions is not supported with --subprocess: " +
+			if cmd.Flags().Changed("full-access") {
+				return fmt.Errorf("--full-access is not supported with --subprocess: " +
 					"pass permission options inside the subprocess command if it supports them, " +
-					"or drop --bypass-permissions")
+					"or drop --full-access")
 			}
 			// Both were accepted and then silently dropped here — RunChat is
 			// given neither. (--query IS honoured: it opens the chat and sends
@@ -80,7 +80,7 @@ var chatCmd = &cobra.Command{
 				return err
 			}
 			code, err := ui.RunAgent(agentID, query, chatModel, dev, chatTimeout, ctrl,
-				bypassPermissions, useClaude, claudeModelArg(), mockAgent, trace)
+				fullAccessFlag, useClaude, claudeModelArg(), mockAgent, trace)
 			if err != nil {
 				return err
 			}

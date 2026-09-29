@@ -40,6 +40,7 @@ from typing import (
     Union,
 )
 
+from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -53,6 +54,14 @@ from gaia.agents.base.context_eviction import (
     resolve_context_eviction,
 )
 from gaia.agents.base.errors import format_execution_trace
+from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
+from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
+from gaia.agents.base.extraction import REASONING as EXTRACTION_REASONING
+from gaia.agents.base.extraction import (
+    ExtractionLedger,
+    extraction_response_format,
+    read_snapshot,
+)
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -141,6 +150,26 @@ LOCAL_MAX_OUTPUT_TOKENS = 8192
 # A cloud reasoning model spends output tokens on thinking too; its window is
 # the provider's, not local hardware's.
 CLOUD_MAX_OUTPUT_TOKENS = 32768
+
+
+def _skill_prompt_body(agent, skill) -> str:
+    """*skill*'s effective body, plus a note for any declared command missing here.
+
+    Rendered every turn so the substitute stays in front of the model however
+    the skill was loaded (the ``load_skill`` tool or a manifest).
+    """
+    body = effective_skill_body(agent, skill)
+    parsed_permissions = getattr(skill, "parsed_permissions", None)
+    if not callable(parsed_permissions):
+        return body
+
+    from gaia.skills import unavailable_binaries
+
+    missing = unavailable_binaries(parsed_permissions())
+    if not missing:
+        return body
+    notes = " ".join(policy.unavailable_note() for policy in missing)
+    return f"{body}\n\nOn this machine: {notes}"
 
 
 def effective_skill_body(agent, skill) -> str:
@@ -755,6 +784,61 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 # One correction — a second disagreement is better than a loop, and the
 # verification footer states the truth either way.
 _MAX_TEST_CLAIM_CORRECTIONS = 1
+_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# Anchored: only a reply that *opens* with an unclosed block was cut off
+# mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
+# reasoning silently deletes everything the model said after it.
+_CUT_OFF_THINK_PATTERN = re.compile(r"\A<think>(?!.*</think>)(.*)\Z", re.DOTALL)
+
+
+def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
+    """Split inline ``<think>`` reasoning out of a reply.
+
+    Returns ``(answer_text, reasoning)``. A reply that *opens* with an unclosed
+    ``<think>`` was cut off mid-thought and is reasoning to the end, and text
+    before a lone ``</think>`` (the template opened the block in the prompt) is
+    reasoning.
+    """
+    parts: List[str] = []
+    if "</think>" in text and "<think>" not in text.split("</think>", 1)[0]:
+        head, _, text = text.partition("</think>")
+        parts.append(head.strip())
+    cut_off = _CUT_OFF_THINK_PATTERN.match(text.lstrip())
+    if cut_off:
+        parts.append(cut_off.group(1).strip())
+        text = ""
+    parts.extend(m.strip() for m in _THINK_BLOCK_PATTERN.findall(text))
+    answer = _THINK_BLOCK_PATTERN.sub("", text).strip()
+    return answer, "\n\n".join(p for p in parts if p) or None
+
+
+def _response_reasoning(response: Any) -> Optional[str]:
+    """The model's reasoning off a chat response, or ``None`` when it has none.
+
+    ``AgentResponse.reasoning`` is declared ``Optional[str]``, but this reads it
+    with ``getattr`` because older responses and test doubles may not carry the
+    attribute at all. Anything that is not a non-empty string is "no reasoning":
+    it would otherwise ride into the request history as ``reasoning_content``
+    and into the trace file, neither of which can serialise it.
+    """
+    value = getattr(response, "reasoning", None)
+    return value if isinstance(value, str) and value else None
+
+
+# A reply that ended on the output-token limit (finish_reason=length).
+_MAX_CUT_OFF_CONTINUATIONS = 2
+_CUT_OFF_CONTINUE_PROMPT = (
+    "Your last reply was cut off at the output-token limit before it finished, "
+    "so nothing in it was carried out. Continue from where you stopped: keep "
+    "your reasoning brief and make the next tool call, or give the final "
+    "answer if the task is complete."
+)
+_CUT_OFF_FAILURE_ANSWER = (
+    "I could not finish this task: my replies kept getting cut off at the "
+    "model's output-token limit, so the work they described was never carried "
+    "out. Retry with a higher output-token limit (max_tokens) or a model that "
+    "reasons more briefly."
+)
 
 # Unfinished-answer guard (#3887): a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
@@ -777,6 +861,16 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
 )
+
+
+def _same_file(first: str, second: str) -> bool:
+    """Path identity, including case-insensitive filesystems such as APFS."""
+    if first == second:
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
 
 
 def _unfinished_answer_kind(answer: str) -> Optional[str]:
@@ -820,27 +914,17 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
 # Fabricated-save guard (#4010): a final answer that asserts a file was
 # written when no write tool ran this turn.
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
-# File-writing tools the guard can name in its correction. Presence of one of
-# these in the registry is what makes the claim checkable at all.
-_FILE_WRITE_TOOLS: Tuple[str, ...] = (
-    "write_file",
-    "write_markdown_file",
-    "write_python_file",
-    "edit_file",
+# Tools that could hand-edit a file save_extracted_items exported this turn.
+_INVENTORY_HAND_EDITS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "write_markdown_file",
+        "write_python_file",
+        "edit_python_file",
+        "replace_function",
+    }
 )
-# Tools whose completed call makes a save claim believable. Two sources: the
-# confirmation set covers the write/execute tools (minus the one entry that
-# merely spawns a notifier), and the names below write a file as a side effect
-# of doing something else, so they are gated on cost rather than on danger and
-# never reach that set.
-_DISK_TOUCHING_TOOLS: FrozenSet[str] = frozenset(TOOLS_REQUIRING_CONFIRMATION) - {
-    "notify_desktop"
-} | {
-    "take_screenshot",
-    "text_to_speech",
-    "transcribe_media",
-    "refine_transcript",
-}
 _FILE_WRITE_VERBS = r"(?:saved|stored|wrote|written|exported|created)"
 # Adverbs the model sprinkles around the verb. They carry no meaning for the
 # guard, but every slot they can occupy has to be spelled out or the claim
@@ -1275,6 +1359,7 @@ Do NOT wrap conversational replies in JSON.
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
+        resend_reasoning_across_requests: bool = False,
         max_output_tokens: Optional[int] = None,
         context_eviction: str = "off",
         context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS,
@@ -1320,6 +1405,10 @@ Do NOT wrap conversational replies in JSON.
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
+            resend_reasoning_across_requests: If True, reasoning stored on
+                          ``conversation_history`` from earlier user requests
+                          is sent back to the model. Within one request it is
+                          always sent back (default: False).
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
@@ -1356,6 +1445,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_output_tokens = max_output_tokens
         self.device = device
+        self.resend_reasoning_across_requests = resend_reasoning_across_requests
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
         self._requested_skill_set = skill_set
@@ -1492,6 +1582,9 @@ Do NOT wrap conversational replies in JSON.
         # the silent False fallback.
         self._single_tool_done: bool = False
 
+        # Per-agent tool overrides by name (read_tool_output, extraction tools).
+        self._tool_overrides: Dict[str, Any] = {}
+
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
@@ -1500,6 +1593,10 @@ Do NOT wrap conversational replies in JSON.
         self._output_artifacts = ArtifactStore()
         if any(name != "read_tool_output" for name in self._tools_registry):
             self._register_output_reader()
+
+        # Rebuilt by every process_query; None before the first turn.
+        self._extraction_ledger: Optional[ExtractionLedger] = None
+        self._completion_evidence: Optional[CompletionEvidence] = None
 
         # Declarative skills (#2466, #2467 scope D): compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -1919,27 +2016,41 @@ Do NOT wrap conversational replies in JSON.
 
             Pass the result's artifact and the n of the index entry you need.
             The index already names every omitted part, so paging through a
-            whole output is almost never needed.
-
-            Args:
-                artifact: The condensed result's artifact handle.
-                entry: The n of an index entry; returns exactly that part.
-                offset: Character offset, only when reading without an entry.
-                limit: Characters to return; defaults to the entry's length.
-                    A part longer than 8000 characters comes back in pages:
-                    when remaining is set, call again with offset=next_offset
-                    and limit=remaining.
+            whole output is almost never needed. For exhaustive item lists from
+            long files, use extract_document_items instead.
             """
+            # Per-argument detail lives in the schema below, not here: this
+            # docstring is the tool description and is re-sent every call.
             return store_for(self).read(artifact, offset, limit, entry)
 
         self._output_reader_entry = {
             "name": "read_tool_output",
             "description": read_tool_output.__doc__,
             "parameters": {
-                "artifact": {"type": "string", "required": True},
-                "entry": {"type": "integer", "required": False},
-                "offset": {"type": "integer", "required": False},
-                "limit": {"type": "integer", "required": False},
+                "artifact": {
+                    "type": "string",
+                    "required": True,
+                    "description": "The condensed result's artifact handle.",
+                },
+                "entry": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "The n of an index entry; returns exactly that part.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "Character offset, only when reading without an entry.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "required": False,
+                    "description": (
+                        "Characters to return; defaults to the entry's length. A part "
+                        "over 8000 chars pages: set offset=next_offset and "
+                        "limit=remaining."
+                    ),
+                },
             },
             "function": read_tool_output,
             "atomic": True,
@@ -1951,6 +2062,215 @@ Do NOT wrap conversational replies in JSON.
         self._tool_overrides["read_tool_output"] = self._output_reader_entry
         if self._instance_tools is not None:
             self._instance_tools["read_tool_output"] = self._output_reader_entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+
+    def _extraction_skill_instructions(self, query, just_loaded=False):
+        """A selected task skill may activate extraction; voice routing may not."""
+        active = set(getattr(self, "_active_skill_filter", None) or ())
+        skills = getattr(self, "_loaded_skills", None) or {}
+        selected = active | {name for name in skills if name in query}
+        if isinstance(just_loaded, str):
+            selected.add(just_loaded)
+        selected -= self._always_on_skill_names
+        return "\n".join(
+            effective_skill_body(self, skills[name])
+            for name in sorted(selected)
+            if name in skills
+        )
+
+    def _read_validator(self):
+        """The agent's file read boundary, or None when it has none."""
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            validator = getattr(self, "_path_validator", None)
+        return validator
+
+    def _check_extraction_sources(self):
+        ledger = self._extraction_ledger
+        validator = self._read_validator()
+        ledger.validate_sources(lambda path: read_snapshot(path, validator))
+        ledger.validate_outputs(
+            lambda path, limit: read_snapshot(path, validator, limit)
+        )
+        # The framework just read each export in full and matched it exactly.
+        for path in ledger.verified:
+            self._completion_evidence.read_by_framework(path)
+
+    def _make_extraction_chat(self):
+        """Isolate SDK state from timed-out workers and subsequent turns."""
+        import copy
+
+        config = copy.deepcopy(self.chat.config)
+        config.temperature = 0
+        return AgentSDK(config)
+
+    def _register_extraction_tool(self):
+        def extract_document_items(
+            file_path: str, fields: Optional[List[str]] = None
+        ) -> dict:
+            """Extract EVERY requested item from a text document, page by page.
+
+            Use for list-all/enumerate-every tasks, including long transcripts.
+            Pages are read automatically; do not manually paginate or summarize.
+            Each item retains requested fields and exact source evidence. Call
+            once per source file. Errors mean incomplete, never an empty success.
+
+            Args:
+                file_path: Source text file permitted in this session.
+                fields: Requested field names; each entry must include every field.
+            """
+            from gaia.agents.base.tools import raise_if_cancelled
+
+            ledger = self._extraction_ledger
+            extraction_chat = self._make_extraction_chat()
+            usage_sink = self._tool_reported_usage
+
+            def check():
+                raise_if_cancelled()
+                event = getattr(self, "_cancel_event", None)
+                if (
+                    self._extraction_ledger is not ledger
+                    or (event is not None and event.is_set())
+                    or self._console_cancelled()
+                ):
+                    raise ValueError("Extraction cancelled or superseded")
+
+            from gaia.llm.lemonade_client import cloud_model_provider
+
+            # A cloud reasoning model can spend its whole budget thinking about
+            # one dense page; copying quotes out of it needs little reasoning.
+            # Local anti-repetition penalties fight verbatim quote copying.
+            sampling = (
+                {"reasoning_effort": EXTRACTION_REASONING}
+                if cloud_model_provider(getattr(self, "model_id", None))
+                else {
+                    "frequency_penalty": 0.0,
+                    "presence_penalty": 0.0,
+                    "repeat_penalty": 1.0,
+                }
+            )
+
+            def send(system, prompt, options):
+                check()
+                response = extraction_chat.send_messages(
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=system,
+                    tools=[],
+                    response_format=extraction_response_format(ledger.fields),
+                    max_tokens=EXTRACTION_MAX_TOKENS,
+                    **options,
+                )
+                check()
+                # These calls are outside the outer conversation's stats.
+                usage = getattr(response, "usage", None)
+                usage_sink.append(
+                    usage if isinstance(usage, dict) else (response.stats or {})
+                )
+                spent = (
+                    usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
+                )
+                exhausted = getattr(response, "finish_reason", None) == "length" or (
+                    isinstance(spent, int) and spent >= EXTRACTION_MAX_TOKENS
+                )
+                return response, exhausted
+
+            def ask(system, prompt):
+                response, exhausted = send(system, prompt, sampling)
+                if exhausted and sampling.get("reasoning_effort") not in (None, "none"):
+                    # Copying quotes needs no reasoning; retry this page without it.
+                    logger.warning(
+                        "Extraction page used its %d-token budget reasoning; "
+                        "retrying the page with reasoning_effort=none",
+                        EXTRACTION_MAX_TOKENS,
+                    )
+                    response, exhausted = send(
+                        system, prompt, {**sampling, "reasoning_effort": "none"}
+                    )
+                if exhausted:
+                    raise ValueError(
+                        f"Extraction reply used its whole {EXTRACTION_MAX_TOKENS}-token "
+                        "output budget without finishing the page"
+                    )
+                return response.text
+
+            # Parallel tool batches share the ledger; serialize its updates.
+            while not ledger.lock.acquire(timeout=0.1):
+                check()
+            try:
+                check()
+                validator = self._read_validator()
+                return ledger.run(
+                    file_path,
+                    lambda path: read_snapshot(path, validator),
+                    ask,
+                    check,
+                    fields,
+                )
+            finally:
+                ledger.lock.release()
+
+        def save_extracted_items(file_path: str) -> dict:
+            """Save the entire extracted inventory without summarizing away items.
+
+            Use after extract_document_items on every source. Output is JSON for
+            .json, CSV for .csv, and text for .txt/.md or extensionless paths.
+            The framework reads it back and checks it; do not edit it by hand.
+            Binary document formats are unsupported.
+
+            Args:
+                file_path: Requested destination for the complete inventory.
+            """
+            ledger = self._extraction_ledger
+            if not isinstance(file_path, str) or "\x00" in file_path:
+                return {"status": "error", "error": "file_path must be a file path"}
+            missing = (ledger.sources | ledger.requested) - ledger.results.keys()
+            if ledger.key(file_path) in ledger.sources | ledger.requested:
+                return {
+                    "status": "error",
+                    "error": "Use a destination different from the source documents",
+                }
+            if missing or not ledger.results:
+                return {
+                    "status": "error",
+                    "error": "Extract every source successfully before saving the inventory",
+                }
+            writer = self._tools_registry.get("write_file")
+            if writer is None:
+                return {
+                    "status": "error",
+                    "error": "write_file is unavailable for this agent",
+                }
+            result = writer["function"](
+                file_path=file_path, content=ledger.export(file_path)
+            )
+            if isinstance(result, dict) and result.get("status") == "success":
+                ledger.exported.add(ledger.key(file_path))
+            return result
+
+        for name, function, gated in (
+            ("extract_document_items", extract_document_items, False),
+            ("save_extracted_items", save_extracted_items, True),
+        ):
+            entry = {
+                "name": name,
+                "description": function.__doc__,
+                "parameters": {"file_path": {"type": "string", "required": True}},
+                "function": function,
+                "atomic": True,
+                "display_label": None,
+                "timeout": EXTRACTION_MAX_SECONDS + 60 if not gated else None,
+                "requires_confirmation": gated,
+            }
+            if name == "extract_document_items":
+                entry["parameters"]["fields"] = {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "required": False,
+                }
+            self._tool_overrides[name] = entry
+            if self._instance_tools is not None:
+                self._instance_tools[name] = entry
         if hasattr(self, "_system_prompt_cache"):
             del self._system_prompt_cache
 
@@ -2137,6 +2457,13 @@ Do NOT wrap conversational replies in JSON.
         expansion is visible to the very next model step — both render paths
         (``system_prompt`` and ``_openai_tools``) read these live.
         """
+        extraction = getattr(self, "_extraction_ledger", None)
+        if extraction is not None and extraction.enabled and new_filter is not None:
+            new_filter = list(
+                dict.fromkeys(
+                    [*new_filter, "extract_document_items", "save_extracted_items"]
+                )
+            )
         self._active_tool_filter = new_filter
         self._system_prompt_cache = self._compose_system_prompt()
 
@@ -3032,7 +3359,7 @@ Do NOT wrap conversational replies in JSON.
             for skill in skills.values():
                 if not skill.body:
                     continue
-                body = effective_skill_body(self, skill)
+                body = _skill_prompt_body(self, skill)
                 sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             if not sections:
                 return ""
@@ -3044,7 +3371,7 @@ Do NOT wrap conversational replies in JSON.
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
-                    body = effective_skill_body(self, skill)
+                    body = _skill_prompt_body(self, skill)
                     body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             else:
                 menu_lines.append(
@@ -4435,19 +4762,6 @@ Do NOT wrap conversational replies in JSON.
             return bool(flag)
         return tool_name.startswith("mcp_")
 
-    def _tool_can_touch_disk(self, tool_name: str) -> bool:
-        """Whether a call that already ran could have put bytes on disk.
-
-        Deliberately not ``_tool_requires_confirmation``: that one exempts a
-        pre-authorized write and treats an unclassified ``mcp_`` tool as
-        consequential, and both of those readings are inverted here. A
-        third-party tool counts only when it declared the flag itself.
-        """
-        if tool_name in _DISK_TOUCHING_TOOLS:
-            return True
-        entry = self._tools_registry.get(tool_name) or {}
-        return bool(entry.get("requires_confirmation"))
-
     def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
         """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
         against this turn's running total. Called from the single success path
@@ -4464,6 +4778,32 @@ Do NOT wrap conversational replies in JSON.
         logger.debug("Tool '%s' reported its own LLM usage: %s", tool_name, usage)
         self._tool_reported_usage.append(usage)
 
+    def _refuse_inventory_hand_edit(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """An exported inventory is rewritten only by save_extracted_items."""
+        ledger = getattr(self, "_extraction_ledger", None)
+        path = (tool_args or {}).get("file_path")
+        if (
+            ledger is None
+            or not ledger.exported
+            or tool_name not in _INVENTORY_HAND_EDITS
+            or not isinstance(path, str)
+            or "\x00" in path
+            or not any(_same_file(ledger.key(path), out) for out in ledger.exported)
+        ):
+            return None
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": (
+                f"{path} holds the complete extracted inventory written by "
+                "save_extracted_items; editing it by hand would drop or reshape "
+                "entries. Leave it as saved, call save_extracted_items again to "
+                "rewrite it, and read it back with read_file."
+            ),
+        }
+
     def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """Run :meth:`_execute_tool`, timing it for the step and turn records.
 
@@ -4475,6 +4815,19 @@ Do NOT wrap conversational replies in JSON.
         ``_execute_tool`` has — refusals, unknown names, declined confirmations
         — so a refused call's latency is never misfiled as agent overhead.
         """
+        refused = self._refuse_inventory_hand_edit(tool_name, tool_args)
+        if refused is not None:
+            return refused
+        evidence = getattr(self, "_completion_evidence", None)
+        before = (
+            evidence.snapshot(
+                tool_name,
+                tool_args,
+                self._read_validator(),
+            )
+            if evidence is not None
+            else {}
+        )
         recorder = getattr(self, "_turn_recorder", None)
         step_timer = getattr(self, "_step_timer", None)
         # Only the outermost call is timed. A tool body may call another tool
@@ -4484,7 +4837,7 @@ Do NOT wrap conversational replies in JSON.
             self, "_tool_timing_depth", 0
         ):
             result = self._execute_tool(tool_name, tool_args)
-            self._note_verification_signal(tool_name, tool_args, result)
+            self._note_verification_signal(tool_name, tool_args, result, before=before)
             return result
 
         started = time.perf_counter()
@@ -4496,7 +4849,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
-            self._note_verification_signal(tool_name, tool_args, result)
+            self._note_verification_signal(tool_name, tool_args, result, before=before)
             return result
         finally:
             self._tool_timing_depth = 0
@@ -5149,6 +5502,25 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             The truncated result or original if within limits
         """
+        extraction = getattr(self, "_extraction_ledger", None)
+        if extraction is not None:
+            extraction.activate_skill(
+                self._extraction_skill_instructions(
+                    extraction.query,
+                    (
+                        (tool_args or {}).get("name")
+                        if tool_name == "load_skill"
+                        else False
+                    ),
+                )
+            )
+            extraction.observe(tool_name, tool_args or {}, tool_result)
+            if (
+                extraction.enabled
+                and "extract_document_items" not in self._tools_registry
+            ):
+                self._register_extraction_tool()
+                self._apply_tool_filter(self._active_tool_filter)
         truncated_result = tool_result
         # Its pages are bounded by the store; condensing one would archive it again.
         if (
@@ -5189,6 +5561,12 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if self.debug:
                     print(f"[DEBUG] Tool result truncated from {len(result_str)} chars")
+
+        evidence = getattr(self, "_completion_evidence", None)
+        if evidence is not None and not self._is_error_result(tool_result):
+            evidence.delivered(
+                tool_name, tool_args or {}, tool_result, truncated_result
+            )
 
         # Add to conversation
         tool_entry: Dict[str, Any] = {
@@ -5526,7 +5904,50 @@ Do NOT wrap conversational replies in JSON.
                 shrunk_rest.append(shrunk)
             else:
                 shrunk_rest.append(m)
-        return [first] + shrunk_rest
+        return self._with_overflow_note([first] + shrunk_rest)
+
+    def _with_overflow_note(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Restate a mixin's ``overflow_recovery_note`` on the last user message.
+
+        Stubbing old tool results drops what they taught this turn (memory's
+        lessons). User messages are never stubbed, so the note survives.
+        """
+        hook = getattr(self, "overflow_recovery_note", None)
+        try:
+            note = hook() if callable(hook) else ""
+        except Exception as exc:
+            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
+            logger.debug("Could not build the overflow recovery note: %s", exc)
+            return messages
+        if not note:
+            return messages
+
+        def _text(content: Any) -> str:
+            if isinstance(content, list):
+                return "\n".join(
+                    str(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict)
+                )
+            return str(content or "")
+
+        if any(note in _text(m.get("content")) for m in messages):
+            return messages
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            content = message.get("content")
+            if message.get("role") != "user":
+                continue
+            if isinstance(content, str):
+                content = f"{content}\n\n{note}"
+            elif isinstance(content, list):
+                content = [*content, {"type": "text", "text": note}]
+            else:
+                continue
+            return messages[:i] + [{**message, "content": content}] + messages[i + 1 :]
+        return messages
 
     def _create_tool_message(
         self,
@@ -5583,8 +6004,24 @@ Do NOT wrap conversational replies in JSON.
                     break
         return msg
 
+    def _history_for_request(self) -> List[Dict[str, Any]]:
+        """``conversation_history``, with earlier requests' reasoning stripped.
+
+        Every subclass that prepopulates a request from history must go through
+        here, or ``resend_reasoning_across_requests`` only holds for some of them.
+        """
+        history = getattr(self, "conversation_history", None) or []
+        if self.resend_reasoning_across_requests:
+            return list(history)
+        return [
+            {k: v for k, v in m.items() if k != "reasoning_content"} for m in history
+        ]
+
     def _build_assistant_message(
-        self, raw_response: str, parsed: Dict[str, Any]
+        self,
+        raw_response: str,
+        parsed: Dict[str, Any],
+        reasoning: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Construct the assistant message to append to the LLM context.
@@ -5600,11 +6037,16 @@ Do NOT wrap conversational replies in JSON.
 
         For embedded-JSON / plain-text responses we keep passing the raw
         response text through unchanged.
+
+        ``reasoning`` rides along as ``reasoning_content`` so the model keeps
+        its own reasoning across the steps of one request.
         """
+        extra = {"reasoning_content": reasoning} if reasoning else {}
         tc_list = parsed.get("tool_calls")
         if not tc_list:
-            return {"role": "assistant", "content": raw_response}
+            return {"role": "assistant", "content": raw_response, **extra}
         return {
+            **extra,
             "role": "assistant",
             "content": parsed.get("content"),
             "tool_calls": [
@@ -5971,7 +6413,12 @@ Do NOT wrap conversational replies in JSON.
         return answer
 
     def _note_verification_signal(
-        self, tool_name: str, tool_args: Dict[str, Any], result: Any
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        result: Any,
+        *,
+        before: Optional[dict] = None,
     ) -> None:
         """Record one dispatched tool call for this turn's verification scope.
 
@@ -5994,6 +6441,16 @@ Do NOT wrap conversational replies in JSON.
         record["args"] = tool_args if isinstance(tool_args, dict) else {}
         record["output"] = check_output(tool_name, result)
         log.append(record)
+        evidence = getattr(self, "_completion_evidence", None)
+        if evidence is not None:
+            evidence.record(
+                tool_name,
+                record["args"],
+                result,
+                successful=record["ran"] and not record["failed"],
+                before=before,
+                executed=record["ran"],
+            )
 
     def _verification_project_root(self) -> Optional[str]:
         """The project this turn works in, from the shared project-root resolver."""
@@ -6044,6 +6501,34 @@ Do NOT wrap conversational replies in JSON.
             # The whole "answer" was an echoed scope line; one is still one.
             return statement
         return f"{body.rstrip()}\n\n{statement}"
+
+    def _gate_unsealed_answer(
+        self, answer: Optional[str]
+    ) -> Tuple[Optional[str], List[str]]:
+        """Judge an answer that never passed the loop's own completion gate.
+
+        Every exit that ends a turn early — error, context overflow, the step
+        cap — lands here, so an unverified save or an unfinished extraction is
+        reported as incomplete on those paths too. ``None`` stays ``None`` when
+        nothing is unverified: the caller's max-steps fallback owns that text.
+        """
+        self._check_extraction_sources()
+        gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
+        gaps.extend(self._extraction_ledger.gaps())
+        unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
+        if unsupported:
+            gaps.append(unsupported[1] + ".")
+        if gaps:
+            report = incomplete_answer(gaps)
+            # Keep the error that ended the turn; add what stays unverified.
+            answer = (
+                f"{answer}\n\n{report}" if answer and self.error_history else report
+            )
+        # Items already extracted stay visible when the turn runs out.
+        inventory = self._extraction_ledger.render()
+        if inventory and answer:
+            answer += "\n\n" + inventory
+        return answer, gaps
 
     def process_query(
         self,
@@ -6151,6 +6636,11 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_schemas = None
         self._last_tool_filter = None
 
+        # Relative paths resolve against the working directory, as the file tools do.
+        self._extraction_ledger = ExtractionLedger(
+            user_input, os.getcwd(), available=self._read_validator() is not None
+        )
+
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
@@ -6163,6 +6653,21 @@ Do NOT wrap conversational replies in JSON.
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
+
+        self._extraction_ledger.activate_skill(
+            self._extraction_skill_instructions(user_input)
+        )
+        had_extraction_tools = "extract_document_items" in self._tools_registry
+        if self._extraction_ledger.enabled:
+            self._register_extraction_tool()
+        else:
+            getattr(self, "_tool_overrides", {}).pop("extract_document_items", None)
+            getattr(self, "_tool_overrides", {}).pop("save_extracted_items", None)
+            if self._instance_tools is not None:
+                self._instance_tools.pop("extract_document_items", None)
+                self._instance_tools.pop("save_extracted_items", None)
+        if self._extraction_ledger.enabled or had_extraction_tools:
+            self._apply_tool_filter(self._active_tool_filter)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []
@@ -6180,7 +6685,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self.conversation_history)
+            messages.extend(self._history_for_request())
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
@@ -6206,7 +6711,9 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         verify_after_change_reprompted = False
         test_claim_corrections = 0
-        file_write_claim_reprompts = 0
+        cut_off_continuations = 0
+        completion_corrections = 0
+        completion_gaps = []
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -6236,6 +6743,11 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        self._completion_evidence = CompletionEvidence(
+            user_input,
+            os.getcwd(),
+            scratch=getattr(self._read_validator(), "scratch_dir", None),
+        )
         # Files edited this turn, so an empty response can name what it left
         # behind (#3733). Per-turn: an instance persists across queries.
         self._turn_file_edits: List[Dict[str, Any]] = []
@@ -6682,6 +7194,8 @@ Do NOT wrap conversational replies in JSON.
             # Handle streaming or non-streaming LLM response
             # Initialize response_stats so it's always in scope
             response_stats = None
+            response_finish_reason = None
+            response_reasoning = None
 
             if self.streaming:
                 # Streaming mode - raw response will be streamed
@@ -6732,6 +7246,10 @@ Do NOT wrap conversational replies in JSON.
                                 break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
+                                response_finish_reason = getattr(
+                                    chunk_response, "finish_reason", None
+                                )
+                                response_reasoning = _response_reasoning(chunk_response)
                                 # Non-empty complete chunk = tool_calls sentinel from
                                 # native tool-calling path (no streaming for tool calls)
                                 if chunk_response.text:
@@ -6891,6 +7409,10 @@ Do NOT wrap conversational replies in JSON.
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
+                        response_finish_reason = getattr(
+                            chat_response, "finish_reason", None
+                        )
+                        response_reasoning = _response_reasoning(chat_response)
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
@@ -7018,19 +7540,51 @@ Do NOT wrap conversational replies in JSON.
                 # Stop the progress indicator
                 self.console.stop_progress()
 
-            # Strip <think>...</think> blocks emitted by reasoning models
-            # (e.g. Qwen3.5).  Must happen before parsing so the JSON extractor
-            # finds clean input, and before the response is stored in
-            # conversation_history so the thinking text never bleeds into the
-            # next turn and confuses the model about the current user message.
-            response = re.sub(
-                r"<think>.*?</think>", "", response, flags=re.DOTALL
-            ).strip()
+            # Reasoning is kept as reasoning: never parsed, never the answer.
+            response, inline_reasoning = _split_reasoning(response)
+            reasoning = response_reasoning or inline_reasoning
 
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")
             if self.show_prompts:
                 self.console.print_response(response, "LLM Response")
+
+            # A reply the output-token limit cut off is unfinished whatever it
+            # says; parsing it would turn half a thought into the answer.
+            if response_finish_reason == "length" and not response.startswith(
+                '{"__tool_calls__":'
+            ):
+                self.error_history.append(
+                    {
+                        "step": steps_taken,
+                        "error": "reply cut off at the output-token limit",
+                        "type": "output_truncated",
+                    }
+                )
+                if (
+                    cut_off_continuations >= _MAX_CUT_OFF_CONTINUATIONS
+                    or steps_taken >= steps_limit
+                ):
+                    logger.warning(
+                        "[WORKFLOW] Reply cut off at the output-token limit "
+                        "%d time(s) this turn; stopping (step %d/%d)",
+                        cut_off_continuations + 1,
+                        steps_taken,
+                        steps_limit,
+                    )
+                    final_answer = _CUT_OFF_FAILURE_ANSWER
+                    break
+                cut_off_continuations += 1
+                logger.info(
+                    "[WORKFLOW] Reply cut off at the output-token limit; "
+                    "asking the model to continue (%d/%d)",
+                    cut_off_continuations,
+                    _MAX_CUT_OFF_CONTINUATIONS,
+                )
+                if response:
+                    messages.append({"role": "assistant", "content": response})
+                messages.append({"role": "user", "content": _CUT_OFF_CONTINUE_PROMPT})
+                continue
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed
             # tool_calls JSON — concatenated enum values, unterminated strings,
@@ -7119,12 +7673,15 @@ Do NOT wrap conversational replies in JSON.
                 steps_taken += 1
                 continue
             logger.debug(f"Parsed response: {parsed}")
-            conversation.append({"role": "assistant", "content": parsed})
+            conversation.append(
+                {"role": "assistant", "content": parsed}
+                | ({"reasoning": reasoning} if reasoning else {})
+            )
 
             # Add assistant response to messages for chat history (OpenAI
             # shape for native tool_calls, raw text otherwise — see
             # ``_build_assistant_message`` for the why).
-            messages.append(self._build_assistant_message(response, parsed))
+            messages.append(self._build_assistant_message(response, parsed, reasoning))
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -7175,6 +7732,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Handle streaming as before
                     full_response = ""
+                    plan_reasoning = None
                     # Add plan request to messages
                     messages.append({"role": "user", "content": plan_prompt})
 
@@ -7188,6 +7746,7 @@ Do NOT wrap conversational replies in JSON.
 
                     for chunk_response in stream_gen:
                         if chunk_response.is_complete:
+                            plan_reasoning = _response_reasoning(chunk_response)
                             if chunk_response.text:
                                 full_response = chunk_response.text
                         else:
@@ -7229,12 +7788,11 @@ Do NOT wrap conversational replies in JSON.
                         max_tokens=self._max_output_tokens(),
                     )
                     plan_response = chat_response.text
+                    plan_reasoning = _response_reasoning(chat_response)
                     self.console.stop_progress()
 
-                # Strip <think> blocks before parsing (same reason as main path)
-                plan_response = re.sub(
-                    r"<think>.*?</think>", "", plan_response, flags=re.DOTALL
-                ).strip()
+                plan_response, inline_plan_reasoning = _split_reasoning(plan_response)
+                plan_reasoning = plan_reasoning or inline_plan_reasoning
 
                 # Parse the plan response
                 try:
@@ -7277,7 +7835,10 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken += 1
                     continue
                 logger.debug(f"Parsed plan response: {parsed_plan}")
-                conversation.append({"role": "assistant", "content": parsed_plan})
+                conversation.append(
+                    {"role": "assistant", "content": parsed_plan}
+                    | ({"reasoning": plan_reasoning} if plan_reasoning else {})
+                )
 
                 # Add plan response to messages for chat history. Same
                 # OpenAI-shape rule as the main-response append (issue
@@ -7287,7 +7848,9 @@ Do NOT wrap conversational replies in JSON.
                 # assistant turn so the fan-out below can correlate
                 # results back via ``tool_call_id``.
                 messages.append(
-                    self._build_assistant_message(plan_response, parsed_plan)
+                    self._build_assistant_message(
+                        plan_response, parsed_plan, plan_reasoning
+                    )
                 )
 
                 # Display the agent's reasoning for the plan
@@ -7908,6 +8471,7 @@ Do NOT wrap conversational replies in JSON.
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
                 answer_candidate = parsed["answer"]
+                completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
                 # calling index_document but before issuing a query tool call.
@@ -8199,50 +8763,6 @@ Do NOT wrap conversational replies in JSON.
                     )
                     continue
 
-                # Fabricated-save guard: the answer says a file was written but
-                # no tool that can touch disk ran this turn, so nothing was.
-                if (
-                    file_write_claim_reprompts < _MAX_FILE_WRITE_CLAIM_REPROMPTS
-                    and steps_taken < steps_limit - 1
-                    and _claims_file_write(answer_candidate)
-                ):
-                    _registry = self._tools_registry
-                    _write_tool = next(
-                        (_t for _t in _FILE_WRITE_TOOLS if _t in _registry), None
-                    )
-                    # Read the execution log, not tool_call_log: the latter is
-                    # appended before the call runs, so a refused, errored or
-                    # declined write would silence the guard on the exact harm
-                    # it exists to catch.
-                    _wrote_this_turn = any(
-                        _entry["ran"]
-                        and not _entry["failed"]
-                        and self._tool_can_touch_disk(_entry["tool"])
-                        for _entry in (self._turn_tool_executions or [])
-                    )
-                    if _write_tool and not _wrote_this_turn:
-                        file_write_claim_reprompts += 1
-                        logger.debug(
-                            "[WORKFLOW] Blocking unbacked file-write claim as final "
-                            "answer: %s",
-                            answer_candidate[:120],
-                        )
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "SYSTEM: Your answer says a file was saved, but no "
-                                    "file-writing tool ran in this turn — nothing was "
-                                    "written to disk. If the file is still needed, call "
-                                    f"`{_write_tool}` now with the full content and the "
-                                    "exact path. If you mean a file written earlier in "
-                                    "the conversation, say that explicitly instead of "
-                                    "claiming you just saved it."
-                                ),
-                            }
-                        )
-                        continue
-
                 # Capability-claim-without-attempt guard: catch responses that declare
                 # a tool's availability or unavailability (e.g. "I can generate images
                 # when the --sd flag is active") without having tried the tool first.
@@ -8405,7 +8925,7 @@ Do NOT wrap conversational replies in JSON.
                     )
                     if not can_correct_claim:
                         logger.warning(
-                            "[WORKFLOW] Emitting unsupported test claim %r (%s): "
+                            "[WORKFLOW] Rejecting unsupported test claim %r (%s): "
                             "%d/%d corrections used, step %d/%d",
                             claim,
                             why,
@@ -8414,6 +8934,8 @@ Do NOT wrap conversational replies in JSON.
                             steps_taken,
                             steps_limit,
                         )
+                        completion_gaps = [why + "."]
+                        answer_candidate = incomplete_answer(completion_gaps)
                     else:
                         test_claim_corrections += 1
                         logger.debug(
@@ -8421,16 +8943,20 @@ Do NOT wrap conversational replies in JSON.
                             claim,
                             why,
                         )
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    f'Your answer says "{claim}", but {why}. '
-                                    "Either run the check now, or answer "
-                                    "without that claim."
-                                ),
-                            }
-                        )
+                        # The next answer replaces this one wholesale, so it
+                        # must carry the whole answer, not just the fixed claim.
+                        correction = {
+                            "role": "user",
+                            "content": (
+                                f'Your answer says "{claim}", but {why}. '
+                                "Either run the check now, or drop the claim. "
+                                "Then give your complete answer again: it "
+                                "replaces the one above, which the user will "
+                                "not see."
+                            ),
+                        }
+                        messages.append(correction)
+                        conversation.append(dict(correction))
                         continue
 
                 # A message that landed DURING this model call was never seen
@@ -8447,11 +8973,77 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     continue
 
-                # Scope line goes on AFTER the subclass hook: a subclass that
-                # rewrites the answer must not be able to drop it (#3376).
-                final_answer = self._with_verification_scope(
-                    self.finalize_answer(answer_candidate, conversation)
+                answer_candidate = self.finalize_answer(answer_candidate, conversation)
+                soft_gaps: List[str] = []
+                self._check_extraction_sources()
+                artifact_gaps = self._completion_evidence.gaps(
+                    answer_candidate, _claims_file_write, soft=soft_gaps
                 )
+                extraction_gaps = self._extraction_ledger.gaps()
+                artifact_gaps.extend(extraction_gaps)
+                if artifact_gaps or soft_gaps:
+                    if (
+                        completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                        and steps_taken < steps_limit - 1
+                        and any(
+                            name in self._tools_registry
+                            for name in (
+                                "write_file",
+                                "write_python_file",
+                                "write_markdown_file",
+                                "edit_file",
+                                "read_file",
+                                "run_python",
+                                "load_tools",
+                            )
+                        )
+                    ):
+                        completion_corrections += 1
+                        correction = (
+                            (
+                                "[check:completion] "
+                                + " ".join(artifact_gaps)
+                                + " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary. Use `write_file` for a missing requested save, then "
+                                "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
+                                "continuation pages. Report only contents observed in "
+                                "tool results. An unrelated tool or file is not evidence."
+                            )
+                            if artifact_gaps
+                            else (
+                                "[check:completion] "
+                                + " ".join(soft_gaps)
+                                + " If the file is needed, write it with `write_file` and read it back. "
+                                "If you were describing where something is usually saved, or a file "
+                                "from an earlier turn, say so without claiming you saved it now."
+                            )
+                        )
+                        messages.append({"role": "user", "content": correction})
+                        conversation.append({"role": "user", "content": correction})
+                        continue
+                    completion_gaps.extend(artifact_gaps)
+                # Validate after subclass rewriting, before console/SSE emission.
+                final_test_claim = unsupported_test_claim(
+                    answer_candidate, self._turn_tool_executions
+                )
+                if (
+                    final_test_claim
+                    and final_test_claim[1] + "." not in completion_gaps
+                ):
+                    completion_gaps.append(final_test_claim[1] + ".")
+                if completion_gaps:
+                    answer_candidate = incomplete_answer(completion_gaps)
+                inventory = self._extraction_ledger.render()
+                if inventory:
+                    # Never ask another synthesis call to reproduce the set; it condenses.
+                    answer_candidate += "\n\n" + inventory
+                    if not completion_gaps:
+                        saved = sorted(self._extraction_ledger.destinations)
+                        if saved:
+                            answer_candidate += (
+                                "\n\nSaved and read back the complete inventory: "
+                                + ", ".join(f"`{path}`" for path in saved)
+                            )
+                final_answer = self._with_verification_scope(answer_candidate)
                 verification_scope_applied = True
                 self.execution_state = self.STATE_COMPLETION
                 # Compute the real token total BEFORE printing the answer so it
@@ -8551,9 +9143,13 @@ Do NOT wrap conversational replies in JSON.
                 if cap_answer is None:
                     cancelled_by_console = True
                 else:
-                    final_answer = self._with_verification_scope(
+                    # Same gate an ordinary answer passes: running out of steps
+                    # mid-extraction still reports incomplete, it does not
+                    # promote the closing reply to a verified one.
+                    gated, completion_gaps = self._gate_unsealed_answer(
                         self.finalize_answer(cap_answer, conversation)
                     )
+                    final_answer = self._with_verification_scope(gated)
                     verification_scope_applied = True
                     _cap_input_tokens, cap_output_tokens = _sum_conversation_tokens(
                         conversation, self._tool_reported_usage
@@ -8634,6 +9230,9 @@ Do NOT wrap conversational replies in JSON.
             conversation, self._tool_reported_usage
         )
 
+        if not verification_scope_applied and not account_refused:
+            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
+
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
         # overflow, typed Lemonade error, parse give-up, loop-break summary,
@@ -8651,9 +9250,15 @@ Do NOT wrap conversational replies in JSON.
         )  # Check for non-empty answer
         result = {
             "status": (
-                "success"
-                if has_valid_answer and not has_errors and not max_steps_reached
-                else ("failed" if has_errors else "incomplete")
+                "failed"
+                if has_errors
+                else (
+                    "success"
+                    if has_valid_answer
+                    and not completion_gaps
+                    and not max_steps_reached
+                    else "incomplete"
+                )
             ),
             "result": (
                 final_answer
@@ -8661,6 +9266,11 @@ Do NOT wrap conversational replies in JSON.
                 else self._with_verification_scope(
                     self._generate_max_steps_message(
                         conversation, steps_taken, steps_limit
+                    )
+                    + (
+                        "\n\n" + self._extraction_ledger.render()
+                        if self._extraction_ledger.results
+                        else ""
                     )
                 )
             ),
@@ -8678,6 +9288,8 @@ Do NOT wrap conversational replies in JSON.
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
             "tool_schema": self._trace_tool_schema(),
+            "completion_gaps": completion_gaps,
+            "extraction_sources": sorted(self._extraction_ledger.results),
         }
 
         result["model_messages"] = messages.finish(result["result"])

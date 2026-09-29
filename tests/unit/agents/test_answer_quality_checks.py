@@ -241,10 +241,14 @@ class TestVerifyAfterChangeSilent:
 
     def test_writing_a_report_is_not_a_code_change(self, project, scripted):
         agent, chat = scripted(
-            [_call("write_file", path="notes.md", content="# Notes\n"), _answer("Ok.")]
+            [
+                _call("write_file", path="notes.md", content="# Notes\n"),
+                _call("read_file", path="notes.md"),
+                _answer("Ok."),
+            ]
         )
         result = agent.process_query("Jot some notes down.")
-        assert chat.send_messages.call_count == 2
+        assert chat.send_messages.call_count == 3
         assert not _tagged(result, VERIFY_AFTER_CHANGE_TAG)
 
 

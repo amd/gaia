@@ -42,6 +42,14 @@ async function pressCtrlC(before: Function[]): Promise<void> {
 }
 
 async function runServe(shutdownImpl: () => Promise<void>): Promise<number> {
+  const { running, before } = await startServe(shutdownImpl);
+  await pressCtrlC(before);
+  return running;
+}
+
+async function startServe(
+  shutdownImpl: () => Promise<void>,
+): Promise<{ running: Promise<number>; before: Function[] }> {
   vi.doMock("../src/fetch.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../src/fetch.js")>()),
     fetchBinary: vi.fn(async () => ({ binaryPath: "/fake/gaia-agent", cached: true })),
@@ -58,9 +66,7 @@ async function runServe(shutdownImpl: () => Promise<void>): Promise<number> {
   }));
   const { main } = await import("../src/cli.js");
   const before = process.listeners("SIGINT").slice();
-  const running = main(["serve"]);
-  await pressCtrlC(before);
-  return running;
+  return { running: main(["serve"]), before };
 }
 
 describe("gaia serve on Ctrl+C", () => {
@@ -71,6 +77,19 @@ describe("gaia serve on Ctrl+C", () => {
     expect(code).toBe(1);
     expect(stderr.join("")).toContain("pid 4242");
     expect(stderr.join("")).toContain("kill -9 -4242");
+  });
+
+  it("reports cleanup failure while preserving the original startup error", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      if (String(chunk).includes("GAIA agent:")) throw new Error("output pipe closed");
+      return true;
+    });
+    const { running } = await startServe(async () => {
+      throw new Error(SHUTDOWN_ERROR);
+    });
+
+    await expect(running).rejects.toThrow("output pipe closed");
+    expect(stderr.join("")).toContain(SHUTDOWN_ERROR);
   });
 
   it("exits 0 when the sidecar stops cleanly", async () => {

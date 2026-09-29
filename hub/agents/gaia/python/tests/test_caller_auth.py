@@ -3,7 +3,7 @@
 """Caller authentication on the flagship sidecar's local REST API.
 
 This sidecar binds loopback and drives an agent with shell and file tools plus a
-bypass-permissions mode, so "loopback only" is not access control. These tests
+full-access mode, so "loopback only" is not access control. These tests
 pin the three controls that make the port safe to open:
 
 1. **Per-session bearer token** — a non-exempt request without a valid token is

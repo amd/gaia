@@ -355,7 +355,7 @@ gaia uninstall [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
-| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs |
+| `--purge` | flag | Remove venv + chats + documents + embedded Lemonade + config + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`), and undo the installer's PATH edits |
 | `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
@@ -373,7 +373,7 @@ gaia uninstall --purge --dry-run
 gaia uninstall --venv
 ```
 
-```bash Full Purge (venv + chats + documents + embedded Lemonade + config)
+```bash Full Purge (venv + chats + documents + embedded Lemonade + config + installer leftovers)
 gaia uninstall --purge
 ```
 
@@ -388,8 +388,21 @@ gaia uninstall --purge --purge-lemonade --yes
 
 <Warning>
 `--purge` permanently deletes your chat history, uploaded documents, configuration,
-and embedded Lemonade downloads. Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
+embedded Lemonade downloads, agent traces, and the daemon's state in `~/.gaia/host` —
+including its custody database (agent memory, sessions, and audit history). Use `--purge --dry-run` first to preview the purge tier; pair other cleanup tiers with `--dry-run` to preview those instead.
 </Warning>
+
+<Note>
+`--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
+before deleting its state, removes `gaia-tui` and `gaia-agent` from `~/.gaia/bin`, and
+removes the installer's PATH entries: the `# Added by GAIA installer` block in
+`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\venv\Scripts`
+and `~\.gaia\bin` entries on the Windows user PATH. The rest of each file and every
+other PATH entry are left exactly as they were. If you edited the installer's `export PATH`
+line by hand, it is kept and the command tells you to remove it yourself. A `GAIA_HOME`
+other than `~/.gaia` leaves these PATH edits alone, because they still point at `~/.gaia`.
+Open a new terminal afterwards so it stops using the old PATH.
+</Note>
 
 <Note>
 `GAIA_HOME` moves the directory this command deletes into, and the resolved path is printed above the plan and in the `--purge` confirmation prompt. It must name a directory GAIA owns, and **both `--venv` and `--purge` check this** before deleting anything:
@@ -921,6 +934,7 @@ gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
 | `-i, --interactive` | flag | false | REPL loop until `/quit`. |
 | `-v, --verbose` | flag | false | Emit structured logs for every triage decision and tool call. |
 | `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
+| `--trace` | flag | false | Write the run's request and full agent event stream to `./email_trace_<timestamp>_<run-id>.json` (path echoed on stderr). One file per turn in interactive mode; contains real email content. |
 | `--spec` | flag | false | Generate the HTML endpoint spec page, write it to disk, and open it in a browser. No LLM or Lemonade required. |
 | `--output PATH` | path | `~/.gaia/email/endpoint-spec.html` | Where to write the HTML spec (only used with `--spec`). |
 | `--base-url` | – | – | Rejected (exit 2). The email agent runs inside the GAIA daemon and uses the daemon's `LEMONADE_BASE_URL`; to switch servers, run `gaia daemon stop`, set `LEMONADE_BASE_URL`, and re-run `gaia email`. |
@@ -1516,6 +1530,36 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
+| `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
+
+### Full access
+
+By default the agent asks before it runs a shell command or writes a file. Turn
+that off every time you launch `gaia-tui` with:
+
+```bash
+gaia config set full_access true
+```
+
+The TUI shows a warning banner on every frame while it is on, and names this
+setting as the reason. To turn it off:
+
+| | |
+|---|---|
+| `gaia config set full_access false` | stop it coming back |
+| `/full-access never` (in the TUI) | same, without leaving the session |
+| `/full-access off` (in the TUI) | this session only; the setting stays |
+| `gaia-tui --full-access=false` | skip it for one launch |
+
+Full access needs an agent the TUI launches itself. A Hub-installed flagship runs
+through the GAIA background service, which doesn't support it yet: `--full-access`
+is refused there, and a saved `full_access` leaves prompts on with a note in the
+chat saying so.
+
+This is the only thing that turns full access on without someone asking for it
+on that launch, so it is read **only** from your own `~/.gaia/config.json` — a
+project-local `.env` or a checked-in config file can never switch off your
+confirmation prompts.
 
 ### Default model precedence
 
@@ -1938,7 +1982,7 @@ gaia eval code --control ~/.gaia/tui/control.json
 
 ### Flagship Agent Tasks
 
-Run the flagship GaiaAgent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, tested changes, quality, honesty, tokens, steps and runtime, against main's committed results.
+Run an agent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, tested changes, quality, honesty, tokens, steps and runtime, against main's committed results.
 
 ```bash
 gaia eval tasks run --suite core                   # Run the core tasks, then judge them
@@ -1948,7 +1992,44 @@ gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's qual
 gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
 ```
 
-[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks)
+**Harness × model comparison.** The same tasks, fixtures, time limit and judge, against more than one agent — so a difference in the table is a difference between the agents, not between their conditions:
+
+```bash
+gaia eval tasks run --suite everyday --model fireworks.glm-5p3-flash --repeats 3 --meter fireworks --out runs/gaia-glm
+gaia eval tasks run --suite everyday --harness claude-code --model claude-opus-5 --out runs/cc-opus
+gaia eval tasks run --suite therock --harness claude-code --model fireworks.glm-5p3-flash --out runs/cc-therock
+gaia eval tasks report runs/cc-opus runs/gaia-glm --out runs/report
+gaia eval tasks controls                           # Check the judge on planted attempts
+gaia eval tasks gateway --port 8788                # One model gateway for a whole matrix
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--harness` | `gaia` | `gaia` (the flagship) or `claude-code` (`claude -p`) |
+| `--repeats` | `1` | Run the suite N times, into `<out>/r1`, `<out>/r2`… |
+| `--tasks` | all | Comma-separated task ids to run from the suite |
+| `--run-timeout` | `1800` | Wall-clock cap per task, the same for every harness |
+| `--work-root` | temp dir | Where task workdirs live while running |
+| `--gateway-url` | started per run | A model gateway already running |
+| `--fence` | off | Fence the agent off the answer keys (macOS only) |
+| `--full-access` | off | Give GAIA the reach Claude Code has with permissions skipped |
+| `--meter` | none | `fireworks`: read real cost from the provider's billing meter |
+| `--therock-url` | `https://github.com/ROCm/TheRock` | Source for the `therock` suite |
+
+**SWE-bench Verified.** The `swebench` suite builds its tasks from real upstream issues, and grading runs the official harness in Docker. `run` grades as it goes; pass `--no-evaluate` to capture the predictions now and grade them later on a machine that has Docker:
+
+```bash
+gaia eval tasks run --suite swebench --instances psf__requests-1921,pallets__flask-5014
+gaia eval tasks run --suite swebench --no-evaluate --out eval/results/eval-tasks-swebench
+gaia eval tasks swebench eval/results/eval-tasks-swebench   # Grade those predictions in Docker
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--instances` | the five-instance pilot | Comma-separated SWE-bench Verified instance ids; only with `--suite swebench` |
+| `--no-evaluate` | off | Capture predictions without grading them in Docker |
+
+[→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks) · [→ Comparing harnesses and models](/reference/eval#comparing-harnesses-and-models)
 
 ---
 
@@ -3313,7 +3394,8 @@ run and keep it.
 
 A launch that fails before the agent says anything (a refused port, an unmet
 precondition) removes its own empty trace rather than leaving a 0-byte file
-behind. `~/.gaia/traces` is never pruned otherwise — delete old runs yourself.
+behind. `~/.gaia/traces` is never pruned otherwise — delete old runs yourself, or
+remove them all with `gaia uninstall --purge`.
 
 ---
 
