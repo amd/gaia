@@ -33,7 +33,7 @@ def real_matrix() -> list:
 
 
 def test_every_gaia_lane_gets_fixtures_and_live_memory(real_matrix):
-    gaia_lanes = [l for l in real_matrix if "gaia_" in l["categories"]]
+    gaia_lanes = [lane for lane in real_matrix if "gaia_" in lane["categories"]]
     assert gaia_lanes, "no gaia_* lane in eval/ci_lanes.json"
     for lane in gaia_lanes:
         assert lane["gaia_fixtures"] == "1", lane
@@ -41,7 +41,9 @@ def test_every_gaia_lane_gets_fixtures_and_live_memory(real_matrix):
 
 
 def test_gaia_memory_runs_with_memory_on(real_matrix):
-    lane = next(l for l in real_matrix if "gaia_memory" in l["categories"].split())
+    lane = next(
+        each for each in real_matrix if "gaia_memory" in each["categories"].split()
+    )
     assert lane["memory_disabled"] == "0"
 
 
@@ -55,7 +57,9 @@ def test_non_gaia_non_memory_lanes_run_with_memory_off(real_matrix):
 
 
 def test_memory_lane_registers_the_mcp_read_tools(real_matrix):
-    lane = next(l for l in real_matrix if l["categories"].split() == ["memory"])
+    lane = next(
+        each for each in real_matrix if each["categories"].split() == ["memory"]
+    )
     assert lane["memory_mcp"] == "1"
 
 
