@@ -473,10 +473,12 @@ func firstWord(cmd string) string {
 // the front of a command, leaving the program it actually runs.
 func stripEnvPrefix(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
-	if rest, ok := strings.CutPrefix(cmd, `set "`); ok {
-		if _, after, found := strings.Cut(rest, "&&"); found {
-			return strings.TrimSpace(after)
+	for strings.HasPrefix(cmd, `set "`) {
+		_, after, found := strings.Cut(cmd, "&&")
+		if !found {
+			return cmd
 		}
+		cmd = strings.TrimSpace(after)
 	}
 	for {
 		rest, ok := strings.CutPrefix(cmd, "env ")

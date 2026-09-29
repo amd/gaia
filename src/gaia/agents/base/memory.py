@@ -74,6 +74,7 @@ from gaia.agents.base.verification import check_was_executed
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
+    backend_crash_remedy,
 )
 
 if TYPE_CHECKING:
@@ -580,10 +581,11 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
 
 #: Reason codes for why memory is unavailable this session (#2519). Distinct
 #: codes because the remedies differ: an unset env var, a model that was
-#: never pulled into a *running* Lemonade, and Lemonade not running at all
-#: are three different problems with three different fixes.
+#: never pulled into a *running* Lemonade, a pulled model Lemonade cannot
+#: load, and Lemonade not running at all each have a different fix.
 MEMORY_UNAVAILABLE_DISABLED_BY_ENV = "disabled_by_env"
 MEMORY_UNAVAILABLE_MODEL_NOT_PULLED = "model_not_pulled"
+MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED = "model_load_failed"
 MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE = "service_unreachable"
 
 #: Substrings that identify a Lemonade "model not found" response (the
@@ -592,19 +594,26 @@ MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE = "service_unreachable"
 #: with ``{"error":{"code":"model_not_found", ...}}``.
 _MODEL_NOT_FOUND_MARKERS = ("model_not_found", "was not found", "404")
 
+#: Lemonade answered and has the model, but its backend died loading it —
+#: status 500 ``{"error":{"code":"model_load_error", ...}}`` (#1831).
+_MODEL_LOAD_FAILED_MARKERS = ("model_load_error", "llama-server failed to start")
+
 
 def _classify_embedding_failure(exc: Exception) -> str:
     """Classify why the embedding connectivity probe failed at startup.
 
     Returns ``MEMORY_UNAVAILABLE_MODEL_NOT_PULLED`` when Lemonade answered
-    but rejected the embedding model as unknown (never pulled), or
-    ``MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE`` for everything else (Lemonade
-    down, wrong port, connection refused/timeout, etc.) — the safer default
-    when the failure can't be positively identified as "model not pulled".
+    but rejected the embedding model as unknown (never pulled),
+    ``MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED`` when it has the model but could
+    not load it, or ``MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE`` for everything
+    else (Lemonade down, wrong port, connection refused/timeout, etc.) — the
+    safer default when the failure can't be positively identified.
     """
     text = str(exc).lower()
     if any(marker in text for marker in _MODEL_NOT_FOUND_MARKERS):
         return MEMORY_UNAVAILABLE_MODEL_NOT_PULLED
+    if any(marker in text for marker in _MODEL_LOAD_FAILED_MARKERS):
+        return MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED
     return MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE
 
 
@@ -793,6 +802,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                     "[MemoryMixin] embedding model '%s' is not pulled in "
                     "Lemonade — memory v2 disabled for this session (pull "
                     "the model and restart the agent to enable). Reason: %s",
+                    self._embedding_model,
+                    e,
+                )
+            elif reason == MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED:
+                logger.error(
+                    "[MemoryMixin] embedding model '%s' would not load in "
+                    "Lemonade — memory v2 disabled for this session. Reason: %s",
                     self._embedding_model,
                     e,
                 )
@@ -1033,7 +1049,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         """Human-readable reason + remedy for why memory is off this session.
 
         Returns ``None`` when a memory store is live. Otherwise returns one of
-        three DISTINCT messages, keyed off the real cause recorded by
+        four DISTINCT messages, keyed off the real cause recorded by
         ``init_memory()`` — never conflates "the model was never pulled" (the
         service is reachable and running fine) with "the service itself is
         down" (start it), since a user who acts on the wrong one is sent down
@@ -1070,6 +1086,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                 f"running and reachable. {remedy}, then restart the agent. "
                 f"{restart_note}"
             )
+        if reason == MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED:
+            return (
+                f"Memory is unavailable this session: the embedding model "
+                f"'{model}' is downloaded but would not load. "
+                f"{backend_crash_remedy(model)} {restart_note}"
+            )
         # MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE, or an unclassified failure —
         # treat as unreachable, the safer default (matches the pre-#2519
         # behavior for anything we can't positively identify).
@@ -1093,6 +1115,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             return False
         if getattr(self, "_memory_unavailable_reason", None) not in (
             MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+            MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED,
             MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
         ):
             return False
