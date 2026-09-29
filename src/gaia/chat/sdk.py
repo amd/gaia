@@ -57,6 +57,9 @@ class AgentResponse:
     # as it was (the polled ``/stats`` measurement). ``None`` for providers/
     # calls that don't expose per-call usage.
     usage: Optional[Dict[str, Any]] = None
+    # Why the reply ended, as the provider reported it; ``"length"`` means
+    # the output-token limit cut it off.
+    finish_reason: Optional[str] = None
     # The model's reasoning for this reply, kept apart from ``text``.
     reasoning: Optional[str] = None
 
@@ -492,6 +495,7 @@ class AgentSDK:
                 stats=stats,
                 usage=usage,
                 is_complete=True,
+                finish_reason=self.llm_client.get_last_finish_reason(),
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 
@@ -594,6 +598,7 @@ class AgentSDK:
                 text="",
                 stats=stats,
                 is_complete=True,
+                finish_reason=self.llm_client.get_last_finish_reason(),
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 

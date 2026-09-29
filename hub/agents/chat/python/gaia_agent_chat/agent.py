@@ -773,10 +773,16 @@ class ChatAgent(
             ) from e
 
     def _resolve_dynamic_tools_max(self) -> int:
-        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly."""
+        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly.
+
+        Grown by any workspace-added CORE tools (e.g. the shell in a repo
+        session) so they don't eat into the dynamic selection budget.
+        """
         raw = os.getenv("GAIA_DYNAMIC_TOOLS_MAX")
         if raw is None:
-            return int(self.config.dynamic_tools_max)
+            return int(self.config.dynamic_tools_max) + len(
+                self._workspace_core_tools()
+            )
         try:
             return int(raw)
         except ValueError as e:
@@ -1743,7 +1749,8 @@ No documents are currently indexed.
                 files. Report numbers from its output — do not work them
                 out in your head.
 
-                No access to your tools: `from gaia import <tool>` fails.
+                No access to your tools: `from gaia import <tool>` fails —
+                call it directly as a tool instead.
 
                 Args:
                     code: Python source to run; print() whatever you need back.

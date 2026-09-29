@@ -51,7 +51,7 @@ func TestSSEClientImplementsTheLivePermissionInterfaces(t *testing.T) {
 	if _, ok := c.(ToolPermissionResponder); !ok {
 		t.Error("SSEClient must deliver permission decisions, or gated tools never run")
 	}
-	if _, ok := c.(PermissionBypasser); !ok {
+	if _, ok := c.(FullAccessSetter); !ok {
 		t.Error("SSEClient must carry bypass, or /bypass is subprocess-only")
 	}
 }
@@ -164,13 +164,13 @@ func TestAPromptThatAlreadyResolvedIsReportedNotSwallowed(t *testing.T) {
 	}
 }
 
-func TestBypassIsScopedToTheConversationNotTheRun(t *testing.T) {
+func TestFullAccessIsScopedToTheConversationNotTheRun(t *testing.T) {
 	f := newFakeRelay(t)
 	c, done := liveRun(t, f)
 	defer done()
 
-	if err := c.SetBypassPermissions(true); err != nil {
-		t.Fatalf("SetBypassPermissions: %v", err)
+	if err := c.SetFullAccess(true); err != nil {
+		t.Fatalf("SetFullAccess: %v", err)
 	}
 
 	f.mu.Lock()
@@ -189,13 +189,13 @@ func TestBypassIsScopedToTheConversationNotTheRun(t *testing.T) {
 	}
 }
 
-func TestBypassBeforeTheConversationStartsExplainsItself(t *testing.T) {
+func TestFullAccessBeforeTheConversationStartsExplainsItself(t *testing.T) {
 	f := newFakeRelay(t)
 	f.bypassStatus = http.StatusNotFound
 	c, done := liveRun(t, f)
 	defer done()
 
-	err := c.SetBypassPermissions(true)
+	err := c.SetFullAccess(true)
 	if err == nil {
 		t.Fatal("a 404 must surface rather than looking like success")
 	}
@@ -227,12 +227,12 @@ func TestAnOlderAgentIsNotAskedForPermission(t *testing.T) {
 	}
 }
 
-func TestAnOlderAgentIsNotAskedToBypass(t *testing.T) {
+func TestAnOlderAgentIsNotAskedForFullAccess(t *testing.T) {
 	f := newFakeRelay(t)
 	c, done := liveRunAtContract(t, f, "2.13")
 	defer done()
 
-	err := c.SetBypassPermissions(true)
+	err := c.SetFullAccess(true)
 	if err == nil {
 		t.Fatal("a 2.13 agent has no bypass route; calling it must be refused")
 	}

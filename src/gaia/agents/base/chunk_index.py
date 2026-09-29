@@ -146,7 +146,7 @@ def _tile(
             first = bisect.bisect_right(starts, start)
             last = bisect.bisect_right(starts, max(start, end - 1))
             prefix = f"L{first}-{last} " if last > first else f"L{first} "
-            label, short = prefix + label, prefix + short
+            label, short = prefix + label, _clip(prefix + short, SHORT_LABEL_CHARS)
         chunks.append(Chunk(start, end - start, _clip(label), kind, lead, refs, short))
     return chunks
 
@@ -605,6 +605,13 @@ def render_search(matches: List[Dict[str, Any]]) -> Tuple[str, List[Chunk]]:
     except ValueError:
         root = ""
 
+    def relative(path: str) -> str:
+        # Keep the separator the caller's path used: ntpath.relpath answers in
+        # backslashes even for a POSIX path, so the index would name a file
+        # differently from the body text right above it.
+        name = os.path.relpath(path, root)
+        return name.replace("\\", "/") if "\\" not in path else name
+
     def block(match: Dict[str, Any]) -> str:
         out = f"  {match.get('line')}: {match.get('content', '')}\n"
         context = match.get("context") or []
@@ -625,7 +632,7 @@ def render_search(matches: List[Dict[str, Any]]) -> Tuple[str, List[Chunk]]:
         if not path:
             name = "(no file)"
         elif root:
-            name = os.path.relpath(path, root)
+            name = relative(path)
         else:
             name = path
         noun = "match" if len(found) == 1 else "matches"
@@ -785,24 +792,32 @@ def select(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """``(shown, index)`` for ``text`` within ``room`` serialized characters.
 
-    Shown is the first chunk, then the leads (a file's first match, a failing
-    section, a part the call's arguments name), then the rest in document
-    order -- each taken only while it still fits. The index names every chunk
-    not shown, merging neighbours once it would take more than
-    ``INDEX_SHARE`` of the room.
+    Shown is a leading chunk that leads (a run's closing summary), then the
+    first chunk, then the other leads (a file's first match, a failing section,
+    a part the call's arguments name), then the rest in document order -- each
+    taken only while it still fits. The index names every chunk not shown,
+    merging neighbours once it would take more than ``INDEX_SHARE`` of the room.
     """
     index_cap = int(room * INDEX_SHARE)
     while len(chunks) > MAX_CANDIDATES:
+        # The trailing lead sits out the merge: fused into a multi-KB
+        # neighbour it stops fitting, and it is the line that says whether the
+        # whole run passed.
+        head, tail = (chunks[:-1], chunks[-1:]) if chunks[-1].lead else (chunks, [])
         chunks = [
-            _merge_pair(chunks[i], chunks[i + 1]) if i + 1 < len(chunks) else chunks[i]
-            for i in range(0, len(chunks), 2)
-        ]
+            _merge_pair(head[i], head[i + 1]) if i + 1 < len(head) else head[i]
+            for i in range(0, len(head), 2)
+        ] + tail
     wanted = [c for c in named if isinstance(c, str) and len(c) >= 3]
-    order = [0]
+    # A long log's closing summary bids before chunk 0, which for command
+    # output is the "test session starts" banner.
+    last = len(chunks) - 1
+    order = [last] if last > 0 and chunks[last].lead else []
+    order.append(0)
     order += [
         i
         for i, c in enumerate(chunks)
-        if i and (c.lead or any(w in c.label for w in wanted))
+        if i and i not in order and (c.lead or any(w in c.label for w in wanted))
     ]
     order += [i for i in range(1, len(chunks)) if i not in order]
 
@@ -1021,6 +1036,8 @@ def condense_result(
     parts; the caller's record-dropping or head/tail path applies instead.
     Every field other than the body is kept verbatim -- a ``check_result``
     included -- except other long text, which becomes an archived excerpt.
+    An over-target render raises rather than degrading: a budgeting bug here
+    would otherwise reach the model as a silently oversized prompt.
     """
     body = find_body(tool_name, result, store)
     if body is None:

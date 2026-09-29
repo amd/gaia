@@ -195,7 +195,7 @@ def test_a_query_runs_with_the_shell_gates_on(built):
 
     assert r.status_code == 200, r.text
     assert agents[0].console is not None
-    assert agents[0].console.bypass_permissions is False
+    assert agents[0].console.full_access is False
 
 
 def test_the_request_body_cannot_ask_for_bypass(built):
@@ -203,7 +203,7 @@ def test_the_request_body_cannot_ask_for_bypass(built):
     bypass field fails here instead of shipping."""
     client, _agents = built
 
-    r = client.post("/v1/gaia/query", json=_body(bypass_permissions=True))
+    r = client.post("/v1/gaia/query", json=_body(full_access=True))
 
     assert r.status_code == 422, r.text
 
@@ -213,7 +213,7 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
 
     The two grants ride the same ``PermissionState``, and ``attach`` writes it
     onto each turn's fresh handler — so a session that turned bypass on would
-    otherwise overwrite the ``bypass_permissions = False`` the query path pins,
+    otherwise overwrite the ``full_access = False`` the query path pins,
     handing a bound socket the operator block, the read-only binary policy and
     the rate limit. Approval is answerable over HTTP; arbitrary shell is not.
     """
@@ -229,7 +229,7 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
 
     console = agents[0].console
     assert console.auto_approve_gated_tools is True, "bypass must stop the prompts"
-    assert console.bypass_permissions is False, "shell gates must stay on over HTTP"
+    assert console.full_access is False, "shell gates must stay on over HTTP"
 
 
 def _served_paths(app) -> set:
@@ -975,7 +975,7 @@ def test_a_decision_for_an_unknown_run_is_a_404(built):
 # ---------------------------------------------------------------------------
 
 
-def test_bypass_applies_to_the_session_and_survives_the_turn(built):
+def test_full_access_applies_to_the_session_and_survives_the_turn(built):
     """Bypass outliving a turn is the entire point of it."""
     client, _ = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1"))
@@ -984,16 +984,16 @@ def test_bypass_applies_to_the_session_and_survives_the_turn(built):
 
     assert response.status_code == 200, response.text
     assert response.json() == {"session_id": "s-1", "enabled": True}
-    assert sr.registry.get("s-1").permissions.bypass is True
+    assert sr.registry.get("s-1").permissions.full_access is True
 
 
-def test_bypass_can_be_turned_back_off(built):
+def test_full_access_can_be_turned_back_off(built):
     client, _ = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1"))
     client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": True})
     client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": False})
 
-    assert sr.registry.get("s-1").permissions.bypass is False
+    assert sr.registry.get("s-1").permissions.full_access is False
 
 
 def test_bypass_on_an_unknown_session_is_a_404_not_a_new_session(built):
@@ -1050,7 +1050,7 @@ def test_ordinary_session_ids_still_work_on_both_routes(built, good_id):
 
     assert query.status_code == 200, query.text
     assert bypass.status_code == 200, bypass.text
-    assert sr.registry.get(good_id).permissions.bypass is True
+    assert sr.registry.get(good_id).permissions.full_access is True
 
 
 def test_the_session_hands_each_turn_its_accumulated_permission_state(built):

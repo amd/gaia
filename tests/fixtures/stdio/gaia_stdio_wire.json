@@ -5,7 +5,7 @@
     "control_key": "gaia_control",
     "control_verbs": {
       "tool_decision": { "fields": ["decision", "confirm_id"], "sent_by_tui": true },
-      "bypass": { "fields": ["enabled"], "sent_by_tui": true },
+      "full_access": { "fields": ["enabled"], "sent_by_tui": true },
       "cancel": { "fields": [], "sent_by_tui": true },
       "clear_history": { "fields": [], "sent_by_tui": false }
     },

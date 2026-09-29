@@ -635,9 +635,8 @@ class ClaudeProvider(LLMClient):
             raise  # unreachable — _raise_actionable always raises
 
         self._capture_usage(usage_totals, time.monotonic() - start)
-        self._last_finish_reason = (
-            _FINISH_REASON_MAP.get(stop_reason, stop_reason) or None
-        )
+        finish_reason = _FINISH_REASON_MAP.get(stop_reason, stop_reason)
+        self._last_finish_reason = finish_reason or None
 
         if stop_reason == "refusal":
             raise RuntimeError(
@@ -651,7 +650,7 @@ class ClaudeProvider(LLMClient):
             yield json.dumps(
                 {
                     _NATIVE_TC_KEY: [tool_slots[i] for i in sorted(tool_slots)],
-                    "finish_reason": _FINISH_REASON_MAP.get(stop_reason, stop_reason),
+                    "finish_reason": finish_reason,
                     "content": "".join(text_parts) or None,
                 }
             )
@@ -694,6 +693,7 @@ class ClaudeProvider(LLMClient):
         return self._last_usage
 
     def get_last_finish_reason(self) -> Optional[str]:
+        """Why the last reply ended. Set once the stream is fully consumed."""
         return self._last_finish_reason
 
     def get_last_ttft_seconds(self) -> Optional[float]:

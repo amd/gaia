@@ -112,6 +112,10 @@ run crashing.
   the environment as it was at startup, so a project-local `.env` cannot enable
   it. Do not leave it set on a machine with a live mailbox connected — it lets the
   model send, forward, and permanently delete without asking.
+
+  Neither opt-in widens `run_shell_command`: a command off its read-only list
+  (`npm test`, `git commit`) is refused under either one, where an interactive
+  run would have asked. Only the TUI's full access runs those unasked.
 </Warning>
 
 ---

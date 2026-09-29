@@ -51,7 +51,8 @@ def custody_db_path() -> Path:
     A single store under ``host_dir()`` so custody survives a UI/browser session
     (it belongs to the always-on daemon, not the tab) and an agent uninstall
     (audit rows must persist — §0.19). WAL sidecar files (``-wal``/``-shm``) sit
-    alongside it.
+    alongside it. ``gaia uninstall --purge`` deliberately deletes it with the
+    rest of ``host_dir()``: a full product purge removes all user data.
     """
     return host_dir() / "custody.db"
 

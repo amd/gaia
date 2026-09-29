@@ -12,6 +12,13 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Changed
+
+- **Bypass permissions is now called full access, everywhere.** `--full-access`
+  and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
+  fail with a message naming the new one. `/full-access always` (or
+  `gaia config set full_access true`) keeps it on across launches.
+
 ### Fixed
 
 - `/v1/gaia/query` now honours `provider` on an existing session. It used to
@@ -54,6 +61,13 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Complete inventories from long documents.** Asking for every exercise,
+  action item or finding in a transcript now returns all of them, each with its
+  source quote, instead of a condensed list. The opt-in `document-extract` skill
+  drives new `extract_document_items` and `save_extracted_items` tools; a save is
+  reported only after the exact file is written and read back, and anything
+  unfinished is reported as incomplete. `gaia-voice` gains one routing line
+  (702 tokens).
 - **The agent can set up a skill's CLI instead of handing the job back.** Asking
   it to triage GitHub issues on a machine without `gh` used to end the
   conversation. Three new tools — `check_cli_setup` (read-only), `install_cli`
@@ -62,6 +76,11 @@ the terminal UI meant building it from source.
   tools are confirmation-gated on every call and no skill grant pre-approves
   them; over `/v1/gaia/query` they are refused, like every other gated tool
   (§8). Registered tool count goes 83 → 86.
+- **A shell command's `cd` now survives to the next one.** Every
+  `run_shell_command` call used to start from scratch, so `cd build` in one
+  call was invisible to the next. `get_shell_state` reads the session's
+  current directory, and `reset_shell_session` returns it to where the task
+  started. Registered tool count goes 86 → 88.
 - **Say something while the agent is still working.** `POST
   /v1/gaia/query/{run_id}/followup` hands a live run a message the user typed
   after it started (contract **2.15**). The run is not interrupted and no
@@ -113,6 +132,16 @@ the terminal UI meant building it from source.
   printed, instead of a throwaway script left in your repository. It joins the
   always-on tool set (about 250 more prompt tokens per call) and the `shell`
   bundle.
+- **The shell, always on inside a code repository.** When the project map
+  resolves to a repository (a VCS directory or a known manifest at its root),
+  `run_shell_command` is offered on every turn instead of only when the request
+  happens to sound like a shell request. Coding tasks such as "skip these tests
+  on PRs" previously ran without a shell and did every grep through `run_python`.
+  It follows the *same* root the map already uses, so the sidecar needs
+  `GAIA_PROJECT_ROOT=/path/to/repo` (or `GaiaAgentConfig(project_root=...)` when
+  embedding) to see your repository — its own working directory is whatever
+  started it, not yours. With no repository nothing changes, and the shell's
+  approval gate still applies either way. See SKILL §11.
 - **`sleep`, always on.** The agent can now wait before retrying, e.g. until a
   rate limit resets, instead of giving up; before, its only way to wait was
   `time.sleep` inside a confirmation-gated `run_python`. Up to five minutes per
@@ -193,7 +222,7 @@ the terminal UI meant building it from source.
   `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
   moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
 - **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`
-  entry, so it is always on and rendered in full on every LLM call — 676 tokens
+  entry, so it is always on and rendered in full on every LLM call — 702 tokens
   of every prompt, and it declares no tools. It is the agent's honesty floor
   (don't claim work you didn't do, don't present empty output as a result,
   don't substitute a near-miss and report success), which is why it is not in an
@@ -357,9 +386,9 @@ the terminal UI meant building it from source.
   that killed only the launcher: the cancelled tool call ran to completion and
   the surviving process consumed the next message. The first Esc now sends the
   agent a `cancel` control message, so the turn ends and the session keeps its
-  loaded skills, "always" grants, history and bypass mode. A second Esc stops
+  loaded skills, "always" grants, history and full access. A second Esc stops
   the whole process tree.
-- **A restart after a hard stop no longer turns bypass permissions back on.**
+- **A restart after a hard stop no longer turns full access back on.**
   The replacement agent is launched in the session's current permission mode
   instead of from the original flags, and the TUI says what the restart lost.
 

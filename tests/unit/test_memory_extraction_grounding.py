@@ -36,6 +36,9 @@ class _AgentBase:
             self._execute_tool(name, args)
         answer = self.answer
         self._after_process_query(user_input, answer)
+        # Extraction is queued, not run, so drain before returning — these
+        # tests assert on what it stored, and the store closes at teardown.
+        self.wait_for_memory_extraction(timeout=10)
         return {"result": answer}
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:

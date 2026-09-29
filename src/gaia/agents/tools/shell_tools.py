@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -29,6 +30,7 @@ from gaia.agents.tools.command_timeouts import (
     terminate_process_tree,
 )
 from gaia.agents.tools.file_edit import file_read_record
+from gaia.agents.tools.shell_session import ShellSession
 from gaia.tool_cancellation import tool_cancelled
 
 logger = logging.getLogger(__name__)
@@ -77,8 +79,19 @@ WAIT_PROBE_TIMEOUT = 30
 #: enough that Stop feels immediate, long enough to cost nothing over 30 minutes.
 CANCEL_POLL_SECONDS = 0.5
 
-# Security: WHITELIST approach - only allow explicitly safe commands
-# This is much safer than a blacklist which always misses dangerous commands
+# The no-prompt list: what a blanket pre-approval may run — not the set of
+# commands that exist.
+#
+# ``run_shell_command`` is confirmation-gated, so interactively every call is
+# shown to the user. A command that is not on this list is not refused; it is
+# shown the same way and runs if approved (``TIER_CONFIRM``). Membership buys
+# one thing: running under ``GAIA_AUTO_APPROVE_TOOLS`` or
+# ``auto_approve_gated_tools``, which refuse everything else. An allowlist used
+# as a refusal list makes the agent unable to do ordinary work its user is
+# sitting right there to approve.
+#
+# So the bar for adding an entry is "safe to run unattended, every time, with
+# arguments nobody reviewed", which in practice still means read-only.
 ALLOWED_COMMANDS = {
     # File listing and navigation (READ-ONLY)
     "ls",
@@ -168,8 +181,34 @@ DANGEROUS_FIND_ACTIONS = {
     "-fls",
 }
 
+# How a blocked command is blocked. Mirrors the three tiers in
+# ``gaia.skills.binaries`` (ALLOW / CONFIRM / REFUSE), spelled locally so this
+# module keeps its light import.
+#
+# REFUSE is for escalations a single yes/no prompt cannot honestly describe:
+# base64-encoded PowerShell, a git option that runs a script behind a
+# ``status``-looking subcommand, a granted CLI's credential-printing action.
+# Asking about those trains a user to click yes on something the prompt text
+# misrepresents.
+#
+# CONFIRM is everything else that is not a read: `git commit`, `npm test`,
+# `rm file`. The user is shown the exact command and answers y / n / always.
+# These MUST NOT be refused here — refusing a command that would run on
+# approval is the dead end this tier exists to remove.
+#
+# Only an explicit TIER_CONFIRM reaches the prompt. A block with no tier is
+# refused, so a guard that forgets to say which tier it is fails closed.
+TIER_CONFIRM = "confirm"
+TIER_REFUSE = "refuse"
+
+
+def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
+    """True when *error* is a block the user may approve at the prompt."""
+    return error is not None and error.get("tier") == TIER_CONFIRM
+
+
 # The binaries a developer session needs and a read-only session must not have
-# (#3374). Active ONLY under bypass permissions; ALLOWED_COMMANDS above is
+# (#3374). Active ONLY under full access; ALLOWED_COMMANDS above is
 # untouched so the read-only tier keeps claiming exactly what it claims, and
 # #2768's sweep of it never has to reason about these entries.
 #
@@ -236,6 +275,7 @@ GIT_GLOBAL_FLAGS_WITH_VALUE = {
     "--work-tree",
     "--namespace",
 }
+
 
 # Standalone switches that change nothing about what gets run.
 GIT_GLOBAL_FLAGS_NO_VALUE = {
@@ -725,6 +765,26 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
     return normalize_binary(token) in granted
 
 
+#: Another name for a program the rules below already cover.
+_PROGRAM_ALIASES = {"pwsh": "powershell"}
+
+
+def _program_behind(token: str) -> Optional[str]:
+    """The bare program *token* names when it spells one another way, else None.
+
+    ``/usr/bin/git``, ``git.exe`` and ``pwsh`` run the programs the rules below
+    call ``git`` and ``powershell``, so they earn the same refusals. They never
+    earn the no-prompt pass: that list names bare programs only.
+    """
+    if token in ALLOWED_COMMANDS:
+        return None
+    name = re.split(r"[\\/]", token)[-1]
+    if name.endswith(".exe"):
+        name = name[: -len(".exe")]
+    name = _PROGRAM_ALIASES.get(name, name)
+    return name if name and name != token else None
+
+
 def _is_granted_segment(segment: list, granted: frozenset) -> bool:
     """True when *segment* runs a CLI this agent's skills granted."""
     if not granted:
@@ -912,7 +972,7 @@ def _operator_check_text(command: str) -> str:
 #: tokenisation — so extending the set leaves default behaviour untouched.
 _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 
-#: Characters shlex is asked to lex as punctuation in bypass mode. A newline is
+#: Characters shlex is asked to lex as punctuation under full access. A newline is
 #: one of them because the shell that ultimately runs the string treats it as a
 #: command separator, so the segment walk has to as well.
 _BYPASS_PUNCTUATION = ";&|<>\n"
@@ -1492,8 +1552,6 @@ def _run_step(
         exec_cmd = (step.shell_text or step.text) if os.name == "nt" else step.text
         cmd_base = segments[0][0].lower()
         if cmd_base in _UNIX_TO_WIN:
-            import shutil
-
             if not shutil.which(cmd_base):
                 win_cmd = _UNIX_TO_WIN[cmd_base]
                 logger.info(
@@ -1629,6 +1687,46 @@ class ShellToolsMixin:
         self.max_commands_per_minute = 10
         self.max_commands_per_10_seconds = 3
 
+        # Created on first use: an agent that never runs a command should not
+        # pay for tracking a session it never needed.
+        self._shell_session: Optional[ShellSession] = None
+
+    def _session_cwd_guard(self) -> Callable[[str], bool]:
+        """The predicate the session asks before checkpointing a ``cd``.
+
+        Without it, persistence would be a way around the path policy: ``cd`` to
+        a forbidden directory, then read a file by bare name, and the per-argument
+        check never sees a path to reject. Reuses ``_path_allowed`` -- the same
+        check ``working_directory`` and every step's own path already go
+        through, so a directory the session remembers and one a fresh call
+        would accept can never disagree.
+        """
+        return self._path_allowed
+
+    @property
+    def shell_session(self) -> ShellSession:
+        """This agent's shell session, created on first use."""
+        session = getattr(self, "_shell_session", None)
+        if session is None or session.closed:
+            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            self._shell_session = session
+        return session
+
+    def reset_shell_session(self) -> ShellSession:
+        """Replace the session with a clean one and return it."""
+        previous = getattr(self, "_shell_session", None)
+        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        if previous is not None:
+            previous.close()
+        return self._shell_session
+
+    def close_shell_session(self) -> None:
+        """Tear the session down at task end. Safe to call more than once."""
+        session = getattr(self, "_shell_session", None)
+        if session is not None:
+            session.close()
+            self._shell_session = None
+
     def _validate_shell_command(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its steps.
 
@@ -1658,10 +1756,11 @@ class ShellToolsMixin:
             directory, path traversal) stay with the caller, so a command this
             clears may still be refused later; one it rejects never runs.
         """
-        bypass = self.bypass_gates_active()
+        bypass = self.full_access_active()
         steps, error = _parse_line(command, bypass_gates=bypass)
         if error is not None:
-            return error, []
+            # A shape the runner cannot execute is never approvable.
+            return {"tier": TIER_REFUSE, **error}, []
 
         granted = skill_granted_binaries(self)
 
@@ -1698,23 +1797,26 @@ class ShellToolsMixin:
                     bypass_gates=bypass,
                 )
                 if error:
-                    return error, []
+                    # Steps travel with the block: a TIER_CONFIRM one still has
+                    # to run once approved, and it can only run what was parsed.
+                    return error, steps
 
         return None, steps
 
-    def bypass_gates_active(self) -> bool:
-        """Whether this session is running under bypass permissions (#3373).
+    def full_access_active(self) -> bool:
+        """Whether this session is running under full access (#3373).
 
         One source of truth, read live: the session's output handler carries
-        ``bypass_permissions``, set only by the sidecar's ``PermissionState``
-        from ``--bypass-permissions`` or the TUI's ``/bypass``. Every gate reads
+        ``full_access``, set only by the sidecar's ``PermissionState``
+        from ``--full-access`` or the TUI's ``/full-access``. Every gate reads
         this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
         executor — so they cannot hold different opinions about whether a
         command is legal.
 
-        Read live rather than resolved once because bypass is toggleable
-        mid-session over the control channel; caching it would leave `/bypass
-        off` half-applied. Each ``run_shell_command`` reads it once and threads
+        Read live rather than resolved once because full access is toggleable
+        mid-session over the control channel; caching it would leave
+        `/full-access off` half-applied. Each ``run_shell_command`` reads it
+        once and threads
         that value through its own pre-flight and execution, so a toggle landing
         mid-call cannot split the two.
 
@@ -1722,27 +1824,25 @@ class ShellToolsMixin:
         HTTP transport, a library embedding — which is what keeps the shipped
         default byte-identical.
         """
-        return bool(
-            getattr(getattr(self, "console", None), "bypass_permissions", False)
-        )
+        return bool(getattr(getattr(self, "console", None), "full_access", False))
 
     def policy_refusal_for_call(
         self, tool_name: str, tool_args: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """The refusal this call has already earned, before anyone is asked.
 
-        Read by ``Agent._policy_refusal``. A command the guardrails will refuse
-        must never raise a confirmation prompt: asking someone to approve
-        ``gh auth token`` when the answer is already no trains them to click
-        through, and frames a blocked action as merely risky. Refuse it first
-        and say why.
+        Read by ``Agent._policy_refusal``, which runs *before* the confirmation
+        prompt. ``TIER_REFUSE`` always stops here: an escalation a yes/no cannot
+        honestly describe (``gh auth token``, base64 PowerShell, ``git -c``
+        behind ``status``), or a shape the runner cannot execute at all.
 
-        The mirror of that rule is what makes writes work: a command that WOULD
-        run on approval must not be refused here. ``_validate_shell_command``
-        returns None for a granted binary's confirmable write, so it falls
-        through to the prompt instead of dying in front of it.
+        ``TIER_CONFIRM`` (``git commit``, ``npm test``, ``rm notes.txt``) falls
+        through to the prompt: refusing a command that would run on approval is
+        the dead end this tier removes. The exception is a run where only a
+        blanket pre-approval would answer the prompt; see
+        :meth:`_approval_is_blanket_only`.
 
-        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
         if tool_name not in (_POLICY_GATED_SHELL_TOOL, _WAIT_TOOL):
@@ -1751,13 +1851,73 @@ class ShellToolsMixin:
         if not isinstance(command, str):
             return None
         error, _ = self._validate_shell_command(command)
-        if error is not None:
-            logger.info(
-                "Refusing %r before the confirmation prompt: %s",
-                command,
-                error.get("error"),
-            )
+        if error is None:
+            return None
+        if _reaches_the_prompt(error):
+            if not self._approval_is_blanket_only():
+                return None
+            error = self._blanket_approval_refusal(error)
+        logger.info(
+            "Refusing %r before the confirmation prompt: %s",
+            command,
+            error.get("error"),
+        )
         return error
+
+    def _approval_is_blanket_only(self) -> bool:
+        """True when no prompt a person answers stands behind this call.
+
+        ``GAIA_AUTO_APPROVE_TOOLS`` and ``auto_approve_gated_tools=True`` both
+        pre-approve for unattended runs. They were granted when commands outside
+        the no-prompt list could not be approved at all, so neither widens what
+        such a run executes. Only the console's ``full_access`` (the TUI's
+        ``/full-access``, on screen for the whole session) runs them unasked.
+        """
+        console = getattr(self, "console", None)
+        if getattr(console, "full_access", False) is True:
+            return False
+        if console is None:
+            return False
+        if getattr(console, "auto_approve_gated_tools", False):
+            return True
+        # Deferred: the console module imports the package root.
+        from gaia.agents.base import console as console_mod
+
+        return console_mod.auto_approve_env_enabled()
+
+    def _nothing_could_have_confirmed(self) -> bool:
+        """True when this call reached execution without anyone approving it.
+
+        The execution-path counterpart of :meth:`_approval_is_blanket_only`: it
+        also covers a host with no console, which the pre-flight leaves alone so
+        the confirmation gate can deny it itself (#2210). Reaching a direct tool
+        call on such a host means that gate was never consulted.
+        """
+        if getattr(self, "console", None) is None:
+            return True
+        return self._approval_is_blanket_only()
+
+    def _blanket_approval_refusal(self, error: Dict[str, Any]) -> Dict[str, Any]:
+        """A confirmable command's block, re-explained for an unasked run."""
+        if getattr(self, "console", None) is None:
+            why = (
+                "This run has no console, so nothing could show the confirmation "
+                "prompt this command needs."
+            )
+        else:
+            why = (
+                "This run approves prompts automatically (GAIA_AUTO_APPROVE_TOOLS "
+                "or auto_approve_gated_tools), which does not extend to commands "
+                "outside the no-prompt list."
+            )
+        return {
+            **error,
+            "tier": TIER_REFUSE,
+            "hint": (
+                f"{why} Run it interactively to approve it, or turn on full "
+                "access in the TUI."
+            ),
+        }
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -1793,9 +1953,9 @@ class ShellToolsMixin:
             # anything else would skip the modal without enforcing the policy.
             return False
 
-        bypass = self.bypass_gates_active()
+        bypass = self.full_access_active()
         if bypass:
-            # Every gated tool is pre-approved in bypass mode; saying so here
+            # Every gated tool is pre-approved under full access; saying so here
             # keeps this answer aligned with the console's, rather than leaving
             # two predicates to disagree about whether the call was consented to.
             return True
@@ -2200,6 +2360,16 @@ class ShellToolsMixin:
         if bypass_gates:
             return ShellToolsMixin._validate_bypass_command(cmd_base)
 
+        program = _program_behind(cmd_base)
+        if program is not None:
+            # A refusal follows the program, not its spelling; what it would
+            # merely ask about still asks, as the unlisted spelling below.
+            behind = ShellToolsMixin._validate_command(
+                program, [program, *cmd_parts[1:]], command
+            )
+            if behind is not None and not _reaches_the_prompt(behind):
+                return behind
+
         # Git's global options sit before the subcommand, so every check below
         # has to read the call with them stepped over. The options that hand git
         # arbitrary code are refused here rather than stepped over.
@@ -2208,6 +2378,7 @@ class ShellToolsMixin:
             if resolve_error is not None:
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": resolve_error,
                     "has_errors": True,
                 }
@@ -2222,6 +2393,7 @@ class ShellToolsMixin:
                 if _is_file_write_flag(part):
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
                         "error": (
                             f"git '{part}' writes to a file, which is not allowed "
                             "under the read-only command policy."
@@ -2231,7 +2403,8 @@ class ShellToolsMixin:
                     }
 
         # Skill-granted CLIs are gated by their own policy table instead of
-        # ALLOWED_COMMANDS; anything ungranted is still refused.
+        # ALLOWED_COMMANDS; an ungranted one that only lacks the grant is
+        # confirmable, and everything else here is refused outright.
         # Imported here — gaia.skills pulls in the connector stack.
         from gaia.skills.binaries import (
             BINARY_POLICIES,
@@ -2247,10 +2420,18 @@ class ShellToolsMixin:
         policy = BINARY_POLICIES.get(binary)
         if policy is not None:
             granted = binary in granted_binaries
-            classify = classify_invocation if granted else classify_ungranted_invocation
-            decision = classify(policy, policy_parts)
+            # Classified against the GRANTED policy as well, whoever is asking:
+            # a refusal that survives a grant is refused on what the invocation
+            # does, and no yes/no prompt can honestly describe it.
+            granted_decision = classify_invocation(policy, policy_parts)
+            decision = (
+                granted_decision
+                if granted
+                else classify_ungranted_invocation(policy, policy_parts)
+            )
             if decision.outcome != REFUSE:
                 return None
+            tier = TIER_REFUSE
             if granted:
                 message = decision.message
                 hint = (
@@ -2259,9 +2440,17 @@ class ShellToolsMixin:
                     "Use an allowed command, or tell the user what you would "
                     "have run and why it is blocked."
                 )
+            elif shutil.which(policy.binary) is None:
+                # Not installed is not "load the skill": reloading cannot fix it.
+                message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                hint = "Do not retry this command or reload the skill."
             else:
                 # Name the skill: "a skill that declares it" left models no route.
                 message = f"{decision.message} {_grant_route(binary, skill_manager)}"
+                # Only the missing grant is in the way when the same invocation
+                # would run with one — that is a question the user can answer.
+                if granted_decision.outcome != REFUSE:
+                    tier = TIER_CONFIRM
                 hint = (
                     f"{policy.summary} To go beyond that, load a skill "
                     f"declaring 'shell:execute:{binary}' — the grant is what "
@@ -2270,6 +2459,7 @@ class ShellToolsMixin:
                 )
             return {
                 "status": "error",
+                "tier": tier,
                 "error": message,
                 "has_errors": True,
                 "hint": hint,
@@ -2281,6 +2471,7 @@ class ShellToolsMixin:
                 if _is_file_write_flag(part):
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
                         "error": (
                             f"wmic '{part}' writes to a file, which is not allowed "
                             "under the read-only command policy."
@@ -2294,6 +2485,7 @@ class ShellToolsMixin:
             if cmd_words & dangerous_wmic_ops:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only wmic queries are allowed (get, list). Modifying operations (call, create, delete, set) are blocked.",
                     "has_errors": True,
                     "hint": "Use 'wmic <alias> get <properties>' for safe queries",
@@ -2304,6 +2496,7 @@ class ShellToolsMixin:
             if any(_is_blocked_ps_flag(part) for part in cmd_parts[1:]):
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
                     "has_errors": True,
                     "hint": "Use -Command to pass a readable cmdlet string",
@@ -2321,6 +2514,7 @@ class ShellToolsMixin:
                 if name not in _SAFE_PS_LEADING_SWITCHES:
                     return {
                         "status": "error",
+                        "tier": TIER_REFUSE,
                         "error": f"PowerShell switch '{part}' has not been reviewed and is not allowed.",
                         "has_errors": True,
                         "hint": "Use -Command with plain read-only cmdlets.",
@@ -2330,6 +2524,7 @@ class ShellToolsMixin:
             if not ps_cmd:
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": "PowerShell requires an explicit read-only command.",
                     "has_errors": True,
                 }
@@ -2338,6 +2533,7 @@ class ShellToolsMixin:
             if escape is not None:
                 return {
                     "status": "error",
+                    "tier": TIER_REFUSE,
                     "error": (
                         f"PowerShell {escape} is not allowed: it runs code the "
                         "read-only cmdlet allowlist cannot inspect."
@@ -2356,6 +2552,7 @@ class ShellToolsMixin:
             if any(pat in ps_cmd for pat in DANGEROUS_PS_PATTERNS):
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "Only read-only PowerShell cmdlets are allowed (Get-*, Select-Object, Format-*, Where-Object, etc.).",
                     "has_errors": True,
                     "hint": "Use Get-* cmdlets for safe queries",
@@ -2371,6 +2568,8 @@ class ShellToolsMixin:
                 if not head or not head[1].startswith(SAFE_PS_CMDLET_PREFIXES):
                     return {
                         "status": "error",
+                        # A segment that is not a cmdlet at all runs a file.
+                        "tier": TIER_CONFIRM if head else TIER_REFUSE,
                         "error": "Each PowerShell pipeline command must be a read-only cmdlet.",
                         "has_errors": True,
                     }
@@ -2381,6 +2580,7 @@ class ShellToolsMixin:
                 ):
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": f"PowerShell cmdlet '{cmdlet}' is not allowed. Only read-only cmdlets are permitted.",
                         "has_errors": True,
                         "hint": "Allowed: Get-*, Select-Object, Format-List, Format-Table, Where-Object, Sort-Object",
@@ -2393,6 +2593,7 @@ class ShellToolsMixin:
                 if part.lower() in DANGEROUS_FIND_ACTIONS:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": (
                             f"find action '{part}' is not allowed: it can run "
                             "arbitrary commands, delete, or write files, "
@@ -2425,6 +2626,7 @@ class ShellToolsMixin:
                 if is_output:
                     return {
                         "status": "error",
+                        "tier": TIER_CONFIRM,
                         "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
                         "has_errors": True,
                         "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
@@ -2457,6 +2659,7 @@ class ShellToolsMixin:
             if len(operands) >= 2:
                 return {
                     "status": "error",
+                    "tier": TIER_CONFIRM,
                     "error": "uniq with an output file is not allowed: it writes to disk, violating the read-only command policy.",
                     "has_errors": True,
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
@@ -2512,9 +2715,13 @@ class ShellToolsMixin:
                 }
             return {
                 "status": "error",
+                "tier": TIER_CONFIRM,
                 "error": f"Command '{cmd_base}' is not in the allowed list for security reasons",
                 "has_errors": True,
-                "hint": "Only read-only, informational commands are allowed",
+                "hint": (
+                    "Commands outside the no-prompt list run once the user "
+                    "approves them; they are not refused."
+                ),
                 "examples": "ls, cat, grep, find, systeminfo, powershell -Command 'Get-WmiObject ...'",
             }
 
@@ -2522,34 +2729,52 @@ class ShellToolsMixin:
 
     @staticmethod
     def _validate_bypass_command(cmd_base: str) -> Optional[Dict[str, Any]]:
-        """The whole binary policy under bypass permissions.
+        """The whole binary policy under full access.
 
         Membership in ``ALLOWED_COMMANDS | DEVELOPER_COMMANDS`` and nothing
         else: the read-only sub-guards (git subcommands, PowerShell cmdlets,
         ``find -exec``, ``sort -o``, ``uniq`` output) and the binary policies'
         own refusals all encode "this binary may not write", which is precisely
-        the assumption bypass mode drops.
+        the assumption full access drops.
 
         Still a set, not an open door — ``rm`` and anything unrecognised are
         refused, and every segment lands in the audit record either way.
         """
         from gaia.skills.binaries import normalize_binary
 
+        # A keyword is not a binary that happens to be missing from the set —
+        # it cannot run in any mode, so it is named the same way here.
+        if cmd_base in SHELL_KEYWORDS:
+            return {
+                "status": "error",
+                "tier": TIER_REFUSE,
+                "error": (
+                    f"'{cmd_base}' is shell control flow, and commands run "
+                    "directly rather than through a shell, so it cannot run."
+                ),
+                "has_errors": True,
+                "hint": (
+                    "Use run_python for a loop or a condition, or issue the "
+                    "commands one per call and decide between them yourself."
+                ),
+            }
+
         candidates = {cmd_base, normalize_binary(cmd_base)}
         if candidates & (ALLOWED_COMMANDS | DEVELOPER_COMMANDS):
             return None
         return {
             "status": "error",
+            "tier": TIER_REFUSE,
             "error": (
                 f"Command '{cmd_base}' is not in the developer command set, "
-                "even with bypass permissions active."
+                "even with full access active."
             ),
             "has_errors": True,
             "hint": (
-                "Bypass permissions swap the read-only allowlist for a "
-                "developer set (python, python3, pytest, node, npm, make, "
-                "cmake, go, cargo, gh, git, sed, awk, curl, sleep, timeout, "
-                "export, cp, mv). 'rm' is deliberately excluded."
+                "Full access swaps the read-only allowlist for a developer set "
+                "(python, python3, pytest, node, npm, make, cmake, go, cargo, "
+                "gh, git, sed, awk, curl, sleep, timeout, export, cp, mv). "
+                "'rm' is deliberately excluded."
             ),
         }
 
@@ -2609,7 +2834,7 @@ class ShellToolsMixin:
                 the limit carries 'timed_out'.
             """
             try:
-                bypass = self.bypass_gates_active()
+                bypass = self.full_access_active()
                 try:
                     timeout, timeout_class = resolve_timeout(command, timeout)
                 except ValueError as exc:
@@ -2668,16 +2893,28 @@ class ShellToolsMixin:
                         }
 
                     cwd = str(Path(working_directory).resolve())
+                    session_scoped = False
                 else:
-                    cwd = str(Path.cwd())
+                    # An explicit working_directory is a one-shot override that
+                    # never touches the session; with none, resume where the
+                    # last call's cd left off.
+                    cwd = self.shell_session.cwd
+                    session_scoped = True
 
                 # Operators, syntax, and the per-command whitelist, for every
                 # segment of every pipeline on the line. Shared with the
                 # pre-flight that runs before the confirmation prompt, so a
                 # command refused there is refused here for the same reason.
+                #
+                # A CONFIRM-tier command has already been through
+                # ``Agent._execute_tool``'s gate, so it runs here unless the
+                # only approval was a blanket pre-approval.
+                unconfirmed = self._nothing_could_have_confirmed()
                 error, steps = self._validate_shell_command(command)
-                if error:
+                if error and not _reaches_the_prompt(error):
                     return error
+                if error and unconfirmed:
+                    return self._blanket_approval_refusal(error)
 
                 granted = skill_granted_binaries(self)
 
@@ -2735,8 +2972,9 @@ class ShellToolsMixin:
                 last_code = 0
                 unhandled_failure = False
                 spawned = False
+                ran_cwd = cwd
 
-                for step, step_cwd in zip(steps, step_cwds):
+                for index, (step, step_cwd) in enumerate(zip(steps, step_cwds)):
                     if not _connector_runs(step.connector, last_code):
                         continue
                     # `||` is the line saying it expects the failure before it;
@@ -2749,6 +2987,12 @@ class ShellToolsMixin:
                         # already applied to the steps that follow it.
                         last_code = 0
                         ran.append({"command": step.text, "return_code": 0})
+                        # Only a cd that actually ran moves the session.
+                        ran_cwd = (
+                            step_cwds[index + 1]
+                            if index + 1 < len(step_cwds)
+                            else walk_cwd
+                        )
                         continue
                     try:
                         result = _run_step(
@@ -2854,6 +3098,15 @@ class ShellToolsMixin:
                                 reads.note(viewed)
 
                 duration = time.monotonic() - start_time
+
+                # Checkpoint where the cd's that actually ran left off, so the
+                # NEXT separate call starts there. The pre-flight walk applies
+                # every cd on the line unconditionally, so it is not the answer
+                # here: a cd that `&&`/`||` skipped, or that a timeout cut the
+                # line before, never happened and must not move the session.
+                # A one-shot working_directory never touches it either way.
+                if session_scoped:
+                    self.shell_session.set_cwd(ran_cwd)
 
                 # One line is one model step, so it costs one slot however many
                 # commands it chains. Skipped under bypass, where the limit is
@@ -3105,4 +3358,39 @@ class ShellToolsMixin:
                     f"happen; tell the user which. A single wait is capped at "
                     f"{WAIT_MAX_TIMEOUT}s."
                 ),
+            }
+
+        @tool(
+            atomic=True,
+            display_label="Shell state",
+        )
+        def get_shell_state() -> Dict[str, Any]:
+            """Report the shell session's current working directory.
+
+            Shell commands share one session, so a `cd` from an earlier command
+            (when it was not a one-shot `working_directory` override) is still
+            in effect. Call this to read that directory instead of guessing it.
+            """
+            return {
+                "status": "success",
+                "cwd": self.shell_session.cwd,
+                "has_errors": False,
+            }
+
+        @tool(
+            atomic=True,
+            display_label="Reset shell",
+        )
+        def reset_shell_session() -> Dict[str, Any]:
+            """Return the shell session to the directory it started in.
+
+            Use this when the session is in the wrong directory, or as a clean
+            slate at the start of an unrelated task.
+            """
+            session = self.reset_shell_session()
+            return {
+                "status": "success",
+                "message": "Shell session reset.",
+                "cwd": session.cwd,
+                "has_errors": False,
             }
