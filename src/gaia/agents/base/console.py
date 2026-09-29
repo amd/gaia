@@ -1514,7 +1514,6 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             Rendered ANSI string, or empty string on failure
         """
         try:
-            import shutil
             from pathlib import Path
 
             from PIL import Image
