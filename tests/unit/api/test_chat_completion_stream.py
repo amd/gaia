@@ -37,8 +37,17 @@ _PAYLOAD = {
 }
 
 
-async def _run_asgi(disconnect_after_first_chunk):
-    """POST ``_PAYLOAD`` and return the response body as text."""
+async def _run_asgi(disconnect_after_first_chunk, cancel_after=None):
+    """POST ``_PAYLOAD`` and return the response body as text.
+
+    ``cancel_after``, when given, is a ``threading.Event`` the disconnect
+    waits on in addition to the first chunk. The first SSE byte can flush
+    before the agent thread has even reached its first step — a bare
+    ``first_chunk`` wait races that scheduling, not the agent's actual
+    progress — so a caller testing mid-flight cancellation passes the event
+    its mock sets, guaranteeing the disconnect lands after the call it means
+    to interrupt has genuinely started.
+    """
     body = json.dumps(_PAYLOAD).encode()
     pending = [{"type": "http.request", "body": body, "more_body": False}]
     first_chunk = asyncio.Event()
@@ -49,6 +58,8 @@ async def _run_asgi(disconnect_after_first_chunk):
             return pending.pop(0)
         if disconnect_after_first_chunk:
             await first_chunk.wait()
+            if cancel_after is not None:
+                await asyncio.to_thread(cancel_after.wait, 5)
             return {"type": "http.disconnect"}
         await asyncio.Event().wait()
 
@@ -99,7 +110,7 @@ def test_client_disconnect_cancels_the_agent(mocker):
     agent.chat.llm_client.chat = slow_chat
     mocker.patch.object(openai_server.registry, "get_agent", return_value=agent)
 
-    asyncio.run(_run_asgi(disconnect_after_first_chunk=True))
+    asyncio.run(_run_asgi(disconnect_after_first_chunk=True, cancel_after=llm_started))
 
     assert llm_started.wait(timeout=5)
     assert released_by_cancel.wait(timeout=5), "agent was never told to stop"
