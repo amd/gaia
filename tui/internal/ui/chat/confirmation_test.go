@@ -110,13 +110,10 @@ func TestDenyingClearsTheModalAndRecordsOutcome(t *testing.T) {
 	if cmd2 != nil {
 		t.Error("denying with no confirm_url must not attempt delivery")
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.Role != RoleStatus || !strings.Contains(last.Content, "denied") {
-		t.Errorf("the denial was not recorded: %+v", last)
+	if got := approvalOf(m); got != "denied" {
+		t.Errorf("the denial was not recorded on the step: %q", got)
 	}
-	if len(m.activity) == 0 {
-		t.Fatal("the activity panel must show the confirmation result")
-	}
+	// No tool_call preceded this confirmation, so it is a row of its own.
 	act := m.activity[len(m.activity)-1]
 	if act.Kind != "confirm" || act.Success == nil || *act.Success {
 		t.Errorf("activity item wrong: %+v", act)
@@ -168,9 +165,8 @@ func TestApprovingWithNoConfirmURLDoesNotClaimDelivery(t *testing.T) {
 	if len(c.calls) != 0 {
 		t.Errorf("Confirm() was called with no confirm_url on the event: %v", c.calls)
 	}
-	last := m.messages[len(m.messages)-1]
-	if strings.Contains(last.Content, "approved,") == false || strings.Contains(last.Content, "nothing was actually sent") == false {
-		t.Errorf("an unfulfillable approval must say so, not claim success: %q", last.Content)
+	if got := approvalOf(m); !strings.Contains(got, "not sent") {
+		t.Errorf("an unfulfillable approval must say so, not claim success: %q", got)
 	}
 }
 
@@ -253,14 +249,8 @@ func TestTerminalEventClearsThePendingConfirmation(t *testing.T) {
 				t.Fatal("the confirmation outlived the turn it belonged to")
 			}
 			// The durable record survived even though the modal did not.
-			found := false
-			for _, msg := range m.messages {
-				if strings.Contains(msg.Content, "resolved: denied") {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("no durable resolution line in the transcript: %+v", m.messages)
+			if got := approvalOf(m); !strings.HasPrefix(got, "denied") {
+				t.Errorf("no durable outcome on the step: %q in %+v", got, m.messages)
 			}
 			// The composer takes text again.
 			updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
@@ -283,12 +273,17 @@ func TestTerminalEventDoesNotDoubleRecordTheOutcome(t *testing.T) {
 
 	count := 0
 	for _, msg := range m.messages {
-		if strings.Contains(msg.Content, "resolved:") {
-			count++
+		for _, item := range msg.Work {
+			if item.Approval != "" {
+				count++
+			}
+		}
+		if msg.Role == RoleStatus && strings.Contains(msg.Content, "denied") {
+			t.Errorf("the outcome was also written as a transcript line: %+v", msg)
 		}
 	}
 	if count != 1 {
-		t.Errorf("expected exactly one resolution line, got %d: %+v", count, m.messages)
+		t.Errorf("expected exactly one recorded outcome, got %d: %+v", count, m.messages)
 	}
 }
 
@@ -314,13 +309,12 @@ func TestConfirmationTimeoutDeniesAndClearsModal(t *testing.T) {
 	if m.confirmation != nil {
 		t.Error("the modal must clear once the timeout resolves it")
 	}
-	last := m.messages[len(m.messages)-1]
-	if !strings.Contains(last.Content, "timeout") {
-		t.Errorf("the timeout warning was not recorded: %q", last.Content)
+	if got := approvalOf(m); !strings.Contains(got, "no answer in") {
+		t.Errorf("the timeout was not recorded on the step: %q", got)
 	}
 }
 
-// The transcript line is the copy that SURVIVES: resolving clears the modal, so
+// The step's outcome is the copy that SURVIVES: resolving clears the modal, so
 // a frame later the only thing on screen saying why the call died is this.
 // It named 30s while a live prompt waited ten minutes, because it spelled the
 // duration by hand instead of reading the clock the prompt actually ran.
@@ -342,7 +336,7 @@ func TestTheRecordedTimeoutNamesTheClockThatActuallyRan(t *testing.T) {
 
 	updated2, _ := m.Update(msg)
 	m = updated2.(ChatModel)
-	last := m.messages[len(m.messages)-1].Content
+	last := approvalOf(m)
 	want := components.HumanTimeout(components.DeliverableConfirmationTimeout)
 	if !strings.Contains(last, want) {
 		t.Errorf("the record does not name the wait the user actually had: %q, want %q in it",
@@ -403,4 +397,23 @@ func TestCtrlCWhilePendingConfirmationCancelsTheTurn(t *testing.T) {
 	if m.streaming {
 		t.Error("the turn must be marked stopped once settlement is confirmed")
 	}
+}
+
+// approvalOf is the newest confirmation outcome recorded on any step, live or
+// already committed to the transcript.
+func approvalOf(m ChatModel) string {
+	for i := len(m.activity) - 1; i >= 0; i-- {
+		if a := m.activity[i].Approval; a != "" {
+			return a
+		}
+	}
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		work := m.messages[i].Work
+		for j := len(work) - 1; j >= 0; j-- {
+			if a := work[j].Approval; a != "" {
+				return a
+			}
+		}
+	}
+	return ""
 }

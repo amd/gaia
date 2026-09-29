@@ -11,9 +11,8 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
 
-// Opening the palette must upgrade capture to All-Motion — the transcript
-// already holds the mouse for the wheel, but hover needs motion reporting the
-// plain mode does not ask for.
+// Opening the palette must capture the mouse with All-Motion: hover needs motion
+// reporting, and the terminal holds the mouse until an overlay asks for it.
 func TestOpeningThePaletteUpgradesCaptureToAllMotion(t *testing.T) {
 	m, _ := newTestModel(t)
 	m = typeInto(t, m, "/")
@@ -28,11 +27,30 @@ func TestOpeningThePaletteUpgradesCaptureToAllMotion(t *testing.T) {
 	}
 }
 
-// Closing the overlay must step capture back DOWN rather than release it: the
-// transcript still wants the wheel, and All-Motion tracking is noticeably
-// chattier over SSH than Cell-Motion.
+// Closing the overlay hands the mouse straight back to the terminal: the
+// palette needed it, the user did not ask for it, and drag-select must work
+// again the moment the palette is gone.
+func TestClosingThePaletteReleasesTheMouse(t *testing.T) {
+	m, _ := newTestModel(t)
+	m = typeInto(t, m, "/")
+	if !m.mouseCaptureAllMotion {
+		t.Fatal("test setup: palette should have captured with All-Motion")
+	}
+	m, _ = press(t, m, tea.KeyEsc)
+	if m.palette.open {
+		t.Fatal("test setup: Esc should have closed the palette")
+	}
+	if m.mouseCaptured {
+		t.Error("closing the palette kept the mouse, so drag-select stays broken")
+	}
+}
+
+// With APP MOUSE on, closing an overlay steps capture back DOWN rather than
+// releasing it: the user still wants clicks, and All-Motion tracking is
+// noticeably chattier over SSH than Cell-Motion.
 func TestClosingThePaletteStepsCaptureBackDown(t *testing.T) {
 	m, _ := newTestModel(t)
+	m, _ = press(t, m, tea.KeyCtrlT)
 	m = typeInto(t, m, "/")
 	if !m.mouseCaptureAllMotion {
 		t.Fatal("test setup: palette should have upgraded capture to All-Motion")
@@ -43,21 +61,20 @@ func TestClosingThePaletteStepsCaptureBackDown(t *testing.T) {
 		t.Fatal("test setup: Esc should have closed the palette")
 	}
 	if !m.mouseCaptured {
-		t.Error("closing the palette killed the transcript's wheel scrolling")
+		t.Error("closing the palette dropped the mouse the user gave the app")
 	}
 	if m.mouseCaptureAllMotion {
 		t.Error("no overlay is open — capture should have stepped back down to Cell-Motion")
 	}
 }
 
-// SELECT MODE is a standing USER choice, and an overlay opening and closing
+// The default is a standing USER choice too, and an overlay opening and closing
 // around it must not silently fight it: the overlay still needs its clicks
 // while it is up, and the mouse must go straight back to the terminal after.
-func TestSelectModeSurvivesAnOverlayOpeningAndClosing(t *testing.T) {
+func TestTheDefaultSurvivesAnOverlayOpeningAndClosing(t *testing.T) {
 	m, _ := newTestModel(t)
-	m, _ = press(t, m, tea.KeyCtrlT)
-	if !m.mouseSelectMode || m.mouseCaptured {
-		t.Fatal("test setup: Ctrl+T should have handed the mouse to the terminal")
+	if m.appMouse || m.mouseCaptured {
+		t.Fatal("test setup: the terminal should own the mouse by default")
 	}
 
 	m = typeInto(t, m, "/")
@@ -69,8 +86,8 @@ func TestSelectModeSurvivesAnOverlayOpeningAndClosing(t *testing.T) {
 	if m.palette.open {
 		t.Fatal("test setup: Esc should have closed the palette")
 	}
-	if !m.mouseSelectMode {
-		t.Error("the palette closing turned off the user's own select mode")
+	if m.appMouse {
+		t.Error("the palette closing gave the app the mouse the user never asked for")
 	}
 	if m.mouseCaptured {
 		t.Error("the palette closing kept a capture the user had asked to give up")
@@ -108,7 +125,7 @@ func TestOpeningAndClosingAQuestionScopesTheMouseTheSameWay(t *testing.T) {
 	if m.mouseCaptureAllMotion {
 		t.Error("the question closing left hover tracking on with nothing to hover")
 	}
-	if !m.mouseCaptured {
-		t.Error("the question closing killed the transcript's wheel scrolling")
+	if m.mouseCaptured {
+		t.Error("the question closing kept the mouse, so drag-select stays broken")
 	}
 }

@@ -162,7 +162,14 @@ type ChatModel struct {
 	hubClient agents.HubAgentLister
 	messages  []Message
 	activity  []ActivityItem
-	streaming bool
+	// expandWork shows every work log in full — narration, stage lines and
+	// multi-row outcomes — instead of one row per step. Ctrl+O toggles it.
+	expandWork bool
+	// approvalAt is the m.activity index of the step the pending confirmation
+	// gates; its answer is written there. Only meaningful while that item's
+	// Approval is approvalWaiting.
+	approvalAt int
+	streaming  bool
 	// cancelPending is true from the moment Esc/Ctrl+C requests a cancel until
 	// doneMsg confirms the run's channel actually closed. It exists only to
 	// let the doneMsg handler distinguish "this settlement was a cancel" (so
@@ -178,6 +185,10 @@ type ChatModel struct {
 	// strings.Builder: Bubble Tea copies the model on every update, and a
 	// Builder panics the moment a copied non-zero one is written to again.
 	buffer string
+	// stashed is the last text stashNarration moved out of buffer, whole: the
+	// answer of last resort when a model answers, calls one more tool, and
+	// then ends with an empty `final`.
+	stashed string
 
 	// queued holds follow-ups typed while the agent was still working, sent one
 	// at a time as each turn settles (see Update's drain). A local model
@@ -290,14 +301,13 @@ type ChatModel struct {
 
 	// mouseCaptured is true while the APP holds the mouse, for either of the
 	// two independent reasons documented on overlayOpen (mousecapture.go):
-	// the transcript wants the wheel and clicked links, or an overlay is open
-	// and needs clicks — see selectmode.go.
+	// the user asked for it (appMouse), or an overlay is open and needs
+	// clicks — see selectmode.go.
 	mouseCaptured bool
-	// mouseSelectMode is true only while the USER has handed the mouse back to
-	// the terminal (Ctrl+T) for native drag-select — independent of
-	// mouseCaptured, which an overlay can still set. Zero value false is the
-	// default, so the wheel scrolls and links are clickable out of the box.
-	mouseSelectMode bool
+	// appMouse is true only while the USER has given the mouse to the app
+	// (Ctrl+T) for clickable links and double-click copy. Zero value false is
+	// the default, so drag-select works out of the box.
+	appMouse bool
 	// mouseCaptureAllMotion records which mouse-tracking mode is currently
 	// active (All-Motion for an open overlay's hover, Cell-Motion for plain
 	// wheel scrolling) so applyMouseCapture can tell "already captured, but
@@ -481,13 +491,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		viewport:     vp,
 		connected:    true,
 		followTail:   true,
-		// Optimistically reconciled: Init issues the matching escape sequence
-		// once, so applyMouseCapture has nothing left to do on the first
-		// Update. Recording it here instead of letting that Update discover it
-		// is what keeps every turn's command stream free of a one-off mouse
-		// command nobody is expecting.
-		mouseCaptured: true,
-		lastClickRow:  -1,
+		lastClickRow: -1,
 	}
 	// Reads the transport, never a saved preference: full access and Claude mode
 	// are off on a fresh launch unless THIS launch asked on the command line.
@@ -580,10 +584,6 @@ func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		textarea.Blink,
-		// The transcript owns the mouse from the first frame: the wheel is the
-		// only way to scroll an alt-screen app, which has no terminal
-		// scrollback behind it. Ctrl+T hands it back — see selectmode.go.
-		tea.EnableMouseCellMotion,
 		// Warms up capability gating (availableCommandSet) for a daemon-relay
 		// session, whose Supports answer is otherwise "unknown" until a query
 		// or /memory has already run negotiate once — see
@@ -944,9 +944,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.streaming = false
 		m.question = nil
-		m.confirmation = nil
+		m.resolveConfirmationOnTurnEnd()
+		m.commitWork()
 		m.flushBuffer()
-		m.activity = nil
 		// The channel closing is the settlement signal a cancel was waiting
 		// on (#2901) — settleTurn appends the confirmed "cancelled" line only
 		// now, once it is actually confirmed rather than merely requested.
@@ -980,12 +980,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.question = nil
 		m.confirmation = nil
 		m.err = msg.err
+		m.commitWork()
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
 			Content: sanitizeErrorText(msg.err.Error()),
 		})
 		m.drainPendingPreScan()
-		m.activity = nil
 		m.updateViewport()
 		return m, nil
 
@@ -1061,17 +1061,15 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Approved {
 			word = "approved"
 		}
-		if msg.err != nil {
-			m.messages = append(m.messages, Message{
-				Role:    RoleError,
-				Content: sanitizeErrorText(fmt.Sprintf("could not deliver the %s decision for '%s': %v", word, msg.Action, msg.err)),
-			})
-		} else {
-			m.messages = append(m.messages, Message{
-				Role:    RoleStatus,
-				Content: fmt.Sprintf("[!] %s decision for '%s' delivered", word, msg.Action),
-			})
+		// Delivered is the expected case and says nothing the step's
+		// "approved" does not; only a failure earns a line.
+		if msg.err == nil {
+			return m, nil
 		}
+		m.messages = append(m.messages, Message{
+			Role:    RoleError,
+			Content: sanitizeErrorText(fmt.Sprintf("could not deliver the %s decision for '%s': %v", word, msg.Action, msg.err)),
+		})
 		m.updateViewport()
 		return m, nil
 
@@ -1289,16 +1287,6 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEsc:
-		// Leave SELECT MODE first: while it is on the wheel does not scroll,
-		// so "never mind" most likely means "give me my scrolling back".
-		// Leaving a turn running is fine — Esc pressed again cancels it.
-		// Keyed on mouseSelectMode, not mouseCaptured: an overlay can also
-		// hold the mouse (for its own clicks), and Esc there means cancel the
-		// question/turn (below) or close the palette (handled earlier, in the
-		// m.palette.open branch).
-		if m.mouseSelectMode {
-			return m.toggleSelectMode()
-		}
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
 			return m.requestCancel()
 		}
@@ -1375,7 +1363,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.submit(query)
 
 	case tea.KeyCtrlT:
-		return m.toggleSelectMode()
+		return m.toggleAppMouse()
+
+	case tea.KeyCtrlO:
+		return m.toggleWorkDetail()
 
 	case tea.KeyCtrlY:
 		// Mouse reporting is on so the wheel can scroll, which is exactly what
@@ -1480,7 +1471,8 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // implements neither tears its connection down immediately below.
 func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.cancelPending = true
-	m.activity = nil
+	// What already ran stays on record; the live log starts over.
+	m.commitWork()
 	// The log just emptied; holding the height it reached would leave a block of
 	// blank rows under "Stopping at the next step".
 	m.logPeakRows = 0
@@ -1555,7 +1547,7 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	m.cancelPending = false
 	m.question = nil
 	m.confirmation = nil
-	m.activity = nil
+	m.commitWork()
 	abandoned := m.queued
 	m.queued = nil
 	content := "gave up waiting locally — the run may still be finishing on the server; " +
@@ -1787,6 +1779,7 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.activity = nil
 	m.logPeakRows = 0
 	m.buffer = ""
+	m.stashed = ""
 	// Asking a new question means you want to see its answer, wherever the
 	// scroll happened to be left.
 	m.followTail = true
@@ -1924,6 +1917,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 
 	case event.ToolStartEvent:
+		m.stashNarration()
 		m.activity = append(m.activity, ActivityItem{
 			Kind:    "tool",
 			Content: e.Tool,
@@ -1983,9 +1977,9 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 
 	case event.StatusEvent:
 		if e.Status == "complete" {
+			m.commitWork()
 			m.flushBuffer()
 			m.streaming = false
-			m.activity = nil
 			m.settleTurn()
 			m.updateViewport()
 			return m, nil
@@ -2002,6 +1996,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		}
 
 	case event.AnswerEvent:
+		m.commitWork()
 		m.flushBuffer()
 		duration := time.Since(m.queryStart)
 		content := StripVerificationScope(e.Content)
@@ -2020,7 +2015,6 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 			ToolsUsed: e.ToolsUsed,
 		})
 		m.streaming = false
-		m.activity = nil
 		m.totalSteps = e.Steps
 		m.settleTurn()
 		m.updateViewport()
@@ -2034,6 +2028,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.events)
 
 	case event.AgentErrorEvent:
+		m.commitWork()
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
 			Content: sanitizeErrorText(e.Content),
@@ -2045,6 +2040,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case event.ErrorEvent:
+		m.commitWork()
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
 			Content: sanitizeErrorText(e.Content),
@@ -2056,9 +2052,9 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case event.DoneEvent:
+		m.commitWork()
 		m.flushBuffer()
 		m.streaming = false
-		m.activity = nil
 		m.settleTurn()
 		m.updateViewport()
 		return m, nil
@@ -2120,11 +2116,6 @@ func (m *ChatModel) syncComposerHeight() {
 }
 
 func (m *ChatModel) resize() {
-	headerH := 1
-	statusH := 1
-	inputH := m.composerRows() + 2
-	padding := 2
-
 	vpWidth := m.width
 	if vpWidth < 10 {
 		vpWidth = 10
@@ -2146,7 +2137,7 @@ func (m *ChatModel) resize() {
 	if m.confirmation != nil {
 		m.confirmation.SetWidth(m.cardWidthFor(vpWidth))
 	}
-	m.syncViewportHeight(headerH + statusH + inputH + padding)
+	m.syncViewportHeight(m.chatChromeRows())
 
 	// Markdown wraps to the same measure the answer is laid out at, or glamour
 	// hard-wraps at a different column than the panel and the block develops a
@@ -2198,8 +2189,17 @@ func (m *ChatModel) markDirty() {
 // pinned confirmation: header, status bar, the composer with its border, and
 // the two dividers.
 func (m ChatModel) chatChromeRows() int {
-	const headerH, statusH, padding = 1, 1, 2
-	return headerH + statusH + m.composerRows() + 2 + padding
+	// Exactly the rows View draws around the transcript: header, the two
+	// dividers, the composer and the status bar, plus the full access banner
+	// when it is up. A frame shorter than the window leaves the terminal's own
+	// bottom rows unpainted — after a resize reflow, that is where a stale
+	// copy of the old status bar survived.
+	const headerH, dividersH, statusH = 1, 2, 1
+	rows := headerH + dividersH + statusH + m.composerRows()
+	if banner := m.renderFullAccessBanner(); banner != "" {
+		rows += lipgloss.Height(banner)
+	}
+	return rows
 }
 
 // syncViewportHeight splits the rows left after *chrome* between the transcript
@@ -2450,7 +2450,8 @@ func (m ChatModel) wrapProse(s string) string {
 // separate events rather than one aside.
 func spacedAfter(role MessageRole) bool {
 	switch role {
-	case RoleUser, RoleAssistant, RoleCard, RoleError:
+	// RoleWork too: the answer under it must not read as one more step.
+	case RoleUser, RoleAssistant, RoleCard, RoleError, RoleWork:
 		return true
 	}
 	return false
@@ -2536,6 +2537,10 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 	case RoleAssistant:
 		content := msg.Content
 		if msg.Rendered != "" {
+			if wrap := m.answerWidth() - 2; msg.renderedWrap != wrap {
+				msg.Rendered = components.RenderMarkdown(msg.Content)
+				msg.renderedWrap = wrap
+			}
 			content = msg.Rendered
 		}
 		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
@@ -2558,13 +2563,8 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		}
 		return components.Panel(components.PanelError, "error", msg.Content, panelWidth)
 
-	case RoleToolError:
-		// Same wrap-don't-clip reasoning as RoleStatus, in the failure colour:
-		// visible enough to read, quiet enough that a retried call does not
-		// look like the turn ended badly.
-		// Continuation lines hang under the prefix so a multi-line remedy reads
-		// as one aside rather than as text that escaped it.
-		return failStyle.Render(m.wrapForPane("  [x] " + strings.ReplaceAll(msg.Content, "\n", "\n      ")))
+	case RoleWork:
+		return m.renderWork(msg)
 
 	case RoleStatus:
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
@@ -2715,7 +2715,7 @@ func (m *ChatModel) liveRegionView() string {
 func (m ChatModel) renderLiveRegion() string {
 	elapsed := time.Since(m.queryStart)
 
-	log := collapseActivity(m.activity)
+	log := collapseActivity(m.visibleWork(m.activity))
 	if len(log) > workLogLines {
 		log = log[len(log)-workLogLines:]
 	}
@@ -2723,7 +2723,8 @@ func (m ChatModel) renderLiveRegion() string {
 	// The live slot is the last still-open action. A finished one cannot be it:
 	// the agent has moved on to something this client has no event for yet.
 	live := -1
-	if n := len(log); n > 0 && !log[n-1].Done {
+	// A denied step never runs, whether or not its sidecar says so.
+	if n := len(log); n > 0 && !log[n-1].Done && !strings.HasPrefix(log[n-1].Approval, "denied") {
 		live = n - 1
 	}
 
@@ -2846,8 +2847,12 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 		}
 		if n := len(out); n > 0 {
 			last := &out[n-1]
-			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) {
+			// Different confirmation answers never fold: "x2 · approved" over a
+			// denied second call would misstate what the user said.
+			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
+				last.Approval == item.Approval {
 				last.Repeat++
+				last.Content = mergeTargets(last.Content, item.Content)
 				last.Done = item.Done
 				last.Success = item.Success
 				// The newest call's outcome is the one worth showing; an older
@@ -2864,6 +2869,28 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 		out = append(out, item)
 	}
 	return out
+}
+
+// mergeTargets names every distinct thing a folded run of calls touched.
+// "Editing file: dates.py x2" for an edit to dates.py and one to
+// test_dates.py claims the wrong file was edited twice; the row has to say
+// "Editing file: dates.py, test_dates.py x2". Narration with no shared
+// "label: target" shape keeps the newest call's words.
+func mergeTargets(folded, next string) string {
+	if folded == next {
+		return folded
+	}
+	label, targets, ok := strings.Cut(folded, ": ")
+	nextLabel, target, nextOK := strings.Cut(next, ": ")
+	if !ok || !nextOK || label != nextLabel {
+		return next
+	}
+	for _, t := range strings.Split(targets, ", ") {
+		if t == target {
+			return folded
+		}
+	}
+	return folded + ", " + target
 }
 
 // activityKey is what "the same activity twice" means: for a tool, the tool
@@ -2917,8 +2944,15 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	if item.Repeat > 0 {
 		suffix = fmt.Sprintf(" x%d", item.Repeat+1)
 	}
+	if item.Approval != "" {
+		suffix += " · " + clean(item.Approval)
+	}
 
+	// Folded, a step is one row: what it did. Its wrapped tail is detail.
 	headRows := logHeadRows
+	if !m.expandWork {
+		headRows = 1
+	}
 	if maxRows > 0 && maxRows < headRows {
 		headRows = maxRows
 	}
@@ -2960,13 +2994,29 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		lines = append(lines, "    "+style.Render(row))
 	}
 
+	detail := clean(item.Detail)
+	// A sidecar's preview can report the failure its data did not flag; the
+	// word is the signal (markFailed puts it there for every failure we see).
+	failed := (item.Success != nil && !*item.Success) ||
+		strings.HasPrefix(strings.ToLower(detail), "failed")
 	detailRows := logDetailRows
+	if !m.expandWork {
+		switch {
+		case strings.HasPrefix(item.Approval, "denied"):
+			// The approval already says why it failed.
+			detail = ""
+		case !failed:
+			// A success earns one row, and only for what it found. A failure
+			// keeps its rows: its tail is the remedy.
+			detail, detailRows = conciseDetail(detail), 1
+		}
+	}
 	if maxRows > 0 {
 		detailRows = maxRows - len(lines) // the call outranks its outcome
 	}
-	if detail := clean(item.Detail); detail != "" && detailRows > 0 {
+	if detail != "" && detailRows > 0 {
 		dstyle := activityStyle
-		if item.Success != nil && !*item.Success {
+		if failed {
 			dstyle = failStyle
 		}
 		drows := wrapLog(detail, "", width-2, detailRows)
@@ -3187,9 +3237,6 @@ func (m ChatModel) contentHeaderRows() int {
 	if m.renderFullAccessBanner() != "" {
 		n++
 	}
-	if m.renderSelectBanner() != "" {
-		n++
-	}
 	n++ // divider immediately above the viewport
 	return n
 }
@@ -3232,28 +3279,25 @@ func (m ChatModel) View() string {
 
 	// Built as ranked items and thinned by dropping whole ones, so a narrow
 	// terminal loses the wheel hint and keeps the way out — see hints.go.
-	hint := fitHints(m.statusHints(), m.hintBudget())
-
+	//
 	// Steps is deliberately not passed: the bar renders it only when the hint is
 	// empty, which it never is here, and the step count already rides the hint
 	// under --dev. Passing it kept a second renderer for one number alive, one
 	// that would print it in user mode the day the hint did come back empty.
-	statusBar := components.RenderStatusBar(components.StatusBarState{
+	barState := components.StatusBarState{
 		AgentName:        m.agentIdentity(),
 		Connected:        m.connected,
 		Streaming:        m.streaming,
 		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
-		Hint:             hint,
-	}, m.width)
+	}
+	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
+	statusBar := components.RenderStatusBar(barState, m.width)
 
 	// The full access banner sits OUTSIDE the viewport, directly under the header,
 	// so it is in every frame and cannot be scrolled away. When full access is off
 	// it renders to "" and JoinVertical drops it, costing no row.
 	rows := []string{header}
 	if banner := m.renderFullAccessBanner(); banner != "" {
-		rows = append(rows, banner)
-	}
-	if banner := m.renderSelectBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
 	rows = append(rows, divider, vpView)

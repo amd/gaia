@@ -33,12 +33,26 @@ import (
 // square thumbnail is free to SLICE the frame to fill — macOS qlmanage does
 // exactly that — and the result looks like a TUI that cannot draw its own
 // header and status bar, rather than a converter that cropped them off.
+//
+// The cell is 0.6em wide — the advance of every common monospace face — so the
+// textLength fit is close to 1:1 rather than squashing glyphs, and 1.45em tall,
+// so rows of prose have air between them instead of touching.
 const (
-	svgCellW    = 8.4
-	svgCellH    = 17.0
-	svgFontSize = 14.0
-	svgPad      = 10.0
+	svgFontSize = 15.0
+	svgCellW    = 0.6 * svgFontSize
+	svgCellH    = 22.0
+	svgPad      = 12.0
 )
+
+// svgFontFamily names a readable monospace on each platform before the generic
+// fallback. `ui-monospace` resolves only in Safari; without the names after it,
+// every other viewer draws whatever its `monospace` happens to mean.
+const svgFontFamily = `ui-monospace,'Cascadia Mono','Cascadia Code','SF Mono',SFMono-Regular,Menlo,` +
+	`'JetBrains Mono',Consolas,'DejaVu Sans Mono','Liberation Mono',monospace`
+
+// svgBaseline is where a row's text sits: the em box centred in the cell, with
+// the baseline at the usual 80% of the em.
+const svgBaseline = (svgCellH-svgFontSize)/2 + 0.8*svgFontSize
 
 // The 16 ANSI colours, in the palette most terminals ship.
 //
@@ -114,8 +128,8 @@ func ScreenSVG(frame string, cols, rows int) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" `+
-		`viewBox="0 0 %.0f %.0f" preserveAspectRatio="xMidYMid meet" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" `+
-		`font-size="%.1f">`, w, h, w, h, svgFontSize)
+		`viewBox="0 0 %.0f %.0f" preserveAspectRatio="xMidYMid meet" font-family="%s" `+
+		`font-size="%.1f">`, w, h, w, h, svgFontFamily, svgFontSize)
 	fmt.Fprintf(&b, `<rect width="%.0f" height="%.0f" fill="%s"/>`, w, h, svgDefaultBG)
 	writeFrameBody(&b, frame)
 	b.WriteString("</svg>")
@@ -367,7 +381,7 @@ func writeFrameBody(b *strings.Builder, frame string) {
 			}
 			fg, _ := r.state.colors()
 			fmt.Fprintf(b, `<text x="%.2f" y="%.2f" textLength="%.2f" lengthAdjust="spacingAndGlyphs" fill="%s"`,
-				svgPad+float64(r.col)*svgCellW, y+svgFontSize*0.8, float64(r.width)*svgCellW, fg)
+				svgPad+float64(r.col)*svgCellW, y+svgBaseline, float64(r.width)*svgCellW, fg)
 			if r.state.bold {
 				b.WriteString(` font-weight="bold"`)
 			}

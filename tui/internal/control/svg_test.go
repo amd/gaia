@@ -145,3 +145,30 @@ func TestSVGPinsItsAspectRatio(t *testing.T) {
 		}
 	}
 }
+
+// A capture is read by a person, so it has to be legible in any viewer: a named
+// monospace for each platform ahead of the generic one, rows with air between
+// them, and a cell as wide as a monospace glyph so the grid fit does not squash
+// the text. Both the still and the replay draw with the same face.
+func TestCapturesAreReadable(t *testing.T) {
+	if ratio := svgCellH / svgFontSize; ratio < 1.35 {
+		t.Errorf("line height is %.2fem; rows of text touch below 1.35em", ratio)
+	}
+	if svgFontSize < 15 {
+		t.Errorf("font size %.0fpx is below a comfortable reading size", svgFontSize)
+	}
+	if svgCellW != 0.6*svgFontSize {
+		t.Errorf("cell width %.2f is not a monospace advance (0.6em = %.2f)", svgCellW, 0.6*svgFontSize)
+	}
+	for _, doc := range []string{
+		ScreenSVG("hello", 10, 1),
+		RecordingSVG([]Frame{{Seq: 1, Screen: "hello"}}, 10, 1),
+	} {
+		wellFormed(t, doc)
+		for _, face := range []string{"'Cascadia Mono'", "Menlo", "'DejaVu Sans Mono'", "monospace"} {
+			if !strings.Contains(doc, face) {
+				t.Errorf("the font stack lost %s:\n%.300s", face, doc)
+			}
+		}
+	}
+}

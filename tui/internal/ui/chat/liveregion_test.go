@@ -70,13 +70,22 @@ func TestLiveRegionNarratesToolsInPlainLanguage(t *testing.T) {
 	for _, want := range []string{
 		"Checking your installed skills",  // list_skills, in words
 		"18 skills",                       // its outcome, one line
-		"21ms",                            // ...with how long it took
 		"Loading the github-triage skill", // the argument that matters
 		"experimental tier",               // the outcome worth knowing
-		"1.5s",                            // seconds once it passes a second
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("live region never said %q:\n%s", want, out)
+		}
+	}
+	// How long a step took is telemetry: folded away, there on Ctrl+O.
+	if strings.Contains(out, "21ms") {
+		t.Errorf("the folded log carries latency:\n%s", out)
+	}
+	m.expandWork = true
+	expanded := ansi.Strip(m.renderLiveRegion())
+	for _, want := range []string{"21ms", "1.5s"} {
+		if !strings.Contains(expanded, want) {
+			t.Errorf("the expanded log never said %q:\n%s", want, expanded)
 		}
 	}
 	// Harness internals stay out of the user's way unless --dev asked for them.
@@ -311,6 +320,9 @@ func TestInitSlashCommandIsGone(t *testing.T) {
 // no room left for the work.
 func TestARepeatedStageIsNotSaidTwice(t *testing.T) {
 	m := newTestChat(t)
+	// Stage lines are narration, folded away by default — this pins the
+	// Ctrl+O view, where they are all on screen.
+	m.expandWork = true
 	m = feed(t, m,
 		event.CanonicalStatusEvent{Type: "status", Message: "Working out how to answer"},
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_skills"},
