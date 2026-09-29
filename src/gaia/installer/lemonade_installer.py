@@ -883,7 +883,7 @@ class LemonadeInstaller:
     def _uninstall_macos() -> InstallResult:
         """macOS: the upstream .pkg ships no uninstaller, so say so and hand over steps.
 
-        Paths and pkgutil identifiers come from the v11.8.1 .pkg BOMs. Upstream
+        Paths and pkgutil identifiers come from the v2026.39.1 .pkg BOMs. Upstream
         renamed the launchd labels and receipts com.lemonade.* -> ai.lemonadeserver.*
         after 11.5.0, so these track the pin.
         """

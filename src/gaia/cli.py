@@ -5367,7 +5367,9 @@ Let me know your answer!
             sys.exit(2)
 
         if args.check:
+            from gaia.config import GaiaConfigError
             from gaia.installer.init_command import check_setup_status
+            from gaia.llm.model_fit import ModelFitError
 
             try:
                 status = check_setup_status(
@@ -5380,6 +5382,11 @@ Let me know your answer!
             except ValueError as e:
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)
+            except (GaiaConfigError, ModelFitError, LemonadeClientError) as e:
+                # Not "needs setup" (exit 1): setup cannot fix a bad config or a
+                # model that will not fit, so report that the check went unanswered.
+                print(f"Error: could not check setup: {e}", file=sys.stderr)
+                sys.exit(2)
             exit_code = 0 if status.ready else 3 if status.stage == "load" else 1
             if getattr(args, "json", False):
                 print(json.dumps(status.to_json()))
