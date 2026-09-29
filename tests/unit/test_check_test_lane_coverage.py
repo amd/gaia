@@ -321,3 +321,147 @@ class TestRunCheck:
         _write_tests(repo, ["tests/unit/__pycache__/test_stale.py"])
         _write_workflow(repo, "unit", ["pytest tests/unit/test_a.py -v"])
         assert guard.run_check() == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-command extraction (what check_module_skips.py collects)
+# ---------------------------------------------------------------------------
+
+
+class TestPytestCommands:
+    def test_each_command_keeps_its_own_paths(self):
+        script = "pytest tests/unit/test_a.py -v\npython -m pytest tests/b/ tests/c.py"
+        commands, _ = guard.pytest_commands_in_script(script, {}, ["tests"])
+        assert commands == [["tests/unit/test_a.py"], ["tests/b", "tests/c.py"]]
+
+    def test_command_without_a_test_path_is_dropped(self):
+        script = "python util/check_module_skips.py --workflow w.yml --job j"
+        commands, _ = guard.pytest_commands_in_script(script, {}, ["tests"])
+        assert commands == []
+
+    def test_node_ids_of_one_file_collapse_to_one_command(self):
+        script = "pytest tests/t.py::A\npytest tests/t.py::B"
+        commands, _ = guard.pytest_commands_in_script(script, {}, ["tests"])
+        assert commands == [["tests/t.py"]]
+
+    def test_job_run_blocks_names_the_missing_job(self, repo):
+        path = _write_workflow(repo, "unit", ["pytest tests/unit/ -v"])
+        assert guard.job_run_blocks(path, "build") == [("pytest tests/unit/ -v", {})]
+        with pytest.raises(ValueError, match="no job `nope`.*build"):
+            guard.job_run_blocks(path, "nope")
+
+
+# ---------------------------------------------------------------------------
+# module_skips: files allowed to skip wholesale in some lane (#4206)
+# ---------------------------------------------------------------------------
+
+
+def _write_module_skips(repo: Path, groups: list) -> Path:
+    path = repo / "util" / "test_lane_allowlist.yml"
+    path.write_text(yaml.dump({"files": {}, "module_skips": groups}), encoding="utf-8")
+    return path
+
+
+class TestModuleSkipParsing:
+    def test_group_expands_to_one_entry_per_path(self, repo):
+        path = _write_module_skips(
+            repo,
+            [
+                {
+                    "reason": "Needs the chat wheel.",
+                    "runs_in": "chat.yml",
+                    "paths": ["tests/unit/test_a.py", "tests/unit/email/"],
+                }
+            ],
+        )
+        entries = guard.load_module_skips(path)
+        assert [(e.path, e.runs_in) for e in entries] == [
+            ("tests/unit/test_a.py", "chat.yml"),
+            ("tests/unit/email", "chat.yml"),
+        ]
+
+    def test_runs_in_is_optional(self, repo):
+        path = _write_module_skips(
+            repo, [{"reason": "Broken goldens.", "paths": ["tests/unit/test_a.py"]}]
+        )
+        assert guard.load_module_skips(path)[0].runs_in is None
+
+    @pytest.mark.parametrize(
+        "group, message",
+        [
+            ({"reason": " ", "paths": ["tests/a.py"]}, "no reason"),
+            ({"reason": "x"}, "lists no paths"),
+            ({"reason": "x", "runs_in": ["a.yml"], "paths": ["tests/a.py"]}, "runs_in"),
+        ],
+    )
+    def test_malformed_group_is_rejected(self, repo, group, message):
+        path = _write_module_skips(repo, [group])
+        with pytest.raises(ValueError, match=message):
+            guard.load_module_skips(path)
+
+    def test_path_listed_twice_is_rejected(self, repo):
+        path = _write_module_skips(
+            repo,
+            [
+                {"reason": "a", "paths": ["tests/a.py"]},
+                {"reason": "b", "paths": ["tests/a.py"]},
+            ],
+        )
+        with pytest.raises(ValueError, match="listed twice"):
+            guard.load_module_skips(path)
+
+    def test_most_specific_entry_wins_and_names_are_not_prefixes(self):
+        entries = [
+            guard.ModuleSkip("tests/unit/email", "dir", "a.yml"),
+            guard.ModuleSkip("tests/unit/email/test_x.py", "file", "b.yml"),
+        ]
+        by_file = guard.find_module_skip("tests/unit/email/test_x.py", entries)
+        by_dir = guard.find_module_skip("tests/unit/email/sub/test_y.py", entries)
+        assert by_file.reason == "file"
+        assert by_dir.reason == "dir"
+        assert guard.find_module_skip("tests/unit/email_extra.py", entries) is None
+
+
+class TestModuleSkipsInRunCheck:
+    GUARD = "python util/check_module_skips.py --workflow chat.yml --job build"
+
+    def _setup(self, repo, steps, runs_in="chat.yml", paths=None):
+        _write_tests(repo, ["tests/unit/test_a.py"])
+        _write_workflow(repo, "unit", ["pytest tests/unit/ -v"])
+        _write_workflow(repo, "chat", steps)
+        _write_module_skips(
+            repo,
+            [
+                {
+                    "reason": "Needs the chat wheel.",
+                    "runs_in": runs_in,
+                    "paths": paths or ["tests/unit/test_a.py"],
+                }
+            ],
+        )
+
+    def test_entry_whose_lane_runs_it_and_the_guard_passes(self, repo, capsys):
+        self._setup(repo, [self.GUARD, "pytest tests/unit/test_a.py"])
+        assert guard.run_check() == 0
+        assert "1 module-skip" in capsys.readouterr().out
+
+    def test_runs_in_lane_that_does_not_name_the_file_fails(self, repo, capsys):
+        self._setup(repo, [self.GUARD, "pytest tests/other/"])
+        assert guard.run_check() == 1
+        assert "`chat.yml` does not run it" in capsys.readouterr().err
+
+    def test_runs_in_lane_without_the_guard_fails(self, repo, capsys):
+        # Nothing would notice the file still skipping in its own lane.
+        self._setup(repo, ["pytest tests/unit/test_a.py"])
+        assert guard.run_check() == 1
+        assert "never runs check_module_skips.py" in capsys.readouterr().err
+
+    def test_runs_in_workflow_that_does_not_exist_fails(self, repo, capsys):
+        self._setup(repo, [self.GUARD], runs_in="gone.yml")
+        assert guard.run_check() == 1
+        assert "`gone.yml` does not exist" in capsys.readouterr().err
+
+    def test_entry_for_a_deleted_file_fails(self, repo, capsys):
+        self._setup(repo, [self.GUARD, "pytest tests/"], paths=["tests/unit/gone.py"])
+        assert guard.run_check() == 1
+        assert "no such test file or directory" in capsys.readouterr().err

@@ -64,11 +64,11 @@ from gaia.eval.tool_cost import (  # noqa: E402
 # Reproducible, not machine-local: these are identical on Linux CI and on a
 # Windows dev box, measured through the loader-OFF `doc_agent` fixture below.
 # Measuring with `dynamic_tools=True` instead gives a different tool count.
-EXPECTED_DOC_TOOL_COUNT = 39
-BASELINE_TEXT_CHARS = 5456
-BASELINE_NATIVE_CHARS = 21726
-BASELINE_TEXT_TOKENS = 1162
-BASELINE_NATIVE_TOKENS = 5525
+EXPECTED_DOC_TOOL_COUNT = 44
+BASELINE_TEXT_CHARS = 5910
+BASELINE_NATIVE_CHARS = 24870
+BASELINE_TEXT_TOKENS = 1260
+BASELINE_NATIVE_TOKENS = 6283
 # Band tolerates trivial wording edits; a real tool add/remove blows past it
 # and should bump the baseline deliberately.
 TOLERANCE = 0.10

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
 
+from gaia.config import gaia_home
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -200,8 +201,12 @@ class ChatAgentConfig:
     enable_scratchpad: bool = (
         False  # Data scratchpad for analysis (disabled until agent split)
     )
-    filesystem_index_path: str = "~/.gaia/file_index.db"
-    scratchpad_db_path: str = "~/.gaia/scratchpad.db"
+    filesystem_index_path: str = field(
+        default_factory=lambda: str(gaia_home() / "file_index.db")
+    )
+    scratchpad_db_path: str = field(
+        default_factory=lambda: str(gaia_home() / "scratchpad.db")
+    )
     filesystem_scan_depth: int = 3  # Default scan depth (conservative)
     filesystem_exclude_patterns: List[str] = field(default_factory=list)
 
@@ -1731,7 +1736,8 @@ No documents are currently indexed.
                 files. Report numbers from its output — do not work them
                 out in your head.
 
-                No access to your tools: `from gaia import <tool>` fails.
+                No access to your tools: `from gaia import <tool>` fails —
+                call it directly as a tool instead.
 
                 Args:
                     code: Python source to run; print() whatever you need back.

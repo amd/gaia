@@ -18,7 +18,14 @@ on:
       # Tested here, but outside src/: the PE-resource gate and the installer
       # filename table.
       - 'util/check_pe_resources.py'
+      # The wholesale-skip guard and the allowlist it reads.
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
       - 'installer/tui/**'
+      # tests/integration/test_tui_control_e2e.py builds and drives the real Go
+      # TUI, so a TUI-only change has to run the offline-integration job.
+      - 'tui/**'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
@@ -39,7 +46,14 @@ on:
       # Tested here, but outside src/: the PE-resource gate and the installer
       # filename table.
       - 'util/check_pe_resources.py'
+      # The wholesale-skip guard and the allowlist it reads.
+      - 'util/check_module_skips.py'
+      - 'util/check_test_lane_coverage.py'
+      - 'util/test_lane_allowlist.yml'
       - 'installer/tui/**'
+      # tests/integration/test_tui_control_e2e.py builds and drives the real Go
+      # TUI, so a TUI-only change has to run the offline-integration job.
+      - 'tui/**'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_unit.yml'
@@ -66,10 +80,9 @@ jobs:
   unit-tests:
     name: Unit Tests (Linux, py3.12)
     runs-on: ubuntu-latest
-    # 40, not 30: the suite measures ~22 min locally and the lane came back
-    # `cancelled` at 30m19s — the wall, with zero failing steps. A budget a
-    # green suite can cross reads as a test failure to everyone who sees it.
-    timeout-minutes: 40
+    # Grown past the old 30-min budget from normal test-suite growth (was 26min
+    # on 2026-09-26, timing out consistently by 2026-09-29) — not a hang.
+    timeout-minutes: 45
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7
@@ -112,10 +125,19 @@ jobs:
           # it walks KNOWN_TOOLS and asserts each one registers tools, and the
           # browser_use mixin registers nothing when Playwright is unimportable.
           # The wheel alone is enough — no `playwright install` browser download.
+          # python-docx, python-pptx, reportlab and slack-sdk: tests/unit/rag/,
+          # tests/unit/eval/test_pdf_document_generator.py and
+          # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
+          # module level, so without them those files skip wholesale (#4206).
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf playwright
+                                  faiss-cpu pypdf playwright python-docx python-pptx reportlab slack-sdk
           uv pip install --system -e ".[api]"
+
+      - name: Check no test file skips wholesale
+        # A file that skips at collection runs none of its tests; each one must
+        # be listed in util/test_lane_allowlist.yml with the lane that runs it.
+        run: python util/check_module_skips.py --workflow test_unit.yml --job unit-tests
 
       - name: Validate packaging integrity
         run: |
@@ -290,6 +312,9 @@ jobs:
       # binary, which is what makes it the only lane that can run it.
       - name: Install Chromium for the browser-use tests
         run: playwright install --with-deps chromium
+
+      - name: Check no test file skips wholesale
+        run: python util/check_module_skips.py --workflow test_unit.yml --job offline-integration
 
       - name: Run offline integration tests
         # No GAIA_MEMORY_DISABLED: test_memory_eval.py exercises the memory mixin.

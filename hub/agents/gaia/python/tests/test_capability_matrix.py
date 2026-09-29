@@ -58,19 +58,21 @@ _spec.loader.exec_module(capability_matrix)
 # the flagship eval dataset §1/§3).
 # ---------------------------------------------------------------------------
 
-# 94: 86 before the browser work (82 after #3023's `remember_skill_lesson`, the
-# email and image_gen bundles, `run_python`, `capture_skill` and #3402's
-# `wait_for_condition`; plus `sleep` and the three cli_setup tools), plus the
-# eight live-browser tools.
-_EXPECTED_TOOLS_TOTAL = 94
+# 96: 88 on main (82 after #3023's `remember_skill_lesson`, the email and
+# image_gen bundles, `run_python`, `capture_skill` and #3402's
+# `wait_for_condition`, plus `sleep`, the three cli_setup tools, and the
+# persistent shell session's `get_shell_state` / `reset_shell_session`), plus
+# the eight live-browser tools.
+_EXPECTED_TOOLS_TOTAL = 96
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
 # rate limit is not a capability a query can be matched to.
 _EXPECTED_CORE_COUNT = 16
-# 24: the `cli_setup` bundle, plus `browser_nav` and `browser_use` — the browser
+# 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
+# reset_shell_session), plus `browser_nav` and `browser_use` — the browser
 # tools arrive as two bundles so one pull-in cannot exhaust the dynamic slots.
-_EXPECTED_BUNDLE_COUNT = 24
+_EXPECTED_BUNDLE_COUNT = 25
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
     {

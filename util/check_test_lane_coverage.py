@@ -28,8 +28,9 @@ Scope and limits, stated so the output is not over-read:
 - **Being named by a lane is not the same as being executed there.** A file that
   a lane collects and then skips wholesale — a module-scope
   `pytest.importorskip` for a dependency the lane never installs — counts as
-  covered here and is invisible to this check. That is the second half of #4121
-  and needs a separate `--collect-only` guard.
+  covered here. `util/check_module_skips.py` catches that inside the lane
+  itself (#4206); this check only keeps its `module_skips:` allowlist honest:
+  each entry's `runs_in` workflow must exist, name the path, and run that guard.
 - Every workflow counts equally, including release-only ones. A file named only
   by a `workflow_dispatch` lane passes this check while never running on a PR.
 
@@ -42,8 +43,9 @@ from __future__ import annotations
 import itertools
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Sequence, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 import yaml
 
@@ -53,6 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 ACTION_DIR = REPO_ROOT / ".github" / "actions"
 ALLOWLIST_PATH = REPO_ROOT / "util" / "test_lane_allowlist.yml"
+MODULE_SKIP_GUARD = "check_module_skips.py"
 
 # Directories walked for test files. `hub/agents/*/python/tests` is a glob
 # because each packaged agent ships its own suite.
@@ -117,6 +120,34 @@ def _expand_matrix(text: str, matrix: Dict[str, List[str]]) -> List[str]:
     return expanded
 
 
+def _load_yaml(path: Path) -> Any:
+    """Parse a workflow file, raising on YAML this cannot read."""
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, UnicodeDecodeError) as exc:
+        raise ValueError(f"{path.name}: failed to parse: {exc}") from exc
+
+
+def _job_run_blocks(job: Any) -> Iterator[Tuple[str, Dict[str, List[str]]]]:
+    """Yield (run_script, matrix_values) for every `run:` step of one job."""
+    if not isinstance(job, dict):
+        return
+    matrix = _matrix_values(job)
+    for step in job.get("steps") or []:
+        if isinstance(step, dict) and isinstance(step.get("run"), str):
+            yield step["run"], matrix
+
+
+def job_run_blocks(path: Path, job_id: str) -> List[Tuple[str, Dict[str, List[str]]]]:
+    """The `run:` steps of one named job. Raises when the job does not exist."""
+    doc = _load_yaml(path)
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict) or job_id not in jobs:
+        known = ", ".join(sorted(jobs)) if isinstance(jobs, dict) else "none"
+        raise ValueError(f"{path.name}: no job `{job_id}` (jobs: {known})")
+    return list(_job_run_blocks(jobs[job_id]))
+
+
 def _iter_run_blocks(path: Path) -> Iterator[Tuple[str, Dict[str, List[str]]]]:
     """Yield (run_script, matrix_values) for every `run:` step in a YAML file.
 
@@ -124,23 +155,14 @@ def _iter_run_blocks(path: Path) -> Iterator[Tuple[str, Dict[str, List[str]]]]:
     (`runs.steps`). Raises on unparseable YAML — a workflow this cannot read is
     a hole in the audit, not something to skip past.
     """
-    try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (yaml.YAMLError, UnicodeDecodeError) as exc:
-        raise ValueError(f"{path.name}: failed to parse: {exc}") from exc
-
+    doc = _load_yaml(path)
     if not isinstance(doc, dict):
         return
 
     jobs = doc.get("jobs")
     if isinstance(jobs, dict):
         for job in jobs.values():
-            if not isinstance(job, dict):
-                continue
-            matrix = _matrix_values(job)
-            for step in job.get("steps") or []:
-                if isinstance(step, dict) and isinstance(step.get("run"), str):
-                    yield step["run"], matrix
+            yield from _job_run_blocks(job)
 
     runs = doc.get("runs")
     if isinstance(runs, dict):
@@ -236,15 +258,16 @@ def _normalise(token: str) -> str:
     return path.rstrip("/")
 
 
-def lane_paths_in_script(
+def pytest_commands_in_script(
     script: str, matrix: Dict[str, List[str]], roots: Sequence[str]
-) -> Tuple[Set[str], Set[str]]:
-    """Test paths a script runs, plus any path it names unresolvably.
+) -> Tuple[List[List[str]], Set[str]]:
+    """The test paths of each test command in a script, one list per command.
 
-    Returns (paths, unresolved). A path is kept only when it sits under one of
-    `roots`, which keeps unrelated arguments out without guessing.
+    Returns (commands, unresolved). A path is kept only when it sits under one
+    of `roots`, which keeps unrelated arguments out without guessing. A command
+    that names no test path (`python util/foo.py`) is left out.
     """
-    paths: Set[str] = set()
+    commands: List[List[str]] = []
     unresolved: Set[str] = set()
 
     for variant in _expand_matrix(script, matrix):
@@ -252,6 +275,7 @@ def lane_paths_in_script(
             tokens = _tokenise(command)
             if not _is_test_invocation(tokens):
                 continue
+            paths: List[str] = []
             for token in _candidate_path_tokens(tokens):
                 candidate = _normalise(token)
                 if not candidate:
@@ -261,10 +285,20 @@ def lane_paths_in_script(
                     if _may_be_test_path(candidate, roots):
                         unresolved.add(candidate)
                     continue
-                if _under_any_root(candidate, roots):
-                    paths.add(candidate)
+                if _under_any_root(candidate, roots) and candidate not in paths:
+                    paths.append(candidate)
+            if paths and paths not in commands:
+                commands.append(paths)
 
-    return paths, unresolved
+    return commands, unresolved
+
+
+def lane_paths_in_script(
+    script: str, matrix: Dict[str, List[str]], roots: Sequence[str]
+) -> Tuple[Set[str], Set[str]]:
+    """Test paths a script runs, plus any path it names unresolvably."""
+    commands, unresolved = pytest_commands_in_script(script, matrix, roots)
+    return {path for command in commands for path in command}, unresolved
 
 
 def _may_be_test_path(candidate: str, roots: Sequence[str]) -> bool:
@@ -393,6 +427,117 @@ def load_allowlist(path: Path) -> Dict[str, str]:
     return entries
 
 
+@dataclass(frozen=True)
+class ModuleSkip:
+    """A test file (or directory) allowed to skip wholesale in some lane."""
+
+    path: str
+    reason: str
+    # The workflow that installs what the file needs and so must run it. None
+    # means no lane runs it, which the reason has to justify.
+    runs_in: Optional[str]
+
+
+def load_module_skips(path: Path) -> List[ModuleSkip]:
+    """Parse the `module_skips:` groups of the allowlist.
+
+    Each group is `{reason, runs_in (optional), paths}`. Raises on a group with
+    no reason or no paths, and on a path listed twice.
+    """
+    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path.name}: expected a mapping at the top level")
+    groups = doc.get("module_skips") or []
+    if not isinstance(groups, list):
+        raise ValueError(f"{path.name}: `module_skips:` must be a list of groups")
+
+    entries: List[ModuleSkip] = []
+    seen: Set[str] = set()
+    for index, group in enumerate(groups):
+        where = f"{path.name}: module_skips[{index}]"
+        if not isinstance(group, dict):
+            raise ValueError(f"{where} must be a mapping")
+        reason = group.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(
+                f"{where} has no reason. Say what the lane lacks (a hub wheel, "
+                f"an extra) or why no lane can run the file."
+            )
+        runs_in = group.get("runs_in")
+        if runs_in is not None and not isinstance(runs_in, str):
+            raise ValueError(f"{where}: `runs_in` must be a workflow file name")
+        paths = group.get("paths")
+        if not isinstance(paths, list) or not paths:
+            raise ValueError(f"{where} lists no paths")
+        for raw in paths:
+            entry = str(raw).replace("\\", "/").rstrip("/")
+            if entry in seen:
+                raise ValueError(f"{path.name}: `{entry}` is listed twice")
+            seen.add(entry)
+            entries.append(ModuleSkip(entry, reason.strip(), runs_in))
+    return entries
+
+
+def find_module_skip(
+    test_file: str, entries: Sequence[ModuleSkip]
+) -> Optional[ModuleSkip]:
+    """The most specific entry covering `test_file`, or None."""
+    matches = [
+        e for e in entries if test_file == e.path or test_file.startswith(e.path + "/")
+    ]
+    return max(matches, key=lambda e: len(e.path)) if matches else None
+
+
+def module_skip_errors(
+    entries: Sequence[ModuleSkip],
+    test_files: Sequence[str],
+    repo_root: Path,
+    workflow_dir: Path,
+    roots: Sequence[str],
+) -> List[str]:
+    """Entries that no longer describe reality.
+
+    A `runs_in` workflow must exist, must name the path, and must run the
+    module-skip guard — otherwise "runs elsewhere" is an unchecked promise.
+    """
+    errors: List[str] = []
+    workflows: Dict[str, Tuple[Set[str], bool]] = {}
+
+    for entry in entries:
+        exists = entry.path in test_files or (
+            (repo_root / entry.path).is_dir()
+            and any(f.startswith(entry.path + "/") for f in test_files)
+        )
+        if not exists:
+            errors.append(f"{entry.path}: no such test file or directory")
+            continue
+        if entry.runs_in is None:
+            continue
+
+        if entry.runs_in not in workflows:
+            wf_path = workflow_dir / entry.runs_in
+            if not wf_path.is_file():
+                errors.append(f"{entry.path}: runs_in `{entry.runs_in}` does not exist")
+                continue
+            paths: Set[str] = set()
+            guarded = False
+            for script, matrix in _iter_run_blocks(wf_path):
+                found, _ = lane_paths_in_script(script, matrix, roots)
+                paths |= found
+                guarded = guarded or MODULE_SKIP_GUARD in script
+            workflows[entry.runs_in] = (paths, guarded)
+
+        paths, guarded = workflows[entry.runs_in]
+        if not is_covered(entry.path, paths):
+            errors.append(f"{entry.path}: `{entry.runs_in}` does not run it")
+        if not guarded:
+            errors.append(
+                f"{entry.path}: `{entry.runs_in}` never runs {MODULE_SKIP_GUARD}, "
+                f"so nothing checks the file stops skipping there"
+            )
+    return errors
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -414,6 +559,7 @@ def run_check() -> int:
             WORKFLOW_DIR, ACTION_DIR, roots
         )
         allowlist = load_allowlist(ALLOWLIST_PATH)
+        module_skips = load_module_skips(ALLOWLIST_PATH)
     except ValueError as exc:
         print(f"[!] {exc}", file=sys.stderr)
         return 1
@@ -470,13 +616,27 @@ def run_check() -> int:
         for name in sorted(missing_from_disk):
             print(f"    - {name}", file=sys.stderr)
 
+    stale_skips = module_skip_errors(
+        module_skips, test_files, REPO_ROOT, WORKFLOW_DIR, roots
+    )
+    if stale_skips:
+        errors = True
+        print(
+            f"[!] {len(stale_skips)} `module_skips` entr(ies) in "
+            f"{ALLOWLIST_PATH.name} are stale. Fix the entry or the lane:",
+            file=sys.stderr,
+        )
+        for problem in stale_skips:
+            print(f"    - {problem}", file=sys.stderr)
+
     if errors:
         return 1
 
     print(
         f"[OK] {len(test_files)} test file(s) across {len(roots)} root(s) are all "
         f"named by a lane or allowlisted ({scanned} workflow file(s) scanned, "
-        f"{len(allowlist)} allowlisted)."
+        f"{len(allowlist)} allowlisted, {len(module_skips)} module-skip "
+        f"entr(ies) verified)."
     )
     return 0
 

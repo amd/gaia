@@ -180,3 +180,40 @@ func TestAMDGatewayCustomHeaderAndRuntimeKey(t *testing.T) {
 		t.Fatal("gateway configuration or key lifecycle failed")
 	}
 }
+
+func TestEvidenceFollowsTheRankedEntryInEitherIDForm(t *testing.T) {
+	for _, r := range RecommendedModels {
+		long := "fireworks.accounts/fireworks/models/" + strings.TrimPrefix(r.ID, "fireworks.")
+		if Evidence(r.ID) != r.Evidence || Evidence(long) != r.Evidence {
+			t.Fatalf("%s: evidence %q / %q, want %q", r.ID, Evidence(r.ID), Evidence(long), r.Evidence)
+		}
+	}
+	if Evidence("fireworks.unknown") != "" || Evidence("amd."+strings.TrimPrefix(RecommendedModels[0].ID, "fireworks.")) != "" {
+		t.Fatal("evidence must be empty for an unranked id or another provider")
+	}
+}
+
+// Every figure a "Measured:" line shows must still be the published one. A
+// number nobody can trace back to a run is an assertion wearing a measurement's
+// clothes, so an edit to either side has to touch both.
+func TestEvidenceIsTranscribed(t *testing.T) {
+	for _, r := range RecommendedModels {
+		src, ok := EvidenceSource[r.ID]
+		if (r.Evidence != "") != ok {
+			t.Fatalf("%s: evidence %q but source present=%v — a shown figure needs a source, and an unshown one needs none", r.ID, r.Evidence, ok)
+		}
+		if !ok {
+			continue
+		}
+		for _, cell := range []string{src.Passed, src.Quality, src.Cost} {
+			if !strings.Contains(r.Evidence, cell) {
+				t.Fatalf("%s: evidence %q dropped published cell %q", r.ID, r.Evidence, cell)
+			}
+		}
+	}
+	for id := range EvidenceSource {
+		if _, _, ok := Rank(id); !ok {
+			t.Fatalf("%s is sourced but no longer ranked", id)
+		}
+	}
+}

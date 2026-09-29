@@ -32,8 +32,7 @@ _PULL_INSTRUCTION = "Run: lemonade pull Gemma-4-E4B-it-GGUF"
 @pytest.fixture
 def start_hint(monkeypatch):
     monkeypatch.setattr(
-        stdio_mod,
-        "describe_start_hint",
+        "gaia.llm.lemonade_launcher.describe_start_hint",
         lambda *a, **k: StartHint(instruction=_INSTRUCTION, command="lemond"),
     )
 
@@ -139,10 +138,24 @@ def test_unknown_model_error_is_resolved_not_hard_coded(monkeypatch):
 
 
 def test_instruction_is_punctuated_once(monkeypatch):
+    from gaia.agents.base.readiness import start_advice
+
     monkeypatch.setattr(
-        stdio_mod,
-        "describe_start_hint",
+        "gaia.llm.lemonade_launcher.describe_start_hint",
         lambda *a, **k: StartHint(instruction="Start the app, then retry."),
     )
 
-    assert stdio_mod.lemonade_start_instruction() == "Start the app, then retry."
+    assert start_advice().endswith("Start the app, then retry.")
+    assert not start_advice().endswith("retry..")
+
+
+def test_instruction_gets_a_period_when_the_hint_has_none(monkeypatch):
+    """A bare-command hint (the common non-macOS case) still ends one sentence."""
+    from gaia.agents.base.readiness import start_advice
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.describe_start_hint",
+        lambda *a, **k: StartHint(instruction=_INSTRUCTION, command="lemond"),
+    )
+
+    assert start_advice().endswith(f"{_INSTRUCTION}.")

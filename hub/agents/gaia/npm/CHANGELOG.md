@@ -12,6 +12,13 @@ into the terminal UI. Before this there was no packaged path at all — the flag
 agent had to be run from a repo checkout with a Python environment, and reaching
 the terminal UI meant building it from source.
 
+### Changed
+
+- **Bypass permissions is now called full access, everywhere.** `--full-access`
+  and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
+  fail with a message naming the new one. `/full-access always` (or
+  `gaia config set full_access true`) keeps it on across launches.
+
 ### Fixed
 
 - `/v1/gaia/query` now honours `provider` on an existing session. It used to
@@ -89,6 +96,11 @@ the terminal UI meant building it from source.
   tools are confirmation-gated on every call and no skill grant pre-approves
   them; over `/v1/gaia/query` they are refused, like every other gated tool
   (§8). Registered tool count goes 83 → 86.
+- **A shell command's `cd` now survives to the next one.** Every
+  `run_shell_command` call used to start from scratch, so `cd build` in one
+  call was invisible to the next. `get_shell_state` reads the session's
+  current directory, and `reset_shell_session` returns it to where the task
+  started. Registered tool count goes 86 → 88.
 - **Say something while the agent is still working.** `POST
   /v1/gaia/query/{run_id}/followup` hands a live run a message the user typed
   after it started (contract **2.15**). The run is not interrupted and no
@@ -384,9 +396,9 @@ the terminal UI meant building it from source.
   that killed only the launcher: the cancelled tool call ran to completion and
   the surviving process consumed the next message. The first Esc now sends the
   agent a `cancel` control message, so the turn ends and the session keeps its
-  loaded skills, "always" grants, history and bypass mode. A second Esc stops
+  loaded skills, "always" grants, history and full access. A second Esc stops
   the whole process tree.
-- **A restart after a hard stop no longer turns bypass permissions back on.**
+- **A restart after a hard stop no longer turns full access back on.**
   The replacement agent is launched in the session's current permission mode
   instead of from the original flags, and the TUI says what the restart lost.
 

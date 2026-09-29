@@ -99,7 +99,7 @@ def build_chat():
         icon="message-circle",
         # Introspected registry size for prompt_profile="chat" (shell plus
         # CLI-setup tools) — drift-guarded by tests/unit/test_chat_fix_contracts.py.
-        tools_count=5,
+        tools_count=7,
         model_tiers=tiers,
     )
 
@@ -130,7 +130,7 @@ def build_doc():
         icon="file-text",
         # Introspected registry size for prompt_profile="doc" — drift-guarded
         # by tests/unit/test_chat_fix_contracts.py.
-        tools_count=42,
+        tools_count=44,
         model_tiers=tiers,
     )
 
@@ -162,6 +162,6 @@ def build_file():
         # Introspected registry size for prompt_profile="file" (with
         # enable_filesystem=True, matching this factory's extra kwarg) —
         # drift-guarded by tests/unit/test_chat_fix_contracts.py.
-        tools_count=39,
+        tools_count=41,
         model_tiers=tiers,
     )

@@ -317,6 +317,14 @@ not named by any workflow's pytest step, because a file nothing runs looks green
 every PR whether it works or not. Add a new file to a lane (offline integration
 files go in `test_unit.yml`'s `offline-integration` job), or list it in
 `util/test_lane_allowlist.yml` with the reason CI can't run it.
+
+Being named isn't the same as running. A file with a module-level
+`pytest.importorskip` (for a hub wheel like `gaia_agent_chat`, or an optional
+extra) skips wholesale in any lane that lacks the package. The unit lane and the
+lanes that install hub wheels run `util/check_module_skips.py` right after their
+install step. It fails on such a skip unless the file is listed
+under `module_skips:` in the same allowlist, with `runs_in` naming the lane that
+installs the package. That lane must name the file and run the check too.
 </Note>
 
 ### Running Tests
