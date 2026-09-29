@@ -97,6 +97,19 @@ describe("agent-email playground on Ctrl+C", () => {
     expect(stderr.join("")).toContain(SHUTDOWN_ERROR);
   });
 
+  it("reports cleanup failure while preserving the original startup error", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      if (String(chunk).includes("Playground:")) throw new Error("output pipe closed");
+      return true;
+    });
+    const { running } = await startPlayground(async () => {
+      throw new Error(SHUTDOWN_ERROR);
+    });
+
+    await expect(running).rejects.toThrow("output pipe closed");
+    expect(stderr.join("")).toContain(SHUTDOWN_ERROR);
+  });
+
   it("exits 0 when the sidecar stops cleanly", async () => {
     expect(await runPlayground(async () => undefined)).toBe(0);
   });

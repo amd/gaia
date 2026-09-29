@@ -275,7 +275,13 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
     }
     return 0;
   } catch (e) {
-    await shutdown(sidecar).catch(() => undefined);
+    try {
+      await shutdown(sidecar);
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      process.stderr.write(`[agent-email] failed to clean up sidecar: ${message}\n`);
+    }
     throw e;
   }
 }
