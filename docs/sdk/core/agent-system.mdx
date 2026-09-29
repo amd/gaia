@@ -578,6 +578,11 @@ def search_codebase(query: str) -> str:
 
 **What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
 
+Two loops that vary their arguments are stopped the same way:
+
+- **One tool failing with new arguments each time.** After `max_consecutive_repeats` rejections of the same tool, with no file changed in between, the next call to it is not run and the model is told to change approach; calling it again ends the turn. A command that ran and exited non-zero (a failing test run) does not count.
+- **New work after the answer.** Once the turn has produced an answer, a call that touches nothing the request touched (no file it named, read or changed, and not a test run) is not run, and the model is told to finish and offer the work instead. A second such call ends the turn with a closing answer to the original request.
+
 **Solutions:**
 ```python
 # 1. Limit max steps

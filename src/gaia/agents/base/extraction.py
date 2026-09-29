@@ -784,7 +784,12 @@ class ExtractionLedger:
                 isinstance(path, str)
                 and "\x00" not in path
                 and self.key(path) not in self.destinations
-                and (not self.requested or self.key(path) in self.requested)
+                and (
+                    self.key(path) in self.requested
+                    # Code read on the way is a lookup, not a document to inventory.
+                    or not self.requested
+                    and os.path.splitext(path)[1].lower() not in _CODE_EXTENSIONS
+                )
             ):
                 self.sources.add(self.key(path))
 

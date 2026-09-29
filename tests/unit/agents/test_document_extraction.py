@@ -1508,6 +1508,7 @@ def test_a_model_loaded_skill_switches_extraction_on_mid_turn(agent, tmp_path):
         "document-extract": SimpleNamespace(
             name="document-extract",
             body="Extract every requested item from the source document.",
+            gaia=SimpleNamespace(tools_required=["extract_document_items"]),
         )
     }
     assert not agent._extraction_ledger.enabled
@@ -1516,3 +1517,40 @@ def test_a_model_loaded_skill_switches_extraction_on_mid_turn(agent, tmp_path):
     )
     assert agent._extraction_ledger.enabled
     assert "extract_document_items" in agent._tools_registry
+
+
+def test_a_skill_that_only_mentions_every_does_not_switch_extraction_on(
+    agent, tmp_path
+):
+    from types import SimpleNamespace
+
+    (tmp_path / "dates.py").write_text("def parse(): ...\n")
+    agent._extraction_ledger = ExtractionLedger(
+        "dates.py mishandles a lowercase z. Fix it and add a test.", str(tmp_path)
+    )
+    # The coding skill's own wording: advice about grep, not an inventory request.
+    agent._loaded_skills = {
+        "coding": SimpleNamespace(
+            name="coding",
+            body="Use search_file_content. Fastest way to find every call site.",
+            gaia=SimpleNamespace(tools_required=["search_file_content"]),
+        )
+    }
+    agent._handle_large_tool_result(
+        "load_skill", {"status": "success"}, [], {"name": "coding"}
+    )
+    agent._handle_large_tool_result(
+        "read_file", {"status": "success"}, [], {"file_path": "dates.py"}
+    )
+    assert not agent._extraction_ledger.enabled
+    assert not agent._extraction_ledger.gaps()
+    assert "extract_document_items" not in agent._tools_registry
+
+
+def test_code_read_on_the_way_is_not_an_extraction_source(tmp_path):
+    state = ExtractionLedger("List all planets", str(tmp_path))
+    state.activate_skill("Extract every item from the source document.")
+    state.observe("read_file", {"file_path": "helpers.py"}, {"status": "success"})
+    assert not state.gaps()
+    state.observe("read_file", {"file_path": "notes.txt"}, {"status": "success"})
+    assert state.gaps()

@@ -65,6 +65,11 @@ from gaia.agents.base.extraction import (
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.turn_scope import (
+    ANSWERED_MARKER,
+    POST_ANSWER_CLOSING_PROMPT,
+    TurnScopeGuard,
+)
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     VERIFY_AFTER_CHANGE_TAG,
@@ -1493,6 +1498,7 @@ Do NOT wrap conversational replies in JSON.
                 "so below 2 every tool call is a repeat of itself and none runs."
             )
         self.max_consecutive_repeats = max_consecutive_repeats
+        self._turn_scope = TurnScopeGuard(max_consecutive_repeats)
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
@@ -2081,17 +2087,21 @@ Do NOT wrap conversational replies in JSON.
             del self._system_prompt_cache
 
     def _extraction_skill_instructions(self, query, just_loaded=False):
-        """A selected task skill may activate extraction; voice routing may not."""
+        """A selected extraction skill may activate extraction; others may not."""
         active = set(getattr(self, "_active_skill_filter", None) or ())
         skills = getattr(self, "_loaded_skills", None) or {}
         selected = active | {name for name in skills if name in query}
         if isinstance(just_loaded, str):
             selected.add(just_loaded)
         selected -= self._always_on_skill_names
+        # Only a skill built on the extraction tool counts: coding's "find
+        # every call site" is advice, not a request for an inventory.
         return "\n".join(
             effective_skill_body(self, skills[name])
             for name in sorted(selected)
             if name in skills
+            and "extract_document_items"
+            in getattr(getattr(skills[name], "gaia", None), "tools_required", ())
         )
 
     def _read_validator(self):
@@ -4873,6 +4883,13 @@ Do NOT wrap conversational replies in JSON.
         refused = self._refuse_inventory_hand_edit(tool_name, tool_args)
         if refused is not None:
             return refused
+        outermost = not getattr(self, "_tool_timing_depth", 0)
+        scope = getattr(self, "_turn_scope", None) if outermost else None
+        if scope is not None:
+            refused = scope.check(tool_name, tool_args)
+            if refused is not None:
+                logger.info("Turn scope refused %s: %s", tool_name, refused["error"])
+                return refused
         evidence = getattr(self, "_completion_evidence", None)
         before = (
             evidence.snapshot(
@@ -4888,11 +4905,11 @@ Do NOT wrap conversational replies in JSON.
         # Only the outermost call is timed. A tool body may call another tool
         # (CodeAgent's orchestration does); timing both would count the inner
         # one's seconds twice and push tool_s past the turn's own total.
-        if (recorder is None and step_timer is None) or getattr(
-            self, "_tool_timing_depth", 0
-        ):
+        if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            if scope is not None:
+                scope.record(tool_name, tool_args, result)
             return result
 
         started = time.perf_counter()
@@ -4905,6 +4922,8 @@ Do NOT wrap conversational replies in JSON.
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            if scope is not None:
+                scope.record(tool_name, tool_args, result)
             return result
         finally:
             self._tool_timing_depth = 0
@@ -6736,6 +6755,7 @@ Do NOT wrap conversational replies in JSON.
         self._extraction_ledger = ExtractionLedger(
             user_input, os.getcwd(), available=self._read_validator() is not None
         )
+        self._turn_scope.begin_turn(user_input, os.getcwd())
 
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
@@ -7062,6 +7082,16 @@ Do NOT wrap conversational replies in JSON.
                     messages.append(
                         self._create_tool_message(tool_name, truncated_result)
                     )
+
+                    if self._turn_scope.turn_should_end:
+                        final_answer, steps_taken = self._end_turn_on_scope(
+                            tool_name, messages, conversation, steps_taken
+                        )
+                        if final_answer is None:
+                            cancelled_by_console = True
+                        else:
+                            loop_break_answer_unprinted = True
+                        break
 
                     # Check for error (support multiple error formats)
                     is_error = isinstance(tool_result, dict) and (
@@ -8234,6 +8264,17 @@ Do NOT wrap conversational replies in JSON.
                         )
                     )
 
+                    if self._turn_scope.turn_should_end:
+                        final_answer, steps_taken = self._end_turn_on_scope(
+                            tool_name, messages, conversation, steps_taken
+                        )
+                        if final_answer is None:
+                            cancelled_by_console = True
+                        else:
+                            loop_break_answer_unprinted = True
+                        fanout_repeat_break = True
+                        break
+
                     # Track errors but DON'T break early — drain all N
                     # tool calls first so conversation history reflects
                     # the full set, per #944 acceptance criterion (b).
@@ -8495,6 +8536,16 @@ Do NOT wrap conversational replies in JSON.
 
                 # Share tool output with subsequent LLM calls
                 messages.append(self._create_tool_message(tool_name, truncated_result))
+
+                if self._turn_scope.turn_should_end:
+                    final_answer, steps_taken = self._end_turn_on_scope(
+                        tool_name, messages, conversation, steps_taken
+                    )
+                    if final_answer is None:
+                        cancelled_by_console = True
+                    else:
+                        loop_break_answer_unprinted = True
+                    break
 
                 # For single-step plans, we still need to let the LLM process the result
                 # This is especially important for RAG queries where the LLM needs to
@@ -8996,6 +9047,16 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
+                # An answer, not a plan or a narrated step: from here on, calls
+                # must serve the request rather than start new work.
+                if not self._turn_scope.answered:
+                    self._turn_scope.mark_answered()
+                    conversation.append(
+                        {
+                            "role": "system",
+                            "content": {"type": ANSWERED_MARKER, "step": steps_taken},
+                        }
+                    )
                 # Changed code after the last test run: ask once for the run.
                 if not verify_after_change_reprompted and steps_taken < steps_limit - 1:
                     _correction = self._verify_after_change_prompt()
@@ -9099,7 +9160,12 @@ Do NOT wrap conversational replies in JSON.
                             (
                                 "[check:completion] "
                                 + " ".join(artifact_gaps)
-                                + " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary. Use `write_file` for a missing requested save, then "
+                                + (
+                                    " For incomplete extraction, call `extract_document_items` on each source file. Never replace enumeration with a summary."
+                                    if extraction_gaps
+                                    else ""
+                                )
+                                + " Use `write_file` for a missing requested save, then "
                                 "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
                                 "continuation pages. Report only contents observed in "
                                 "tool results. An unrelated tool or file is not evidence."
@@ -9604,6 +9670,47 @@ Do NOT wrap conversational replies in JSON.
             )
         # Raw, like the summary branches above — the caller finalizes once.
         # Subclass hooks append corrections, so a second pass duplicates them.
+        return answer, steps_taken
+
+    def _end_turn_on_scope(
+        self,
+        tool_name: str,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+    ) -> Tuple[Optional[str], int]:
+        """End the turn once the turn-scope guard gives up, the loop-guard way.
+
+        After an answer the closing call restates it, because the answer is
+        what the user asked for; before one, a failing tool gets the loop
+        guard's failure summary.
+        """
+        scope = self._turn_scope
+        self.console.print_repeated_tool_warning()
+        if not scope.answered:
+            return self._answer_after_repeated_calls(
+                tool_name,
+                scope.failures.get(tool_name, 0),
+                [{"status": "error", "error": scope.last_error.get(tool_name, "")}],
+                messages,
+                conversation,
+                steps_taken,
+            )
+        steps_taken += 1
+        if self._turn_recorder is not None and self.chat is not None:
+            self.chat.turn_step = steps_taken
+        self.execution_state = self.STATE_COMPLETION
+        try:
+            answer = self._closing_answer(
+                messages, conversation, POST_ANSWER_CLOSING_PROMPT, steps_taken
+            )
+        except Exception as e:  # noqa: BLE001 - the reason goes in the answer
+            logger.warning("Could not write the closing answer: %s", e)
+            return (
+                "I stopped because I had started work this request did not ask "
+                f"for, and the closing answer couldn't be written: {e}",
+                steps_taken,
+            )
         return answer, steps_taken
 
     def _dedup_mutation_call(

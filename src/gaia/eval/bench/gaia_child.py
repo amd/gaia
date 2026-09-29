@@ -31,6 +31,10 @@ def instrument(progress: Path) -> Callable[[Any], None]:
     """Wrap the agent's model calls and tool calls so each leaves a line in *progress*."""
 
     def _install(agent: Any) -> None:
+        from gaia.agents.base.turn_scope import (  # pylint: disable=import-outside-toplevel
+            ANSWERED_MARKER,
+        )
+
         execute = agent._execute_tool  # pylint: disable=protected-access
 
         @functools.wraps(execute)
@@ -48,6 +52,20 @@ def instrument(progress: Path) -> Callable[[Any], None]:
             return result
 
         agent._execute_tool = _execute  # pylint: disable=protected-access
+        scope = getattr(agent, "_turn_scope", None)
+        if scope is not None:
+            mark = scope.mark_answered
+
+            @functools.wraps(mark)
+            def _answered() -> None:
+                if not scope.answered:
+                    _append(
+                        progress,
+                        {"role": "system", "content": {"type": ANSWERED_MARKER}},
+                    )
+                mark()
+
+            scope.mark_answered = _answered
         chat = getattr(agent, "chat", None)
         for name in ("send_messages", "send_messages_stream"):
             send = getattr(chat, name, None)

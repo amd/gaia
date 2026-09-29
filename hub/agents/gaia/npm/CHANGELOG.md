@@ -26,6 +26,14 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- **The agent no longer starts an unrelated job after answering.** A bugfix
+  request loaded the `coding` skill, whose "find every call site" tip switched
+  on document inventorying; after the fix was done and verified, the agent spent
+  minutes extracting every file it had read until the user cancelled. Only a
+  skill built on the extraction tool turns inventorying on now. Separately,
+  once a turn has answered, a tool call on nothing the request touched is not
+  run and a second one ends the turn, and a tool that keeps failing with new
+  arguments is stopped like an identical repeat.
 - `/v1/gaia/query` now honours `provider` on an existing session. It used to
   matter only when the session was created, so `provider: "lemonade"` could keep
   sending a Claude session's conversation to Anthropic, and `provider: "claude"`
