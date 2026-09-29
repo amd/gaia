@@ -1371,7 +1371,6 @@ Do NOT wrap conversational replies in JSON.
         skip_lemonade: bool = False,
         device: Optional[str] = None,
         skill_set: Optional[str] = None,
-        resend_reasoning_across_requests: bool = False,
         max_output_tokens: Optional[int] = None,
         context_eviction: str = "off",
         context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS,
@@ -1421,10 +1420,6 @@ Do NOT wrap conversational replies in JSON.
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
                           an unavailable device fails loudly (default: None = no check).
-            resend_reasoning_across_requests: If True, reasoning stored on
-                          ``conversation_history`` from earlier user requests
-                          is sent back to the model. Within one request it is
-                          always sent back (default: False).
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,

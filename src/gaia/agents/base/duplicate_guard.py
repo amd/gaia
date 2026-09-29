@@ -87,6 +87,15 @@ READ_ONLY_TOOLS: FrozenSet[str] = frozenset(
 #: and ``execute_python_file`` run code, which is never read-only.
 SHELL_TOOL = "run_shell_command"
 
+#: A successful, non-read-only run of one of these can rewrite any file on
+#: disk, and its command text (a shell one-liner, an inline snippet) can't be
+#: parsed for exactly which -- unlike the named-path tools ``is_mutating_tool``
+#: covers. So instead of naming paths, a run here drops every fingerprinted
+#: read cached this turn.
+OPAQUE_EXEC_TOOLS: FrozenSet[str] = frozenset(
+    {"run_shell_command", "run_python", "execute_python_file"}
+)
+
 #: Programs that only read. A segment starting with anything else is a run.
 READ_ONLY_PROGRAMS: FrozenSet[str] = frozenset(
     {
@@ -518,6 +527,20 @@ class DuplicateCallGuard:
                     self._changes.append((form, self._sequence))
             if changed:
                 self._invalidate([os.path.abspath(p) for p in changed])
+        elif ok and not read_only and tool_name in OPAQUE_EXEC_TOOLS:
+            self._invalidate_cached_reads()
+
+    def _invalidate_cached_reads(self) -> None:
+        """Drop every fingerprinted read cached this turn.
+
+        Called after a shell command or Python snippet whose command text
+        can't be parsed for exactly which paths it touched -- unlike a named
+        write/edit tool, so ``paths_changed_by`` has nothing to report. A
+        stale cache would otherwise answer a later read from before the run.
+        """
+        for key, record in list(self._executed.items()):
+            if record["fingerprint"]:
+                del self._executed[key]
 
     def _invalidate(self, paths: List[str]) -> None:
         if self._on_invalidate is not None and paths:

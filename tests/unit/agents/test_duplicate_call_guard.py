@@ -390,6 +390,61 @@ def test_a_repeated_ls_runs_again_after_a_script_added_files():
 
 
 @pytest.mark.usefixtures("clean_registry")
+def test_a_repeated_grep_runs_again_after_a_script_rewrote_a_file_two_dirs_down():
+    """Rewriting a file two directories below the grepped root moves neither
+    the root's own mtime nor its top-level entry listing, so the fingerprint
+    diff alone would miss it. Only recognising the script's run as one that
+    can rewrite anything -- and dropping the cached read because of that,
+    rather than trying to name the path it touched -- catches this.
+    """
+    agent = _make_agent()
+    nested = Path("src/pkg/module.py")
+    nested.parent.mkdir(parents=True)
+    nested.write_text("def old():\n    pass\n", encoding="utf-8")
+
+    def shell(command):
+        if command == "python tools/rewrite.py":
+            _rewrite(nested, "def new():\n    pass\n")
+            return "rewrote"
+        return "src/pkg/module.py:1:def old():"
+
+    agent.shell = shell
+    grep = {"command": "grep -rn old src"}
+    calls = _stub_chat(
+        agent,
+        _script(
+            ("run_shell_command", grep),
+            ("run_shell_command", {"command": "python tools/rewrite.py"}),
+            ("run_shell_command", grep),
+        ),
+    )
+
+    agent.process_query("go")
+
+    assert agent.runs.count(("run_shell_command", grep["command"])) == 2
+    statuses = [r.get("status") for r in _tool_results(calls, "run_shell_command")]
+    assert "duplicate" not in statuses
+
+
+def test_an_opaque_exec_drops_every_cached_read_this_turn():
+    """``run_shell_command``'s command text (here, a Python snippet) can't be
+    parsed for exactly which paths it touched, unlike a named write/edit
+    tool -- so a successful run drops every fingerprinted read rather than
+    risk serving one that no longer matches disk."""
+    guard = DuplicateCallGuard(store=lambda: store_for(SimpleNamespace()))
+    guard.begin_turn()
+    guard.begin_step(1)
+    guard.record("read_file", {"file_path": "a.py"}, {"status": "success"})
+    assert guard.check("read_file", {"file_path": "a.py"}) is not None
+    guard.record(
+        "run_shell_command",
+        {"command": "python tools/rewrite.py"},
+        {"status": "success", "return_code": 0},
+    )
+    assert guard.check("read_file", {"file_path": "a.py"}) is None
+
+
+@pytest.mark.usefixtures("clean_registry")
 def test_a_repeated_grep_with_nothing_changed_is_short_circuited():
     agent = _make_agent()
     services = Path("toybox/services")
