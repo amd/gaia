@@ -10,12 +10,13 @@ does it guessed. Both are one look away from right.
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.look_first import named_workspace_paths
+from gaia.agents.base.look_first import _PATH_TOKEN, named_workspace_paths
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 
@@ -47,6 +48,28 @@ def test_named_workspace_paths(workspace, request_text, expected):
 def test_the_working_folder_alone_is_not_something_to_look_at(workspace):
     request_text = f"You are working in {workspace}. What is 2 + 2?"
     assert named_workspace_paths(request_text, str(workspace)) == []
+
+
+@pytest.mark.parametrize(
+    "request_text,expected_tokens",
+    [
+        ("What does /etc/hosts contain?", ["/etc/hosts"]),
+        ("Look at /home/me/proj/x.py please.", ["/home/me/proj/x.py"]),
+    ],
+)
+def test_unix_absolute_paths_keep_their_leading_slash(request_text, expected_tokens):
+    # The first alternative required a word char right after the drive-letter
+    # group, so a bare leading "/" (no drive letter) was dropped, not matched.
+    assert _PATH_TOKEN.findall(request_text) == expected_tokens
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="/etc/hosts only exists as an absolute path on POSIX"
+)
+def test_a_unix_absolute_path_outside_the_workspace_is_still_found(workspace):
+    assert named_workspace_paths("What does /etc/hosts contain?", str(workspace)) == [
+        "/etc/hosts"
+    ]
 
 
 class _LookingAgent(Agent):

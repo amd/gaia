@@ -17,7 +17,7 @@ from typing import List
 
 #: A path-like token: has a separator, or ends in a short file extension.
 _PATH_TOKEN = re.compile(
-    r"(?<![\w@])(?:[A-Za-z]:[\\/])?[\w.\-]+(?:[\\/][\w.\-]+)+|"
+    r"(?<![\w@])(?:[A-Za-z]:[\\/]|/)?[\w.\-]+(?:[\\/][\w.\-]+)+|"
     r"(?<![\w@/\\])[\w\-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b"
 )
 
