@@ -85,6 +85,19 @@ def test_questions_go_unanswered_without_waiting():
     assert [e["type"] for e in _events(handler)] == ["user_input_request"]
 
 
+def test_a_transport_that_cannot_answer_is_never_shown_a_question():
+    handler = SSEOutputHandler()
+    handler.answers_questions = False
+
+    answer = handler.request_user_input_blocking(
+        "Allow it once?", choices=["Allow once"], timeout_seconds=300
+    )
+
+    assert answer == "__NO_RESPONSE__"
+    assert handler._user_input_events == {}
+    assert _events(handler) == []
+
+
 def test_a_command_that_names_nothing_is_rejected():
     with pytest.raises(ValueError, match="names no command"):
         scripted_user.set_declined_commands(["| tail"])

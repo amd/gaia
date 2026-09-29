@@ -4823,9 +4823,17 @@ Do NOT wrap conversational replies in JSON.
         """
         console = getattr(self, "console", None)
         asker = getattr(console, "request_user_input_blocking", None)
-        if not callable(asker) or getattr(console, "background_mode", False):
+        if (
+            not callable(asker)
+            or getattr(console, "background_mode", False)
+            or not getattr(console, "answers_questions", True)
+        ):
             return None
-        request = " ".join(str(getattr(self, "_current_query", "") or "").split())
+        # The user's own words, not the memory context the loop prepends.
+        raw = getattr(self, "_original_user_input", None) or getattr(
+            self, "_current_query", ""
+        )
+        request = " ".join(str(raw or "").split())
         purpose = f" to finish “{request[:160]}”" if request else ""
         question = (
             f"You declined `{denial.rendered}` earlier in this request. My next "

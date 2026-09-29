@@ -492,6 +492,37 @@ def test_a_no_or_a_reply_is_passed_back(tmp_path, script, answer, expected):
     assert agent.ran == []
 
 
+def test_a_console_that_cannot_take_answers_is_never_asked(tmp_path, script):
+    # The TUI's stdio agent: a question there has no route back and hangs.
+    console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+    console.answers_questions = False
+    agent = _agent(console, tmp_path)
+    agent._execute_tool("run_shell_command", {"command": "pytest -q"})
+
+    result = agent._execute_tool("execute_python_file", {"file_path": script})
+
+    assert result["status"] == "denied"
+    assert console.questions == []
+    assert "ask the user" in result["error"]
+
+
+def test_the_question_quotes_the_users_words_not_the_memory_context(tmp_path, script):
+    console = _AskingConsole("__NO_RESPONSE__")
+    agent = _agent(console, tmp_path)
+    agent._original_user_input = "check the tie order in sorting.py"
+    agent._current_query = (
+        "[GAIA Memory Context]\nCurrent time: 2026-09-29\n\n"
+        "check the tie order in sorting.py"
+    )
+    agent._execute_tool("run_shell_command", {"command": "pytest -q"})
+
+    agent._execute_tool("execute_python_file", {"file_path": script})
+
+    [(question, _)] = console.questions
+    assert "check the tie order in sorting.py" in question
+    assert "GAIA Memory Context" not in question
+
+
 def test_a_background_run_is_never_asked(tmp_path, script):
     console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
     console.background_mode = True

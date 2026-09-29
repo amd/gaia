@@ -234,6 +234,9 @@ class SSEOutputHandler(OutputHandler):
         # Autonomous loop support
         # background_mode=True: skip blocking user confirmation; immediately deny.
         self.background_mode: bool = background_mode
+        # False on a transport with no route back for an answer (the stdio
+        # agent): a question there would hang the turn, so none is asked.
+        self.answers_questions: bool = True
         # Directive written by set_loop_state tool; read by AgentLoop after the run.
         self.loop_state_directive: Optional[Dict[str, Any]] = None
         # User input request queue (ordered, multi-slot keyed by request_id).
@@ -1260,6 +1263,14 @@ class SSEOutputHandler(OutputHandler):
             timeout, or ``"__NO_RESPONSE__"`` when no default is provided and
             the timeout expires.  Never returns empty string.
         """
+        if not self.answers_questions:
+            logger.info("Question not asked: this transport cannot return an answer")
+            return (
+                default_if_no_response
+                if default_if_no_response is not None
+                else "__NO_RESPONSE__"
+            )
+
         request_id = str(uuid.uuid4())
         timeout_seconds = max(10, timeout_seconds)  # floor: 10 seconds
 
