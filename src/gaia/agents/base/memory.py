@@ -173,13 +173,12 @@ def _changed_software_versions(existing: List[Dict]) -> List[str]:
 # ============================================================================
 
 #: Default embedder served by Lemonade — EmbeddingGemma 300M, 768-dim GGUF
-#: (GPU/CPU profiles). Replaced nomic-embed-text-v2-moe, which the current
-#: llama.cpp server cannot load. The active embedder is per-instance
+#: (GPU/CPU profiles). The active embedder is per-instance
 #: (``self._embedding_model``) and may be the NPU-native FLM embedder instead;
 #: see ``init_memory`` (#1744). These module constants remain the fallback default.
 EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
 
-#: Default embedding dimensionality (EmbeddingGemma 300M / nomic are both 768).
+#: Default embedding dimensionality (EmbeddingGemma 300M is 768).
 #: The active dim is derived from the live embedder at startup
 #: (``self._embedding_dim``); this is only the pre-probe fallback.
 EMBEDDING_DIM = 768
@@ -642,8 +641,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 ``~/.gaia/memory.db`` (see ``resolve_memory_db_path``).
             context: Active context scope (e.g., 'work', 'personal', 'global').
             embedding_model: Embedder model id. Defaults to ``EMBEDDING_MODEL``
-                (GGUF nomic). The NPU profile passes the FLM-native embedder so
-                chat and embeddings stay co-resident on the NPU backend (#1744).
+                (EmbeddingGemma GGUF). The NPU profile passes the FLM-native
+                embedder so chat and embeddings stay co-resident on the NPU
+                backend (#1744).
                 The embedding dimension is derived from the live embedder, not
                 this id, so a model with a different dim works without changes.
 
@@ -769,21 +769,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 self._embedding_model,
                 self._embedding_dim,
             )
-            # Invalidate stored vectors when the embedder changed. Vectors from
-            # a different model live in a different vector space (even at the
-            # same dim), so reusing them silently corrupts similarity search.
-            # Clearing forces backfill to re-embed with the active model.
-            prior = self._memory_store.get_embedder_id()
-            if prior is not None and prior != self._embedding_model:
-                cleared = self._memory_store.clear_all_embeddings()
-                logger.warning(
-                    "[MemoryMixin] embedder changed (%s -> %s); cleared %d stored "
-                    "embedding(s) for re-embedding",
-                    prior,
-                    self._embedding_model,
-                    cleared,
-                )
-            self._memory_store.set_embedder_id(self._embedding_model)
+            # Clears vectors from any other embedder so backfill re-embeds them.
+            self._memory_store.reconcile_embedder(self._embedding_model)
         except Exception as e:
             reason = _classify_embedding_failure(e)
             self._memory_unavailable_reason = reason
@@ -815,7 +802,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             return
 
         # (Embedder-change migration is handled above via the store's
-        # get_embedder_id / set_embedder_id + clear_all_embeddings, #1744.)
+        # reconcile_embedder, #1744.)
 
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)

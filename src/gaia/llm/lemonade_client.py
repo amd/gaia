@@ -274,10 +274,9 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
-# Default embedding model. EmbeddingGemma 300M (768-dim) replaces
-# nomic-embed-text-v2-moe, which the current llama.cpp server cannot load.
-# Not a Lemonade built-in — registered as a ``user.`` custom model on first
-# pull via checkpoint + recipe + the ``embedding`` label (see MODELS entry).
+# Default embedding model: EmbeddingGemma 300M (768-dim). Not a Lemonade
+# built-in — registered as a ``user.`` custom model on first pull via
+# checkpoint + recipe + the ``embedding`` label (see MODELS entry).
 DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
 
@@ -742,8 +741,7 @@ MODELS = {
     ),
     # Embedding Models
     # EmbeddingGemma 300M (768-dim). Custom user-model: registered on first pull
-    # from the HF checkpoint with the ``embedding`` label. Replaced nomic-embed,
-    # which the current llama.cpp server cannot load.
+    # from the HF checkpoint with the ``embedding`` label.
     "embeddinggemma": ModelRequirement(
         model_type=ModelType.EMBEDDING,
         model_id=DEFAULT_EMBEDDING_MODEL,
@@ -756,7 +754,7 @@ MODELS = {
     ),
     # --- NPU-native FLM embedder for the NPU profile (#1744) ---
     # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
-    # memory Ryzen AI APU the GGUF nomic embedder runs on Vulkan/llama.cpp and
+    # memory Ryzen AI APU a GGUF embedder runs on Vulkan/llama.cpp and
     # reclaims the memory the FLM chat model holds, so loading it evicts the
     # chat model — every chat turn then thrashes NPU<->Vulkan (#1676). Keeping
     # the embedder on the same FLM/NPU backend as the chat model lets both stay
@@ -2038,7 +2036,7 @@ class LemonadeClient:
             return 2.0  # ~2GB for 3B models
         elif "1b" in model_lower or "0.5b" in model_lower or "0.6b" in model_lower:
             return 1.0  # ~1GB for small models
-        elif "embed" in model_lower or "nomic" in model_lower:
+        elif "embed" in model_lower:
             return 0.5  # Embedding models are usually small
         else:
             return 10.0  # Conservative default

@@ -105,7 +105,7 @@ class TestRagEncodeQueryCaching:
 
         sdk = RAGSDK.__new__(RAGSDK)  # skip heavy __init__
         sdk.config = MagicMock()
-        sdk.config.embedding_model = "nomic-embed-text-v2-moe-GGUF"
+        sdk.config.embedding_model = "user.embeddinggemma-300m-GGUF"
         sdk._embedding_cache = None
         sdk._encode_texts = MagicMock(
             return_value=np.random.rand(1, 768).astype(np.float32)

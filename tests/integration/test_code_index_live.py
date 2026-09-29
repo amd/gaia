@@ -183,12 +183,12 @@ class TestCacheKeying:
 
 
 class TestSingleSlotEviction:
-    def test_index_repository_reloads_embedder_after_eviction_by_another_model(
+    def test_index_repository_reloads_embedder_after_eviction(
         self, require_lemonade, tmp_path
     ):
-        """Lemonade's embedding slot holds exactly one model. Loading a
-        different embedder must not corrupt or hang the next index — the
-        SDK should reload its own model on demand and index correctly.
+        """Lemonade's embedding slot holds exactly one model, so the SDK's
+        embedder can be gone by the time it indexes. It must reload its own
+        model on demand and index correctly, not corrupt or hang.
         """
         from gaia.llm.lemonade_client import LemonadeClient
 
@@ -206,13 +206,6 @@ class TestSingleSlotEviction:
             # error here would let the test proceed against a dead server and
             # fail later with a misleading message.
             print(f"unload_model precondition: {e}")
-
-        # Evict by loading a different embedding model into the single slot.
-        other_model = "nomic-embed-text-v2-moe-GGUF"
-        try:
-            client.load_model(other_model)
-        except Exception as e:
-            pytest.skip(f"could not load a competing embedder to force eviction: {e}")
 
         sdk = make_sdk(tmp_path)
         result = sdk.index_repository()

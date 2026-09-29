@@ -267,7 +267,7 @@ def test_agent_threads_npu_embedder_when_flm_resolved(tmp_path, monkeypatch):
 def test_agent_leaves_default_embedder_when_e4b_resolved(tmp_path, monkeypatch):
     """Regression: resolver landing on DEFAULT_MODEL_NAME must NOT thread
     the NPU embedder -- ``embedding_model`` stays the unchanged default
-    (None -> GGUF nomic embedder)."""
+    (None -> the default GGUF embedder)."""
     cfg = _make_config(tmp_path, model_id=None)
 
     with (

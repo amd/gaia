@@ -1071,7 +1071,7 @@ def test_lemonade_models_excludes_embedding_and_image_and_not_downloaded(monkeyp
         "data": [
             {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True, "labels": ["hot"]},
             {
-                "id": "nomic-embed-text-v2-moe-GGUF",
+                "id": "embeddinggemma-300m-GGUF",
                 "downloaded": True,
                 "labels": ["embeddings"],
             },

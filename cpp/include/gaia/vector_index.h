@@ -40,7 +40,7 @@ struct GAIA_API VectorIndexOptions {
     /// With Metric::InnerProduct this makes search() return cosine similarity.
     bool normalizeOnAdd = false;
 
-    /// Embedding model that produced the vectors (e.g. "nomic-embed-text-v1-GGUF").
+    /// Embedding model that produced the vectors (e.g. "embeddinggemma-300m-GGUF").
     /// Persisted in the .vec file. When set, load() raises unless the file
     /// carries exactly this tag -- including when the file carries none at all,
     /// since an untagged file cannot back the provenance claim. Querying an
@@ -100,7 +100,7 @@ struct GAIA_API VectorIndexOptions {
 /// @code
 ///   VectorIndexOptions opts;
 ///   opts.dimension = 768;
-///   opts.embeddingModel = "nomic-embed-text-v1-GGUF";
+///   opts.embeddingModel = "embeddinggemma-300m-GGUF";
 ///   VectorIndex index(opts);
 ///   index.add("chunk-0", embedding);
 ///   auto hits = index.search(queryEmbedding, 5);   // [(id, score), ...]

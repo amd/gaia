@@ -132,7 +132,7 @@ class TestDynamicDim:
 
         host = _make_host()
         _init_with_embedder(host, tmp_path / "memory.db", model=None, dim=768)
-        # Default GGUF embedder is EmbeddingGemma 300M (replaced nomic).
+        # Default GGUF embedder is EmbeddingGemma 300M.
         assert host._embedding_model == EMBEDDING_MODEL
         assert host._embedding_model == "user.embeddinggemma-300m-GGUF"
         assert host._embedding_dim == 768
@@ -213,7 +213,7 @@ class TestEmbedderChangeInvalidation:
         store = MemoryStore(db_path=db_path)
         kid = store.store(category="fact", content="water is wet")
         store.store_embedding(kid, np.zeros(768, dtype=np.float32).tobytes())
-        store.set_embedder_id("nomic-embed-text-v2-moe-GGUF")
+        store.set_embedder_id("user.embeddinggemma-300m-GGUF")
         store.close()
 
         host = _make_host()
@@ -221,9 +221,42 @@ class TestEmbedderChangeInvalidation:
             "gaia.agents.base.memory_store.MemoryStore.clear_all_embeddings"
         ) as clear:
             _init_with_embedder(
-                host, db_path, model="nomic-embed-text-v2-moe-GGUF", dim=768
+                host, db_path, model="user.embeddinggemma-300m-GGUF", dim=768
             )
             clear.assert_not_called()
+
+    def test_unstamped_legacy_vectors_are_reembedded(self, tmp_path, monkeypatch):
+        """Memory written before the embedder was stamped holds nomic vectors;
+        they must be cleared and re-embedded, not mixed with the new space."""
+        monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+        from gaia.agents.base.memory import MemoryMixin
+
+        db_path = tmp_path / "memory.db"
+        store = MemoryStore(db_path=db_path)
+        kid = store.store(category="fact", content="the sky is blue")
+        legacy = np.zeros(768, dtype=np.float32)
+        store.store_embedding(kid, legacy.tobytes())
+        assert store.get_embedder_id() is None
+        store.close()
+
+        host = _make_host()
+        vec = np.ones(768, dtype=np.float32)
+        with (
+            patch.object(MemoryMixin, "_get_embedder", return_value=MagicMock()),
+            patch.object(MemoryMixin, "_embed_text", return_value=vec),
+            patch.object(MemoryMixin, "init_system_context", return_value=None),
+        ):
+            host.init_memory(
+                db_path=db_path, embedding_model="user.embeddinggemma-300m-GGUF"
+            )
+
+        store = host._memory_store
+        assert store.get_embedder_id() == "user.embeddinggemma-300m-GGUF"
+        assert store.get_embedding_coverage()["without_embedding"] == 0
+        (item,) = store.get_items_with_embeddings()
+        assert not np.array_equal(
+            np.frombuffer(item["embedding"], dtype=np.float32), legacy
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +282,31 @@ class TestMemoryStoreEmbedderMarker:
             assert store.get_embedding_coverage()["without_embedding"] == 0
             cleared = store.clear_all_embeddings()
             assert cleared == 1
+            assert store.get_embedding_coverage()["without_embedding"] == 1
+        finally:
+            store.close()
+
+    def test_reconcile_embedder(self, tmp_path):
+        store = MemoryStore(db_path=tmp_path / "memory.db")
+        try:
+            assert store.reconcile_embedder("a") == 0  # fresh DB: stamp only
+            assert store.get_embedder_id() == "a"
+            kid = store.store(category="fact", content="hello")
+            store.store_embedding(kid, np.zeros(768, dtype=np.float32).tobytes())
+            assert store.reconcile_embedder("a") == 0  # unchanged: keep
+            assert store.reconcile_embedder("b") == 1  # changed: clear
+            assert store.get_embedder_id() == "b"
+            assert store.get_embedding_coverage()["without_embedding"] == 1
+        finally:
+            store.close()
+
+    def test_reconcile_clears_unstamped_vectors(self, tmp_path):
+        """Vectors with no stamp predate the marker (nomic era) — cleared."""
+        store = MemoryStore(db_path=tmp_path / "memory.db")
+        try:
+            kid = store.store(category="fact", content="hello")
+            store.store_embedding(kid, np.zeros(768, dtype=np.float32).tobytes())
+            assert store.reconcile_embedder("user.embeddinggemma-300m-GGUF") == 1
             assert store.get_embedding_coverage()["without_embedding"] == 1
         finally:
             store.close()

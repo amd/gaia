@@ -398,7 +398,7 @@ Source is visible in the dashboard and helps users understand why the agent "kno
 
 After storage, the item is embedded via Lemonade (`user.embeddinggemma-300m-GGUF`, 768-dim) and the embedding BLOB is written back. `init_memory()` validates Lemonade connectivity at startup; if the endpoint is unreachable it disables memory for the session rather than raising (see [Hard Requirements](#hard-requirements)). All knowledge items must end up with embeddings; items without one -- from a schema migration, or from a `--chat-only` bootstrap run on a machine with no embedder -- are backfilled at the next agent start.
 
-The embedder switched from `nomic-embed-text-v2-moe-GGUF` to `user.embeddinggemma-300m-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so the embedding schema is unchanged — but old nomic vectors are not comparable to EmbeddingGemma vectors, so the changed model name invalidates the stored embeddings and existing stores are re-embedded automatically on the next run.
+The `meta` table records the embedder that produced the stored vectors (`MemoryStore.reconcile_embedder`). A different or missing record — memory written before v0.22.0 carries no record and holds `nomic-embed-text-v2-moe-GGUF` vectors — clears every stored vector with a logged warning, and backfill re-embeds them with the active model. Vectors from two models never share an index.
 
 ### Dedup
 

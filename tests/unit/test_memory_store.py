@@ -3855,7 +3855,7 @@ class TestStoreEmbedding:
     def test_clear_all_embeddings_nulls_vectors_keeps_rows(self, store):
         """clear_all_embeddings() NULLs stored vectors but keeps the rows.
 
-        Used on an embedding-model change (nomic → EmbeddingGemma): old vectors
+        Used on an embedding-model change: old vectors
         aren't comparable to new-model queries, so they must be regenerated —
         but the knowledge itself must survive so backfill can re-embed it.
         """
