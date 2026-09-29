@@ -270,9 +270,12 @@ def test_the_readiness_probe_takes_no_request_parameters():
 #: chat profile picked it up too. Raised again from 2800 when #3335 put the
 #: three ``cli_setup`` tools inside the chat profile's early return: their
 #: schemas cost 497 tokens, measured, which took the bare profile to 2,860.
-#: Still under a fifth of the default profile's cost; see
+#: Raised again from 3100 when the persistent shell session's
+#: ``get_shell_state`` / ``reset_shell_session`` (#3380) joined the same
+#: ``register_shell_tools`` call the bare profile already makes unconditionally
+#: — measured at 3,170. Still under a fifth of the default profile's cost; see
 #: ``test_fast_mode_costs_a_fraction_of_the_default``.
-FAST_PREFILL_CEILING = 3100
+FAST_PREFILL_CEILING = 3300
 
 
 @contextlib.contextmanager
@@ -336,18 +339,25 @@ def test_fast_mode_registers_only_the_conversational_surface():
         registered = sorted(agent._tools_registry)
     # Unconditional. `check_cli_setup`/`install_cli`/`sign_in_cli` joined the
     # bare profile in #3335 — a skill's CLI setup is conversational by design.
+    # `get_shell_state`/`reset_shell_session` (#3380) ship in the same
+    # `register_shell_tools` call as `run_shell_command`, so the bare profile
+    # picked them up too.
     assert {
         "check_cli_setup",
+        "get_shell_state",
         "install_cli",
         "read_tool_output",
+        "reset_shell_session",
         "run_shell_command",
         "sign_in_cli",
         "wait_for_condition",
     } <= set(registered)
     assert set(registered) <= {
         "check_cli_setup",
+        "get_shell_state",
         "install_cli",
         "read_tool_output",
+        "reset_shell_session",
         "run_shell_command",
         "search_documentation",
         "search_web",

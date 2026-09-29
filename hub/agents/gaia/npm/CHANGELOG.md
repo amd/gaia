@@ -68,10 +68,10 @@ the terminal UI meant building it from source.
   human, never the model, and the session is stored encrypted. Acting inside a
   session you signed in to asks first. Ships behind the optional `browser`
   extra; without it none of the eight register. Registered tool count goes
-  86 → 94.
+  88 → 96.
 - **Fast mode, for a session that's only conversation.** `GAIA_FAST=1` drops
   the flagship to a plain conversational surface for the whole session —
-  2,860 tokens of fixed prompt instead of 17,620 — so saying "hi" no longer
+  3,170 tokens of fixed prompt instead of 17,620 — so saying "hi" no longer
   costs as much as a repo search. Session-scoped and one-way: a fast session
   has no documents, files, web or skills and cannot pick them up mid-way.
 
