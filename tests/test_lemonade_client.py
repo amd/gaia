@@ -756,6 +756,9 @@ class TestLemonadeClientMock(unittest.TestCase):
                 with self.assertRaises(LemonadeClientError) as ctx:
                     self.client.load_model(model_name=TEST_MODEL, load_retries=2)
             self.assertIn("llama-server failed to start", str(ctx.exception))
+            # A crash that outlives the retries names the fix, not just the
+            # symptom (#1831).
+            self.assertIn("GGML_VK_DISABLE_COOPMAT=1", str(ctx.exception))
             # 1 initial attempt + 2 retries = 3 load calls.
             self.assertEqual(len(responses.calls), 3)
         finally:

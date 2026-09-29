@@ -1065,6 +1065,22 @@ def _validate_profile_model_registry() -> None:
 _validate_profile_model_registry()
 
 
+def backend_crash_remedy(model: str) -> str:
+    """What to do when Lemonade is up but llama-server dies loading ``model``."""
+    return (
+        f"Lemonade is running, but llama.cpp exited while loading '{model}'. "
+        "On an AMD Radeon GPU with the Vulkan backend, the likely cause is "
+        "llama.cpp's cooperative-matrix crash: Lemonade must start with "
+        "GGML_VK_DISABLE_COOPMAT=1. GAIA sets it on servers it starts, so run "
+        "`gaia lemonade embedded stop`, then `gaia lemonade embedded start`. "
+        "A Lemonade you run yourself needs it set before it starts (for the "
+        "systemd service: `systemctl --user edit lemond`, add "
+        "`Environment=GGML_VK_DISABLE_COOPMAT=1` under [Service], then "
+        "`systemctl --user restart lemond`). Otherwise, Lemonade's server log "
+        "has llama-server's own output."
+    )
+
+
 class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
 
@@ -4731,6 +4747,12 @@ class LemonadeClient:
             if not (auto_download and self._is_model_error(e)):
                 # Not a model error or auto_download disabled - re-raise
                 self.log.error(f"Failed to load {model_name}: {original_error}")
+                if self._is_transient_load_error(e):
+                    # Outlived any retries, so name the likely cause.
+                    raise LemonadeClientError(
+                        f"Failed to load {model_name}: {original_error}. "
+                        f"{backend_crash_remedy(model_name)}"
+                    ) from e
                 if isinstance(e, LemonadeClientError):
                     raise
                 raise LemonadeClientError(

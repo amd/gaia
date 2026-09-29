@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from gaia.llm.lemonade_launcher import (
+    LLAMACPP_ENV,
     build_start_command,
     get_installed_version,
     resolve_lemonade,
@@ -182,11 +183,12 @@ def test_get_installed_version_parses_legacy_client_output(mocker):
 # ---------------------------------------------------------------------------
 
 
-def test_build_start_command_modern_windows():
+def test_build_start_command_modern_windows(mocker):
     """Modern Windows: argv=[<LemonadeServer.exe path>, '--silent'],
-    env={'LEMONADE_CTX_SIZE': '32768'} — ctx size travels via env, not argv."""
+    ctx size via LEMONADE_CTX_SIZE env — not argv."""
     from gaia.llm.lemonade_launcher import LemonadeTooling
 
+    mocker.patch("platform.system", return_value="Windows")
     tooling = LemonadeTooling(
         found=True,
         kind="modern",
@@ -202,12 +204,12 @@ def test_build_start_command_modern_windows():
         r"C:\Users\test\AppData\Local\lemonade_server\bin\LemonadeServer.exe",
         "--silent",
     ]
-    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
+    assert spec.env == {"LEMONADE_CTX_SIZE": "32768", **LLAMACPP_ENV}
 
 
 def test_build_start_command_legacy(mocker):
     """Legacy (non-Windows): argv=['lemonade-server', 'serve', '--ctx-size',
-    '32768'], env={} — unchanged from today's behavior."""
+    '32768'] — unchanged from today's behavior."""
     from gaia.llm.lemonade_launcher import LemonadeTooling
 
     mocker.patch("platform.system", return_value="Linux")
@@ -221,7 +223,7 @@ def test_build_start_command_legacy(mocker):
     spec = build_start_command(tooling, ctx_size=32768)
 
     assert spec.argv == ["lemonade-server", "serve", "--ctx-size", "32768"]
-    assert spec.env == {}
+    assert spec.env == LLAMACPP_ENV
 
 
 def test_build_start_command_legacy_windows_includes_no_tray(mocker):
@@ -244,7 +246,7 @@ def test_build_start_command_legacy_windows_includes_no_tray(mocker):
     assert "--no-tray" in spec.argv
     idx = spec.argv.index("--ctx-size")
     assert spec.argv[idx + 1] == "32768"
-    assert spec.env == {}
+    assert spec.env == LLAMACPP_ENV
 
 
 def test_build_start_command_modern_linux_uses_systemctl(mocker):
@@ -275,6 +277,7 @@ def test_env_override_modern_non_exe_launched_verbatim(mocker):
     Windows .exe (e.g. an explicit Linux daemon path) is launched verbatim —
     never silently rerouted to systemctl."""
     mocker.patch.dict(os.environ, {"LEMONADE_SERVER_PATH": "/opt/lemonade/lemond"})
+    mocker.patch("platform.system", return_value="Linux")
 
     tooling = resolve_lemonade()
     assert tooling.source == "env"
@@ -283,7 +286,31 @@ def test_env_override_modern_non_exe_launched_verbatim(mocker):
     spec = build_start_command(tooling, ctx_size=32768)
 
     assert spec.argv == ["/opt/lemonade/lemond"]
-    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
+    assert spec.env == {"LEMONADE_CTX_SIZE": "32768", **LLAMACPP_ENV}
+
+
+@pytest.mark.parametrize(
+    "system, tooling_kwargs",
+    [
+        (
+            "Windows",
+            {"kind": "modern", "server_launcher": r"C:\lemonade\LemonadeServer.exe"},
+        ),
+        ("Windows", {"kind": "legacy", "server_launcher": r"C:\lemonade-server.exe"}),
+        ("Linux", {"kind": "legacy", "server_launcher": "lemonade-server"}),
+    ],
+)
+def test_every_process_gaia_spawns_disables_vulkan_coopmat(
+    mocker, system, tooling_kwargs
+):
+    """Without it llama-server crashes loading any embedder on Radeon 8060S
+    Vulkan, so memory and RAG never come up (#1831)."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling
+
+    mocker.patch("platform.system", return_value=system)
+    spec = build_start_command(LemonadeTooling(found=True, **tooling_kwargs), None)
+
+    assert spec.env["GGML_VK_DISABLE_COOPMAT"] == "1"
 
 
 def test_probe_resolved_modern_linux_still_uses_systemctl(mocker):
@@ -561,7 +588,9 @@ def test_start_hint_legacy_still_names_lemonade_server_serve(mocker):
 
     hint = describe_start_hint(ctx_size=8192)
 
-    assert hint.command == "/usr/local/bin/lemonade-server serve --ctx-size 8192"
+    assert hint.command == (
+        "GGML_VK_DISABLE_COOPMAT=1 /usr/local/bin/lemonade-server serve --ctx-size 8192"
+    )
     assert hint.foreground is True
 
 
@@ -608,7 +637,10 @@ def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
 
     assert hint.command is not None
     assert "'" not in hint.command
-    assert hint.command.startswith('"C:\\Program Files')
+    assert hint.command == (
+        'set GGML_VK_DISABLE_COOPMAT=1 && "C:\\Program Files\\lemonade\\'
+        'lemonade-server.exe" serve --no-tray'
+    )
 
 
 def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
@@ -634,7 +666,10 @@ def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
     assert hint.command is not None
     assert "LEMONADE_CTX_SIZE=32768" in hint.command
     assert not hint.command.startswith("LEMONADE_CTX_SIZE")
-    assert hint.command.startswith("set LEMONADE_CTX_SIZE=32768 && ")
+    assert hint.command == (
+        "set GGML_VK_DISABLE_COOPMAT=1 && set LEMONADE_CTX_SIZE=32768 && "
+        "C:\\lemonade\\lemond"
+    )
 
 
 def test_start_hint_macos_names_the_daemon_via_real_detection(mocker):

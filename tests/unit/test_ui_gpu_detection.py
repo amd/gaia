@@ -192,11 +192,13 @@ def test_system_status_renders_the_complete_context_remedy(
     body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
 
     if kind == "legacy":
-        assert (
-            body["start_command"] == "/usr/bin/lemonade-server serve --ctx-size 32768"
+        assert body["start_command"] == (
+            "GGML_VK_DISABLE_COOPMAT=1 /usr/bin/lemonade-server serve --ctx-size 32768"
         )
     elif source == "env":
-        assert body["start_command"] == "LEMONADE_CTX_SIZE=32768 /usr/bin/lemond"
+        assert body["start_command"] == (
+            "GGML_VK_DISABLE_COOPMAT=1 LEMONADE_CTX_SIZE=32768 /usr/bin/lemond"
+        )
     else:
         assert body["start_command"] is None
         assert "32768" in body["start_instruction"]
