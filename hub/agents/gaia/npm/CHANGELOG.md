@@ -61,6 +61,26 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **The agent can drive a real browser.** Pages behind JavaScript or a login
+  used to be out of reach — `fetch_page` is one HTTP GET, so a signed-in inbox
+  or a dashboard came back empty. Eight new tools open a real Chromium, read
+  it, click and type in it, and sign in to a site; the password goes to the
+  human, never the model, and the session is stored encrypted. Acting inside a
+  session you signed in to asks first. Ships behind the optional `browser`
+  extra; without it none of the eight register. Registered tool count goes
+  88 → 96.
+- **Fast mode, for a session that's only conversation.** `GAIA_FAST=1` drops
+  the flagship to a plain conversational surface for the whole session —
+  3,110 tokens of fixed prompt instead of 17,942 — so saying "hi" no longer
+  costs as much as a repo search. Session-scoped and one-way: a fast session
+  has no documents, files, web or skills and cannot pick them up mid-way.
+
+- **`chat`, `doc` and `file` are no longer offered as agents.** New users saw
+  four entries in the picker where only one is the product. The three ids still
+  resolve, so existing sessions, `*-lite` aliases and eval scenarios keep
+  working — they are hidden, not deleted, and `ChatAgent` remains the
+  flagship's base class. A session created without an explicit agent now lands
+  on the flagship rather than a hidden agent.
 - **Complete inventories from long documents.** Asking for every exercise,
   action item or finding in a transcript now returns all of them, each with its
   source quote, instead of a condensed list. The opt-in `document-extract` skill

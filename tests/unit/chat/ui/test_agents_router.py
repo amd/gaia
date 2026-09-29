@@ -84,6 +84,29 @@ class TestListAgents:
         assert "chat" in ids
         assert "gaia" in ids
 
+    def test_hidden_agents_are_not_listed(self):
+        """The picker must not offer a hidden agent. Retiring chat/doc/file
+        rests entirely on this filter — they stay in the registry so stored
+        sessions resolve, and only this endpoint's exclusion keeps them out of
+        the UI.
+        """
+        registry = make_mock_registry(("gaia", "GAIA"), ("doc", "Doc Agent"))
+        for reg in registry.list.return_value:
+            if reg.id == "doc":
+                reg.hidden = True
+        app = create_app(db_path=":memory:")
+        app.state.agent_registry = registry
+
+        # The endpoint also unions in hub-installed sidecars (#2118), so a dev
+        # machine with one installed would fail this on an unrelated id.
+        with patch("gaia.hub.installer.list_installed", return_value={}):
+            data = TestClient(app).get("/api/agents").json()
+        ids = [a["id"] for a in data["agents"]]
+        assert ids == ["gaia"]
+        assert data["total"] == 1
+        # Still resolvable by id — hidden removes the choice, not the route.
+        assert registry.get("doc") is not None
+
     def test_total_matches_agents_count(self, client):
         data = client.get("/api/agents").json()
         assert data["total"] == len(data["agents"])

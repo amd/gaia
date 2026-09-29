@@ -121,13 +121,17 @@ jobs:
           # real RAGSDK — RAGSDK._check_dependencies() raises ImportError without
           # them. They live only in the [rag]/[ui] extras, which this job (like the
           # RAG dependencies above) does not install.
+          # playwright is required by tests/unit/agents/test_builder_template_host_wiring.py:
+          # it walks KNOWN_TOOLS and asserts each one registers tools, and the
+          # browser_use mixin registers nothing when Playwright is unimportable.
+          # The wheel alone is enough — no `playwright install` browser download.
           # python-docx, python-pptx, reportlab and slack-sdk: tests/unit/rag/,
           # tests/unit/eval/test_pdf_document_generator.py and
           # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
           # module level, so without them those files skip wholesale (#4206).
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf python-docx python-pptx reportlab slack-sdk
+                                  faiss-cpu pypdf playwright python-docx python-pptx reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
       - name: Check no test file skips wholesale
@@ -301,7 +305,13 @@ jobs:
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
                                   faiss-cpu pypdf
-          uv pip install --system -e ".[api,mcp]"
+          uv pip install --system -e ".[api,mcp,browser]"
+
+      # test_browser_use_live.py drives a real Chromium against a local HTML
+      # file. The wheel alone is not enough here — this lane needs the browser
+      # binary, which is what makes it the only lane that can run it.
+      - name: Install Chromium for the browser-use tests
+        run: playwright install --with-deps chromium
 
       - name: Check no test file skips wholesale
         run: python util/check_module_skips.py --workflow test_unit.yml --job offline-integration
@@ -313,6 +323,7 @@ jobs:
             tests/test_sdk.py \
             tests/test_hardware_advisor_agent.py \
             tests/installer/test_installer_scenarios.py \
+            tests/integration/test_browser_use_live.py \
             tests/integration/test_chat_hub_wheel_journey.py \
             tests/integration/test_chat_ui_integration.py \
             tests/integration/test_documents_router.py \
@@ -360,13 +371,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py
-          # (see the main unit-tests job's install step for why) — this job runs the
-          # same tests/unit/ suite with -x, so a missing dep here doesn't just fail
-          # loudly, it truncates the whole macOS smoke run at that test.
+          # faiss-cpu + pypdf + playwright are required by tests/unit/ (see the main
+          # unit-tests job's install step for why) — this job runs the same suite
+          # with -x, so a missing dep here doesn't just fail loudly, it truncates
+          # the whole macOS smoke run at that test.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf
+                                  faiss-cpu pypdf playwright
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -418,7 +429,7 @@ jobs:
           # one is needed.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf
+                                  faiss-cpu pypdf playwright
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity

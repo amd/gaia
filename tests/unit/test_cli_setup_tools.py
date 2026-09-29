@@ -78,13 +78,21 @@ class _Host(CliSetupToolsMixin):
 
 
 class _Gated(ShellToolsMixin):
-    """A host wired to the real confirmation gate, with a live ``gh`` grant."""
+    """A host wired to the real confirmation gate, with a live ``gh`` grant.
+
+    Borrows ``Agent``'s gate methods rather than subclassing it, so every
+    collaborator ``_tool_requires_confirmation`` reaches for has to be copied
+    across explicitly — ``CONFIRMATION_HOOKS``/``confirmation_hooks`` joined
+    that set when the browser tools arrived with a per-call gate.
+    """
 
     from gaia.agents.base.agent import Agent as _Agent
 
     CONFIRMATION_REQUIRED_TOOLS: tuple = ()
+    CONFIRMATION_HOOKS: tuple = ()
     _tools_registry: dict = {}
     confirmation_required_tools = _Agent.confirmation_required_tools
+    confirmation_hooks = _Agent.confirmation_hooks
     _call_is_pre_authorized = _Agent._call_is_pre_authorized
     _tool_requires_confirmation = _Agent._tool_requires_confirmation
 

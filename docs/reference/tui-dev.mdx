@@ -1,0 +1,258 @@
+---
+title: "Terminal UI — Developer Manual"
+description: "Build gaia-tui from source, drive it from a script through the control API, and debug it"
+icon: "wrench"
+---
+
+# GAIA Terminal UI — Developer Manual
+
+For working *on* the TUI, or driving it from a test or an assistant. Using it
+day to day is the [user manual](/guides/terminal-hub).
+
+## What it is made of
+
+Three processes, and knowing which one you are looking at saves most of the
+debugging time:
+
+```
+gaia-tui            Go. The terminal app and the control API.
+  └─ gaia-agent     Python subprocess, spawned once per session. The agent loop
+                    and every tool.
+       └─ Lemonade  HTTP server. Runs local models and routes cloud chat.
+```
+
+The readiness gate straddles all three: the **GAIA agent** and **Lemonade** rows
+are checked by the Go side; the **Language model** row shells out to
+`gaia init --check`, which is Python and talks to Lemonade.
+
+<Warning>
+**The agent subprocess is spawned once and outlives your edits.** Change Python
+source and the running TUI keeps executing the old code — a measurement taken
+without restarting is a measurement of the previous build. Restart the TUI
+after touching anything under `src/gaia/` or `hub/agents/`. This is the single
+easiest way to waste an hour.
+</Warning>
+
+## Building
+
+Needs `git`, [Go](https://go.dev/dl/), and a Python env with `gaia` installed.
+
+```bash
+cd gaia && uv venv && uv pip install -e .
+cd tui && make build          # -> tui/bin/gaia-tui
+```
+
+Other targets: `test`, `test-race`, `lint`, `vet`, `cover`, `mock-agent`,
+`dev` (build + mock-agent), `clean`.
+
+For a dev run against your checkout:
+
+```bash
+scripts/dev/run-tui.sh --dev --control
+```
+
+`--dev` shows per-turn timings, steps, and tool arguments **on screen**;
+`--trace=<path>` writes the same events to JSONL instead. They are independent.
+
+### Point it at your checkout, not the published sidecar
+
+`mode: user` runs the **published frozen sidecar**, which is routinely older
+than source. When testing an agent from a checkout, set the matching mode on the
+TUI launch so its ensure request agrees:
+
+```bash
+GAIA_GAIA_AGENT_MODE=dev gaia-tui     # flagship
+GAIA_EMAIL_AGENT_MODE=dev gaia-tui    # email
+```
+
+Starting a dev sidecar separately while the TUI still defaults to `user` creates
+a mode conflict. `GET /daemon/v1/agents` shows the `api_version` actually in
+use.
+
+### Know which branch you built
+
+Stacked branches are siblings; no single branch has everything. A leaf build
+shows behaviour already fixed elsewhere — that has produced bug reports for
+things fixed on another branch. Build from a merged integration branch, or state
+explicitly which slice you tested.
+
+## The control API
+
+Off by default. `--control` auto-assigns a port; `--control-port N` pins one. It
+binds `127.0.0.1` only and is bearer-token authenticated.
+
+The token is written to `$GAIA_TUI_HOME/control.json` (mode 0600), defaulting to
+`~/.gaia/tui/control.json`. Set `GAIA_TUI_HOME` to keep parallel sessions from
+colliding.
+
+```bash
+TOKEN=$(python3 -c "import json;print(json.load(open('$GAIA_TUI_HOME/control.json'))['token'])")
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8815/control/v1/status
+```
+
+### Endpoints
+
+All under `/control/v1/`.
+
+| Endpoint | Method | Body | Returns |
+|---|---|---|---|
+| `status` | GET | — | view, agent, streaming, size, pid, frame_seq |
+| `screen` | GET | `?format=plain\|ansi` | rendered frame |
+| `keys` | POST | `{"keys": ["p"]}` | `{sent, seq, settled}` |
+| `text` | POST | `{"text": "..."}` | `{sent_runes, seq, settled}` |
+| `wait` | POST | see below | blocks server-side |
+| `resize` | POST | `{"cols": 160, "rows": 50}` | — |
+| `frames` | GET | — | frame history |
+
+<Warning>
+**`keys` takes an array of strings, not a string.** `{"keys": "p"}` is rejected
+with `cannot unmarshal string into Go struct field keysRequest.keys of type
+[]string`. Named keys go in the same array: `["down"]`, `["enter"]`, `["esc"]`,
+`["ctrl+d"]`.
+</Warning>
+
+`text` types into the composer but does **not** submit. Follow it with
+`{"keys":["enter"]}`.
+
+### Wait, never sleep
+
+`POST /control/v1/wait` blocks server-side until a condition holds, with
+`timeout_ms`:
+
+```jsonc
+{"contains": "Landed", "timeout_ms": 120000}
+{"absent":   "streaming", "timeout_ms": 180000}
+{"state":    {"view": "chat"}, "timeout_ms": 120000}   // conditions are ANDed
+```
+
+A turn takes anywhere from 30s to several minutes depending on the model and the
+tools it reaches for. A fixed `sleep` is either a wasted minute or a
+half-rendered capture.
+
+<Note>
+`{"state": {"streaming": false}}` can match the instant *before* a turn starts,
+because it was not streaming yet either. Submit, confirm `streaming` went true,
+and only then wait for it to go false — or poll `status` until it reports false.
+</Note>
+
+### State values
+
+`view` is `splash` · `preflight` · `chat` · `unknown`. There is no hub screen:
+the TUI boots into one agent's chat behind the readiness gate.
+
+On `preflight`, `blocker` names the row refusing the launch: `binary`,
+`lemonade`, `model`, `daemon`, `sidecar`, `mailbox`. Wait on
+`{"state": {"view": "chat"}}` rather than a screen substring.
+
+`esc` quits on `preflight` (there is no screen behind it) and clears the
+composer on an idle `chat`.
+
+## Giving it a terminal
+
+The TUI queries terminal size and colour support at startup, so it needs a real
+pty. Two things that do **not** work from a tool call or CI step:
+
+- `script -q /dev/null ...` — fails with `tcgetattr/ioctl: Operation not
+  supported on socket` when stdout is a socket.
+- `osascript -e 'tell application "Terminal" to do script ...'` — can return
+  `AppleEvent timed out (-1712)` and leave nothing running.
+
+What works is allocating the pty yourself:
+
+```python
+import os, pty, fcntl, termios, struct
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm-256color"
+    os.execv(tui_path, [tui_path, "--control-port", "8815", "--dev"])
+
+# Size it, or cols/rows are 0 and every capture wraps wrongly.
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 160, 0, 0))
+while True:                       # drain, or the child blocks on a full buffer
+    if not os.read(fd, 65536):
+        break
+```
+
+Call `resize` **first** in any drive script for the same reason.
+
+### Colour
+
+`GET /screen?format=ansi` and count `\x1b`: dozens on a styled frame, zero means
+the colour profile degraded at launch. On Windows, launch through `wt.exe` — a
+`cmd.exe` window spawned by `Start-Process` lands in legacy conhost, reports no
+colour support, and the TUI then emits no escape sequences at all. It reads as
+"syntax highlighting is broken" but nothing is broken.
+
+## Capture mistakes that produce false bug reports
+
+- **Always capture the whole screen.** A cropped capture once produced a
+  fabricated "uninstall silently does nothing" — the status line is the
+  second-to-last row.
+- **Check which screen you are on** before sending keys. Keys sent to the wrong
+  screen do nothing and read as "the binding is broken".
+- **Grep for the right words.** The confirmation prompt says
+  `Confirm: <tool>` and `DESTRUCTIVE`, not "Allow".
+- **`format=plain` strips ANSI**, so it cannot answer a colour question.
+- `screencapture` is blocked on some machines; use the control API text.
+
+## Logs and traces
+
+| What | Where |
+|---|---|
+| TUI control/state log | `$GAIA_TUI_HOME/gaia-tui.log` |
+| Agent debug log | `~/.gaia/logs/gaia-agent.log` |
+| Lemonade (embedded) | `~/.gaia/lemonade/lemond.log` |
+| Event trace | `~/.gaia/traces/<ts>-<agent>.jsonl` via `--trace` |
+
+The agent log is where tool calls live, with arguments and results:
+
+```bash
+grep -E "Executing tool|Tool execution result" ~/.gaia/logs/gaia-agent.log
+```
+
+The `TOOL_LOADER` lines record which tools were selected for each turn — the
+first thing to check when the agent claims a capability "isn't available".
+
+<Warning>
+A trace holds whatever the agent read — file contents, shell output, email.
+Review before sharing. The control log omits input contents and masks pasted
+credentials by design.
+</Warning>
+
+## Running a local model on a dev box
+
+The embedded Lemonade is self-contained and does not need a system install:
+
+```bash
+gaia lemonade embedded install     # downloads the platform artifact
+gaia lemonade embedded start       # prints its port and writes env.sh
+source ~/.gaia/lemonade/env.sh     # LEMONADE_BASE_URL + LEMONADE_API_KEY
+gaia lemonade embedded status
+```
+
+It is private: its URL and key are its own, and other configured servers never
+inherit them. Cloud routing needs 11.8.1 or later.
+
+`gaia init --check` is the exact gate the preflight screen uses, and it names
+the missing model id:
+
+```
+NOT READY: profile 'gaia' needs setup
+  - Model 'user.embeddinggemma-300m-GGUF' is not downloaded
+```
+
+<Warning>
+`user.`-prefixed models are **custom registrations**: pulling one requires
+`checkpoint` + `recipe` (+ `embedding` for an embedder). Built-in models are the
+opposite — pulling one *with* a recipe makes Lemonade treat it as a new
+registration and 400 (#1655). `gaia init` gets this right;
+`readiness.pull_model` posts `model_name` only and therefore cannot pull a
+`user.` model — it returns HTTP 500 `not registered with Lemonade Server`.
+</Warning>
+
+## Related
+
+- [User manual](/guides/terminal-hub)
+- [`tui/README.md`](https://github.com/amd/gaia/blob/main/tui/README.md) — install and binaries
+- [CLI reference](/reference/cli)

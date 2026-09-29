@@ -341,7 +341,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Twelve of the agent's 86 tools mutate the machine and need explicit approval
+Twelve of the agent's 96 tools mutate the machine and need explicit approval
 before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
@@ -357,6 +357,14 @@ land is additionally **code-inert**: its instructions load, but any
 `gaia skill promote <name>` in a terminal. Everything else — reading,
 indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
 — runs without asking.
+
+The eight live-browser tools are gated by a **hook**, not a set, so a name
+alone does not tell you whether a call will ask. `browser_login` always asks.
+`browser_click` / `browser_type` ask when the call acts inside a session the
+run signed in to, or when the target element's label reads irreversible, and
+run unasked on the open web. The hook **fails closed**: if the browser cannot
+be asked what state it is in, the call is treated as authenticated and prompts.
+Design a workflow around the approval path, not around a fixed tool list.
 
 **Contract ≥ 2.14 can answer one.** Send a `session_id` and leave
 `can_answer_questions` unset (or `true`). The stream emits `needs_confirmation`

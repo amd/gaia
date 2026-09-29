@@ -292,6 +292,15 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "open_url": "Opening link",
     "download_file": "Downloading file",
     "bookmark": "Saving bookmark",
+    # Live browser
+    "browser_open": "Opening a page in the browser",
+    "browser_snapshot": "Looking at the page",
+    "browser_click": "Clicking on the page",
+    "browser_type": "Typing on the page",
+    "browser_find": "Searching the page",
+    "browser_back": "Going back a page",
+    "browser_login": "Waiting for you to sign in",
+    "browser_sessions": "Listing saved sign-ins",
     # Code
     "index_codebase": "Indexing codebase",
     "search_code_index": "Searching code index",

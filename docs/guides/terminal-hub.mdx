@@ -424,6 +424,36 @@ If that file exists but can't be parsed, `/cost` says so and names the problem r
 than reporting "no rate configured" — otherwise you would edit a file that is already
 being ignored.
 
+To run a turn somewhere other than this machine — Fireworks AI or your
+organisation's AMD LLM Gateway — press **p** at the readiness gate or type
+`/provider`. See [AI providers](/guides/ai-providers).
+
+## When GAIA asks permission
+
+Some tools do things that are hard to undo. Those stop and ask:
+
+```
+DESTRUCTIVE  Confirm: browser_login
+
+ Run 'browser_login' with url="https://github.com/login"?
+
+ This is a destructive action and may not be reversible.
+
+ y run once · n/esc deny · waits for you
+```
+
+**y** runs it once, **n** or **esc** denies. Denying is a normal outcome, not an
+error — the agent is told and carries on.
+
+The prompt names the tool *and its arguments*, because the argument is usually
+the part that matters. An "always allow" answer, where offered, is scoped to
+that specific call — approving `gh issue list` once does not hand over your
+shell for the session.
+
+`--bypass-permissions` runs every tool without asking, and the TUI shows a
+persistent warning the whole time it is on. `/bypass off` turns it off
+mid-session.
+
 ## Running another agent
 
 The flagship is the default, but `gaia-tui` can also drive `email` by id — it keeps
@@ -451,6 +481,26 @@ query (SSH, tmux, a CI log) — if the screen comes out hard to read, force a mo
 ```bash
 GAIA_TUI_THEME=light gaia-tui    # or dark; unset or "auto" = detect
 ```
+
+## Troubleshooting
+
+**"not downloaded yet" when a chat model already works.** The **Language
+model** row covers the embedding model too, and the embedder is what usually
+blocks a machine that can already chat. The row says "Several GB" because that
+is the common case; if chat works, the missing piece is the ~300 MB
+`user.embeddinggemma-300m-GGUF`. `gaia init --check` names the exact model id,
+and **f** fetches just what is missing.
+
+**The gate says Lemonade is fine but chat fails.** The gate checks that the
+server answers; it does not load a model. Check the server's own log —
+`~/.gaia/lemonade/lemond.log` for the embedded instance.
+
+**A turn is taking minutes.** On a local model most of that is prompt
+processing rather than generation — the status line's `ttft` is the honest
+number. A cloud provider trades that for network latency and privacy.
+
+**It quit with no message.** `gaia-tui status` shows the background service and
+what is installed.
 
 ## Next steps
 

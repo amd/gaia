@@ -24,6 +24,12 @@ _AGENT_SOURCE_SUBDIRS = {
 
 _REPO_URL = "https://github.com/amd/gaia.git"
 
+# Agent ids the ``gaia-agent-chat`` wheel registers — its three prompt
+# profiles. All three are ``hidden`` (resolvable, not selectable), so a stored
+# session can still ask for one on a box that never installed the wheel; the
+# answer there is this package's install command, not "pick another agent".
+CHAT_WHEEL_AGENT_IDS = frozenset({"chat", "doc", "file"})
+
 
 def source_install_command(wheel: str) -> str:
     """Return the pip command that installs ``wheel`` straight from source.

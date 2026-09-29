@@ -58,21 +58,21 @@ _spec.loader.exec_module(capability_matrix)
 # the flagship eval dataset §1/§3).
 # ---------------------------------------------------------------------------
 
-# 88: 82 on main (69 after #3023's `remember_skill_lesson`, plus the email and
+# 96: 88 on main (82 after #3023's `remember_skill_lesson`, the email and
 # image_gen bundles, `run_python`, `capture_skill` and #3402's
-# `wait_for_condition`), plus `sleep`, the three cli_setup tools, and the
-# persistent shell session's `get_shell_state` / `reset_shell_session`.
-_EXPECTED_TOOLS_TOTAL = 88
+# `wait_for_condition`, plus `sleep`, the three cli_setup tools, and the
+# persistent shell session's `get_shell_state` / `reset_shell_session`), plus
+# the eight live-browser tools.
+_EXPECTED_TOOLS_TOTAL = 96
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
-# 16 with this branch's `sleep`, which joins the core set rather than a bundle:
-# waiting out a rate limit is not a capability a query can be matched to.
+# 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
+# rate limit is not a capability a query can be matched to.
 _EXPECTED_CORE_COUNT = 16
-# 22 with the `cli_setup` bundle (check_cli_setup, install_cli, sign_in_cli).
-# 23 with `shell_session` (get_shell_state, reset_shell_session): they are a
-# separate menu line because folding them into `shell` puts it over
-# MAX_BUNDLE_MEMBERS, and one pull-in must not exhaust the dynamic slots.
-_EXPECTED_BUNDLE_COUNT = 23
+# 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
+# reset_shell_session), plus `browser_nav` and `browser_use` — the browser
+# tools arrive as two bundles so one pull-in cannot exhaust the dynamic slots.
+_EXPECTED_BUNDLE_COUNT = 25
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
     {
