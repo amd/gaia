@@ -603,3 +603,19 @@ func TestAWrappedQuestionHangsUnderItsText(t *testing.T) {
 		}
 	}
 }
+
+// Glamour wraps every document in a blank row above and below. On top of the
+// transcript's own spacing that made every gap around an answer two rows, and
+// the finished answer started a row lower than its streamed copy had.
+func TestAnAnswerHasNoBlankRowsOfItsOwn(t *testing.T) {
+	m := feed(t, sizedChat(t, 100, 30), event.CanonicalFinalEvent{Type: "final", Answer: "Fixed — all 4 tests pass."})
+	msg := m.messages[len(m.messages)-1]
+	msg.Duration = 0 // just the answer, no footnote
+	rows := strings.Split(ansi.Strip(m.renderMessage(&msg, nil)), "\n")
+	if first := strings.TrimSpace(rows[0]); first != "Fixed — all 4 tests pass." {
+		t.Errorf("the answer's first row is %q, not its text", first)
+	}
+	if last := strings.TrimSpace(rows[len(rows)-1]); last == "" {
+		t.Errorf("the answer ends in a blank row: %q", rows)
+	}
+}

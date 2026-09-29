@@ -2550,7 +2550,7 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 				msg.Rendered = components.RenderMarkdown(msg.Content)
 				msg.renderedWrap = wrap
 			}
-			content = msg.Rendered
+			content = trimBlankLines(msg.Rendered)
 		}
 		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
 
@@ -2584,6 +2584,22 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 	default:
 		return msg.Content
 	}
+}
+
+// trimBlankLines drops the blank rows glamour puts above and below every
+// document. The transcript spaces its own blocks, so those rows doubled every
+// gap — and the streamed copy has none, so the answer dropped a row when the
+// finished one replaced it.
+func trimBlankLines(s string) string {
+	lines := strings.Split(s, "\n")
+	blank := func(l string) bool { return strings.TrimSpace(ansi.Strip(l)) == "" }
+	for len(lines) > 0 && blank(lines[0]) {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && blank(lines[len(lines)-1]) {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // workLogLines caps how many ACTIONS the live work log keeps. Bounded so a long
