@@ -1,0 +1,186 @@
+---
+title: "Eval Design & Hillclimbing"
+description: "Make GAIA's evals trustworthy enough to optimize against: validated judges, noise-aware gates, scenarios drawn from real failures, and an auto-fix loop that can't overfit"
+icon: "mountain"
+---
+
+# Eval design and hillclimbing
+
+> **Status:** Proposed
+>
+> **Priority:** P1
+>
+> **Related:** [Agent Eval reference](/reference/eval), [Agent benchmarks](/reference/agent-benchmarks),
+> [Nightly benchmarks](/plans/nightly-benchmarks), [#4470](https://github.com/amd/gaia/pull/4470) (nightly suites + worst-of-N expectations),
+> [#1116](https://github.com/amd/gaia/issues/1116) (Agent Factory optimize loop), [#3514](https://github.com/amd/gaia/issues/3514) (`--fix` dirty-tree guard)
+
+---
+
+## 1. The finding
+
+**GAIA can measure the agent, but it can't yet tell a real improvement from noise, and its auto-fix loop has no way to notice it's overfitting.**
+Every CI scenario runs once. The judge has never been checked against a known answer. `--fix`
+edits the agent to pass the failing scenarios and never re-runs the ones that were passing. So an
+edit that games three scenarios and breaks five others reports as a win.
+
+The reference for this plan is Anthropic's write-up on automating eval design and hillclimbing
+([claude.dev blog](https://claude.dev/blog/automating-eval-design-and-hillclimbing/)). Its core claims:
+
+- **Good evals** mirror production, show a stronger model scoring higher, leave headroom (the best model scores well below 100%) and vary little from run to run.
+- **Source tasks from real use first**: production transcripts, then bug reports, then a handful of hand-written cases, and only then synthetic cases anchored to those. Pick hard cases by expert judgment, not by "today's model fails it". That picks one model's blind spots, not hard tasks.
+- **Validate the grader before trusting it.** Read scored transcripts by hand, re-grade identical outputs to catch inconsistent verdicts, and flag infrastructure noise.
+- **Know the noise floor before hillclimbing.** If run-to-run noise is bigger than the smallest gain you'd act on, add repeats or cases first.
+- **Hillclimb on a train split and gate on a held-out split.** One substantive change per round. Keep it only if both splits improve. A gain on train alone means overfitting, so revert it. Stop after 2–3 flat rounds and analyze the remaining failures by root cause.
+- **Never paste failure content or reference answers into the thing being tuned.**
+
+---
+
+## 2. What GAIA has today
+
+Two harnesses, one CI pipeline.
+
+| Surface | What it is | How it grades | Runs per item |
+|---|---|---|---|
+| `gaia eval agent` | 202 YAML scenarios (200 hand-written) in 25 categories; one `claude -p` process plays the user **and** judges | 7 weighted 0–10 dimensions, recomputed in code; PASS needs correctness ≥ 4 and mean ≥ 6.0 | 1 in CI (`--iterations N` exists) |
+| `gaia eval tasks` | 25 outcome tasks on a fresh project copy (`core`, `everyday`, `therock`, …) | Mechanical checks (tests, probes, unchanged files) plus an Opus judge on 4 axes | 1 (`--repeats N` exists) |
+| `gaia eval tasks controls` | 3 planted attempts (ideal / fabricated / did-nothing) at one task | Judge must land in the expected band on each | 1 judging pass |
+| `eval_flagship.yml` | Nightly + PR; 8 scenario lanes, task suites on self-hosted Strix Halo | `--compare` against a baseline dir; task `gate --enforce` against expectations | — |
+
+### What already works
+
+- **Scores are recomputed in code, not trusted from the judge.** A judge that writes "PASS" over a correctness of 2 gets overruled (`runner.py` `_SCORE_WEIGHTS` and the status re-derivation).
+- **The outcome suite grades mechanically where it can.** Tests pass or they don't, and a change only counts as "verified" when a passing run follows the agent's last edit. That's the article's "programmatic grader first".
+- **Judge controls exist for the task suite.** A known-good, a fabricated and a do-nothing attempt must each score in the right band. The scenario judge has no equivalent.
+- **Provenance and integrity are enforced.** Wrong agent type → `INFRA_ERROR`; missing or unmeasured scenarios fail the integrity gate; `--compare` warns on a judge-model mismatch.
+- **Repeats are wired, just unused.** `--iterations` folds N runs into `stable-pass` / `flaky` / `stable-fail` with pass rate and score spread. #4470 adds `gaia eval tasks propose`, which sets gate limits from the worst of N runs.
+- **Real-failure intake has started.** `--capture-session` turns an Agent UI session into a scenario draft. The in-flight tier work (t1–t4, `gaia_resilience`, `gaia_git`) is organized around difficulty, and `gaia_resilience` measures the #4428 blocker loop directly.
+
+### The gaps, worst first
+
+1. **`--fix` can't detect its own regressions.** It re-runs only the failed scenarios and merges them over the old passing results, so its `prev_passing & now_failing` check compares stale data and can never fire. There's no held-out set. The fixer prompt asks it to log a `targets_scenario` per edit, which invites one-case patches, and it reads the judge's `recommended_fix` straight off the failing transcript.
+2. **The scenario judge is unvalidated.** No labelled transcripts, no re-grade consistency check, no agreement number. The simulator and judge are the same model in the same process, and CI pins a different judge model (`claude-sonnet-4-6`) from the local default (`claude-opus-5`).
+3. **Gates treat one run as a measurement.** CI scenario lanes run once; `compare_scorecards` calls a single PASS→FAIL a regression, and a 2.0 score drop too. Neither uses `stability`. The quality floor (0.60 pass rate) came from one Haiku reading. There is no committed baseline, so regression detection is off.
+4. **Scenarios come from one source: hand authoring.** 2 of 202 came from `--capture-session`. The ~128 in-flight tier scenarios are also hand-written and haven't been run yet. Nothing records where a scenario came from or why it's hard.
+5. **Nobody checks scenario health.** No report flags scenarios that every model passes (saturated, no headroom), that every model fails (usually ambiguous or grader-misaligned), or where a weaker model beats a stronger one (noise or a broken rubric).
+
+---
+
+## 3. Point-by-point against the article
+
+| Article practice | GAIA scenario eval | GAIA task suite |
+|---|---|---|
+| Tasks sourced from production → bugs → hand → synthetic | Hand only; capture tool barely used | Hand only; `therock` uses real upstream fixes ✅ |
+| Hard cases picked by expert, with a written reason | `severity` and tier tags, no rationale field | `max_steps`, no rationale |
+| Programmatic grading where possible | LLM judge for everything, including tool-use checks written as prose | ✅ mechanical checks first |
+| Grader validated against known outcomes | ❌ | ✅ 3 controls, one pass, all-or-nothing |
+| Grader re-run on identical output | ❌ | ❌ |
+| Blind judging vs reference | Judge sees ground truth (fine) — no pairwise mode | Judge sees `genuine_answer` |
+| Noise floor known before gating | ❌ n=1 | Fixed slack (1 task, +35% tokens), worst-of-N in #4470 ✅ |
+| Headroom / saturation check | ❌ | ❌ |
+| Train / held-out split | ❌ | n/a (no fix loop) |
+| One change per round, keep only if both splits improve | ❌ free-form edits, 3 rounds, stop at 90% judged pass | n/a |
+| Stall → root-cause analysis | Judge writes `root_cause` per scenario; no cross-scenario grouping in the loop | `analyze_failures.py` exists for traces |
+| Failure content kept out of the tuned artifact | ❌ not stated in `fixer.md` | n/a |
+
+---
+
+## 4. Proposal
+
+Ordered by what unblocks the most. Items 1–5 are **now**: each makes the next one trustworthy.
+Items 6–9 are **later**.
+
+### Now
+
+#### 1. Variance-aware gating ([#4473](https://github.com/amd/gaia/issues/4473))
+
+**Impact:** high. It turns "regressed" from a coin flip into a claim. It's also what every other item leans on.
+**Effort:** M.
+
+- Run each gated scenario **3×** in the nightly (`--iterations 3`). Keep PR lanes at 1×, but have them report `flaky` instead of `regressed` when the baseline marks a scenario flaky.
+- Teach `compare_scorecards` to read `stability`. Call it a regression only when the baseline was `stable-pass` and the current run is `stable-fail`, or the pass-rate drop is larger than the measured noise floor. Report `flaky` as its own bucket.
+- Add `gaia eval agent noise --runs 5 --category X`. It runs the same config N times and writes the per-scenario pass-rate spread and score stdev to `noise.json`. The gate reads that file instead of the fixed 2.0 threshold.
+- Commit the first flagship baseline only from a ≥ 3-iteration run, and make `--save-baseline` refuse a 1-iteration scorecard.
+
+**Files:** `src/gaia/eval/runner.py` (`compare_scorecards`, `summarize_attempts`), `src/gaia/cli.py`, `.github/workflows/eval_flagship.yml`, `tests/fixtures/gaia/quality_gate_thresholds.json`, `docs/reference/eval.mdx`.
+**Measured by:** re-run an unchanged `main` through the nightly 5 times and record how many scenarios flip PASS↔FAIL (the noise floor). After, none of those runs report a regression, while a deliberately broken prompt (for example, the tool list removed) still does.
+
+#### 2. Judge calibration for the scenario eval ([#4474](https://github.com/amd/gaia/issues/4474))
+
+**Impact:** high. Every scenario score is a judge opinion; this makes it a checked one.
+**Effort:** M.
+
+- Build a **labelled control set**: ~20 frozen transcripts, each labelled PASS or FAIL by a human, with the failing dimension named. Cover the zero rules (wrong number, hallucinated source, lazy refusal), a correct answer with wrong tool use, and a verbose-but-correct answer. Store them under `eval/judge_controls/`.
+- Add `gaia eval agent controls`. It judges each control transcript **3×** with the judge prompts alone, no simulator, and reports:
+  - the **agreement rate** against the human labels
+  - **self-consistency**: the share of controls where all 3 verdicts match
+  - the per-dimension score spread
+- Run it in CI whenever `eval/prompts/judge_*.md`, `simulator.md` or the judge model changes. Fail below 90% agreement or 90% self-consistency.
+- Extend `gaia eval tasks controls` the same way: repeat judging and report a rate instead of one ✅/❌.
+
+**Files:** new `eval/judge_controls/`, `src/gaia/eval/runner.py` (a judge-only entry point that reuses `judge_turn.md` / `judge_scenario.md`), `src/gaia/eval/bench/controls.py`, `src/gaia/cli.py`, `.github/workflows/eval_flagship.yml`.
+**Measured by:** the agreement and self-consistency numbers themselves, tracked per judge model. A judge-prompt PR has to show them before merge.
+
+#### 3. A held-out hillclimbing loop for `--fix` ([#4475](https://github.com/amd/gaia/issues/4475))
+
+**Impact:** high. It's the only automated path that edits the agent's prompt and tools. Today it can silently trade passing scenarios for failing ones.
+**Effort:** M.
+
+- Split the selected scenarios into **train** and **held-out** by a stable hash of `scenario_id`, roughly 70/30, stratified by category. The fixer sees train failures only. Held-out transcripts and ground truth never enter its prompt.
+- **One change per round.** The fixer proposes a single edit to the system prompt, a tool docstring or a skill file. The loop re-runs **both** splits at `--iterations 3` and keeps the edit only if train improves beyond noise (item 1) **and** held-out does not regress. Otherwise it reverts with `git checkout` on the touched files. That also fixes the dead regression check.
+- Add to `fixer.md`: no edit may name a scenario, quote a ground-truth value or special-case a fixture path. Scope edits to `_get_system_prompt`, tool docstrings and `hub/skills/**`, not arbitrary files.
+- Stop after 2 flat rounds and write a **root-cause rollup** of the remaining failures, grouped by `failure_category`. Don't keep editing.
+- Keep #3514's clean-tree / scratch-branch guard as a prerequisite.
+
+**Files:** `src/gaia/eval/runner.py` (`run_fix_iteration`, the `--fix` loop), `eval/prompts/fixer.md`, `src/gaia/cli.py`, `docs/reference/eval.mdx`.
+**Measured by:** `fix_history.json` records train and held-out deltas for every kept edit. Success means no kept edit has a held-out regression, and a fix session's held-out gain is at least half its train gain. A larger gap means it's still overfitting.
+
+#### 4. Scenarios drafted from real failures ([#4476](https://github.com/amd/gaia/issues/4476))
+
+**Impact:** high. The distribution shifts toward what users actually hit. #4428 (43 tool calls routing around a logged-out `gh`) came from a real session, not the eval.
+**Effort:** M.
+
+- Extend `--capture-session` into `gaia eval agent draft --from-session ID | --from-issue N`:
+  - **From a session**, whether TUI or Agent UI: the user turns become turns, and the agent's tool calls become `expected_tools` candidates.
+  - **From an issue**: the repro steps become turns, and the "expected" section becomes `success_criteria`.
+  - Either way, it writes a draft into `eval/scenarios/drafts/`, which no lane runs.
+- Add two scenario fields:
+  - `source`: `session`, `issue`, `hand` or `synthetic`, with a link.
+  - `difficulty_rationale`: one line on *why* the case is hard, written by a person.
+- The loader warns when a non-draft scenario lacks either.
+- Scrub drafts before they land. Paths, emails and tokens get replaced with fixture values. Drafts from private sessions stay out of the repo unless reviewed.
+- Promotion takes a human review plus one run on a strong cloud model and one on the resident local model, which confirms the case is passable and not already saturated.
+
+**Files:** `src/gaia/eval/runner.py` (`capture_session`, `validate_scenario`), `src/gaia/cli.py`, `eval/scenarios/drafts/`, `docs/reference/eval.mdx`.
+**Measured by:** the share of scenarios with `source: session|issue`, starting at 2 of 202. Target 20% in a quarter. Separately, count bugs filed from real use that already had a failing scenario before the fix.
+
+#### 5. Scenario health report ([#4477](https://github.com/amd/gaia/issues/4477))
+
+**Impact:** medium-high. It retires scenarios that no longer measure anything, and exposes the ones that are broken.
+**Effort:** S.
+
+- Add `gaia eval agent health RUN_DIR...`. Over the last N nightly scorecards, plus optional runs on a stronger and a weaker model, it flags each scenario as:
+  - **Saturated**: `stable-pass` on every model, so there's no headroom.
+  - **Always-fail**: `stable-fail` on the strongest model, so the task is likely ambiguous or the grader misaligned.
+  - **Inverted**: the weaker model scores higher.
+  - **Flaky**.
+- Output a per-category headroom number: the strongest model's judged pass rate, aiming for well under 95%.
+- Always-fail and inverted scenarios go to a human to fix the task or the rubric. Saturated ones move to a cheaper smoke lane.
+
+**Files:** new `src/gaia/eval/health.py`, `src/gaia/cli.py`, `eval_flagship.yml` (weekly job), `docs/reference/eval.mdx`.
+**Measured by:** each category reports headroom, and the always-fail count trends down as rubrics get fixed.
+
+### Later
+
+6. **Split simulator from judge.** Run the judge as a separate call on the finished transcript, so its verdict can't be shaped by the persona it just played. That also makes item 2's judge-only mode the normal path. *Effort M; touches `runner.py` and the prompts; measured by the change in item 2's agreement numbers.*
+7. **Move checkable criteria out of the LLM judge.** Most "agent_tools[] must be empty" and "must call X" rules in `success_criteria` are programmatic. Add a structured `expected_tools` / `forbidden_tools` check in code, so the judge grades only what needs judgment. *Effort M; `runner.py`, scenario schema; measured by fewer judge-vs-code disagreements.*
+8. **Model-scaling signal per category.** Run each category weekly on one weak and one strong model. A category where the stronger model doesn't score higher is measuring noise. *Effort S once item 5 exists.*
+9. **Cost hillclimbs on the task suite.** Once item 3's loop exists, point it at `gaia eval tasks everyday` with the goal "fewer tokens and steps, `min_passed` held". #4470's worst-of-N expectations are the held-out gate. This is where #4448's extraction loop, which skews tokens and time, would show up as a win. *Effort M.*
+
+---
+
+## 5. Open questions
+
+- **Iterations budget.** 3× nightly roughly triples judge spend on the scenario lanes. The scenario lanes may need to run 3× weekly and 1× nightly. #4080 (judge org spend limit) makes this concrete.
+- **Who labels judge controls?** A labelling pass needs one person, around an hour, per 20 transcripts. Controls must be re-labelled when the rubric changes, not when the judge model changes.
+- **Held-out rotation.** A fixed hash split is simple but eventually leaks as people read held-out failures. Rotating the salt each quarter trades comparability for freshness.
+- **Scenario harness vs task suite as the long-term gate** (#4070). Items 1–3 apply to both; if the task suite wins, item 2's work carries over through `controls.py`.

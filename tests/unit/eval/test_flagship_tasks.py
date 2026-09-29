@@ -1351,6 +1351,59 @@ def test_the_report_puts_main_beside_this_run():
     assert "12 (main 10)" in report and "FAIL (main PASS)" in report
 
 
+def test_tool_calls_are_gated_once_expectations_set_a_limit():
+    card = _card(asdict_task("a", judge=_GOOD), asdict_task("b", judge=_GOOD))
+    calls = {c.metric: c for c in ft.gate(card, EXPECTED)}["Tool calls"]
+    assert calls.ok and not calls.gated
+    missed = [
+        c.metric for c in ft.gate(card, {**EXPECTED, "max_tool_calls": 3}) if not c.ok
+    ]
+    assert missed == ["Tool calls"]
+    assert ft.propose_expectations(card)["max_tool_calls"] == int(4 * 1.35)
+
+
+def test_consistent_expectations_take_the_worst_run_for_every_limit():
+    good = _card(
+        asdict_task("a", judge=_GOOD, steps=10, tokens=(10000, 0)),
+        asdict_task("b", judge=_GOOD, steps=10, tokens=(10000, 0)),
+    )
+    worse = _card(
+        asdict_task("a", passed=False, judge={**_GOOD, "work_quality": 2}),
+        asdict_task("b", judge=_GOOD, steps=30, tokens=(40000, 0)),
+    )
+    proposal = ft.propose_consistent_expectations([good, worse])
+    assert proposal["runs"] == 2
+    assert proposal["min_passed"] == ft.propose_expectations(worse)["min_passed"]
+    assert proposal["min_quality"] == ft.propose_expectations(worse)["min_quality"]
+    assert proposal["max_steps"] == ft.propose_expectations(worse)["max_steps"]
+    assert (
+        proposal["max_total_tokens"]
+        == ft.propose_expectations(worse)["max_total_tokens"]
+    )
+    # Every run it was measured from passes it, the worst included.
+    for card in (good, worse):
+        assert all(check.ok for check in ft.gate(card, proposal))
+
+
+def test_consistent_expectations_refuse_runs_of_different_models():
+    a = _card(asdict_task("a", judge=_GOOD))
+    b = {**_card(asdict_task("a", judge=_GOOD)), "model": "other"}
+    with pytest.raises(ValueError, match="differ in model"):
+        ft.propose_consistent_expectations([a, b])
+
+
+def test_consistent_expectations_refuse_runs_of_different_tasks():
+    full = _card(asdict_task("a", judge=_GOOD), asdict_task("b", judge=_GOOD))
+    partial = _card(asdict_task("a", judge=_GOOD))
+    with pytest.raises(ValueError, match="different tasks"):
+        ft.propose_consistent_expectations([full, partial])
+
+
+def test_consistent_expectations_need_at_least_one_run():
+    with pytest.raises(ValueError, match="No runs"):
+        ft.propose_consistent_expectations([])
+
+
 def test_expectations_are_not_proposed_from_an_unjudged_run():
     with pytest.raises(ValueError, match="judge the run"):
         ft.propose_expectations(_card(asdict_task("a")))

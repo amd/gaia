@@ -111,7 +111,12 @@ def _bundled_skill_roots() -> List[str]:
     out-of-the-box prompt is byte-identical — this only means that when a user
     asks for a skill by name, it is there to load.
     """
-    return [str(d) for d in (_SKILLS_DIR, _HUB_SKILLS_DIR) if d.is_dir()]
+    roots: List[str] = []
+    for directory in (_SKILLS_DIR, _HUB_SKILLS_DIR):
+        path = str(directory)
+        if directory.is_dir() and path not in roots:
+            roots.append(path)
+    return roots
 
 
 _MANIFEST_CANDIDATES = (

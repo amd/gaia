@@ -6,6 +6,7 @@ The workflow is meant to be thin, so every choice it makes is a flag here and
 every bad choice fails at startup with a message naming the fix.
 """
 
+import json
 import shlex
 import sys
 
@@ -332,3 +333,48 @@ def test_progress_is_line_buffered_so_a_redirected_run_shows_its_work(
     monkeypatch.setattr(sys, "stdout", Recording())
     run("run", "--no-judge", "--out", str(tmp_path / "out"))
     assert reconfigured == {"line_buffering": True}
+
+
+def _judged_card(steps):
+    grade = {
+        "instruction_compliance": 5,
+        "work_quality": 4,
+        "reasoning": 4,
+        "fabrication_free": 5,
+    }
+    task = {
+        "id": "a",
+        "passed": True,
+        "why": "",
+        "error": "",
+        "error_kind": "",
+        "wall_seconds": 10.0,
+        "steps": steps,
+        "tool_calls": 2,
+        "input_tokens": 10000,
+        "output_tokens": 500,
+        "judge": grade,
+    }
+    return {"suite": "core", "model": "m", "judge_model": "j", "tasks": [task]}
+
+
+def test_propose_writes_limits_every_repeat_met(tmp_path, capsys, run):
+    for repeat, steps in ((1, 10), (2, 30)):
+        run_dir = tmp_path / "out" / f"r{repeat}"
+        run_dir.mkdir(parents=True)
+        ft.write_scorecard(run_dir, _judged_card(steps))
+    out = tmp_path / "expect" / "m.core.json"
+    assert run("propose", str(tmp_path / "out"), "--out", str(out)) == 0
+    proposal = json.loads(out.read_text(encoding="utf-8"))
+    assert proposal["runs"] == 2
+    assert (
+        proposal["max_steps"] == ft.propose_expectations(_judged_card(30))["max_steps"]
+    )
+    assert "from 2 run(s)" in capsys.readouterr().out
+
+
+def test_propose_on_a_directory_with_no_runs_fails_cleanly(tmp_path, capsys, run):
+    out = tmp_path / "x.json"
+    assert run("propose", str(tmp_path / "empty"), "--out", str(out)) == 2
+    assert "Nothing proposed" in capsys.readouterr().out
+    assert not out.exists()

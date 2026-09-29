@@ -1702,6 +1702,19 @@ def gate(card: Mapping[str, Any], expected: Mapping[str, Any]) -> List[GateCheck
             s["steps"] <= expected["max_steps"],
             main.get("steps"),
         ),
+        # Optional so expectations committed before it existed still load.
+        GateCheck(
+            "Tool calls",
+            s["tool_calls"],
+            (
+                f"<= {expected['max_tool_calls']}"
+                if "max_tool_calls" in expected
+                else "not gated yet"
+            ),
+            s["tool_calls"] <= expected.get("max_tool_calls", s["tool_calls"]),
+            main.get("tool_calls"),
+            gated="max_tool_calls" in expected,
+        ),
         GateCheck(
             "Total runtime (s)",
             s["wall_seconds"],
@@ -1772,6 +1785,7 @@ def propose_expectations(card: Mapping[str, Any]) -> Dict[str, Any]:
                 "misreported",
                 "total_tokens",
                 "steps",
+                "tool_calls",
                 "wall_seconds",
             )
         },
@@ -1782,7 +1796,55 @@ def propose_expectations(card: Mapping[str, Any]) -> Dict[str, Any]:
         "max_misreported": s["misreported"] + MISREPORT_SLACK,
         "max_total_tokens": int(s["total_tokens"] * (1 + USAGE_SLACK)),
         "max_steps": int(s["steps"] * (1 + USAGE_SLACK)),
+        "max_tool_calls": int(s["tool_calls"] * (1 + USAGE_SLACK)),
         "max_wall_seconds": int(s["wall_seconds"] * (1 + RUNTIME_SLACK)),
+    }
+
+
+def propose_consistent_expectations(
+    cards: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Expectations every one of *cards* met: the worst run sets each limit.
+
+    One run is noise, so a limit taken from it fails the next run half the
+    time. Taken over repeats, each floor is the lowest any run reached and each
+    ceiling the highest, before the usual headroom.
+    """
+    if not cards:
+        raise ValueError("No runs to propose expectations from.")
+    proposals = [propose_expectations(card) for card in cards]
+    for key in ("suite", "model", "judge_model"):
+        seen = {p[key] for p in proposals}
+        if len(seen) != 1:
+            raise ValueError(
+                f"These runs differ in {key} ({sorted(map(str, seen))}); "
+                "expectations must come from runs of one suite, model and judge."
+            )
+    task_sets = {tuple(sorted(t["id"] for t in card["tasks"])) for card in cards}
+    if len(task_sets) != 1:
+        raise ValueError(
+            "These runs cover different tasks; a run limited with --tasks would "
+            "lower every floor. Propose from full runs of the same suite."
+        )
+    first = proposals[0]
+    measured = {
+        k: statistics.median_low(p["measured"][k] for p in proposals)
+        for k in first["measured"]
+    }
+    return {
+        **first,
+        "runs": len(proposals),
+        "measured": {
+            k: round(v, 2) if isinstance(v, float) else v for k, v in measured.items()
+        },
+        "min_passed": min(p["min_passed"] for p in proposals),
+        "min_verified": min(p["min_verified"] for p in proposals),
+        "min_quality": min(p["min_quality"] for p in proposals),
+        "max_misreported": max(p["max_misreported"] for p in proposals),
+        "max_total_tokens": max(p["max_total_tokens"] for p in proposals),
+        "max_steps": max(p["max_steps"] for p in proposals),
+        "max_tool_calls": max(p["max_tool_calls"] for p in proposals),
+        "max_wall_seconds": max(p["max_wall_seconds"] for p in proposals),
     }
 
 

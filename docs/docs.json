@@ -439,6 +439,7 @@
               "plans/adaptive-skills",
               "spec/harness-engineering-mode",
               "plans/adaptive-memory",
+              "plans/adaptive-recovery",
               "plans/oem-bundling"
             ]
           },
@@ -452,7 +453,8 @@
               "plans/desktop-installer",
               "plans/tool-loader",
               "plans/code-index-review",
-              "plans/nightly-benchmarks"
+              "plans/nightly-benchmarks",
+              "plans/eval-hillclimbing"
             ]
           },
           {

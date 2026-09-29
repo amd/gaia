@@ -197,7 +197,7 @@ on:
         type: boolean
         default: false
       task_suite:
-        description: 'Flagship task suite from eval/tasks/tasks.json (core runs on PRs; adversarial is the trap tasks; full is everything)'
+        description: 'Space-separated suites from eval/tasks/tasks.json (PRs run core; the nightly runs everyday therock; adversarial is the traps; full is everything)'
         required: false
         default: 'core'
   # `pull_request`, NOT `push`. A `push` path filter matches the files in the
@@ -229,6 +229,8 @@ on:
       # The lane map decides which categories run at all, so an edit that orphans
       # one has to be able to trigger the gate that would notice.
       - 'eval/ci_lanes.json'
+      - 'util/eval_lane_matrix.py'
+      - 'tests/fixtures/gaia/stage_eval_env.py'
       # In-core agents that carry their own model_id, plus the prompt/tool
       # surfaces CLAUDE.md lists as eval-requiring — a tool docstring edit
       # changes the JSON tool schema and is exactly what tool_selection scores.
@@ -337,7 +339,8 @@ env:
   # Connector resolution blocks on the OS keyring in a headless runner, which
   # hangs agent construction. Same guard as test_email_agent_eval.yml.
   PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-  # The default for every lane; the memory lane overrides all three at job level.
+  # The default for every lane; the memory and gaia_* lanes override all three at
+  # job level (util/eval_lane_matrix.py).
   # Long-term memory surviving between categories makes a later category's score
   # depend on an earlier one's run order (convention: test_chat_agent.yml,
   # test_email_agent_eval.yml). The memory lane is the one place that state IS
@@ -379,90 +382,10 @@ jobs:
 
       - name: Validate the lane map and emit the matrix
         id: build
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os, pathlib, sys
-
-          # Never measurable in CI: both read the runner's screen/clipboard into a
-          # scorecard that uploads as a public artifact.
-          SCREEN_READING = {"vision", "web_system"}
-
-          lanes_file = pathlib.Path(os.environ["EVAL_LANES_FILE"])
-          try:
-              doc = json.loads(lanes_file.read_text(encoding="utf-8"))
-          except (OSError, ValueError) as exc:
-              sys.exit(
-                  f"::error::Could not read the lane map at {lanes_file}: {exc}. "
-                  "Nothing downstream knows which categories to run, so the eval "
-                  "would measure nothing and pass. Fix the JSON."
-              )
-
-          lanes = doc.get("lanes") or []
-          excluded = doc.get("excluded") or {}
-          if not lanes:
-              sys.exit(
-                  f"::error::{lanes_file} defines no lanes, so no scenario would "
-                  "run and this gate would go green having measured nothing."
-              )
-
-          claimed = {c for lane in lanes for c in lane["categories"]}
-          leaked = sorted(SCREEN_READING & claimed)
-          if leaked:
-              sys.exit(
-                  f"::error::{leaked} is assigned to a CI lane. These read this "
-                  "runner's clipboard, windows and screen, and every lane uploads "
-                  "its scorecard and traces as a PUBLIC artifact. Move them back "
-                  f"to `excluded` in {lanes_file}."
-              )
-
-          on_disk = {
-              p.name
-              for p in pathlib.Path("eval/scenarios").iterdir()
-              if p.is_dir() and any(p.glob("*.yaml"))
-          }
-          orphans = sorted(on_disk - claimed - set(excluded))
-          if orphans:
-              sys.exit(
-                  f"::error::No lane runs {orphans}, and {lanes_file} gives no "
-                  "reason. These scenarios would stop being measured with every "
-                  "lane still green. Add each to a lane's `categories`, or to "
-                  "`excluded` with why it cannot run in CI."
-              )
-
-          missing = sorted(claimed - on_disk)
-          if missing:
-              sys.exit(
-                  f"::error::{lanes_file} names {missing}, which has no directory "
-                  "under eval/scenarios/. `gaia eval agent --category` on it "
-                  "measures nothing and reports success."
-              )
-
-          # The memory lane is the only one whose scenarios call remember/recall
-          # and verify through memory_recall, so it is the only one that runs with
-          # the store live. Derived from the categories rather than stored as a
-          # second field, so moving `memory` between lanes cannot leave the flag
-          # pointing at the wrong one. Emitted as the literal env values rather
-          # than a boolean the job turns into one: a GitHub expression of the
-          # form "flag and '0' or '1'" reads '0' as FALSY and falls through to
-          # '1', quietly handing the memory lane the disabled value.
-          include = [
-              {
-                  "lane": lane["lane"],
-                  "categories": " ".join(lane["categories"]),
-                  "memory_disabled": "0" if "memory" in lane["categories"] else "1",
-                  "memory_admin": "1" if "memory" in lane["categories"] else "0",
-                  "memory_mcp": "1" if "memory" in lane["categories"] else "0",
-              }
-              for lane in lanes
-          ]
-          print(f"matrix={json.dumps({'include': include})}")
-          print(
-              f"Lanes: {', '.join(l['lane'] for l in lanes)} "
-              f"covering {len(claimed)} categories; "
-              f"excluded: {', '.join(sorted(excluded)) or 'none'}",
-              file=sys.stderr,
-          )
-          PY
+        # The rules (which lane gets memory, which gets the gaia_* fixtures,
+        # what may never be in a lane) live in util/eval_lane_matrix.py, where
+        # tests/unit/eval/test_eval_lane_matrix.py covers them.
+        run: python util/eval_lane_matrix.py >> "$GITHUB_OUTPUT"
 
   # The flagship GaiaAgent on outcome-scored tasks (`gaia eval tasks`, docs:
   # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
@@ -473,13 +396,26 @@ jobs:
   # eval/tasks/expectations/<model>.<suite>.json. The gate always enforces: a
   # missed expectation fails this job. A model with no committed expectations
   # is reported, not failed, and a task the backend could not serve is "not
-  # measured", never a regression. Memory is off here, as for the whole workflow.
+  # measured", never a regression. Memory is off here, as it is outside the
+  # memory and gaia_* lanes.
   #
-  # The fifth lane in everything but the matrix. It stays its own job because its
+  # Which suites: a PR runs `core` (the traps, ~7 tasks); the nightly runs
+  # `everyday` (the 14 tasks the published model rankings cite) and `therock`
+  # (four real fixes in a 144K-line repo). A dispatch runs the suites it names.
+  # Each suite is judged and gated on its own against
+  # eval/tasks/expectations/<model>.<suite>.json once they are committed (from
+  # `gaia eval tasks propose` over repeated TASK_MODEL runs on this pool); until
+  # then the gate reports only. A nightly failure files an issue naming the suite
+  # (nightly-escalation below). PRs also run TASK_MODEL, so its 17 GB download
+  # is part of every PR's budget.
+  #
+  # A lane in everything but the matrix. It stays its own job because its
   # steps are a different shape - embedded Lemonade, `gaia eval tasks` - not
   # because it is ordered against the others; it runs alongside them.
   flagship-tasks:
     name: Scenario eval - outcomes
+    outputs:
+      failed_suites: ${{ steps.gate.outputs.failed }}
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
@@ -494,9 +430,14 @@ jobs:
         # Windows PowerShell 5.1 and pure-ASCII run bodies, for the reasons
         # spelled out on the agent-eval job below.
         shell: powershell
-    timeout-minutes: 90
+    # At least the sum of the step limits below plus setup, or a job-level
+    # timeout cancels and skips the judge, gate and upload steps.
+    timeout-minutes: ${{ github.event_name != 'pull_request' && 420 || 200 }}
     env:
-      TASK_SUITE: ${{ github.event.inputs.task_suite || 'core' }}
+      TASK_SUITES: ${{ github.event.inputs.task_suite || (github.event_name == 'schedule' && 'everyday therock') || 'core' }}
+      # The local model the expectations were measured on. Changing it means
+      # measuring and committing new expectations for it first.
+      TASK_MODEL: Qwen3-30B-A3B-Instruct-2507-GGUF
       TASK_JUDGE_MODEL: claude-opus-5-5
       TASKS_OUT: eval-out\tasks
     steps:
@@ -535,36 +476,67 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Could not install llamacpp:vulkan into the embedded Lemonade." }
           gaia lemonade embedded status
 
-      # No credentials in this step's environment: the agent runs shell commands.
-      - name: Run the flagship on the task suite
+      # This pool is ephemeral, so the model is never cached. Download it here,
+      # or the first task's clock pays for a 17 GB download.
+      - name: Download the task model
         timeout-minutes: 60
+        run: |
+          . "$HOME\.gaia\lemonade\env.ps1"
+          python -c "import os, sys; from gaia.llm.lemonade_client import LemonadeClient; sys.exit(0 if LemonadeClient().ensure_model_downloaded(os.environ['TASK_MODEL'], timeout=3300) else 1)"
+          if ($LASTEXITCODE -ne 0) { throw "Could not download $env:TASK_MODEL into the embedded Lemonade; the error is above." }
+
+      # No credentials in this step's environment: the agent runs shell commands.
+      - name: Run the flagship on the task suites
+        timeout-minutes: ${{ github.event_name != 'pull_request' && 240 || 60 }}
         run: |
           $ErrorActionPreference = "Continue"
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           . "$HOME\.gaia\lemonade\env.ps1"
-          gaia eval tasks run --suite $env:TASK_SUITE --no-judge --out $env:TASKS_OUT
-          if ($LASTEXITCODE -ne 0) { throw "gaia eval tasks run crashed (exit $LASTEXITCODE): a harness failure, not a verdict." }
+          # One suite crashing must not stop the next from being measured.
+          $crashed = @()
+          foreach ($suite in ($env:TASK_SUITES -split ' ')) {
+            gaia eval tasks run --suite $suite --model $env:TASK_MODEL --no-judge --out "$env:TASKS_OUT\$suite"
+            if ($LASTEXITCODE -ne 0) { $crashed += "$suite (exit $LASTEXITCODE)" }
+          }
+          if ($crashed.Count -gt 0) { throw "gaia eval tasks run crashed for: $($crashed -join ', '). A harness failure, not a verdict." }
 
       - name: Judge quality
         if: ${{ !cancelled() }}
-        timeout-minutes: 30
+        timeout-minutes: ${{ github.event_name != 'pull_request' && 60 || 30 }}
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Blank when the OAuth token is set: the judge adds --bare only with a key.
           ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          gaia eval tasks judge $env:TASKS_OUT --judge-model $env:TASK_JUDGE_MODEL --judge-attempts 2
-          if ($LASTEXITCODE -ne 0) { throw "gaia eval tasks judge failed (exit $LASTEXITCODE)." }
+          $failed = @()
+          foreach ($suite in ($env:TASK_SUITES -split ' ')) {
+            $out = "$env:TASKS_OUT\$suite"
+            if (-not (Test-Path "$out\scorecard.json")) { $failed += "$suite (no results to judge)"; continue }
+            gaia eval tasks judge $out --judge-model $env:TASK_JUDGE_MODEL --judge-attempts 2
+            if ($LASTEXITCODE -ne 0) { $failed += "$suite (exit $LASTEXITCODE)" }
+          }
+          if ($failed.Count -gt 0) { throw "gaia eval tasks judge failed for: $($failed -join ', ')." }
 
       # Always enforced. With no committed expectations for the model yet it only
       # reports; the proposal in the artifact is the file to commit from main.
       - name: Gate on the committed expectations
+        id: gate
         if: ${{ !cancelled() }}
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          gaia eval tasks gate $env:TASKS_OUT --enforce --propose "$env:TASKS_OUT\proposed-expectations.json"
-          exit $LASTEXITCODE
+          $failed = @()
+          foreach ($suite in ($env:TASK_SUITES -split ' ')) {
+            $out = "$env:TASKS_OUT\$suite"
+            if (-not (Test-Path "$out\scorecard.json")) { $failed += "$suite (no results - its run crashed)"; continue }
+            gaia eval tasks gate $out --enforce --propose "$out\proposed-expectations.json"
+            if ($LASTEXITCODE -ne 0) { $failed += "$suite (exit $LASTEXITCODE)" }
+          }
+          "failed=$($failed -join ', ')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::The outcomes gate failed for: $($failed -join ', '). Each suite's verdict is printed above."
+            exit 1
+          }
 
       - name: Stop the embedded Lemonade
         if: always()
@@ -721,15 +693,20 @@ jobs:
     #
     #   tools 18 -> 72 min    retrieval 29 -> 116    memory 25 -> 101
     #   conversation 10 -> 42                        outcomes: its own job
+    #   gaia-* lanes 23-34 scenarios each (CI-runnable, after tag exclusions)
+    #
+    # Lanes grow as scenarios are added, so the step limit is generous rather
+    # than a cap to balance against: 360 min covers ~53 scenarios at the worst
+    # observed 6.73 min. It exists only so an overrun fails here with partial
+    # results still collected; rebalance when a lane's [TIMING] nears it.
     #
     # The ceiling is sized for the LARGEST lane rather than per lane; a smaller
     # lane finishing early costs nothing on a machine that is discarded anyway:
     #
-    #   retrieval, 29 scenarios    expected 116 min, ceiling 29 x 6.73 = 195
-    #   eval step                                                      -> 240
+    #   eval step (see above)                                          -> 360
     #   setup on a COLD machine (venv, npm, Lemonade install + model)  ->  45
     #   collect + scrub + integrity + compare + upload                 ->  15
-    #   job: 240+45+15                                                 -> 300
+    #   job: 360+45+15                                                 -> 420
     #
     # Serial, all 82 scenarios in one job, this was 347 min expected / 552 ceiling.
     # The split trades that for four ~2 h lanes that finish together.
@@ -746,7 +723,7 @@ jobs:
     # skips the `!cancelled()` collect/integrity/compare steps AND the upload,
     # which on an ephemeral machine destroys the partial results permanently.
     # That is how run 30869194618 threw away 124 min of rag_quality data.
-    timeout-minutes: 300
+    timeout-minutes: 420
     env:
       # The lane's categories, from eval/ci_lanes.json via the `lanes` job. Every
       # step below reads this one list, so run / collect / gate / compare cannot
@@ -762,6 +739,7 @@ jobs:
       GAIA_MEMORY_DISABLED: ${{ matrix.memory_disabled }}
       GAIA_MEMORY_ADMIN: ${{ matrix.memory_admin }}
       GAIA_MEMORY_MCP_ALWAYS: ${{ matrix.memory_mcp }}
+      GAIA_FIXTURES: ${{ matrix.gaia_fixtures }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -772,15 +750,20 @@ jobs:
       # refuse to start if the environment disagrees, before anything has run.
       # Independent of the matrix wiring on purpose: the point is to catch that
       # wiring going wrong, so it cannot be checked against itself.
-      - name: Check the memory environment matches this lane
+      - name: Check the lane environment matches its categories
         run: |
           $ErrorActionPreference = "Stop"
-          $needsMemory = ($env:EVAL_CATEGORIES -split '\s+') -contains 'memory'
-          if ($needsMemory) {
-            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1' }
+          $cats = @($env:EVAL_CATEGORIES -split '\s+' | Where-Object { $_ })
+          $needsMemory = $cats -contains 'memory'
+          $gaiaLane = @($cats | Where-Object { $_ -like 'gaia_*' }).Count -gt 0
+          if ($gaiaLane) {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '1' }
+            $why = "gaia_* categories must run the way test_gaia_agent_eval.yml runs them and their baselines were captured: memory live with admin seeding, fixtures staged."
+          } elseif ($needsMemory) {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1'; GAIA_FIXTURES = '0' }
             $why = "The memory scenarios call remember/recall and verify through memory_recall, so this lane must run with the store live and its admin and MCP read tools registered."
           } else {
-            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0' }
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '0' }
             $why = "No category in this lane touches long-term memory, and leaving the store live lets state from one scenario change the next one's score."
           }
           $wrong = @()
@@ -790,10 +773,10 @@ jobs:
             if ($have -ne $want[$name]) { $wrong += "$name is '$have' but should be '$($want[$name])'" }
           }
           if ($wrong.Count -gt 0) {
-            Write-Host "::error::Lane '$env:EVAL_LANE' runs [$env:EVAL_CATEGORIES] but its memory environment is wrong: $($wrong -join '; '). $why Fix the per-lane overrides in the agent-eval job's env: block, which take their values from the lanes job in this same workflow - do NOT change the workflow-level defaults, that would re-enable memory for every lane."
+            Write-Host "::error::Lane '$env:EVAL_LANE' runs [$env:EVAL_CATEGORIES] but its environment is wrong: $($wrong -join '; '). $why The per-lane values come from util/eval_lane_matrix.py via the lanes job - fix them there, not in the workflow-level defaults, which would change every lane."
             exit 1
           }
-          Write-Host "Lane '$env:EVAL_LANE' memory environment is correct (memory scenarios in this lane: $needsMemory)."
+          Write-Host "Lane '$env:EVAL_LANE' environment is correct (memory lane: $needsMemory, gaia_* lane: $gaiaLane)."
 
       - name: Setup Python Environment
         uses: ./.github/actions/setup-venv
@@ -1288,6 +1271,15 @@ jobs:
             exit 1
           }
 
+      # gaia_* scenarios read fixtures under ~/gaia-eval, starter skills and a
+      # signed fixture hub. Same script as test_gaia_agent_eval.yml, so the two
+      # workflows cannot disagree on what "staged" means.
+      - name: Stage the gaia_* fixtures, skills and fixture hub
+        if: env.GAIA_FIXTURES == '1'
+        run: |
+          python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
+          if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
+
       - name: Run this lane's categories serially
         # Own timeout so an overrun fails HERE, by name, with the collect /
         # integrity / compare / upload steps still running on the partial results.
@@ -1298,7 +1290,7 @@ jobs:
         # MUST stay below the job's timeout-minutes, or the job cancels first and
         # this is dead code - the 60 min gap is the setup + collect + upload the
         # budget table prices.
-        timeout-minutes: 240
+        timeout-minutes: 360
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Blank when the OAuth token is present, deliberately: runner.py adds
@@ -1348,6 +1340,29 @@ jobs:
             $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
             Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
           }
+          # gaia_* lanes: the fixture server, and the env the corpus is written
+          # against (tests/fixtures/gaia/README.md), set before the backend
+          # starts so the agents it spawns inherit them.
+          $fixture = $null
+          $extraArgs = @()
+          if ($env:GAIA_FIXTURES -eq '1') {
+            $env:GAIA_HUB_URL = "http://127.0.0.1:8765/fixture_hub"
+            $env:GAIA_WEB_ALLOWED_HOSTS = "127.0.0.1"
+            $env:GAIA_AUTO_APPROVE_TOOLS = "1"
+            $fixture = Start-Process -FilePath "python" `
+              -ArgumentList "tests/fixtures/gaia/serve_fixtures.py","--port","8765" `
+              -WorkingDirectory $PWD `
+              -RedirectStandardOutput (Join-Path $PWD "eval-out\fixtures.log") `
+              -RedirectStandardError (Join-Path $PWD "eval-out\fixtures.err.log") `
+              -NoNewWindow -PassThru
+            if (-not $fixture) {
+              Write-Host "::error::Could not start tests/fixtures/gaia/serve_fixtures.py - the gaia_* web and skill-hub scenarios depend on it."
+              exit 1
+            }
+            # live: hits a real external service. local_blocked_win_shim: needs
+            # the fake gh, which cannot win argv resolution on Windows (#4427).
+            $extraArgs = @('--exclude-tag', 'live', '--exclude-tag', 'local_blocked_win_shim')
+          }
           $backend = Start-Process -FilePath "python" `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
             -WorkingDirectory $PWD `
@@ -1382,6 +1397,20 @@ jobs:
               exit 1
             }
             Write-Host "Backend healthy."
+            if ($fixture) {
+              $served = $false
+              foreach ($attempt in 1..6) {
+                if ($fixture.HasExited) { break }
+                try { Invoke-RestMethod -Uri "http://127.0.0.1:8765/atlas.html" -TimeoutSec 10 | Out-Null; $served = $true; break }
+                catch { Start-Sleep -Seconds 5 }
+              }
+              if (-not $served) {
+                Write-Host "::error::Fixture server not serving on port 8765 - see eval-out\fixtures*.log. The gaia_* web and skill-hub scenarios depend on it."
+                Get-Content (Join-Path $PWD "eval-out\fixtures.err.log") -ErrorAction SilentlyContinue
+                exit 1
+              }
+              Write-Host "Fixture server healthy."
+            }
 
             # Healthy is not the same as "can run these scenarios". The eval asks
             # the backend for DEFAULT_AGENT_TYPE on every scenario, and an agent
@@ -1484,7 +1513,7 @@ jobs:
               # Not Tee-Object: on Windows PowerShell 5.1 it has no -Encoding and
               # writes UTF-16, which the `Output:` parse in the next step then has
               # to guess at. Echo + Out-File keeps the log UTF-8 and greppable.
-              gaia eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" 2>&1 |
+              gaia eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" @extraArgs 2>&1 |
                 ForEach-Object { Write-Host "$_"; "$_" } |
                 Out-File -FilePath "eval-out\$category.log" -Encoding utf8
               # Capture BEFORE anything else can clobber it. .NET calls and
@@ -1494,7 +1523,7 @@ jobs:
               $swCat.Stop()
 
               $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
-              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 240-min step budget)"
+              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 360-min step budget)"
               Add-Summary "| ``$category`` | $mins |"
 
               if ($code -ne 0) {
@@ -1518,9 +1547,11 @@ jobs:
             [System.IO.File]::WriteAllText("$PWD\eval-out\lane-timing.json", $timing, (New-Object System.Text.UTF8Encoding($false)))
           }
           finally {
-            if ($backend -and -not $backend.HasExited) {
-              Write-Host "Stopping GAIA UI backend (pid $($backend.Id))..."
-              Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
+            foreach ($proc in @($backend, $fixture)) {
+              if ($proc -and -not $proc.HasExited) {
+                Write-Host "Stopping pid $($proc.Id)..."
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              }
             }
           }
 
@@ -1920,6 +1951,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LANES_RESULT: ${{ needs.agent-eval.result }}
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
+          OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
         run: |
           set -euo pipefail
           # STABLE DEDUP KEY - do not reword. The lookup below searches this exact
@@ -1932,7 +1964,7 @@ jobs:
 
           - Run: ${RUN_URL}
           - Scenario lanes: \`${LANES_RESULT}\`
-          - Outcomes (\`gaia eval tasks\`): \`${OUTCOMES_RESULT}\`
+          - Outcomes (\`gaia eval tasks\`): \`${OUTCOMES_RESULT}\`${OUTCOMES_FAILED:+ - gate failed for: ${OUTCOMES_FAILED}}
 
           Start with the run's summary page: it names which lanes measured, which measured nothing, and
           how long each took. Then download the failing lane's \`eval-<lane>\` artifact - it carries the

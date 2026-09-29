@@ -32,6 +32,7 @@ An explicit ``timeout=`` argument always wins; this is only the default.
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -189,6 +190,42 @@ _SUBCOMMAND_CLASS: Dict[str, Dict[str, TimeoutClass]] = {
 # ``npm run <script>`` / ``pnpm run`` / ``yarn run`` — the script name decides.
 _RUN_SCRIPT_BINARIES = frozenset({"npm", "pnpm", "yarn"})
 
+# A leading ``NAME=value`` changes the environment, not the command being
+# timed. Keep this aligned with the shell tool's leading-assignment grammar.
+_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
+
+# Git accepts global options before its subcommand. Value-taking options must
+# consume their values or a path such as ``repo`` would be mistaken for the
+# subcommand and hide the network class of ``git -C repo pull``.
+_GIT_GLOBAL_OPTIONS_WITH_VALUE = frozenset(
+    {
+        "-C",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--super-prefix",
+        "-c",
+        "--config-env",
+    }
+)
+_GIT_GLOBAL_OPTIONS_NO_VALUE = frozenset(
+    {
+        "-p",
+        "-P",
+        "--paginate",
+        "--no-pager",
+        "--exec-path",
+        "--bare",
+        "--no-lazy-fetch",
+        "--no-replace-objects",
+        "--literal-pathspecs",
+        "--glob-pathspecs",
+        "--noglob-pathspecs",
+        "--icase-pathspecs",
+        "--no-optional-locks",
+    }
+)
+
 
 def command_basename(token: str) -> str:
     """``C:\\Tools\\PyTest.EXE`` -> ``pytest``: basename, no suffix, lowercase.
@@ -210,6 +247,9 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     index = 0
     while index < len(tokens):
         token = tokens[index]
+        if _ENV_ASSIGNMENT.fullmatch(token):
+            index += 1
+            continue
         if token.startswith("-"):  # a flag, incl. python's -m
             index += 1
             continue
@@ -222,12 +262,32 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
         return DEFAULT
 
     binary = command_basename(tokens[index])
-    operands = [
-        (position, command_basename(token))
-        for position, token in enumerate(tokens[index + 1 :], start=index + 1)
-        if not token.startswith("-")
-    ]
-    subcommand = operands[0][1] if operands else ""
+    operands: List[Tuple[int, str]] = []
+    if binary == "git":
+        subcommand = ""
+        option_index = index + 1
+        while option_index < len(tokens):
+            token = tokens[option_index]
+            if not token.startswith("-"):
+                subcommand = command_basename(token)
+                break
+            option_name, has_inline_value, _ = token.partition("=")
+            if option_name in _GIT_GLOBAL_OPTIONS_WITH_VALUE:
+                option_index += 1 if has_inline_value else 2
+                continue
+            if option_name in _GIT_GLOBAL_OPTIONS_NO_VALUE:
+                option_index += 1
+                continue
+            # Unknown options are still flags for timeout purposes; leave the
+            # next non-option token available as the best subcommand guess.
+            option_index += 1
+    else:
+        operands = [
+            (position, command_basename(token))
+            for position, token in enumerate(tokens[index + 1 :], start=index + 1)
+            if not token.startswith("-")
+        ]
+        subcommand = operands[0][1] if operands else ""
 
     if (binary, subcommand) in _DELEGATING:
         return _classify_tokens(tokens[operands[0][0] + 1 :])
@@ -243,17 +303,21 @@ def _classify_tokens(tokens: List[str]) -> TimeoutClass:
     return _BINARY_CLASS.get(binary, DEFAULT)
 
 
-def split_pipeline(tokens: List[str]) -> List[List[str]]:
-    """Already-tokenized *tokens* cut on ``|`` into non-empty segments.
+_SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 
-    One implementation, used by both the shell tool's validator and the
-    classifier below. They tokenize differently — the validator is deliberately
-    stricter — but neither should carry its own copy of this.
+
+def split_pipeline(tokens: List[str]) -> List[List[str]]:
+    """Already-tokenized *tokens* cut on shell separators.
+
+    The shell validator has a separate tokenizer for security checks; this
+    helper only segments the classifier's shell-like token stream.
     """
     segments: List[List[str]] = []
     current: List[str] = []
     for token in tokens:
-        if token == "|":
+        if token in _SEGMENT_SEPARATORS or (
+            "\n" in token and all(char in ";&|\n" for char in token)
+        ):
             if current:
                 segments.append(current)
             current = []
@@ -265,15 +329,16 @@ def split_pipeline(tokens: List[str]) -> List[List[str]]:
 
 
 def _tokenize(command: str) -> List[str]:
-    """*command* split into tokens, with ``|`` always a token of its own.
+    """*command* split into tokens, with shell separators as punctuation.
 
     ``punctuation_chars`` is what makes ``ls|pytest`` classify as a test run:
     plain ``shlex.split`` keeps it as one token, so the pipeline is missed and
-    the whole thing is timed as a 30s command. Quoted text is untouched, so
-    ``grep "a|b"`` stays one argument.
+    the whole thing is timed as a 30s command. Newlines are preserved as
+    separators too, while quoted text remains untouched.
     """
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
     lexer.whitespace_split = True
+    lexer.whitespace = " \t\r"
     # shlex.split() clears these; a raw shlex does not, and a URL fragment
     # (curl .../page#frag) would otherwise truncate the command mid-classify.
     lexer.commenters = ""
@@ -283,6 +348,59 @@ def _tokenize(command: str) -> List[str]:
         return command.split()
 
 
+def _heredoc_starts(line: str) -> List[Tuple[str, bool]]:
+    """Return the heredoc delimiters opened on one shell command line."""
+    lexer = shlex.shlex(line, posix=False, punctuation_chars=";&|<>")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return []
+
+    starts: List[Tuple[str, bool]] = []
+    for index, token in enumerate(tokens):
+        if token not in ("<<", "<<-") or index + 1 >= len(tokens):
+            continue
+        word = tokens[index + 1]
+        strip_tabs = token == "<<-"
+        if word == "-" and index + 2 < len(tokens):
+            word, strip_tabs = tokens[index + 2], True
+        elif word.startswith("-") and len(word) > 1:
+            word, strip_tabs = word[1:], True
+        try:
+            delimiter = shlex.split(word, posix=True)
+        except ValueError:
+            continue
+        if len(delimiter) == 1 and delimiter[0]:
+            starts.append((delimiter[0], strip_tabs))
+    return starts
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """Remove heredoc input bodies before scanning shell command separators."""
+    if "<<" not in command:
+        return command
+
+    lines = command.split("\n")
+    kept: List[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        kept.append(line)
+        index += 1
+        for delimiter, strip_tabs in _heredoc_starts(line):
+            while index < len(lines):
+                body_line = lines[index].lstrip("\t") if strip_tabs else lines[index]
+                if body_line.rstrip("\r") == delimiter:
+                    index += 1
+                    break
+                index += 1
+            else:
+                return "\n".join(kept)
+    return "\n".join(kept)
+
+
 def classify_command(command: str) -> TimeoutClass:
     """The timeout class *command* falls into.
 
@@ -290,7 +408,7 @@ def classify_command(command: str) -> TimeoutClass:
     test run whose output happens to be filtered, and the shell waits for the
     whole pipeline anyway.
     """
-    segments = split_pipeline(_tokenize(command))
+    segments = split_pipeline(_tokenize(_strip_heredoc_bodies(command)))
     if not segments:
         return DEFAULT
     return max(
