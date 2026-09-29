@@ -16,8 +16,10 @@ icon: sparkles
 # The real registered size for the default construction (prompt_profile="full",
 # no skill set loaded). Drift-guarded by tests/test_gaia_agent.py, which builds
 # the agent and compares — a hand-edit that disagrees with the registry fails CI.
-# 59 from ChatAgent's "full" profile (incl. transcribe_media and
-# refine_transcript) + 8 skill-library tools
+# 66 from ChatAgent's "full" profile (incl. transcribe_media,
+# refine_transcript, wait_for_condition, sleep, the three CLI-setup tools
+# and the persistent shell session's get_shell_state / reset_shell_session)
+# + 8 skill-library tools
 # (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
 # + 5 read-only email tools (gaia.agents.tools.email_tools)
 # + 3 Stable Diffusion tools (enable_sd_tools is on for this agent)
@@ -25,7 +27,7 @@ icon: sparkles
 # because dynamic_tools is on.
 # This is the REGISTERED size — what the agent can do. Dynamic tool loading
 # means a single turn only shows the model a subset of it.
-tools_count: 81
+tools_count: 88
 
 language: python
 # 0.23.0's daemon has no `gaia` entry in builtin_specs(), so it cannot supervise
@@ -51,7 +53,7 @@ interfaces:
 
 requirements:
   min_memory_gb: 8
-  platforms: [win-x64, linux-x64, darwin-arm64]
+  platforms: [win-x64, linux-x64, darwin-arm64, darwin-x64]
 
 # ---------------------------------------------------------------------------
 # Skills
@@ -74,7 +76,7 @@ requirements:
 # the flagship and they corrupt an answer no matter which task is running, so
 # they cannot live in an opt-in bundle the way a task skill can.
 #
-# Its body is 676 tiktoken (cl100k) tokens, measured, and it declares no tools —
+# Its body is 702 tiktoken (cl100k) tokens, measured, and it declares no tools —
 # so the concern that kept `default_skill_set` commented out, loading several
 # large skill bodies into every prompt, does not apply. Keep it that size: it is
 # paid on every LLM call of every turn. default_skill_set stays off.

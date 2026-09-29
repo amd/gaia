@@ -13,6 +13,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
+	"github.com/amd/gaia/tui/internal/ui/gateway"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/status"
@@ -30,6 +31,8 @@ const (
 	// chat opens.
 	viewPreflight
 	viewChat
+	// viewGateway connects GAIA to the AMD LLM gateway (Lemonade cloud offload).
+	viewGateway
 )
 
 // FlagshipModel is the whole TUI: splash, readiness, chat, for exactly one
@@ -53,9 +56,12 @@ type FlagshipModel struct {
 	width  int
 	height int
 	dev    bool
-	// bypassPermissions starts the agent with confirmation prompts off
-	// (--bypass-permissions). Off unless the launch asked for it.
-	bypassPermissions bool
+	// fullAccess starts the agent with confirmation prompts off
+	// (--full-access). Off unless the launch asked for it.
+	fullAccess bool
+	// fullAccessNotice explains, in the first chat frame, why a saved full-access
+	// preference was not applied to this launch. Empty when there is nothing to say.
+	fullAccessNotice string
 	// useClaude starts the agent against Anthropic's Claude API instead of the
 	// local Lemonade backend (--use-claude). claudeModel optionally picks the
 	// Claude model.
@@ -67,6 +73,9 @@ type FlagshipModel struct {
 	// trace records every agent event to a JSONL file (--trace). Nil when off.
 	// Owned by the caller of RunFlagship, which closes it after the event loop.
 	trace *event.TraceWriter
+
+	// gw is the AMD LLM gateway screen, nil until the user opens it.
+	gw *gateway.GatewayModel
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -195,14 +204,20 @@ func (m FlagshipModel) WithLocalPreflight(opts preflight.LocalOptions) FlagshipM
 	return m
 }
 
-// WithBypassPermissions starts the agent with confirmation prompts off.
+// WithFullAccess starts the agent with confirmation prompts off.
 //
 // A builder rather than a constructor parameter, for the same reason
 // WithPreflight is one: the flag is opt-in and rare, and threading it through
 // every caller — including a dozen tests that do not care — would make the
 // default path noisier than the feature.
-func (m FlagshipModel) WithBypassPermissions(enabled bool) FlagshipModel {
-	m.bypassPermissions = enabled
+func (m FlagshipModel) WithFullAccess(enabled bool) FlagshipModel {
+	m.fullAccess = enabled
+	return m
+}
+
+// WithFullAccessNotice carries a status line into the chat view when it opens.
+func (m FlagshipModel) WithFullAccessNotice(text string) FlagshipModel {
+	m.fullAccessNotice = text
 	return m
 }
 
@@ -312,6 +327,8 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chat = &chatModel
 				return m, cmd
 			}
+		case viewGateway:
+			return m.updateGateway(msg)
 		}
 		return m, nil
 
@@ -322,6 +339,14 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.beginPreflight(m.agent)
+
+	case chat.OpenGatewayMsg:
+		return m.openGateway()
+
+	case gateway.CloseMsg:
+		m.gw = nil
+		m.activeView = viewChat
+		return m, nil
 
 	case preflight.ProceedMsg:
 		if !m.gateIsFor(msg.AgentID) {
@@ -413,9 +438,43 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chat = &chatModel
 			return m, cmd
 		}
+	case viewGateway:
+		// Everything the screen started answers with a message this package
+		// cannot name (probe, install, auth, model list, cursor blink), so it
+		// gets the whole default stream.
+		return m.updateGateway(msg)
 	}
 
 	return m, nil
+}
+
+// openGateway switches to the AMD LLM gateway screen. A Lemonade that cannot
+// be reached is passed into the screen rather than swallowed here, so the user
+// sees why on the screen they asked for.
+func (m FlagshipModel) openGateway() (tea.Model, tea.Cmd) {
+	c, err := gateway.NewClient()
+	gw := gateway.New(c, err)
+	m.gw = &gw
+	m.activeView = viewGateway
+
+	cmds := []tea.Cmd{gw.Init()}
+	if m.width > 0 && m.height > 0 {
+		updated, cmd := gw.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+		sized := updated.(gateway.GatewayModel)
+		m.gw = &sized
+		cmds = append(cmds, cmd)
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m FlagshipModel) updateGateway(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.gw == nil {
+		return m, nil
+	}
+	updated, cmd := m.gw.Update(msg)
+	gw := updated.(gateway.GatewayModel)
+	m.gw = &gw
+	return m, cmd
 }
 
 func (m FlagshipModel) View() string {
@@ -436,6 +495,10 @@ func (m FlagshipModel) View() string {
 	case viewChat:
 		if m.chat != nil {
 			base = m.chat.View()
+		}
+	case viewGateway:
+		if m.gw != nil {
+			base = m.gw.View()
 		}
 	}
 
@@ -470,11 +533,11 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
 		Dev: m.dev, Logf: m.logf, Interactive: true,
-		Model:             m.model,
-		Trace:             m.trace,
-		BypassPermissions: m.bypassPermissions,
-		UseClaude:         m.useClaude,
-		ClaudeModel:       m.claudeModel,
+		Model:       m.model,
+		Trace:       m.trace,
+		FullAccess:  m.fullAccess,
+		UseClaude:   m.useClaude,
+		ClaudeModel: m.claudeModel,
 	})
 	if err != nil {
 		m.pendingTranscript = nil
@@ -512,6 +575,11 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 		// has one, so this is a no-op there.
 		chatModel = chatModel.WithMessages(m.pendingTranscript)
 		m.pendingTranscript = nil
+	}
+	if m.fullAccessNotice != "" {
+		chatModel = chatModel.WithNotice(m.fullAccessNotice)
+		// It explains this launch only; an /agents switch must not repeat it.
+		m.fullAccessNotice = ""
 	}
 	m.chat = &chatModel
 	m.agent = agent

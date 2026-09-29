@@ -17,7 +17,7 @@ A tool with no scope rule returns ``None``, which means **"always" is not
 offered at all** for that call. That is the safe default and it is honest: the
 key is either narrow enough to describe in the prompt, or the user answers
 y/n each time. Blanket session-wide trust has one home, and it is
-bypass-permissions mode — explicit, indicated on every frame, and opted into
+full-access mode — explicit, indicated on every frame, and opted into
 deliberately.
 
 This replaces an earlier blanket ban on "always" for the shell tools. The ban's
@@ -84,7 +84,10 @@ _UNBOUNDED_BINARIES = frozenset(
 #: ``git remote add``) and stops well short of the arguments.
 _MAX_SHELL_SCOPE_WORDS = 2
 
-_SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command"})
+#: ``wait_for_condition`` belongs here because its ``command`` is a shell
+#: command like any other — scoping the grant to it keeps "always" from becoming
+#: "any command, as long as you poll with it".
+_SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
 
 #: Tools whose blast radius is one path. The grant is that exact path — not its
 #: directory: the prompt named a file, so the grant covers a file.
@@ -97,6 +100,7 @@ PATH_TOOLS = frozenset(
         "edit_python_file",
         "replace_function",
         "update_gaia_md",
+        "save_extracted_items",
     }
 )
 

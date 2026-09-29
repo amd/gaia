@@ -127,9 +127,13 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running (`lemonade-server serve`).
-2. The default model downloaded (`gaia download Gemma-4-E4B-it-GGUF`, or
-   `gaia init`).
+1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
+   one, so `gaia daemon start` is normally all that is needed (`gaia init`
+   also installs and starts it on first run).
+2. The default model downloaded (`gaia init`). `gaia download` takes **no**
+   model argument — naming one makes it exit 2. To pull a single model instead,
+   repeat the command `GET /v1/gaia/init` gives you: it names the Lemonade
+   client this machine actually has. Do not invent one.
 
 Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 (it never pulls or loads) that probes Lemonade, compares its version to the
@@ -150,7 +154,9 @@ alone:
                 "min_version": "10.2.0", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
-  "hint": "Local Lemonade Server is not reachable at … — start it with `lemonade-server serve`, or set LEMONADE_BASE_URL to a running server."
+  // The manual fallback ("Otherwise: …") is resolved for the host's Lemonade
+  // install (tray app, macOS app, systemd service, or CLI) — render it verbatim.
+  "hint": "Local Lemonade Server is not reachable at …. GAIA starts it automatically — run `gaia daemon start` if the background service is not running. Otherwise: Start the Lemonade app from Applications, then retry. Or set LEMONADE_BASE_URL to a running server. See https://amd-gaia.ai/docs/guides/gaia."
 }
 ```
 
@@ -236,10 +242,10 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `query` | yes | Non-empty. |
 | `run_id` | yes | **You mint it**, and it must be a UUID (non-UUID → 422). It is the cancel handle, valid from the instant the request is sent. |
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
-| `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. |
+| `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
-| `provider` | no | `"lemonade"` (default) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. Under `"claude"`, `model` names a Claude model. |
+| `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
 | `max_steps` | no | ≥ 1. |
 
 ```ts
@@ -332,19 +338,25 @@ Rules a client must respect:
 
 ## 8. Over `/v1/gaia/query`, a gated tool asks — when you can answer
 
-Nine of the agent's tools mutate the machine and need explicit approval
-before they run. Six sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+Read this before you design a workflow around it. This section is about the HTTP
+surface — the agent's other transport can collect an approval; see SPEC §5.5.
+
+Twelve of the agent's 86 tools mutate the machine and need explicit approval
+before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
-**`execute_python_file`**, **`run_python`**, and **`notify_desktop`**, which
-spawns a PowerShell child on Windows to draw the notification — and the
-flagship adds three of its own (`CONFIRMATION_REQUIRED_TOOLS`):
-**`install_skill`**, **`capture_skill`**, and **`remove_skill`**, because
-installing or capturing a skill writes third-party content under
-`~/.gaia/skills` and removing one deletes it. A capture that does land is
-additionally **code-inert**: its instructions load, but any `tools.py`/scripts
-stay unregistered until a human runs `gaia skill promote <name>` in a
-terminal. Everything else — reading, indexing, querying, web fetching,
-memory — runs without asking.
+**`wait_for_condition`**, which re-runs a shell command until it succeeds,
+**`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
+a PowerShell child on Windows to draw the notification, and **`install_cli`** /
+**`sign_in_cli`**, which install software and sign a CLI in to the user's
+account — and the flagship adds three of its own
+(`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
+**`remove_skill`**, because installing or capturing a skill writes third-party
+content under `~/.gaia/skills` and removing one deletes it. A capture that does
+land is additionally **code-inert**: its instructions load, but any
+`tools.py`/scripts stay unregistered until a human runs
+`gaia skill promote <name>` in a terminal. Everything else — reading,
+indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
+— runs without asking.
 
 **Contract ≥ 2.14 can answer one.** Send a `session_id` and leave
 `can_answer_questions` unset (or `true`). The stream emits `needs_confirmation`
@@ -375,7 +387,17 @@ POST /v1/gaia/sessions/{session_id}/bypass
 ```
 
 It applies to the very next gated tool, including one in a turn already running,
-and an unknown session is a **404** rather than a new one.
+and an unknown session is a **404** rather than a new one. A malformed
+`session_id` is a **400**, same as on `/query`.
+
+**That bypass stops the prompts; it does not open the shell.** The stdio
+transport's `--bypass-permissions` does both — it runs gated tools unasked *and*
+lifts the shell tool's guardrails (redirection and the other shell-only
+operators, the read-only binary allowlist, the rate limit). That second half is
+arbitrary code execution, appropriate for one local parent on a private pipe and
+not for a bound socket, so it stays on stdio: HTTP sessions never lift the shell
+gates, and the request body rejects unknown fields so a client cannot ask. See
+SPEC §5.5.
 
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
@@ -447,7 +469,12 @@ turn — budget for it. It is not a task recipe but the agent's honesty floor: d
 not claim work you did not do, do not present empty output as a result, do not
 substitute a near-miss and report success. Those failures corrupt an answer
 whatever the task is, which is why it cannot live in an opt-in bundle. It
-declares no tools, and its body measures 676 tokens (tiktoken `cl100k`).
+declares no tools, and its body measures 702 tokens (tiktoken `cl100k`).
+
+**`document-extract` ships bundled but not enabled.** `gaia-voice` routes a
+request for every item in a document to it, and it drives
+`extract_document_items` and `save_extracted_items` so a long transcript yields
+a complete, source-quoted inventory rather than a summary.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
 `default_skill_set:` blocks **commented out** — following the email agent's
@@ -473,7 +500,7 @@ Two consequences an integrator needs to plan for:
 
 - **Up to 600 prompt tokens, every turn.** That is the enforced ceiling
   (1.8% of the NPU profile's 32K window), not a typical value — budget it
-  alongside `gaia-voice`'s 676.
+  alongside `gaia-voice`'s 702.
 - **A background embedding pass on first contact with a new repository.** If
   the repo has no [code index](https://amd-gaia.ai/docs/guides/code-index), the
   map starts one in a background thread so semantic search is ready when it is
@@ -485,6 +512,11 @@ specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or
 `GaiaAgentConfig(project_root=...)` when embedding. A directory that is neither
 a VCS checkout nor holds a recognised manifest gets **no map** — that is the
 designed answer, not a failure.
+
+The same root check also decides whether the shell rides along: when it
+resolves to a repository, `run_shell_command` is offered on every turn instead
+of only when semantic selection guesses the request sounds like a shell
+request. No repository, no change.
 
 ## 12. Ports
 

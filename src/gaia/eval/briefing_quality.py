@@ -306,20 +306,20 @@ def parse_judge_verdict(text: str) -> dict[str, Any]:
 
 
 def make_claude_judge(model: str | None = None) -> Callable[[str], str]:
-    """A judge callable backed by :class:`gaia.eval.claude.ClaudeClient`.
+    """A judge callable backed by whichever Claude credential is available.
 
     Lazy import so the module stays importable (and unit-testable) without
-    the ``[eval]`` extras; ``ClaudeClient`` itself fails loud when the judge
-    credential is absent.
+    the ``[eval]`` extras; ``make_judge_client`` itself fails loud when no
+    judge credential is present.
 
     An API failure that means the judge is *unreachable* (out of credit, key
     rejected) is re-raised as :class:`~gaia.eval.judge_outage.JudgeOutageError`
     so it reads as an outage rather than a bad score.
     """
-    from gaia.eval.claude import ClaudeClient
+    from gaia.eval.judge_client import make_judge_client
 
     # No temperature pin — the judge model rejects sampling params (400).
-    client = ClaudeClient(model=model)
+    client = make_judge_client(model=model)
 
     def judge(prompt: str) -> str:
         return judge_completion_text(client, prompt)

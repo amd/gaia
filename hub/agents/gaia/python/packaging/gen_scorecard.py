@@ -240,7 +240,7 @@ def _build_reproduction_command(model: str, ctx_size: int) -> str:
         "# hardware, and have the Claude Code CLI on PATH (the eval driver).\n"
         'uv pip install -e ".[dev,eval,ui,api]" '
         "-e hub/agents/chat/python -e hub/agents/gaia/python\n"
-        "lemonade-server serve   # in a separate shell; must stay running\n\n"
+        "gaia init   # installs and starts Lemonade Server; it must stay running\n\n"
         "# Step 0: stage fixtures + start the fixture server (see\n"
         "# tests/fixtures/gaia/README.md for the staging contract)\n"
         "python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root <skills-root>\n"

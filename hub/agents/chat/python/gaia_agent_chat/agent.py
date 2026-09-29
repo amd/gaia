@@ -11,8 +11,9 @@ import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
 
+from gaia.config import gaia_home
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,6 +37,11 @@ from gaia.agents.base.checks import (
     snippet_target,
 )
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.context_eviction import (
+    DEFAULT_EVICT_KEEP_STEPS,
+    DEFAULT_EVICT_MIN_BATCH_TOKENS,
+    DEFAULT_EVICT_THRESHOLD_TOKENS,
+)
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.project_map import resolve_project_root
 
@@ -51,12 +57,14 @@ from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
     AudioToolsMixin,
     BrowserToolsMixin,
+    CliSetupToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
     RAGToolsMixin,
     ScreenshotToolsMixin,
     ShellToolsMixin,
+    WaitToolsMixin,
 )
 from gaia.llm.inference_location import (
     InferenceLocation,
@@ -160,6 +168,19 @@ class ChatAgentConfig:
     # NPU's FLM build runs at 4K, so a device config can override the 32K ctx.
     device: Optional[str] = None
     min_context_size: Optional[int] = None
+    # None = per-model default (larger for Lemonade cloud models).
+    max_output_tokens: Optional[int] = None
+
+    # Evict tool results older than ``keep_steps`` from the context sent to
+    # the model (never from the log) once the measured prompt is over the
+    # threshold and the batch is worth a cache break; each stays readable via
+    # read_tool_output. "auto" is on only for a cloud model whose cached-input
+    # price ratio (gaia.llm.cache_pricing) makes it pay. GAIA_CONTEXT_EVICTION,
+    # GAIA_EVICT_THRESHOLD, GAIA_EVICT_KEEP and GAIA_EVICT_MIN_BATCH win.
+    context_eviction: str = "off"
+    context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS
+    context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS
+    context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS
 
     # Debug/output settings
     debug: bool = False
@@ -195,8 +216,12 @@ class ChatAgentConfig:
     enable_scratchpad: bool = (
         False  # Data scratchpad for analysis (disabled until agent split)
     )
-    filesystem_index_path: str = "~/.gaia/file_index.db"
-    scratchpad_db_path: str = "~/.gaia/scratchpad.db"
+    filesystem_index_path: str = field(
+        default_factory=lambda: str(gaia_home() / "file_index.db")
+    )
+    scratchpad_db_path: str = field(
+        default_factory=lambda: str(gaia_home() / "scratchpad.db")
+    )
     filesystem_scan_depth: int = 3  # Default scan depth (conservative)
     filesystem_exclude_patterns: List[str] = field(default_factory=list)
 
@@ -257,6 +282,7 @@ class ChatAgent(
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    CliSetupToolsMixin,
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
     BrowserToolsMixin,
@@ -266,6 +292,7 @@ class ChatAgent(
     ScreenshotToolsMixin,
     SDToolsMixin,
     AudioToolsMixin,
+    WaitToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -312,6 +339,7 @@ class ChatAgent(
             config.allowed_paths,
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
             on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+            interactive_check=self._console_accepts_stdin_prompts,
         )
         # Created after tool registration, once we know the agent can write files.
         self.scratch_dir: Optional[Path] = None
@@ -511,6 +539,11 @@ class ChatAgent(
                 if config.min_context_size is not None
                 else 32768
             ),
+            max_output_tokens=config.max_output_tokens,
+            context_eviction=config.context_eviction,
+            context_eviction_threshold_tokens=config.context_eviction_threshold_tokens,
+            context_eviction_keep_steps=config.context_eviction_keep_steps,
+            context_eviction_min_batch_tokens=config.context_eviction_min_batch_tokens,
         )
 
         # Without this, throwaway scripts land in the user's project. One path
@@ -708,7 +741,7 @@ class ChatAgent(
         if profile_config is None:
             return None
         return ToolLoader(
-            core_tools=profile_config.core,
+            core_tools=profile_config.core | self._workspace_core_tools(),
             bundles=profile_config.bundles,
             optional_tools=profile_config.optional,
             embed_fn=self._embed_text,
@@ -716,6 +749,14 @@ class ChatAgent(
             threshold=self._resolve_dynamic_tools_threshold(),
             max_tools=self._resolve_dynamic_tools_max(),
         )
+
+    def _workspace_core_tools(self) -> FrozenSet[str]:
+        """Tools the session's workspace makes always-on, beyond the profile CORE.
+
+        Fixed when the loader is built, so the offered prefix is stable from the
+        first turn. Default: none.
+        """
+        return frozenset()
 
     def _resolve_dynamic_tools_enabled(self) -> bool:
         """Toggle: ``GAIA_DYNAMIC_TOOLS`` (truthy) wins over the config field."""
@@ -737,10 +778,16 @@ class ChatAgent(
             ) from e
 
     def _resolve_dynamic_tools_max(self) -> int:
-        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly."""
+        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly.
+
+        Grown by any workspace-added CORE tools (e.g. the shell in a repo
+        session) so they don't eat into the dynamic selection budget.
+        """
         raw = os.getenv("GAIA_DYNAMIC_TOOLS_MAX")
         if raw is None:
-            return int(self.config.dynamic_tools_max)
+            return int(self.config.dynamic_tools_max) + len(
+                self._workspace_core_tools()
+            )
         try:
             return int(raw)
         except ValueError as e:
@@ -776,7 +823,7 @@ class ChatAgent(
         )
 
     def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
-        """Return this turn's sorted tool subset, or ``None`` for the full registry.
+        """Return this turn's tool subset in admission order, or ``None``.
 
         The SKILL signal (#1451) and the semantic query use deliberately
         different inputs: ``skill_tools`` derives from the **clean current goal**
@@ -788,6 +835,11 @@ class ChatAgent(
         "summarize it". ``_recalled_skill_tools`` is ``[]`` on every off-state
         (no recall / memory disabled), so the loader runs on CORE + semantic
         exactly as in Parts 1-2.
+
+        The ``tools_required`` of loaded skills whose body renders this turn
+        join the same signal, ahead of recalled-procedure tools: the user's
+        skill is the stronger signal. A skill stops contributing when the body
+        filter hides it or it is unloaded.
         """
         if not self._dynamic_tools_active():
             return None
@@ -797,9 +849,23 @@ class ChatAgent(
             self.tool_loader.validate_registry(self._tools_registry)
             self._dynamic_tools_validated = True
         query = self._build_tool_selection_query(user_input)
+        skill_tools = self._loaded_skill_tools()
+        for name in self._recalled_skill_tools():
+            if name not in skill_tools:
+                skill_tools.append(name)
         return self.tool_loader.select(
-            query, self._tools_registry, skill_tools=self._recalled_skill_tools()
+            query, self._tools_registry, skill_tools=skill_tools
         )
+
+    def _admit_skill_tools(self, names: List[str]) -> None:
+        """Admit a just-loaded skill's tools into the loader (no-op when inactive).
+
+        Keeps the loader's loaded set and ``_active_tool_filter`` in step, so the
+        next turn's selection still carries them and calling one doesn't register
+        as an escape hatch.
+        """
+        if self.tool_loader is not None:
+            self.tool_loader.admit_tools(names, self._tools_registry)
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Record tool-use recency for the loader's LRU (no-op when inactive)."""
@@ -1489,11 +1555,16 @@ No documents are currently indexed.
         if spec.early_return:
             # Minimal: only shell for system queries
             self.register_shell_tools()
+            # Registered on every profile, this one included: "can you install
+            # the GitHub CLI?" is a conversational question, and the answer has
+            # to be yes before any skill needing that CLI can even load.
+            self.register_cli_setup_tools()
             self._register_external_tools_conditional()
             return
 
         # All other profiles get at least shell tools
         self.register_shell_tools()
+        self.register_cli_setup_tools()
         self.register_memory_tools()  # Persistent memory tools
 
         for _group_name in spec.tool_groups:
@@ -1513,21 +1584,18 @@ No documents are currently indexed.
             def load_tools(bundle: str) -> dict:
                 """Load a bundle of tools so you can call them on your next step.
 
-                Call this when the capability you need is not in your current
-                tool list. If a "Loadable tool bundles" menu is shown in your
-                instructions, pick a bundle name from it; otherwise pass the name
-                of the specific tool you need and its bundle is loaded. The
-                bundle's tools become available on your **next** step; then call
-                the one you need.
+                Call when the capability you need is not in your current tool
+                list. The bundle's tools become available on your **next**
+                step; then call the one you need.
 
                 Args:
-                    bundle: A bundle name (e.g. "file_search", "rag_index") — from
-                        the menu when one is shown — or a specific tool name to
-                        load its owning bundle.
+                    bundle: A bundle name from the "Loadable tool bundles" menu
+                        when one is shown (e.g. "file_search", "rag_index"), or
+                        a specific tool name to load its owning bundle.
 
                 Returns:
-                    Dictionary with status, the resolved bundle, and the full
-                    loaded_tools list now available to call.
+                    The resolved bundle and the full loaded_tools list now
+                    available to call.
                 """
                 # load_tools is registered only inside ``if self.tool_loader is
                 # not None`` and the loader is never re-nulled after construction,
@@ -1596,12 +1664,10 @@ No documents are currently indexed.
             ) -> dict:
                 """Execute a Python file as a subprocess and capture its output.
 
-                A script inside the agent's project runs from the project root,
-                with it on PYTHONPATH, so a test file such as tests/test_x.py
-                can import the project's own packages. Any other script — and
-                every script when there is no project — runs from its own
-                folder. Relative paths in the script resolve against that
-                working directory.
+                A script inside the agent's project runs from the project root
+                with it on PYTHONPATH, so tests/test_x.py can import the
+                project's packages. Any other script runs from its own folder.
+                Relative paths resolve against that working directory.
 
                 Args:
                     file_path: Path to the .py file to run
@@ -1609,7 +1675,7 @@ No documents are currently indexed.
                     timeout: Max seconds to wait (default 60)
 
                 Returns:
-                    Dictionary with stdout, stderr, return_code, and duration
+                    stdout, stderr, return_code, and duration
                 """
                 import shlex
                 import subprocess
@@ -1683,22 +1749,20 @@ No documents are currently indexed.
             def run_python(code: str, timeout: int = 60) -> dict:
                 """Run a Python snippet and return what it prints.
 
-                Use this to compute, transform data, or run a quick check
-                without creating a file. It runs from the project root, so
-                relative paths reach the user's files, and the snippet itself is
-                never saved in the workspace. Report numbers from its printed
-                output — do not work them out in your head.
+                Compute or check something without creating a file. Runs
+                from the project root, so relative paths reach the user's
+                files. Report numbers from its output — do not work them
+                out in your head.
 
-                This runs a plain Python process with no access to your own
-                tools. `from gaia import <tool>` does not work — to use another
-                tool, call it directly as a tool instead of from here.
+                No access to your tools: `from gaia import <tool>` fails —
+                call it directly as a tool instead.
 
                 Args:
                     code: Python source to run; print() whatever you need back.
                     timeout: Max seconds to wait (default 60)
 
                 Returns:
-                    Dictionary with stdout, stderr, return_code, and duration
+                    stdout, stderr, return_code, and duration.
                 """
                 import subprocess
                 import sys
@@ -2443,6 +2507,7 @@ No documents are currently indexed.
     # - BrowserToolsMixin (shared): Web browsing, content extraction, download
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
+    # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from ~/.gaia/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:

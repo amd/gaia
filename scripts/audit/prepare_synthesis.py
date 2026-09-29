@@ -118,7 +118,13 @@ def load_findings(findings_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise SystemExit(f"Cannot read findings file {path}: {exc}") from exc
+            # A lens killed mid-write (job timeout, cancelled runner) leaves a
+            # truncated file. Quarantine that one lens, like a malformed record.
+            problems.append(f"{path}: unreadable findings file ({exc})")
+            continue
+        if not isinstance(payload, dict):
+            problems.append(f"{path}: top level is not a JSON object")
+            continue
         raw = payload.get("findings")
         if raw is None or not isinstance(raw, list):
             problems.append(f"{path}: no top-level 'findings' list")

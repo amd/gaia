@@ -43,13 +43,14 @@ a cloud service, and that's enforced when the agent starts up.
 
 A local AI model has to be running before triage or drafting works:
 
-1. Install and start it with **`gaia init`** — this downloads the default model
-   and starts Lemonade Server for you.
+1. Install it with **`gaia init`** (downloads the default model). GAIA starts
+   the model server itself — **`gaia daemon start`** is enough.
 2. On a fresh machine the agent still starts, but triage won't return results
    until that local model is up. Call `client.init()` to check readiness.
 
 You'll need about 8 GB of RAM for the default model, and one of: Windows x64,
-Linux x64, or macOS Apple Silicon.
+Linux x64, macOS Apple Silicon, or Intel macOS (best-effort: a release that
+couldn't build the Intel binary says so at install).
 
 ## Install
 

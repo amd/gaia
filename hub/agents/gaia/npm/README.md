@@ -11,8 +11,10 @@ verifies both against a checksum manifest that ships inside this package, and dr
 you into the terminal UI. No Python to install, no repo to clone, no build step.
 Local inference is the default. The TUI can explicitly select Fireworks AI or AMD
 LLM Gateway through Lemonade; remote chat sends conversation history to that provider. The
-terminal UI's `--use-claude` flag, which would send a conversation to the
-Anthropic API, is refused for the agent this package installs — see
+terminal UI's *launch* flag `--use-claude`, which would pin the Anthropic API for
+the life of the process, is refused for the agent this package installs. That is a
+limit on the launch flag, not on the agent: a caller can still ask for Anthropic
+per request with `/query`'s `provider` field (contract ≥ 2.14) — see
 [`SPEC.md` §5.5](./SPEC.md#55-other-transports).
 
 The terminal UI you get here is the published **`terminal-hub`** component — the
@@ -182,7 +184,8 @@ await shutdown(proc);
 **Reuse the same `session_id` for every turn in a conversation.** It is what
 lets a document you had it index, or a skill you had it load, survive to the
 next question — drop it (or mint a new one per call) and the agent still
-answers, but it forgets everything from the previous turn. See
+answers, but it forgets everything from the previous turn. An id must be 1–128
+characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 [`SPEC.md` §5.2](./SPEC.md#52-session_id-and-agent-retention) for the retry
 and eviction behavior.
 

@@ -25,10 +25,10 @@ type ForAgentOptions struct {
 	// leaves it false so an agent that needs an answer says so and stops,
 	// instead of parking until the question times out.
 	Interactive bool
-	// BypassPermissions starts the agent with confirmation prompts OFF: every
+	// FullAccess starts the agent with confirmation prompts OFF: every
 	// gated tool runs without asking. Off unless the launch explicitly asked
 	// for it, and the UI must say so on every frame while it is on.
-	BypassPermissions bool
+	FullAccess bool
 	// UseClaude routes the agent's inference to Anthropic's Claude API instead
 	// of the local Lemonade backend — the conversation leaves the machine.
 	// Subprocess transport only; the daemon transport refuses it.
@@ -43,10 +43,14 @@ type ForAgentOptions struct {
 	Trace *event.TraceWriter
 }
 
-// BypassPermissionsFlag is the argument that starts a subprocess agent with
+// FullAccessFlag is the argument that starts a subprocess agent with
 // prompts off. Must match the flag gaia_agent.stdio's parser declares, and
-// SubprocessClient.BypassAtLaunch scans argv for exactly this string.
-const BypassPermissionsFlag = "--bypass-permissions"
+// SubprocessClient.FullAccessAtLaunch scans argv for exactly this string.
+// Deliberately the same name as the TUI's own flag: an agent too old to know
+// it exits on the unrecognized argument instead of starting with prompts on
+// under a full-access banner, and a new agent refuses the retired
+// --bypass-permissions the same way.
+const FullAccessFlag = "--full-access"
 
 // UseClaudeFlag is the argument that points a subprocess agent at Anthropic's
 // Claude API instead of the local Lemonade backend. Must match the flag the
@@ -65,7 +69,7 @@ const ClaudeModelFlag = "--claude-model"
 // finding every launch site. It deliberately lives here rather than on a Bubble
 // Tea model — the headless CLI paths need it without a UI.
 func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
-	if err := CheckBypassSupported(agent, opts.BypassPermissions); err != nil {
+	if err := CheckFullAccessSupported(agent, opts.FullAccess); err != nil {
 		return nil, err
 	}
 	// A model with no backend switch would be accepted and then change nothing.
@@ -111,8 +115,8 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		if opts.Dev && len(agent.DevArgs) > 0 {
 			args = append(append([]string{}, args...), agent.DevArgs...)
 		}
-		if opts.BypassPermissions {
-			args = append(append([]string{}, args...), BypassPermissionsFlag)
+		if opts.FullAccess {
+			args = append(append([]string{}, args...), FullAccessFlag)
 		}
 		if opts.UseClaude {
 			extra := []string{UseClaudeFlag}
@@ -139,10 +143,15 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 	}
 }
 
-// CheckBypassSupported validates launch options before readiness can connect.
-func CheckBypassSupported(agent catalog.Agent, enabled bool) error {
-	if enabled && agent.Transport == catalog.TransportDaemon {
-		return fmt.Errorf("--bypass-permissions is not supported for agent %q over the daemon transport. Drop --bypass-permissions to keep confirmation prompts enabled", agent.ID)
+// FullAccessSupported reports whether this agent's transport can carry full access.
+func FullAccessSupported(agent catalog.Agent) bool {
+	return agent.Transport != catalog.TransportDaemon
+}
+
+// CheckFullAccessSupported validates launch options before readiness can connect.
+func CheckFullAccessSupported(agent catalog.Agent, enabled bool) error {
+	if enabled && !FullAccessSupported(agent) {
+		return fmt.Errorf("--full-access is not supported for agent %q over the daemon transport. Drop --full-access to keep confirmation prompts enabled", agent.ID)
 	}
 	return nil
 }

@@ -11,14 +11,15 @@ docs describe a single ``DIR`` positional, while 11.8 takes two
 sailed straight past that.
 
 So this test downloads the artifact (~5 MB), starts it on a private port, proves
-the generated API key is enforced, and stops it. It never downloads a model or
-an inference backend, so it stays cheap.
+the generated API key is enforced, and stops it. It never downloads a model; the
+one backend it installs is ``llamacpp:cpu``, on Linux and Windows.
 
 Skips when GitHub is unreachable or ``GAIA_SKIP_NETWORK_TESTS`` is set.
 """
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 
@@ -140,6 +141,10 @@ def test_stop_is_idempotent_and_clears_state(running_instance):
     assert running_instance.status().running is False
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="lemond offers llamacpp:cpu on Linux and Windows only",
+)
 def test_backend_install_command_is_accepted(running_instance):
     """The real bundled client can install a backend through the live server."""
     try:

@@ -157,3 +157,270 @@ describe("TrayManager.setNotificationCount", () => {
     expect(mgr.notificationCount).toBe(2);
   });
 });
+
+describe("tray:set-config validation", () => {
+  function setConfig(payload) {
+    setPlatform("win32");
+    new TrayManager(createMockWindow());
+    return electronMock.ipcMain.simulateInvoke("tray:set-config", payload);
+  }
+
+  beforeEach(() => {
+    electronMock.app.setLoginItemSettings = jest.fn();
+  });
+
+  test.each([[null], [undefined], ["tray"], [[]]])(
+    "rejects a %p payload with a clear error",
+    async (bad) => {
+      await expect(setConfig(bad)).rejects.toThrow(/tray:set-config expects an object/);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    }
+  );
+
+  test("persists only the known tray keys", async () => {
+    const result = await setConfig({
+      tray: { minimizeToTray: false, injected: "x" },
+    });
+    expect(result.tray).toEqual({
+      minimizeToTray: false,
+      startMinimized: false,
+      startOnLogin: false,
+    });
+    const saved = JSON.parse(fs.writeFileSync.mock.calls[0][1]);
+    expect(Object.keys(saved.tray).sort()).toEqual([
+      "minimizeToTray",
+      "startMinimized",
+      "startOnLogin",
+    ]);
+  });
+
+  test.each([["true"], [1], [null]])(
+    "rejects a non-boolean startOnLogin (%p) without touching the login item",
+    async (bad) => {
+      await expect(setConfig({ tray: { startOnLogin: bad } })).rejects.toThrow(
+        /tray\.startOnLogin must be a boolean/
+      );
+      expect(electronMock.app.setLoginItemSettings).not.toHaveBeenCalled();
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    }
+  );
+
+  test("applies a boolean startOnLogin to the OS login item", async () => {
+    await setConfig({ tray: { startOnLogin: true } });
+    expect(electronMock.app.setLoginItemSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ openAtLogin: true })
+    );
+  });
+
+  test("rejects a non-object tray section", async () => {
+    await expect(setConfig({ tray: "on" })).rejects.toThrow(/tray must be an object/);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent config persistence", () => {
+  const AGENT_CFG = { autoStart: true, restartOnCrash: false, logLevel: "debug" };
+  let disk;
+
+  beforeEach(() => {
+    disk = null;
+    fs.existsSync.mockImplementation(
+      (p) => !String(p).endsWith("tray-config.json") || disk !== null
+    );
+    fs.readFileSync.mockImplementation(() => disk);
+    fs.writeFileSync.mockImplementation((_p, data) => {
+      disk = data;
+    });
+  });
+
+  afterEach(() => {
+    fs.existsSync.mockImplementation(() => true);
+    fs.readFileSync.mockImplementation(() => "{}");
+    fs.writeFileSync.mockImplementation(() => {});
+  });
+
+  function freshManager() {
+    setPlatform("win32");
+    return new TrayManager(createMockWindow());
+  }
+
+  const invoke = (channel, ...args) =>
+    electronMock.ipcMain.simulateInvoke(channel, ...args);
+
+  test("a saved agent config survives a reload from disk", async () => {
+    freshManager();
+    await invoke("tray:set-config", { agents: { "email-agent": AGENT_CFG } });
+
+    freshManager();
+    const reloaded = await invoke("tray:get-config");
+    expect(reloaded.agents).toEqual({ "email-agent": AGENT_CFG });
+  });
+
+  test("saving one agent keeps the others and the tray settings", async () => {
+    freshManager();
+    await invoke("tray:set-config", {
+      tray: { minimizeToTray: false },
+      agents: { a: AGENT_CFG },
+    });
+    const other = { autoStart: false, restartOnCrash: true, logLevel: "warn" };
+    await invoke("tray:set-config", { agents: { b: other } });
+
+    freshManager();
+    const reloaded = await invoke("tray:get-config");
+    expect(reloaded.agents).toEqual({ a: AGENT_CFG, b: other });
+    expect(reloaded.tray.minimizeToTray).toBe(false);
+  });
+
+  test("an unconfigured install reports an empty agents section", async () => {
+    freshManager();
+    const cfg = await invoke("tray:get-config");
+    expect(cfg.agents).toEqual({});
+  });
+
+  test("a malformed agents section on disk keeps the tray settings", async () => {
+    disk = JSON.stringify({
+      tray: { minimizeToTray: false, startMinimized: true },
+      agents: { "email-agent": { autoStart: "yes" } },
+    });
+    const errors = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    freshManager();
+    const cfg = await invoke("tray:get-config");
+
+    expect(cfg.tray.minimizeToTray).toBe(false);
+    expect(cfg.tray.startMinimized).toBe(true);
+    expect(cfg.agents).toEqual({});
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringMatching(/Ignoring invalid agents section/)
+    );
+    errors.mockRestore();
+  });
+
+  test("a non-object tray section falls back without losing agents", async () => {
+    disk = JSON.stringify({ tray: "on", agents: { a: AGENT_CFG } });
+
+    freshManager();
+    const cfg = await invoke("tray:get-config");
+
+    expect(cfg.tray).toEqual({
+      minimizeToTray: true,
+      startMinimized: false,
+      startOnLogin: false,
+    });
+    expect(cfg.agents).toEqual({ a: AGENT_CFG });
+  });
+
+  test("a failed write rejects and leaves the in-memory config unchanged", async () => {
+    freshManager();
+    fs.writeFileSync.mockImplementation(() => {
+      throw new Error("EACCES: permission denied");
+    });
+    await expect(
+      invoke("tray:set-config", { agents: { a: AGENT_CFG } })
+    ).rejects.toThrow(/Could not save settings to .*EACCES/);
+    const cfg = await invoke("tray:get-config");
+    expect(cfg.agents).toEqual({});
+  });
+
+  test("drops unknown per-agent keys", async () => {
+    freshManager();
+    const result = await invoke("tray:set-config", {
+      agents: { a: { ...AGENT_CFG, injected: "x" } },
+    });
+    expect(result.agents.a).toEqual(AGENT_CFG);
+  });
+
+  test.each([
+    [{ agents: "on" }, /agents must be an object/],
+    [{ agents: { a: null } }, /agents\.a must be an object/],
+    [
+      { agents: { a: { ...AGENT_CFG, autoStart: "yes" } } },
+      /agents\.a\.autoStart must be a boolean/,
+    ],
+    [
+      { agents: { a: { autoStart: true, logLevel: "info" } } },
+      /agents\.a\.restartOnCrash must be a boolean/,
+    ],
+    [
+      { agents: { a: { ...AGENT_CFG, logLevel: "loud" } } },
+      /agents\.a\.logLevel must be one of/,
+    ],
+    [{ agents: { "": AGENT_CFG } }, /agent id must be a non-empty string/],
+  ])("rejects invalid agent config %p without writing", async (payload, err) => {
+    freshManager();
+    await expect(invoke("tray:set-config", payload)).rejects.toThrow(err);
+    expect(disk).toBeNull();
+  });
+});
+
+describe("tray config already on disk from the unvalidated handler", () => {
+  const DEFAULT_TRAY = {
+    minimizeToTray: true,
+    startMinimized: false,
+    startOnLogin: false,
+  };
+
+  function managerWithStoredConfig(stored) {
+    setPlatform("win32");
+    fs.readFileSync.mockReturnValue(
+      typeof stored === "string" ? stored : JSON.stringify(stored)
+    );
+    return new TrayManager(createMockWindow());
+  }
+
+  beforeEach(() => {
+    electronMock.app.setLoginItemSettings = jest.fn();
+  });
+
+  afterEach(() => {
+    fs.readFileSync.mockReturnValue("{}");
+  });
+
+  test("a non-boolean on disk is replaced by the default at load", () => {
+    const mgr = managerWithStoredConfig({
+      tray: { minimizeToTray: true, startMinimized: false, startOnLogin: "true" },
+    });
+    expect(mgr.config.tray).toEqual(DEFAULT_TRAY);
+  });
+
+  test("a non-boolean on disk does not block saving an unrelated setting", async () => {
+    const mgr = managerWithStoredConfig({
+      tray: { minimizeToTray: true, startMinimized: false, startOnLogin: 1 },
+    });
+
+    const result = await electronMock.ipcMain.simulateInvoke("tray:set-config", {
+      tray: { minimizeToTray: false },
+    });
+
+    expect(result.tray).toEqual({ ...DEFAULT_TRAY, minimizeToTray: false });
+    expect(JSON.parse(fs.writeFileSync.mock.calls[0][1]).tray.startOnLogin).toBe(false);
+    expect(mgr.config.tray.minimizeToTray).toBe(false);
+  });
+
+  test("the renderer's get-config → set-config round-trip still saves", async () => {
+    managerWithStoredConfig({
+      tray: { minimizeToTray: true, startMinimized: null, startOnLogin: "yes" },
+    });
+
+    // The renderer edits whatever tray:get-config handed it and sends it back.
+    const current = await electronMock.ipcMain.simulateInvoke("tray:get-config");
+    const result = await electronMock.ipcMain.simulateInvoke("tray:set-config", {
+      tray: { ...current.tray, startOnLogin: true },
+    });
+
+    expect(result.tray).toEqual({ ...DEFAULT_TRAY, startOnLogin: true });
+    expect(electronMock.app.setLoginItemSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ openAtLogin: true })
+    );
+  });
+
+  test("a non-object tray section on disk falls back to defaults", () => {
+    const mgr = managerWithStoredConfig({ tray: "on" });
+    expect(mgr.config.tray).toEqual(DEFAULT_TRAY);
+  });
+
+  test("a JSON file that is not an object falls back to defaults", () => {
+    const mgr = managerWithStoredConfig("[1, 2, 3]");
+    expect(mgr.config.tray).toEqual(DEFAULT_TRAY);
+  });
+});

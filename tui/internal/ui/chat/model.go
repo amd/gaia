@@ -98,6 +98,9 @@ type preScanDegradedMsg struct{ notice string }
 // ToggleHelpMsg signals the root model to toggle help overlay.
 type ToggleHelpMsg struct{}
 
+// OpenGatewayMsg signals the root model to open the AMD LLM gateway screen.
+type OpenGatewayMsg struct{}
+
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -257,19 +260,19 @@ type ChatModel struct {
 	// not "cancel the turn" — see handleKey).
 	confirmation *components.ConfirmationModel
 
-	// bypassPermissions is true while the agent runs every gated tool without
+	// fullAccess is true while the agent runs every gated tool without
 	// asking. OFF on a fresh launch, always, and never restored from anywhere:
 	// the zero value is the safe value, so there is no code path that can turn
 	// it on without someone having asked for it in this session (or passed
-	// --bypass-permissions on this launch).
+	// --full-access on this launch).
 	//
 	// While it is true the UI owes the user an unmissable, unscrollable
-	// statement of that fact — see renderBypassBanner.
-	bypassPermissions bool
-	// bypassArmed is set by /bypass and cleared by the next key. Turning
+	// statement of that fact — see renderFullAccessBanner.
+	fullAccess bool
+	// fullAccessArmed is set by /full-access and cleared by the next key. Turning
 	// autonomy ON is a two-step confirmation; turning it OFF is one key, and
 	// never gated.
-	bypassArmed bool
+	fullAccessArmed bool
 
 	// claudeMode is true while the agent's inference runs on Anthropic's
 	// Claude API instead of the local Lemonade backend (--use-claude). Set
@@ -486,9 +489,9 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		mouseCaptured: true,
 		lastClickRow:  -1,
 	}
-	// Reads the transport, never a saved preference: bypass and Claude mode
+	// Reads the transport, never a saved preference: full access and Claude mode
 	// are off on a fresh launch unless THIS launch asked on the command line.
-	return m.applyLaunchBypass().applyLaunchClaude()
+	return m.applyLaunchFullAccess().applyLaunchClaude()
 }
 
 // NewChatModelForFlagship creates the ChatModel the TUI boots into.
@@ -1472,7 +1475,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 //
 // The local subprocess implements AgentCanceler too, for a different reason:
 // killing the child discards the session state it holds (skills, grants,
-// history, a /bypass toggle), so the first press asks it to stop and the
+// history, a /full-access toggle), so the first press asks it to stop and the
 // second (forceLocalAbort) kills its whole process tree. A transport that
 // implements neither tears its connection down immediately below.
 func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
@@ -1602,11 +1605,11 @@ func (m *ChatModel) restoreToComposer(text string) {
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// `/model` takes a free-form argument (a model id), so it can't join the
-	// exact-match switch below like /bypass's fixed variants — it's dispatched
+	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
-			// Same shape as setBypass's capability check (bypass.go): refuse
+			// Same shape as setFullAccess's capability check (fullaccess.go): refuse
 			// visibly rather than let the literal text ship as a chat
 			// question the agent has no way to understand.
 			m.messages = append(m.messages, Message{
@@ -1633,7 +1636,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		// posts a user chat bubble; the agent's own confirmation (or
 		// refusal) is the only line that belongs in the transcript. Still
 		// rides the real query channel (startTurn/Send), not the
-		// fire-and-forget control one /bypass uses — see
+		// fire-and-forget control one /full-access uses — see
 		// gaia_agent.stdio.run_model_command for why.
 		m.awaitingModelSwitch = true
 		return m.startTurn(query)
@@ -1669,6 +1672,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
 
+	case "/gateway":
+		return m, func() tea.Msg { return OpenGatewayMsg{} }
+
 	case "/clear":
 		return m.clearConversation()
 
@@ -1691,30 +1697,41 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
-	case "/bypass":
-		if m.bypassPermissions {
-			return m.setBypass(false)
+	case "/full-access":
+		if m.fullAccess {
+			return m.setFullAccess(false)
 		}
-		return m.armBypass()
+		return m.armFullAccess()
 
-	case "/bypass on":
-		if m.bypassPermissions {
-			return m.bypassNote("Bypass permissions is already ON."), nil
+	case "/full-access on":
+		if m.fullAccess {
+			return m.fullAccessNote("Full access is already ON."), nil
 		}
-		return m.armBypass()
+		return m.armFullAccess()
 
-	case "/bypass confirm":
-		if !m.bypassArmed {
-			return m.bypassNote("Nothing to confirm. Type /bypass first — it " +
+	case "/full-access confirm":
+		if !m.fullAccessArmed {
+			return m.fullAccessNote("Nothing to confirm. Type /full-access first — it " +
 				"explains what you would be turning on."), nil
 		}
-		return m.setBypass(true)
+		return m.setFullAccess(true)
 
-	case "/bypass off":
-		if !m.bypassPermissions {
-			return m.bypassNote("Bypass permissions is already off."), nil
+	case "/full-access off":
+		if !m.fullAccess {
+			return m.fullAccessNote("Full access is already off."), nil
 		}
-		return m.setBypass(false)
+		return m.setFullAccess(false)
+
+	// The retired name, recognised only to point at the new one, so an old
+	// habit never turns into a question sent to the agent.
+	case "/bypass", "/bypass on", "/bypass off", "/bypass confirm":
+		return m.fullAccessNote("/bypass is now /full-access. Same commands, new name."), nil
+
+	case "/full-access always":
+		return m.setFullAccessDefault(true)
+
+	case "/full-access never":
+		return m.setFullAccessDefault(false)
 
 	case "/setup":
 		if m.agentID != setupAgentID {
@@ -2290,7 +2307,7 @@ func (m *ChatModel) updateViewport() {
 	}
 
 	// The confirmation modal is deliberately NOT written here. It is pinned
-	// outside the viewport by View(), for the same reason as the bypass
+	// outside the viewport by View(), for the same reason as the full access
 	// banner: it must be in every frame and unscrollable.
 	//
 	// It used to live in this content, and the turn it blocks made that
@@ -3167,7 +3184,7 @@ func (m ChatModel) midTurnEnterHint() string {
 // from it the day a row is added or removed there.
 func (m ChatModel) contentHeaderRows() int {
 	n := 1 // header
-	if m.renderBypassBanner() != "" {
+	if m.renderFullAccessBanner() != "" {
 		n++
 	}
 	if m.renderSelectBanner() != "" {
@@ -3229,11 +3246,11 @@ func (m ChatModel) View() string {
 		Hint:             hint,
 	}, m.width)
 
-	// The bypass banner sits OUTSIDE the viewport, directly under the header,
-	// so it is in every frame and cannot be scrolled away. When bypass is off
+	// The full access banner sits OUTSIDE the viewport, directly under the header,
+	// so it is in every frame and cannot be scrolled away. When full access is off
 	// it renders to "" and JoinVertical drops it, costing no row.
 	rows := []string{header}
-	if banner := m.renderBypassBanner(); banner != "" {
+	if banner := m.renderFullAccessBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
 	if banner := m.renderSelectBanner(); banner != "" {

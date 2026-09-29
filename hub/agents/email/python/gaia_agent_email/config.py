@@ -30,6 +30,7 @@ from gaia.agents.base.agent import default_max_steps
 from gaia.connectors.api import connected_mailbox_providers, get_connection
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.providers.microsoft import ACCOUNT_TYPES
+from gaia.llm.lemonade_client import configured_lemonade_url
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -52,7 +53,7 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 def _allowed_hosts() -> set[str]:
     out = set(_LOCAL_HOSTS)
-    env = os.environ.get("LEMONADE_BASE_URL", "")
+    env = configured_lemonade_url() or ""
     if env:
         parsed = urlparse(env)
         host = parsed.hostname

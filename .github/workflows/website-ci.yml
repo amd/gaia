@@ -13,20 +13,35 @@
 
 name: Website CI
 
-# The agent manifests are in the filter because the snapshot gate below is the
-# only thing that catches them drifting — and the change it exists to catch
-# (adding an agent under hub/agents/) touches nothing in website/.
+# Paths outside website/ are in the filter because the gates that catch them
+# drifting live here and nowhere else: the agent manifests and their npm package
+# names (the snapshot gate below, and adding an agent under hub/agents/ touches
+# nothing in website/), the Agent UI stylesheet and the TUI theme
+# (cross-surface.test.ts reads both to assert the shared hues match — retuning
+# one surface alone is exactly how the two ambers drifted apart), and the design
+# language spec (tokens.contrast.test.ts recomputes the ratios it quotes).
+#
+# Both lists are asserted by cross-surface.test.ts, which scans the suite for
+# reads that leave website/ — so a new one fails here rather than going unrun.
 on:
   pull_request:
     paths:
       - 'website/**'
       - 'hub/agents/**/gaia-agent.yaml'
+      - 'hub/agents/**/package.json'
+      - 'src/gaia/apps/webui/src/styles/index.css'
+      - 'tui/internal/ui/theme/theme.go'
+      - 'docs/spec/gaia-design-language.mdx'
       - '.github/workflows/website-ci.yml'
   push:
     branches: [main]
     paths:
       - 'website/**'
       - 'hub/agents/**/gaia-agent.yaml'
+      - 'hub/agents/**/package.json'
+      - 'src/gaia/apps/webui/src/styles/index.css'
+      - 'tui/internal/ui/theme/theme.go'
+      - 'docs/spec/gaia-design-language.mdx'
       - '.github/workflows/website-ci.yml'
 
 permissions:
@@ -47,6 +62,11 @@ jobs:
       # Same source the Railway production build uses; the live catalog is the
       # real dependency (no fixture fallback). A hub outage fails the build loudly.
       HUB_CATALOG_URL: https://hub.amd-gaia.ai
+      # Optional — the homepage stats row (website/src/data/github.ts) fetches
+      # public GitHub data at build time. Unauthenticated works fine (60
+      # req/hr); this just raises it to 5,000/hr. Actions provides it for
+      # free, so there's no reason to omit it even though it isn't required.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 

@@ -12,8 +12,10 @@ All tests use in-memory SQLite or temp files — no external dependencies.
 The mixin is tested in isolation via a minimal host class (no real Agent).
 """
 
+import inspect
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -737,7 +739,7 @@ class TestSystemPrompt:
         assert "sk-supersecret999" not in prompt
 
     def test_system_prompt_filters_by_active_context(self, mixin_host):
-        """System prompt includes global + active context items only."""
+        """Default global reads every context; a set context reads it + global."""
         mixin_host.memory_store.store(
             category="fact",
             content="Work specific deployment process",
@@ -751,9 +753,10 @@ class TestSystemPrompt:
             confidence=0.9,
         )
 
-        # Active context is "global" — should NOT include work or personal
+        # Active context is "global" (no scoping in use) — every context shows
         prompt = mixin_host.get_memory_system_prompt()
-        assert "dentist" not in prompt.lower()
+        assert "deployment" in prompt.lower()
+        assert "dentist" in prompt.lower()
 
         # Switch to work context — should include work + global
         mixin_host.set_memory_context("work")
@@ -923,17 +926,12 @@ class TestRememberTool:
         upcoming = mixin_with_tools.memory_store.get_upcoming(within_days=7)
         assert any("course" in r["content"].lower() for r in upcoming)
 
-    def test_remember_with_context(self, mixin_with_tools):
-        """remember with explicit context stores in that context."""
+    def test_remember_does_not_take_a_context(self, mixin_with_tools):
+        """The model can't file a memory under a label no session reads."""
         func = mixin_with_tools._registered_tools["remember"]["function"]
-        result = func(
-            fact="Work deployment uses kubectl",
-            category="fact",
-            context="work",
-        )
-
-        results = mixin_with_tools.memory_store.get_by_category("fact", context="work")
-        assert any("kubectl" in r["content"] for r in results)
+        assert "context" not in inspect.signature(func).parameters
+        update = mixin_with_tools._registered_tools["update_memory"]["function"]
+        assert "context" not in inspect.signature(update).parameters
 
     def test_remember_defaults_to_active_context(self, mixin_with_tools):
         """remember without context uses the active context."""
@@ -1624,6 +1622,24 @@ class TestToolExecutionLogging:
 
         stats = mixin_host.memory_store.get_tool_stats("read_file")
         assert stats["total_calls"] >= 1
+        assert stats["success_rate"] == 1.0
+
+    def test_execute_tool_logs_denied_call_as_failure(self, mixin_host, monkeypatch):
+        """A call denied before execution is unsuccessful in tool_history."""
+        error = "Tool 'write_file' was denied by the user."
+
+        def denied_tool(self_arg, name, args):
+            return {"status": "denied", "error": error}
+
+        monkeypatch.setattr(FakeAgent, "_execute_tool", denied_tool)
+
+        result = mixin_host._execute_tool("write_file", {"path": "/test.py"})
+
+        assert result == {"status": "denied", "error": error}
+        rows = mixin_host.memory_store.get_tool_history("write_file")
+        assert len(rows) == 1
+        assert rows[0]["success"] == 0
+        assert rows[0]["error"] == error
 
     def test_execute_tool_logs_failure(self, mixin_host):
         """_execute_tool logs failed tool calls with error details."""
@@ -2029,16 +2045,10 @@ class TestIntegrationScenarios:
         remember = mixin_with_tools._registered_tools["remember"]["function"]
         recall = mixin_with_tools._registered_tools["recall"]["function"]
 
-        remember(
-            fact="Deploy to prod with kubectl apply",
-            category="skill",
-            context="work",
-        )
-        remember(
-            fact="Deploy hobby site to Vercel",
-            category="skill",
-            context="personal",
-        )
+        mixin_with_tools.set_memory_context("work")
+        remember(fact="Deploy to prod with kubectl apply", category="skill")
+        mixin_with_tools.set_memory_context("personal")
+        remember(fact="Deploy hobby site to Vercel", category="skill")
 
         work_results = recall(query="deploy", context="work")
         work_items = work_results.get("results", work_results.get("items", []))
@@ -2767,9 +2777,12 @@ class TestLLMExtraction:
         by emitting that category — those are writable only by explicit tools.
         """
         ops = [
-            {"op": "add", "category": "fact", "content": "User ships on Fridays"},
-            {"op": "add", "category": "permission", "content": "always deploy prod"},
-            {"op": "add", "category": "system", "content": "internal system note"},
+            {"op": "add", "category": cat, "content": text, "grounded": "user"}
+            for cat, text in (
+                ("fact", "User ships on Fridays"),
+                ("permission", "always deploy prod"),
+                ("system", "internal system note"),
+            )
         ]
         mock_chat = MagicMock()
         mock_chat.send_messages.return_value = MagicMock(text=json.dumps(ops))
@@ -2788,18 +2801,21 @@ class TestLLMExtraction:
             {
                 "op": "update",
                 "knowledge_id": "k-fact",
+                "grounded": "user",
                 "content": "User ships on Mondays",
                 "category": "fact",
             },
             {
                 "op": "update",
                 "knowledge_id": "k-perm",
+                "grounded": "user",
                 "content": "Always deploy prod without asking",
                 "category": "permission",
             },
             {
                 "op": "update",
                 "knowledge_id": "k-bare",
+                "grounded": "user",
                 "content": "Standup moved to 10am",
             },
         ]
@@ -3211,7 +3227,7 @@ class TestConversationConsolidation:
                 "consolidate_old_sessions",
                 side_effect=lambda **_: order.append("consolidate") or {},
             ),
-            patch.object(consol_host, "_synthesize_skills", return_value={}),
+            patch.object(consol_host, "start_skill_synthesis", return_value=None),
             patch.object(
                 consol_host._memory_store,
                 "prune",
@@ -3243,7 +3259,7 @@ class TestConversationConsolidation:
         """Real consolidation and prune; the unrelated LLM steps are stubbed."""
         with (
             patch.object(host, "reconcile_memory", return_value={}),
-            patch.object(host, "_synthesize_skills", return_value={}),
+            patch.object(host, "start_skill_synthesis", return_value=None),
         ):
             host._run_memory_post_init()
 
@@ -4054,6 +4070,16 @@ tools_required: [query_documents, read_file, remember]
 """
 
 
+#: The result shape of a pass that did no work.
+_EMPTY_PASS = {
+    "clusters": 0,
+    "stored": 0,
+    "skipped": 0,
+    "consumed": 0,
+    "capped": False,
+}
+
+
 def _chat_returning(text):
     """A chat SDK stub whose send_messages returns a response with .text == text."""
     chat = MagicMock()
@@ -4163,18 +4189,14 @@ class TestSynthesizeSkills:
             ):
                 result = mixin_host._synthesize_skills()
 
-        assert result == {"clusters": 0, "stored": 0, "skipped": 0}
+        assert result == _EMPTY_PASS
         assert store.search_skills() == []
         assert "disabled" in caplog.text.lower()
 
     def test_no_store_is_noop(self, mixin_host):
         """With no store (GAIA_MEMORY_DISABLED floor) synthesis is a clean no-op."""
         mixin_host._memory_store = None
-        assert mixin_host._synthesize_skills() == {
-            "clusters": 0,
-            "stored": 0,
-            "skipped": 0,
-        }
+        assert mixin_host._synthesize_skills() == _EMPTY_PASS
 
     def test_rerun_is_noop_and_never_deletes(self, mixin_host):
         """Reconcile issues NOOP on a re-run — the row is kept, never duplicated."""
@@ -4237,9 +4259,12 @@ class TestSynthesizeSkills:
         assert rows_after_1[0]["name"] == "summarize-unread-emails"
         pass1_id = rows_after_1[0]["id"]
 
-        # Pass 2: 2 more sessions raise the cluster's aggregate success_count; the
-        # distiller drifts the name. Match-by-meaning must UPDATE, not duplicate.
-        for sid in ["d4", "d5"]:
+        # Pass 2 sees only what pass 1 did not consume — one more
+        # min_occurrences-sized batch, which is the steady state.  It does NOT
+        # out-score the stored row on its own; what supersedes is the LINEAGE's
+        # record, the stored row's plus these.  Requiring the window to beat the
+        # row outright is what made UPDATE unreachable after the first pass.
+        for sid in ["d4", "d5", "d6"]:
             _seed_qualifying_session(store, sid, goal)
         mixin_host.chat = _chat_returning(pass2_md)
         second = mixin_host._synthesize_skills()
@@ -4249,6 +4274,16 @@ class TestSynthesizeSkills:
         assert len(visible) == 1
         assert visible[0]["name"] == "summarize-my-unread-emails"  # pass-2 name
         assert "digest" in visible[0]["markdown_body"]  # pass-2 body
+        # Six sessions of track record, not the three pass 2 happened to see.
+        assert visible[0]["success_count"] == 2 * rows_after_1[0]["success_count"]
+        assert sorted(visible[0]["provenance"]["from_sessions"]) == [
+            "d1",
+            "d2",
+            "d3",
+            "d4",
+            "d5",
+            "d6",
+        ]
         # The pass-1 row is superseded (kept, never deleted).
         old = store.search_skills(
             skill_id=pass1_id, include_superseded=True, enabled_only=False
@@ -5141,6 +5176,340 @@ class TestReminderSurfacingIsBounded:
         assert "Fernbrook" in first
         assert "Current time:" in first
         assert "Fernbrook" not in host.get_memory_dynamic_context()
+
+
+# ===========================================================================
+# Background Extraction — off the answer path, with a timeout that bites
+# ===========================================================================
+
+
+class TestBackgroundExtraction:
+    """Extraction runs after the answer, bounded, one at a time."""
+
+    @pytest.fixture
+    def bg_host(self, tmp_path):
+        """A MemoryMixin host whose chat SDK the test drives."""
+        from gaia.agents.base.memory import MemoryMixin
+
+        class TestBackgroundAgent(MemoryMixin, FakeAgent):
+            pass
+
+        host = TestBackgroundAgent()
+        mock_embedder = _make_mock_embedder()
+        with _mock_v2_init_context():
+            host.init_memory(db_path=tmp_path / "background.db", context="global")
+        host._embedder = mock_embedder
+        yield host
+        host.wait_for_memory_extraction(timeout=5)
+        host._memory_store.close()
+
+    @staticmethod
+    def _turn():
+        """A user turn long enough to clear MIN_EXTRACTION_WORDS."""
+        return (
+            "My name is Priya and I always deploy on Fridays from the Berlin office",
+            "Noted — Fridays from Berlin it is.",
+        )
+
+    @staticmethod
+    def _add_op(content: str) -> str:
+        return json.dumps(
+            [
+                {
+                    "op": "add",
+                    "category": "fact",
+                    "content": content,
+                    "confidence": 0.5,
+                    "grounded": "user",
+                }
+            ]
+        )
+
+    def _blocking_chat(self, release, content="Priya deploys on Fridays"):
+        """A chat SDK whose extraction call blocks until *release* is set."""
+        chat = MagicMock()
+
+        def _send(*_args, **_kwargs):
+            release.wait(30)
+            return MagicMock(text=self._add_op(content))
+
+        chat.send_messages.side_effect = _send
+        return chat
+
+    @staticmethod
+    def _stored_contents(host):
+        return [
+            item["content"]
+            for item in host._memory_store.get_by_category("fact", context="global")
+        ]
+
+    def test_another_workspaces_lesson_stays_out_of_the_extraction_prompt(
+        self, bg_host
+    ):
+        """The extraction call is a prompt too, and it is not user-visible.
+
+        Its "existing memory" list comes from an unfiltered read scope in a
+        global session, so without a lesson filter another project's raw tool
+        output reaches this prompt — the same leak the per-turn path was fixed
+        for, one call further in.
+        """
+        from gaia.agents.base.memory import LESSON_DOMAIN, LESSON_SOURCE
+
+        bg_host._memory_store.store(
+            category="note",
+            content="pytest needs PYTHONHASHSEED=0 in the other project",
+            domain=LESSON_DOMAIN,
+            source=LESSON_SOURCE,
+            context="workspace:/some/other/project",
+        )
+        prompts = []
+
+        def _send(messages, **_kwargs):
+            prompts.append(messages[0]["content"])
+            return MagicMock(text=self._add_op("Priya deploys on Fridays"))
+
+        bg_host.chat = MagicMock()
+        bg_host.chat.send_messages.side_effect = _send
+        user, assistant = self._turn()
+
+        bg_host._after_process_query(user, assistant)
+        assert bg_host.wait_for_memory_extraction(timeout=10) is True
+
+        assert prompts, "extraction never ran"
+        assert not any("PYTHONHASHSEED" in p for p in prompts)
+
+    def test_turn_returns_before_extraction_finishes(self, bg_host):
+        """The answer is done the moment the turn ends; extraction follows."""
+        release = threading.Event()
+        bg_host.chat = self._blocking_chat(release)
+        user, assistant = self._turn()
+
+        start = time.monotonic()
+        bg_host._after_process_query(user, assistant)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, f"turn blocked on extraction for {elapsed:.2f}s"
+        assert self._stored_contents(bg_host) == []
+
+        release.set()
+        assert bg_host.wait_for_memory_extraction(timeout=10) is True
+        assert any("Fridays" in c for c in self._stored_contents(bg_host))
+
+    def test_conversation_turns_are_stored_synchronously(self, bg_host):
+        """The transcript is durable the instant the turn ends, not later."""
+        release = threading.Event()
+        bg_host.chat = self._blocking_chat(release)
+        user, assistant = self._turn()
+
+        bg_host._after_process_query(user, assistant)
+
+        history = bg_host._memory_store.get_history(bg_host.memory_session_id)
+        assert [h["role"] for h in history] == ["user", "assistant"]
+        release.set()
+
+    def test_hung_extraction_is_abandoned_at_the_timeout(self, bg_host, monkeypatch):
+        """A model call that never returns stops costing time at the deadline."""
+        monkeypatch.setattr("gaia.agents.base.memory.EXTRACTION_TIMEOUT_S", 0.5)
+        never = threading.Event()
+        bg_host.chat = self._blocking_chat(never)
+        user, assistant = self._turn()
+
+        start = time.monotonic()
+        bg_host._after_process_query(user, assistant)
+        assert bg_host.wait_for_memory_extraction(timeout=5) is True
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 3.0, f"abandonment took {elapsed:.2f}s"
+        assert self._stored_contents(bg_host) == []
+        never.set()
+
+    def test_a_hung_extraction_does_not_delay_the_next_turn(self, bg_host, monkeypatch):
+        """Turn two is as fast as turn one even while turn one's call hangs."""
+        monkeypatch.setattr("gaia.agents.base.memory.EXTRACTION_TIMEOUT_S", 0.5)
+        never = threading.Event()
+        bg_host.chat = self._blocking_chat(never)
+        user, assistant = self._turn()
+
+        bg_host._after_process_query(user, assistant)
+        start = time.monotonic()
+        bg_host._after_process_query(user, assistant)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0, f"second turn waited {elapsed:.2f}s"
+        never.set()
+
+    def test_back_to_back_turns_do_not_pile_up_threads(self, bg_host):
+        """Ten fast turns run on one extraction thread, not ten."""
+        seen = set()
+        chat = MagicMock()
+
+        def _send(*_args, **_kwargs):
+            seen.add(threading.current_thread().name)
+            return MagicMock(text="[]")
+
+        chat.send_messages.side_effect = _send
+        bg_host.chat = chat
+        user, assistant = self._turn()
+
+        before = threading.active_count()
+        for _ in range(10):
+            bg_host._after_process_query(user, assistant)
+        assert bg_host.wait_for_memory_extraction(timeout=15) is True
+
+        assert len(seen) == 1, f"extraction ran on {len(seen)} threads: {seen}"
+        assert threading.active_count() <= before + 1
+
+    def test_a_queued_turn_still_gets_extracted(self, bg_host):
+        """A turn that lands mid-extraction is not simply thrown away."""
+        release = threading.Event()
+        calls = []
+        chat = MagicMock()
+
+        def _send(*_args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                release.wait(30)
+                return MagicMock(text=self._add_op("first turn fact"))
+            return MagicMock(text=self._add_op("second turn fact"))
+
+        chat.send_messages.side_effect = _send
+        bg_host.chat = chat
+        user, assistant = self._turn()
+
+        bg_host._after_process_query(user, assistant)
+        bg_host._after_process_query(
+            "A second statement about the Berlin office team", assistant
+        )
+        release.set()
+        assert bg_host.wait_for_memory_extraction(timeout=15) is True
+
+        contents = self._stored_contents(bg_host)
+        assert any("first turn fact" in c for c in contents)
+        assert any("second turn fact" in c for c in contents)
+
+    def test_extraction_failure_leaves_the_answer_untouched(self, bg_host, caplog):
+        """A crashing extraction is logged, never surfaced to the turn."""
+        chat = MagicMock()
+        chat.send_messages.side_effect = RuntimeError("model exploded")
+        bg_host.chat = chat
+        user, assistant = self._turn()
+
+        with caplog.at_level(logging.WARNING, logger="gaia.agents.base.memory"):
+            bg_host._after_process_query(user, assistant)
+            assert bg_host.wait_for_memory_extraction(timeout=10) is True
+
+        history = bg_host._memory_store.get_history(bg_host.memory_session_id)
+        assert len(history) == 2
+        assert "model exploded" in caplog.text
+
+    def test_timeout_is_logged(self, bg_host, monkeypatch, caplog):
+        """An abandoned extraction says so, with the deadline it blew."""
+        monkeypatch.setattr("gaia.agents.base.memory.EXTRACTION_TIMEOUT_S", 0.3)
+        never = threading.Event()
+        bg_host.chat = self._blocking_chat(never)
+        user, assistant = self._turn()
+
+        with caplog.at_level(logging.WARNING, logger="gaia.agents.base.memory"):
+            bg_host._after_process_query(user, assistant)
+            assert bg_host.wait_for_memory_extraction(timeout=5) is True
+
+        assert "abandoned" in caplog.text.lower()
+        never.set()
+
+    def test_start_and_finish_are_logged_at_info(self, bg_host, caplog):
+        """INFO says an extraction started, and what it stored, and how long."""
+        chat = MagicMock()
+        chat.send_messages.return_value = MagicMock(
+            text=self._add_op("Priya works from Berlin")
+        )
+        bg_host.chat = chat
+        user, assistant = self._turn()
+
+        with caplog.at_level(logging.INFO, logger="gaia.agents.base.memory"):
+            bg_host._after_process_query(user, assistant)
+            assert bg_host.wait_for_memory_extraction(timeout=10) is True
+
+        assert "extraction started" in caplog.text
+        assert "extraction finished" in caplog.text
+
+    def test_skipped_short_turn_is_logged_and_never_schedules(self, bg_host, caplog):
+        """Too-short turns never reach the model, and say why."""
+        chat = MagicMock()
+        bg_host.chat = chat
+
+        with caplog.at_level(logging.INFO, logger="gaia.agents.base.memory"):
+            bg_host._after_process_query("thanks", "You're welcome.")
+
+        assert bg_host.wait_for_memory_extraction(timeout=5) is True
+        chat.send_messages.assert_not_called()
+        assert "extraction skipped" in caplog.text
+
+    def test_wait_returns_true_when_nothing_is_running(self, bg_host):
+        """Waiting on an idle agent returns immediately."""
+        start = time.monotonic()
+        assert bg_host.wait_for_memory_extraction(timeout=5) is True
+        assert time.monotonic() - start < 0.5
+
+    def test_extraction_reads_the_turn_captured_at_turn_end(self, bg_host):
+        """Mutating the host after the turn cannot change what was extracted."""
+        release = threading.Event()
+        prompts = []
+        chat = MagicMock()
+
+        def _send(*_args, **kwargs):
+            release.wait(30)
+            prompts.append(kwargs.get("messages") or (_args[0] if _args else None))
+            return MagicMock(text="[]")
+
+        chat.send_messages.side_effect = _send
+        bg_host.chat = chat
+
+        bg_host._after_process_query(
+            "My name is Priya and I always deploy on Fridays", "Noted."
+        )
+        bg_host._original_user_input = "a completely different sentence"
+        bg_host._memory_context = "work"
+        release.set()
+        assert bg_host.wait_for_memory_extraction(timeout=10) is True
+
+        sent = json.dumps(prompts)
+        assert "Priya" in sent
+        assert "a completely different sentence" not in sent
+
+    def test_drain_waits_for_a_departing_agent(self, bg_host):
+        """The helper one-shot callers use actually lands the memory."""
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        release = threading.Event()
+        bg_host.chat = self._blocking_chat(release, content="Priya ships on Fridays")
+        user, assistant = self._turn()
+
+        bg_host._after_process_query(user, assistant)
+        release.set()
+
+        assert drain_memory_extraction(bg_host, timeout=10) is True
+        assert any("ships on Fridays" in c for c in self._stored_contents(bg_host))
+
+    def test_drain_says_so_when_it_gives_up(self, bg_host, caplog):
+        """A dropped extraction is never silent — the user's fact is gone."""
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        never = threading.Event()
+        bg_host.chat = self._blocking_chat(never)
+        user, assistant = self._turn()
+
+        bg_host._after_process_query(user, assistant)
+        with caplog.at_level(logging.WARNING, logger="gaia.agents.base.memory"):
+            assert drain_memory_extraction(bg_host, timeout=0.3) is False
+
+        assert "not stored" in caplog.text
+        never.set()
+
+    def test_drain_is_a_no_op_for_an_agent_without_memory(self):
+        """Agents that never mixed in memory are not an error to drain."""
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        assert drain_memory_extraction(FakeAgent()) is True
 
 
 @pytest.mark.parametrize("initialized", [False, True])

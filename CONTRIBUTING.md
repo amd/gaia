@@ -58,7 +58,7 @@ The PR template asks for these because they make review faster and better:
 - **Summary** — what changed, in plain English. *Not* a copy of the commit log.
 - **Why** — the motivation. "Fixes a crash on startup" beats "Refactors `LemonadeClient`."
 - **Linked issue** — `Closes #N` at the top.
-- **Test plan** — specific commands or steps a reviewer can run. `pytest tests/unit/test_chat.py -k startup` is signal; "I tested it" is not.
+- **Test plan** — specific commands or steps a reviewer can run. `pytest tests/unit/test_chat_preflight.py -k triggers_load` is signal; "I tested it" is not.
 
 A good Summary + Why example:
 

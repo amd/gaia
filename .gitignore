@@ -311,6 +311,16 @@ eval/results/gaia-local-tui-validation/
 eval/results/gaia-haiku-scorecard/
 docs/plans/flagship-architecture-findings.md
 
+# Local working scratch. Same rule as the private-reports block above: these are
+# agent-run artifacts and datasets, not project material, and `git add -A` would
+# otherwise commit a mailbox corpus. The material itself lives in
+# ../gaia-private-reports/{plans,presentations,audits,recovered,datasets}.
+/email-dataset/
+/audit_reports/
+/.playwright-mcp/
+/*.png
+/*.pdf
+
 # Local frozen-agent build (packaging/freeze.py)
 .venv-freeze/
 hub/agents/*/python/packaging/dist/

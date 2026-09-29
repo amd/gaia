@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia.llm.lemonade_client import LemonadeClientError
 from gaia.llm.vlm_client import VLMClient, VLMExtractionError
 
 
@@ -41,7 +42,7 @@ def vlm():
 
 class TestTheThreeFailureSites:
     def test_an_unavailable_model_raises(self, vlm):
-        vlm._ensure_vlm_loaded = lambda: False
+        vlm.client.chat_completions.side_effect = LemonadeClientError("model not found")
 
         with pytest.raises(VLMExtractionError) as excinfo:
             vlm.extract_from_image(b"fake-png", page_num=4, image_num=2)
@@ -50,14 +51,12 @@ class TestTheThreeFailureSites:
         assert excinfo.value.image_num == 2
 
     def test_an_error_response_raises(self, vlm):
-        vlm._ensure_vlm_loaded = lambda: True
         vlm.client.chat_completions.return_value = {"error": "model exploded"}
 
         with pytest.raises(VLMExtractionError):
             vlm.extract_from_image(b"fake-png")
 
     def test_an_unexpected_exception_raises_with_the_cause_attached(self, vlm):
-        vlm._ensure_vlm_loaded = lambda: True
         vlm.client.chat_completions.side_effect = ConnectionError("refused")
 
         with pytest.raises(VLMExtractionError) as excinfo:
@@ -66,14 +65,12 @@ class TestTheThreeFailureSites:
         assert isinstance(excinfo.value.__cause__, ConnectionError)
 
     def test_the_message_names_the_page_and_image(self, vlm):
-        vlm._ensure_vlm_loaded = lambda: True
         vlm.client.chat_completions.side_effect = ConnectionError("refused")
 
         with pytest.raises(VLMExtractionError, match="page 9, image 3"):
             vlm.extract_from_image(b"fake-png", page_num=9, image_num=3)
 
     def test_a_successful_extraction_still_returns_its_text(self, vlm):
-        vlm._ensure_vlm_loaded = lambda: True
         vlm.client.chat_completions.return_value = {
             "choices": [{"message": {"content": "# Real page text"}}]
         }
@@ -81,11 +78,68 @@ class TestTheThreeFailureSites:
         assert vlm.extract_from_image(b"fake-png") == "# Real page text"
 
 
+class TestModelLoading:
+    """The request itself loads the vision model, at GAIA's context size."""
+
+    _OK = {"choices": [{"message": {"content": "text"}}]}
+
+    def test_extraction_never_loads_without_a_context_size(self, vlm):
+        vlm.client.chat_completions.return_value = self._OK
+
+        vlm.extract_from_image(b"fake-png")
+
+        for call in vlm.client.load_model.call_args_list:
+            assert call.kwargs.get("ctx_size"), f"load without ctx_size: {call}"
+
+    def test_the_request_does_the_ctx_aware_load(self, vlm):
+        vlm.client.chat_completions.return_value = self._OK
+
+        vlm.extract_from_image(b"fake-png")
+
+        assert vlm.client.chat_completions.call_args.kwargs["auto_download"] is True
+
+    def test_auto_load_false_tells_the_request_not_to_load(self, vlm):
+        vlm.auto_load = False
+        vlm.client.chat_completions.return_value = self._OK
+
+        vlm.extract_from_image(b"fake-png")
+
+        assert vlm.client.chat_completions.call_args.kwargs["auto_download"] is False
+        vlm.client.load_model.assert_not_called()
+
+    def test_every_request_rechecks_the_load(self, vlm):
+        """A model evicted mid-batch is reloaded on the next page, not skipped."""
+        vlm.client.chat_completions.return_value = self._OK
+
+        vlm.extract_from_image(b"a")
+        vlm.extract_from_image(b"b")
+
+        calls = vlm.client.chat_completions.call_args_list
+        assert [c.kwargs["auto_download"] for c in calls] == [True, True]
+
+    def test_the_real_load_failure_reaches_the_error(self, vlm):
+        """A timeout or OOM must not be reported as a generic 'not available'."""
+        vlm.client.load_model.side_effect = LemonadeClientError(
+            "llama-server failed to start: out of memory"
+        )
+
+        def chat_completions(**kwargs):
+            # The real client loads the model at its required ctx inside the request.
+            vlm.client.load_model(kwargs["model"], ctx_size=65536)
+
+        vlm.client.chat_completions.side_effect = chat_completions
+
+        with pytest.raises(VLMExtractionError, match="out of memory") as excinfo:
+            vlm.extract_from_image(b"fake-png")
+
+        assert isinstance(excinfo.value.__cause__, LemonadeClientError)
+
+
 class TestNothingReturnsAnErrorString:
     """The specific shape that used to be indexed as content."""
 
     def test_a_failure_never_comes_back_as_a_return_value(self, vlm):
-        vlm._ensure_vlm_loaded = lambda: False
+        vlm.client.chat_completions.side_effect = LemonadeClientError("model not found")
         try:
             result = vlm.extract_from_image(b"fake-png")
         except VLMExtractionError:
@@ -94,7 +148,6 @@ class TestNothingReturnsAnErrorString:
 
     def test_the_page_wrapper_does_not_swallow_it_into_partial_text(self, vlm):
         """One bad image must not be reported as a page that extracted fine."""
-        vlm._ensure_vlm_loaded = lambda: True
         vlm.client.chat_completions.side_effect = [
             {"choices": [{"message": {"content": "first image"}}]},
             ConnectionError("refused"),

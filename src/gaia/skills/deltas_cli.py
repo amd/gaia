@@ -239,7 +239,7 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
             base_name=args.name,
             scope=args.scope,
             kind=KIND_DROP_SECTION,
-            anchor_section=args.drop_section,
+            anchor_section=target.slug,
             anchor_digest=target.digest,
             payload={},
             provenance={"source": "user_instruction", "via": "gaia skill deltas"},

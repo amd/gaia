@@ -700,6 +700,8 @@ func (s *Server) handleText(w http.ResponseWriter, r *http.Request) {
 	if !s.injectable(w) {
 		return
 	}
+	// Length only: focus may be on a masked field (the gateway token), and the
+	// debug log is cleartext.
 	s.debugf("inject: text (%d runes; content omitted)", len(keys))
 	seq, settled := s.send(msgs, time.Duration(req.DelayMS)*time.Millisecond)
 	writeJSON(w, http.StatusOK, map[string]any{

@@ -159,8 +159,61 @@ _UNITTEST_SUMMARY_RE = re.compile(
     r"(?m)^Ran [1-9]\d* tests? in \d+(?:\.\d+)?s\s*\n\s*"
     r"(?:OK(?: \(.*\))?|FAILED \(.*\))[ \t]*$"
 )
+#: jest: ``Tests:       1 failed, 9 passed, 10 total``.
+_JEST_SUMMARY_RE = re.compile(
+    r"(?m)^[ \t]*Tests:[ \t]+(?:\d+ (?:failed|passed|skipped|todo|total)(?:, )?)+[ \t]*$"
+)
+#: vitest: ``Tests  1 failed | 9 passed (10)``.
+_VITEST_SUMMARY_RE = re.compile(
+    r"(?m)^[ \t]*Tests[ \t]+(?:\d+ (?:failed|passed|skipped|todo)(?: \| )?)+"
+    r" \(\d+\)[ \t]*$"
+)
+#: mocha: ``10 passing (52ms)``, then ``1 pending`` and ``2 failing`` lines.
+_MOCHA_SUMMARY_RE = re.compile(
+    r"(?m)^[ \t]*\d+ passing \(\d+(?:\.\d+)?m?s\)[ \t]*$"
+    r"(?:\n[ \t]*\d+ pending[ \t]*$)?(?:\n[ \t]*[1-9]\d* failing[ \t]*$)?"
+)
+#: go test: one ``ok`` / ``FAIL`` line per package. The duration, ``(cached)``
+#: or ``[...]`` trailer is required — without it ``print("ok done")`` reads as a
+#: passing run.
+_GO_SUMMARY_RE = re.compile(
+    r"(?m)^(?:ok|FAIL)[ \t]+\S+"
+    r"(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s)(?:[ \t]+\[[^\]\n]*\])?"
+    r"|[ \t]+\[[^\]\n]*\])"
+    r"(?:[ \t]+coverage:[^\n]*)?[ \t]*$"
+)
+_GO_RAN_RE = re.compile(r"^(?:ok|FAIL)\b(?![^\n]*\[no tests to run\])")
+#: cargo test: one ``test result:`` line per target (unit, integration, doc).
+_CARGO_SUMMARY_RE = re.compile(
+    r"(?m)^test result: (?:ok|FAILED)\. \d+ passed; \d+ failed; \d+ ignored;"
+    r" \d+ measured; \d+ filtered out(?:; finished in \d+(?:\.\d+)?s)?[ \t]*$"
+)
+_COUNTED_RUN_RE = re.compile(r"\b[1-9]\d* (?:passed|failed|passing|failing)\b")
+#: A summary that counts a failure, in any runner's words.
 _REPORTED_FAILURE_RE = re.compile(
-    r"\b[1-9]\d* (?:subtests? )?(?:failed|error|errors)\b|\bFAILED \("
+    r"\b[1-9]\d* (?:subtests? )?(?:failed|error|errors|failing)\b"
+    r"|\bFAILED \(|^FAIL\b|\btest result: FAILED\b"
+)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+@dataclass(frozen=True)
+class _Runner:
+    label: str
+    summary: "re.Pattern[str]"
+    ran: "re.Pattern[str]"
+    #: The runner reports per package or target, so one failure fails the run.
+    per_target: bool = False
+
+
+_RUNNERS: Tuple[_Runner, ...] = (
+    _Runner("pytest", _PYTEST_SUMMARY_RE, _PYTEST_RAN_RE),
+    _Runner("unittest", _UNITTEST_SUMMARY_RE, re.compile(r"^Ran [1-9]")),
+    _Runner("jest", _JEST_SUMMARY_RE, _COUNTED_RUN_RE),
+    _Runner("vitest", _VITEST_SUMMARY_RE, _COUNTED_RUN_RE),
+    _Runner("mocha", _MOCHA_SUMMARY_RE, _COUNTED_RUN_RE),
+    _Runner("go test", _GO_SUMMARY_RE, _GO_RAN_RE, per_target=True),
+    _Runner("cargo test", _CARGO_SUMMARY_RE, _COUNTED_RUN_RE, per_target=True),
 )
 
 
@@ -208,23 +261,34 @@ def argv_check_label(argv: Sequence[str]) -> Optional[str]:
 
 
 def runner_summary(output: str) -> Optional[Tuple[str, str]]:
-    """``(label, summary_line)`` for the last test-runner summary in *output*."""
-    pytest_lines = [
-        m.group(0).strip(" =\t")
-        for m in _PYTEST_SUMMARY_RE.finditer(output or "")
-        if _PYTEST_RAN_RE.search(m.group(0))
-    ]
-    if pytest_lines:
-        return ("pytest", pytest_lines[-1])
-    unittest_blocks = _UNITTEST_SUMMARY_RE.findall(output or "")
-    if unittest_blocks:
-        return ("unittest", " ".join(unittest_blocks[-1].split()))
-    return None
+    """``(label, summary_line)`` for the last test-runner summary in *output*.
+
+    Knows pytest, unittest, jest, vitest, mocha, ``go test`` and ``cargo test``
+    by the summary each writes itself. The summary printed last wins — a
+    snippet may run the suite more than once — except for runners that report
+    per package or target, where any failing line decides the run.
+    """
+    text = _ANSI_RE.sub("", output or "")
+    found: Optional[Tuple[str, str]] = None
+    found_at = -1
+    for runner in _RUNNERS:
+        matches = [
+            m for m in runner.summary.finditer(text) if runner.ran.search(m.group(0))
+        ]
+        if not matches or matches[-1].end() <= found_at:
+            continue
+        decisive = matches[-1]
+        if runner.per_target:
+            failed = [m for m in matches if _REPORTED_FAILURE_RE.search(m.group(0))]
+            decisive = failed[-1] if failed else decisive
+        found_at = matches[-1].end()
+        found = (runner.label, " ".join(decisive.group(0).split()).strip(" ="))
+    return found
 
 
 def summary_reports_failure(summary: str) -> bool:
     """True when a runner's summary line counts a failure or an error."""
-    return bool(_REPORTED_FAILURE_RE.search(summary or ""))
+    return bool(_REPORTED_FAILURE_RE.search(_ANSI_RE.sub("", summary or "")))
 
 
 def _output(stdout: Any, stderr: Any) -> str:
@@ -246,7 +310,9 @@ def check_from_command(
     failure is a failure whatever the pipeline returned. ``return_code`` is
     ``None`` when the run never finished (timed out).
     """
-    label = next((found for seg in segments if (found := argv_check_label(seg))), None)
+    label = next(
+        (matched for seg in segments if (matched := argv_check_label(seg))), None
+    )
     if label is None:
         return None
     found = runner_summary(_output(stdout, stderr))

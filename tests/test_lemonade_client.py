@@ -2076,7 +2076,10 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
     (LemonadeServer.exe / lemond) and legacy (lemonade-server) tooling.
     """
 
-    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch(
+        "gaia.llm.lemonade_client.LemonadeClient._classify_port_listeners",
+        return_value=([], []),
+    )
     @patch("subprocess.Popen")
     @patch("gaia.llm.lemonade_client.build_start_command")
     @patch("gaia.llm.lemonade_client.resolve_lemonade")
@@ -2101,7 +2104,7 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
         mock_popen.return_value = MagicMock()
 
         client = LemonadeClient(host=HOST, port=PORT, verbose=False)
-        # health_check would normally gate this via kill_process_on_port —
+        # health_check would normally gate this via _classify_port_listeners —
         # patch it out directly since launch_server() calls it unconditionally
         # today; the "skip when already healthy" behavior is asserted
         # separately below.
@@ -2124,7 +2127,10 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
         self.assertEqual(env.get("GAIA_TEST_SENTINEL"), "1")
         self.assertIn("PATH", env)
 
-    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch(
+        "gaia.llm.lemonade_client.LemonadeClient._classify_port_listeners",
+        return_value=([], []),
+    )
     @patch("subprocess.Popen")
     @patch("gaia.llm.lemonade_client.build_start_command")
     @patch("gaia.llm.lemonade_client.resolve_lemonade")
@@ -2158,14 +2164,18 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
         argv = call_args[0] if call_args else call_kwargs.get("args")
         self.assertEqual(argv, ["lemonade-server", "serve", "--ctx-size", "32768"])
 
-    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch("gaia.llm.lemonade_client.terminate_pid")
+    @patch(
+        "gaia.llm.lemonade_client.LemonadeClient._classify_port_listeners",
+        return_value=([], []),
+    )
     @patch("subprocess.Popen")
     @patch("gaia.llm.lemonade_client.build_start_command")
     @patch("gaia.llm.lemonade_client.resolve_lemonade")
     def test_launch_server_skips_kill_when_already_healthy(
-        self, mock_resolve, mock_build_cmd, mock_popen, mock_kill_port
+        self, mock_resolve, mock_build_cmd, mock_popen, mock_classify, mock_kill_port
     ):
-        """kill_process_on_port(self.port) must NOT be called when
+        """The port must not even be inspected, let alone freed, when
         health_check() already reports OK at entry to launch_server() —
         a healthy server already listening should not be killed."""
         from gaia.llm.lemonade_launcher import LemonadeTooling, StartSpec
@@ -2187,6 +2197,7 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
             with patch("socket.create_connection"):
                 client.launch_server(background="silent", ctx_size=32768)
 
+        mock_classify.assert_not_called()
         mock_kill_port.assert_not_called()
 
 

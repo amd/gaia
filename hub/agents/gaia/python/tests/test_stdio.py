@@ -19,6 +19,8 @@ import sys
 import pytest
 from gaia_agent import stdio
 
+from gaia.llm.lemonade_launcher import StartHint
+
 
 def _logger_tree():
     return [logging.getLogger()] + [
@@ -144,37 +146,110 @@ def test_a_turn_still_writes_only_json_events(configure_logging):
 #
 # The switch that makes every gated tool run unattended must leave a record in
 # a NORMAL session. apply_control writes nothing to stdout by design, so if the
-# log drops it too, enabling bypass happened nowhere at all.
+# log drops it too, enabling full access happened nowhere at all.
 
 
-def test_a_bypass_toggle_is_recorded_at_the_default_log_level(configure_logging):
+def test_a_full_access_toggle_is_recorded_at_the_default_log_level(configure_logging):
     wire = io.StringIO()
     path = configure_logging(wire, dev=False)  # user mode, NOT --dev
 
-    stdio.PermissionState().set_bypass(True)
+    stdio.PermissionState().set_full_access(True)
 
-    assert "Bypass permissions ENABLED" in _log_text(path)
+    assert "Full access ENABLED" in _log_text(path)
     assert wire.getvalue() == "", "the audit trail must never touch the wire"
 
 
-def test_turning_bypass_off_is_recorded_too(configure_logging):
+def test_turning_full_access_off_is_recorded_too(configure_logging):
     wire = io.StringIO()
     path = configure_logging(wire, dev=False)
 
-    stdio.PermissionState(bypass=True).set_bypass(False)
+    stdio.PermissionState(full_access=True).set_full_access(False)
 
-    assert "Bypass permissions disabled" in _log_text(path)
+    assert "Full access disabled" in _log_text(path)
 
 
 def test_launching_unattended_is_recorded_too(configure_logging):
-    """--bypass-permissions never goes through set_bypass, so the strongest
+    """--full-access never goes through set_full_access, so the strongest
     case for a record is the one that had none."""
     wire = io.StringIO()
     path = configure_logging(wire, dev=False)
 
-    stdio.PermissionState(bypass=True)
+    stdio.PermissionState(full_access=True)
 
-    assert "Bypass permissions ENABLED at launch" in _log_text(path)
+    assert "Full access ENABLED at launch" in _log_text(path)
+
+
+# ---------------------------------------------------------------------------
+# Bypass reaches the SHELL gates, not just the confirmation prompt (#3373).
+#
+# The two are separate attributes on purpose: an unattended harness that only
+# pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS) must not inherit an unguarded
+# shell. Only PermissionState sets both.
+# ---------------------------------------------------------------------------
+
+
+class _Handler:
+    """The slice of SSEOutputHandler that PermissionState writes to."""
+
+    def __init__(self):
+        self.auto_approve_gated_tools = False
+        self.full_access = False
+        self.confirm_timeout_seconds = 0
+        self._grants = set()
+
+    def session_grants(self):
+        return self._grants
+
+
+def test_attach_hands_the_turn_both_halves_of_full_access():
+    handler = _Handler()
+
+    stdio.PermissionState(full_access=True).attach(handler)
+
+    assert handler.auto_approve_gated_tools is True
+    assert handler.full_access is True
+
+
+def test_attach_leaves_a_normal_session_fully_gated():
+    handler = _Handler()
+
+    stdio.PermissionState().attach(handler)
+
+    assert handler.auto_approve_gated_tools is False
+    assert handler.full_access is False
+
+
+def test_toggling_full_access_mid_turn_reaches_the_shell_gates():
+    handler = _Handler()
+    state = stdio.PermissionState()
+    state.attach(handler)
+
+    state.set_full_access(True)
+    assert handler.full_access is True
+
+    # /bypass off must put the shell guardrails back on the next command, not
+    # at the next turn boundary.
+    state.set_full_access(False)
+    assert handler.full_access is False
+
+
+def test_the_shell_mixin_reads_the_attached_handler():
+    """End to end through the real predicate, not a re-implementation of it."""
+    from gaia.agents.tools.shell_tools import ShellToolsMixin
+
+    class _Agent(ShellToolsMixin):
+        def __init__(self):
+            self.console = _Handler()
+
+    agent = _Agent()
+    assert agent.full_access_active() is False
+    # `make` is a developer binary, ungranted by default: the chain is refused.
+    assert agent._validate_shell_command("cd . && make build")[0] is not None
+
+    stdio.PermissionState(full_access=True).attach(agent.console)
+
+    assert agent.full_access_active() is True
+    assert agent._validate_shell_command("cd . && make build")[0] is None
 
 
 def test_a_denied_and_dropped_decision_is_recorded_at_the_default_level(
@@ -264,14 +339,24 @@ def test_an_agent_exception_becomes_a_terminal_error():
     assert "tool exploded" in terminals[0]["detail"]
 
 
-def test_unreachable_lemonade_gets_actionable_copy():
+def test_unreachable_lemonade_gets_actionable_copy(monkeypatch):
     """The raw urllib3 repr tells a user nothing; name the fix instead."""
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.describe_start_hint",
+        lambda *a, **k: StartHint(instruction="Run: lemond --port 13305"),
+    )
     detail = stdio._terminal_error(
         ConnectionError("Max retries exceeded ... Connection refused")
     )["detail"]
 
     assert "Lemonade" in detail
-    assert "lemonade-server serve" in detail
+    # A real next step, not a specific launch command. Pinning a literal here
+    # is how `lemonade-server serve` stayed asserted-as-real for releases after
+    # Lemonade 10.7 removed it (CLAUDE.md, "Never hardcode how Lemonade is
+    # started") — the manual fallback is resolved per machine, so there is no
+    # single launch string to assert.
+    assert "gaia daemon start" in detail
+    assert "lemonade-server serve" not in detail
 
 
 def test_an_anthropic_outage_is_not_blamed_on_lemonade():
@@ -281,7 +366,8 @@ def test_an_anthropic_outage_is_not_blamed_on_lemonade():
         ConnectionError("anthropic: Max retries exceeded ... Connection refused")
     )["detail"]
 
-    assert "lemonade-server serve" not in detail
+    assert "gaia daemon start" not in detail
+    assert "Lemonade Server" not in detail
     assert "Max retries exceeded" in detail
 
 
@@ -295,7 +381,8 @@ def test_an_anthropic_sdk_exception_is_recognised_by_its_module():
 
     detail = stdio._terminal_error(APIConnectionError("Connection refused"))["detail"]
 
-    assert "lemonade-server serve" not in detail
+    assert "gaia daemon start" not in detail
+    assert "Lemonade Server" not in detail
 
 
 def test_a_memory_dump_failure_becomes_a_terminal_error(monkeypatch):
@@ -790,7 +877,7 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
     def _unreachable(base_url):
         raise RuntimeError(
             f"Lemonade Server is not reachable at {base_url} (connection refused). "
-            "Start it with `lemonade-server serve`, then retry."
+            "GAIA starts it automatically — run `gaia daemon start`."
         )
 
     monkeypatch.setattr(stdio_mod, "_lemonade_models", _unreachable)
@@ -802,7 +889,7 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
     events = _events(out)
     assert len(events) == 1 and events[0]["type"] == "error"
     assert "13305" in events[0]["detail"]
-    assert "lemonade-server serve" in events[0]["detail"]
+    assert "gaia daemon start" in events[0]["detail"]
     assert agent.chat.llm_client is previous_client
     assert agent.rebuild_count == 0
 
@@ -871,19 +958,44 @@ def test_a_health_failure_with_no_url_names_the_one_that_was_tried(monkeypatch):
     assert state["lemonade_base_url"] == "http://10.0.0.7:9000/api/v1"
 
 
-def test_a_health_failure_with_no_url_and_no_env_names_the_default(monkeypatch):
-    from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL
+class _Unbuildable:
+    def __init__(self, base_url=None, verbose=True):
+        raise ValueError("boom")
 
-    class _Unbuildable:
-        def __init__(self, base_url=None, verbose=True):
-            raise ValueError("boom")
+
+def test_a_health_failure_with_no_url_and_no_env_names_the_default(
+    monkeypatch, tmp_path
+):
+    from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL
 
     monkeypatch.setattr(stdio, "LemonadeClient", _Unbuildable)
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))  # no GAIA server recorded
 
     state = stdio._lemonade_health(None)
 
     assert state["lemonade_base_url"] == DEFAULT_LEMONADE_URL
+
+
+def test_a_health_failure_names_gaias_own_server_when_one_is_recorded(
+    monkeypatch, tmp_path
+):
+    """The URL reported is the one the client would have used, not a guess."""
+    import json
+
+    (tmp_path / "lemonade").mkdir()
+    (tmp_path / "lemonade" / "state.json").write_text(
+        json.dumps({"pid": os.getpid(), "port": 51234, "api_key": "k"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(stdio, "LemonadeClient", _Unbuildable)
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+
+    state = stdio._lemonade_health(None)
+
+    assert state["lemonade_base_url"] == "http://localhost:51234/api/v1"
 
 
 def test_the_rollback_restores_an_absent_model_id(monkeypatch, stub_lemonade):
@@ -982,13 +1094,19 @@ def test_lemonade_models_unreachable_names_url_and_fix(monkeypatch):
     fake = _FakeLemonadeClient
     fake.error = stdio_mod.LemonadeClientError("connection refused")
     monkeypatch.setattr(stdio_mod, "LemonadeClient", fake)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.describe_start_hint",
+        lambda *a, **k: StartHint(instruction="Run: lemond --port 13305"),
+    )
 
     try:
         stdio_mod._lemonade_models("http://127.0.0.1:13305/api/v1")
         raise AssertionError("expected RuntimeError")
     except RuntimeError as exc:
         assert "13305" in str(exc)
-        assert "lemonade-server serve" in str(exc)
+        assert "gaia daemon start" in str(exc)
+        assert "Run: lemond --port 13305" in str(exc)
+        assert "lemonade-server serve" not in str(exc)
     finally:
         fake.error = None
 
@@ -1238,7 +1356,7 @@ class TestAMultiLineQuestionArrivesWhole:
     def test_control_messages_are_still_routed_away_from_queries(self):
         from gaia_agent.stdio import CONTROL_KEY, parse_control, parse_query
 
-        control = json.dumps({CONTROL_KEY: "bypass", "enabled": True})
+        control = json.dumps({CONTROL_KEY: "full_access", "enabled": True})
         assert parse_control(control) is not None
         # And a query is never mistaken for control.
         assert parse_control(json.dumps({"gaia_query": "hello"})) is None
@@ -1272,14 +1390,14 @@ def test_the_pump_routes_control_away_from_queries(monkeypatch):
     lines = [
         "",
         "   ",
-        json.dumps({stdio.CONTROL_KEY: "bypass", "enabled": True}),
+        json.dumps({stdio.CONTROL_KEY: stdio.CONTROL_FULL_ACCESS, "enabled": True}),
         "what is 2+2?",
         json.dumps({stdio.QUERY_KEY: "line one\nline two"}),
     ]
 
     drained, state = _pump(monkeypatch, "\n".join(lines) + "\n")
 
-    assert state.bypass is True, "the control line never reached apply_control"
+    assert state.full_access is True, "the control line never reached apply_control"
     assert drained == ["what is 2+2?", "line one\nline two", None]
 
 
@@ -1299,7 +1417,10 @@ def test_a_control_line_that_explodes_does_not_take_the_pump_down(monkeypatch):
         raise RuntimeError("control handler bug")
 
     monkeypatch.setattr(stdio, "apply_control", _boom)
-    lines = [json.dumps({stdio.CONTROL_KEY: "bypass", "enabled": True}), "still here?"]
+    lines = [
+        json.dumps({stdio.CONTROL_KEY: stdio.CONTROL_FULL_ACCESS, "enabled": True}),
+        "still here?",
+    ]
 
     drained, _ = _pump(monkeypatch, "\n".join(lines) + "\n")
 
@@ -1358,7 +1479,7 @@ def test_the_parser_accepts_the_spellings_the_go_side_pins():
             "--use-claude",
             "--claude-model",
             "claude-opus-5",
-            "--bypass-permissions",
+            "--full-access",
             "--json-events",
             "--dev",
         ]
@@ -1366,16 +1487,39 @@ def test_the_parser_accepts_the_spellings_the_go_side_pins():
 
     assert args.use_claude is True
     assert args.claude_model == "claude-opus-5"
-    assert args.bypass_permissions is True
+    assert args.full_access is True
     assert args.json_events is True
     assert args.dev is True
+
+
+def test_the_retired_flag_fails_naming_the_new_one(capsys):
+    """One name: the old spelling must not quietly keep working."""
+    with pytest.raises(SystemExit) as exc:
+        stdio.build_parser().parse_args(["--" + "bypass-permissions"])
+
+    assert exc.value.code == 2
+    assert "renamed to --full-access" in capsys.readouterr().err
+
+
+def test_the_retired_control_verb_turns_full_access_off(configure_logging):
+    """An older host's toggle is trusted in neither direction; OFF runs nothing."""
+    wire = io.StringIO()
+    path = configure_logging(wire, dev=False)
+    state = stdio.PermissionState(full_access=True)
+
+    stdio.apply_control(
+        {stdio.CONTROL_KEY: stdio._RETIRED_CONTROL_VERB, "enabled": True}, state
+    )
+
+    assert state.full_access is False
+    assert "renamed" in _log_text(path)
 
 
 def test_the_parser_defaults_to_local_and_prompting():
     args = stdio.build_parser().parse_args([])
 
     assert args.use_claude is False
-    assert args.bypass_permissions is False, "permissions must never default off"
+    assert args.full_access is False, "permissions must never default off"
     assert args.claude_model is None
     assert args.model is None
 
@@ -1654,7 +1798,7 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     agent.conversation_history = []
     agent.model_id = "chosen-model"
     agent.loaded_skills = {"coding": "loaded"}
-    state = stdio.PermissionState(bypass=True)
+    state = stdio.PermissionState(full_access=True)
     seen = []
 
     def turn(agent, query, out, **kwargs):
@@ -1670,7 +1814,7 @@ def test_clear_conversation_resets_only_history(monkeypatch):
     assert seen == [[], []]
     assert agent.model_id == "chosen-model"
     assert agent.loaded_skills == {"coding": "loaded"}
-    assert state.bypass
+    assert state.full_access
     assert json.loads(_lines(wire)[1]) == {
         "type": "final",
         "answer": "conversation_cleared",

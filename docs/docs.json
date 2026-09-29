@@ -79,13 +79,15 @@
                     "group": "Setup & Hardware",
                     "pages": [
                       "guides/hardware-advisor",
-                      "guides/npu"
+                      "guides/npu",
+                      "guides/llm-gateway"
                     ]
                   },
                   {
                     "group": "Core Agents",
                     "pages": [
                       "guides/gaia",
+                      "guides/document-extraction",
                       "guides/ai-providers",
                       "guides/chat",
                       "guides/talk",
@@ -307,6 +309,12 @@
             ]
           },
           {
+            "group": "Design",
+            "pages": [
+              "spec/gaia-design-language"
+            ]
+          },
+          {
             "group": "Packaging",
             "pages": [
               "spec/electron-integration"
@@ -347,6 +355,7 @@
                 ]
               },
               "reference/session-analytics",
+              "reference/agent-benchmarks",
               "reference/dependency-management",
               "reference/contributing-docs"
             ]
@@ -419,11 +428,13 @@
               "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
               "plans/flagship-installer",
+              "plans/embedded-onboarding",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",
               "plans/adaptive-skills",
+              "plans/adaptive-memory",
               "plans/oem-bundling"
             ]
           },
@@ -435,7 +446,8 @@
               "plans/mcp-docs",
               "plans/desktop-installer",
               "plans/tool-loader",
-              "plans/code-index-review"
+              "plans/code-index-review",
+              "plans/nightly-benchmarks"
             ]
           },
           {
@@ -515,7 +527,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.24.1 \u00b7 Lemonade 11.8.1",
+        "label": "v0.24.1 \u00b7 Lemonade 2026.39.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

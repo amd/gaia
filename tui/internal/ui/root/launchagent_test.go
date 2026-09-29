@@ -82,3 +82,31 @@ func TestLaunchAgentCommitClearsThePendingTranscript(t *testing.T) {
 		}
 	}
 }
+
+// The saved-default notice explains the launch that set it aside; repeating
+// it after an /agents switch would describe a decision nobody just made.
+func TestLaunchAgentShowsTheFullAccessNoticeOnce(t *testing.T) {
+	m, _ := liveChatModel(t, catalog.FlagshipID)
+	const notice = "Full access is saved as your default, but this agent cannot use it."
+	m = m.WithFullAccessNotice(notice)
+
+	updated, _ := m.launchAgent(fixtureAgent(t, "other"), true)
+	m = updated.(FlagshipModel)
+	shown := 0
+	for _, msg := range m.chat.Messages() {
+		if msg.Content == notice {
+			shown++
+		}
+	}
+	if shown != 1 {
+		t.Fatalf("the notice must appear once on the launch it explains, got %d: %+v", shown, m.chat.Messages())
+	}
+
+	updated, _ = m.launchAgent(fixtureAgent(t, "another"), true)
+	m = updated.(FlagshipModel)
+	for _, msg := range m.chat.Messages() {
+		if msg.Content == notice {
+			t.Fatalf("a later launch repeated the notice: %+v", m.chat.Messages())
+		}
+	}
+}
