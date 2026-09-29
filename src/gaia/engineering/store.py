@@ -40,7 +40,81 @@ def private_directory(path: Path) -> Path:
         raise ValueError("Engineering directories must not be symlinks")
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.chmod(0o700)
+    if os.name == "nt":
+        _lock_down_windows_acl(path)
     return path
+
+
+def _lock_down_windows_acl(path: Path) -> None:
+    """Restrict *path*'s DACL to the current user only — ``chmod 0700`` above
+    is a no-op on NTFS (#2250: the same gap already fixed for the daemon's
+    launch secret in ``gaia.daemon.sidecars.manager``). A shared snapshot or
+    grant left world-readable on a shared Windows box is exactly what this
+    store exists to prevent, so a failure here must not be swallowed.
+    """
+    try:
+        import ntsecuritycon
+        import win32api
+        import win32security
+    except ImportError as e:
+        raise RuntimeError(
+            f"cannot lock down {path} to the current user: pywin32 is not "
+            "installed. There is no fallback — an engineering directory "
+            "without an owner-only ACL is readable by other local accounts "
+            "on NTFS. Run `pip install pywin32` (it ships as a core "
+            "amd-gaia dependency on Windows). See issue #2250."
+        ) from e
+
+    try:
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32security.TOKEN_QUERY
+        )
+        user_sid, _attributes = win32security.GetTokenInformation(
+            token, win32security.TokenUser
+        )
+
+        dacl = win32security.ACL()
+        dacl.AddAccessAllowedAce(
+            win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, user_sid
+        )
+        win32security.SetNamedSecurityInfo(
+            str(path),
+            win32security.SE_FILE_OBJECT,
+            win32security.DACL_SECURITY_INFORMATION
+            | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            dacl,
+            None,
+        )
+
+        sd = win32security.GetNamedSecurityInfo(
+            str(path),
+            win32security.SE_FILE_OBJECT,
+            win32security.DACL_SECURITY_INFORMATION,
+        )
+        result_dacl = sd.GetSecurityDescriptorDacl()
+        if result_dacl is None:
+            raise RuntimeError(
+                f"{path} has no DACL after lockdown (a null DACL grants "
+                "everyone access on Windows) — refusing to use an "
+                "unprotected engineering directory."
+            )
+        for i in range(result_dacl.GetAceCount()):
+            _ace_type_flags, _mask, ace_sid = result_dacl.GetAce(i)
+            if ace_sid != user_sid:
+                raise RuntimeError(
+                    f"{path} DACL still grants access to a SID other than "
+                    "the current user after lockdown — refusing to use an "
+                    "engineering directory other local users could read."
+                )
+    except RuntimeError:
+        raise
+    except Exception as e:
+        # pywin32 raises pywintypes.error (not OSError) on API failures.
+        raise RuntimeError(
+            f"could not lock down {path} to the current user via a Windows " f"ACL: {e}"
+        ) from e
 
 
 def atomic_json(path: Path, value: dict) -> None:

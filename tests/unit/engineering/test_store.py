@@ -4,12 +4,13 @@
 
 import json
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from gaia.engineering.service import EngineeringService
-from gaia.engineering.store import JobStore, clean_context
+from gaia.engineering.store import JobStore, clean_context, private_directory
 
 
 def test_developer_mode_is_required_before_any_storage(tmp_path, monkeypatch):
@@ -134,3 +135,146 @@ def test_frozen_sidecar_never_becomes_python_launcher(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Python installation"):
         service.connection("codex")
     assert not (tmp_path / "clients" / "codex.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Windows DACL lockdown (#2250 gap: chmod 0700 is a no-op on NTFS) — the
+# fake pywin32 surface lets this run on every CI platform, not just Windows.
+# ---------------------------------------------------------------------------
+
+USER_SID = "S-1-5-21-fake-current-user"
+FOREIGN_SID = "S-1-5-32-545"  # BUILTIN\Users
+FILE_ALL_ACCESS = 0x1F01FF
+
+
+class _FakeACL:
+    def __init__(self):
+        self.aces = []
+
+    def AddAccessAllowedAce(self, revision, mask, sid):
+        self.aces.append({"revision": revision, "mask": mask, "sid": sid})
+
+    def GetAceCount(self):
+        return len(self.aces)
+
+    def GetAce(self, index):
+        ace = self.aces[index]
+        return ((0, 0), ace["mask"], ace["sid"])
+
+
+class _FakeSD:
+    def __init__(self, dacl):
+        self._dacl = dacl
+
+    def GetSecurityDescriptorDacl(self):
+        return self._dacl
+
+
+def _install_fake_pywin32(monkeypatch, *, readback_sids=(USER_SID,), null_dacl=False):
+    calls = {"set": []}
+
+    ntsecuritycon = type(sys)("ntsecuritycon")
+    ntsecuritycon.FILE_ALL_ACCESS = FILE_ALL_ACCESS
+
+    win32api = type(sys)("win32api")
+    win32api.GetCurrentProcess = lambda: "FAKE-PROCESS-HANDLE"
+
+    win32security = type(sys)("win32security")
+    win32security.ACL = _FakeACL
+    win32security.ACL_REVISION = 2
+    win32security.SE_FILE_OBJECT = 1
+    win32security.TOKEN_QUERY = 0x0008
+    win32security.TokenUser = 1
+    win32security.DACL_SECURITY_INFORMATION = 0x00000004
+    win32security.PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
+    win32security.OpenProcessToken = lambda process, access: "FAKE-TOKEN"
+    win32security.GetTokenInformation = lambda token, info_class: (USER_SID, 0)
+
+    def _set_named_security_info(path, obj_type, flags, owner, group, dacl, sacl):
+        calls["set"].append({"path": path, "flags": flags, "dacl": dacl})
+
+    def _get_named_security_info(path, obj_type, flags):
+        if null_dacl:
+            return _FakeSD(None)
+        readback = _FakeACL()
+        for sid in readback_sids:
+            readback.AddAccessAllowedAce(2, FILE_ALL_ACCESS, sid)
+        return _FakeSD(readback)
+
+    win32security.SetNamedSecurityInfo = _set_named_security_info
+    win32security.GetNamedSecurityInfo = _get_named_security_info
+
+    monkeypatch.setitem(sys.modules, "ntsecuritycon", ntsecuritycon)
+    monkeypatch.setitem(sys.modules, "win32api", win32api)
+    monkeypatch.setitem(sys.modules, "win32security", win32security)
+    return calls
+
+
+def test_private_directory_locks_down_windows_acl(tmp_path, monkeypatch):
+    """The regression this fixes: chmod(0o700) alone is a no-op on NTFS, so a
+    shared engineering snapshot was readable by any other local account.
+    """
+    monkeypatch.setattr(os, "name", "nt")
+    calls = _install_fake_pywin32(monkeypatch)
+
+    target = tmp_path / "engineering-root"
+    private_directory(target)
+
+    assert len(calls["set"]) == 1
+    flags = calls["set"][0]["flags"]
+    assert flags & 0x00000004, "DACL_SECURITY_INFORMATION must be set"
+    assert flags & 0x80000000, (
+        "PROTECTED_DACL_SECURITY_INFORMATION must be set — without it the "
+        "parent temp dir's inherited ACEs survive alongside the new one"
+    )
+    assert calls["set"][0]["path"] == str(target)
+
+
+def test_private_directory_skips_acl_lockdown_off_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "name", "posix")
+    calls = _install_fake_pywin32(monkeypatch)
+
+    private_directory(tmp_path / "engineering-root")
+
+    assert calls["set"] == []
+
+
+def test_private_directory_refuses_a_directory_a_foreign_sid_can_still_read(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "name", "nt")
+    _install_fake_pywin32(monkeypatch, readback_sids=(USER_SID, FOREIGN_SID))
+
+    with pytest.raises(RuntimeError, match="other local users"):
+        private_directory(tmp_path / "engineering-root")
+
+
+def test_private_directory_refuses_a_null_dacl(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "name", "nt")
+    _install_fake_pywin32(monkeypatch, null_dacl=True)
+
+    with pytest.raises(RuntimeError, match="no DACL"):
+        private_directory(tmp_path / "engineering-root")
+
+
+def test_private_directory_requires_pywin32_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.delitem(sys.modules, "win32security", raising=False)
+    monkeypatch.delitem(sys.modules, "win32api", raising=False)
+    monkeypatch.delitem(sys.modules, "ntsecuritycon", raising=False)
+    monkeypatch.setattr(
+        "builtins.__import__",
+        _raise_on_pywin32_import(__import__),
+    )
+
+    with pytest.raises(RuntimeError, match="pywin32"):
+        private_directory(tmp_path / "engineering-root")
+
+
+def _raise_on_pywin32_import(real_import):
+    def _guarded(name, *args, **kwargs):
+        if name in {"win32api", "win32security", "ntsecuritycon"}:
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    return _guarded
