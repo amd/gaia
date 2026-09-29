@@ -272,6 +272,12 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch v := msg.(type) {
 		case providers.ClosedMsg:
 			m.providerPanel = nil
+			// Resizes while the panel was open reached only the panel.
+			if m.width > 0 && m.height > 0 {
+				updated, _ := m.preflight.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+				gate := updated.(preflight.Model)
+				m.preflight = &gate
+			}
 			return m, m.preflight.Init()
 		case providers.SelectedMsg:
 			m.providerPanel = nil
@@ -346,7 +352,7 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gateway.CloseMsg:
 		m.gw = nil
 		m.activeView = viewChat
-		return m, nil
+		return m.syncChatSize()
 
 	case preflight.ProceedMsg:
 		if !m.gateIsFor(msg.AgentID) {
@@ -465,6 +471,18 @@ func (m FlagshipModel) openGateway() (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// syncChatSize hands the chat the current window size on the way back to it:
+// resizes while another screen was up reached only that screen.
+func (m FlagshipModel) syncChatSize() (FlagshipModel, tea.Cmd) {
+	if m.chat == nil || m.width <= 0 || m.height <= 0 {
+		return m, nil
+	}
+	updated, cmd := m.chat.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+	chatModel := updated.(chat.ChatModel)
+	m.chat = &chatModel
+	return m, cmd
 }
 
 func (m FlagshipModel) updateGateway(msg tea.Msg) (tea.Model, tea.Cmd) {
