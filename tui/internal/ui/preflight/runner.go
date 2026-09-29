@@ -29,8 +29,17 @@ type Runner interface {
 	// Check probes every precondition in dependency order.
 	Check(ctx context.Context, cfg Config) Report
 	// Fix applies a row's one-key fix. A fix with progress to report streams it
-	// through onLine (see streamsProgress); one without never calls it.
-	Fix(ctx context.Context, cfg Config, kind FixKind, onLine func(string)) FixResult
+	// through onProgress (see streamsProgress); one without never calls it.
+	Fix(ctx context.Context, cfg Config, kind FixKind, onProgress func(Progress)) FixResult
+}
+
+// Progress is one update from a running fix: the row it is working on, and
+// what it is doing in words a person reads — never a raw log line.
+type Progress struct {
+	Row  string
+	Text string
+	// Percent is a download's completion, -1 when the step reports none.
+	Percent int
 }
 
 // FixResult is what a one-key fix did. A failed fix carries a Diagnosis rather
@@ -45,6 +54,8 @@ type FixResult struct {
 	Diagnosis Diagnosis
 	// Final is a streamed fix's last progress line — the one carrying ✓ or ✗.
 	Final string
+	// Log is the tail of what the fix printed, verbatim, for `d details`.
+	Log []string
 }
 
 // OK reports whether the fix succeeded.
@@ -73,7 +84,7 @@ func (d daemonRunner) Check(ctx context.Context, cfg Config) Report {
 	return Check(ctx, d.t, cfg)
 }
 
-func (d daemonRunner) Fix(ctx context.Context, cfg Config, kind FixKind, onLine func(string)) FixResult {
+func (d daemonRunner) Fix(ctx context.Context, cfg Config, kind FixKind, onProgress func(Progress)) FixResult {
 	switch kind {
 	case FixStartDaemon:
 		if _, err := d.t.Start(ctx); err != nil {
@@ -116,7 +127,11 @@ func (d daemonRunner) Fix(ctx context.Context, cfg Config, kind FixKind, onLine 
 		return FixResult{Note: cfg.AgentName + " agent restarted in the requested mode."}
 
 	case FixPullModel:
-		res := Provision(ctx, d.t, cfg, onLine)
+		res := Provision(ctx, d.t, cfg, func(line string) {
+			if onProgress != nil {
+				onProgress(Progress{Row: KeyModel, Text: line, Percent: -1})
+			}
+		})
 		if res.OK {
 			return FixResult{Note: "Download complete.", Final: res.Final}
 		}

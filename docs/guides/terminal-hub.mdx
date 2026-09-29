@@ -142,30 +142,79 @@ is dropped and the frame is just the wordmark and tagline on one line.
 
 For the flagship, three things are checked, in order, each depending on the one
 before it: is `gaia-agent` on this machine, is the local model server (Lemonade)
-reachable, are the models downloaded. The gate stops at the first failure — a
-missing model server makes "are the models downloaded" meaningless.
+reachable, and do the models **load**. The gate stops at the first failure — a
+missing model server makes "do the models load" meaningless.
 
-An all-green machine flashes through this screen and lands in chat without a
-keypress. A failure holds it open:
+An all-green machine lands in chat without a keypress, naming the chat model on
+its way out. Because the last check loads the models, that takes a few seconds
+when they are already in memory and longer right after a reboot — time the first
+message would otherwise have spent.
+
+#### First run
+
+On a new machine nothing is broken yet — Lemonade and the models just are not
+there. The gate shows that as numbered steps, not failures:
 
 ```
-  Setting up GAIA                                                   1 of 3 ready
+  Setting up GAIA                                                    step 1 of 2
   ──────────────────────────────────────────────────────────────────────────────
-    [ok]  GAIA agent          found at /usr/local/bin/gaia-agent
-  > [!]   Lemonade            not running
-          GAIA needs a local model server. It runs on your machine; no message
-          text ever leaves it.
-          f set it up now
-          or run: gaia init
-          look:   https://amd-gaia.ai/docs/guides/install
-    [ ]   Language model      —  checked once "Lemonade" is fixed
+    [ok]  GAIA agent          C:\Users\you\.gaia\bin\gaia-agent.exe
+  > [ ]   Lemonade            Step 1 of 2 — install the local model server (~1 min)
+          Lemonade runs AI models on this machine and routes chat to the
+          provider you pick. Setup installs it privately for GAIA — nothing
+          system-wide.
+          enter start step 1
+    [ ]   Language model      Step 2 of 2 — download the models (~6 GB)
   ──────────────────────────────────────────────────────────────────────────────
-  f set it up now · r re-check · d details · esc back
+  enter start step 1 · p AI provider · r re-check · d details · esc back
 ```
 
-Pressing `f` runs `gaia init` right there and streams its progress into the
-screen; `esc` cancels it. The command is shown only as the copy-paste
-alternative — nothing on this screen requires leaving the TUI.
+Press `Enter` and setup runs right there. The row it is working on shows it, and
+the line underneath says what is happening in words — never a log line:
+
+```
+  Setting up GAIA                                                    step 2 of 2
+  ──────────────────────────────────────────────────────────────────────────────
+    [ok]  GAIA agent          C:\Users\you\.gaia\bin\gaia-agent.exe
+    [ok]  Lemonade            done
+    [..]  Language model      ⣟  downloading Gemma-4-E4B-it-GGUF…
+
+  ⣟  Step 2 of 2 — downloading Gemma-4-E4B-it-GGUF · 0:05
+  Leaving this screen stops setup.
+  ──────────────────────────────────────────────────────────────────────────────
+  r re-check · d details · esc back
+```
+
+`esc` cancels it. If setup stops, the screen says why and `d` shows its full
+output; `gaia init` does the same work from a terminal.
+
+When setup finishes, the gate checks the models by **loading** them once — the
+chat model, and the embedding model that document search and memory use — and
+only then says it is ready, naming the chat model and its size:
+
+```
+  Setup finished and the models load. Chat runs on Gemma-4-E4B-it-GGUF (5.6 GB,
+  on this machine). Press enter to start GAIA.
+```
+
+#### When something is actually broken
+
+A real failure is marked `[!]` and says what to do. For example, a model that
+downloaded but will not load:
+
+```
+  > [!]   Language model      user.embeddinggemma-300m-GGUF will not load
+          It is downloaded, but the model server could not start it, so
+          document search and memory will not work. Chat still does.
+          Stop GAIA's model server, then press r — it starts again with
+          current settings. If it still fails, attach the output of
+          `gaia diagnostics` to a bug report.
+          run:    gaia lemonade embedded stop
+          look:   https://github.com/amd/gaia/issues
+```
+
+An embedding model that will not load does not stop the launch — `Enter` starts
+GAIA without document search and memory. A chat model that will not load does.
 
 If `gaia-agent` itself is missing, the gate stops on the first row and sends you
 to the installer — there is no in-TUI download for the agent binary:
@@ -199,8 +248,8 @@ that gate end to end.
 | `[ok]` | Checked and working |
 | `[!]` | Checked and failed |
 | `[?]` | Tried, but couldn't establish an answer either way — not a pass |
-| `[ ]` | Not checked yet (waiting on the row above) |
-| `[..]` | Checking now |
+| `[ ]` | Not checked yet (waiting on the row above), or a first-run step setup has not done yet |
+| `[..]` | Checking now, or setup is working on this row |
 
 The marker and the words carry the state on their own, so the screen reads the same
 on a monochrome terminal or piped to a file.
@@ -213,7 +262,7 @@ on a monochrome terminal or piped to a file.
 | `r` | Re-check everything |
 | `d` | Toggle the raw answer the check got — paste this into a bug report |
 | `↑` / `↓` (or `k` / `j`) | Move between rows |
-| `Enter` | Continue anyway — offered only when nothing is outright broken |
+| `Enter` | On a first-run step, start it. Otherwise continue anyway — offered only when nothing is outright broken |
 | `Esc` | **Quit.** There is no screen behind the gate to go back to — the footer still shows this key as "back" |
 | `Ctrl+C` | Quit |
 

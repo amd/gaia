@@ -26,15 +26,11 @@ type EmbeddedState struct {
 // An explicit GAIA_HOME isolates the entire runtime: absent or malformed state
 // there must not cause a connection to the user's unrelated default instance.
 func ReadEmbedded() *EmbeddedState {
-	dir := strings.TrimSpace(os.Getenv("GAIA_HOME"))
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil
-		}
-		dir = filepath.Join(home, ".gaia")
+	dir, ok := embeddedDir()
+	if !ok {
+		return nil
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "lemonade", "state.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	if err != nil {
 		return nil
 	}
@@ -44,6 +40,30 @@ func ReadEmbedded() *EmbeddedState {
 	}
 	state.APIKey = strings.TrimSpace(state.APIKey)
 	return &state
+}
+
+// EmbeddedInstalled reports whether GAIA's private Lemonade is unpacked, running
+// or not. The state file only exists while it runs, so it cannot answer this.
+func EmbeddedInstalled() bool {
+	dir, ok := embeddedDir()
+	if !ok {
+		return false
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "dist", "*", "lemond*"))
+	return len(matches) > 0
+}
+
+// embeddedDir is <GAIA_HOME>/lemonade, as Python's EmbeddedLemonade lays it out.
+func embeddedDir() (string, bool) {
+	dir := strings.TrimSpace(os.Getenv("GAIA_HOME"))
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", false
+		}
+		dir = filepath.Join(home, ".gaia")
+	}
+	return filepath.Join(dir, "lemonade"), true
 }
 
 // ResolveBaseURL keeps an explicitly selected endpoint, then checks the

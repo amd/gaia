@@ -96,8 +96,8 @@ func (l localRunner) Rows(cfg Config) []Row {
 		modelLabel = "Embeddings"
 	}
 	rows = append(rows,
-		Row{Key: KeyLemonade, Label: lemonadeRowLabel},
-		Row{Key: KeyModel, Label: modelLabel},
+		Row{Key: KeyLemonade, Label: lemonadeRowLabel, Step: installServerStep},
+		Row{Key: KeyModel, Label: modelLabel, Step: l.downloadStep(nil)},
 	)
 	for i := range rows {
 		rows[i].State = StatePending
@@ -117,7 +117,11 @@ func (l localRunner) Check(ctx context.Context, cfg Config) Report {
 	if l.opts.ClaudeMode {
 		steps = append(steps, l.checkClaudeCredential)
 	}
-	steps = append(steps, l.checkLemonade, l.checkModels)
+	steps = append(steps, l.checkLemonade, func(ctx context.Context, cfg Config) Row {
+		row, chat := l.verifyModels(ctx, cfg)
+		rep.Chat = chat
+		return row
+	})
 	for _, step := range steps {
 		row := step(ctx, cfg)
 		setRow(&rep, row)
@@ -342,8 +346,7 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	// Installing and starting Lemonade is `gaia init`'s job, so this row gets
 	// the same one-key setup the model row does. It cannot run twice: Check
 	// stops at the FIRST failure, so whenever this row is the blocker the model
-	// row below it is pending and unfocusable. Withholding the key here left
-	// the commonest first-run failure with nothing to press.
+	// row below it is pending and unfocusable.
 	//
 	// Two states are excluded because `gaia init` provably cannot fix them:
 	//
@@ -354,17 +357,38 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	//     mode from it and then refuses to install or start anything. The
 	//     daemon runner already special-cases this (check.go); matching it here
 	//     is what keeps the two screens from diverging.
-	if resolveLemonade().BadOverride == "" && isLoopback(base) {
-		row.Fix = FixRunSetup
-		// The shared remedy's Action describes starting Lemonade BY HAND, which
-		// is right where there is no `f`. Here there is one, so say what it does
-		// first — otherwise the row explains the manual route while the key that
-		// automates it sits directly underneath.
-		row.Remedy.Action = "Press f and setup installs and starts it. Already have it? " +
-			row.Remedy.Action
+	l0 := resolveLemonade()
+	if l0.BadOverride != "" || !isLoopback(base) {
+		return row
 	}
+	row.Fix = FixRunSetup
+	if !l0.Found && !lemonade.EmbeddedInstalled() && readEmbeddedLemonade() == nil {
+		// Nothing installed is how every new machine starts — a step, not a fault.
+		row.FirstRun = true
+		row.Line = "not installed yet"
+		row.Step = installServerStep
+		row.Detail = "Lemonade runs AI models on this machine and routes chat to the provider " +
+			"you pick. Setup installs it privately for GAIA — nothing system-wide."
+		return row
+	}
+	// Installed, and GAIA could not start it: a real failure, with the start
+	// command as the manual alternative to `f`.
+	if !l0.Found {
+		// GAIA's own server: its state file proves it is installed, which the
+		// shared remedy — resolved from system installs — would call missing.
+		row.Remedy = Remedy{
+			Action:  "Press f and setup starts it. By hand instead: run this, then press r to re-check.",
+			Command: "gaia lemonade embedded start",
+			Where:   installDocs,
+		}
+		return row
+	}
+	row.Remedy.Action = "Press f and setup starts it. By hand instead: " + row.Remedy.Action
 	return row
 }
+
+// installServerStep is the Lemonade row's first-run step.
+const installServerStep = "install the local model server (~1 min)"
 
 // probeLemonade asks the local model server for its model list, which is the
 // smallest call that proves it is actually serving rather than merely bound.
@@ -460,15 +484,28 @@ func (l localRunner) skipChatModel() bool {
 	return l.opts.ClaudeMode || lemonade.IsCloudID(l.opts.Model)
 }
 
-func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
+// localChatModel is the local chat model to load when the user picked one other
+// than the profile default; empty otherwise.
+func (l localRunner) localChatModel() string {
+	if l.skipChatModel() {
+		return ""
+	}
+	return l.opts.Model
+}
+
+// verifyModels answers the model row by LOADING the models, not listing them: an
+// embedder llama-server cannot start is "downloaded" and still breaks document
+// search and memory on the first turn. It also returns the chat line for the
+// hand-off, empty when there is nothing proven to name.
+func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string) {
 	row := Row{Key: KeyModel}
 
-	ready, err := gaiainit.Check(ctx, l.skipChatModel())
+	st, err := gaiainit.Verify(ctx, l.skipChatModel(), l.localChatModel())
 	switch {
 	case errors.Is(err, gaiainit.ErrUnanswered):
 		// The question was never answered — an installed gaia older than
-		// `--check` exits 2 for "unrecognized arguments". Reading that as "not
-		// set up" ran a full multi-minute `gaia init` on every single launch.
+		// `--check --load` exits 2 for "unrecognized arguments". Reading that as
+		// "not set up" ran a full multi-minute `gaia init` on every single launch.
 		// Unknown is what this package already has for exactly that.
 		row.State = StateUnknown
 		row.Disposition = status.DispositionNotify
@@ -477,54 +514,186 @@ func (l localRunner) checkModels(ctx context.Context, _ Config) Row {
 		row.Remedy = Remedy{
 			Action:  "Run setup yourself if anything below behaves oddly.",
 			Command: gaiainit.RunCommand(l.skipChatModel()),
-			Where:   "https://amd-gaia.ai/docs/guides/install",
+			Where:   installDocs,
 		}
 		row.Raw = err.Error()
-		return row
+		return row, ""
 
 	case err != nil:
-		// Check only ever wraps ErrUnanswered today; anything else reaching
+		// Verify only ever wraps ErrUnanswered today; anything else reaching
 		// here is a bug, and must not read as a clean machine.
 		row.State = StateUnknown
 		row.Disposition = status.DispositionHalt
 		row.Line = "could not be checked"
 		row.Detail = err.Error()
 		row.Raw = err.Error()
-		return row
+		return row, ""
 
-	case ready:
+	case st.Ready:
 		row.State = StateOK
-		row.Line = "downloaded"
-		if lemonade.IsCloudID(l.opts.Model) {
-			row.Line = "embedder downloaded — chat uses " + l.opts.Model
+		row.Raw = strings.Join(modelSummaries(st), "\n")
+		switch {
+		case l.opts.ClaudeMode:
+			row.Line = "embedder loads — chat runs on Claude"
+			return row, "Claude"
+		case lemonade.IsCloudID(l.opts.Model):
+			row.Line = "embedder loads — chat uses " + l.opts.Model
+			return row, l.opts.Model + " (in the cloud)"
 		}
-		if l.opts.ClaudeMode {
-			row.Line = "embedder downloaded — chat runs on Claude"
+		chat, ok := st.Chat()
+		if !ok {
+			row.Line = "loads"
+			return row, ""
 		}
-		return row
+		row.Line = chat.ID + sizeSuffix(chat.SizeGB) + " and the embedder load"
+		return row, describeChat(chat)
 	}
 
+	switch st.Stage {
+	case gaiainit.StageLoad:
+		return l.loadFailedRow(st), ""
+	case gaiainit.StageServer:
+		// Installed and not answering is a fault, not a step still to do.
+		row.State = StateFailed
+		row.Disposition = status.DispositionHalt
+		row.Line = "model server not answering"
+		row.Detail = strings.Join(st.Reasons, "\n")
+		row.Fix = FixRunSetup
+		row.Remedy = Remedy{
+			Action:  "Press f and setup starts it again, then checks the models.",
+			Command: gaiainit.RunCommand(l.skipChatModel()),
+			Where:   installDocs,
+		}
+		row.Raw = row.Detail
+		return row, ""
+	}
+
+	// Not downloaded yet: the normal state of a first run.
 	row.State = StateFailed
+	row.FirstRun = true
 	row.Disposition = status.DispositionHalt
 	row.Line = "not downloaded yet"
-	row.Detail = "Several GB on a first run. Once downloaded they are reused by every " +
-		"GAIA session."
+	row.Step = l.downloadStep(st.Models)
+	row.Detail = "Downloaded once, then reused by every GAIA session."
 	if l.skipChatModel() {
-		row.Line = "embedding models not downloaded"
-		row.Detail = "Chat uses your selected remote provider. Setup downloads local embedding models for document search and memory."
+		row.Line = "embedding model not downloaded yet"
+		row.Detail = "Chat uses your selected provider. Document search and memory run on a " +
+			"small local embedding model."
 	}
 	row.Fix = FixRunSetup
 	row.Remedy = Remedy{
 		Action:  "Setup downloads what is missing and starts the local server.",
 		Command: gaiainit.RunCommand(l.skipChatModel()),
-		Where:   "https://amd-gaia.ai/docs/guides/install",
+		Where:   installDocs,
 	}
+	row.Raw = strings.Join(st.Reasons, "\n")
+	return row, ""
+}
+
+// loadFailedRow is a model that is downloaded and will not load — a real
+// failure, which running setup again cannot fix.
+func (l localRunner) loadFailedRow(st gaiainit.Status) Row {
+	row := Row{Key: KeyModel, State: StateFailed, Disposition: status.DispositionHalt}
+	var failed []gaiainit.Model
+	chatFailed := false
+	for _, m := range st.Models {
+		if !m.Loaded {
+			failed = append(failed, m)
+			chatFailed = chatFailed || m.Role == "chat"
+		}
+	}
+	if len(failed) == 0 {
+		// A load-stage answer that names no failed model contradicts itself.
+		failed = []gaiainit.Model{{ID: "a model", Error: strings.Join(st.Reasons, "; ")}}
+		chatFailed = true
+	}
+	row.Line = failed[0].ID + " will not load"
+	if chatFailed {
+		row.Detail = "It is downloaded, but the model server could not start it, so GAIA " +
+			"cannot answer."
+	} else {
+		// Chat still works, so the launch may go ahead — but never quietly.
+		row.Optional = true
+		row.Detail = "It is downloaded, but the model server could not start it, so document " +
+			"search and memory will not work. Chat still does."
+	}
+	if readEmbeddedLemonade() != nil {
+		row.Remedy = Remedy{
+			Action: "Stop GAIA's model server, then press r — it starts again with current settings. " +
+				"If it still fails, attach the output of `gaia diagnostics` to a bug report.",
+			Command: "gaia lemonade embedded stop",
+			Where:   "https://github.com/amd/gaia/issues",
+		}
+	} else {
+		row.Remedy = lemonadeRestartRemedy()
+	}
+	var raw []string
+	for _, m := range failed {
+		raw = append(raw, m.ID+": "+m.Error)
+	}
+	row.Raw = strings.Join(raw, "\n")
 	return row
 }
 
+// downloadStep is the model row's first-run step, sized from what Verify
+// reported when the server could say, otherwise from the profile.
+func (l localRunner) downloadStep(models []gaiainit.Model) string {
+	var total float64
+	known := len(models) > 0
+	for _, m := range models {
+		if m.SizeGB == nil {
+			known = false
+			break
+		}
+		total += *m.SizeGB
+	}
+	switch {
+	case known:
+		return fmt.Sprintf("download the models (%s)", formatGB(total))
+	case l.skipChatModel():
+		return "download the embedding model (under 1 GB)"
+	}
+	return "download the models (" + gaiainit.ProfileSize + ")"
+}
+
+func formatGB(gb float64) string {
+	if gb < 1 {
+		return fmt.Sprintf("%.0f MB", gb*1000)
+	}
+	return fmt.Sprintf("%.1f GB", gb)
+}
+
+// describeChat names a local chat model for the hand-off line.
+func describeChat(m gaiainit.Model) string {
+	if m.SizeGB == nil {
+		return m.ID + " (on this machine)"
+	}
+	return fmt.Sprintf("%s (%s, on this machine)", m.ID, formatGB(*m.SizeGB))
+}
+
+func sizeSuffix(gb *float64) string {
+	if gb == nil {
+		return ""
+	}
+	return " (" + formatGB(*gb) + ")"
+}
+
+func modelSummaries(st gaiainit.Status) []string {
+	var out []string
+	for _, m := range st.Models {
+		out = append(out, fmt.Sprintf("%s (%s)%s: loaded", m.ID, m.Role, sizeSuffix(m.SizeGB)))
+	}
+	return out
+}
+
+const installDocs = "https://amd-gaia.ai/docs/guides/install"
+
 // --- fixes ------------------------------------------------------------------
 
-func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onLine func(string)) FixResult {
+// maxSetupLog bounds the setup transcript kept for `d details`.
+const maxSetupLog = 200
+
+func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress func(Progress)) FixResult {
 	if kind != FixRunSetup {
 		return FixResult{Err: errNoFix}
 	}
@@ -535,47 +704,92 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onLine fun
 			Cause:   err.Error(),
 			Remedy:  "Run setup in a terminal instead, then press r to re-check.",
 			Command: gaiainit.RunCommand(l.skipChatModel()),
-			Where:   "https://amd-gaia.ai/docs/guides/install",
+			Where:   installDocs,
 		}}
 	}
 	defer cancel()
 
-	var last string
+	var (
+		log     []string
+		current = Progress{Row: KeyLemonade, Text: "Starting setup", Percent: -1}
+		failure string
+	)
+	stopped := func(cause string) string {
+		if failure != "" {
+			cause += " " + failure
+		}
+		return cause
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			// cancel() runs on the way out, so the child dies with the screen.
-			return FixResult{Err: ctx.Err(), Final: last, Diagnosis: Diagnosis{
+			return FixResult{Err: ctx.Err(), Final: current.Text, Log: log, Diagnosis: Diagnosis{
 				Cause:   "Setup was cancelled, or ran past the time limit.",
 				Remedy:  "Run it in a terminal instead, then press r to re-check.",
 				Command: gaiainit.RunCommand(l.skipChatModel()),
-				Where:   "https://amd-gaia.ai/docs/guides/install",
+				Where:   installDocs,
 			}}
 		case evt, ok := <-ch:
 			if !ok {
-				return FixResult{Err: errFixFailed, Final: last, Diagnosis: Diagnosis{
-					Cause:   "Setup ended without saying whether it worked.",
+				return FixResult{Err: errFixFailed, Final: current.Text, Log: log, Diagnosis: Diagnosis{
+					Cause:   stopped("Setup ended without saying whether it worked."),
 					Remedy:  "Press r to re-check whether the models landed, then retry.",
 					Command: gaiainit.RunCommand(l.skipChatModel()),
-					Where:   "https://amd-gaia.ai/docs/guides/install",
+					Where:   installDocs,
 				}}
 			}
 			if !evt.Done {
-				last = evt.Line
-				if onLine != nil {
-					onLine(evt.Line)
+				log = append(log, evt.Line)
+				if len(log) > maxSetupLog {
+					log = log[len(log)-maxSetupLog:]
+				}
+				if next, changed := advance(current, evt.Line, &failure); changed {
+					current = next
+					if onProgress != nil {
+						onProgress(current)
+					}
 				}
 				continue
 			}
 			if evt.Err != nil {
-				return FixResult{Err: evt.Err, Final: last, Diagnosis: Diagnosis{
-					Cause:   "Setup failed: " + evt.Err.Error(),
-					Remedy:  "Run it in a terminal to see the full log, then press r.",
+				return FixResult{Err: evt.Err, Final: current.Text, Log: log, Diagnosis: Diagnosis{
+					Cause: stopped(fmt.Sprintf("Setup stopped while %s (%v).",
+						lowerFirst(current.Text), evt.Err)),
+					Remedy:  "Press d for the setup log, fix what it names, then retry.",
 					Command: gaiainit.RunCommand(l.skipChatModel()),
-					Where:   "https://amd-gaia.ai/docs/guides/install",
+					Where:   installDocs,
 				}}
 			}
-			return FixResult{Note: "Setup complete.", Final: last}
+			return FixResult{Note: "Setup complete.", Final: current.Text, Log: log}
 		}
 	}
+}
+
+// advance folds one line of `gaia init` output into the progress shown to the
+// user. Lines that mean nothing to a person — Python log records above all —
+// change nothing; they are kept for the details view only.
+func advance(cur Progress, line string, failure *string) (Progress, bool) {
+	p, ok := gaiainit.Describe(line)
+	if !ok {
+		return cur, false
+	}
+	if p.Failed {
+		*failure = p.Text
+		return cur, false
+	}
+	if p.Percent >= 0 {
+		if p.Percent == cur.Percent {
+			return cur, false
+		}
+		cur.Percent = p.Percent
+		return cur, true
+	}
+	cur.Text, cur.Percent = p.Text, -1
+	if p.Phase == gaiainit.PhaseServer {
+		cur.Row = KeyLemonade
+	} else if p.Phase != gaiainit.PhaseNone {
+		cur.Row = KeyModel
+	}
+	return cur, true
 }

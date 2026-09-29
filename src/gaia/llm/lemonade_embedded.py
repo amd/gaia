@@ -906,6 +906,9 @@ class EmbeddedLemonade:
 
         env = dict(os.environ)
         env["LEMONADE_API_KEY"] = api_key
+        # Vulkan's cooperative-matrix path crashes llama-server on the first
+        # embedding on Strix Halo; every installer launch path sets this too.
+        env["GGML_VK_DISABLE_COOPMAT"] = "1"
 
         argv = [
             str(self.daemon_path),

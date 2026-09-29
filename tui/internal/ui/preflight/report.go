@@ -198,6 +198,14 @@ type Row struct {
 	Optional bool
 	// Raw is the probe's raw answer (JSON body or error text), shown by `d`.
 	Raw string
+	// FirstRun marks a failed row that is only "not set up yet" — the normal
+	// state of a new machine, not a fault. It still blocks the launch, but it
+	// renders as a neutral numbered step with one way forward, never as red.
+	FirstRun bool
+	// Step is what setup does for this row, as a short imperative phrase —
+	// "download the models (~6 GB)". Set on a FirstRun row, and on the pending
+	// rows behind it so the whole path is numbered from the first frame.
+	Step string
 	// Disposition is what the checklist does when this row is not OK — Halt
 	// or Notify. Set by the check that produces the row, because the check
 	// is what knows whether being unverified will actually bite the user.
@@ -263,6 +271,9 @@ type Report struct {
 	AgentID   string
 	AgentName string
 	Rows      []Row
+	// Chat names the model chat will run on, and its size when it runs here —
+	// "Gemma-4-E4B-it-GGUF (3.2 GB, on this machine)". Empty when unknown.
+	Chat string
 }
 
 // Ready reports whether every precondition proved OK. An indeterminate row is
@@ -378,12 +389,43 @@ func (r Report) OKCount() int {
 	return n
 }
 
-// Summary is the top-right status, e.g. "2 of 5 ready".
+// Summary is the top-right status, e.g. "2 of 5 ready", or "step 1 of 2" on a
+// first run.
 func (r Report) Summary() string {
 	if r.Ready() {
 		return "ready"
 	}
+	if steps := r.Steps(); len(steps) > 0 {
+		return fmt.Sprintf("step 1 of %d", len(steps))
+	}
 	return fmt.Sprintf("%d of %d ready", r.OKCount(), len(r.Rows))
+}
+
+// Steps returns the indexes of the rows that make up a first run, in order:
+// every FirstRun row, plus the pending rows behind the first one that say what
+// setup will do for them. Empty when nothing here is a first run — then every
+// failure is a real one.
+func (r Report) Steps() []int {
+	var steps []int
+	for i, row := range r.Rows {
+		switch {
+		case row.FirstRun:
+			steps = append(steps, i)
+		case len(steps) > 0 && row.State == StatePending && row.Step != "":
+			steps = append(steps, i)
+		}
+	}
+	return steps
+}
+
+// StepNumber is the 1-based position of row i among Steps, or 0.
+func (r Report) StepNumber(i int) int {
+	for n, idx := range r.Steps() {
+		if idx == i {
+			return n + 1
+		}
+	}
+	return 0
 }
 
 // FirstAttention is the index of the row the user should act on: the first

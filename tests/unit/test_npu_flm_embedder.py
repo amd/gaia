@@ -33,10 +33,14 @@ class TestDeviceEmbedderResolution:
         assert get_embedding_model_for_device("npu") == "embed-gemma-300m-FLM"
 
     @pytest.mark.parametrize("device", ["gpu", "cpu", None, "unknown-device"])
-    def test_non_npu_uses_nomic(self, device):
+    def test_non_npu_uses_the_embedder_setup_downloads(self, device):
+        """An embedder `gaia init` never downloads fails on first use (#4449)."""
         from gaia.agents.registry import get_embedding_model_for_device
+        from gaia.installer.init_command import INIT_PROFILES
 
-        assert get_embedding_model_for_device(device) == "nomic-embed-text-v2-moe-GGUF"
+        embedder = get_embedding_model_for_device(device)
+        assert embedder == "user.embeddinggemma-300m-GGUF"
+        assert embedder in INIT_PROFILES["gaia"]["models"]
 
     def test_device_config_carries_embedder(self):
         """The embedder choice lives next to the chat model in DeviceConfig."""
@@ -44,8 +48,8 @@ class TestDeviceEmbedderResolution:
 
         by_device = {dc.device: dc for dc in DEFAULT_DEVICE_CONFIGS}
         assert by_device["npu"].embedding_model == "embed-gemma-300m-FLM"
-        assert by_device["gpu"].embedding_model == "nomic-embed-text-v2-moe-GGUF"
-        assert by_device["cpu"].embedding_model == "nomic-embed-text-v2-moe-GGUF"
+        assert by_device["gpu"].embedding_model == "user.embeddinggemma-300m-GGUF"
+        assert by_device["cpu"].embedding_model == "user.embeddinggemma-300m-GGUF"
 
 
 # ---------------------------------------------------------------------------

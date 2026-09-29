@@ -3,6 +3,7 @@ package preflight
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -154,6 +155,9 @@ func (m Model) header(w int) string {
 	if m.phase == phaseChecking {
 		right = "checking…"
 	}
+	if n, of := m.provisionStep(); n > 0 {
+		right = fmt.Sprintf("step %d of %d", n, of)
+	}
 	gap := w - 2*indentW - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		return pad(titleStyle.Render(truncate(left, w-2*indentW)))
@@ -163,7 +167,15 @@ func (m Model) header(w int) string {
 
 func (m Model) footer(w int) string {
 	keys := [][2]string{}
-	if fix := m.focusedFix(); fix != FixNone && !m.Busy() {
+	firstRun := false
+	if row, ok := m.focusedRow(); ok && row.FirstRun && row.Fix != FixNone {
+		firstRun = true
+	}
+	switch fix := m.focusedFix(); {
+	case m.Busy():
+	case firstRun:
+		keys = append(keys, [2]string{"enter", m.startStepLabel()})
+	case fix != FixNone:
 		keys = append(keys, [2]string{"f", fix.Label()})
 	}
 	if m.cfg.AgentID == "gaia" && !m.Busy() {
@@ -174,9 +186,9 @@ func (m Model) footer(w int) string {
 	// `enter` is offered whenever pressing it would actually do something:
 	// when a report is neither ready nor refusing, and when the screen is
 	// holding after a fix so the user can read what it did.
-	if m.HeldForReview() ||
+	if !firstRun && (m.HeldForReview() ||
 		(!m.Busy() && !m.rep.Ready() &&
-			(!m.rep.Blocked() || m.rep.OfferableDespiteFailure())) {
+			(!m.rep.Blocked() || m.rep.OfferableDespiteFailure()))) {
 		keys = append(keys, [2]string{"enter", "continue"})
 	}
 	keys = append(keys, [2]string{"esc", "back"})
@@ -208,6 +220,14 @@ func renderKeys(keys [][2]string) string {
 		parts = append(parts, keyStyle.Render(k[0])+" "+dimStyle.Render(k[1]))
 	}
 	return strings.Join(parts, dimStyle.Render(" · "))
+}
+
+// startStepLabel is the enter hint on a first-run step: "start step 1".
+func (m Model) startStepLabel() string {
+	if n := m.rep.StepNumber(m.focus); n > 0 {
+		return fmt.Sprintf("start step %d", n)
+	}
+	return "start"
 }
 
 func (m Model) focusedFix() FixKind {
@@ -260,30 +280,47 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 	remedyW := w - remedyIndent - indentW
 	focusAt = len(m.rep.Rows) - 1
 
+	provisioning := m.phase == phaseProvisioning
 	for i, row := range m.rep.Rows {
 		focused := i == m.focus
 		cursor := "  "
-		if focused && !m.rep.Ready() {
+		if focused && !m.rep.Ready() && !provisioning {
 			cursor = "> "
 		}
-		st := stateStyle(row.State)
-		marker := st.Render(fmt.Sprintf("%-*s", markerW-1, row.State.Marker())) + " "
-		label := labelStyle.Render(fmt.Sprintf("%-*s", labelW, truncate(row.Label, labelW)))
-
+		markerText, st := row.State.Marker(), stateStyle(row.State)
 		line := row.Line
+		bodyStyle := st
+		if row.State == StateOK || row.State == StatePending {
+			bodyStyle = dimStyle
+		}
 		if row.State == StateChecking {
 			line = m.spin.View() + " " + line
 		}
 		if row.State == StatePending && row.Detail != "" {
 			line = row.Line + "  " + row.Detail
 		}
-		body := st.Render(truncate(line, lineW))
-		if row.State == StateOK || row.State == StatePending {
-			body = dimStyle.Render(truncate(line, lineW))
+		if n := m.rep.StepNumber(i); n > 0 {
+			// A first-run step is not a failure: neutral, numbered, one way on.
+			markerText, st = StatePending.Marker(), labelStyle
+			bodyStyle = dimStyle
+			if row.FirstRun {
+				bodyStyle = labelStyle
+			}
+			line = stepText(n, len(m.rep.Steps()), row.Step)
 		}
-		checklist = append(checklist, pad(cursor+marker+label+body))
+		switch {
+		case provisioning && row.Key == m.provision.Row:
+			markerText, st, bodyStyle = StateChecking.Marker(), keyStyle, labelStyle
+			line = m.spin.View() + " " + lowerFirst(m.provision.Text) + "…"
+		case provisioning && m.provisionDone[row.Key]:
+			markerText, st, bodyStyle = StateOK.Marker(), okStyle, dimStyle
+			line = "done"
+		}
+		marker := st.Render(fmt.Sprintf("%-*s", markerW-1, markerText)) + " "
+		label := labelStyle.Render(fmt.Sprintf("%-*s", labelW, truncate(row.Label, labelW)))
+		checklist = append(checklist, pad(cursor+marker+label+bodyStyle.Render(truncate(line, lineW))))
 
-		if !focused || row.State == StateOK || row.State == StatePending {
+		if !focused || provisioning || row.State == StateOK || row.State == StatePending {
 			continue
 		}
 		focusAt = i
@@ -292,31 +329,93 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 	return checklist, remedy, focusAt
 }
 
+// stepText is a first-run row's line: "Step 1 of 2 — install the local model
+// server (~1 min)".
+func stepText(n, of int, step string) string {
+	return fmt.Sprintf("Step %d of %d — %s", n, of, step)
+}
+
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	return strings.ToLower(string(r[0])) + string(r[1:])
+}
+
 // trailerLines is what sits under the checklist: the download's progress line,
 // the outcome of the last fix, or the hand-off note on an all-ready screen.
 func (m Model) trailerLines(w int) []string {
 	switch {
 	case m.phase == phaseProvisioning:
+		leaving := "Leaving this screen cancels the download."
+		if m.focusFix() == FixRunSetup {
+			leaving = "Leaving this screen stops setup."
+		}
 		return []string{
 			"",
-			pad(noteStyle.Render(truncate(m.spin.View()+" "+m.provisionLine, w-2*indentW))),
-			pad(dimStyle.Render("Leaving this screen cancels the download.")),
+			pad(noteStyle.Render(truncate(m.spin.View()+" "+m.progressLine(), w-2*indentW))),
+			pad(dimStyle.Render(leaving)),
 		}
 	case m.HeldForReview() && m.rep.Ready():
 		// A fix just ran and everything passed. Say so, and say the screen is
 		// waiting — a green checklist that sits there with no explanation
 		// reads as frozen.
-		return []string{"", pad(noteStyle.Render(
-			"Setup finished and everything checks out. Press enter to start " +
-				m.cfg.AgentName + "."))}
+		msg := "Setup finished and everything checks out."
+		if m.rep.Chat != "" {
+			msg = "Setup finished and the models load. Chat runs on " + m.rep.Chat + "."
+		}
+		return append([]string{""}, indentAll(styleAll(noteStyle,
+			wrap(msg+" Press enter to start "+m.cfg.AgentName+".", w-2*indentW)), indentW)...)
 	case m.note != "":
 		return append([]string{""}, indentAll(wrap(m.note, w-2*indentW), indentW)...)
 	case m.phase == phaseDone:
 		// Only when a hand-off is actually scheduled — under ManualProceed
 		// nothing is starting, and saying so would be a lie.
-		return []string{"", pad(dimStyle.Render("Starting " + m.cfg.AgentName + "…"))}
+		msg := "Starting " + m.cfg.AgentName + "…"
+		if m.rep.Chat != "" {
+			msg = "Starting " + m.cfg.AgentName + " — chat runs on " + m.rep.Chat + "…"
+		}
+		return []string{"", pad(dimStyle.Render(truncate(msg, w-2*indentW)))}
 	}
 	return nil
+}
+
+// progressLine is the running fix in words: which step, what it is doing, how
+// far, and for how long — never a raw log line.
+func (m Model) progressLine() string {
+	line := m.provision.Text
+	if n, of := m.provisionStep(); n > 0 {
+		line = fmt.Sprintf("Step %d of %d — %s", n, of, lowerFirst(line))
+	}
+	if m.provision.Percent >= 0 {
+		line += fmt.Sprintf(" · %d%%", m.provision.Percent)
+	}
+	if !m.provisionSince.IsZero() {
+		d := time.Since(m.provisionSince).Round(time.Second)
+		line += fmt.Sprintf(" · %d:%02d", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return line
+}
+
+// provisionStep is the first-run step the running fix is on, or 0.
+func (m Model) provisionStep() (n, of int) {
+	if m.phase != phaseProvisioning {
+		return 0, 0
+	}
+	for i, row := range m.rep.Rows {
+		if row.Key == m.provision.Row {
+			return m.rep.StepNumber(i), len(m.rep.Steps())
+		}
+	}
+	return 0, 0
+}
+
+func styleAll(s lipgloss.Style, lines []string) []string {
+	for i, l := range lines {
+		lines[i] = s.Render(l)
+	}
+	return lines
 }
 
 func (m Model) remedyLines(row Row, w int) []string {
@@ -325,6 +424,10 @@ func (m Model) remedyLines(row Row, w int) []string {
 		for _, l := range wrap(row.Detail, w) {
 			out = append(out, dimStyle.Render(l))
 		}
+	}
+	if row.FirstRun && row.Fix != FixNone {
+		// One way forward. The command stays behind `d` for anyone who wants it.
+		return append(out, keyStyle.Render("enter")+" "+dimStyle.Render(m.startStepLabel()))
 	}
 	if row.Remedy.Action != "" {
 		for _, l := range wrap(row.Remedy.Action, w) {

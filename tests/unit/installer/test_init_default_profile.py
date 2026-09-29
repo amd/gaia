@@ -18,6 +18,7 @@ Two contracts are pinned here because nothing else can see them:
   and no Go test sees on its own.
 """
 
+import json
 import re
 import subprocess
 import sys
@@ -37,6 +38,7 @@ from gaia.installer.init_command import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GAIAINIT_GO = REPO_ROOT / "tui" / "internal" / "gaiainit" / "gaiainit.go"
+VERIFY_GO = GAIAINIT_GO.with_name("verify.go")
 
 # The flagship's hub id. Its wheel is gaia-agent-gaia; the module it installs is
 # plain `gaia_agent`, NOT `gaia_agent_gaia` (hub/agents/gaia/python).
@@ -44,11 +46,11 @@ FLAGSHIP_AGENT_ID = "gaia"
 FLAGSHIP_IMPORT_NAME = "gaia_agent"
 
 
-def _go_const(name: str) -> str:
-    """Value of a top-level `const <name> = <literal>` in gaiainit.go."""
-    source = GAIAINIT_GO.read_text(encoding="utf-8")
+def _go_const(name: str, path: Path = GAIAINIT_GO) -> str:
+    """Value of a top-level `const <name> = <literal>` in a gaiainit Go file."""
+    source = path.read_text(encoding="utf-8")
     match = re.search(rf"^const {name} = (.+)$", source, re.MULTILINE)
-    assert match, f"const {name} not found in {GAIAINIT_GO}"
+    assert match, f"const {name} not found in {path}"
     return match.group(1).strip().strip('"')
 
 
@@ -207,6 +209,82 @@ class TestGoTuiContract:
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == (0 if ready else 1)
+
+    @pytest.mark.parametrize("stage, code", [("setup", 1), ("load", 3)])
+    def test_check_json_prints_one_parseable_object(
+        self, stage, code, monkeypatch, capsys
+    ):
+        """gaiainit.Verify reads the last stdout line as JSON and the exit code
+        as the stage: 3 is "downloaded but will not load"."""
+        from gaia.installer.init_command import ModelLoad, SetupStatus
+
+        monkeypatch.setattr(
+            "gaia.installer.init_command.check_setup_status",
+            lambda **kwargs: SetupStatus(
+                ready=False,
+                reasons=["x"],
+                stage=stage,
+                models=[ModelLoad("m", "embedding", 0.3, False, "boom")],
+            ),
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["gaia", "init", "--check", "--load", "--json", "--profile", "gaia"],
+        )
+        from gaia.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == code
+        body = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert body["stage"] == stage
+        assert body["models"][0] == {
+            "id": "m",
+            "role": "embedding",
+            "size_gb": 0.3,
+            "loaded": False,
+            "error": "boom",
+        }
+
+    def test_load_failed_exit_code_is_three(self):
+        """verify.go reads 3 as "downloaded but will not load"."""
+        assert _go_const("loadFailedExitCode", VERIFY_GO) == "3"
+
+    def test_tui_names_the_profiles_download_size(self):
+        """The first-run step quotes this size before the server can be asked."""
+        assert (
+            _go_const("ProfileSize", VERIFY_GO)
+            == INIT_PROFILES[DEFAULT_INIT_PROFILE]["approx_size"]
+        )
+
+    def test_the_tuis_verify_argv_parses(self):
+        """gaiainit.VerifyArgs' flags; an unknown one exits 2 before any check."""
+        args = build_parser().parse_args(
+            [
+                "init",
+                "--check",
+                "--profile",
+                _go_const("Profile"),
+                "--skip-chat-model",
+                "--load",
+                "--json",
+                "--chat-model",
+                "Qwen3-4B-Instruct-GGUF",
+            ]
+        )
+        assert args.load and args.json and args.chat_model == "Qwen3-4B-Instruct-GGUF"
+
+    def test_check_only_flags_are_refused_without_check(self, monkeypatch, capsys):
+        """A plain `gaia init --load` would otherwise run a full setup and
+        silently ignore the flag."""
+        monkeypatch.setattr(sys, "argv", ["gaia", "init", "--load"])
+        from gaia.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+        assert "only apply with --check" in capsys.readouterr().err
 
     def test_the_tuis_exact_argv_is_accepted_by_the_real_cli(self):
         """End-to-end on the argv gaiainit.CheckArgs builds. An unrecognised

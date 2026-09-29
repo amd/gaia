@@ -24,6 +24,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // autoStartWindow bounds the whole attempt: spawn, then wait for the server to
@@ -126,7 +129,18 @@ func waitForLemonade(ctx context.Context, probe func(context.Context) bool) bool
 var tryAutoStartLemonade = func(ctx context.Context) (bool, string, string) {
 	l := resolveLemonade()
 	if !canAutoStart(l) {
-		return false, "", ""
+		// Only when no system server is installed: starting GAIA's own beside
+		// one the user runs would leave two answering.
+		if l.Found || l.BadOverride != "" || !lemonade.EmbeddedInstalled() {
+			return false, "", ""
+		}
+		// GAIA's own server: installed, stopped, and started the way GAIA
+		// starts it, so it comes up with GAIA's launch settings.
+		bin, err := gaiainit.Binary()
+		if err != nil {
+			return false, "", "auto-start: " + err.Error()
+		}
+		l = launcher{Argv: []string{bin, "lemonade", "embedded", "start"}, Found: true}
 	}
 
 	probe := func(c context.Context) bool {
