@@ -449,7 +449,8 @@
               "plans/desktop-installer",
               "plans/tool-loader",
               "plans/code-index-review",
-              "plans/nightly-benchmarks"
+              "plans/nightly-benchmarks",
+              "plans/eval-hillclimbing"
             ]
           },
           {
