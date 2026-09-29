@@ -55,6 +55,11 @@ turn 3 accept an honest empty/unreadable result.
   (`memory_clear(scope=all)` / `memory_seed`). Every `gaia_memory` scenario's
   first turn instructs the simulator to call `memory_clear(scope=all)` before
   sending the first user message — the only cross-scenario isolation.
+- `GAIA_EVAL_SCRIPTED_USER=1` — lets a scenario's `setup.decline_commands`
+  script a user who declines those shell commands (checked before
+  auto-approve, so it is the transport's only "no") and answers no
+  questions. The runner sets it before the scenario and clears it after;
+  `gaia_resilience` depends on it.
 
 ## Fixture web server
 

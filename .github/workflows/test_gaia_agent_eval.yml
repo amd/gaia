@@ -207,6 +207,9 @@ env:
   # automated runs. Must be process env, not .env (#2210), which a job-level
   # env satisfies.
   GAIA_AUTO_APPROVE_TOOLS: '1'
+  # Lets a scenario's setup.decline_commands script a user who says no
+  # (gaia_resilience); inert for every scenario that does not set it.
+  GAIA_EVAL_SCRIPTED_USER: '1'
   # Loopback services — bypass any runner proxy (Python side; PowerShell's
   # Invoke-RestMethod ignores NO_PROXY).
   NO_PROXY: 'localhost,127.0.0.1'

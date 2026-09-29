@@ -50,7 +50,8 @@
         "gaia_skills_lifecycle",
         "gaia_shell",
         "gaia_data",
-        "gaia_skills_capture"
+        "gaia_skills_capture",
+        "gaia_resilience"
       ]
     },
     {
