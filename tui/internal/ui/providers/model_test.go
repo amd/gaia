@@ -343,7 +343,7 @@ func TestClearingRuntimeKeyDropsTheExistingKeyNotice(t *testing.T) {
 	if strings.Contains(view, "already configured for") || strings.Contains(view, "already active") {
 		t.Fatal("stale notice still claims a key is active after it was cleared", view)
 	}
-	if !strings.Contains(view, "Runtime key cleared") {
+	if !strings.Contains(view, "Key cleared, here and for future sessions") {
 		t.Fatal("missing clear confirmation", view)
 	}
 }

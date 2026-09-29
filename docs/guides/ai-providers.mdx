@@ -67,9 +67,17 @@ still sends conversation history to Fireworks and incurs usage charges — see
 
 ## Keys and settings
 
-- Pasted keys live in **Lemonade process memory** and disappear when Lemonade
-  restarts. GAIA does not save them in config files, transcripts, control logs,
+- A pasted key that connects is **kept in your OS credential store** (Windows
+  Credential Manager, macOS Keychain, or Secret Service on Linux), so every later
+  TUI and every restarted Lemonade gets it back without asking. Lemonade itself
+  holds the key in memory only; GAIA hands it over again when a chat starts on a
+  cloud model or you open `/provider`. A key that discovers no models is not
+  kept. GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
+- Where no credential store is available (a headless Linux session, for
+  example), the panel says the key works for this session only. Set
+  `LEMONADE_FIREWORKS_API_KEY` or `LEMONADE_AMD_API_KEY` in Lemonade's own
+  environment instead.
 - Provider URLs and authentication-header settings are saved by Lemonade and
   shared with its other clients. Runtime keys are also available to other clients
   of that same Lemonade server.
@@ -80,8 +88,9 @@ still sends conversation history to Fireworks and incurs usage charges — see
   `LEMONADE_FIREWORKS_API_KEY` and `LEMONADE_AMD_API_KEY`, set in the **Lemonade
   server process**, take precedence over pasted keys. A conflict is reported
   explicitly.
-- **Ctrl+D** in provider setup clears that provider's runtime key. Environment
-  keys remain active. **Esc** cancels input or an in-progress connection.
+- **Ctrl+D** in provider setup clears that provider's key, both in Lemonade and
+  the kept copy, so it does not come back next launch. Environment keys remain
+  active. **Esc** cancels input or an in-progress connection.
 - Interactive provider administration requires a **loopback Lemonade server**.
   For a shared remote Lemonade deployment, have its administrator configure
   providers and credentials on the server.
