@@ -37,6 +37,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.checks import check_kind, runner_summary, summary_reports_failure
 from gaia.agents.base.memory import drain_memory_extraction
 from gaia.agents.base.tool_grants import PATH_TOOLS
+from gaia.agents.base.turn_scope import ANSWERED_MARKER, TurnScopeGuard
 from gaia.agents.base.verification import (
     check_was_executed,
     verification_check_label,
@@ -535,6 +536,36 @@ def tests_verified(conversation: List[Mapping[str, Any]]) -> bool:
     return any(latest.values())
 
 
+def calls_after_answer(
+    conversation: List[Mapping[str, Any]], prompt: str, workdir: Path
+) -> List[str]:
+    """Tools that ran after the turn's first answer on work the request never touched.
+
+    Replays the record through the agent's own turn-scope rule, so rerunning
+    the tests or fixing a file the request named still counts as the request.
+    A call the agent refused never ran and is not counted.
+    """
+    scope = TurnScopeGuard(failure_limit=0)
+    scope.begin_turn(prompt, str(workdir))
+    strays: List[str] = []
+    for entry in conversation:
+        content = entry.get("content")
+        if entry.get("role") == "system" and isinstance(content, dict):
+            if content.get("type") == ANSWERED_MARKER:
+                scope.mark_answered()
+            continue
+        if entry.get("role") != "tool":
+            continue
+        name, args = str(entry.get("name") or ""), entry.get("tool_args") or {}
+        result = _tool_result(content)
+        if not check_was_executed(result):
+            continue
+        if scope.answered and not scope.related(name, args):
+            strays.append(name)
+        scope.record(name, args, result)
+    return strays
+
+
 def _files(root: Path) -> set:
     return {
         path.relative_to(root).as_posix()
@@ -613,6 +644,8 @@ class TaskResult:
     web_uses: List[str] = field(default_factory=list)
     gh_calls: int = 0
     gh_blocked_writes: int = 0
+    #: Tools that ran after the answer on work nobody asked for (``calls_after_answer``).
+    after_answer: List[str] = field(default_factory=list)
 
 
 def scrub_judge_credentials() -> Dict[str, str]:
@@ -871,10 +904,19 @@ def run_task(
                 shown = diff or "(no changes to the workspace)"
             else:
                 diff, shown = "", workspace_diff(workdir, baseline)
+            if result.harness == harness.GAIA:
+                result.after_answer = calls_after_answer(
+                    ran.conversation, prompt, workdir
+                )
             if ran.error:
                 result.error = result.why = ran.error
             elif no_patch:
                 result.passed, result.why = False, no_patch
+            elif result.after_answer:
+                result.passed = False
+                result.why = "kept working after its answer: " + ", ".join(
+                    sorted(set(result.after_answer))
+                )
             else:
                 result.passed, result.why = score(task, workdir, baseline, diff)
             ctx.scrubber.write_json(task_dir / "transcript.json", ran.transcript)
@@ -1485,7 +1527,7 @@ def _apply_verdict(entry: Dict[str, Any], task: Task) -> None:
     A SWE-bench task is not the judge's to pass: the official harness decides
     it (``swebench_grade_run``); the judge grades its quality only.
     """
-    if entry.get("error"):
+    if entry.get("error") or entry.get("after_answer"):
         return
     grade = entry["judge"]
     if task.check == "stated" and grade.get("answers_correctly") is not None:

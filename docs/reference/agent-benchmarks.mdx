@@ -143,6 +143,9 @@ write that copy and nothing else. Scoring runs in two stages:
 - **Verified** additionally checks the agent's own tool record for a `pytest` run
   that passed after its last file edit — proof the "4 tests pass" in the answer
   matches a command that was actually run, not just claimed.
+- **After the answer**, any tool that ran on work the request never touched
+  fails the task: an agent that fixed the bug and then spent minutes on a job
+  nobody asked for did not finish cleanly, however good the fix.
 
 **The judge for everything a probe can't check** — quality of the reasoning,
 whether instructions were followed, and question tasks like "what does this file

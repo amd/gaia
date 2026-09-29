@@ -482,7 +482,9 @@ declares no tools, and its body measures 702 tokens (tiktoken `cl100k`).
 **`document-extract` ships bundled but not enabled.** `gaia-voice` routes a
 request for every item in a document to it, and it drives
 `extract_document_items` and `save_extracted_items` so a long transcript yields
-a complete, source-quoted inventory rather than a summary.
+a complete, source-quoted inventory rather than a summary. A skill turns that
+inventorying on only by listing `extract_document_items` in `tools_required`;
+wording such as "find every call site" in another skill does not.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
 `default_skill_set:` blocks **commented out** — following the email agent's

@@ -233,6 +233,17 @@ def _scan_paths(text: str, immediate: bool, modifiers: bool = False) -> list[str
     return paths
 
 
+def mentioned_paths(text: str) -> list[str]:
+    """Every path *text* names, whether it is read from or written to."""
+    return list(
+        dict.fromkeys(
+            path
+            for match in _TARGET.finditer(text)
+            if (path := _path_token(match)) is not None
+        )
+    )
+
+
 def destination_paths(text: str, prepositions: re.Pattern = _DESTINATION) -> list[str]:
     """Read a destination noun phrase, stopping at the next action."""
     # A later 'email it to me' must not replace the save's destination.
