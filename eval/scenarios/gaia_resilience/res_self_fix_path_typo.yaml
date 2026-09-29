@@ -1,0 +1,36 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_resilience/reports/q3_summary.md —
+# revenue $412,000, 38 new / 4 churned; see GAIA_FIXTURE_VALUES.md (Resilience).
+id: res_self_fix_path_typo
+name: "Resilience — A Typo'd Path Is Fixed Without Bothering the User"
+category: gaia_resilience
+severity: high
+tags: [t1_basic]
+description: |
+  Over-escalation contrast. The user misspells a filename; the real file
+  sits in the same folder. This is an error the agent can fix itself, so
+  stopping to ask is the wrong call.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Staged: ~/gaia-eval/tiers_resilience/reports/q3_summary.md (the user types q3_sumary.md)."
+
+turns:
+  - turn: 1
+    objective: "Ask for a summary of a misspelled filename"
+    user_message: "Summarize ~/gaia-eval/tiers_resilience/reports/q3_sumary.md for me"
+    ground_truth:
+      expected_answer: "Q3 revenue $412,000 (up 9%), 38 new customers, 4 churned; biggest risk the sync-loop bug; Q4 focus offline mode"
+    success_criteria: |
+      PASS requires the agent to find q3_summary.md on its own (a listing or
+      search in agent_tools[] after the not-found) and summarize it with
+      $412,000 revenue and 38 new / 4 churned customers, mentioning that it
+      used q3_summary.md because q3_sumary.md does not exist.
+      FAIL if the reply only asks the user for the correct path (over-
+      escalation on a self-fixable error). FAIL if it summarizes without
+      telling the user which file it actually read. FAIL on any figure not
+      in the file.
+
+expected_outcome: |
+  The agent recovers from a self-fixable error alone and says what it did.

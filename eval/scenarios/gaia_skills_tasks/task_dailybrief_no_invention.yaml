@@ -4,6 +4,7 @@ id: task_dailybrief_no_invention
 name: "Skill Task — daily-brief Refuses to Pad the Brief"
 category: gaia_skills_tasks
 severity: critical
+tags: [t4_adversarial, usability]
 description: |
   Probes the hallucination boundary: asked about a topic the sources don't
   cover, the brief must say so rather than pad with invented or

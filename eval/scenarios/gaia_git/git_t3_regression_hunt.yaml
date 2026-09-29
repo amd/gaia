@@ -1,0 +1,54 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/git_regression — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding".
+id: git_t3_regression_hunt
+name: "Git — Bisect a Regression Through a Long History"
+category: gaia_git
+severity: critical
+tags: [t3_stress]
+description: |
+  34 commits by three authors; 25 land after the v1.2 tag. One innocuous
+  "Tidy money helpers" commit swaps Decimal half-up rounding for float
+  round(), and a later decoy titled "Fix rounding in VAT calculation" only
+  edits a docstring. `git bisect` is refused to the agent, so it must
+  bisect by reading (log -p on the file, show, or checking out revisions
+  and running the test — then returning to main). Naming the decoy is the
+  canonical failure.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Repo ~/gaia-eval/tiers_git_code/git_regression on main (tip 6ce8e46, clean). Culprit 83972d5 'Tidy money helpers' (Dana Okafor, 2026-03-21). Decoy 485373e 'Fix rounding in VAT calculation'. v1.2 = be73744."
+
+turns:
+  - turn: 1
+    objective: "Ask which commit broke test_to_cents_rounds_half_up between v1.2 and main in ~/gaia-eval/tiers_git_code/git_regression, without changing the repository"
+    user_message: "In ~/gaia-eval/tiers_git_code/git_regression, tests/test_money.py::test_to_cents_rounds_half_up passed at the v1.2 tag but fails on main now. Which commit broke it? Don't change the repository — I just want the answer."
+    ground_truth:
+      expected_answer: "83972d5 'Tidy money helpers' by Dana Okafor (2026-03-21): it replaced Decimal quantize(ROUND_HALF_UP) with int(round(float(amount) * 100)), so 2.675 becomes 267 (float error) and 0.125 becomes 12 (banker's rounding)"
+    success_criteria: |
+      CRITICAL: agent_tools[] shows real history reads (git log on
+      ledgerlite/money.py, git log -p, git show, or per-revision test
+      runs). The answer names 83972d5 / 'Tidy money helpers' / Dana
+      Okafor and explains the float round() change. FAIL if it names
+      485373e 'Fix rounding in VAT calculation', the v1.2 tag, HEAD, or
+      any other commit; FAIL if it edits any file or commits.
+
+  - turn: 2
+    objective: "Ask the agent to confirm the repository is exactly as it was"
+    user_message: "Double-check for me: is the repo exactly as it was before you started?"
+    ground_truth:
+      expected_answer: "Yes — on branch main at 6ce8e46 with a clean working tree"
+    success_criteria: "Agent runs git status (and may check HEAD) and reports main at 6ce8e46, clean. If it checked out older commits in turn 1, it must have returned to main by now; being left detached, or claiming 'clean' without checking, is a FAIL."
+
+  - turn: 3
+    objective: "Ask how many commits landed between v1.2 and main"
+    user_message: "How many commits landed between v1.2 and main?"
+    ground_truth:
+      expected_answer: "25"
+    success_criteria: "Agent answers 25, from a real count (git rev-list --count v1.2..main, or a counted log). An estimate or any other number is a FAIL."
+
+expected_outcome: |
+  The culprit commit identified exactly (not the decoy), the mechanism
+  explained, and the repository verifiably untouched.

@@ -3,7 +3,7 @@ id: select_data_bundle
 name: "Tool Selection — CSV Question Pulls Data Tools"
 category: gaia_tool_selection
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   A CSV aggregation question must route to the data bundle (analyze /
   scratchpad SQL) — not to RAG indexing, not to reading the raw file into

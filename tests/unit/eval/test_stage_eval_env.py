@@ -47,12 +47,13 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(tmp_path):
     assert not stage_eval_env.NOT_PRE_INSTALLED & installed
     assert (skills_root / "trusted-keys.json").is_file()
 
+    # The git workspaces are built into the staged copy, never the checkout.
+    assert (staged / "tiers_resilience" / "journal" / ".git").is_dir()
+    assert any((staged / "tiers_git_code").glob("*/.git"))
 
-def test_restaging_clears_read_only_files(tmp_path):
+
+def test_restaging_replaces_built_git_workspaces(tmp_path):
+    # git writes objects read-only; a second staging must still clear them.
     stage_eval_env.stage(tmp_path)
-    locked = tmp_path / "gaia-eval" / "locked.txt"
-    locked.write_text("x")
-    locked.chmod(0o444)
     stage_eval_env.stage(tmp_path)
-    assert not locked.exists()
-    assert (tmp_path / "gaia-eval" / "csv" / "sales.csv").is_file()
+    assert (tmp_path / "gaia-eval" / "tiers_resilience" / "journal" / ".git").is_dir()

@@ -1,0 +1,48 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/projects/ (team_roster.txt
+# lists Priya Natarajan, Dmitri Volkov, Amara Okafor) — see
+# GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: files_bookmark_navigate_read
+name: "Files — Use a Bookmark as a Path, Then Read Through It"
+category: gaia_files
+severity: medium
+tags: [t2_compound]
+description: |
+  A bookmark saved in one turn is the only way the user names a folder in
+  the next: the agent must resolve the label to a path, list it, and read a
+  file inside it. Cleans up its bookmark at the end.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "projects/ staged at ~/gaia-eval/tiers_files_shell/projects/. Bookmarks persist machine-wide; the last turn removes the one this scenario adds."
+
+turns:
+  - turn: 1
+    objective: "Bookmark the projects folder as 'atlas-work'"
+    user_message: "Save ~/gaia-eval/tiers_files_shell/projects as a bookmark called atlas-work."
+    ground_truth:
+      expected_behavior: "bookmark add succeeds"
+    success_criteria: "bookmark with action add in agent_tools[] for the projects folder, labelled atlas-work."
+
+  - turn: 2
+    objective: "Refer to the folder only by bookmark name and ask who is on the team"
+    user_message: "In my atlas-work folder there's a team roster — who's on the team?"
+    ground_truth:
+      expected_answer: "Priya Natarajan (owner), Dmitri Volkov (backend), Amara Okafor (design)"
+    success_criteria: |
+      Agent resolves atlas-work to the projects folder (from the bookmark or
+      the previous turn) and reads team_roster.txt (read_file in
+      agent_tools[]). All three names and roles must be exact. Asking the
+      user for the path again is a FAIL; invented names are a FAIL.
+
+  - turn: 3
+    objective: "Clean up the bookmark"
+    user_message: "thanks, you can drop the atlas-work bookmark now"
+    ground_truth:
+      expected_behavior: "bookmark remove succeeds"
+    success_criteria: "bookmark with action remove in agent_tools[], and the agent confirms it is gone."
+
+expected_outcome: |
+  Bookmark -> resolve by label -> read inside it -> remove, all grounded in
+  real tool calls.

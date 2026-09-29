@@ -1,0 +1,48 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/csv/sales_messy.csv — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: data_messy_csv_cleanup
+name: "Data — Messy Real-World CSV: Currency Strings, Case Drift, Repeated Header, TOTAL Row"
+category: gaia_data
+severity: high
+tags: [t3_stress]
+description: |
+  A hand-edited export: amounts as "$1,204.50" strings mixed with bare
+  numbers, region names in four spellings ("North", "North ", "NORTH",
+  "north"), blank lines, a repeated header row mid-file and a trailing TOTAL
+  row equal to the sum. Naive summing either fails on the strings or doubles
+  the total; naive grouping splits one region into four.
+
+persona: small_business_owner
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV staged at ~/gaia-eval/tiers_documents/csv/sales_messy.csv (11 data rows)."
+
+turns:
+  - turn: 1
+    objective: "Ask for total revenue in ~/gaia-eval/tiers_documents/csv/sales_messy.csv"
+    user_message: "my sales sheet is a mess — ~/gaia-eval/tiers_documents/csv/sales_messy.csv. what's the actual total?"
+    ground_truth:
+      expected_answer: "$13,700.00 across 11 sales (the TOTAL row and the repeated header are not sales)"
+    success_criteria: |
+      agent_tools[] shows real data tooling. Answer $13,700.00. CRITICAL
+      FAIL on $27,400 (TOTAL row double-counted) or any total that drops the
+      "$1,204.50"-style string amounts.
+
+  - turn: 2
+    objective: "Ask for revenue by region"
+    user_message: "by region?"
+    ground_truth:
+      expected_answer: "North $5,704.50; South $3,866.25; West $4,129.25 — exactly three regions"
+    success_criteria: "Agent reports exactly three regions with these totals (normalizing case and trailing spaces). FAIL if 'north'/'NORTH'/'North ' appear as separate regions or any total is wrong."
+
+  - turn: 3
+    objective: "Ask which rep sold the most"
+    user_message: "who's my top rep?"
+    ground_truth:
+      expected_answer: "Priya, $3,514.50 (Marco second at $3,455.75)"
+    success_criteria: "Agent answers Priya at $3,514.50. Naming Marco (close second) or a wrong amount is a FAIL."
+
+expected_outcome: |
+  The agent cleans as it computes: $13,700.00 total, three regions, Priya on
+  top.

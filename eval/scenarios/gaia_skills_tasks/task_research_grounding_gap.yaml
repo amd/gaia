@@ -4,6 +4,7 @@ id: task_research_grounding_gap
 name: "Skill Task — research-report Reports What Sources Lack"
 category: gaia_skills_tasks
 severity: critical
+tags: [t4_adversarial, usability]
 description: |
   The research question asks for something the sources do not contain. A
   grounded report says so; a fabricated answer is the failure.

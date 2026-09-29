@@ -1,0 +1,40 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/harbor_lease.pdf — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: rag_pdf_page_citation
+name: "RAG — Index a PDF and Cite the Right Page"
+category: gaia_rag
+severity: high
+tags: [t1_basic, local_blocked_no_embedder]
+description: |
+  The agent indexes a 5-page lease PDF itself, then answers two lookups with
+  the page each fact is on. Each fact appears on exactly one page, so a page
+  citation is either right or wrong.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Fixture PDF staged at ~/gaia-eval/tiers_documents/harbor_lease.pdf (5 pages)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to index ~/gaia-eval/tiers_documents/harbor_lease.pdf and report the early termination fee and the page it is on"
+    user_message: "Index ~/gaia-eval/tiers_documents/harbor_lease.pdf, then tell me the early termination fee and which page it's on."
+    ground_truth:
+      expected_answer: "$15,400 (four months of base rent), page 4"
+    success_criteria: |
+      agent_tools[] shows index_document on harbor_lease.pdf followed by a
+      retrieval call (query_documents / query_specific_file /
+      search_indexed_chunks). Answer is $15,400 AND cites page 4. FAIL on a
+      different amount, on citing any page other than 4, or on answering with
+      no index/retrieval call.
+
+  - turn: 2
+    objective: "Ask for the monthly base rent and its page"
+    user_message: "And the monthly base rent — what page?"
+    ground_truth:
+      expected_answer: "$3,850 per month, page 2"
+    success_criteria: "Agent answers $3,850/month and cites page 2 from a retrieval call. Citing page 4 (the termination clause, which only says 'four months of base rent') or any page other than 2 is a FAIL."
+
+expected_outcome: |
+  Both amounts are exact and each is tied to the one page that contains it.

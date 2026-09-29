@@ -1,0 +1,53 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/field_trial_report.md — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: rag_summarize_drill_export
+name: "RAG — Summarize, Drill Into a Detail, Then Export the Text"
+category: gaia_rag
+severity: high
+tags: [t2_compound, local_blocked_no_embedder]
+description: |
+  Three document tools composed in one session: index + summarize_document,
+  a specific follow-up the summary may have skipped, then dump_document to
+  export the extracted text. The export claim must be backed by a real
+  dump_document call.
+
+persona: student
+
+setup:
+  index_documents: []
+  notes: "Fixture markdown staged at ~/gaia-eval/tiers_documents/field_trial_report.md."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to index ~/gaia-eval/tiers_documents/field_trial_report.md and summarize it"
+    user_message: "I need to write about this for class — can you index ~/gaia-eval/tiers_documents/field_trial_report.md and summarize it for me?"
+    ground_truth:
+      expected_answer: "Drip irrigation cut water use 31% vs baseline, yield +6.5%, 3 sites (Fresno, Yuma, Lubbock); recommendation: expand to 12 farms in 2026 with a $480,000 budget"
+    success_criteria: |
+      agent_tools[] shows index_document then summarize_document (or
+      retrieval calls covering the whole document). The summary must include
+      the 31% water reduction, the +6.5% yield change, and the
+      12-farm / $480,000 recommendation. A wrong figure for any of these is a
+      FAIL.
+
+  - turn: 2
+    objective: "Ask what went wrong at one of the sites"
+    user_message: "did anything go wrong at any of the sites?"
+    ground_truth:
+      expected_answer: "Lubbock: pump failure on July 14, 9 days of data lost"
+    success_criteria: "Agent names Lubbock, the July 14 pump failure, and 9 lost days. Attributing the incident to Fresno or Yuma, or a different day count, is a FAIL."
+
+  - turn: 3
+    objective: "Ask the agent to export the full extracted text to a file so the student can check it"
+    user_message: "can you export the full extracted text so I can double-check it myself?"
+    ground_truth:
+      expected_behavior: "Calls dump_document for field_trial_report.md and reports the output path the tool returned"
+    success_criteria: |
+      agent_tools[] shows dump_document for field_trial_report.md and the
+      reply gives the output_path from that tool result. CRITICAL FAIL if
+      the agent says it exported/saved the text with no dump_document (or
+      write) call in agent_tools[], or reports a path the tool did not return.
+
+expected_outcome: |
+  A grounded summary, an exact follow-up detail, and a real export whose path
+  comes from the tool result.

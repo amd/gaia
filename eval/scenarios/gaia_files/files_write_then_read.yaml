@@ -2,6 +2,7 @@ id: files_write_then_read
 name: "Files — Write a File, Read It Back"
 category: gaia_files
 severity: high
+tags: [t1_basic]
 description: |
   Create a file with specific content, then verify by reading it back. The
   write must actually happen — a claimed write with no tool call is the

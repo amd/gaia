@@ -7,14 +7,16 @@ apart on what "staged" means:
 
     python tests/fixtures/gaia/stage_eval_env.py --home "$HOME"
 
-It does three things:
+It does four things:
 
 1. Copies ``tests/fixtures/gaia`` to ``<home>/gaia-eval`` (replacing any earlier
    copy), because scenario messages name files like ``~/gaia-eval/csv/sales.csv``
    and the agent's path sandbox refuses repo paths.
-2. Copies the starter skills under ``hub/skills`` into ``<home>/.gaia/skills``,
+2. Builds the git workspaces a commit cannot carry (a nested ``.git``) into that
+   staged copy.
+3. Copies the starter skills under ``hub/skills`` into ``<home>/.gaia/skills``,
    except those the corpus contract says must start uninstalled.
-3. Builds and trusts the fixture hub with ``prepare_fixture_hub.py``.
+4. Builds and trusts the fixture hub with ``prepare_fixture_hub.py``.
 
 ``--home`` is required: defaulting to the developer's real home would overwrite
 their installed skills and add a throwaway key to their trust store.
@@ -38,10 +40,12 @@ HUB_SKILLS = REPO_ROOT / "hub" / "skills"
 #: uninstalled (GAIA_FIXTURE_VALUES.md, "Environment preconditions").
 NOT_PRE_INSTALLED = frozenset({"rss-digest"})
 
+#: Staged directories whose repositories are built after the copy.
+GIT_BUILDERS = ("tiers_git_code", "tiers_resilience")
+
 
 def _clear_readonly(func, path, _exc):
-    # Staged fixtures can hold read-only files, which rmtree cannot delete on
-    # Windows.
+    # git writes its objects read-only, which rmtree cannot delete on Windows.
     os.chmod(path, stat.S_IWRITE)
     func(path)
 
@@ -61,7 +65,7 @@ def _run(argv: list[str], what: str) -> None:
 
 
 def stage(home: Path) -> Path:
-    """Stage fixtures, starter skills and the fixture hub under ``home``.
+    """Stage fixtures, workspaces, starter skills and the fixture hub under ``home``.
 
     Returns:
         The skills root the fixture hub was trusted into.
@@ -77,6 +81,18 @@ def stage(home: Path) -> Path:
             shutil.rmtree(fixtures, onerror=_clear_readonly)
     shutil.copytree(HERE, fixtures)
     print(f"staged fixtures -> {fixtures}")
+
+    for name in GIT_BUILDERS:
+        staged = fixtures / name
+        _run(
+            [
+                sys.executable,
+                str(staged / "build_fixtures.py"),
+                "--dest",
+                str(staged),
+            ],
+            f"Building the {name} workspaces",
+        )
 
     skills_root = home / ".gaia" / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)

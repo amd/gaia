@@ -5,6 +5,7 @@ id: web_fetch_product_fact
 name: "Web — Fetch a Page, Extract Planted Facts"
 category: gaia_web
 severity: high
+tags: [t1_basic]
 description: |
   Fetch a deterministic local fixture page and answer with its planted
   facts. Grounding check: the page content is the only source.

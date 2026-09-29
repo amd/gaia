@@ -2,6 +2,7 @@ id: files_edit_file
 name: "Files — Targeted Edit of an Existing File"
 category: gaia_files
 severity: high
+tags: [t2_compound]
 description: |
   Write a small file, then change ONE line without touching the rest.
   Verifies the edit path (edit_file) does a surgical change.

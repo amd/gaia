@@ -2,7 +2,7 @@ id: task_checkin_follows_up
 name: "Skill Task — check-in Picks Up Where the Last One Left Off"
 category: gaia_skills_tasks
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t2_compound, local_blocked_no_embedder]
 description: |
   Items are seeded, distractor turns pass, then a fresh "check in" must
   follow up on exactly the seeded items — asking about the deck, not

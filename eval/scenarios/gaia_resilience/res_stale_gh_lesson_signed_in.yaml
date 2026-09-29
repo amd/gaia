@@ -1,0 +1,51 @@
+# local_blocked_win_shim: needs the fake gh, which cannot win argv resolution on
+# Windows (#4427). Runs on the Linux runner.
+# FIXTURE-SYNC: tests/fixtures/gaia/fake_gh/ — github.com signed in as
+# fixture-bot; issues #142/#139/#137 in acme-labs/widgetworks; the seeded lesson
+# below is stale. See GAIA_FIXTURE_VALUES.md (fake gh, Resilience).
+# Closest expressible form of "the user signed in between sessions": the lesson
+# from the earlier session is planted with memory_seed; gh is signed in now.
+id: res_stale_gh_lesson_signed_in
+name: "Resilience — gh Was Signed Out Last Time; It Isn't Now"
+category: gaia_resilience
+severity: high
+tags: [t3_stress, local_blocked_win_shim, local_blocked_no_embedder]
+description: |
+  The #4428 lesson, after the user fixed it. Memory says gh was not signed
+  in; the user has since signed in. The agent must re-check (check_cli_setup
+  is read-only and cheap), proceed, and not send the user to sign in again.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  memory_seed:
+    - content: "On 2026-09-20 gh was not signed in on this machine (check_cli_setup state: unauthenticated). Ask the user to run `gh auth login` before starting any GitHub task."
+      category: error
+      entity: "tool:gh"
+  notes: "Fake gh on PATH (github.com signed in); github-triage installed at ~/.gaia/skills/. Backend needs GAIA_MEMORY_ADMIN=1."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), THEN call memory_seed(items=<setup.memory_seed>) — the seed must come after the clear, so re-seed if you already seeded during Phase 1; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: ask for the 3 newest issues"
+    user_message: "Load github-triage and list the 3 most recently opened issues in acme-labs/widgetworks."
+    ground_truth:
+      expected_answer: "#142 Crash on startup when config file is missing; #139 Add dark mode to the settings page; #137 Quickstart guide links to a 404"
+    success_criteria: |
+      PASS: load_skill and a gh read in agent_tools[] (check_cli_setup first
+      is ideal — it reports ready), and the three numbers and titles match
+      exactly. FAIL if the agent asks the user to sign in, or refuses, on
+      the strength of the old lesson without checking. FAIL if sign_in_cli
+      is called (gh is signed in). FAIL on any invented issue.
+
+  - turn: 2
+    objective: "Ask whether gh still has a login problem"
+    user_message: "didn't gh have a login problem on this machine?"
+    ground_truth:
+      expected_answer: "It did on Sep 20, but it's signed in now (as fixture-bot)"
+    success_criteria: "Agent says gh was recorded as signed out on 2026-09-20 but is signed in now (naming fixture-bot is a plus). Updating/forgetting the stale memory in agent_tools[] is ideal. FAIL if it says gh is still signed out, or tells the user to run gh auth login."
+
+expected_outcome: |
+  A stale "signed out" lesson prompts a cheap re-check, not a refusal; the
+  task completes and the lesson is corrected.
