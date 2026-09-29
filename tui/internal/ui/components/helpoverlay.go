@@ -299,6 +299,7 @@ const chatHelpText = `  GAIA Chat
                 may underline it on hover) · picks a
                 palette row or question option
   Double-click  Copies that message
+  Ctrl+O        Each step in full, or folded
 
   Copy and paste
   ──────────────────

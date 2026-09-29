@@ -404,7 +404,7 @@ func TestTranscriptRecordsTheGrantedScope(t *testing.T) {
 	updated2, _ := m.Update(decided)
 	m = updated2.(ChatModel)
 
-	last := m.messages[len(m.messages)-1].Content
+	last := approvalOf(m)
 	if !strings.Contains(last, "'pwd'") {
 		t.Errorf("the record must name the granted scope, got: %q", last)
 	}

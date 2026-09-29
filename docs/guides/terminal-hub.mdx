@@ -256,6 +256,32 @@ chip next to it.
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
+| `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
+
+### Reading a turn
+
+While the agent works, and afterwards, each thing it did is one short row, with
+the answer set apart below:
+
+```
+  ▪ Reading file: toybox/dates.py
+    └ 3 symbols
+  ▪ Editing file: toybox/dates.py x2 · approved
+  ▪ Running command: python -m pytest -q tests/
+    └ exit 0 · 2 lines
+
+  Fixed and verified — all 4 tests pass.
+```
+
+- **Paths** are shown relative to the folder you started GAIA in, or under `~`;
+  a path that is still long keeps its end.
+- **A failed step** keeps its reason under it, remedy included — that row is
+  where a failure lives, so a retried call is one red row, not a separate error.
+- **A confirmation** asks once, in the prompt pinned above the composer. The step
+  it gated then records your answer in a word: `approved`, `denied`, or `always
+  allowed '<scope>'`.
+- **The agent's narration** ("Let me check the tests first") is folded away.
+  `Ctrl+O` shows it, along with each step's full command and timing.
 
 ### Saying something while the agent is still working
 

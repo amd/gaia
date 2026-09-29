@@ -106,6 +106,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		return m, waitForEvent(m.events), true
 
 	case event.CanonicalToolCallEvent:
+		m.stashNarration()
 		item := ActivityItem{
 			Kind:    "tool",
 			Tool:    e.Tool,
@@ -122,17 +123,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 	case event.CanonicalToolResultEvent:
 		outcome, toolErr := event.ToolOutcomeOf(e)
 		if e.Render == "" {
-			// A tool that draws no card has no other surface: without this its
-			// error text — usually the only remedy in the whole run — is thrown
-			// away and the user sees an activity tick that scrolls off.
-			// Inline, not the bordered panel: the agent often retries and
-			// answers anyway, and a panel makes a recovered turn read as failed.
+			// A tool that draws no card has no surface but its step row, so the
+			// failure — usually the only remedy in the whole run — goes there,
+			// and the row outlives the turn in the work record (commitWork).
+			// Not the bordered panel: the agent often retries and answers
+			// anyway, and a panel makes a recovered turn read as failed.
 			if outcome == event.ToolOutcomeFailed {
 				m.setToolOutputAt(m.setOpenToolOutcome(e.Tool, false, failureDetail(e, toolErr)), e)
-				m.messages = append(m.messages, Message{
-					Role:    RoleToolError,
-					Content: sanitizeErrorText(composeToolErrorText(e.Tool, toolErr)),
-				})
 				break
 			}
 			m.markToolDone(e)
@@ -179,16 +176,11 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		})
 
 	case event.CanonicalNeedsConfirmationEvent:
-		// The pause goes to the permanent transcript — never swallowed — AND to
-		// the interactive modal, which owns the keyboard until the user answers.
-		// The status line stays durable in scrollback even after the modal
-		// resolves and clears (see CanonicalFinalEvent below): the modal is the
-		// CURRENT decision surface, this line is the permanent record of it.
-		line := "confirmation needed: " + e.Action
-		if summary := strings.TrimSpace(e.Summary); summary != "" {
-			line += " — " + summary
-		}
-		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[!] " + line})
+		// Shown once: the modal is the question, and the step it gates records
+		// the answer as one word (see awaitApproval) — that row is the durable
+		// record, kept in the transcript by commitWork.
+		m.stashNarration()
+		m.awaitApproval(e.Action)
 
 		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL)
 		if m.canRespondToPermission() {
@@ -226,8 +218,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		if content == "" {
 			content = m.buffer
 		}
+		if content == "" {
+			content = m.stashed
+		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
+		// The turn is over, so a confirmation still up is dead — resolved here,
+		// before the work is committed, so its step carries the outcome.
+		m.resolveConfirmationOnTurnEnd()
+		m.commitWork()
 		// A turn stopped before it said anything ends with an empty final; the
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
@@ -265,11 +264,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// the panel up would swallow every keystroke into a question nobody is
 		// listening to — the composer becomes unreachable and Esc quits the app.
 		m.question = nil
-		// Same reasoning for a still-pending confirmation — and on the current
-		// email sidecar this is the ORDINARY case, not an edge one: the stateless
-		// D1 stub sends this final refusal in the same stream read the
+		// A still-pending confirmation was resolved above, before commitWork —
+		// and on the current email sidecar that is the ORDINARY case: the
+		// stateless D1 stub sends this final refusal in the same stream read the
 		// needs_confirmation event arrived on, before a human can plausibly react.
-		m.resolveConfirmationOnTurnEnd()
 		if usage.Steps > 0 {
 			m.totalSteps = usage.Steps
 		}
@@ -285,8 +283,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		return m, nil, true
 
 	case event.CanonicalErrorEvent:
-		m.flushBuffer()
 		m.resolveConfirmationOnTurnEnd()
+		m.commitWork()
+		m.flushBuffer()
 		m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
 		m.drainPendingPreScan()
 		m.streaming = false
@@ -375,18 +374,14 @@ func (m ChatModel) answerQuestion(requestID, value string) tea.Cmd {
 // refusal (docs/spec/agent-ui-query-sse-contract.md §5). Leaving the modal up
 // would trap every keystroke in a decision that can no longer change anything
 // — the composer becomes unreachable, exactly the bug m.question=nil already
-// fixes for a mid-run question. The permanent transcript line added when the
-// event first arrived (not the modal) is the durable record of what happened.
+// fixes for a mid-run question. The gated step's row is the durable record of
+// what happened.
 func (m *ChatModel) resolveConfirmationOnTurnEnd() {
 	if m.confirmation == nil {
 		return
 	}
 	if m.confirmation.Pending() {
-		m.messages = append(m.messages, Message{
-			Role: RoleStatus,
-			Content: "[!] confirmation for '" + m.confirmation.Action() +
-				"' resolved: denied — the run ended before it could be answered. Nothing was sent.",
-		})
+		m.recordApproval(m.confirmation.Action(), "denied — the run ended first", false)
 	}
 	m.confirmation = nil
 }
@@ -411,8 +406,8 @@ func livePermissionsAvailable(c client.AgentClient) bool {
 }
 
 // resolveConfirmationDecision records a confirmation's outcome — from a
-// keypress or the auto-deny — in the activity log and the permanent
-// transcript, then delivers it on whichever seam the transport offers.
+// keypress or the auto-deny — on the step it gated, then delivers it on
+// whichever seam the transport offers.
 //
 // Two seams exist and they are not interchangeable. The LIVE one
 // (ToolPermissionResponder) reaches an agent thread still blocked on the
@@ -420,17 +415,8 @@ func livePermissionsAvailable(c client.AgentClient) bool {
 // stopped. Neither present means the modal only ever recorded intent, and the
 // outcome line has to say so rather than imply the tool ran.
 func (m ChatModel) resolveConfirmationDecision(msg components.ConfirmationDecidedMsg) (tea.Model, tea.Cmd) {
-	outcome, success := confirmationOutcomeText(msg)
-	m.activity = append(m.activity, ActivityItem{
-		Kind:    "confirm",
-		Content: "confirm " + msg.Action + ": " + outcome,
-		Done:    true,
-		Success: &success,
-	})
-	m.messages = append(m.messages, Message{
-		Role:    RoleStatus,
-		Content: "[!] confirmation for '" + msg.Action + "' resolved: " + outcome,
-	})
+	outcome, approved := confirmationOutcomeText(msg)
+	m.recordApproval(msg.Action, outcome, approved)
 	m.confirmation = nil
 	m.updateViewport()
 
@@ -469,28 +455,24 @@ func (m ChatModel) respondToolPermission(msg components.ConfirmationDecidedMsg) 
 	}
 }
 
-// confirmationOutcomeText is the one-line outcome recorded for a resolved
-// confirmation. Never claims delivery that cannot happen: an approval with no
-// channel is recorded as exactly that, not as "approved" — see
+// confirmationOutcomeText is the outcome recorded on a confirmed step — a word
+// where a word is the whole truth. Never claims delivery that cannot happen:
+// an approval with no channel says nothing was sent, not "approved" — see
 // ConfirmationModel's doc comment for why (ui/oneshot.go's writeWithheld
 // already draws this line for the one-shot surface; this is the same rule
 // applied here).
 func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string, success bool) {
 	switch {
 	case msg.TimedOut:
-		return "denied (" + components.HumanTimeout(msg.Timeout) +
-			" timeout — no response)", false
+		return "denied — no answer in " + components.HumanTimeout(msg.Timeout), false
 	case msg.Always:
-		return "approved — and '" + msg.AlwaysScope + "' will not ask again this session", true
+		return "always allowed '" + clean(msg.AlwaysScope) + "'", true
 	case msg.Approved && (msg.Deliverable || msg.ConfirmURL != ""):
-		return "approved — running it", true
+		return "approved", true
 	case msg.Approved:
-		return "approved, but this transport has no live approval channel yet " +
-			"(no confirm_url on the event) — nothing was actually sent", false
-	case msg.Deliverable:
-		return "denied — the agent was told no", false
+		return "approved, but not sent — no approval channel", false
 	default:
-		return "denied — nothing sent", false
+		return "denied", false
 	}
 }
 
@@ -558,7 +540,7 @@ func failureDetail(e event.CanonicalToolResultEvent, te event.ToolError) string 
 	}
 	// clean, not firstLine: the log wraps now, and a tool's error message puts
 	// the remedy on its second line as often as not.
-	if msg := clean(te.Message); msg != "" {
+	if msg := shortenPaths(clean(te.Message)); msg != "" {
 		return truncateRunes(head+": "+msg, detailMax)
 	}
 	if detail := toolResultDetail(e); detail != "" && !isBareStatusWord(detail) {

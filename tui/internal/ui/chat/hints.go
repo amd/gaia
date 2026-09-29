@@ -102,6 +102,15 @@ func (m ChatModel) statusHints() []hint {
 			hints = append(hints, hint{text: "Ctrl+T select text", rank: rankSecondary})
 		}
 	}
+	// Folded detail nobody knows how to open is detail thrown away. Idle only:
+	// mid-turn the row already says how to type on and how to stop.
+	if m.hasWork() && !m.streaming && m.confirmation == nil {
+		text := "Ctrl+O details"
+		if m.expandWork {
+			text = "Ctrl+O fold"
+		}
+		hints = append(hints, hint{text: text, rank: rankSecondary})
+	}
 
 	if m.confirmation != nil && m.confirmation.Pending() {
 		// The modal owns the keyboard while it is up, so every hint here would

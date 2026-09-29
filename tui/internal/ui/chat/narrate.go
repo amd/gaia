@@ -147,8 +147,12 @@ var salientArgKeys = []string{
 // finally the raw tool name — which is honest about being a fallback rather than
 // inventing a description for a tool this client has never heard of.
 func toolNarration(tool string, args json.RawMessage, narration string) string {
+	return truncateRunes(shortenPaths(narrationFor(tool, args, narration)), narrationMax)
+}
+
+func narrationFor(tool string, args json.RawMessage, narration string) string {
 	if n := clean(narration); n != "" {
-		return truncateRunes(n, narrationMax)
+		return truncateRunes(unclipArg(n, args), narrationMax)
 	}
 
 	// The command is the narration — anything wrapped round it is noise.
@@ -188,6 +192,27 @@ func toolNarration(tool string, args json.RawMessage, narration string) string {
 	return truncateRunes(line, narrationMax)
 }
 
+// unclipArg restores the argument a sidecar clipped off the end of its own
+// narration ("Reading file: C:\Users\…\workt…"), from the call's args. The
+// sidecar clips before any path is shortened, so what it kept is the
+// uninformative head; with the full value back, shortenPaths can keep the tail.
+func unclipArg(narration string, args json.RawMessage) string {
+	if !strings.HasSuffix(narration, "…") {
+		return narration
+	}
+	i := strings.LastIndex(narration, ": ")
+	if i < 0 {
+		return narration
+	}
+	head, kept := narration[:i+2], strings.TrimSuffix(narration[i+2:], "…")
+	for _, v := range decodeObject(args) {
+		if full := scalarString(v); len(full) > len(kept) && strings.HasPrefix(full, kept) {
+			return head + full
+		}
+	}
+	return narration
+}
+
 // derivePhrase builds a phrase from the tool name when the table has no entry.
 // An unrecognised leading verb yields "Running <tool>" rather than a guess:
 // "Pre scan inbox" reads like a bug, "Running pre_scan_inbox" reads like a tool.
@@ -215,6 +240,10 @@ func derivePhrase(tool string) toolPhrase {
 // much of it, and how long it took. One line, always — the transcript's render
 // card is where a full result goes.
 func toolResultDetail(e event.CanonicalToolResultEvent) string {
+	return shortenPaths(resultDetail(e))
+}
+
+func resultDetail(e event.CanonicalToolResultEvent) string {
 	// Classified FIRST, so every return below can carry the word. A preview that
 	// short-circuited ahead of this left a failed call marked in red and nothing
 	// else — the exact colour-only signal renderActivityItem promises never to

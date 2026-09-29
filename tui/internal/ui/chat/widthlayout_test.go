@@ -224,6 +224,7 @@ func TestAWiderTerminalShowsMoreOnOneRow(t *testing.T) {
 	item := ActivityItem{Kind: "tool", Tool: "run_shell_command", Content: longNarration}
 	rendered := func(w int) []string {
 		m := sizedChat(t, w, 40)
+		m.expandWork = true // folded, the narrow row is clipped rather than wrapped
 		return m.renderActivityItem(item, false, 0, 0)
 	}
 

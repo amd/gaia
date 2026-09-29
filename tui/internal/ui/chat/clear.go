@@ -18,9 +18,10 @@ func (m ChatModel) clearConversation() (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		m.cancelFn = cancel
 		m.streaming = true
-		m.activity = []ActivityItem{{Kind: "status", Content: "Clearing conversation"}}
+		m.activity = []ActivityItem{{Kind: "stage", Content: "Clearing conversation"}}
 		m.logPeakRows = 0
 		m.buffer = ""
+		m.stashed = ""
 		m.followTail = true
 		m.queryStart = time.Now()
 		// Same per-turn reset as startTurn: a stale step count or a card
