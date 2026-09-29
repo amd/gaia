@@ -464,6 +464,9 @@ func (m Model) View() string {
 			if len(details) > 0 {
 				lines = append(lines, strings.Join(details, " · "))
 			}
+			if evidence := lemonade.Evidence(selected.ID); evidence != "" {
+				lines = append(lines, "Measured: "+evidence)
+			}
 		}
 	}
 	if m.note != "" {

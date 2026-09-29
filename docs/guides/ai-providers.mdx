@@ -23,6 +23,8 @@ on your Lemonade server.
    - `fireworks.deepseek-v4-pro-0813` — most truthful
 
    The ranking is a snapshot (September 2026) and is refreshed as models change.
+   Focusing a ranked model shows the measurement behind its label (see
+   [What the ranked picks measured](#what-the-ranked-picks-measured)).
    Type to filter the list; use **↑/↓** and **Enter** to select.
 
 The model list comes from Lemonade's provider discovery. A listed model may still
@@ -39,6 +41,29 @@ between fields, then paste the key and press **Enter**.
 For **Local**, select a downloaded chat model. If none are installed, close the
 panel and run setup. Selecting a cloud provider before setup downloads only the
 local embedding models, not an unused local chat model.
+
+## What the ranked picks measured
+
+The two flash picks were measured end to end with the GAIA flagship agent over the
+`everyday` suite — the 14 tasks listed under `everyday` in `eval/tasks/tasks.json`
+— as the mean of 3 runs, graded by an independent Opus 5 judge and costed from
+Fireworks' own billing meter. The TUI shows the same figures when the model is
+focused.
+
+| Model | Lemonade id | 14 coding tasks |
+|---|---|---|
+| GLM-5.3 Flash | `fireworks.glm-5p3-flash` | 14/14 solved, quality 4.89/5, $0.09 per run, 7:04 |
+| DeepSeek V4.1 Flash | `fireworks.deepseek-v4p1-flash` | 14/14 solved, quality 4.92/5, $0.10 per run, 5:39 |
+
+Cost is the Fireworks charge for one pass of the suite; time is wall clock for
+that pass. Every figure is the GAIA-harness row of the harness × model table in
+[amd/gaia#4335](https://github.com/amd/gaia/pull/4335); reproduce it with
+`gaia eval tasks run --suite everyday --model <id> --repeats 3`. DeepSeek V4 Pro
+is ranked for truthfulness on the same benchmark and carries no measured line yet,
+and neither pick shows a TheRock figure: those runs exist but have not been
+published, and an unpublished number is not a citable measurement. Fireworks chat
+still sends conversation history to Fireworks and incurs usage charges — see
+[`/cost`](/guides/terminal-hub#what-a-session-costs) for what a session has spent.
 
 ## Keys and settings
 
