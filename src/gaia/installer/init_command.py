@@ -19,7 +19,7 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -76,7 +76,7 @@ INIT_PROFILES = {
         # still needs that wheel separately; the completion message says so.
         "agent": "gaia",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
-        "approx_size": "~4 GB",
+        "approx_size": "~6 GB",
         # EmbeddingGemma loads only on Lemonade v10.9.0+ (see the chat profile).
         "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
@@ -107,7 +107,7 @@ INIT_PROFILES = {
         "description": "Interactive chat with RAG and vision support",
         "agent": "chat",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
-        "approx_size": "~4 GB",
+        "approx_size": "~6 GB",
         # EmbeddingGemma is validated on Lemonade v10.9.0; older bundled
         # llama.cpp builds fail to load it. Floor the version so init fails
         # loudly instead of the embedder failing at first RAG index.
@@ -119,7 +119,7 @@ INIT_PROFILES = {
         "description": "Document Q&A with retrieval",
         "agent": "rag",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
-        "approx_size": "~4 GB",
+        "approx_size": "~6 GB",
         # EmbeddingGemma loads only on Lemonade v10.9.0+ (see chat profile).
         "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
@@ -201,6 +201,31 @@ class SetupStatus:
 
     ready: bool
     reasons: list
+    #: "setup" when `gaia init` still has work to do, "server" when the model
+    #: server is installed but will not answer, "load" when everything is
+    #: downloaded but a model would not load — which re-running setup cannot fix.
+    stage: Optional[str] = None
+    #: One ModelLoad per model the load check tried; empty unless ``load=True``.
+    models: list = field(default_factory=list)
+
+    def to_json(self) -> dict:
+        return {
+            "ready": self.ready,
+            "stage": self.stage,
+            "reasons": list(self.reasons),
+            "models": [m.__dict__ for m in self.models],
+        }
+
+
+@dataclass
+class ModelLoad:
+    """One model the `--check --load` probe loaded, or failed to."""
+
+    id: str
+    role: str  # "chat" or "embedding"
+    size_gb: Optional[float]
+    loaded: bool
+    error: Optional[str] = None
 
 
 def configured_server_too_old(health: object, profile: str, url: str) -> Optional[str]:
@@ -236,6 +261,8 @@ def check_setup_status(
     profile: str = DEFAULT_INIT_PROFILE,
     skip_chat_model: bool = False,
     remote: bool = False,
+    load: bool = False,
+    chat_model: Optional[str] = None,
 ) -> SetupStatus:
     """Check whether `gaia init --profile <profile>` still has work to do.
 
@@ -254,6 +281,13 @@ def check_setup_status(
             backend): only the profile's embedding model(s) are required.
         remote: Check the server LEMONADE_BASE_URL names, which must be set.
             A configured URL is checked the same way without it.
+        load: Once everything is downloaded, load each model the way the agent
+            will — the chat model at its pinned ctx, the embedder with a
+            one-word embedding. "Downloaded" is not "works": a model llama.cpp
+            cannot load passes the presence check and fails on first use.
+        chat_model: The local chat model the session will use, when it is not
+            the profile default. It replaces the default in what ``load`` loads;
+            setup cannot download it, so it never becomes a download step.
 
     Returns:
         SetupStatus with ready=True iff nothing below would need to run.
@@ -289,6 +323,7 @@ def check_setup_status(
             return SetupStatus(
                 ready=False,
                 reasons=[f"GAIA's Lemonade Server could not be started: {e}"],
+                stage="server",
             )
         status = embedded.status()
         if status.unresponsive_pid:
@@ -298,15 +333,19 @@ def check_setup_status(
                     f"GAIA's Lemonade Server (pid {status.unresponsive_pid}) "
                     "is running but not answering"
                 ],
+                stage="server",
             )
         if not status.installed:
             return SetupStatus(
-                ready=False, reasons=["GAIA's Lemonade Server is not installed"]
+                ready=False,
+                reasons=["GAIA's Lemonade Server is not installed"],
+                stage="setup",
             )
         if not status.running:
             return SetupStatus(
                 ready=False,
                 reasons=["GAIA's Lemonade Server is installed but not running"],
+                stage="server",
             )
         if status.version != embedded.version:
             return SetupStatus(
@@ -315,6 +354,7 @@ def check_setup_status(
                     f"GAIA's Lemonade Server is v{status.version}; this GAIA "
                     f"needs v{embedded.version}"
                 ],
+                stage="setup",
             )
         base_url = status.base_url
 
@@ -325,11 +365,12 @@ def check_setup_status(
         return SetupStatus(
             ready=False,
             reasons=[f"Lemonade Server at {base_url} is not reachable: {e}"],
+            stage="server",
         )
     if configured:
         too_old = configured_server_too_old(health, profile, base_url)
         if too_old:
-            return SetupStatus(ready=False, reasons=[too_old])
+            return SetupStatus(ready=False, reasons=[too_old], stage="server")
 
     if profile_config["models"]:
         model_ids = list(profile_config["models"])
@@ -340,6 +381,7 @@ def check_setup_status(
             return SetupStatus(
                 ready=False,
                 reasons=[f"Could not list the models this profile needs: {e}"],
+                stage="server",
             )
 
     if profile not in ("sd", "npu") and not skip_chat_model:
@@ -361,7 +403,66 @@ def check_setup_status(
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
-    return SetupStatus(ready=not reasons, reasons=reasons)
+    if reasons:
+        # Sizes let a caller say what the download will cost before it starts.
+        models = [_describe_model(client, m) for m in model_ids] if load else []
+        return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
+    if not load:
+        return SetupStatus(ready=True, reasons=[])
+
+    if chat_model and not skip_chat_model and not is_embedding_model_id(chat_model):
+        model_ids = [m for m in model_ids if is_embedding_model_id(m)] + [chat_model]
+    models = [_load_model_once(client, model_id) for model_id in model_ids]
+    failed = [m for m in models if not m.loaded]
+    if failed:
+        return SetupStatus(
+            ready=False,
+            reasons=[
+                f"Model '{m.id}' is downloaded but would not load: {m.error}"
+                for m in failed
+            ],
+            stage="load",
+            models=models,
+        )
+    return SetupStatus(ready=True, reasons=[], models=models)
+
+
+def _describe_model(client, model_id: str) -> "ModelLoad":
+    """A not-yet-downloaded model and its download size."""
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    role = "embedding" if is_embedding_model_id(model_id) else "chat"
+    try:
+        size_gb = client.get_model_info(model_id)["size_gb"]
+    except LemonadeClientError as e:
+        return ModelLoad(model_id, role, None, False, str(e))
+    return ModelLoad(model_id, role, size_gb, False)
+
+
+def _load_model_once(client, model_id: str) -> "ModelLoad":
+    """Load one model through the same call the agent's first turn makes."""
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    role = "embedding" if is_embedding_model_id(model_id) else "chat"
+    size_gb = None
+    try:
+        size_gb = client.get_model_info(model_id)["size_gb"]
+        if role == "embedding":
+            response = client.embeddings(["ok"], model=model_id, timeout=120)
+            data = response.get("data") if isinstance(response, dict) else None
+            if not data or not data[0].get("embedding"):
+                return ModelLoad(
+                    model_id, role, size_gb, False, "it returned no embedding"
+                )
+        else:
+            client._ensure_model_loaded(model_id)  # pylint: disable=protected-access
+    except LemonadeClientError as e:
+        return ModelLoad(model_id, role, size_gb, False, str(e))
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        # Reported as this model's failure, so the caller names it — never a
+        # bare traceback that leaves the check unanswered.
+        return ModelLoad(model_id, role, size_gb, False, f"{type(e).__name__}: {e}")
+    return ModelLoad(model_id, role, size_gb, True)
 
 
 class InitCommand:

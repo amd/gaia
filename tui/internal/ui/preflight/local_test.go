@@ -24,14 +24,14 @@ func TestCloudPreflightStillRequiresEmbeddingReadiness(t *testing.T) {
 			if !r.skipChatModel() {
 				t.Fatal("cloud setup would download the local chat model")
 			}
-			stubGaiaInit(t, func() (string, error) { return exitStub(t, 1), nil })
-			row := r.checkModels(context.Background(), localCfg())
+			stubGaiaInit(t, func() (string, error) { return jsonStub(t, 1, setupJSON), nil })
+			row := modelRow(r)
 			if row.State != StateFailed || row.Fix != FixRunSetup || !strings.Contains(row.Remedy.Command, "--skip-chat-model") {
 				t.Fatalf("missing embedder did not block with cloud-compatible setup: %+v", row)
 			}
-			stubGaiaInit(t, func() (string, error) { return exitStub(t, 0), nil })
-			row = r.checkModels(context.Background(), localCfg())
-			if row.State != StateOK || !strings.Contains(row.Line, "embedder downloaded") || !strings.Contains(row.Line, model) {
+			stubGaiaInit(t, func() (string, error) { return jsonStub(t, 0, embedderLoadsJSON), nil })
+			row = modelRow(r)
+			if row.State != StateOK || !strings.Contains(row.Line, "embedder loads") || !strings.Contains(row.Line, model) {
 				t.Fatalf("ready cloud state is incorrect: %+v", row)
 			}
 		})
@@ -225,9 +225,7 @@ func TestBinaryRowPassesOnAResolvedBinary(t *testing.T) {
 // down" with the SAME command. Two screens naming two different ways to start
 // the same server is the drift this reuse exists to prevent.
 func TestTheLemonadeRemedyIsSharedWithTheDaemonRunner(t *testing.T) {
-	// A port nothing serves, so the probe is guaranteed to fail without
-	// depending on whether this machine happens to run Lemonade.
-	t.Setenv(lemonadeBaseURLEnv, "http://127.0.0.1:9/api/v1")
+	downLemonadeOn(t, linuxProbeWithUnit())
 
 	row := localRunner{}.checkLemonade(context.Background(), localCfg())
 	if row.State != StateFailed {
@@ -247,9 +245,76 @@ func TestTheLemonadeRemedyIsSharedWithTheDaemonRunner(t *testing.T) {
 		t.Errorf("the shared start instruction was dropped rather than prefixed:\n"+
 			" local: %q\nshared: %q", row.Remedy.Action, want.Action)
 	}
-	if !strings.HasPrefix(row.Remedy.Action, "Press f and setup installs") {
+	if !strings.HasPrefix(row.Remedy.Action, "Press f and setup starts it") {
 		t.Errorf("the row explains the manual route before the key that automates "+
 			"it:\n%q", row.Remedy.Action)
+	}
+	if row.FirstRun {
+		t.Error("an installed server that will not start was presented as a first-run step")
+	}
+}
+
+// downLemonadeOn makes checkLemonade see a loopback server that is not
+// answering, on a machine resolved through probe, with no GAIA-owned server
+// recorded and nothing auto-starting.
+func downLemonadeOn(t *testing.T, probe hostProbe) {
+	t.Helper()
+	t.Setenv("GAIA_HOME", t.TempDir())
+	t.Setenv(lemonadeBaseURLEnv, "")
+	t.Setenv(serverPathEnv, "")
+	restoreProbe, restoreHost, restoreStart := probeLemonade, realHostProbe, tryAutoStartLemonade
+	t.Cleanup(func() {
+		probeLemonade, realHostProbe, tryAutoStartLemonade = restoreProbe, restoreHost, restoreStart
+	})
+	probeLemonade = func(context.Context) (string, bool, string) {
+		return "http://localhost:13305/api/v1", false, "stub: nothing answering"
+	}
+	realHostProbe = func() hostProbe { return probe }
+	tryAutoStartLemonade = func(context.Context) (bool, string, string) { return false, "", "" }
+}
+
+// #4449: on a new machine the first screen read as an error, and its copy said
+// "setup installs it" and "it is not on this machine — run gaia init" at once.
+// Nothing installed is a step, with one way forward.
+func TestANewMachineGetsAStepNotAFailure(t *testing.T) {
+	downLemonadeOn(t, fakeHostFor("linux", nil, nil, map[string]string{}))
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+
+	if !row.FirstRun || row.Step != installServerStep {
+		t.Fatalf("an uninstalled server is not a first-run step: %+v", row)
+	}
+	if row.State != StateFailed || row.Fix != FixRunSetup {
+		t.Fatalf("the step must still block and carry setup: %+v", row)
+	}
+	if strings.Contains(row.Detail+row.Remedy.Action, "Already have it") {
+		t.Errorf("the contradictory prefix is back: %q", row.Remedy.Action)
+	}
+}
+
+// GAIA's own server is recorded as installed, so the row must not call it
+// missing — the "not on this machine" remedy is for system installs.
+func TestAStoppedEmbeddedServerIsNotCalledMissing(t *testing.T) {
+	downLemonadeOn(t, fakeHostFor("linux", nil, nil, map[string]string{}))
+	home := os.Getenv("GAIA_HOME")
+	if err := os.MkdirAll(filepath.Join(home, "lemonade"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"pid": 1, "port": 13305, "api_key": "k", "version": "1"}`
+	if err := os.WriteFile(filepath.Join(home, "lemonade", "state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+
+	if row.FirstRun {
+		t.Fatal("an installed GAIA server that is down was shown as a first-run step")
+	}
+	if strings.Contains(row.Remedy.Action, "not on this machine") {
+		t.Errorf("the row calls an installed server missing: %q", row.Remedy.Action)
+	}
+	if row.Remedy.Command != "gaia lemonade embedded start" {
+		t.Errorf("command = %q, want the embedded start", row.Remedy.Command)
 	}
 }
 
@@ -393,7 +458,7 @@ func TestClaudeCheckStopsBeforeLocalProbesWhenCredentialIsMissing(t *testing.T) 
 func TestAnUnansweredSetupCheckIsUnknownNotNotReady(t *testing.T) {
 	stubGaiaInit(t, func() (string, error) { return exitStub(t, 2), nil })
 
-	row := localRunner{}.checkModels(context.Background(), localCfg())
+	row := modelRow(localRunner{})
 
 	if row.State == StateFailed {
 		t.Fatal("an unanswered `gaia init --check` was read as a clean machine")
@@ -409,14 +474,15 @@ func TestAnUnansweredSetupCheckIsUnknownNotNotReady(t *testing.T) {
 	}
 }
 
-// Exit 1 IS the documented "not ready" answer, and the row has to offer the fix.
+// Exit 1 IS the documented "not ready" answer: a first-run step with the fix,
+// sized from what the model server reported.
 func TestExitOneMeansSetupIsNeeded(t *testing.T) {
-	stubGaiaInit(t, func() (string, error) { return exitStub(t, 1), nil })
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 1, setupJSON), nil })
 
-	row := localRunner{}.checkModels(context.Background(), localCfg())
+	row := modelRow(localRunner{})
 
-	if row.State != StateFailed {
-		t.Fatalf("state = %s, want failed", row.State.Word())
+	if row.State != StateFailed || !row.FirstRun {
+		t.Fatalf("state = %s first-run = %v, want a failed first-run step", row.State.Word(), row.FirstRun)
 	}
 	if row.Fix != FixRunSetup {
 		t.Errorf("fix = %v, want FixRunSetup", row.Fix)
@@ -424,14 +490,99 @@ func TestExitOneMeansSetupIsNeeded(t *testing.T) {
 	if !strings.Contains(row.Remedy.Command, "gaia init") {
 		t.Errorf("remedy command = %q, want a gaia init", row.Remedy.Command)
 	}
+	if row.Step != "download the models (3.5 GB)" {
+		t.Errorf("step = %q, want the reported sizes summed", row.Step)
+	}
 }
 
-func TestExitZeroMeansReady(t *testing.T) {
-	stubGaiaInit(t, func() (string, error) { return exitStub(t, 0), nil })
+func TestExitZeroMeansReadyAndNamesTheChatModel(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 0, localLoadsJSON), nil })
 
-	if row := (localRunner{}).checkModels(context.Background(), localCfg()); row.State != StateOK {
+	rep := localRunner{}
+	row, chat := rep.verifyModels(context.Background(), localCfg())
+	if row.State != StateOK {
 		t.Fatalf("state = %s, want ok: %s", row.State.Word(), row.Detail)
 	}
+	if row.Line != "Gemma-4-E4B-it-GGUF (3.2 GB) and the embedder load" {
+		t.Errorf("line = %q", row.Line)
+	}
+	if chat != "Gemma-4-E4B-it-GGUF (3.2 GB, on this machine)" {
+		t.Errorf("chat = %q", chat)
+	}
+}
+
+// #4449: "downloaded" passed while the embedder could not start, and chat then
+// failed on its first turn. A model that will not load is a real failure —
+// red, no setup key (setup would change nothing), and the error behind `d`.
+func TestExitThreeIsARealFailureNotAStep(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 3, embedderFailsJSON), nil })
+
+	row := modelRow(localRunner{})
+
+	if row.State != StateFailed || row.FirstRun {
+		t.Fatalf("a model that will not load is %s first-run=%v, want a real failure", row.State.Word(), row.FirstRun)
+	}
+	if row.Fix != FixNone {
+		t.Errorf("fix = %v; re-running setup cannot load a downloaded model", row.Fix)
+	}
+	if !row.Optional {
+		t.Error("an embedder failure refuses the launch; chat still works without it")
+	}
+	if !strings.Contains(row.Line, "user.embeddinggemma-300m-GGUF will not load") {
+		t.Errorf("line = %q, want the model named", row.Line)
+	}
+	if !strings.Contains(row.Detail, "document search and memory") {
+		t.Errorf("detail does not say what breaks: %q", row.Detail)
+	}
+	if !strings.Contains(row.Raw, "model_load_error") {
+		t.Errorf("raw = %q, want the server's error", row.Raw)
+	}
+
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 3, chatFailsJSON), nil })
+	if row := modelRow(localRunner{}); row.Optional {
+		t.Error("a chat model that will not load was allowed to start the session")
+	}
+}
+
+const (
+	setupJSON = `{"ready": false, "stage": "setup", "reasons": ["x"], "models": [` +
+		`{"id": "user.embeddinggemma-300m-GGUF", "role": "embedding", "size_gb": 0.3, "loaded": false, "error": null},` +
+		`{"id": "Gemma-4-E4B-it-GGUF", "role": "chat", "size_gb": 3.2, "loaded": false, "error": null}]}`
+	embedderLoadsJSON = `{"ready": true, "stage": null, "reasons": [], "models": [` +
+		`{"id": "user.embeddinggemma-300m-GGUF", "role": "embedding", "size_gb": 0.3, "loaded": true, "error": null}]}`
+	localLoadsJSON = `{"ready": true, "stage": null, "reasons": [], "models": [` +
+		`{"id": "user.embeddinggemma-300m-GGUF", "role": "embedding", "size_gb": 0.3, "loaded": true, "error": null},` +
+		`{"id": "Gemma-4-E4B-it-GGUF", "role": "chat", "size_gb": 3.2, "loaded": true, "error": null}]}`
+	embedderFailsJSON = `{"ready": false, "stage": "load", "reasons": ["y"], "models": [` +
+		`{"id": "user.embeddinggemma-300m-GGUF", "role": "embedding", "size_gb": 0.3, "loaded": false, "error": "model_load_error: llama-server failed to start"},` +
+		`{"id": "Gemma-4-E4B-it-GGUF", "role": "chat", "size_gb": 3.2, "loaded": true, "error": null}]}`
+	chatFailsJSON = `{"ready": false, "stage": "load", "reasons": ["y"], "models": [` +
+		`{"id": "Gemma-4-E4B-it-GGUF", "role": "chat", "size_gb": 3.2, "loaded": false, "error": "model_load_error"}]}`
+)
+
+// jsonStub is a `gaia` that prints body as `gaia init --check --json` would,
+// then exits with code.
+func jsonStub(t *testing.T, code int, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.json")
+	if err := os.WriteFile(out, []byte(body+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "gaia-stub.bat")
+		script := fmt.Sprintf("@echo off\r\ntype \"%s\"\r\nexit /b %d\r\n", out, code)
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, "gaia-stub.sh")
+	script := fmt.Sprintf("#!/bin/sh\ncat '%s'\nexit %d\n", out, code)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // The walk stops at the first failure, the same way the daemon walk does:
@@ -493,7 +644,7 @@ func TestEveryNonOKLocalRowDeclaresADisposition(t *testing.T) {
 		r.checkBinary(context.Background(), localCfg()),
 		r.checkClaudeCredential(context.Background(), localCfg()),
 		r.checkLemonade(context.Background(), localCfg()),
-		r.checkModels(context.Background(), localCfg()),
+		modelRow(r),
 	}
 	for _, row := range rows {
 		if row.State == StateOK || row.State == StatePending {
@@ -545,7 +696,7 @@ func TestADownLemonadeOffersTheOneKeySetup(t *testing.T) {
 // are PENDING, so two rows can never offer setup at once.
 //
 // Asserting on the Fix fields directly would pass vacuously wherever `gaia` is
-// absent from PATH (every CI runner): checkModels would report StateUnknown,
+// absent from PATH (every CI runner): the model row would report StateUnknown,
 // not StateFailed, so the count would be 1 whether or not the halt existed.
 // Asserting the halt itself needs nothing external.
 func TestCheckHaltsAtTheFirstFailureSoOnlyOneRowCanOfferSetup(t *testing.T) {
@@ -607,5 +758,111 @@ func TestARemoteLemonadeOffersNoSetupKey(t *testing.T) {
 	if row.Fix != FixNone {
 		t.Errorf("fix = %v, want FixNone — `gaia init` refuses to install or "+
 			"start anything in remote mode", row.Fix)
+	}
+}
+
+// installEmbedded unpacks a fake GAIA-owned server under GAIA_HOME, stopped.
+func installEmbedded(t *testing.T) {
+	t.Helper()
+	dist := filepath.Join(os.Getenv("GAIA_HOME"), "lemonade", "dist", "2026.39.1")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "lemond.exe"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// `gaia lemonade embedded stop` deletes the state file. What is left is an
+// installed server, not a new machine — and the row must not call it one.
+func TestAStoppedEmbeddedInstallIsNotAFirstRun(t *testing.T) {
+	downLemonadeOn(t, fakeHostFor("linux", nil, nil, map[string]string{}))
+	installEmbedded(t)
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+
+	if row.FirstRun || strings.Contains(row.Line, "not installed") {
+		t.Fatalf("a stopped GAIA server was offered as an install step: %+v", row)
+	}
+	if row.Remedy.Command != "gaia lemonade embedded start" {
+		t.Errorf("command = %q, want the embedded start", row.Remedy.Command)
+	}
+}
+
+// The gate starts GAIA's own stopped server the way GAIA starts it, so a user
+// who followed "stop it, then press r" is not sent to setup.
+func TestAutoStartStartsAStoppedEmbeddedServer(t *testing.T) {
+	downLemonadeOn(t, fakeHostFor("linux", nil, nil, map[string]string{}))
+	installEmbedded(t)
+	restore := tryAutoStartLemonade
+	t.Cleanup(func() { tryAutoStartLemonade = restore })
+	tryAutoStartLemonade = autoStartForTest
+	stubGaiaInit(t, func() (string, error) { return exitStub(t, 0), nil })
+	started := false
+	probeLemonade = func(context.Context) (string, bool, string) {
+		return "http://localhost:13305/api/v1", started, "stub"
+	}
+	probeCalls := 0
+	inner := probeLemonade
+	probeLemonade = func(ctx context.Context) (string, bool, string) {
+		probeCalls++
+		started = probeCalls > 1 // down before the start, up after it
+		return inner(ctx)
+	}
+
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+
+	if row.State != StateOK || !strings.Contains(row.Line, "started for you") {
+		t.Fatalf("a stopped GAIA server was not started: %+v", row)
+	}
+	if !strings.Contains(row.Raw, "lemonade embedded start") {
+		t.Errorf("trace does not say how it was started: %q", row.Raw)
+	}
+}
+
+// autoStartForTest is the real starter, captured before any test swaps it out.
+var autoStartForTest = tryAutoStartLemonade
+
+// modelRow is the model row as Check produces it.
+func modelRow(r localRunner) Row {
+	row, _ := r.verifyModels(context.Background(), localCfg())
+	return row
+}
+
+func TestAServerThatStopsAnsweringIsAFaultNotAStep(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) {
+		return jsonStub(t, 1, `{"ready": false, "stage": "server", "reasons": ["GAIA's Lemonade Server is installed but not running"], "models": []}`), nil
+	})
+
+	row := modelRow(localRunner{})
+
+	if row.FirstRun || row.State != StateFailed {
+		t.Fatalf("a server fault rendered as a first-run step: %+v", row)
+	}
+	if !strings.Contains(row.Detail, "installed but not running") {
+		t.Errorf("detail = %q, want the reason", row.Detail)
+	}
+}
+
+// A system Lemonade the TUI cannot start itself must not get GAIA's private one
+// started beside it.
+func TestAutoStartLeavesASystemInstallAlone(t *testing.T) {
+	// A legacy CLI install: found, but with no form the TUI may spawn.
+	legacy := fakeHostFor("linux", []string{"lemonade-server"}, nil, map[string]string{})
+	if l := resolveLemonadeWith(legacy); !l.Found || canAutoStart(l) {
+		t.Fatalf("fixture is not a found-but-human-only install: %+v", l)
+	}
+	downLemonadeOn(t, legacy)
+	installEmbedded(t)
+	restore := tryAutoStartLemonade
+	t.Cleanup(func() { tryAutoStartLemonade = restore })
+	tryAutoStartLemonade = autoStartForTest
+	stubGaiaInit(t, func() (string, error) {
+		t.Error("GAIA's server was started beside a system install")
+		return "", errors.New("must not be called")
+	})
+
+	if started, _, trace := tryAutoStartLemonade(context.Background()); started || trace != "" {
+		t.Errorf("auto-start acted on a machine only a human can start: %v %q", started, trace)
 	}
 }

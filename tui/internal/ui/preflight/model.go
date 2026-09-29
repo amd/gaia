@@ -3,11 +3,14 @@ package preflight
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
 )
 
 // ProceedMsg tells the host every precondition is satisfied (or the user
@@ -33,9 +36,9 @@ const (
 	// autoStartLemonade). The starter's own budget is 120s
 	// (lemonade_supervisor.DEFAULT_START_TIMEOUT_S), so a client deadline under
 	// that would abort a start that was about to succeed and then report the
-	// wrong cause. It costs the common path nothing — a deadline is a ceiling,
-	// and an all-green walk still finishes in well under a second.
-	CheckTimeout     = 210 * time.Second
+	// wrong cause. It also covers the model row, which LOADS the models
+	// (gaiainit.VerifyTimeout). A deadline is a ceiling, not a cost.
+	CheckTimeout     = 120*time.Second + gaiainit.VerifyTimeout + 30*time.Second
 	startTimeout     = 60 * time.Second
 	ensureTimeout    = 15 * time.Minute
 	provisionTimeout = 60 * time.Minute
@@ -118,8 +121,14 @@ type Model struct {
 	width, height int
 	spin          spinner.Model
 
-	provisionCh   chan provisionEvent
-	provisionLine string
+	provisionCh chan provisionEvent
+	// provision is what the running fix is doing, and on which row.
+	provision Progress
+	// provisionSince is when provision.Text last changed, for the elapsed time.
+	provisionSince time.Time
+	// provisionDone names rows the running fix has finished with, so the row it
+	// moved on from reads as done rather than still broken.
+	provisionDone map[string]bool
 	cancel        *cancelBox
 
 	// fixApplied is true once a fix has changed something on this machine —
@@ -235,9 +244,9 @@ type fixDoneMsg struct {
 	note string
 }
 type provisionEvent struct {
-	line   string
-	done   bool
-	result ProvisionResult
+	progress Progress
+	done     bool
+	result   ProvisionResult
 }
 type provisionMsg struct {
 	ch    chan provisionEvent
@@ -318,6 +327,22 @@ func send(ctx context.Context, ch chan provisionEvent, ev provisionEvent) {
 	}
 }
 
+func (m Model) rowIndex(key string) int {
+	for i, row := range m.rep.Rows {
+		if row.Key == key {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m Model) focusedRow() (Row, bool) {
+	if m.focus < 0 || m.focus >= len(m.rep.Rows) {
+		return Row{}, false
+	}
+	return m.rep.Rows[m.focus], true
+}
+
 // focusFix is the fix on the focused row, FixNone when there is none.
 func (m Model) focusFix() FixKind {
 	if m.focus < 0 || m.focus >= len(m.rep.Rows) {
@@ -334,28 +359,32 @@ func (m Model) focusFix() FixKind {
 // really does narrate.
 func provisionOpeningLine(kind FixKind) string {
 	if kind == FixRunSetup {
-		return "running setup — the first run takes several minutes"
+		return "Starting setup"
 	}
-	return "downloading the model — the first pull takes several minutes"
+	return "Downloading the model — the first pull takes several minutes"
 }
 
 func (m Model) startProvision() (Model, tea.Cmd) {
 	ch := make(chan provisionEvent, 64)
 	ctx := m.begin(provisionTimeout)
 	m.provisionCh = ch
-	m.provisionLine = provisionOpeningLine(m.focusFix())
+	m.provision = Progress{Row: m.FocusKey(), Text: provisionOpeningLine(m.focusFix()), Percent: -1}
+	m.provisionSince = time.Now()
+	m.provisionDone = map[string]bool{}
 	m.phase = phaseProvisioning
 	m.note = ""
+	m.details = false
 
 	r, cfg, kind := m.r, m.cfg, m.focusFix()
 	go func() {
 		defer close(ch)
-		res := r.Fix(ctx, cfg, kind, func(line string) {
-			send(ctx, ch, provisionEvent{line: line})
+		res := r.Fix(ctx, cfg, kind, func(p Progress) {
+			send(ctx, ch, provisionEvent{progress: p})
 		})
 		send(ctx, ch, provisionEvent{done: true, result: ProvisionResult{
 			OK:        res.OK(),
 			Final:     res.Final,
+			Lines:     res.Log,
 			Diagnosis: res.Diagnosis,
 		}})
 	}()
@@ -443,7 +472,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !msg.event.done {
-			m.provisionLine = msg.event.line
+			p := msg.event.progress
+			if p.Row != "" && m.rowIndex(p.Row) > m.rowIndex(m.provision.Row) {
+				// Only moving FORWARD finishes a row: setup revisits the server
+				// before the models even when the server was already up.
+				m.provisionDone[m.provision.Row] = true
+			}
+			if p.Text != m.provision.Text {
+				m.provisionSince = time.Now()
+			}
+			m.provision = p
 			return m, waitProvision(msg.ch, m.cfg)
 		}
 		m.provisionCh = nil
@@ -451,14 +489,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		res := msg.event.result
 		if res.OK {
 			m.fixApplied = true
-			m.note = "Download complete. Re-checking…"
+			m.note = "Setup finished. Checking that everything loads…"
+			if m.focusFix() == FixPullModel {
+				m.note = "Download complete. Re-checking…"
+			}
 			m.phase = phaseChecking
 			return m, tea.Batch(m.checkCmd(), m.spin.Tick)
 		}
 		m.phase = phaseIdle
-		m.note = "Download failed. " + res.Diagnosis.String()
+		if len(res.Lines) > 0 && m.focus >= 0 && m.focus < len(m.rep.Rows) {
+			// The raw transcript belongs behind `d`, never on the main screen.
+			m.rep.Rows[m.focus].Raw = strings.Join(res.Lines, "\n")
+		}
+		lead := "Setup stopped. "
+		if m.focusFix() == FixPullModel {
+			lead = "Download failed. "
+		}
+		m.note = lead + res.Diagnosis.String()
 		if res.Diagnosis.Cause == "" {
-			m.note = "Download failed. " + res.Final
+			m.note = lead + res.Final
 		}
 		return m, nil
 
@@ -515,6 +564,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.Busy() {
 			return m, nil
+		}
+		// On a first run, enter is the one way forward: it starts the step.
+		if row, ok := m.focusedRow(); ok && row.FirstRun && row.Fix != FixNone {
+			return m.applyFix()
 		}
 		if blocker, blocked := m.rep.Blocker(); blocked && !m.rep.OfferableDespiteFailure() {
 			m.note = fmt.Sprintf("%s cannot start yet: %s is %s. Fix that row first.",
@@ -573,10 +626,15 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 // mailbox, saying "could not be verified" would understate a state we measured.
 func (m Model) unverifiedSummary() string {
 	for _, row := range m.rep.Rows {
-		if row.State == StateFailed {
+		if row.State != StateFailed {
+			continue
+		}
+		if agentRepairable[row.Key] {
 			return row.Label + " is not working (" + row.Line +
 				") — ask " + m.cfg.AgentName + " to fix it."
 		}
+		return row.Label + " is not working (" + row.Line +
+			"). Press enter to start without it, or fix it first."
 	}
 	for _, row := range m.rep.Rows {
 		if row.State == StateUnknown {

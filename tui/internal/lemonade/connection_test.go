@@ -148,3 +148,26 @@ func TestCloudProviderClientUsesEmbeddedConnectionWithoutExportedCredentials(t *
 		t.Fatalf("embedded provider discovery failed: %v", err)
 	}
 }
+
+// The state file exists only while GAIA's server runs, so a stopped install has
+// to be recognised from the unpacked binary.
+func TestEmbeddedInstalledSurvivesAStoppedServer(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GAIA_HOME", dir)
+	if EmbeddedInstalled() {
+		t.Fatal("an empty GAIA_HOME reported an installed server")
+	}
+	dist := filepath.Join(dir, "lemonade", "dist", "2026.39.1")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "lemond.exe"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !EmbeddedInstalled() {
+		t.Fatal("an unpacked, stopped server was not recognised")
+	}
+	if ReadEmbedded() != nil {
+		t.Fatal("a stopped server produced connection state")
+	}
+}

@@ -204,6 +204,7 @@ func Start(claudeMode bool) (<-chan Event, context.CancelFunc, error) {
 		defer wg.Done()
 		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		scanner.Split(scanLinesOrReturns)
 		for scanner.Scan() {
 			if line := strings.TrimSpace(scanner.Text()); line != "" {
 				// Checked first, not just as a case below: with both ready,
@@ -235,6 +236,19 @@ func Start(claudeMode bool) (<-chan Event, context.CancelFunc, error) {
 	}()
 
 	return ch, cancel, nil
+}
+
+// scanLinesOrReturns splits on \n AND \r. A progress bar redraws itself with
+// \r and no newline, so a newline-only scanner delivers the whole download as
+// one line after it has finished.
+func scanLinesOrReturns(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 // LastMeaningfulLine picks the line worth quoting back out of a failed child's

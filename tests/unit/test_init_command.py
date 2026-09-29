@@ -1152,6 +1152,125 @@ class TestCheckSetupStatus(unittest.TestCase):
         checked = {c.args[0] for c in mock_client.check_model_available.call_args_list}
         self.assertEqual(checked, {"user.embeddinggemma-300m-GGUF"})
 
+    def _loading_client(self, mock_client_class, embed_error=None):
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        client = mock_client_class.return_value
+        client.check_model_available.return_value = True
+        client.get_model_info.side_effect = lambda m: {"id": m, "size_gb": 0.3}
+        if embed_error:
+            client.embeddings.side_effect = LemonadeClientError(embed_error)
+        else:
+            client.embeddings.return_value = {"data": [{"embedding": [0.1] * 768}]}
+        return client
+
+    def test_load_reports_a_downloaded_embedder_that_will_not_load(self):
+        """Downloaded is not working: the #4449 embedder passed --check and
+        then failed on the first chat turn."""
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+        ):
+            client = self._loading_client(
+                mock_client_class, embed_error="model_load_error"
+            )
+            status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "load")
+        self.assertEqual(
+            [m.id for m in status.models], ["user.embeddinggemma-300m-GGUF"]
+        )
+        self.assertFalse(status.models[0].loaded)
+        self.assertIn("model_load_error", status.models[0].error)
+        self.assertIn("would not load", status.reasons[0])
+        client._ensure_model_loaded.assert_not_called()
+
+    def test_load_loads_the_chat_model_and_embeds_one_word(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+        ):
+            client = self._loading_client(mock_client_class)
+            status = check_setup_status(profile="gaia", load=True)
+
+        self.assertTrue(status.ready)
+        self.assertEqual(
+            {m.id: (m.role, m.loaded) for m in status.models},
+            {
+                "user.embeddinggemma-300m-GGUF": ("embedding", True),
+                "Gemma-4-E4B-it-GGUF": ("chat", True),
+            },
+        )
+        client._ensure_model_loaded.assert_called_once_with("Gemma-4-E4B-it-GGUF")
+        client.embeddings.assert_called_once()
+        self.assertEqual(
+            client.embeddings.call_args.kwargs["model"], "user.embeddinggemma-300m-GGUF"
+        )
+
+    def test_chat_model_replaces_the_default_in_what_is_loaded(self):
+        """Presence stays the profile's — setup can only download those — while
+        the load proves the model the session will actually use."""
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+        ):
+            client = self._loading_client(mock_client_class)
+            status = check_setup_status(
+                profile="gaia", load=True, chat_model="Qwen3-4B-Instruct-GGUF"
+            )
+
+        self.assertTrue(status.ready)
+        checked = {c.args[0] for c in client.check_model_available.call_args_list}
+        self.assertEqual(
+            checked, {"user.embeddinggemma-300m-GGUF", "Gemma-4-E4B-it-GGUF"}
+        )
+        client._ensure_model_loaded.assert_called_once_with("Qwen3-4B-Instruct-GGUF")
+
+    def test_a_probe_crash_is_reported_as_that_models_failure(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+        ):
+            client = self._loading_client(mock_client_class)
+            client.embeddings.side_effect = KeyError("data")
+            status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
+
+        self.assertEqual(status.stage, "load")
+        self.assertIn("KeyError", status.models[0].error)
+
+    def test_a_server_that_will_not_answer_is_not_a_setup_step(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with self._embedded(self._status()):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "server")
+
+    def test_missing_models_carry_their_download_size_when_asked(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+        ):
+            client = self._loading_client(mock_client_class)
+            client.check_model_available.return_value = False
+            status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(status.models[0].size_gb, 0.3)
+        self.assertFalse(status.models[0].loaded)
+        client.embeddings.assert_not_called()
+
 
 class TestInstallPipExtras(unittest.TestCase):
     """Test _install_pip_extras frontend selection and messaging."""

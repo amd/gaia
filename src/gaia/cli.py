@@ -3555,6 +3555,24 @@ Examples:
         "the GAIA daemon (started too if needed), as any GAIA command would. "
         "Exit code 0 means ready, 1 means `gaia init` still has work to do.",
     )
+    init_parser.add_argument(
+        "--load",
+        action="store_true",
+        help="With --check: once everything is downloaded, load each model "
+        "once (chat model at its context size, embedder with a one-word "
+        "embedding). Exit code 3 means a downloaded model would not load.",
+    )
+    init_parser.add_argument(
+        "--chat-model",
+        default=None,
+        help="With --check --load: the local chat model to load instead of the "
+        "profile default.",
+    )
+    init_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="With --check: print the result as one JSON object on stdout.",
+    )
 
     # Install command (install specific components)
     install_parser = subparsers.add_parser(
@@ -5283,6 +5301,23 @@ Let me know your answer!
             )
             sys.exit(exit_code)
 
+        check_only = [
+            flag
+            for flag, value in (
+                ("--load", getattr(args, "load", False)),
+                ("--json", getattr(args, "json", False)),
+                ("--chat-model", getattr(args, "chat_model", None)),
+            )
+            if value
+        ]
+        if check_only and not args.check:
+            print(
+                f"Error: {', '.join(check_only)} only apply with --check. "
+                "Run `gaia init --check " + " ".join(check_only) + "`.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
         if args.check:
             from gaia.installer.init_command import check_setup_status
 
@@ -5291,17 +5326,26 @@ Let me know your answer!
                     profile=profile,
                     skip_chat_model=getattr(args, "skip_chat_model", False),
                     remote=getattr(args, "remote", False),
+                    load=getattr(args, "load", False),
+                    chat_model=getattr(args, "chat_model", None),
                 )
             except ValueError as e:
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)
+            exit_code = 0 if status.ready else 3 if status.stage == "load" else 1
+            if getattr(args, "json", False):
+                print(json.dumps(status.to_json()))
+                sys.exit(exit_code)
             if status.ready:
                 print(f"READY: profile '{profile}' is already set up")
                 sys.exit(0)
-            print(f"NOT READY: profile '{profile}' needs setup")
+            if status.stage == "load":
+                print(f"NOT READY: profile '{profile}' is downloaded but will not load")
+            else:
+                print(f"NOT READY: profile '{profile}' needs setup")
             for reason in status.reasons:
                 print(f"  - {reason}")
-            sys.exit(1)
+            sys.exit(exit_code)
 
         from gaia.installer.init_command import run_init
 
