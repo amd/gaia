@@ -44,6 +44,23 @@ def test_after_the_answer_only_the_requests_files_and_checks_run(guard):
     assert not guard.turn_should_end
 
 
+def test_loading_the_skill_a_requested_check_needs_is_allowed(guard):
+    """Asked to run the tests after answering, the agent may load what grants pytest."""
+    guard.mark_answered()
+    assert guard.check("load_skill", {"name": "coding"}) is None
+    assert guard.check("list_skills", {}) is None
+    assert not guard.turn_should_end
+
+
+def test_browsing_the_named_folder_after_the_answer_is_in_scope(tmp_path):
+    scope = TurnScopeGuard(failure_limit=4)
+    scope.begin_turn(
+        f"You are working in {tmp_path}. List the open issues.", str(tmp_path)
+    )
+    scope.mark_answered()
+    assert scope.check("browse_directory", {"directory_path": str(tmp_path)}) is None
+
+
 def test_off_request_work_after_the_answer_is_refused_then_ends_the_turn(guard):
     guard.mark_answered()
     first = guard.check("extract_document_items", {"file_path": "toybox/cli.py"})

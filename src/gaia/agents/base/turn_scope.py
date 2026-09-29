@@ -36,15 +36,24 @@ ANSWERED_MARKER = "answered"
 #: A second off-request call after the answer ends the turn.
 DEFAULT_DRIFT_LIMIT = 2
 
-#: Their result is the agent's own state or a question to the user.
+#: Their result is the agent's own state, a question to the user, or a
+#: skill that unlocks the check the loop just asked for.
 _ALWAYS_RELATED = frozenset(
-    {"read_tool_output", "request_user_input", "session_findings"}
+    {
+        "read_tool_output",
+        "request_user_input",
+        "session_findings",
+        "load_skill",
+        "list_skills",
+        "skill_status",
+    }
 )
 #: Tools whose arguments hold code or a command line rather than a path.
 _COMMAND_ARG_KEYS = ("command", "cmd", "script", "code")
 _PATH_ARG_KEYS = (
     "file_path",
     "path",
+    "directory_path",
     "filepath",
     "filename",
     "file",

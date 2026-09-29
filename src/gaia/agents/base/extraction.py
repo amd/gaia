@@ -694,6 +694,8 @@ class ExtractionLedger:
             for p in source_paths(source_clause)
             if os.path.splitext(p)[1].lower() not in _BINARY_SUFFIXES | _DATA_EXTENSIONS
             and os.path.lexists(self.key(p))
+            # A folder is where the work happens, not a document to inventory.
+            and not os.path.isdir(self.key(p))
         ]
         # Code tools answer symbol and analysis questions ("find all bugs in
         # x.py"); listing content such as TODOs still extracts from code.

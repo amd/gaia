@@ -1554,3 +1554,12 @@ def test_code_read_on_the_way_is_not_an_extraction_source(tmp_path):
     assert not state.gaps()
     state.observe("read_file", {"file_path": "notes.txt"}, {"status": "success"})
     assert state.gaps()
+
+
+def test_a_working_folder_in_the_prompt_is_not_a_source(tmp_path):
+    state = ExtractionLedger(
+        f"You are working in {tmp_path}. List the open issues and classify each one.",
+        str(tmp_path),
+    )
+    assert not state.enabled
+    assert state.gaps() == []
