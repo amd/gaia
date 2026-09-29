@@ -58,6 +58,39 @@ def test_roots_are_ordered_packaged_first():
         assert roots.index(str(_SKILLS_DIR)) < roots.index(str(_HUB_SKILLS_DIR))
 
 
+def test_frozen_build_discovers_a_skill_once(monkeypatch, tmp_path):
+    """The frozen package root must not shadow itself during discovery."""
+    import gaia_agent.agent as agent_module
+
+    from gaia.skills.manager import SkillManager
+
+    packaged_skills = tmp_path / "skills"
+    skill_dir = packaged_skills / "frozen-probe"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: frozen-probe\n"
+        "description: Verify frozen bundled skill discovery.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(agent_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(agent_module, "_SKILLS_DIR", packaged_skills)
+    monkeypatch.setattr(agent_module, "_HUB_SKILLS_DIR", packaged_skills)
+
+    roots = agent_module._bundled_skill_roots()
+    manager = SkillManager(
+        agent_skill_dirs=roots,
+        user_skills_root=tmp_path / "user-skills",
+        include_claude_roots=False,
+    )
+
+    assert roots == [str(packaged_skills)]
+    assert "frozen-probe" in manager.discover()
+    assert manager.shadowed() == []
+
+
 def test_missing_roots_are_skipped_not_listed(monkeypatch, tmp_path):
     """A frozen sidecar has no hub/ tree; a non-existent root must not be named.
 
