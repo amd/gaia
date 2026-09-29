@@ -41,14 +41,7 @@ _ALLOWED = {
 # when its fix lands; do NOT add to this set.
 _PENDING = {
     # #3122
-    "hub/agents/email/npm/SCORECARD.md",
-    "hub/agents/email/npm/SKILL.md",
-    "hub/agents/email/python/gaia_agent_email/api_routes.py",
-    "hub/agents/email/python/gaia_agent_email/playground_html.py",
-    "hub/agents/email/python/gaia_agent_email/query_routes.py",
-    "hub/agents/email/python/packaging/gen_scorecard.py",
     "src/gaia/agents/base/readiness.py",
-    "src/gaia/apps/webui/README.md",
     "src/gaia/llm/providers/lemonade.py",
     "tui/internal/ui/chat/modelcmd.go",
 }
