@@ -354,6 +354,13 @@ def test_a_malformed_check_fails_loudly():
         ("all tests passing", "tests passing"),
         ("70 passed, 19 subtests passed in 1.32s", "70 passed"),
         ("The full test suite passes.", "test suite passes"),
+        # Advice in a heading does not make the report after it advice.
+        (
+            "3. **Ensure test suite remains green**: All tests pass under both "
+            "configurations.",
+            "tests pass",
+        ),
+        ("To confirm, I checked: 12 passed.", "12 passed"),
     ],
 )
 def test_a_concrete_test_outcome_is_a_claim(answer, expected):
@@ -373,6 +380,8 @@ def test_a_concrete_test_outcome_is_a_claim(answer, expected):
         "Unverified — I did not run the suite.",
         "Run `pytest tests/unit` to confirm the tests pass.",
         "You should run the test suite before tagging.",
+        "Next: make sure the tests pass before merging.",
+        "Run the suite — to confirm the tests pass — then tag.",
         "Next steps:\n- Run the full test suite\n- Tag a release",
         "I rewrote the loader and documented TOYBOX_CONFIG.",
         "Done. Both bugs are fixed.",
