@@ -50,6 +50,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
+from gaia.eval.scorecard import SKIPPED_STATUSES
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -62,7 +63,7 @@ DEFAULT_RESULTS_DIR = REPO_ROOT / "eval" / "results"
 DEFAULT_SCENARIOS_DIR = REPO_ROOT / "eval" / "scenarios" / "mcp_reliability"
 
 # Statuses that count as "failures" for the analyzer. Anything not in this set
-# and not {"PASS", "SKIPPED_NO_DOCUMENT"} still gets a record as "ERRORED".
+# and not PASS or a skip (SKIPPED_STATUSES) still gets a record as "ERRORED".
 _FAILURE_STATUSES = {
     "FAIL",
     "TIMEOUT",
@@ -73,7 +74,7 @@ _FAILURE_STATUSES = {
     "ERRORED",
 }
 _PASS_STATUSES = {"PASS"}
-_NON_COUNTED_STATUSES = {"SKIPPED_NO_DOCUMENT"}
+_NON_COUNTED_STATUSES = SKIPPED_STATUSES
 
 
 @dataclass

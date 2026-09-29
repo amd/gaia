@@ -843,3 +843,90 @@ class TestMcpServerCommandPreflight:
         errors = runner.preflight_check("http://127.0.0.1:1")
 
         assert any("no-such-binary-xyz" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# requires_asr / requires_vlm — skip visibly when the model is absent
+# ---------------------------------------------------------------------------
+
+
+class TestModelRequirements:
+    @pytest.fixture(autouse=True)
+    def _ffmpeg_present(self, monkeypatch):
+        import gaia.audio.media
+
+        monkeypatch.setattr(gaia.audio.media, "find_ffmpeg", lambda: "ffmpeg")
+
+    def test_untagged_scenario_needs_nothing(self):
+        assert runner._required_models({"tags": ["t1_basic"]}) == []
+        assert runner._missing_requirements({}, set()) == []
+
+    def test_present_models_are_not_missing(self):
+        from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL
+        from gaia.vlm.mixin import DEFAULT_VLM_MODEL
+
+        scenario = {"tags": ["requires_asr", "requires_vlm"]}
+        downloaded = {DEFAULT_ASR_MODEL, DEFAULT_VLM_MODEL}
+        assert runner._missing_requirements(scenario, downloaded) == []
+
+    def test_absent_model_is_named_with_its_tag(self):
+        from gaia.vlm.mixin import DEFAULT_VLM_MODEL
+
+        missing = runner._missing_requirements({"tags": ["requires_vlm"]}, set())
+        assert len(missing) == 1
+        assert DEFAULT_VLM_MODEL in missing[0]
+        assert "requires_vlm" in missing[0]
+
+    def test_asr_without_ffmpeg_is_missing(self, monkeypatch):
+        import gaia.audio.media
+        from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL
+
+        monkeypatch.setattr(gaia.audio.media, "find_ffmpeg", lambda: None)
+        missing = runner._missing_requirements(
+            {"tags": ["requires_asr"]}, {DEFAULT_ASR_MODEL}
+        )
+        assert missing == ["ffmpeg is not on PATH (tag requires_asr)"]
+
+    def test_unreachable_lemonade_fails_loudly(self, monkeypatch):
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        def _boom(self, show_all=False):
+            raise ConnectionError("refused")
+
+        monkeypatch.setattr(LemonadeClient, "list_models", _boom)
+        with pytest.raises(RuntimeError, match="refused"):
+            runner._downloaded_lemonade_models()
+
+    def test_run_records_skip_instead_of_running(self, tmp_path, monkeypatch):
+        from gaia.eval.runner import AgentEvalRunner
+
+        scenario = {
+            "id": "needs_vlm",
+            "category": "gaia_media",
+            "tags": ["requires_vlm"],
+            "setup": {"index_documents": []},
+            "turns": [{"turn": 1, "objective": "x", "success_criteria": "y"}],
+        }
+        monkeypatch.setattr(
+            runner,
+            "find_scenarios",
+            lambda **_kw: [(tmp_path / "needs_vlm.yaml", scenario)],
+        )
+        monkeypatch.setattr(runner, "preflight_check", lambda *_a, **_kw: [])
+        monkeypatch.setattr(runner, "_downloaded_lemonade_models", lambda: set())
+
+        def _must_not_run(*_a, **_kw):
+            raise AssertionError("a scenario missing its model must not run")
+
+        monkeypatch.setattr(runner, "run_scenario_subprocess", _must_not_run)
+
+        scorecard = AgentEvalRunner(results_dir=str(tmp_path)).run(
+            category="gaia_media"
+        )
+
+        (result,) = scorecard["scenarios"]
+        assert result["status"] == "SKIPPED_NO_MODEL"
+        assert "requires_vlm" in result["skip_reason"]
+        assert scorecard["summary"]["skipped"] == 1
+        assert scorecard["summary"]["errored"] == 0
+        assert "warnings" not in scorecard

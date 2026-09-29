@@ -37,7 +37,7 @@
     },
     {
       "lane": "gaia-signal",
-      "categories": ["gaia_memory", "gaia_honesty", "gaia_web"]
+      "categories": ["gaia_memory", "gaia_honesty", "gaia_web", "gaia_media"]
     },
     {
       "lane": "gaia-code",

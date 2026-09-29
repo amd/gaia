@@ -138,6 +138,7 @@ flowchart TD
 | Condition | Status | Subprocess invoked? |
 |-----------|--------|---------------------|
 | Corpus file not on disk | `SKIPPED_NO_DOCUMENT` | No — runner skips entirely |
+| `requires_asr` / `requires_vlm` model not downloaded (or no ffmpeg for ASR) | `SKIPPED_NO_MODEL` | No — runner skips entirely |
 | `system_status()` HTTP error | `INFRA_ERROR` | Yes — exits Phase 1 early |
 | `index_document()` returns 0 chunks (non-adversarial) | `SETUP_ERROR` | Yes — exits Phase 1 early |
 | Subprocess wall-clock timeout | `TIMEOUT` | Yes — killed by runner |
@@ -355,6 +356,7 @@ Statuses are grouped by how they affect scoring. **Judged** statuses count towar
 | INFRA_ERROR | Infrastructure | Agent UI backend unreachable or MCP failure |
 | SETUP_ERROR | Infrastructure | Document indexing failed (0 chunks) |
 | SKIPPED_NO_DOCUMENT | Infrastructure | Corpus file not present on disk (e.g., real-world docs not committed) |
+| SKIPPED_NO_MODEL | Infrastructure | A model named by a `requires_asr` / `requires_vlm` tag is not downloaded on the Lemonade server (or ffmpeg is missing for ASR) |
 | ERRORED | Infrastructure | Eval agent crashed, returned non-JSON, or encountered an unexpected error |
 
 ---

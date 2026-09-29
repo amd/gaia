@@ -177,6 +177,7 @@ Each turn is scored across 7 dimensions. The overall score is a weighted sum:
 | `INFRA_ERROR` | Agent UI backend unreachable or MCP failure |
 | `SETUP_ERROR` | Document indexing failed (0 chunks) |
 | `SKIPPED_NO_DOCUMENT` | Corpus file not present on disk |
+| `SKIPPED_NO_MODEL` | A model a `requires_asr` / `requires_vlm` tag names is not downloaded (or ffmpeg is missing for ASR) |
 | `ERRORED` | Eval agent crashed or returned invalid output |
 
 <Note>

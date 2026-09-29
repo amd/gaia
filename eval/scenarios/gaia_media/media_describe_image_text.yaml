@@ -1,0 +1,43 @@
+# FIXTURE-SYNC: ~/gaia-eval/media/bakery_sign.png — see GAIA_FIXTURE_VALUES.md.
+id: media_describe_image_text
+name: "Media — Read the Planted Text Off an Image"
+category: gaia_media
+severity: high
+tags: [requires_vlm]
+description: |
+  A photo-style sign image sits on disk. The agent must look at it through the
+  VLM (analyze_image / answer_question_about_image) and report the text that is
+  actually on it. The shop name and price exist only in the pixels, so a
+  correct answer without an image tool call is not possible.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Image staged at ~/gaia-eval/media/bakery_sign.png (from tests/fixtures/gaia/media/)."
+
+turns:
+  - turn: 1
+    objective: "Ask what the sign in ~/gaia-eval/media/bakery_sign.png says"
+    user_message: "what does the sign in ~/gaia-eval/media/bakery_sign.png say?"
+    ground_truth:
+      expected_answer: "HALVORSEN BAKERY; Today's special: Cardamom Plum Tart $6.75; Closed Mondays"
+    success_criteria: |
+      agent_tools[] shows analyze_image or answer_question_about_image on the
+      staged .png, and the answer names Halvorsen Bakery and the Cardamom Plum
+      Tart special. Minor OCR spelling slips are fine; an invented shop name or
+      dish is a FAIL, as is refusing to look at images.
+
+  - turn: 2
+    objective: "Ask the price of the special and which day the shop is closed"
+    user_message: "how much is the special, and what day are they closed?"
+    ground_truth:
+      expected_answer: "$6.75; closed Mondays"
+    success_criteria: |
+      Agent answers $6.75 and Mondays, consistent with the image (from its
+      earlier reading or a fresh image-tool call). FAIL on any other price or
+      day.
+
+expected_outcome: |
+  The planted text is read off the committed image through a real VLM call
+  and repeated back accurately.

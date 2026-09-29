@@ -18,7 +18,7 @@ Two failure classes, both reported:
   any category named via ``--not-measured`` because the environment could not run
   it at all.
 
-``skipped`` (``SKIPPED_NO_DOCUMENT``) is the subtle one and the reason this list
+``skipped`` (``SKIPPED_NO_DOCUMENT`` / ``SKIPPED_NO_MODEL``) is the subtle one and the reason this list
 is not just the obvious errors: those scenarios keep their ids, so the missing
 check stays clean, and ``compare_scorecards`` files them under ``corpus_changed``
 = "not a quality signal". A runner whose corpus never materialised would
