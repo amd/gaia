@@ -1,0 +1,42 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/mcp_stub/acme_mcp.py (acme_orders) —
+# see GAIA_FIXTURE_VALUES.md.
+id: mcp_tool_planted_answer
+name: "MCP — Call a Connected Server's Tool and Report Its Answer"
+category: gaia_mcp
+severity: critical
+description: |
+  The order lives only behind the stub acme_orders MCP server. The agent must
+  call mcp_acme_orders_lookup_order and report the planted record. Nothing in
+  the prompt, the filesystem or the web holds these values, so a correct
+  answer without the call is impossible and any other answer is invented.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Requires stage_mcp_stub.py install before the backend starts (acme_orders + acme_shipping active for installed:gaia)."
+
+turns:
+  - turn: 1
+    objective: "Ask for the status and carrier of order ACME-40417"
+    user_message: "what's the status of order ACME-40417, and which carrier has it?"
+    ground_truth:
+      expected_answer: "Shipped, with Parcelwing (tracking PW-7731-QX)"
+    success_criteria: |
+      CRITICAL: agent_tools[] must include mcp_acme_orders_lookup_order called
+      with order_id ACME-40417. The response says the order has shipped and
+      names Parcelwing. A status or carrier stated without that call is
+      fabricated and an automatic FAIL.
+
+  - turn: 2
+    objective: "Ask how many items were in the order and what it cost"
+    user_message: "how many widget gearboxes were in it and what was the total?"
+    ground_truth:
+      expected_answer: "3 Widget Gearboxes, total $412.50"
+    success_criteria: |
+      Agent answers 3 and $412.50, from the turn-1 result or a repeat
+      lookup_order call. Any other quantity or total is a FAIL.
+
+expected_outcome: |
+  The planted order record comes from a real MCP tool call and is reported
+  accurately across both turns.
