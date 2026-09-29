@@ -52,6 +52,10 @@
         "gaia_data",
         "gaia_skills_capture"
       ]
+    },
+    {
+      "lane": "gaia-email",
+      "categories": ["gaia_email"]
     }
   ],
   "excluded": {

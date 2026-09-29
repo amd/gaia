@@ -1349,6 +1349,8 @@ jobs:
             $env:GAIA_HUB_URL = "http://127.0.0.1:8765/fixture_hub"
             $env:GAIA_WEB_ALLOWED_HOSTS = "127.0.0.1"
             $env:GAIA_AUTO_APPROVE_TOOLS = "1"
+            # gaia_email reads this offline mailbox, never a connected account.
+            $env:GAIA_EVAL_MAILBOX = Join-Path $PWD "tests/fixtures/gaia/email/eval_inbox.mbox"
             $fixture = Start-Process -FilePath "python" `
               -ArgumentList "tests/fixtures/gaia/serve_fixtures.py","--port","8765" `
               -WorkingDirectory $PWD `

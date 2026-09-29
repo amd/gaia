@@ -1346,7 +1346,101 @@ def preflight_check(backend_url, scenarios=None):
         if memory_admin_error:
             errors.append(memory_admin_error)
 
+    # gaia_email reads an offline fixture mailbox; without it every scenario
+    # would score a "no mailbox connected" answer as the agent's failure.
+    if scenarios is not None and any(
+        (sd or {}).get("category") == "gaia_email" for _path, sd in scenarios
+    ):
+        mailbox_error = _probe_eval_mailbox(backend_url)
+        if mailbox_error:
+            errors.append(mailbox_error)
+
     return errors
+
+
+_MAILBOX_FIXTURE_STATES = {"attached": True, "detached": False}
+
+
+def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[str]:
+    """Set the fixture mailbox to the scenario's ``setup.mailbox_fixture``.
+
+    Done by the runner, not the simulator: the switch is process-wide, so one
+    skipped call would leave every later scenario reading "no mailbox".
+    Returns ``None`` on success, or an error string.
+    """
+    import urllib.error
+    import urllib.request
+
+    state = (scenario_data.get("setup") or {}).get("mailbox_fixture")
+    if state is None:
+        return None
+    if state not in _MAILBOX_FIXTURE_STATES:
+        return (
+            f"setup.mailbox_fixture is {state!r}; use one of "
+            f"{sorted(_MAILBOX_FIXTURE_STATES)}"
+        )
+    url = f"{backend_url}/api/connectors/eval-mailbox"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"attached": _MAILBOX_FIXTURE_STATES[state]}).encode(),
+        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = json.loads(r.read().decode("utf-8"))
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+        return (
+            f"could not set the fixture mailbox to {state} via {url}: {e}. Start "
+            "the backend with GAIA_EVAL_MAILBOX pointing at "
+            "tests/fixtures/gaia/email/eval_inbox.mbox."
+        )
+    if body.get("attached") != _MAILBOX_FIXTURE_STATES[state]:
+        return f"{url} did not switch the fixture mailbox to {state}: {body}"
+    return None
+
+
+def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
+    """Verify the backend serves the gaia_email fixture mailbox.
+
+    Returns ``None`` on success, or an error string for the preflight list.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = f"{backend_url}/api/connectors/eval-mailbox"
+    req = urllib.request.Request(url, headers={"X-Gaia-UI": "1"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            if r.status != 200:
+                return (
+                    f"Eval mailbox probe returned unexpected HTTP {r.status} from {url}"
+                )
+            state = json.loads(r.read().decode("utf-8"))
+        if not state.get("exists"):
+            return (
+                f"The backend's GAIA_EVAL_MAILBOX is {state.get('path')!r}, which "
+                "does not exist on its machine. Build it with `python "
+                "tests/fixtures/gaia/email/build_mailbox.py` and restart the backend "
+                "with the absolute path."
+            )
+        return None
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404):
+            return (
+                "gaia_email scenarios read an offline fixture mailbox, but the "
+                f"backend at {backend_url} does not serve one (HTTP {e.code} from "
+                f"{url}). Restart the Agent UI backend with GAIA_EVAL_MAILBOX "
+                "pointing at tests/fixtures/gaia/email/eval_inbox.mbox, e.g.:\n"
+                "    GAIA_EVAL_MAILBOX=$PWD/tests/fixtures/gaia/email/eval_inbox.mbox "
+                "GAIA_MEMORY_ADMIN=1 python -m gaia.ui.server --port 4200"
+            )
+        return f"Eval mailbox probe failed with HTTP {e.code} from {url}: {e.reason}"
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+        return (
+            f"Eval mailbox probe could not reach {backend_url}: {e}. "
+            "Is the Agent UI backend running?"
+        )
 
 
 def _probe_memory_admin(backend_url: str) -> Optional[str]:
@@ -1493,6 +1587,18 @@ def run_scenario_subprocess(
 ):
     """Invoke claude -p for one scenario. Returns parsed result dict."""
     scenario_id = scenario_data["id"]
+    mailbox_error = _apply_mailbox_fixture(backend_url, scenario_data)
+    if mailbox_error:
+        print(f"[SETUP_ERROR] {scenario_id}: {mailbox_error}", flush=True)
+        return {
+            "scenario_id": scenario_id,
+            "status": "SETUP_ERROR",
+            "overall_score": None,
+            "turns": [],
+            "error": mailbox_error,
+            "elapsed_s": 0.0,
+            "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
+        }
     manifest_data = _load_merged_manifest(extra_corpus_dirs=extra_corpus_dirs)
 
     prompt = build_scenario_prompt(

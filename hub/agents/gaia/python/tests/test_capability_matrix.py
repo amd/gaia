@@ -257,6 +257,7 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
         "gaia_code",
         "gaia_core",
         "gaia_data",
+        "gaia_email",
         "gaia_files",
         "gaia_honesty",
         "gaia_mcp",
