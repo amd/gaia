@@ -8,16 +8,9 @@ A leaf module (no imports from sibling command modules) so both
 an interactive terminal without one command module importing another.
 """
 
-import sys
+from gaia.utils.terminal import stdin_is_interactive
 
 
 def stdin_is_tty() -> bool:
-    """Return True if stdin looks like an interactive terminal.
-
-    False on any of the ways a non-interactive run can make ``isatty()``
-    itself raise (e.g. closed stdin), not just when it returns False.
-    """
-    try:
-        return bool(sys.stdin.isatty())
-    except (AttributeError, ValueError, OSError):
-        return False
+    """Return True if stdin is a terminal a person is typing into."""
+    return stdin_is_interactive()

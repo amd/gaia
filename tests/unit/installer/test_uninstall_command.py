@@ -409,6 +409,9 @@ class TestNoFlagsHelp:
         self, fake_home, monkeypatch
     ):
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(
+            "gaia.utils.terminal.is_windows_console", lambda stream: True
+        )
         captured = _Capture()
         exit_code = uc.run(_ns(), printer=captured)
         assert exit_code == uc.EXIT_OK
@@ -479,6 +482,9 @@ class TestConfirmationPrompt:
     ):
         _seed_gaia_tree(fake_home)
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(
+            "gaia.utils.terminal.is_windows_console", lambda stream: True
+        )
 
         captured = _Capture()
         answers = iter(["n"])
@@ -499,6 +505,9 @@ class TestConfirmationPrompt:
     def test_interactive_prompt_accepted_removes(self, fake_home, monkeypatch):
         _seed_gaia_tree(fake_home)
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(
+            "gaia.utils.terminal.is_windows_console", lambda stream: True
+        )
 
         captured = _Capture()
         answers = iter(["y"])

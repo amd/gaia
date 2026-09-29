@@ -110,6 +110,7 @@ def test_non_interactive_without_yes_never_calls_input(tmp_path, monkeypatch):
 def test_interactive_yes_answer_proceeds(tmp_path, monkeypatch, answer):
     bundle = _make_bundle(tmp_path)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("gaia.utils.terminal.is_windows_console", lambda stream: True)
     monkeypatch.setattr("builtins.input", lambda *a, **k: answer)
     calls = []
     _patch_import_agent_bundle(monkeypatch, calls)
@@ -123,6 +124,7 @@ def test_interactive_yes_answer_proceeds(tmp_path, monkeypatch, answer):
 def test_interactive_non_yes_answer_refuses(tmp_path, monkeypatch, answer):
     bundle = _make_bundle(tmp_path)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("gaia.utils.terminal.is_windows_console", lambda stream: True)
     monkeypatch.setattr("builtins.input", lambda *a, **k: answer)
     calls = []
     _patch_import_agent_bundle(monkeypatch, calls)
