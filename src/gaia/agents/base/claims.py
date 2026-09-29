@@ -77,10 +77,24 @@ def _first_claim(
         match = claims.search(sentence)
         if not match or _NEGATION.search(sentence):
             continue
-        if reports_only and _UNASSERTED.search(sentence):
+        if reports_only and _UNASSERTED.search(_clause_at(sentence, match.start())):
             continue
         return match.group(0)
     return None
+
+
+#: Clause breaks inside one sentence: "**Ensure the suite is green**: All tests
+#: pass" is a heading of advice followed by a report.
+_CLAUSE_BREAK = re.compile(r"[:;]|\s[—–-]\s")
+
+
+def _clause_at(sentence: str, index: int) -> str:
+    start = 0
+    for brk in _CLAUSE_BREAK.finditer(sentence):
+        if brk.start() >= index:
+            return sentence[start : brk.start()]
+        start = brk.end()
+    return sentence[start:]
 
 
 def claims_success(answer: str) -> bool:
