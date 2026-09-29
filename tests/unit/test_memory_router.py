@@ -838,11 +838,11 @@ class TestRebuildEmbeddingsEndpoint:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 
-    def test_rebuild_uses_stamped_embedder_not_nomic(self, client, test_store):
-        """Re-embed with the stamped embedder, not the nomic default (#1744).
+    def test_rebuild_uses_stamped_embedder_not_default(self, client, test_store):
+        """Re-embed with the stamped embedder, not the GGUF default (#1744).
 
         On the NPU profile the agent stamps the FLM embedder. The dashboard
-        rebuild button must reuse it — embedding with nomic would mix vector
+        rebuild button must reuse it — embedding with the default would mix vector
         spaces in one table and reload a Vulkan embedder that evicts the FLM
         chat model.
         """
@@ -860,7 +860,7 @@ class TestRebuildEmbeddingsEndpoint:
         self, client, test_store
     ):
         """A never-stamped DB (no agent run yet) defaults to the module default
-        embedder — EmbeddingGemma 300M GGUF (replaced nomic)."""
+        embedder — EmbeddingGemma 300M GGUF."""
         from gaia.agents.base.memory import EMBEDDING_MODEL
 
         mock_provider = MagicMock()
@@ -872,6 +872,28 @@ class TestRebuildEmbeddingsEndpoint:
         assert resp.status_code == 200
         ctor.assert_called_once_with(model=EMBEDDING_MODEL)
         assert EMBEDDING_MODEL == "user.embeddinggemma-300m-GGUF"
+
+    def test_rebuild_reembeds_unstamped_legacy_vectors(self, client, test_store):
+        """Vectors in a never-stamped DB predate the marker (nomic era); the
+        rebuild must re-embed them, not backfill around them and mix spaces."""
+        import numpy as np
+
+        from gaia.agents.base.memory import EMBEDDING_MODEL
+
+        kid = _create_knowledge(client, "legacy fact")["knowledge_id"]
+        test_store.store_embedding(kid, np.zeros(768, dtype=np.float32).tobytes())
+        assert test_store.get_embedder_id() is None
+
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ):
+            resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 200
+        assert mock_provider.embed.call_count == 1  # the legacy vector, re-embedded
+        assert test_store.get_embedder_id() == EMBEDDING_MODEL
+        assert test_store.get_embedding_coverage()["without_embedding"] == 0
 
 
 # ===========================================================================

@@ -19,7 +19,7 @@ icon: "wand-magic-sparkles"
 
 **Status:** **All PROPOSED — design, pending maintainer sign-off.** Nothing in this spec is implemented. PR [#606](https://github.com/amd/gaia/issues/606) (memory v2) is **merged** and provides every primitive the pipeline reuses; the `SKILL.md` format ([#691](https://github.com/amd/gaia/issues/691)) is **authored and locked**, so this spec references a settled format rather than inventing one.
 
-**Target agent (v1):** the base `MemoryMixin` (so `ChatAgent` and any memory-bearing agent inherit it). The on-disk default model is `Gemma-4-E4B-it-GGUF`; the embedder is `nomic-embed-text-v2-moe-GGUF` (768-dim), reused unchanged.
+**Target agent (v1):** the base `MemoryMixin` (so `ChatAgent` and any memory-bearing agent inherit it). The on-disk default model is `Gemma-4-E4B-it-GGUF`; the embedder is `user.embeddinggemma-300m-GGUF` (768-dim), reused unchanged.
 </Note>
 
 ---
@@ -98,7 +98,7 @@ new model, no new store engine.
                                  │
                                  ▼
   2. CLUSTER  cluster_by_goal(sequences, embedder)             PROPOSED
-     embed each user_goal with the #606 nomic-768 embedder;
+     embed each user_goal with the 768-dim memory embedder;
      agglomerate at cosine ≥ SIMILARITY_TAU; keep clusters
      of ≥ MIN_OCCURRENCES
                                  │
@@ -341,7 +341,7 @@ each reuse to its verified `file:line` on `main`.
 |---|---|---|
 | 1 | `MemoryStore` over `~/.gaia/memory.db` | [`memory_store.py:297`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py), `:300`, `:308` |
 | 2 | `tool_history` (`session_id, tool_name, args, result_summary, success, error, duration_ms, timestamp`) — the episodic trace `extract_sequences` walks | [`memory_store.py:241`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) |
-| 3 | `nomic-embed-text-v2-moe-GGUF`, `EMBEDDING_DIM = 768` — reused to embed goals; **no new model** | [`memory.py:148`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py), `:151` |
+| 3 | `user.embeddinggemma-300m-GGUF`, `EMBEDDING_DIM = 768` — reused to embed goals; **no new model** | [`memory.py:148`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py), `:151` |
 | 4 | FAISS `IndexFlatIP` over L2-normalized vectors = cosine — the index pattern `procedures.embedding` copies | [`memory.py:687`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py) |
 | 5 | Mem0-style `_EXTRACTION_PROMPT` (ADD/UPDATE/DELETE/NOOP) — the distil-and-reconcile pattern | [`memory.py:186`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py) |
 | 6 | `_CONSOLIDATION_PROMPT` / `_RECONCILIATION_PROMPT` — prior art for an LLM-in-the-loop maintenance prompt | [`memory.py:222`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py), `:235` |
@@ -522,7 +522,7 @@ mirroring the v1→v2 `ADD COLUMN` pattern
 `distill_cluster` / `DistilledProcedure.parse` / `reconcile_and_store`, hooked into the
 maintenance pass as `_synthesize_skills` after `consolidate_old_sessions`
 ([`memory.py:1233`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
-Reuses the nomic-768 embedder ([`memory.py:148`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
+Reuses the 768-dim memory embedder ([`memory.py:148`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
 
 **Success criteria:**
 - After **3** successful similar sequences (≥`MIN_STEPS`, ≥`MIN_SUCCESS_RATE`), a
@@ -746,7 +746,7 @@ The memory layer it builds on is real and merged; the synthesis pipeline is
 |---|---|---|---|
 | Memory store | `MemoryStore`, `~/.gaia/memory.db` | `memory_store.py:297`, `:308` | **Exists** (#606) |
 | Episodic trace | `tool_history` table | `memory_store.py:241` | **Exists** — synthesis input |
-| Embedder | `nomic-embed-text-v2-moe-GGUF`, `EMBEDDING_DIM = 768` | `memory.py:148`, `:151` | **Exists** — reused, no new model |
+| Embedder | `user.embeddinggemma-300m-GGUF`, `EMBEDDING_DIM = 768` | `memory.py:148`, `:151` | **Exists** — reused, no new model |
 | Vector index | FAISS `IndexFlatIP` | `memory.py:687` | **Exists** — pattern for `procedures.embedding` |
 | Maintenance pass | `_run_memory_post_init` → `reconcile_memory` + `consolidate_old_sessions` | `memory.py:1206`, `:1377`, `:1233` | **Exists** — the hook point |
 | Distillation prior art | `_EXTRACTION_PROMPT`, `_CONSOLIDATION_PROMPT` | `memory.py:186`, `:222` | **Exists** — Mem0 pattern |

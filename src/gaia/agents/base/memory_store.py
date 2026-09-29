@@ -1834,9 +1834,10 @@ class MemoryStore:
     def get_embedder_id(self) -> Optional[str]:
         """Return the embedder model id that produced the stored embeddings.
 
-        ``None`` when nothing has been stamped yet (fresh DB) — callers treat
-        that as "no change to detect". Read from the ``meta`` table so every
-        connection (agent + UI router) sees the same value.
+        ``None`` when nothing has been stamped yet: a fresh DB, or one written
+        before the marker existed (see ``reconcile_embedder``). Read from the
+        ``meta`` table so every connection (agent + UI router) sees the same
+        value.
         """
         with self._locked():
             row = self._conn.execute(
@@ -1857,6 +1858,30 @@ class MemoryStore:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def reconcile_embedder(self, model_id: str) -> int:
+        """Stamp ``model_id`` as the embedder, clearing vectors from any other.
+
+        Vectors from a different model live in a different space (even at the
+        same dim), so reusing them silently corrupts similarity search. A store
+        with vectors but no stamp predates the marker — those came from the
+        retired nomic default — so they are cleared too. Returns the number of
+        embeddings cleared; backfill re-embeds them with ``model_id``.
+        """
+        prior = self.get_embedder_id()
+        cleared = 0
+        if prior != model_id:
+            cleared = self.clear_all_embeddings()
+            if cleared:
+                logger.warning(
+                    "[MemoryStore] embedder changed (%s -> %s); cleared %d stored "
+                    "embedding(s) for re-embedding",
+                    prior or "unrecorded, pre-2026-07 memory",
+                    model_id,
+                    cleared,
+                )
+        self.set_embedder_id(model_id)
+        return cleared
 
     def get_items_with_embeddings(
         self,

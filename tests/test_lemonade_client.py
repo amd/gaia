@@ -1102,7 +1102,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         )
         self.assertTrue(_model_ids_match("user.Foo-GGUF", "foo-gguf"))
         self.assertFalse(
-            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "nomic-embed-text-v2-moe-GGUF")
+            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "embed-gemma-300m-FLM")
         )
 
         # Server lists the stripped id; requesting the user.-prefixed name must

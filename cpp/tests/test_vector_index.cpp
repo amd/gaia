@@ -381,7 +381,7 @@ TEST_F(VectorIndexTest, ClearEmptiesVectorsButKeepsConfiguration) {
     opts.metric = Metric::InnerProduct;
     opts.normalizeOnAdd = true;
     opts.dimension = 2;
-    opts.embeddingModel = "nomic-embed-text-v1-GGUF";
+    opts.embeddingModel = "embeddinggemma-300m-GGUF";
     VectorIndex index(opts);
     index.add("a", {1.0f, 0.0f});
 
@@ -391,7 +391,7 @@ TEST_F(VectorIndexTest, ClearEmptiesVectorsButKeepsConfiguration) {
     EXPECT_EQ(index.dimension(), 2u);
     EXPECT_EQ(index.metric(), Metric::InnerProduct);
     EXPECT_TRUE(index.normalizeOnAdd());
-    EXPECT_EQ(index.embeddingModel(), "nomic-embed-text-v1-GGUF");
+    EXPECT_EQ(index.embeddingModel(), "embeddinggemma-300m-GGUF");
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +401,7 @@ TEST_F(VectorIndexTest, ClearEmptiesVectorsButKeepsConfiguration) {
 TEST_F(VectorIndexTest, SaveLoadRoundTripPreservesResultsExactly) {
     VectorIndexOptions opts;
     opts.metric = Metric::L2;
-    opts.embeddingModel = "nomic-embed-text-v1-GGUF";
+    opts.embeddingModel = "embeddinggemma-300m-GGUF";
     VectorIndex index(opts);
     for (size_t i = 0; i < kParityVectors.size(); ++i) {
         index.add("v" + std::to_string(i), kParityVectors[i]);
@@ -414,7 +414,7 @@ TEST_F(VectorIndexTest, SaveLoadRoundTripPreservesResultsExactly) {
     EXPECT_FALSE(fs::exists(file.string() + ".tmp"));
 
     VectorIndexOptions loadOpts;
-    loadOpts.embeddingModel = "nomic-embed-text-v1-GGUF";
+    loadOpts.embeddingModel = "embeddinggemma-300m-GGUF";
     VectorIndex loaded(loadOpts);
     loaded.load(file.string());
 
@@ -566,7 +566,7 @@ TEST_F(VectorIndexTest, LoadRejectsUnknownFormatVersion) {
 
 TEST_F(VectorIndexTest, LoadRejectsEmbeddingModelMismatchAndNamesBoth) {
     VectorIndexOptions opts;
-    opts.embeddingModel = "nomic-embed-text-v1-GGUF";
+    opts.embeddingModel = "embeddinggemma-300m-GGUF";
     VectorIndex src(opts);
     src.add("a", {1.0f, 2.0f});
     const auto file = path("model.vec");
@@ -581,7 +581,7 @@ TEST_F(VectorIndexTest, LoadRejectsEmbeddingModelMismatchAndNamesBoth) {
         FAIL() << "expected an embedding-model mismatch throw";
     } catch (const std::runtime_error& e) {
         const std::string msg = e.what();
-        EXPECT_NE(msg.find("nomic-embed-text-v1-GGUF"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("embeddinggemma-300m-GGUF"), std::string::npos) << msg;
         EXPECT_NE(msg.find("all-MiniLM-L6-v2"), std::string::npos) << msg;
     }
     // A refused load leaves the existing index intact.
@@ -597,7 +597,7 @@ TEST_F(VectorIndexTest, LoadRejectsAnUntaggedFileWhenAModelIsConfigured) {
     src.save(file.string());
 
     VectorIndexOptions opts;
-    opts.embeddingModel = "nomic-embed-text-v1-GGUF";
+    opts.embeddingModel = "embeddinggemma-300m-GGUF";
     VectorIndex index(opts);
     try {
         index.load(file.string());
@@ -605,13 +605,13 @@ TEST_F(VectorIndexTest, LoadRejectsAnUntaggedFileWhenAModelIsConfigured) {
     } catch (const std::runtime_error& e) {
         const std::string msg = e.what();
         EXPECT_NE(msg.find("no embedding-model tag"), std::string::npos) << msg;
-        EXPECT_NE(msg.find("nomic-embed-text-v1-GGUF"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("embeddinggemma-300m-GGUF"), std::string::npos) << msg;
     }
 }
 
 TEST_F(VectorIndexTest, LoadAdoptsTheFileModelWhenNoneIsConfigured) {
     VectorIndexOptions opts;
-    opts.embeddingModel = "nomic-embed-text-v1-GGUF";
+    opts.embeddingModel = "embeddinggemma-300m-GGUF";
     VectorIndex src(opts);
     src.add("a", {1.0f, 2.0f});
     const auto file = path("adopt.vec");
@@ -619,7 +619,7 @@ TEST_F(VectorIndexTest, LoadAdoptsTheFileModelWhenNoneIsConfigured) {
 
     VectorIndex index;
     index.load(file.string());
-    EXPECT_EQ(index.embeddingModel(), "nomic-embed-text-v1-GGUF");
+    EXPECT_EQ(index.embeddingModel(), "embeddinggemma-300m-GGUF");
 }
 
 TEST_F(VectorIndexTest, LoadRejectsDimensionMismatch) {

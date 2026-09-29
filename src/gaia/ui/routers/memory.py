@@ -721,9 +721,10 @@ def rebuild_embeddings() -> Dict:
         store = _get_store()
         # Re-embed with the embedder that produced the stored vectors, not a
         # hardcoded default. On the NPU profile that is the FLM-native embedder;
-        # using nomic here would mix vector spaces in one table and reload a
+        # the GGUF default would mix vector spaces in one table and reload a
         # Vulkan GGUF embedder that evicts the FLM chat model (#1744).
         embedder_model = store.get_embedder_id() or EMBEDDING_MODEL
+        store.reconcile_embedder(embedder_model)
         provider = LemonadeProvider(model=embedder_model)
 
         def _embed_fn(text: str) -> bytes:
@@ -803,7 +804,7 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
 
         # Dimension is derived from the stored vectors, not a hardcoded constant
         # — the active embedder (e.g. the NPU FLM embedder) may differ from the
-        # nomic default (#1744). The first valid vector sets the expected dim;
+        # GGUF default (#1744). The first valid vector sets the expected dim;
         # any vector of a different dim (a stale pre-switch embedding) is skipped.
         ids: List[str] = []
         vectors: List[np.ndarray] = []

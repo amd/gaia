@@ -313,7 +313,7 @@ def _embed_text(self, text: str) -> np.ndarray
 Embeds a single text string into a 768-dimensional vector via `user.embeddinggemma-300m-GGUF`. Returns a normalized `numpy` array suitable for cosine similarity via FAISS `IndexFlatIP`.
 
 <Note>
-The embedder switched from `nomic-embed-text-v2-moe-GGUF` to `user.embeddinggemma-300m-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so the schema is unchanged — but old nomic vectors are not comparable to EmbeddingGemma vectors, so the changed model name invalidates the stored embeddings and existing memory stores are re-embedded automatically on the next run.
+The store records which embedder produced its vectors. When that differs from the active embedder — or is missing, as in memory written before v0.22.0 with the retired `nomic-embed-text-v2-moe-GGUF` — the stored vectors are cleared and re-embedded on the next agent start (or dashboard rebuild), with a warning in the log. Vectors from two models are never mixed in one index.
 </Note>
 
 ```python

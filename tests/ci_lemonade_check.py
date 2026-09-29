@@ -9,7 +9,6 @@ exercised. This pulls + loads a model via the client and optionally verifies an
 embeddings or chat round-trip, then exits non-zero on failure.
 
 Usage:
-    python tests/ci_lemonade_check.py --model nomic-embed-text-v2-moe-GGUF --embeddings
     python tests/ci_lemonade_check.py --model Gemma-4-E4B-it-GGUF --chat --ctx-size 4096
     # Custom (``user.``-namespaced) model — register on first pull:
     python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF \

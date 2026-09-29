@@ -554,7 +554,7 @@ def test_rag_embedder_warmup_holds_one_lease_across_unload_and_load(monkeypatch)
     sdk.llm_client = _Client()
 
     class _Config:
-        embedding_model = "nomic-embed-text-v1-GGUF"  # not a "user." model
+        embedding_model = "embed-gemma-300m-FLM"  # not a "user." model
 
     sdk.config = _Config()
 
