@@ -120,12 +120,38 @@ class TestInitialization:
         assert result["journal_mode"] == "wal"
 
     def test_schema_version_is_set(self, tmp_index):
-        """Verify schema_version table has version 1."""
+        """Verify schema_version table is at the current version."""
         row = tmp_index.query(
             "SELECT MAX(version) AS ver FROM schema_version", one=True
         )
         assert row is not None
-        assert row["ver"] == 1
+        assert row["ver"] == FileSystemIndexService.SCHEMA_VERSION == 2
+
+    def test_migrates_v1_index_to_mtime_ns(self, tmp_path, populated_dir):
+        """A v1 index gains mtime_ns, re-stamps each entry once, then is stable."""
+        db_path = str(tmp_path / "v1_index.db")
+        service = FileSystemIndexService(db_path=db_path)
+        service.scan_directory(str(populated_dir))
+        indexed = service.query("SELECT COUNT(*) AS n FROM files", one=True)["n"]
+        # Rewind to a v1 database: no mtime_ns column, version 1 only.
+        service.execute("ALTER TABLE files DROP COLUMN mtime_ns")
+        service.delete("schema_version", "version > 1", {})
+        service.close_db()
+
+        service = FileSystemIndexService(db_path=db_path)
+        try:
+            assert service._get_schema_version() == 2
+            columns = {r["name"] for r in service.query("PRAGMA table_info(files)")}
+            assert "mtime_ns" in columns
+
+            first = service.scan_directory(str(populated_dir))
+            assert first["files_added"] == 0
+            assert first["files_updated"] == indexed
+
+            second = service.scan_directory(str(populated_dir))
+            assert second["files_updated"] == 0
+        finally:
+            service.close_db()
 
     def test_integrity_check_passes(self, tmp_index):
         """Verify _check_integrity returns True on a fresh database."""
@@ -189,27 +215,13 @@ class TestScanDirectory:
         assert row is None, "Files in excluded directories should not be indexed"
 
     def test_scan_incremental_skips_unchanged(self, tmp_index, populated_dir):
-        """Scan twice; second scan should have files_added=0."""
-        import time
-
-        # On some filesystems (NTFS), mtime can have sub-second precision
-        # that causes tiny differences on re-stat.  Sleep briefly to ensure
-        # timestamps stabilize before the second scan.
+        """Scan twice; the second scan must neither add nor update anything."""
         tmp_index.scan_directory(str(populated_dir))
-        time.sleep(0.1)
 
         stats2 = tmp_index.scan_directory(str(populated_dir))
 
-        assert (
-            stats2["files_added"] == 0
-        ), "Incremental scan should not re-add unchanged files"
-        # On Windows NTFS, float→ISO conversion of mtime can differ between
-        # calls due to sub-second precision, causing spurious updates.
-        # We allow a small number of "updated" entries here.
-        assert stats2["files_updated"] <= 2, (
-            f"Incremental scan reported {stats2['files_updated']} updates "
-            "for unchanged files (expected 0, tolerating <=2 for timestamp precision)"
-        )
+        assert stats2["files_added"] == 0
+        assert stats2["files_updated"] == 0
 
     def test_scan_incremental_detects_changes(self, tmp_index, populated_dir):
         """Scan, modify a file's mtime/size, scan again, verify update detected."""
