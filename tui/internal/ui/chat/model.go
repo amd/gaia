@@ -2703,6 +2703,12 @@ func (m *ChatModel) liveRegionView() string {
 	return out
 }
 
+// awaitingUser reports whether the turn is blocked on a confirmation or a
+// question the user has not answered yet.
+func (m ChatModel) awaitingUser() bool {
+	return (m.confirmation != nil && m.confirmation.Pending()) || m.question != nil
+}
+
 // renderLiveRegion draws the rolling activity log for the running turn: one line
 // per meaningful action, newest last, each closed action followed by a single
 // indented outcome line.
@@ -2746,8 +2752,10 @@ func (m ChatModel) renderLiveRegion() string {
 	// tool result under it is precisely the wait that needs saying is normal.
 	// Measured against the WHOLE turn, not the trimmed window, or the hint
 	// reappears the moment the last finished action scrolls out of view.
+	// Never while the turn is parked on the user: the wait is theirs, and
+	// "still working" would tell them the opposite.
 	hint := ""
-	if !anyCompleted(m.activity) && elapsed >= stillWorkingAfter {
+	if !m.awaitingUser() && !anyCompleted(m.activity) && elapsed >= stillWorkingAfter {
 		// Measured like every other row in this region. Its 50 columns fit an
 		// 80-column terminal, but on a narrower one it wrapped to two rows and
 		// broke the single-row assumption the budget below is making.
