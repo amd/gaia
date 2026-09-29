@@ -155,7 +155,7 @@ If any step can't finish — no code appears, the code expires, the browser sign
 
 Breadth is not free. The tool descriptions and capability instructions are re-read by the model on **every** call of a turn, and a turn is two to five calls — so a session spent entirely on conversation pays for documents, files, and the web without ever using them.
 
-Fast mode drops the agent to a plain conversational surface for the whole session: **3,170 tokens of fixed prompt instead of 17,620** — under a fifth. The personality and honesty rules stay; nothing else does. It keeps the three CLI-setup tools above, which are conversational by design, so "set up the GitHub CLI" still works in a fast session.
+Fast mode drops the agent to a plain conversational surface for the whole session: **3,110 tokens of fixed prompt instead of 17,942** — under a fifth. The personality and honesty rules stay; nothing else does. It keeps the three CLI-setup tools above, which are conversational by design, so "set up the GitHub CLI" still works in a fast session.
 
 ```bash
 GAIA_FAST=1               # environment

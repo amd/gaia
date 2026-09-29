@@ -273,7 +273,8 @@ def test_the_readiness_probe_takes_no_request_parameters():
 #: Raised again from 3100 when the persistent shell session's
 #: ``get_shell_state`` / ``reset_shell_session`` (#3380) joined the same
 #: ``register_shell_tools`` call the bare profile already makes unconditionally
-#: — measured at 3,170. Still under a fifth of the default profile's cost; see
+#: — measured at 3,110 with both conditional tools present. Still under a fifth
+#: of the default profile's 17,942; see
 #: ``test_fast_mode_costs_a_fraction_of_the_default``.
 FAST_PREFILL_CEILING = 3300
 

@@ -2680,7 +2680,7 @@
     "description": "A chat session.",
     "properties": {
       "agent_type": {
-        "default": "chat",
+        "default": "gaia",
         "title": "Agent Type",
         "type": "string"
       },

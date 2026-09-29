@@ -71,7 +71,7 @@ the terminal UI meant building it from source.
   88 → 96.
 - **Fast mode, for a session that's only conversation.** `GAIA_FAST=1` drops
   the flagship to a plain conversational surface for the whole session —
-  3,170 tokens of fixed prompt instead of 17,620 — so saying "hi" no longer
+  3,110 tokens of fixed prompt instead of 17,942 — so saying "hi" no longer
   costs as much as a repo search. Session-scoped and one-way: a fast session
   has no documents, files, web or skills and cannot pick them up mid-way.
 
