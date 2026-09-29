@@ -307,19 +307,19 @@ composer, if the turn has already ended) rather than disappearing.
 Mid-turn messages need agent contract 2.15 or newer. On an older one `Enter`
 queues as before, and the TUI says so with the command to update.
 
-By default GAIA owns the mouse, so the wheel scrolls the conversation — a
-full-screen terminal app has no scrollback of its own behind it — and a printed
-link is clickable. Hold `Shift` (`Option` in iTerm2) to drag-select without
-leaving that mode, or press `Ctrl+T` to hand the mouse back to your terminal
-outright.
+By default the mouse belongs to your terminal, so you drag to select text and
+copy and paste with your terminal's own keys (`Ctrl+Shift+C` / `Ctrl+Shift+V`,
+`Cmd+C` / `Cmd+V`, or right-click). The wheel still scrolls the conversation:
+GAIA turns on your terminal's alternate scroll mode, which sends each wheel tick
+as `↑` / `↓`. Press `Ctrl+T` to hand the mouse to GAIA instead, for clickable
+links and double-click copy.
 
 | Mouse | What it does |
 |---|---|
 | Wheel | Scrolls the conversation |
-| Click, on a printed `http(s)` link | Opens it in your browser. Only `http(s)` is clickable, so agent output cannot launch an arbitrary handler. Printed links are also marked up as real terminal hyperlinks, so a terminal that supports them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) underlines them on hover and offers its own right-click menu — and those keep working in select mode, where no click reaches GAIA |
-| Double-click, on a message | Copies that message |
-| `Ctrl+T` | Select mode — hands the mouse to your terminal for plain drag-select and its own copy/paste (right-click, `Ctrl+Shift+C`, `Cmd+C`). The wheel stops scrolling and links stop being clickable while it is on; `Ctrl+T` or `Esc` gives both back, and a banner says so meanwhile |
-| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. A `Ctrl+T` you turned on yourself survives the palette or question opening and closing |
+| Drag | Selects text, for your terminal's own copy |
+| `Ctrl+T` | Hands the mouse to GAIA: a printed `http(s)` link opens in your browser on click, and a double-click copies a whole message. Drag-select then needs `Shift` held (`Option` in iTerm2). `Ctrl+T` again gives the mouse back. Printed links are also real terminal hyperlinks, so terminals that support them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) open them with their own gesture either way |
+| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. The palette takes the mouse only while it is open |
 
 | Command | What it does |
 |---|---|

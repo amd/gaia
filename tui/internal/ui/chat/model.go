@@ -301,14 +301,13 @@ type ChatModel struct {
 
 	// mouseCaptured is true while the APP holds the mouse, for either of the
 	// two independent reasons documented on overlayOpen (mousecapture.go):
-	// the transcript wants the wheel and clicked links, or an overlay is open
-	// and needs clicks — see selectmode.go.
+	// the user asked for it (appMouse), or an overlay is open and needs
+	// clicks — see selectmode.go.
 	mouseCaptured bool
-	// mouseSelectMode is true only while the USER has handed the mouse back to
-	// the terminal (Ctrl+T) for native drag-select — independent of
-	// mouseCaptured, which an overlay can still set. Zero value false is the
-	// default, so the wheel scrolls and links are clickable out of the box.
-	mouseSelectMode bool
+	// appMouse is true only while the USER has given the mouse to the app
+	// (Ctrl+T) for clickable links and double-click copy. Zero value false is
+	// the default, so drag-select works out of the box.
+	appMouse bool
 	// mouseCaptureAllMotion records which mouse-tracking mode is currently
 	// active (All-Motion for an open overlay's hover, Cell-Motion for plain
 	// wheel scrolling) so applyMouseCapture can tell "already captured, but
@@ -492,13 +491,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		viewport:     vp,
 		connected:    true,
 		followTail:   true,
-		// Optimistically reconciled: Init issues the matching escape sequence
-		// once, so applyMouseCapture has nothing left to do on the first
-		// Update. Recording it here instead of letting that Update discover it
-		// is what keeps every turn's command stream free of a one-off mouse
-		// command nobody is expecting.
-		mouseCaptured: true,
-		lastClickRow:  -1,
+		lastClickRow: -1,
 	}
 	// Reads the transport, never a saved preference: full access and Claude mode
 	// are off on a fresh launch unless THIS launch asked on the command line.
@@ -591,10 +584,6 @@ func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		textarea.Blink,
-		// The transcript owns the mouse from the first frame: the wheel is the
-		// only way to scroll an alt-screen app, which has no terminal
-		// scrollback behind it. Ctrl+T hands it back — see selectmode.go.
-		tea.EnableMouseCellMotion,
 		// Warms up capability gating (availableCommandSet) for a daemon-relay
 		// session, whose Supports answer is otherwise "unknown" until a query
 		// or /memory has already run negotiate once — see
@@ -1298,16 +1287,6 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEsc:
-		// Leave SELECT MODE first: while it is on the wheel does not scroll,
-		// so "never mind" most likely means "give me my scrolling back".
-		// Leaving a turn running is fine — Esc pressed again cancels it.
-		// Keyed on mouseSelectMode, not mouseCaptured: an overlay can also
-		// hold the mouse (for its own clicks), and Esc there means cancel the
-		// question/turn (below) or close the palette (handled earlier, in the
-		// m.palette.open branch).
-		if m.mouseSelectMode {
-			return m.toggleSelectMode()
-		}
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
 			return m.requestCancel()
 		}
@@ -1384,7 +1363,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.submit(query)
 
 	case tea.KeyCtrlT:
-		return m.toggleSelectMode()
+		return m.toggleAppMouse()
 
 	case tea.KeyCtrlO:
 		return m.toggleWorkDetail()
@@ -2137,11 +2116,6 @@ func (m *ChatModel) syncComposerHeight() {
 }
 
 func (m *ChatModel) resize() {
-	headerH := 1
-	statusH := 1
-	inputH := m.composerRows() + 2
-	padding := 2
-
 	vpWidth := m.width
 	if vpWidth < 10 {
 		vpWidth = 10
@@ -2163,7 +2137,7 @@ func (m *ChatModel) resize() {
 	if m.confirmation != nil {
 		m.confirmation.SetWidth(m.cardWidthFor(vpWidth))
 	}
-	m.syncViewportHeight(headerH + statusH + inputH + padding)
+	m.syncViewportHeight(m.chatChromeRows())
 
 	// Markdown wraps to the same measure the answer is laid out at, or glamour
 	// hard-wraps at a different column than the panel and the block develops a
@@ -2215,8 +2189,17 @@ func (m *ChatModel) markDirty() {
 // pinned confirmation: header, status bar, the composer with its border, and
 // the two dividers.
 func (m ChatModel) chatChromeRows() int {
-	const headerH, statusH, padding = 1, 1, 2
-	return headerH + statusH + m.composerRows() + 2 + padding
+	// Exactly the rows View draws around the transcript: header, the two
+	// dividers, the composer and the status bar, plus the full access banner
+	// when it is up. A frame shorter than the window leaves the terminal's own
+	// bottom rows unpainted — after a resize reflow, that is where a stale
+	// copy of the old status bar survived.
+	const headerH, dividersH, statusH = 1, 2, 1
+	rows := headerH + dividersH + statusH + m.composerRows()
+	if banner := m.renderFullAccessBanner(); banner != "" {
+		rows += lipgloss.Height(banner)
+	}
+	return rows
 }
 
 // syncViewportHeight splits the rows left after *chrome* between the transcript
@@ -2554,6 +2537,10 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 	case RoleAssistant:
 		content := msg.Content
 		if msg.Rendered != "" {
+			if wrap := m.answerWidth() - 2; msg.renderedWrap != wrap {
+				msg.Rendered = components.RenderMarkdown(msg.Content)
+				msg.renderedWrap = wrap
+			}
 			content = msg.Rendered
 		}
 		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
@@ -2865,6 +2852,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
 				last.Approval == item.Approval {
 				last.Repeat++
+				last.Content = mergeTargets(last.Content, item.Content)
 				last.Done = item.Done
 				last.Success = item.Success
 				// The newest call's outcome is the one worth showing; an older
@@ -2881,6 +2869,28 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 		out = append(out, item)
 	}
 	return out
+}
+
+// mergeTargets names every distinct thing a folded run of calls touched.
+// "Editing file: dates.py x2" for an edit to dates.py and one to
+// test_dates.py claims the wrong file was edited twice; the row has to say
+// "Editing file: dates.py, test_dates.py x2". Narration with no shared
+// "label: target" shape keeps the newest call's words.
+func mergeTargets(folded, next string) string {
+	if folded == next {
+		return folded
+	}
+	label, targets, ok := strings.Cut(folded, ": ")
+	nextLabel, target, nextOK := strings.Cut(next, ": ")
+	if !ok || !nextOK || label != nextLabel {
+		return next
+	}
+	for _, t := range strings.Split(targets, ", ") {
+		if t == target {
+			return folded
+		}
+	}
+	return folded + ", " + target
 }
 
 // activityKey is what "the same activity twice" means: for a tool, the tool
@@ -3227,9 +3237,6 @@ func (m ChatModel) contentHeaderRows() int {
 	if m.renderFullAccessBanner() != "" {
 		n++
 	}
-	if m.renderSelectBanner() != "" {
-		n++
-	}
 	n++ // divider immediately above the viewport
 	return n
 }
@@ -3272,28 +3279,25 @@ func (m ChatModel) View() string {
 
 	// Built as ranked items and thinned by dropping whole ones, so a narrow
 	// terminal loses the wheel hint and keeps the way out — see hints.go.
-	hint := fitHints(m.statusHints(), m.hintBudget())
-
+	//
 	// Steps is deliberately not passed: the bar renders it only when the hint is
 	// empty, which it never is here, and the step count already rides the hint
 	// under --dev. Passing it kept a second renderer for one number alive, one
 	// that would print it in user mode the day the hint did come back empty.
-	statusBar := components.RenderStatusBar(components.StatusBarState{
+	barState := components.StatusBarState{
 		AgentName:        m.agentIdentity(),
 		Connected:        m.connected,
 		Streaming:        m.streaming,
 		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
-		Hint:             hint,
-	}, m.width)
+	}
+	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
+	statusBar := components.RenderStatusBar(barState, m.width)
 
 	// The full access banner sits OUTSIDE the viewport, directly under the header,
 	// so it is in every frame and cannot be scrolled away. When full access is off
 	// it renders to "" and JoinVertical drops it, costing no row.
 	rows := []string{header}
 	if banner := m.renderFullAccessBanner(); banner != "" {
-		rows = append(rows, banner)
-	}
-	if banner := m.renderSelectBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
 	rows = append(rows, divider, vpView)

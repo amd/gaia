@@ -52,14 +52,15 @@ type ChatState struct {
 	// so it is the field that says whether a scroll was registered at all.
 	FollowTail bool `json:"follow_tail"`
 	// MouseOwner is "app" while the TUI is tracking the mouse (the wheel
-	// scrolls, links are clickable) or "terminal" while it is not — either
-	// because the user asked for SELECT MODE or because nothing wants it yet.
+	// scrolls, links are clickable) or "terminal" while it is not — the
+	// default, so drag-select reaches the terminal.
 	MouseOwner string `json:"mouse_owner"`
 	// MouseMotion is "cell" or "all" — which tracking mode is armed. An
 	// overlay needs "all" for hover; the plain transcript does not.
 	MouseMotion string `json:"mouse_motion,omitempty"`
-	// SelectMode is the user's own Ctrl+T choice, independent of who happens
-	// to hold the mouse this frame.
+	// SelectMode is true unless the user gave the mouse to the app with
+	// Ctrl+T — their own choice, independent of whether an overlay holds the
+	// mouse this frame.
 	SelectMode bool `json:"select_mode"`
 	// ViewportRows is the height of the transcript window in rows, and
 	// HeaderRows how many screen rows sit above it — the offset a client adds

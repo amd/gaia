@@ -436,3 +436,120 @@ func TestAnAnswerBeforeATrailingToolCallSurvivesAnEmptyFinal(t *testing.T) {
 		t.Errorf("the answer was lost to the trailing tool call: %+v", last)
 	}
 }
+
+// Found reading the live frames: an edit to dates.py and one to test_dates.py
+// folded into "Editing file: toybox/dates.py x2" — a row naming the wrong file.
+func TestAFoldedRowNamesEveryTargetItTouched(t *testing.T) {
+	m := feed(t, sizedChat(t, 120, 40),
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "edit_file", Narration: "Editing file: toybox/dates.py"},
+		toolDone("edit_file", "1 edit"),
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "edit_file", Narration: "Editing file: tests/test_dates.py"},
+		toolDone("edit_file", "1 edit"),
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "edit_file", Narration: "Editing file: toybox/dates.py"},
+		toolDone("edit_file", "1 edit"),
+	)
+	want := "Editing file: toybox/dates.py, tests/test_dates.py x3"
+	if frame := frameOf(m); !strings.Contains(frame, want) {
+		t.Errorf("want %q on screen:\n%s", want, frame)
+	}
+}
+
+// Esc mid-turn clears the live log; what already ran must stay on record.
+func TestCancellingKeepsTheStepsThatRan(t *testing.T) {
+	m := feed(t, sizedChat(t, 120, 40),
+		toolCall("read_file", `{"file_path":"toybox/dates.py"}`),
+		toolDone("read_file", "3 symbols"),
+	)
+	m.cancelFn = func() {}
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+	if len(m.activity) != 0 {
+		t.Errorf("the live log must start over on cancel: %+v", m.activity)
+	}
+	if frame := frameOf(m); !strings.Contains(frame, "Reading toybox/dates.py") {
+		t.Errorf("the steps that ran before the cancel vanished:\n%s", frame)
+	}
+}
+
+// The bar thinned its hints against a guessed width — the bare agent name plus
+// " connected" — while it drew "agent gaia streaming", so from 38 to 150
+// columns the last hint came out cut mid-word ("Ctrl+C q…"). Swept across every
+// width, busy and idle: every hint whole, no row wider than the terminal, and
+// never taller than the window.
+func TestTheFrameFitsEveryWidth(t *testing.T) {
+	for _, streaming := range []bool{true, false} {
+		for w := 38; w <= 200; w++ {
+			m := sizedChat(t, w, 30)
+			m.streaming = streaming
+			m.updateViewport()
+			rows := strings.Split(m.View(), "\n")
+			if len(rows) > 30 {
+				t.Errorf("w=%d streaming=%v: %d rows on a 30-row terminal", w, streaming, len(rows))
+			}
+			for i, r := range rows {
+				if got := ansi.StringWidth(ansi.Strip(r)); got > w {
+					t.Errorf("w=%d streaming=%v: row %d is %d columns", w, streaming, i, got)
+				}
+			}
+			if bar := strings.TrimSpace(ansi.Strip(rows[len(rows)-1])); strings.HasSuffix(bar, "…") {
+				t.Errorf("w=%d streaming=%v: a hint was cut mid-word: %q", w, streaming, bar)
+			}
+		}
+	}
+}
+
+// An answer's markdown was laid out once, at the width it arrived at. Narrow the
+// window afterwards and its rows stayed that wide — the viewport clipped the
+// right-hand side off tables, code and prose. Shrink and grow again: every row
+// of the transcript fits the pane it is drawn in.
+func TestAnAnswerReflowsWhenTheWindowNarrows(t *testing.T) {
+	answer := "Fixed.\n\n| file | change | notes |\n|---|---|---|\n" +
+		"| toybox/dates.py | endswith | a long note that keeps going past any sensible column |\n\n" +
+		"```python\nif v.endswith((\"Z\", \"z\")):  # a trailing comment that runs well past eighty columns\n```\n\n" +
+		strings.Repeat("Prose that wraps. ", 20)
+	m := feed(t, sizedChat(t, 200, 40), event.CanonicalFinalEvent{Type: "final", Answer: answer})
+	for _, w := range []int{100, 60, 160} {
+		m.width = w
+		m.resize()
+		content := m.renderMessage(&m.messages[len(m.messages)-1], nil)
+		for i, row := range strings.Split(content, "\n") {
+			if got := ansi.StringWidth(row); got > m.viewport.Width {
+				t.Fatalf("at %d columns, row %d is %d wide — laid out for the old width: %q",
+					w, i, got, ansi.Strip(row))
+			}
+		}
+	}
+}
+
+// The chrome budget reserved two rows View never drew, so every frame stopped
+// two rows short of the window. Those rows were never repainted — after a
+// resize the terminal reflowed a stale status bar into them and it stayed. The
+// frame fills the window exactly, full access banner and confirmation included.
+func TestTheFrameFillsTheWindowExactly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*ChatModel)
+	}{
+		{"idle", func(*ChatModel) {}},
+		{"streaming", func(m *ChatModel) { m.streaming = true }},
+		{"full access", func(m *ChatModel) { m.fullAccess = true }},
+	} {
+		for _, h := range []int{12, 24, 30, 50} {
+			m := sizedChat(t, 100, h)
+			m.streaming = false
+			tc.set(&m)
+			m.resize()
+			if got := len(strings.Split(m.View(), "\n")); got != h {
+				t.Errorf("%s at %d rows: the frame is %d rows", tc.name, h, got)
+			}
+		}
+	}
+	m, _ := liveModel(t)
+	m.width, m.height = 100, 30
+	m.resize()
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+	if got := len(strings.Split(m.View(), "\n")); got != 30 {
+		t.Errorf("with a confirmation up the frame is %d rows of 30", got)
+	}
+}

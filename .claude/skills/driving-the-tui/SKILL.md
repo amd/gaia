@@ -212,8 +212,11 @@ terminal sends and what the app has to recognise.
 program's message queue, so they arrive even when the app has *released* the
 mouse and a real user's click would reach nothing. The endpoint refuses with
 `mouse_not_captured` while `state.chat.mouse_owner` is `terminal`, precisely so
-this cannot report a pass for a gesture nobody can make. If you need to prove
-what the terminal is doing, read the escape sequences off the pty (below).
+this cannot report a pass for a gesture nobody can make. The terminal owns the
+mouse by default (so drag-select works), which means clicks and wheel ticks
+need `keys ctrl+t` first; scroll with `up`/`down` keys otherwise — that is what
+the wheel sends under alternate scroll mode. If you need to prove what the
+terminal is doing, read the escape sequences off the pty (below).
 
 ## Diagnostics: `state.chat`
 
@@ -222,7 +225,7 @@ defect from a mis-aimed test:
 
 ```json
 {"scroll_y": 8, "content_rows": 56, "at_bottom": false, "follow_tail": false,
- "mouse_owner": "app", "mouse_motion": "cell", "select_mode": false,
+ "mouse_owner": "terminal", "select_mode": true,
  "viewport_rows": 33, "header_rows": 2, "help_open": false, "messages": 6}
 ```
 
@@ -254,6 +257,7 @@ the harness. Then grep the captured stream:
 | Sequence | Means |
 |---|---|
 | `\e[?1049h` | Alt screen entered |
+| `\e[?1007h` | Alternate scroll mode — the wheel arrives as ↑/↓ keys |
 | `\e[?1002h` / `\e[?1002l` | App took / released the mouse (cell-motion) |
 | `\e[?1003h` | All-motion — an overlay wants hover |
 | `\e[?1006h` | SGR extended coordinates |

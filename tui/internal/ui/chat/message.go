@@ -69,6 +69,11 @@ type Message struct {
 	// Keyed by width; a resize invalidates it.
 	cardCache      string
 	cardCacheWidth int
+
+	// renderedWrap is the markdown measure Rendered was laid out at. An answer
+	// rendered before the window narrowed keeps rows wider than the pane, and
+	// the viewport clips them; renderMessage re-renders when this differs.
+	renderedWrap int
 }
 
 // renderCard draws the card at w, reusing the last render when the width has not
