@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.llm.lemonade_client import REQUEST_BUDGET_ENV
 from gaia.llm.lemonade_embedded import (
     _ASSET_TEMPLATES,
     EMBEDDABLE_SHA256,
@@ -362,7 +363,7 @@ class TestConfig:
         assert config["broadcast"] is False
 
     def test_gaia_owned_keys_are_still_updated(self, manager, monkeypatch):
-        monkeypatch.setenv("GAIA_LEMONADE_REQUEST_BUDGET", "4321")
+        monkeypatch.setenv(REQUEST_BUDGET_ENV, "4321")
         manager.config_dir.mkdir(parents=True, exist_ok=True)
         path = manager.config_dir / "config.json"
         stale = {"broadcast": True, "auto_evict": True, "global_timeout": 600}
@@ -373,6 +374,15 @@ class TestConfig:
         assert config["global_timeout"] == 4321
         assert config["broadcast"] is False
         assert config["auto_evict"] is False
+
+    def test_a_stale_no_fetch_executables_is_stripped(self, manager):
+        manager.config_dir.mkdir(parents=True, exist_ok=True)
+        path = manager.config_dir / "config.json"
+        path.write_text(json.dumps({"no_fetch_executables": True}), encoding="utf-8")
+
+        config = json.loads(manager.write_config().read_text(encoding="utf-8"))
+
+        assert "no_fetch_executables" not in config
 
     @pytest.mark.parametrize("content", ["{ not json", "[1, 2]"])
     def test_unusable_existing_config_is_replaced_loudly(
