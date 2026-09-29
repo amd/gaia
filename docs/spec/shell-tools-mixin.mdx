@@ -446,6 +446,12 @@ This permits arbitrary code execution, and is reachable on the stdio transport
 only. See [Security Model](/plans/security-model) §4.5 for the full blast radius
 and why the HTTP transport is excluded.
 
+A heredoc (`python3 - <<'EOF' ... EOF`) is input to the command that opened
+it, not a command of its own: the body is stripped before the binary walk
+picks out which commands run, so a semicolon or apostrophe inside it cannot
+fracture the line or break tokenising. Only the check sees the stripped text
+— the step that actually executes still carries the real body.
+
 ### Git Command Filtering
 
 `git` has no subcommand allowlist of its own here. It has a full three-tier
