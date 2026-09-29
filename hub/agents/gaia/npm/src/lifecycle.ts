@@ -732,7 +732,13 @@ export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
     return sidecar;
   } catch (e) {
     log.error(`startSidecar failed (${(e as Error).message}); shutting down`);
-    await shutdown(sidecar).catch(() => undefined);
+    try {
+      await shutdown(sidecar);
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      log.error(`startSidecar cleanup failed: ${message}`);
+    }
     throw e;
   }
 }
