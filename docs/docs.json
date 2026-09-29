@@ -91,6 +91,7 @@
                       "guides/ai-providers",
                       "guides/chat",
                       "guides/browser-use",
+                      "guides/harness-engineering",
                       "guides/talk",
                       "guides/transcription"
                     ]
@@ -436,6 +437,7 @@
               "plans/skill-format",
               "plans/skill-synthesis",
               "plans/adaptive-skills",
+              "spec/harness-engineering-mode",
               "plans/adaptive-memory",
               "plans/oem-bundling"
             ]

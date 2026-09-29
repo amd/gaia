@@ -344,6 +344,7 @@ jobs:
             tests/integration/test_scheduler_e2e.py \
             tests/integration/test_tui_control_e2e.py \
             tests/mcp/test_agent_mcp_server_stdio.py \
+            tests/mcp/test_engineering_mcp.py \
             tests/mcp/test_mcp_cli_to_agent_workflow.py \
             tests/mcp/test_mcp_sdk_integration.py \
             tests/mcp/test_port_map.py \

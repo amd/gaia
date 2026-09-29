@@ -3567,8 +3567,8 @@ The bundle includes:
 
 Most commands support these options. They come from a shared parent parser, so
 despite the name they are **not** accepted by `gaia agent`, `gaia cache`,
-`gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia gateway`,
-`gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory` or
+`gaia config`, `gaia connectors`, `gaia daemon`, `gaia diagnostics`, `gaia engineering`,
+`gaia gateway`, `gaia hub`, `gaia init`, `gaia knowledge`, `gaia lemonade`, `gaia memory` or
 `gaia skill` — passing one there fails with `unrecognized arguments`.
 
 | Option | Type | Default | Description |
@@ -3691,3 +3691,32 @@ Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 
 </small>
+
+## Developer engineering
+
+`gaia engineering --developer-mode` manages explicit Claude Code/Codex handoffs —
+snapshot-only sharing of GAIA context, gated behind `--developer-mode` and a fresh
+consent prompt on every share. Normal mode exposes none of this. See the
+[developer engineering guide](/guides/harness-engineering) for the full workflow.
+
+```bash
+gaia engineering --developer-mode {setup,connect,share,status,append,approve-code,open,revoke} [OPTIONS]
+```
+
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `gaia engineering setup` | Prepare the cached source repository used for worktrees |
+| `gaia engineering connect <claude\|codex>` | Write a private MCP pairing configuration for the chosen coding app |
+| `gaia engineering share <claude\|codex> --summary <text> --context-file <path>` | Review and share an explicit, consent-gated context snapshot |
+| `gaia engineering status <job_id>` | Show a shared job's diagnosis, approval and preview state |
+| `gaia engineering append <job_id> --context-file <path>` | Append follow-up feedback to an existing job |
+| `gaia engineering approve-code <job_id>` | Approve the code scope for the displayed diagnosis revision |
+| `gaia engineering open <job_id>` | Open the job's prepared worktree |
+| `gaia engineering revoke <job_id>` | Revoke a job's grant; the paired app immediately loses read access |
+
+`gaia mcp engineering --developer-mode --backend <claude|codex>` starts its local
+stdio bridge with the pairing credential supplied through its generated MCP configuration.
+Normal mode cannot start this bridge. `gaia-tui --developer-mode` enables the
+flagship skill and sharing tools; `--dev` remains diagnostic output only.

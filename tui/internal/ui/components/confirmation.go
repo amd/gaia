@@ -81,6 +81,9 @@ func (t RiskTier) Badge() string {
 // what they do: `run_shell_command` is `pwd` on one call and `rm -rf` on the
 // next. The file writers are Write — scoped, and visible afterwards.
 var confirmationRiskTiers = map[string]RiskTier{
+	"share_engineering_context":   RiskWrite,
+	"append_engineering_context":  RiskWrite,
+	"approve_engineering_code":    RiskWrite,
 	"send_now":                    RiskWrite,
 	"send_draft":                  RiskWrite,
 	"schedule_send":               RiskWrite,

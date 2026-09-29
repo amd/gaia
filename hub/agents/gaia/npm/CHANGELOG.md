@@ -152,6 +152,9 @@ the terminal UI meant building it from source.
   printed, instead of a throwaway script left in your repository. It joins the
   always-on tool set (about 250 more prompt tokens per call) and the `shell`
   bundle.
+- Opt-in developer-mode skill and consent-gated MCP handoffs to Claude Code/Codex,
+  with managed worktrees, approved feedback snapshots and reported preview results.
+  Python `[mcp]` installation is required for the bridge; normal mode has no access.
 - **The shell, always on inside a code repository.** When the project map
   resolves to a repository (a VCS directory or a known manifest at its root),
   `run_shell_command` is offered on every turn instead of only when the request

@@ -49,6 +49,11 @@ from pathlib import Path
 from typing import ClassVar, FrozenSet, List, Optional
 
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
+from gaia_agent.engineering_tools import (
+    ENGINEERING_SKILL,
+    ENGINEERING_TOOL_NAMES,
+    EngineeringToolsMixin,
+)
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 from gaia_agent_chat.profiles import get_profile_spec
 
@@ -180,6 +185,11 @@ class GaiaAgentConfig(ChatAgentConfig):
     # resolution order is explicit arg -> env -> manifest default.
     skill_set: Optional[str] = None
 
+    # Explicit opt-in, independent of diagnostic --dev output. Inherited by WebUI.
+    developer_mode: bool = field(
+        default_factory=lambda: os.environ.get("GAIA_DEVELOPER_MODE") == "1"
+    )
+
     # Lazy skill-body activation (#2848 follow-up): per-turn semantic
     # selection of which LOADED skill's body actually renders, instead of
     # every loaded skill's body riding along on every turn for the life of
@@ -299,6 +309,7 @@ def _apply_fast_mode(config: GaiaAgentConfig) -> None:
 # overrides anything and a future method cannot silently win over ChatAgent's.
 class GaiaAgent(
     ProjectMapMixin,
+    EngineeringToolsMixin,
     ChatAgent,
     SkillLibraryToolsMixin,
     SkillLearningToolsMixin,
@@ -347,6 +358,40 @@ class GaiaAgent(
                 "files, web or skills this session"
             )
         super().__init__(config=resolved)
+        if self.config.developer_mode:
+            self.load_skill(ENGINEERING_SKILL)
+            self._start_engineering_setup()
+
+    @property
+    def skill_manager(self):
+        """Exclude the developer skill before metadata discovery in normal mode."""
+        if getattr(self, "_skill_manager", None) is None:
+            from gaia.skills import SkillManager
+
+            self._skill_manager = SkillManager(
+                agent_skill_dirs=[*self.SKILL_DIRS, *self._bundled_skill_dirs()],
+                excluded_names=(
+                    () if self.config.developer_mode else (ENGINEERING_SKILL,)
+                ),
+            )
+        return self._skill_manager
+
+    def load_skill(self, name, *, manager=None):
+        # Also covers an explicitly supplied manager or a restored manifest.
+        if name == ENGINEERING_SKILL and not self.config.developer_mode:
+            raise PermissionError("The engineering skill requires --developer-mode.")
+        return super().load_skill(name, manager=manager)
+
+    @property
+    def _always_on_skill_names(self):
+        names = super()._always_on_skill_names
+        return names | {ENGINEERING_SKILL} if self.config.developer_mode else names
+
+    def _select_tools_for_turn(self, user_input):
+        selected = super()._select_tools_for_turn(user_input)
+        if self.config.developer_mode and selected is not None:
+            return sorted(set(selected) | set(ENGINEERING_TOOL_NAMES))
+        return selected
 
     def close(self) -> None:
         """Release this agent's watchers, HTTP session and SQLite handles now.
@@ -379,6 +424,9 @@ class GaiaAgent(
         *referenced* here, not called, so this needs no embedder/Lemonade
         access at construction time — only the first real turn does.
         """
+        engineering_tools = (
+            self.register_engineering_tools() if self.config.developer_mode else {}
+        )
         self.skill_loader = self._maybe_build_skill_loader()
         self._skill_catalog_enabled = self._resolve_skill_catalog_enabled()
         if self._profile_registers_tools():
@@ -403,6 +451,10 @@ class GaiaAgent(
             self.register_code_index_tools()
             self.register_email_tools()
         super()._register_tools()
+        if engineering_tools:
+            # Keep developer closures out of the process-global registry even
+            # transiently: another WebUI agent may be constructing concurrently.
+            self._instance_tools = {**self._tools_registry, **engineering_tools}
 
     def _profile_registers_tools(self) -> bool:
         """False on a profile whose spec registers no tool groups (#4103).

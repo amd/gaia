@@ -55,6 +55,13 @@ export interface SessionToolGrant {
   grantedAt: number;
 }
 
+/** These decisions apply to one displayed snapshot or code scope, never a tool name. */
+export function requiresFreshConsent(tool: string | undefined): boolean {
+  return tool === 'share_engineering_context'
+    || tool === 'append_engineering_context'
+    || tool === 'approve_engineering_code';
+}
+
 // ── State Interface ──────────────────────────────────────────────────────
 
 interface NotificationState {
@@ -134,6 +141,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   respondToPermission: async (id, action, remember) => {
     const notification = get().notifications.find((n) => n.id === id);
     const chatSessionId = notification?.sessionId;
+    const rememberChoice = remember && !requiresFreshConsent(notification?.tool);
 
     // Chat prompts belong to the backend even when Electron IPC is available.
     const electronApi = window.gaiaAPI;
@@ -146,7 +154,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       }
     } else if (notification && electronApi?.notification?.respondPermission) {
       try {
-        await electronApi.notification.respondPermission(id, action, remember);
+        await electronApi.notification.respondPermission(id, action, rememberChoice);
       } catch (err) {
         console.error('[notificationStore] Failed to send permission response via IPC:', err);
         // Don't update local state — the agent didn't receive the response.
@@ -161,7 +169,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     // (an OS agent) has nothing to auto-approve here; its remember flag
     // already went to the agent above.
     const tool = notification?.tool;
-    if (action === 'allow' && remember && chatSessionId && tool) {
+    if (action === 'allow' && rememberChoice && chatSessionId && tool) {
       set((state) =>
         state.alwaysAllowGrants.some((g) => g.sessionId === chatSessionId && g.tool === tool)
           ? state
@@ -184,7 +192,8 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   },
 
   isAlwaysAllowed: (sessionId, tool) =>
-    get().alwaysAllowGrants.some((g) => g.sessionId === sessionId && g.tool === tool),
+    !requiresFreshConsent(tool)
+    && get().alwaysAllowGrants.some((g) => g.sessionId === sessionId && g.tool === tool),
 
   revokeAlwaysAllow: (sessionId, tool) =>
     set((state) => ({

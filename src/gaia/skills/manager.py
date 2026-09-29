@@ -98,6 +98,7 @@ class SkillManager:
         claude_skill_dirs: Optional[Iterable[Path | str]] = None,
         project_dir: Optional[Path | str] = None,
         include_claude_roots: bool = True,
+        excluded_names: Optional[Iterable[str]] = None,
     ) -> None:
         """Build a manager over the v1 discovery roots.
 
@@ -107,7 +108,9 @@ class SkillManager:
             claude_skill_dirs: Overrides the ``.claude/skills`` roots (precedence 3).
             project_dir: Working directory used to locate ``./.claude/skills``.
             include_claude_roots: Set False to skip the read-only import roots.
+            excluded_names: Host-disabled skills, omitted from all discovery roots.
         """
+        self._excluded_names = frozenset(excluded_names or ())
         self._agent_dirs = [Path(p) for p in (agent_skill_dirs or [])]
         self._user_root = (
             Path(user_skills_root) if user_skills_root is not None else None
@@ -190,6 +193,8 @@ class SkillManager:
                         log.error("Skipping invalid skill at %s: %s", entry, exc)
                         continue
 
+                    if skill.name in self._excluded_names:
+                        continue
                     if skill.name in found:
                         shadowed.setdefault(skill.name, []).append(skill)
                         log.debug(

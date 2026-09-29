@@ -27,7 +27,13 @@ logger = logging.getLogger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
-_SUPPORTED_TOOL_KWARGS = ("atomic", "display_label", "timeout", "preflight")
+_SUPPORTED_TOOL_KWARGS = (
+    "atomic",
+    "display_label",
+    "timeout",
+    "preflight",
+    "registry",
+)
 
 # Every model call re-sends the schema of every offered tool, so this text is
 # billed on each step of each turn. Enforced by `python util/lint.py
@@ -207,6 +213,7 @@ def tool(
     display_label: str | None = None,
     timeout: float | None = None,
     preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
+    registry: dict[str, dict] | None = None,
     **unexpected_kwargs: object,
 ) -> Callable:
     """
@@ -228,6 +235,10 @@ def tool(
             prompt; returns the refusal the call has already earned, or
             ``None``. The tool body must enforce the same rule itself, since
             state can change while a prompt waits.
+
+        registry: An explicit instance-local destination. When omitted, register
+            globally for existing callers. Passing an empty mapping is honored;
+            no entry is ever written to the global registry in this mode.
 
     Returns:
         The original function or decorator, unchanged
@@ -263,7 +274,8 @@ def tool(
             params[name] = param_info
 
         # Register the tool with atomic metadata
-        _TOOL_REGISTRY[tool_name] = {
+        destination = _TOOL_REGISTRY if registry is None else registry
+        destination[tool_name] = {
             "name": tool_name,
             "description": _schema_description(f.__doc__),
             "parameters": params,
