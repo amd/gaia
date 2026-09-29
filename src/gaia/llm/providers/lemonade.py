@@ -459,11 +459,25 @@ class LemonadeProvider(LLMClient):
 
         Goes through the backend, which carries the catalog metadata, so a
         provider discovered at runtime is recognised as well as the two whose
-        id prefixes are known up front.
+        id prefixes are known up front. Answers ``None`` for a runtime-
+        discovered provider until ``refresh_model_catalog`` (or any call that
+        reads ``list_models``) has populated that metadata at least once.
         """
         return self._backend.cloud_model_provider(
             model or self._last_model or self._model or DEFAULT_MODEL_NAME
         )
+
+    def refresh_model_catalog(self, show_all: bool = True) -> None:
+        """Read the Lemonade catalog once so ``cloud_model_provider`` can
+        recognise a runtime-discovered provider right away.
+
+        A freshly constructed client has no catalog metadata yet —
+        ``cloud_model_provider`` only reads what ``list_models`` has cached —
+        so anything composed from it immediately after construction (a
+        switch message, a rebuilt system prompt) would call a runtime-
+        discovered cloud model local (#4365).
+        """
+        self._backend.list_models(show_all=show_all)
 
     def generate(
         self,

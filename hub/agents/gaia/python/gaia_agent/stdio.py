@@ -593,10 +593,19 @@ def _apply_local_switch(agent: Any, target: str) -> str:
             base_url=chat.config.base_url,
             system_prompt=chat.config.system_prompt,
         )
+        # Warm the catalog metadata now, before this client answers anything.
+        # cloud_model_provider() only recognises a runtime-discovered provider
+        # (an id outside the fireworks./amd. prefixes) once list_models() has
+        # read it — and both the switch message below and the system prompt
+        # _apply_switch is about to rebuild call it on this same client
+        # (#4365).
+        refresh = getattr(new_client, "refresh_model_catalog", None)
+        if callable(refresh):
+            refresh()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Reachability was already confirmed above — this covers whatever else
-        # LemonadeClient's constructor could still reject (a malformed
-        # base_url, mostly). Nothing on agent/chat has moved yet.
+        # LemonadeClient's constructor (or the catalog warm-up) could still
+        # reject. Nothing on agent/chat has moved yet.
         raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
 
     _apply_switch(
