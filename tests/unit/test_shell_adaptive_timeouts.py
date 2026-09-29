@@ -264,6 +264,61 @@ class TestTimeoutClasses:
         # 15-minute test run a 30-second command.
         assert classify_command("pytest -q | grep FAILED").seconds == 900
 
+    @pytest.mark.parametrize(
+        "command,expected_class",
+        [
+            ("cd project && pytest tests/", "test"),
+            ("pip install -e . && pytest -q", "build"),
+            ("git status || pytest tests/", "test"),
+            ("cd project & pytest tests/", "test"),
+            ("cd project\npytest tests/", "test"),
+            ("make; curl https://example.com", "build"),
+        ],
+    )
+    def test_chained_commands_use_the_longest_segment(self, command, expected_class):
+        assert classify_command(command).name == expected_class
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "FOO=1 pytest tests/",
+            "FOO=1 uv run pytest tests/",
+            "env FOO=1 pytest tests/",
+        ],
+    )
+    def test_leading_environment_assignments_do_not_hide_the_command(self, command):
+        assert classify_command(command).name == "test"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git -C repo pull",
+            "git --git-dir repo fetch origin",
+            "git -C repo --no-pager pull",
+            "git --super-prefix workspace pull",
+        ],
+    )
+    def test_git_global_options_do_not_hide_the_subcommand(self, command):
+        assert classify_command(command).name == "network"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat <<'EOF'\r\npytest -q; git fetch origin\r\nEOF\r\n",
+            "cat <<'ONE' <<'TWO'\npytest -q\nONE\nmake\nTWO",
+        ],
+    )
+    def test_heredoc_bodies_are_not_classified_as_commands(self, command):
+        assert classify_command(command).name == "default"
+
+    def test_command_after_heredoc_is_still_classified(self):
+        command = "cat <<'EOF'; pytest -q\ninput data\nEOF"
+        assert classify_command(command).name == "test"
+
+    def test_quoted_heredoc_operator_is_regular_argument_text(self):
+        command = "printf '%s' '<<' EOF\npytest -q"
+        assert classify_command(command).name == "test"
+
 
 class TestResolveTimeout:
     def test_class_default_fills_the_gap(self):
@@ -294,6 +349,8 @@ class TestResolveTimeout:
     [
         ("pytest --version", 900, "test"),
         ("pip install --help", 1800, "build"),
+        ("cd . && pytest tests/", 900, "test"),
+        ("pip install -e . && pytest -q", 1800, "build"),
         ("git clone --help", 300, "network"),
         ("ls -la", 30, "default"),
     ],
