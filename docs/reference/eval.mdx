@@ -127,7 +127,7 @@ measurements remain visible as warnings and the comparison judges measured resul
 
 ## Flagship Agent Tasks
 
-`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs it on pull requests that touch the agent, and fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the committed expectations.
+`gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs `core` on pull requests that touch the agent, and `everyday` plus `therock` every night on `main`, all with the local Qwen3 30B (`Qwen3-30B-A3B-Instruct-2507-GGUF`) on the Strix Halo runner pool. It fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the expectations committed for that model and suite, and a nightly failure files an issue naming the suite.
 
 ```bash
 gaia eval tasks run --suite core     # run each task, then judge quality
@@ -150,11 +150,11 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 
 | Suite | Tasks | Where it runs |
 |---|---|---|
-| `core` | Explain a file · bug fix with a regression test · weekly CSV report · config from an environment variable · fix a bug beside an unrelated failing test, without touching that test · fix a test that fails only from a cold cache, without weakening it · fix a bug without disturbing the user's uncommitted edits | Every CI run |
+| `core` | Explain a file · bug fix with a regression test · weekly CSV report · config from an environment variable · fix a bug beside an unrelated failing test, without touching that test · fix a test that fails only from a cold cache, without weakening it · fix a bug without disturbing the user's uncommitted edits | Pull requests that touch the agent |
 | `adversarial` | The three traps in `core`, plus: answer from the code when the README is wrong · add a test in a project that is not installed · count errors in a log too big to read · report a suite that hangs | `workflow_dispatch` with `task_suite: adversarial` |
 | `full` | `core` and `adversarial`, plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
-| `everyday` | The 14 tasks a developer actually asks for: explain a file · code review · refactor · bug fix · triage issues · find the duplicate · issue to fix · draft a reply · review a patch · write tests · weekly CSV report · fix a shell injection · label two issues · config from an environment variable | The harness × model comparison |
-| `therock` | Four real merged fixes in [TheRock](https://github.com/ROCm/TheRock), AMD's ROCm build system, each from the commit before the fix. Two of them also forbid the internet in the prompt. | The harness × model comparison |
+| `everyday` | The 14 tasks a developer actually asks for: explain a file · code review · refactor · bug fix · triage issues · find the duplicate · issue to fix · draft a reply · review a patch · write tests · weekly CSV report · fix a shell injection · label two issues · config from an environment variable | Nightly on `main`; the harness × model comparison |
+| `therock` | Four real merged fixes in [TheRock](https://github.com/ROCm/TheRock), AMD's ROCm build system, each from the commit before the fix. Two of them also forbid the internet in the prompt. | Nightly on `main`; the harness × model comparison |
 | `swebench` | Instances of [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), built from the dataset at run time (`--instances`; default: a five-instance pilot) and graded by the official harness in Docker. Not in `tasks.json`. | The harness × model comparison, against the public yardstick |
 
 The hanging suite stays out of `core`: every test run the agent tries costs a full command timeout.
@@ -174,6 +174,7 @@ Tasks and suites live in `eval/tasks/tasks.json`. Every task is checked in both 
 | `gaia eval tasks run [--suite core] [--model M] [--out DIR] [--no-judge]` | Runs an agent on each task and writes `scorecard.json`, plus each task's `transcript.json` and `workspace.diff`, and `setup.diff` for a task with a setup. Judges afterwards unless `--no-judge`. |
 | `gaia eval tasks judge DIR [--judge-model M] [--judge-attempts N]` | Grades a finished run. A task with no usable grade is recorded as unjudged, not scored. With `--repeats`, grades every repeat. |
 | `gaia eval tasks gate DIR [--expect FILE] [--enforce] [--propose FILE]` | Compares the run with its expectations. Reports by default; `--enforce` exits 1 on a miss or on a task that was not measured. CI always enforces. |
+| `gaia eval tasks propose DIR... --out FILE` | Writes expectations every one of several judged runs met: each floor is the worst run's, each ceiling the most expensive run's, before the usual headroom. A `--repeats` directory counts as each of its runs. Use it to gate a model on what it achieves consistently, not on one draw. |
 | `gaia eval tasks report DIR... --out DIR` | The harness × model table from finished runs, as markdown and HTML (and a PNG where a headless Chrome is found). |
 | `gaia eval tasks controls` | Checks the judge itself on three planted attempts with known verdicts. |
 | `gaia eval tasks gateway --port N` | Runs the model gateway in the foreground, for a matrix that reuses one gateway. |

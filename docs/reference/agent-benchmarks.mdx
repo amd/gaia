@@ -283,6 +283,7 @@ precisely so you don't have to re-run the agent to do it.
 | `gaia eval tasks run --suite SUITE [--harness gaia\|claude-code] [--model M] --out DIR` | Runs the suite, one task at a time, and judges it unless `--no-judge`. Writes `DIR/scorecard.json`, and per task: `transcript.json`, `workspace.diff`, `setup.diff` (if the task has a setup). |
 | `gaia eval tasks judge DIR [--judge-attempts N]` | Re-grades every task in a finished run from its saved transcripts — no agent re-run needed. Updates `DIR/scorecard.json` in place. |
 | `gaia eval tasks gate DIR [--expect FILE] [--enforce]` | Compares a judged run with committed expectations; used by CI, not this comparison workflow. |
+| `gaia eval tasks propose DIR... --out FILE` | Writes the expectations CI gates on from several judged runs (or one `--repeats` directory), each limit set by the worst run. |
 | `gaia eval tasks controls [--out DIR]` | Grades the three planted attempts described above; with `--out`, also writes each attempt's `transcript.json` and the verdicts to `DIR/controls.json`. |
 | `gaia eval tasks report DIR... --out DIR` | The harness × model table across one or more finished, judged runs. Writes `report.md`, `report.html`, and `report.png` (skipped without a headless Chrome, or with `--no-png`). |
 | `gaia eval tasks gateway --port N` | Runs the model gateway in the foreground, so a whole matrix of runs can share one instead of each starting its own. |
