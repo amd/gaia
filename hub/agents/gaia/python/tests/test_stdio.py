@@ -1145,6 +1145,114 @@ def test_cloud_model_switch_preserves_session_and_reports_remote(
     assert agent._use_claude is False
 
 
+def test_switch_message_classifies_from_the_client_not_the_id_prefix(
+    monkeypatch, stub_lemonade
+):
+    """A cloud model whose id prefix is not a known provider must not be
+    announced as local.
+
+    The switchable-model filter calls ``cloud_model_provider(id, metadata)``,
+    which honours the catalog's own ``cloud_provider`` field — so a model can
+    be switchable under any prefix. The switch message called the one-argument
+    form, which knows only the ``fireworks.``/``amd.`` prefixes and returns
+    None for anything else, so this model was described with the LOCAL
+    sentence: an affirmative "not sending this conversation to any cloud
+    provider" about a cloud model, contradicting the system prompt, which does
+    consult the client.
+
+    The stub starts COLD, like the real ``LemonadeProvider`` create_client
+    just built: ``cloud_model_provider`` answers from empty metadata until
+    ``refresh_model_catalog`` — the warm-up ``_apply_local_switch`` now runs
+    right after construction — has read the catalog. A stub that answers
+    correctly from birth (the pre-fix version of this test) can't fail even
+    when the production code forgets to warm the client.
+    """
+    model = "custom.gemma-4-31b-it"
+    stub_lemonade.catalog = {
+        "data": [
+            {
+                "id": model,
+                "recipe": "cloud",
+                "cloud_provider": "fireworks",
+                "downloaded": False,
+            }
+        ]
+    }
+
+    class _CatalogAwareClient:
+        """Mirrors LemonadeProvider: classifies a discovered cloud model only
+        after refresh_model_catalog (== list_models) has run."""
+
+        def __init__(self):
+            self._metadata = {}
+            self.refresh_calls = 0
+
+        def refresh_model_catalog(self, show_all=True):
+            self.refresh_calls += 1
+            assert show_all is True, "labels/downloaded are only in the full catalog"
+            for entry in stub_lemonade.catalog.get("data", []):
+                if entry.get("id"):
+                    self._metadata.setdefault(entry["id"], {}).update(entry)
+
+        def cloud_model_provider(self, model_id):
+            meta = self._metadata.get(model_id)
+            if meta is None:
+                return None
+            return meta.get("cloud_provider")
+
+    created = []
+
+    def _fake_create_client(**_kwargs):
+        client = _CatalogAwareClient()
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(stdio, "create_client", _fake_create_client)
+
+    answer = _events(_model_run(_ModelSwitchAgent(), f"/model {model}"))[-1]["answer"]
+
+    assert created[0].refresh_calls == 1
+    assert "Fireworks AI" in answer
+    assert "a cloud provider" in answer
+    assert "not sending this conversation to any cloud provider" not in answer
+
+
+def test_switch_message_falls_back_to_prefix_rule_without_refresh_model_catalog(
+    monkeypatch, stub_lemonade
+):
+    """A client with no ``refresh_model_catalog`` (a fake without the new
+    method, or a future non-Lemonade backend) must not crash the switch —
+    ``_apply_local_switch`` just skips the warm-up, same as before this fix
+    existed, and the message falls back to the id-prefix rule."""
+    model = "custom.gemma-4-31b-it"
+    stub_lemonade.catalog = {
+        "data": [
+            {
+                "id": model,
+                "recipe": "cloud",
+                "cloud_provider": "fireworks",
+                "downloaded": False,
+            }
+        ]
+    }
+
+    class _UnwarmableClient:
+        """Has the classifier but no way to populate it — represents any
+        future backend that never learns catalog metadata."""
+
+        def cloud_model_provider(self, model_id):
+            return None
+
+    monkeypatch.setattr(stdio, "create_client", lambda **kwargs: _UnwarmableClient())
+
+    answer = _events(_model_run(_ModelSwitchAgent(), f"/model {model}"))[-1]["answer"]
+
+    # No catalog metadata available: falls back to the id-prefix rule, which
+    # does not know "custom." — described as local, the pre-existing (and
+    # documented) fallback behaviour.
+    assert "not sending this conversation to any cloud provider" in answer
+
+
 def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
     stub_lemonade.catalog = {
         "data": [
