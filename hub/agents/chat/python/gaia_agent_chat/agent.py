@@ -386,7 +386,7 @@ class ChatAgent(
         # Embedder is device-scoped: the NPU profile uses the FLM-native
         # embedder so chat and embeddings stay co-resident on the NPU backend
         # (a GGUF embedder runs on Vulkan and evicts the FLM chat model every
-        # turn — #1744). GPU/CPU keep the GGUF nomic embedder.
+        # turn — #1744). GPU/CPU use the GGUF embedder `gaia init` downloads.
         effective_embedding_model = get_embedding_model_for_device(config.device)
 
         # RAG (#2323 Increment 3): ``RAGConfig`` is cheap (no I/O) and built

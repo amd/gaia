@@ -937,7 +937,8 @@ class EmailTriageAgent(
         # the same way ChatAgent does (hub/agents/chat/python/gaia_agent_chat/
         # agent.py, get_embedding_model_for_device) so chat + embeddings stay
         # co-resident on the NPU backend. Any other resolved model keeps the
-        # unchanged default (embedding_model=None -> GGUF nomic).
+        # unchanged default (embedding_model=None -> the GGUF embedder
+        # `gaia init` downloads).
         embedding_model = (
             get_embedding_model_for_device("npu")
             if effective_model_id == NPU_EMAIL_MODEL_ID

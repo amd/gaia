@@ -429,6 +429,24 @@ class TestStatus:
         assert status.unresponsive_pid == 4321
         assert manager.state_path.exists(), "live daemon lost its state file"
 
+    def test_start_disables_vulkan_coopmat(self, manager, monkeypatch):
+        """Without it the embedder crashes on first use on Strix Halo (#4449)."""
+        monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT", raising=False)
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
+        spawned = []
+
+        def fake_popen(argv, **kwargs):
+            spawned.append(kwargs["env"])
+            return SimpleNamespace(pid=4321, poll=lambda: None, returncode=None)
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.subprocess.Popen", fake_popen)
+
+        manager.start(port=65530)
+
+        assert spawned and spawned[0]["GGML_VK_DISABLE_COOPMAT"] == "1"
+
     def test_start_refuses_to_spawn_a_second_daemon(self, manager, monkeypatch):
         manager._write_state(
             {"pid": 4321, "port": 65535, "api_key": "k", "version": manager.version}

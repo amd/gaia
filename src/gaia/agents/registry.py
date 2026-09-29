@@ -21,7 +21,13 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 import yaml
 
 from gaia.connectors.providers.base import ConnectorRequirement
-from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE
+from gaia.llm.lemonade_client import (
+    DEFAULT_EMBEDDING_MODEL as LEMONADE_DEFAULT_EMBEDDING_MODEL,
+)
+from gaia.llm.lemonade_client import (
+    GPU_CTX_SIZE,
+    NPU_CTX_SIZE,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -281,9 +287,10 @@ def _compute_custom_origin_hash(py_file: Path) -> str:
     return hashlib.sha256(py_file.read_bytes()).hexdigest()[:16]
 
 
-# Default embedder (GPU/CPU). The NPU device overrides this with the FLM-native
-# embedder so chat + embeddings stay co-resident on the NPU backend (#1744).
-DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v2-moe-GGUF"
+# Default embedder (GPU/CPU) — the one `gaia init` downloads. The NPU device
+# overrides it with the FLM-native embedder so chat + embeddings stay
+# co-resident on the NPU backend (#1744).
+DEFAULT_EMBEDDING_MODEL = LEMONADE_DEFAULT_EMBEDDING_MODEL
 
 
 @dataclass
@@ -358,8 +365,8 @@ def get_embedding_model_for_device(device: Optional[str]) -> str:
     Single source of truth: reads ``DEFAULT_DEVICE_CONFIGS`` so the embedder
     choice lives next to the chat model/recipe/backend for each device. The NPU
     profile uses the FLM-native embedder (see ``DeviceConfig.embedding_model``);
-    GPU/CPU and an unspecified device default to the GGUF nomic embedder, which
-    matches the GPU-default policy elsewhere in the CLI.
+    GPU/CPU and an unspecified device default to the GGUF embedder `gaia init`
+    downloads, which matches the GPU-default policy elsewhere in the CLI.
     """
     for dc in DEFAULT_DEVICE_CONFIGS:
         if dc.device == device:
