@@ -93,20 +93,24 @@ func (m ChatModel) statusHints() []hint {
 
 	// In an alt-screen app the wheel and the arrows are the ONLY way back to
 	// earlier turns; a user who does not know that concludes history is gone.
-	hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
-	// Only while the app holds the mouse: then plain drag-select is what the
-	// user has lost, and this is the way to get it back.
-	if m.appMouse && m.confirmation == nil {
-		hints = append(hints, hint{text: "Ctrl+T drag-select", rank: rankSecondary})
-	}
-	// Folded detail nobody knows how to open is detail thrown away. Idle only:
-	// mid-turn the row already says how to type on and how to stop.
-	if m.hasWork() && !m.streaming && m.confirmation == nil {
-		text := "Ctrl+O details"
-		if m.expandWork {
-			text = "Ctrl+O fold"
+	// The warm-up stage has no transcript to scroll or select — it replaces
+	// the transcript entirely.
+	if !(m.warming && !m.warmHidden) {
+		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
+		// Only while the app holds the mouse: then plain drag-select is what the
+		// user has lost, and this is the way to get it back.
+		if m.appMouse && m.confirmation == nil {
+			hints = append(hints, hint{text: "Ctrl+T drag-select", rank: rankSecondary})
 		}
-		hints = append(hints, hint{text: text, rank: rankSecondary})
+		// Folded detail nobody knows how to open is detail thrown away. Idle only:
+		// mid-turn the row already says how to type on and how to stop.
+		if m.hasWork() && !m.streaming && m.confirmation == nil {
+			text := "Ctrl+O details"
+			if m.expandWork {
+				text = "Ctrl+O fold"
+			}
+			hints = append(hints, hint{text: text, rank: rankSecondary})
+		}
 	}
 
 	if m.confirmation != nil && m.confirmation.Pending() {
@@ -119,6 +123,12 @@ func (m ChatModel) statusHints() []hint {
 		// outranks everything, so spelling it again only got the bar saying
 		// "Ctrl+C quits · Ctrl+C quit".
 		hints = append(hints, hint{text: "answer above", rank: rankInterrupt})
+	} else if m.warming && !m.warmHidden {
+		// Esc does not cancel here — it shows the chat; see warmup.go.
+		hints = append(hints,
+			hint{text: "type ahead", rank: rankAffordance},
+			hint{text: "Esc show chat", rank: rankInterrupt},
+		)
 	} else if m.streaming {
 		// Worth advertising exactly when it applies: someone who believes the
 		// composer is frozen never tries it.

@@ -285,6 +285,16 @@ type ChatModel struct {
 	// never gated.
 	fullAccessArmed bool
 
+	// warming is the warm-up stage before the first chat turn — see warmup.go.
+	// warmHidden is Esc on the stage: the chat shows while the warm-up turn
+	// keeps running. warmStep is what the agent is doing now; warmDone what it
+	// already did.
+	warming    bool
+	warmHidden bool
+	warmStart  time.Time
+	warmStep   string
+	warmDone   []string
+
 	// claudeMode is true while the agent's inference runs on Anthropic's
 	// Claude API instead of the local Lemonade backend (--use-claude). Set
 	// once at launch from the transport's argv — see applyLaunchClaude — and
@@ -619,6 +629,11 @@ func (m ChatModel) Init() tea.Cmd {
 			"[DEBUG] pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q\n",
 			m.agentID, preScanAgentID)
 	}
+	// Behind the first-boot gate the warm-up waits for it: there may be no
+	// model to load yet (releaseAfterSetupGate starts it then).
+	if !m.setupChecking && m.warmUpApplies() {
+		cmds = append(cmds, func() tea.Msg { return startWarmUpMsg{} })
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -849,6 +864,14 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sendQueryMsg:
 		return m.sendQuery(msg.query)
+
+	case startWarmUpMsg:
+		// A turn already running (a queued launch query, /clear) needs no
+		// warm-up: it is paying for the same work itself.
+		if m.streaming {
+			return m, nil
+		}
+		return m.startWarmUp()
 
 	case channelReadyMsg:
 		m.events = msg.ch
@@ -1271,6 +1294,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// programmatic driver, including this TUI's own control API. Ctrl+V reads the
 	// clipboard directly and is the multi-line paste path on such terminals.
 
+	if msg.Type == tea.KeyEsc && m.warming && !m.warmHidden {
+		return m.hideWarmUpStage()
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
@@ -1348,7 +1375,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		//
 		// The first-boot gate (setupChecking) and a `gaia init` run
 		// (setupRunning) always hold: there is nothing running to send to.
-		if m.streaming && !m.setupChecking && !m.setupRunning &&
+		if m.streaming && !m.warming && !m.setupChecking && !m.setupRunning &&
 			!isSlashCommand(query) && m.followUpSupported() {
 			m.sending = append(m.sending, query)
 			m.updateViewport()
@@ -1849,6 +1876,9 @@ func (m ChatModel) supersededTurn(ch <-chan interface{}) bool {
 func (m *ChatModel) settleTurn() {
 	m.events = nil
 	m.cancelFn = nil
+	// A warm-up ends like any turn — finished, failed or abandoned.
+	m.warming = false
+	m.warmHidden = false
 	// A failed `/model` switch (Lemonade down, bad credential) never sends a
 	// model-state ping — clearing here, not just on the ping itself, is what
 	// keeps a failure from leaving this stuck true and permanently
@@ -3200,7 +3230,11 @@ func (m ChatModel) renderQueuedRow() string {
 	// press's promise, or a user pressing it a second time because nothing
 	// visibly happened loses their draft to a hint that was no longer true.
 	one, many := "  Esc stops the turn and puts this back", "  Esc stops the turn and puts these back"
-	if m.cancelPending {
+	switch {
+	case m.warming:
+		// Esc does not stop a warm-up (see warmup.go); the message just waits.
+		one, many = "  sent when GAIA is ready", "  sent when GAIA is ready"
+	case m.cancelPending:
 		one, many = "  Esc again abandons this", "  Esc again abandons these"
 	}
 	hint := one
@@ -3263,6 +3297,9 @@ func (m ChatModel) View() string {
 	header := m.renderHeader()
 	divider := dividerStyle.Render(strings.Repeat("─", m.width))
 	vpView := m.viewport.View()
+	if m.warming && !m.warmHidden {
+		vpView = m.renderWarmUpStage(m.viewport.Height)
+	}
 
 	inputView := m.input.View()
 	if m.streaming {
@@ -3297,6 +3334,7 @@ func (m ChatModel) View() string {
 		Connected:        m.connected,
 		Streaming:        m.streaming,
 		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
+		Preparing:        m.warming,
 	}
 	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
 	statusBar := components.RenderStatusBar(barState, m.width)

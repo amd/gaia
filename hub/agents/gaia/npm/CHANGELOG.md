@@ -14,6 +14,11 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The first answer on a local model starts in seconds, not after a ~20 s
+  silence.** The terminal UI now shows a "Getting GAIA ready" stage before the
+  chat: the agent starts, loads its model and reads its system prompt there,
+  step by step. New stdio sentinel `warm_up` (answers `warmed_up`, or
+  `warm_up_skipped` for a remote model).
 - **Bypass permissions is now called full access, everywhere.** `--full-access`
   and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
   fail with a message naming the new one. `/full-access always` (or

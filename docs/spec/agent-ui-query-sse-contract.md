@@ -600,12 +600,19 @@ sides in the same change.
 
 - A plain line is one query.
 - `{"gaia_query": "<text>"}` is one query whose text may contain newlines.
-- Two sentinel queries never reach the LLM:
+- Three sentinel queries never reach the chat:
   - `"\u0000gaia:clear_conversation\u0000"` clears the agent's conversation
     history. The agent answers with `{"type": "final", "answer": "conversation_cleared"}`,
     and the TUI keeps the transcript on screen unless it gets exactly that answer.
   - `"\u0000gaia:memory_dump\u0000"` returns a snapshot of the agent's memory
     as JSON in the `answer` of a `final`.
+  - `"\u0000gaia:warm_up\u0000"` does the first turn's one-time work before
+    the chat opens: memory upkeep, tool embeddings, and one priming request
+    carrying the real system prompt with a one-token budget, which loads the
+    model and leaves the prompt prefix in llama.cpp's cache. Each step is a
+    `status` event; the answer is `warmed_up`, or `warm_up_skipped` for a remote
+    model (nothing loads locally). A failure is an `error` event. Nothing is
+    added to the conversation history.
 
 ### 10.2 stdin: control messages
 

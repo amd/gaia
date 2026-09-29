@@ -6584,6 +6584,47 @@ Do NOT wrap conversational replies in JSON.
             answer += "\n\n" + inventory
         return answer, gaps
 
+    #: What warm_up primes with. Short and fixed, so the priming call itself
+    #: costs one prefill of the system prompt and one output token.
+    WARM_UP_PROMPT = "Reply with OK."
+
+    def warm_up(
+        self, progress: Optional[Callable[[str], None]] = None
+    ) -> Dict[str, Any]:
+        """Do the first turn's one-time work now, before anyone is waiting on it.
+
+        Builds the tool embeddings and narrows the tools to the ones every turn
+        starts with, then sends one request carrying the real system prompt and
+        those tool schemas with a one-token budget. That loads the model at its
+        context size and leaves the prompt prefix in the server's cache, so the
+        first real question starts answering instead of reading ~10K tokens of
+        instructions. Only worth it for a local model; the caller decides.
+
+        Raises whatever the embedder or LLM client raises: a warm-up that failed
+        must say so, or the slow first turn it was meant to prevent looks
+        unexplained.
+        """
+        say = progress or (lambda _message: None)
+        started = time.perf_counter()
+        # A turn renders skills through the per-turn filter; the primed prompt
+        # has to as well, or it diverges from the first turn's at the skills
+        # heading and everything after it — tools included — is re-read.
+        self._refresh_active_skill_filter(self.WARM_UP_PROMPT)
+        loader = getattr(self, "tool_loader", None)
+        if loader is not None:
+            say("Indexing tools")
+            core = loader.warm(self._tools_registry)
+            if core:
+                self._apply_tool_filter(core)
+        say(f"Loading {self.model_id} and reading its instructions")
+        self.chat.send_messages(
+            [{"role": "user", "content": self.WARM_UP_PROMPT}],
+            system_prompt=self.system_prompt,
+            tools=self._openai_tools,
+            max_tokens=1,
+        )
+        return {"seconds": round(time.perf_counter() - started, 1)}
+
     def process_query(
         self,
         user_input: str,

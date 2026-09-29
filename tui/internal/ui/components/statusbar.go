@@ -21,7 +21,10 @@ type StatusBarState struct {
 	// it is waiting on a person. Reading "streaming" for minutes while a
 	// prompt sits unanswered is how a question reads as a hang.
 	AwaitingDecision bool
-	Hint             string
+	// Preparing is the warm-up before the first question: the agent is busy,
+	// but not answering anything yet, so "streaming" would be the wrong word.
+	Preparing bool
+	Hint      string
 }
 
 var (
@@ -123,6 +126,9 @@ func statusLeft(state StatusBarState) string {
 	}
 	if state.Streaming {
 		status = "streaming"
+	}
+	if state.Preparing {
+		status = "getting ready"
 	}
 	if state.AwaitingDecision {
 		status = "waiting for your answer"

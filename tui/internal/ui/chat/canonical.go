@@ -87,6 +87,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// keeps (see narrate.go). What PRINTS is still laid out to this terminal
 		// at render time; this only stops a megabyte of "status" living in the
 		// model for the rest of the session.
+		if m.warming {
+			// A warm-up step, not turn progress: it is the stage's checklist,
+			// and the live line while the stage is hidden.
+			if msg := strings.TrimSpace(e.Message); msg != "" {
+				m.advanceWarmStep(truncateRunes(msg, narrationMax))
+				m.setLiveStatus("Getting GAIA ready: " + m.warmStep)
+			}
+			break
+		}
 		if msg := userFacingStatus(e.Message); msg != "" {
 			m.setLiveStatus(truncateRunes(msg, narrationMax))
 		} else if m.dev {
@@ -202,6 +211,11 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		return m, tea.Batch(cmds...), true
 
 	case event.CanonicalFinalEvent:
+		if m.warming {
+			// The warm-up's answer is a sentinel, not something to show.
+			m.finishWarmUp(e.Answer)
+			return m, nil, true
+		}
 		usage := event.CanonicalUsageOf(e)
 		// ttft is the BACKEND's own measurement or nothing — see
 		// CanonicalUsage. The client used to stamp it when the first token
