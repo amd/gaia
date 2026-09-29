@@ -1610,3 +1610,32 @@ def test_an_exact_hit_is_never_labelled_unverified(harness_factory):
     assert out["exact_match"] is True
     assert out["broadened"] is False
     assert "unverified" not in out
+
+
+def test_a_failing_sweep_rung_does_not_discard_already_found_exact_hits(
+    harness_factory,
+):
+    """A later rung's backend error must not throw away a good rung-0 hit.
+
+    The sweep is a bonus pass beyond the query as sent, so an error partway
+    through it must degrade to "the sweep was cut short", not to a failed
+    search that had already found the right mail.
+    """
+    calls = []
+
+    def handler(request):
+        calls.append((request.url.params.get("$search") or "").strip('"'))
+        if len(calls) == 1:
+            return json_response({"value": [WRONG_ONE]})
+        return httpx.Response(401, text="expired")
+
+    h = harness_factory(handler)
+
+    out = json.loads(h._tool("search_email")(query="contract schedule"))
+
+    assert out["success"] is True
+    assert out["exact_match"] is True
+    assert [m["subject"] for m in out["messages"]] == ["Contract schedule v2"]
+    assert "expired" in out["sweep_incomplete"]
+    assert "sweep" in out["note"].lower()
+    assert len(calls) == 2

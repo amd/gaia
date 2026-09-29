@@ -494,9 +494,19 @@ class EmailToolsMixin:
                 alternatives: List[Dict] = []
                 threads: Dict[str, Dict] = {}
                 seen_ids: set = set()
+                sweep_error: Optional[str] = None
 
                 for rung, candidate in enumerate(_broadening_ladder(query) or [query]):
-                    found = mixin._email_call("search", candidate, limit=fetch)
+                    try:
+                        found = mixin._email_call("search", candidate, limit=fetch)
+                    except Exception as exc:
+                        # The sweep is a bonus pass beyond the query as sent;
+                        # losing a later rung must not discard what the query
+                        # itself already matched.
+                        if not exact:
+                            raise
+                        sweep_error = f"{type(exc).__name__}: {exc}"
+                        break
                     attempts.append({"query": candidate, "count": len(found)})
                     bucket = exact if rung == 0 else alternatives
                     for message in found:
@@ -559,6 +569,10 @@ class EmailToolsMixin:
                 }
                 if exact and alternatives:
                     payload["alternatives"] = [_as_candidate(h) for h in alternatives]
+                if sweep_error:
+                    # Loud, not silent: the model gets the exact hits it asked
+                    # for, plus notice that the broader pass didn't finish.
+                    payload["sweep_incomplete"] = sweep_error
                 if flagged:
                     payload["suspicious_guidance"] = SUSPICIOUS_GUIDANCE
                 if not messages:
@@ -597,6 +611,18 @@ class EmailToolsMixin:
                         f"`messages` matched '{query}' as sent. `alternatives` "
                         "come from broader queries — use them only if none of "
                         "the exact hits is the message the user meant."
+                    )
+                if sweep_error:
+                    incomplete = (
+                        "The broader sweep stopped early after a backend error "
+                        "(see `sweep_incomplete`), so `alternatives` may be "
+                        "missing hits a full sweep would have found. `messages` "
+                        "above matched your query and is unaffected."
+                    )
+                    payload["note"] = (
+                        f"{payload['note']} {incomplete}"
+                        if payload.get("note")
+                        else incomplete
                     )
                 return json.dumps(payload, indent=2)
             except Exception as exc:
